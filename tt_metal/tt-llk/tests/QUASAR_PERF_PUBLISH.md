@@ -76,11 +76,26 @@ column to that schema.
    ```
 
 4. Read the report. A dropped column is data that the warehouse does not get.
-5. Send the files:
+5. Check the files against the rules of the warehouse loader:
+
+   ```bash
+   python -m helpers.perf.publish_manual check <out>/*.parquet
+   ```
+
+   The loader refuses a file that has no run column, a blank or uppercase
+   `arch` or `pipeline`, or a repeated (configuration, marker) pair. It also
+   refuses a `run_id` that a run of another arch or pipeline has. The check
+   finds all of these. It also makes sure that each `run_id` agrees with its
+   timestamp and arch, and that no two files have the same `run_id`.
+6. Send the files:
 
    ```bash
    python -m helpers.perf.publish_manual upload <out>/*.parquet --key ~/.ssh/<key>
    ```
+
+`upload` does the same check first, and it sends nothing if one file fails.
+It names each remote object `llk_perf_<run_id>.parquet` from the `run_id` in
+the rows, not from the local file name.
 
 Use `--dry-run` on `upload` (or on `publish --upload`) to see the SFTP commands
 before you send.

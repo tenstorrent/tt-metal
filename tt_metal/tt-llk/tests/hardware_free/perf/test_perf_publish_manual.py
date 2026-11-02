@@ -174,6 +174,23 @@ def test_plan_backfill_prefers_the_sidecar_platform(tmp_path):
     assert (run.platform, run.platform_version) == ("simulator", "v7")
 
 
+def test_plan_backfill_lowercases_the_sidecar_arch(tmp_path):
+    meta = {"timestamp": "2026-08-14T09:00:00Z", "arch": " Quasar "}
+    _archive_run(tmp_path, "batch_a", meta)
+    (run,) = pm.plan_backfill(tmp_path, "quasar", "Emulator")
+    assert (run.arch, run.platform) == ("quasar", "emulator")
+    assert run.run_id.endswith("-quasar")
+
+
+def test_plan_backfill_rejects_an_unknown_arch(tmp_path):
+    meta = {"timestamp": "2026-08-14T09:00:00Z", "arch": "wormhole_b0"}
+    _archive_run(tmp_path, "batch_a", meta)
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        ValueError, match="arch must be one of"
+    ):
+        pm.plan_backfill(tmp_path, "quasar", "emulator")
+
+
 def test_plan_backfill_needs_a_platform(tmp_path):
     _archive_run(tmp_path, "batch_a", {"timestamp": "2026-08-14T09:00:00Z"})
     with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
@@ -274,18 +291,111 @@ def test_upload_needs_a_key(monkeypatch, tmp_path):
         pm.main(["upload", str(f)])
 
 
+def _published(tmp_path, stamp="20261005T143012Z"):
+    run = tmp_path / f"local-{stamp}"
+    _csv(run / "perf_pack_quasar", "perf_pack_quasar", _quasar_rows())
+    out, _ = pm.publish(
+        run, tmp_path / "out", "quasar", commit_sha="abc123", platform="emulator"
+    )
+    return out
+
+
+def _rewrite(path, **columns):
+    df = pq.read_table(path).to_pandas()
+    for name, value in columns.items():
+        df[name] = value
+    df.to_parquet(path, index=False)
+
+
 def test_upload_dry_run_sends_nothing(tmp_path, capsys, monkeypatch):
     key = tmp_path / "key"
     key.write_text("k")
-    f = tmp_path / "llk_perf_manual-20261005-20261005T143012Z-quasar.parquet"
-    f.write_bytes(b"PAR1")
+    f = _published(tmp_path)
     monkeypatch.setattr(pm.subprocess, "run", pytest.fail)
 
     assert pm.main(["upload", str(f), "--key", str(key), "--dry-run"]) == 0
 
     out = capsys.readouterr().out
     assert f"{pm.SFTP_USER}@{pm.SFTP_HOST}" in out
-    assert f'put "{f}"' in out
+    assert f'put "{f}" "{f.name}"' in out
+
+
+def test_upload_names_the_object_from_the_rows(tmp_path, capsys):
+    # A local name that lost the prefix (backfill writes <run_id>.parquet)
+    # still goes up under the run's own name.
+    f = _published(tmp_path)
+    local = f.rename(tmp_path / "renamed.parquet")
+
+    assert pm.upload([local], tmp_path / "key", dry_run=True) == 0
+
+    out = capsys.readouterr().out
+    assert '"llk_perf_manual-20261005-20261005T143012Z-quasar.parquet"' in out
+
+
+def test_check_passes_a_published_file(tmp_path):
+    run_id, rows, problems = pm.check_file(_published(tmp_path))
+    assert run_id == "manual-20261005-20261005T143012Z-quasar"
+    assert rows == 2
+    assert problems == []
+
+
+@pytest.mark.parametrize(
+    "columns, expected",
+    [
+        ({"arch": "Quasar"}, "not lowercase"),
+        ({"pipeline": "nightly"}, "not 'manual'"),
+        ({"pipeline": "  "}, "'pipeline' is blank"),
+        ({"run_id": "manual-20261005-20261005T143012Z-wormhole"}, "does not agree"),
+        ({"platform": None}, "platform None"),
+        ({"timestamp": "1970-01-01T00:00:00Z"}, "outside 2020..2100"),
+    ],
+)
+def test_check_applies_the_loader_rules(tmp_path, columns, expected):
+    f = _published(tmp_path)
+    _rewrite(f, **columns)
+    _, _, problems = pm.check_file(f)
+    assert any(expected in p for p in problems), problems
+
+
+def test_check_flags_a_missing_run_column(tmp_path):
+    f = _published(tmp_path)
+    pq.read_table(f).drop(["pr_number"]).to_pandas().to_parquet(f, index=False)
+    _, _, problems = pm.check_file(f)
+    assert any("pr_number" in p for p in problems)
+
+
+def test_check_flags_a_repeated_configuration_and_marker(tmp_path):
+    f = _published(tmp_path)
+    df = pq.read_table(f).to_pandas()
+    pd.concat([df, df.iloc[[0]]]).to_parquet(f, index=False)
+    _, _, problems = pm.check_file(f)
+    assert any("repeat a (configuration, marker)" in p for p in problems)
+
+
+def test_check_files_flags_two_files_with_one_run_id(tmp_path):
+    f = _published(tmp_path)
+    twin = tmp_path / "twin.parquet"
+    twin.write_bytes(f.read_bytes())
+    results = pm.check_files([f, twin])
+    assert all(any("also in" in p for p in r[2]) for r in results.values())
+
+
+def test_upload_refuses_a_file_that_fails_the_check(tmp_path):
+    f = _published(tmp_path)
+    _rewrite(f, arch="Quasar")
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        ValueError, match="not lowercase"
+    ):
+        pm.upload([f], tmp_path / "key", dry_run=True)
+
+
+def test_check_cli_reports_pass_and_fail(tmp_path, capsys):
+    good = _published(tmp_path)
+    bad = _published(tmp_path / "b", stamp="20261006T000000Z")
+    _rewrite(bad, pipeline="Manual")
+    assert pm.main(["check", str(good), str(bad)]) == 1
+    out = capsys.readouterr().out
+    assert "1 of 2 file(s) pass" in out
 
 
 def test_upload_refuses_a_file_that_is_not_parquet(tmp_path):

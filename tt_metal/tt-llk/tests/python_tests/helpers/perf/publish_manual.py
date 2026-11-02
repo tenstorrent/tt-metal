@@ -24,6 +24,16 @@ Every file also says what executed the run: ``platform`` (emulator,
 simulator or silicon) and ``platform_version`` (its build). Numbers from two
 platforms must never share a trend, so ``platform`` is mandatory here.
 
+Before a file leaves the machine, ``check_file`` applies the rules of the
+warehouse loader (data_airflow ``dags/pipelines/llk_perf_run``): the run
+columns are present and constant, ``arch`` and ``pipeline`` are lowercase and
+not blank, and each (configuration, marker) pair occurs once. The loader
+replaces a run by RUN_ID, and it refuses a RUN_ID that another (arch,
+pipeline) owns. A manual run_id holds its pipeline and its arch, so the check
+also makes sure that the run_id agrees with both. ``upload`` sends only files
+that pass, and it names each remote object from the run_id in its rows, not
+from the local file name.
+
 Only the holder of a private key that data_iac lists for the ``llk-perf-run``
 SFTP user can upload. Without ``--upload`` nothing leaves the machine.
 """
@@ -36,6 +46,8 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+
+import pyarrow.parquet as pq
 
 from .migrate import discover_runs, migrate_runs, summarize_coverage
 from .parquet import convert_csvs_to_parquet
@@ -56,6 +68,21 @@ OBJECT_PREFIX = "llk_perf_"
 SFTP_HOST = "s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com"
 SFTP_USER = "llk-perf-run-writer"
 KEY_ENV = "LLK_PERF_SFTP_KEY"
+
+# The loader's RUN_COLUMNS: a file without any one of them is quarantined.
+# OPTIONAL_RUN_COLUMNS may be absent, but must be constant when present.
+LOADER_RUN_COLUMNS = (
+    "run_id",
+    "pipeline",
+    "commit_sha",
+    "pr_number",
+    "arch",
+    "timestamp",
+)
+LOADER_OPTIONAL_RUN_COLUMNS = ("platform", "platform_version")
+MARKER_COLUMN = "marker"
+# The loader's STAT_COLUMN_RE: "mean(X)" / "std(X)" are measurements, not config.
+_STAT_COLUMN_RE = re.compile(r"^(?P<stat>[A-Za-z_]\w*)\((?P<metric>.+)\)$")
 
 # TestConfig.perf_run_tag() writes local-%Y%m%dT%H%M%SZ off CI.
 _STAMP_RE = re.compile(r"(\d{8}T\d{6}Z)")
@@ -130,6 +157,14 @@ def checkout_state(cwd=_LLK_ROOT):
     return sha, problems
 
 
+def _normalize_arch(arch):
+    """Lowercase and strip, as the loader stores ARCH; refuse an unknown arch."""
+    value = str(arch or "").strip().lower()
+    if value not in _VALID_ARCHES:
+        raise ValueError(f"arch must be one of {_VALID_ARCHES}, got {arch!r}")
+    return value
+
+
 def _check_platform(platform):
     if platform not in PLATFORMS:
         raise ValueError(f"platform must be one of {PLATFORMS}, got {platform!r}")
@@ -192,8 +227,11 @@ def plan_backfill(archive_root, arch, platform=None, platform_version=None):
             raise ValueError(
                 f"{run.run_id}: run_meta.json has no timestamp; the run_id needs it"
             )
-        run_arch = arch if run.arch == "unknown" else run.arch
-        run_platform = run.platform or platform
+        try:
+            run_arch = _normalize_arch(arch if run.arch == "unknown" else run.arch)
+        except ValueError as e:
+            raise ValueError(f"{run.run_id}: {e}") from None
+        run_platform = (run.platform or platform or "").strip().lower() or None
         try:
             _check_platform(run_platform)
         except ValueError as e:
@@ -219,19 +257,141 @@ def plan_backfill(archive_root, arch, platform=None, platform_version=None):
     return runs
 
 
+def object_name(run_id):
+    """The remote object for a run. One run is one object, as in CI."""
+    return f"{OBJECT_PREFIX}{run_id}.parquet"
+
+
+def _distinct(series):
+    return series.dropna().unique().tolist()
+
+
+def check_file(path):
+    """``(run_id, rows, problems)`` for one Parquet file.
+
+    A problem is a reason the warehouse loader would quarantine the file, or
+    would file it under the wrong run. The rules copy the loader's (see the
+    module docstring); keep them in step with data_airflow.
+    """
+    path = Path(path)
+    if not path.is_file() or path.suffix != ".parquet":
+        return None, 0, [f"not a Parquet file: {path}"]
+    try:
+        df = pq.read_table(path).to_pandas()
+    except Exception as e:  # noqa: BLE001 - any read failure is a problem to report
+        return None, 0, [f"cannot read: {type(e).__name__}: {e}"]
+    if df.empty:
+        return None, 0, ["the file has no rows"]
+
+    problems = []
+    missing = [c for c in LOADER_RUN_COLUMNS if c not in df.columns]
+    if missing:
+        problems.append(f"missing run columns: {missing}")
+    if MARKER_COLUMN not in df.columns:
+        problems.append(f"no '{MARKER_COLUMN}' column")
+    stats = [c for c in df.columns if _STAT_COLUMN_RE.match(c)]
+    if not any(_STAT_COLUMN_RE.match(c).group("stat").lower() == "mean" for c in stats):
+        problems.append("no mean(<METRIC>) column")
+
+    run = {}
+    for column in LOADER_RUN_COLUMNS + LOADER_OPTIONAL_RUN_COLUMNS:
+        if column not in df.columns:
+            continue
+        values = _distinct(df[column])
+        if len(values) > 1:
+            problems.append(f"'{column}' is not constant: {values[:5]}")
+        run[column] = values[0] if values else None
+
+    run_id = run.get("run_id")
+    for column in ("run_id", "arch", "pipeline"):
+        if column in df.columns and not str(run.get(column) or "").strip():
+            problems.append(f"'{column}' is blank")
+    for column in ("arch", "pipeline"):
+        value = run.get(column)
+        if isinstance(value, str) and value and value != value.strip().lower():
+            problems.append(f"'{column}' is not lowercase: {value!r}")
+    if run.get("pipeline") and run["pipeline"] != PIPELINE:
+        problems.append(f"pipeline is {run['pipeline']!r}, not {PIPELINE!r}")
+    if run.get("arch") and run["arch"] not in _VALID_ARCHES:
+        problems.append(f"arch {run['arch']!r} is not one of {_VALID_ARCHES}")
+    platform = run.get("platform")
+    if platform not in PLATFORMS:
+        problems.append(f"platform {platform!r} is not one of {PLATFORMS}")
+
+    timestamp = run.get("timestamp")
+    try:
+        start = _parse_ts(timestamp)
+        if not 2020 <= start.year <= 2100:
+            problems.append(f"timestamp {timestamp!r} is outside 2020..2100")
+        # The ownership rule: the id holds the pipeline and the arch, so no
+        # wormhole or blackhole run, and no other manual arch, can own it.
+        if run.get("arch") and run_id != manual_run_id(timestamp, run["arch"]):
+            problems.append(
+                f"run_id {run_id!r} does not agree with its timestamp and arch "
+                f"(expected {manual_run_id(timestamp, run['arch'])!r})"
+            )
+    except ValueError as e:
+        problems.append(str(e))
+
+    if MARKER_COLUMN in df.columns:
+        run_columns = set(LOADER_RUN_COLUMNS) | set(LOADER_OPTIONAL_RUN_COLUMNS)
+        grain = [c for c in df.columns if c not in run_columns and c not in stats]
+        repeated = int(df.duplicated(subset=grain, keep=False).sum())
+        if repeated:
+            problems.append(
+                f"{repeated} rows repeat a (configuration, marker) pair; "
+                "the loader refuses the whole file"
+            )
+    return run_id, len(df), problems
+
+
+def check_files(paths):
+    """``{path: (run_id, rows, problems)}``; two files with one run_id fail both."""
+    results = {Path(p): check_file(p) for p in paths}
+    owners = {}
+    for p, (run_id, _, _) in results.items():
+        if run_id:
+            owners.setdefault(run_id, []).append(p)
+    for run_id, files in owners.items():
+        if len(files) > 1:
+            for p in files:
+                results[p][2].append(
+                    f"run_id {run_id!r} is also in {[str(f) for f in files if f != p]}; "
+                    "the later file would replace the earlier one"
+                )
+    return results
+
+
+def _report_checks(results):
+    bad = 0
+    for p, (run_id, rows, problems) in results.items():
+        if problems:
+            bad += 1
+            print(f"FAIL {p}")
+            for problem in problems:
+                print(f"     {problem}")
+        else:
+            print(f"ok   {p}: {rows} rows -> {object_name(run_id)}")
+    return bad
+
+
 def upload(paths, key, *, dry_run=False):
     """Send ``paths`` to the warehouse ingest bucket over SFTP.
 
-    One ``put`` per file, then ``ls`` of each, so the log shows the server
-    holds them. The batch aborts on the first failed command.
+    Every file must pass ``check_files`` first; one failure stops the whole
+    batch before a connection opens. Each file goes up as
+    ``llk_perf_<run_id>.parquet``, from the run_id in its rows. Then ``ls`` of
+    each object, so the log shows that the server holds it. The batch aborts
+    on the first failed command.
     """
+    results = check_files(paths)
+    for run_id, _, problems in results.values():
+        if problems:
+            raise ValueError("; ".join(problems))
     lines = []
-    for p in paths:
-        p = Path(p)
-        if not p.is_file() or p.suffix != ".parquet":
-            raise ValueError(f"not a Parquet file: {p}")
-        lines.append(f'put "{p}"')
-    lines += [f'ls -l "{Path(p).name}"' for p in paths]
+    for p, (run_id, _, _) in results.items():
+        lines.append(f'put "{p}" "{object_name(run_id)}"')
+    lines += [f'ls -l "{object_name(r)}"' for r, _, _ in results.values()]
     cmd = [
         "sftp",
         "-i",
@@ -318,7 +478,19 @@ def _cmd_backfill(a):
 
 
 def _cmd_upload(a):
-    return upload(a.files, _key(a.key), dry_run=a.dry_run)
+    key = _key(a.key)
+    results = check_files(a.files)
+    if _report_checks(results):
+        raise SystemExit("upload: not sending anything; fix the files above")
+    return upload(a.files, key, dry_run=a.dry_run)
+
+
+def _cmd_check(a):
+    results = check_files(a.files)
+    bad = _report_checks(results)
+    rows = sum(r for _, r, _ in results.values())
+    print(f"check: {len(results) - bad} of {len(results)} file(s) pass, {rows} rows")
+    return 1 if bad else 0
 
 
 def main(argv=None):
@@ -364,6 +536,10 @@ def main(argv=None):
     )
     b.add_argument("--platform-version", help="for runs whose run_meta.json omits it")
     b.set_defaults(func=_cmd_backfill)
+
+    c = sub.add_parser("check", help="apply the loader's rules; send nothing")
+    c.add_argument("files", nargs="+")
+    c.set_defaults(func=_cmd_check)
 
     u = sub.add_parser("upload", help="send Parquet files to the warehouse")
     u.add_argument("files", nargs="+")
