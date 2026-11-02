@@ -15,11 +15,14 @@
 // Generate this core's column mask on-device: block_w tiles, one per tile across the shard width, with
 // the padding columns of the boundary tile (and any all-padding tiles) zeroed. The core's width position
 // comes from width_shard_tile_start_id (its first tile index along the normalized dimension); block_w is
-// the per-core width in tiles and logical_K the un-padded normalized width in columns.
+// the per-core width in tiles and logical_K the un-padded normalized width in columns. dfb_col_mask_obj is the
+// kernel's own col_mask DataflowBuffer: on Quasar a DataflowBuffer drains when it goes out of scope (#60848), and
+// the compute kernel pops the mask only at its end, so a helper-owned one would block here.
+// DFB is templated because on Quasar DataflowBuffer is a class template on its access patterns.
+template <typename DFB>
 FORCE_INLINE void generate_col_mask(
-    uint32_t dfb_col_mask, uint32_t block_w, uint32_t logical_K, uint32_t width_shard_tile_start_id) {
+    DFB& dfb_col_mask_obj, uint32_t block_w, uint32_t logical_K, uint32_t width_shard_tile_start_id) {
     constexpr uint32_t tile_w = 32;
-    DataflowBuffer dfb_col_mask_obj(dfb_col_mask);
     // A width shard always starts on a block boundary, so this offset is an exact multiple of block_w.
     ASSERT(width_shard_tile_start_id % block_w == 0);
     const uint32_t core_start_col = width_shard_tile_start_id * tile_w;

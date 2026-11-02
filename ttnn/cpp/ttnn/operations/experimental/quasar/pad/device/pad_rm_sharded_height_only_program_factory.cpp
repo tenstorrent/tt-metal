@@ -251,7 +251,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     const std::vector<CoreCoord> padded_cores =
         corerange_to_cores(all_cores_padded, num_cores_padded, row_major_padded);
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;

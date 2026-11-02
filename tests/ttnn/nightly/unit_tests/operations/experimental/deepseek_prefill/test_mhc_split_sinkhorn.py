@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, is_blackhole
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_blackhole
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig, parametrize
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
 

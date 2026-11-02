@@ -19,14 +19,14 @@
 - name: Llama 3.1-8B e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 420 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
     # The DRAM prefetcher does not yet support more than one repeat batch (issue #47820):
     # cover the eval repeat-batch loop with the prefetcher DISABLED (perf reporting skipped
     # so only the prefetcher run sets perf), and cover the prefetcher path with a SINGLE
     # repeat batch (this run reports/validates perf). See #47820 for the multi-batch work.
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
+    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
+    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
+    pytest --timeout 420 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
   model: llama3.1-8b
   model_family: Llama
   skus:
@@ -59,30 +59,30 @@
 # test definition instead of leaking into the workflow yamls. Mirrors the
 # legacy `llama3.1-8b data-parallel tests (LFC)` entry from
 # tests/pipeline_reorg/blackhole_demo_tests.yaml.
-- name: Llama 3.1-8B data-parallel e2e tests (P300 LFC)
-  cmd: |
-    set -e
-    mkdir -p /mnt/MLPerf/huggingface/meta-llama
-    wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /mnt/MLPerf/huggingface/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
-    export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
-  model: llama3.1-8b-dp
-  model_family: Llama
-  skus:
-    bh_p300:
-      timeout: 25
-      tier: 2
-      release_ready: false
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: e2e
+# - name: Llama 3.1-8B data-parallel e2e tests (P300 LFC)
+#   cmd: |
+#     set -e
+#     mkdir -p /mnt/MLPerf/huggingface/meta-llama
+#     wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /mnt/MLPerf/huggingface/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+#     export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
+#     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
+#     pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
+#   model: llama3.1-8b-dp
+#   model_family: Llama
+#   skus:
+#     bh_p300:
+#       timeout: 25
+#       tier: 2
+#       release_ready: false
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: e2e
 
 # TODO: Move DP tests to sweep pipelines when those come online
 - name: Llama 3.1-8B data-parallel e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
+    pytest models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
   model: llama3.1-8b-dp
   model_family: Llama
   skus:
@@ -105,7 +105,7 @@
 - name: Llama 3.1-8B data-parallel e2e tests (Galaxy)
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+    pytest models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
   model: llama3.1-8b-dp-galaxy
   model_family: Llama
   skus:
@@ -119,8 +119,8 @@
 
 - name: Llama 3.2-1B e2e tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.2-1B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.2-1B-Instruct MESH_DEVICE=N150
-    pytest --timeout 600 models/common/tests/demos/llama32_1b/demo.py -k "token-accuracy and performance"
+    export HF_MODEL=meta-llama/Llama-3.2-1B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.2-1B-Instruct MESH_DEVICE=N150 TT_TRANSFORMERS_REQUIRE_PASS=1
+    tests/scripts/run_tt_transformers_tests.sh --timeout 600 tests/hardware/models/llama32_1b/test_demo.py -k "token-accuracy and performance"
   model: llama3.2-1b
   model_family: Llama
   skus:
@@ -134,10 +134,10 @@
 
 - name: Llama 3.2-3B e2e tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.2-3B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.2-3B-Instruct MESH_DEVICE=N150
+    export HF_MODEL=meta-llama/Llama-3.2-3B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.2-3B-Instruct MESH_DEVICE=N150 TT_TRANSFORMERS_REQUIRE_PASS=1
     # Extra time budget vs a warm run: the first CI run must generate the TTTv2 weight cache at
     # TT_CACHE_PATH (cold-cache weight conversion) before the demo runs; warm re-runs are faster.
-    pytest --timeout 720 models/common/tests/demos/llama32_3b/demo.py -k "token-accuracy and performance"
+    tests/scripts/run_tt_transformers_tests.sh --timeout 720 tests/hardware/models/llama32_3b/test_demo.py -k "token-accuracy and performance"
   model: llama3.2-3b
   model_family: Llama
   skus:
@@ -152,7 +152,7 @@
 - name: Llama 3.2-11B Vision e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.2-11B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-11B-Vision-Instruct MESH_DEVICE=T3K
-    pytest --timeout 900 models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace"
+    pytest --timeout 900 models/ttt_compat/demo/simple_vision_demo.py -k "not batch1-notrace"
   model: llama3.2-11b-vision
   model_family: Llama
   skus:
@@ -167,7 +167,7 @@
 - name: Llama 3.2-90B-Vision e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
-    pytest --timeout 1500 models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace"
+    pytest --timeout 1500 models/ttt_compat/demo/simple_vision_demo.py -k "batch1-trace"
   model: llama3.2-90b-vision
   model_family: Llama
   skus:
@@ -185,8 +185,8 @@
 - name: Llama 3.3-70B e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 4200 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: llama3.3-70b
   model_family: Llama
   skus:
@@ -221,7 +221,7 @@
 # - name: Llama 3.3-70B data-parallel e2e tests (Galaxy)
 #   cmd: |
 #     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-#     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+#     pytest models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
 #   model: llama3.3-70b-dp-galaxy
 #   skus:
 #     wh_galaxy_perf:
@@ -240,9 +240,9 @@
   # One pytest process per case (matching the Qwen2.5-Coder-32B leg below): grouping demo configs in a
   # single process on the 8-device Wormhole mesh has wedged an ETH core, so each case opens its own mesh.
   cmd: |
-    export HF_MODEL=Qwen/Qwen3-32B HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen3-32B MESH_DEVICE=T3K
-    pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "token-accuracy and performance"
-    pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "eval-32-perf-report and performance"
+    export HF_MODEL=Qwen/Qwen3-32B HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen3-32B MESH_DEVICE=T3K TT_TRANSFORMERS_REQUIRE_PASS=1
+    tests/scripts/run_tt_transformers_tests.sh --timeout 1800 tests/hardware/models/qwen3_32b/test_demo.py -k "token-accuracy and performance"
+    tests/scripts/run_tt_transformers_tests.sh --timeout 1800 tests/hardware/models/qwen3_32b/test_demo.py -k "eval-32-perf-report and performance"
   model: qwen3-32b
   model_family: Qwen
   skus:
@@ -259,8 +259,8 @@
   # simple_text_demo leg until a Blackhole TTTv2 bring-up exists — no coverage dropped.
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 4200 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen3-32b
   model_family: Qwen
   skus:
@@ -295,7 +295,7 @@
 - name: Qwen3-0.6B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen3-0.6B HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-0.6B
-    pytest --timeout 720 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
+    pytest --timeout 720 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
   model: qwen3-0.6b
   model_family: Qwen
   skus:
@@ -314,7 +314,7 @@
 - name: Qwen3-1.7B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen3-1.7B HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-1.7B
-    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
+    pytest --timeout 840 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
   model: qwen3-1.7b
   model_family: Qwen
   skus:
@@ -333,8 +333,8 @@
 - name: Qwen2.5-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct
-    pytest --timeout 1500 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 1500 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen2.5-32b
   model_family: Qwen
   skus:
@@ -352,9 +352,9 @@
 
 - name: Qwen2.5-Coder-32B e2e tests
   cmd: |
-    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-Coder-32B-Instruct MESH_DEVICE=T3K
-    pytest --timeout 1500 models/common/tests/demos/qwen25_coder_32b/demo.py -k "token-accuracy and performance"
-    pytest --timeout 1800 models/common/tests/demos/qwen25_coder_32b/demo.py -k "eval-32 and performance"
+    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-Coder-32B-Instruct MESH_DEVICE=T3K TT_TRANSFORMERS_REQUIRE_PASS=1
+    tests/scripts/run_tt_transformers_tests.sh --timeout 1500 tests/hardware/models/qwen25_coder_32b/test_demo.py -k "token-accuracy and performance"
+    tests/scripts/run_tt_transformers_tests.sh --timeout 1800 tests/hardware/models/qwen25_coder_32b/test_demo.py -k "eval-32 and performance"
   model: qwen2.5-coder-32b
   model_family: Qwen
   skus:
@@ -369,8 +369,8 @@
 - name: Qwen2.5-Coder-32B e2e tests (Blackhole)
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
-    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 4200 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen2.5-coder-32b
   model_family: Qwen
   skus:
@@ -384,8 +384,8 @@
 
 - name: Qwen2.5-7B e2e tests
   cmd: |
-    export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300
-    pytest --timeout 420 models/common/tests/demos/qwen25_7b/demo.py -k "token-accuracy and performance"
+    export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300 TT_TRANSFORMERS_REQUIRE_PASS=1
+    tests/scripts/run_tt_transformers_tests.sh --timeout 420 tests/hardware/models/qwen25_7b/test_demo.py -k "token-accuracy and performance"
   model: qwen2.5-7b
   model_family: Qwen
   skus:
@@ -407,7 +407,7 @@
 #   # devices). First CI run builds the TTTv2 LazyWeight cache (cold 72B weight conversion) before the demo.
 #   cmd: |
 #     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-72B-Instruct MESH_DEVICE=T3K
-#     pytest --timeout 3600 models/common/tests/demos/qwen25_72b/demo.py -k "token-accuracy and performance"
+#     tests/scripts/run_tt_transformers_tests.sh --timeout 3600 tests/hardware/models/qwen25_72b/test_demo.py -k "token-accuracy and performance"
 #   model: qwen2.5-72b
 #   model_family: Qwen
 #   skus:
@@ -490,11 +490,11 @@
   budget_type: e2e
 
 # TODO Top-1/Top-5 test failing with segfaulting.
-# pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+# pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
 - name: QwQ-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/QwQ-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/QwQ-32B
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwq-32b
   model_family: Qwen
   skus:
@@ -587,11 +587,11 @@
 
 # Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N300
 # (2B + 9B); 2B also runs on N150 (single-chip, covered by CI). Requires
-# gemma-2-{2b,9b}-it.refpt under models/tt_transformers/tests/reference_outputs/.
+# gemma-2-{2b,9b}-it.refpt under models/ttt_compat/tests/reference_outputs/.
 - name: Gemma-2-2B e2e tests
   cmd: |
     export HF_MODEL=google/gemma-2-2b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-2b-it
-    pytest --timeout 900 models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
+    pytest --timeout 900 models/ttt_compat/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
   model: gemma-2-2b
   model_family: Gemma
   skus:
@@ -608,7 +608,7 @@
 - name: Gemma-2-9B e2e tests
   cmd: |
     export HF_MODEL=google/gemma-2-9b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-9b-it
-    pytest --timeout 1200 models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
+    pytest --timeout 1200 models/ttt_compat/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
   model: gemma-2-9b
   model_family: Gemma
   skus:
@@ -729,10 +729,10 @@
     #   tier: 3
     # Note: do not add bh_p150 here — models e2e_tier3 bh_p150 budget is 7m
     # and Gemma-4-E2B already uses 5m on that SKU (f562aa60493 over-budget).
-    bh_p300:
-      timeout: 10
-      tier: 3
-      release_ready: false
+    # bh_p300:
+    #   timeout: 10
+    #   tier: 3
+    #   release_ready: false
     bh_quietbox_2:
       timeout: 15
       tier: 3
@@ -748,11 +748,12 @@
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
     # 10m; demo+lm_head+matches_sequential+full_model already fill it.
-    pytest -s --timeout 900 \
-      models/demos/gemma4/tests/unit/test_lm_head.py \
-      models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    # test_full_model ("MoE model too large for TP=4") and test_packed_verify
+    # (expert prefill needs seq_len % 32 == 0) skip on the 26B, so only lm_head
+    # is listed. The image e2e (SigLIP tower shared with the 31B, 1152->2816
+    # projector, soft tokens merged into the MoE prefill) runs batch 1 only.
+    pytest -s --timeout 900 models/demos/gemma4/tests/unit/test_lm_head.py
+    pytest -s --timeout 900 models/demos/gemma4/demo/vision_demo.py -k "not 32"
   model: gemma-4-26b-a4b
   model_family: Gemma
   skus:
@@ -761,7 +762,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 22
+      timeout: 14  # measured 7.7 min warm (16.4 cold) 2026-10-24
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
@@ -782,21 +783,42 @@
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
-    # 10m; demo+lm_head+matches_sequential+full_model already fill it.
+    # 14m; demo+lm_head+matches_sequential+full_model measure 11-13m there.
+    # test_prose_accuracy: 2048 prose tokens on the (1,4) mesh against the fp32 top-5 reference (~1.5 min with the load)
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    # Blackhole only: the 2K prose gate (a (1,4) gate; the wh_llmbox_perf leg has no minute to spare for it) and the
+    # report-only composite-path readings (GEMMA4_QKV_NORM_ROPE_PREFILL=0) on the release SKU: the 2K prose gate and
+    # the 385-position token-accuracy row next to the gated rows, which run the fused prefill op (the dense default);
+    # never asserting. Blackhole only (the op's kernels are Blackhole-validated; the resolver refuses it on Wormhole).
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      pytest -s --timeout 900 models/demos/gemma4/tests/test_prose_accuracy.py
+      GEMMA4_QKV_NORM_ROPE_PREFILL=0 GEMMA4_PROSE_REPORT_ONLY=1 GEMMA4_PROSE_TAG="report-only composite qkv-norm-rope" \
+        pytest -s --timeout 900 models/demos/gemma4/tests/test_prose_accuracy.py
+      GEMMA4_QKV_NORM_ROPE_PREFILL=0 GEMMA4_MIN_TOP1=0 GEMMA4_MIN_TOP5=0 GEMMA4_TOKACC_TAG="report-only 31B composite qkv-norm-rope" \
+        pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
+    fi
+    # Vision tower + encoder at full depth against the masked HF reference
+    # (PCC >= 0.98), weight-backed; ~2.5 min on the QB2 1x4 mesh. The vision
+    # tests keep CI to their two_layers case unless told otherwise.
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      GEMMA4_VISION_FULL_DEPTH=1 pytest -s --timeout 900 \
+        models/demos/gemma4/tests/unit/test_vision_encoder.py \
+        -k "all_layers"
+    fi
   model: gemma-4-31b
   model_family: Gemma
   skus:
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 14
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 25
+      timeout: 26  # text_demo 404 s + lm_head / packed_verify / full_model 614 s (HF reference cached after the first run)
+                   # + the prose gate and its composite reading + the vision towers; a 31B load on this runner is ~5.5 min
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
@@ -808,16 +830,52 @@
   team: models
   budget_type: e2e
 
+- name: Gemma-4-31B token-accuracy tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    # Whole-model teacher-forced token-accuracy gate (top-1 / top-5 vs the stored HF predictions, batch 1): ~3 min
+    # on the QB2 1x4 mesh plus the ~5.5 min checkpoint load from a warm TT cache (a cold cache converts the 1188
+    # tensors first). The full-depth vision gate runs in the 31B e2e job.
+    pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
+    # Report-only rows on the release SKU (GEMMA4_MIN_TOP1/5=0 never trip the gate; the tag names the row in the log):
+    # the 12B on the same 385 positions with the fused qkv-norm-rope prefill op (the dense default) and with the
+    # composite path (GEMMA4_QKV_NORM_ROPE_PREFILL=0). The 385-position metric swings 0.02-0.04 between ulp-level
+    # trajectories (0.8416 on a Galaxy column vs 0.8649 on this SKU for identical code); the prose gates decide.
+    export HF_MODEL=google/gemma-4-12B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-12B-it
+    GEMMA4_MIN_TOP1=0 GEMMA4_MIN_TOP5=0 GEMMA4_TOKACC_TAG="report-only 12B fused qkv-norm-rope (the default)" \
+      pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
+    GEMMA4_QKV_NORM_ROPE_PREFILL=0 GEMMA4_MIN_TOP1=0 GEMMA4_MIN_TOP5=0 GEMMA4_TOKACC_TAG="report-only 12B composite qkv-norm-rope" \
+      pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
+  model: gemma-4-31b
+  model_family: Gemma
+  skus:
+    bh_quietbox_2:
+      timeout: 16  # 3.3 min warm plus the two 12B report rows; a cold TT-cache rebuild is the shield runner's exposure
+      tier: 1  # the tier-2 QB2 bucket is full (186/186); this fits the tier-1 headroom
+      release_ready: false
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: e2e
+
 - name: Gemma-4-12B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-12B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-12B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    # test_prose_accuracy: 2048 prose tokens on the (1,4) mesh against the fp32 top-5 reference (skips on bh_p150)
+    # test_mm_prefill_vision_device: bidirectional vision attention through a cached-prefix continuation and a
+    # generator-chunked prefill vs the whole prompt (a (1,4) gate, ~1 min; skips on bh_p150)
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      models/demos/gemma4/tests/test_prose_accuracy.py \
+      models/demos/gemma4/tests/unit/test_mm_prefill_vision_device.py \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    # Report-only 2K prose reading with the fused prefill op on (GEMMA4_QKV_NORM_ROPE_PREFILL=1), next to the gated row
+    GEMMA4_QKV_NORM_ROPE_PREFILL=0 GEMMA4_PROSE_REPORT_ONLY=1 GEMMA4_PROSE_TAG="report-only composite qkv-norm-rope" \
+      pytest -s --timeout 900 models/demos/gemma4/tests/test_prose_accuracy.py
   model: gemma-4-12b
   model_family: Gemma
   skus:
@@ -829,7 +887,7 @@
       timeout: 6
       tier: 2
     bh_quietbox_2:
-      timeout: 22
+      timeout: 13  # 9.7 min measured plus ~1 min for test_prose_accuracy (24 s of test on a warm cache + load)
       tier: 1
       release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy
@@ -840,9 +898,9 @@
 
 - name: Mistral-7B e2e tests
   cmd: |
-    export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mistralai/Mistral-7B-Instruct-v0.3 MESH_DEVICE=N150
-    pytest --timeout 420 models/common/tests/demos/mistral_7b/demo.py -k "token-accuracy and performance"
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3 pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mistralai/Mistral-7B-Instruct-v0.3 MESH_DEVICE=N150 TT_TRANSFORMERS_REQUIRE_PASS=1
+    tests/scripts/run_tt_transformers_tests.sh --timeout 420 tests/hardware/models/mistral_7b/test_demo.py -k "token-accuracy and performance"
+    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3 pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: mistral-7b
   model_family: Mistral
   skus:
@@ -874,8 +932,8 @@
 - name: Mixtral-8x7B e2e tests
   cmd: |
     export HF_MODEL=mistralai/Mixtral-8x7B-Instruct-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-Instruct-v0.1
-    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 4200 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: mixtral-8x7b
   model_family: Mistral
   skus:
@@ -923,6 +981,11 @@
   cmd: |
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
     pytest models/demos/gpt_oss/demo/text_demo.py --timeout 600
+    # DFlash accuracy (QuietBox 2; skips elsewhere). The drafter is not in the shared HF cache (read-only, offline here):
+    # download it into a job-local cache.
+    DFLASH_DRAFT_PATH=$(HF_HUB_OFFLINE=0 HF_HUB_CACHE=/tmp/dflash_hf python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download('z-lab/gpt-oss-20b-DFlash'))")
+    export DFLASH_DRAFT_PATH
+    pytest models/demos/gpt_oss/tests/test_dflash.py -k isl_1k
   model: gpt-oss-20b
   model_family: GPT-OSS
   skus:
@@ -935,7 +998,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 15
+      timeout: 26 # text_demo 7.2 min + DFlash test 9-12 min (measured: the weight load from the shared cache varies)
       tier: 2
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
@@ -998,7 +1061,7 @@
 - name: Phi-3-mini e2e tests
   cmd: |
     export HF_MODEL=microsoft/Phi-3-mini-128k-instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/Phi-3-mini-128k-instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 420 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
   model: phi-3-mini
   model_family: Phi
   skus:
@@ -1014,7 +1077,7 @@
 # - name: Phi-4-mini e2e tests
 #   cmd: |
 #     export HF_MODEL=microsoft/Phi-4-mini-instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/Phi-4-mini-instruct
-#     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+#     pytest --timeout 420 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching"
 #   model: phi-4-mini
 #   skus:
 #     wh_n150:
@@ -1591,7 +1654,7 @@
     pytest --timeout 3500 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
       -k "resolution_480p and t2v" || exit $?
     pytest --timeout 3500 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
-      -k "(4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p) or (2x2sp0tp1nl2_linear_is_fsdp1 and resolution_480p)" || exit $?
+      -k "t2v and ((4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p) or (2x2sp0tp1nl2_linear_is_fsdp1 and resolution_480p))" || exit $?
     pytest --timeout 1700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
       -k "wh_4x8_sp1tp0 and resolution_720p and t2v" || exit $?
   model: wan-2.2-t2v
@@ -1614,15 +1677,13 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
     PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
-    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
     test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
@@ -1633,7 +1694,33 @@
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       -- \
-      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and t2v"
+      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p and t2v"
+  model: wan-2.2-t2v
+  model_family: Wan
+  skus:
+    bh_sc4:
+      timeout: 40
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: e2e
+
+- name: TT-DiT Wan2.2-T2V-A14B multihost quad perf tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    export RUN_VBENCH=1 VBENCH_EXPORT_DIR="${PIPELINE_DIR}/vbench"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
@@ -1641,14 +1728,17 @@
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       -- \
-      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and t2v" || exit $?
+    mpirun -np 1 --host "${RESOLVED_HOSTS%%,*}" --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      env OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=1 python3 -m models.tt_dit.utils.vbench_bundle evaluate \
+        --bundle "${VBENCH_EXPORT_DIR}"
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    bh_sc4:
-      timeout: 80
+    bh_sc4_high_power:
+      timeout: 75
       tier: 1
-      release_ready: true
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
   budget_type: e2e
@@ -1657,15 +1747,13 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
-    PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py"
+    PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
-    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
     test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
@@ -1676,7 +1764,33 @@
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       -- \
-      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and i2v"
+      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p and i2v"
+  model: wan-2.2-i2v
+  model_family: Wan
+  skus:
+    bh_sc4:
+      timeout: 35
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: e2e
+
+- name: TT-DiT Wan2.2-I2V-A14B multihost quad perf tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    export RUN_VBENCH=1 VBENCH_EXPORT_DIR="${PIPELINE_DIR}/vbench"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
@@ -1684,72 +1798,73 @@
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       -- \
-      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and i2v" || exit $?
+    mpirun -np 1 --host "${RESOLVED_HOSTS%%,*}" --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      env OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=1 python3 -m models.tt_dit.utils.vbench_bundle evaluate \
+        --bundle "${VBENCH_EXPORT_DIR}"
   model: wan-2.2-i2v
   model_family: Wan
   skus:
-    bh_sc4:
-      timeout: 80
+    bh_sc4_high_power:
+      timeout: 50
       tier: 1
-      release_ready: true
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
   budget_type: e2e
 
 # ── WAN 2.2 (Black Hole single galaxy, bh_sc1) ───────────────────
-- name: TT-DiT Wan2.2-T2V-A14B single galaxy e2e tests
+- name: TT-DiT Wan2.2-T2V-A14B single galaxy perf tests
   cmd: |
     unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || exit $?; }
-    run --timeout 1800 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+    run --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
       -k "ring_bh_4x8_sp1tp0 and t2v"
     run --timeout 2100 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
-      -k "4x8sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+      -k "4x8sp1tp0nl2_ring_is_fsdp0 and resolution_720p and t2v"
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    bh_sc1:
-      timeout: 45
+    bh_sc1_high_power:
+      timeout: 65
       tier: 1
       release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
   budget_type: e2e
 
-- name: TT-DiT Wan2.2-I2V-A14B single galaxy e2e tests
+- name: TT-DiT Wan2.2-I2V-A14B single galaxy perf tests
   cmd: |
     unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    # Single-galaxy counterparts of the bh_sc4 quad legs above, on one rank instead of tt-run:
-    # ring_bh_4x8 for perf (it requests a Blackhole-sized fabric packet payload, so it self-skips
-    # on Wormhole only, not here), and the 4x8 linear pipeline case, which is the only 4x8 config
-    # test_pipeline_wan_i2v.py defines for Blackhole -- there is no 4x8 ring case for I2V.
+    # The pipeline test runs the 4x8 linear case: it's the only Blackhole 4x8 config test_pipeline_wan.py
+    # has for I2V (the 4x8 ring case is T2V only).
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || exit $?; }
-    run --timeout 1200 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+    run --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
       -k "ring_bh_4x8_sp1tp0 and resolution_720p and i2v"
-    run --timeout 3000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py \
-      -k "4x8sp1tp0nl2_linear_is_fsdp0 and resolution_720p"
+    run --timeout 3000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
+      -k "4x8sp1tp0nl2_linear_is_fsdp0 and resolution_720p and i2v"
   model: wan-2.2-i2v
   model_family: Wan
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 75
       tier: 1
       release_ready: true
@@ -1763,7 +1878,7 @@
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
-    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -1781,12 +1896,12 @@
   team: models
   budget_type: e2e
 
-- name: TT-DiT LTX-2.3 Fast T2V e2e tests
+- name: TT-DiT LTX-2.3 Fast T2V perf tests
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
-    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     # Keep five seeds and every frame. Appearance metrics use the original clips;
     # temporal metrics use lossless 960x544 copies, scored concurrently after pytest.
     export RUN_VBENCH=1 VBENCH_SEEDS=5 VBENCH_TEMPORAL_WIDTH=960
@@ -1808,8 +1923,8 @@
   model: ltx-2.3-fast-t2v
   model_family: LTX
   skus:
-    bh_sc1:
-      timeout: 35
+    bh_sc1_high_power:
+      timeout: 45
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
@@ -1821,7 +1936,7 @@
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
-    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -1845,7 +1960,7 @@
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
-    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1

@@ -279,13 +279,15 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, WaitOnEventIgnoresLaterWork) {
 
     // Returns without waiting for spin_wl, which would never finish before the release below
     cq1.enqueue_wait_for_event(event);
+    distributed::Finish(cq1);
 
     std::vector<uint32_t> written(1, 0);
     slow_dispatch::ReadFromL1(this->device(), node, written_address, sizeof(uint32_t), written);
-    ASSERT_EQ(written[0], written_value);
 
+    // Release prior to checking values so kernel doesn't get stuck on failure
     std::vector<uint32_t> release(1, release_value);
     slow_dispatch::WriteToL1(this->device(), node, release_address, release);
     distributed::Finish(cq0);
     distributed::Finish(cq1);
+    ASSERT_EQ(written[0], written_value);
 }

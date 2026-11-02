@@ -42,7 +42,7 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <impl/context/metal_context.hpp>
@@ -279,7 +279,6 @@ static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(c
         case ReduceType::MAX: reduce_defines.emplace("REDUCE_OP", "PoolType::MAX"); break;
     }
     reduce_defines.emplace("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
-    reduce_defines.emplace("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
     return reduce_defines;
 }
 
@@ -919,15 +918,14 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
     }
 }
 
-// Quasar-only: MxFp4 column-reduce (SUM) exercising the 2x-packed src-register format via GAPOOL.
-// Mirrors the LLK test_reduce_quasar_mxfp4_2x_gapool python test at the metal layer. Only the
+// Quasar-only: MxFp4 column-reduce (SUM) via GAPOOL with the reader's Float16_b scaler, so it runs the
+// plain MxFp4 -> Float16_b path; the 2x-packed path also needs an MxFp4 scaler. Only the
 // column (H) reduce is valid for MxFp4_2x: it issues GAPOOLs, the only op_mmul-family op (with
 // MVMUL/MVMULDI) that reads the 2x-packed SrcA correctly. Row/Scalar reduce commit per-face
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceColumnMxFp4X2) {
-    if (MetalContext::instance().rtoptions().get_quasar_arch_variant() == "quasar_4row") {
-        GTEST_SKIP() << "MxFp4_2x register formats do not exist on the 4-row Quasar variant";
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4) {
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
     }
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
@@ -943,8 +941,9 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceColumnM
         .rtol = 0.1f,
         .golden_function = ::unit_tests::compute::gold_reduce_h,
         .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
-        .math_fidelity = MathFidelity::HiFi4,
-        // MxFp4 + column (H) reduce auto-selects the 2x-packed src-register format on Quasar.
+        // Quasar's first fidelity phase covers the Float16_b operands in full
+        .math_fidelity = MathFidelity::LoFi,
+        // Plain MxFp4 path: the reader's scaler is Float16_b (see the comment above the test)
         .input_format = tt::DataFormat::MxFp4,
     };
     run_single_core_reduce_program(this->device(), test_config);

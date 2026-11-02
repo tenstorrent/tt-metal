@@ -5,7 +5,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 pytestmark = pytest.mark.use_module_device
 

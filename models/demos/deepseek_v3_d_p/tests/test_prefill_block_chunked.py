@@ -35,11 +35,16 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    moe_fabric_payload,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7 import KimiK27Adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -47,6 +52,7 @@ from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
+    gather_cache_natural,
     gather_cache_tp0,
     interleave_pe,
     read_sharded_rows,
@@ -240,6 +246,7 @@ def run_chunked_block(
     kv_reduction_reference=None,
     determinism_check=False,
     num_iterations=1,
+    tp_shard_kv=False,
 ):
     is_dense = layer_idx < variant.model_config.NUM_DENSE_LAYERS
     if weight_cache_path is None:
@@ -323,6 +330,7 @@ def run_chunked_block(
         is_chunked=True,
         slot_num=1,
         layer_num=1,
+        tp_shard_kv=tp_shard_kv or None,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -344,6 +352,7 @@ def run_chunked_block(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=1,
+        tp_axis=tp_axis if tp_shard_kv else None,
     )
 
     hidden_shard_dims = [None, None]
@@ -485,15 +494,10 @@ def run_chunked_block(
     _pcc("layer_output", ref_out, out_accum, THRESHOLDS.output)
 
     # --- Independent sanity check: un-rotate the final device cache and compare to kv_post_transform. ---
-    cache_sr = ttnn.to_torch(
-        tt_kvpe_cache.storage,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[:, :1][
-        0, 0
-    ]  # [SEQ_CACHE, kvpe]
-    p = blockcyclic_positions(sp, CHUNK, SEQ_CACHE)
+    cache_sr, stripes = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)
+    p = blockcyclic_positions(stripes, CHUNK, SEQ_CACHE)
     nat = torch.empty(SEQ_CACHE, kvpe_dim, dtype=torch.float32)
-    nat[p] = cache_sr
+    nat[p] = cache_sr[0]
     dev_cache = nat[:total_len]
     logger.info("Device cache sanity vs kv_post_transform:")
     _pcc("cache[nope]", g_post[:, :kv_lora], dev_cache[:, :kv_lora], THRESHOLDS.kv_nope)
@@ -520,7 +524,7 @@ def run_chunked_block(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -712,7 +716,7 @@ def run_chunked_block_multiuser(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -749,7 +753,16 @@ def test_ds_prefill_block_chunked_multiuser(
 
 
 def run_chunked_block_padded(
-    variant, config, mesh_device, weight_cache_path, splits, layer_idx, gate_fallback_mode, num_links, topology
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    splits,
+    layer_idx,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    tp_shard_kv=False,
 ):
     """Variable/partial chunked prefill: a single prompt of sum(splits) real tokens fed in chunks of
     variable real length `splits` (e.g. [1024, 4096]), each run as a full CHUNK-wide tile padded with
@@ -850,6 +863,7 @@ def run_chunked_block_padded(
         is_chunked=True,
         slot_num=1,
         layer_num=1,
+        tp_shard_kv=tp_shard_kv or None,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -870,6 +884,7 @@ def run_chunked_block_padded(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=1,
+        tp_axis=tp_axis if tp_shard_kv else None,
     )
 
     hidden_shard_dims = [None, None]
@@ -973,15 +988,10 @@ def run_chunked_block_padded(
 
     # --- Final: gather the device KV cache, un-rotate, compare the contiguous [:total_real] valid
     #     region to the trace's kv_post_transform (this is the "5k gathered from 2 chunks" check). ---
-    cache_sr = ttnn.to_torch(
-        tt_kvpe_cache.storage,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[:, :1][
-        0, 0
-    ]  # [seq_len_cache, kvpe]
-    p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
+    cache_sr, stripes = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)
+    p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
     nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
-    nat[p] = cache_sr
+    nat[p] = cache_sr[0]
     dev_cache = nat[:total_real]
     logger.info("Device KV cache (gathered across chunks) vs kv_post_transform:")
     _pcc("cache[nope]", g_post[:, :kv_lora], dev_cache[:, :kv_lora], THRESHOLDS.kv_nope)
@@ -1005,7 +1015,7 @@ def run_chunked_block_padded(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1059,7 +1069,10 @@ def test_ds_prefill_block_chunked_padded(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
+            # Open L1_SMALL like the Kimi K2.7 runner, so op-owned CCL semaphores stay out of main L1.
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(KimiK27Config), l1_small_size=KimiK27Adapter.l1_small_size
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1096,6 +1109,7 @@ def test_kimi_prefill_block_chunked(
         topology,
         determinism_check=determinism_check,
         num_iterations=num_iterations,
+        tp_shard_kv=True,
     )
 
 
@@ -1110,7 +1124,10 @@ def test_kimi_prefill_block_chunked(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
+            # Open L1_SMALL like the Kimi K2.7 runner, so op-owned CCL semaphores stay out of main L1.
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(KimiK27Config), l1_small_size=KimiK27Adapter.l1_small_size
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1134,7 +1151,16 @@ def test_kimi_prefill_block_chunked_padded(
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block_padded(
-        variant, config_only, mesh_device, weight_cache_path, splits, layer_idx, gate_fallback_mode, num_links, topology
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        splits,
+        layer_idx,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        tp_shard_kv=True,
     )
 
 
@@ -1156,7 +1182,7 @@ def test_kimi_prefill_block_chunked_padded(
     [
         pytest.param(
             (8, 4),
-            fabric2d_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
+            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(MistralSmall4Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-mesh-8x4",
@@ -1370,7 +1396,7 @@ def run_chunked_block_glm_indexer(
         pytest.param(
             (8, 4),
             # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
-            torus_xy_device_params(fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE, l1_small_size=768),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=768),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

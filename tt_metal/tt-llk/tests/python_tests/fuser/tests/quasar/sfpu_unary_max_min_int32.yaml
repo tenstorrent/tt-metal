@@ -1,0 +1,50 @@
+# Int32 unary max/min at the default scalar 1000: both signs, the scalar's neighbours and both int32
+# extremes. The fuser stages Int32 as sign-magnitude while the kernel defaults to two's complement; a
+# negative sign-magnitude word still reads as negative, so against the positive scalar every pick is
+# right. Negative scalars and the sign-magnitude kernel are covered by test_unary_max_min_scalar_quasar.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Int32]
+    stimuli:
+      include:
+        - [-2147483646.0, -2147483600.0]
+        - [-123456030.0, -123456000.0]
+        - [-1100.0, -900.0]
+        - [-40.0, -2.0]
+        - [2.0, 40.0]
+        - [900.0, 997.0]
+        - [1003.0, 1100.0]
+        - [123456000.0, 123456030.0]
+        - [2147483600.0, 2147483646.0]
+        - -2147483647.0
+        - -1073741824.0
+        - -65536.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 998.0
+        - 999.0
+        - 1000.0
+        - 1001.0
+        - 1002.0
+        - 65536.0
+        - 1073741824.0
+        - 2147483647.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Int32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [UnaryMaxInt32, UnaryMinInt32]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

@@ -21,7 +21,7 @@ import gc
 import pytest
 from transformers import AutoTokenizer
 
-MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
+MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
 MESH_SHAPE = (1, 2)  # data_parallel = 2 submeshes
 PER_SUBMESH_BATCH = 16  # global batch = 2 * 16 = 32
 NUM_COMPLETIONS = 32

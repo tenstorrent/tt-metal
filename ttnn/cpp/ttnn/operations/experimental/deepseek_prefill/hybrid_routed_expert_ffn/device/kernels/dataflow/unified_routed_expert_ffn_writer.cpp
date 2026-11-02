@@ -40,6 +40,7 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
+#include "../hybrid_expert_done.hpp"  // outside HYB_NS: it reads absolute, unshifted runtime-arg indices
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp"
 // Under HYB_NS this body is one half of the union kernel: everything below is namespaced so
 // the two halves cannot collide at file scope, and the shims rebase its argument indices into
@@ -55,6 +56,12 @@ namespace HYB_NS {
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
+#ifdef URE_FAR_EXT_OFF
+// Overlapped with combine: the chunk each expert's combine walks open on, appended to the counts table.
+#define URE_FIRST_CHUNK(counts_ptr, gid) ((counts_ptr)[URE_FAR_EXT_OFF / sizeof(uint32_t) + (gid)])
+#else
+#define URE_FIRST_CHUNK(counts_ptr, gid) 0u
+#endif
 void kernel_main() {
     Noc noc;
 
@@ -270,7 +277,9 @@ void kernel_main() {
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
 
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        for (uint32_t chunk_i = 0; chunk_i < effective_chunks; ++chunk_i) {
+            const uint32_t chunk =
+                adaptive_chunk::chunk_at(chunk_i, effective_chunks, URE_FIRST_CHUNK(counts_ptr, global_expert_id));
             // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
             // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
             // Runs before the cb_out drain.
@@ -502,7 +511,9 @@ void kernel_main() {
                     cb_out_buf.pop_front(this_tiles);
                 }
             }
+            HYB_CHUNK_DONE(chunk, chunk_M_max);
         }  // end chunk loop
+        HYB_EXPERT_DONE();
     }  // end per-local-expert loop
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).

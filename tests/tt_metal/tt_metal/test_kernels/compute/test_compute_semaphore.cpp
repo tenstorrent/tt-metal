@@ -20,7 +20,10 @@
 //      back-pressure keeps the value at the programmed maximum and every credit must survive.
 //
 // The hardware semaphore is 4-bit (0..15) and starts every kernel at 0: compute_kernel_hw_startup()
-// seeds it on PACK (pattern D), and every pattern leaves it balanced at 0 for the next program. The
+// seeds it on PACK (pattern D), and every pattern leaves it at 0 for the next program. The firmware does
+// not reset the Sync Unit semaphore between programs, so a residue would be read by the next program's
+// consumer before its producer's seed lands. The nosync negative controls are deliberately unbalanced,
+// so they end with set(0) on whichever thread issues the last semaphore op. The
 // patterns that do not call hw_startup (A/E) seed it with set(0) on their PRODUCING thread, which
 // is safe for the same reason the hw_startup seed is: the producer's first up() is queued behind its
 // own SEMINIT, and the consumer reads 0 either way. A/E waits are bounded so a lost update cannot
@@ -205,6 +208,11 @@ void kernel_main() {
 
         PACK(store_u32(report_addr + 0u, num_iters);)
         UNPACK(store_u32(report_addr + 8u, sem.value());)
+        if constexpr (nosync) {
+            // num_iters up()s with no down(): clear the residue. UNPACK issues no semaphore ops here, and
+            // the SEMINIT is queued behind PACK's own SEMPOSTs.
+            PACK(sem.set(0);)
+        }
     }
 #elif defined(PATTERN_D_DFB)
     // TODO @RT: delete this branch and run the LLKOperand path above on Quasar after the Quasar compute API has
@@ -337,6 +345,12 @@ void kernel_main() {
         store_u32(report_addr + 8u, high_water);
         store_u32(report_addr + 12u, sem.value());
         store_u32(report_addr + 16u, timeout);
+        if constexpr (nosync) {
+            // Blackhole: ungated posts saturate and are dropped, so the count is left unbalanced: clear it. On
+            // UNPACK, after it has recorded the high-water mark, not on PACK, which finishes first and would zero
+            // the count before the slow consumer samples it. (Quasar keeps every credit, so this is a no-op there.)
+            sem.set(0);
+        }
 #endif
     }
 }

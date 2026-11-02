@@ -292,6 +292,46 @@ TEST_F(AutogradTensorTest, AutocastTensorRefreshesHostTensor) {
     EXPECT_TRUE(all_equal(tensor.get_tensor(autograd::PreferredPrecision::FULL), 1.0F));
 }
 
+// Loading values into a tensor keeps the dtype it is stored in, in both directions.
+TEST_F(AutogradTensorTest, AssignCastsToTheStoredDtype) {
+    for (const auto& [stored, loaded] :
+         {std::pair{ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32},
+          std::pair{ttnn::DataType::FLOAT32, ttnn::DataType::BFLOAT16}}) {
+        auto tensor = autograd::create_tensor(filled(0.0F, stored));
+        tensor->assign(filled(1.5F, loaded));
+        const auto& native = tensor->get_value(autograd::PreferredPrecision::NATIVE);
+        EXPECT_EQ(native.dtype(), stored);
+        EXPECT_TRUE(all_equal(native, 1.5F));
+    }
+}
+
+TEST_F(AutogradTensorTest, AssignToEmptyTensorTakesTheValueAsIs) {
+    auto tensor = autograd::create_tensor();
+    tensor->assign(filled(1.5F, ttnn::DataType::FLOAT32));
+    EXPECT_EQ(tensor->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32);
+}
+
+TEST_F(AutogradTensorTest, AssignEmptyValueEmptiesTheTensor) {
+    auto tensor = autograd::create_tensor(filled(1.5F, ttnn::DataType::BFLOAT16));
+    tensor->assign(ttnn::Tensor());
+    EXPECT_FALSE(core::is_tensor_initialized(tensor->get_value(autograd::PreferredPrecision::NATIVE)));
+}
+
+// Only bf16 and fp32 are cast; a value of any other dtype must match the stored one.
+TEST_F(AutogradTensorTest, AssignRejectsNonFloatDtypeMismatch) {
+    for (const auto float_dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
+        auto stored_float = autograd::create_tensor(filled(1.0F, float_dtype));
+        EXPECT_ANY_THROW(stored_float->assign(filled(2.0F, ttnn::DataType::UINT32)));
+        EXPECT_EQ(stored_float->get_value(autograd::PreferredPrecision::NATIVE).dtype(), float_dtype);
+
+        auto stored_uint = autograd::create_tensor(filled(1.0F, ttnn::DataType::UINT32));
+        EXPECT_ANY_THROW(stored_uint->assign(filled(2.0F, float_dtype)));
+    }
+    auto stored_uint = autograd::create_tensor(filled(1.0F, ttnn::DataType::UINT32));
+    EXPECT_NO_THROW(stored_uint->assign(filled(2.0F, ttnn::DataType::UINT32)));
+    EXPECT_EQ(stored_uint->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::UINT32);
+}
+
 TEST_F(AutogradTensorTest, FullViewTracksFusedAdamWStep) {
     optimizers::AdamWConfig config;
     config.lr = 1e-2F;

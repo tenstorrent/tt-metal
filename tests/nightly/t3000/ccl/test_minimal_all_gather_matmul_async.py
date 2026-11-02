@@ -13,6 +13,10 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
+# Written into each finished call's GlobalSemaphores when validate_cache_hits is set. It is above every ready-credit and
+# barrier target, so a cache hit that kept the previous call's semaphore addresses would stop waiting for its data.
+SEMAPHORE_POISON = 1 << 20
+
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
     # create global semaphore handles
@@ -49,6 +53,8 @@ def run_all_gather_impl(
     packer_l1_acc=True,
     precision_offset=None,
     matmul_1d_mcast_in0=None,
+    program_config=None,
+    validate_cache_hits=False,
 ):
     if use_legacy_allgather:
         pytest.skip(LEGACY_CCL_SKIP)
@@ -61,7 +67,7 @@ def run_all_gather_impl(
         mem_config_weights = mem_config_ag
 
     # Skip unsupported cases
-    (is_known_failure, message) = is_unsupported_case(
+    is_known_failure, message = is_unsupported_case(
         ag_output_shape, dim, mem_config_ag, num_devices, ag_input_dtype, layout, tile
     )
     if is_known_failure:
@@ -181,7 +187,9 @@ def run_all_gather_impl(
 
     ##### Configs for ttnn.matmul #####
     core_grid = (8, 6)
-    if matmul_1d_mcast_in0 is not None:
+    if program_config is not None:
+        pass  # caller-provided
+    elif matmul_1d_mcast_in0 is not None:
         # Single-core 1D multicast config: the whole per-device matmul runs on one core with K split
         # into many blocks, so the cross-block reload runs on the classic mcast_in0/in1 program path
         # (mcast_in0 selects which). Shapes are kept small so the single core's CBs fit in SRAM.
@@ -314,6 +322,7 @@ def run_all_gather_impl(
             tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
         logger.info(f"Done executing trace")
     else:
+        cache_entries = []
         for i in range(num_iters):
             tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(i)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
@@ -324,11 +333,36 @@ def run_all_gather_impl(
                 ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
                 logger.info(f"Done op")
 
+            if validate_cache_hits:
+                # The kernels leave their semaphores back at zero, so without the poison a cache hit that skipped
+                # the semaphore refresh would still pass on the previous call's semaphores.
+                cache_entries.append(mesh_device.num_program_cache_entries())
+                completed_sems = list(ccl_semaphore_handles[i])
+                if use_barrier:
+                    completed_sems.append(barrier_semaphore_handles[i])
+                for sem in completed_sems:
+                    ttnn.reset_global_semaphore_value(sem, SEMAPHORE_POISON)
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+
             logger.info(f"Done iteration {i}")
+
+        if validate_cache_hits:
+            assert all(
+                n == cache_entries[0] for n in cache_entries
+            ), f"program cache entries per call: {cache_entries}; the calls after the first must be cache hits"
 
     for i in range(num_iters):
         tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
         torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
+
+        # Output TensorTopologies: the whole-mesh all_gather of {N}, [Shard(dim)] is {N}, [Replicate]; the matmul of
+        # that by the {N}, [Shard(dim)] weight (and bias) takes the union-default label {N}, [Shard(dim)], which
+        # ConcatMeshToTensor(dim=3) composes below.
+        assert [repr(p) for p in tt_all_gather_out_tensor_list[i].tensor_topology().placements()] == [
+            "PlacementReplicate()"
+        ]
+        assert [repr(p) for p in tt_mm_out_tensor.tensor_topology().placements()] == [f"PlacementShard({dim})"]
+        assert tuple(int(d) for d in tt_mm_out_tensor.tensor_topology().distribution_shape()) == (num_devices,)
 
         tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
         tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
@@ -600,9 +634,8 @@ def test_all_gather_matmul_async_fp32_reload_precision(mesh_device, all_gather_t
     )
 
 
-# The mcast_in1 path segfaults for this single-core non-gather 1D matmul routed through
-# all_gather_matmul, and reproduces on main. A segfault would kill the test process; so run=False
-# keeps the case from executing while still recording it as an expected failure.
+# all_gather_matmul does not support the 1D mcast_in0=False (mcast_in1) path (it segfaulted before, #50167); it
+# raises a TT_FATAL.
 @pytest.mark.parametrize(
     "matmul_1d_mcast_in0",
     [
@@ -611,9 +644,9 @@ def test_all_gather_matmul_async_fp32_reload_precision(mesh_device, all_gather_t
             False,
             id="mcast_in1",
             marks=pytest.mark.xfail(
-                reason="process_mcast_in1 segfaults for a single-core non-gather 1D matmul through "
-                "all_gather_matmul; reproduces on main. Issue #50167",
-                run=False,
+                reason="all_gather_matmul does not support 1D mcast_in1. Issue #50167",
+                raises=RuntimeError,
+                strict=True,
             ),
         ),
     ],
@@ -664,4 +697,77 @@ def test_all_gather_matmul_async_1d_fp32_reload_precision(mesh_device, all_gathe
         packer_l1_acc=False,
         precision_offset=1000.0,
         matmul_1d_mcast_in0=matmul_1d_mcast_in0,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_all_gather_matmul_async_1d_sharded_decode(mesh_device, all_gather_topology):
+    """The 1D mcast_in0 config that models/common attention_1d and tt_transformers run for the fused all-gather +
+    WO matmul in decode on a T3K ring (Llama-3.1-8B shapes): L1 width-sharded activation and all-gather output on
+    8x1 cores, DRAM weights, L1 width-sharded matmul output. Three iterations with fresh inputs and semaphores check
+    that program-cache hits re-point every tensor and semaphore: the calls after the first must not add cache entries,
+    and each finished call's semaphores are poisoned so a hit still pointing at them fails.
+    """
+    num_devices = mesh_device.get_num_devices()
+    dim, rows, tile = 4096, 32, 32
+    width_sharded = ttnn.ShardStrategy.WIDTH
+    ag_memcfg = ttnn.create_sharded_memory_config(
+        (rows, dim // 8),
+        ttnn.CoreGrid(x=8, y=1),
+        width_sharded,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    mm_grid = ttnn.CoreGrid(x=8, y=2)
+    mm_memcfg = ttnn.create_sharded_memory_config(
+        (rows, dim // mm_grid.num_cores // num_devices),
+        mm_grid,
+        width_sharded,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    per_core_N = dim // num_devices // tile // 8
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 1),
+        in0_block_w=dim // tile // 8,
+        out_subblock_h=1,
+        out_subblock_w=per_core_N,
+        per_core_M=rows // tile,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    run_all_gather_impl(
+        mesh_device,
+        num_devices,
+        ag_output_shape=[1, 1, rows, dim],
+        dim=3,
+        num_links=1,
+        ag_input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        matmul_output_dim=dim // num_devices,
+        matmul_weights_dtype=ttnn.bfloat8_b,
+        max_in0_block_w=None,  # unused: program_config is given
+        use_bias=False,
+        mem_config_input=ag_memcfg,
+        mem_config_ag=ag_memcfg,
+        mem_config_mm=mm_memcfg,
+        mem_config_weights=ttnn.DRAM_MEMORY_CONFIG,
+        all_gather_topology=all_gather_topology,
+        use_non_fused=False,
+        use_legacy_allgather=False,
+        num_iters=3,
+        enable_trace=False,
+        use_barrier=True,
+        use_persistent_buffers=False,
+        program_config=program_config,
+        validate_cache_hits=True,
     )

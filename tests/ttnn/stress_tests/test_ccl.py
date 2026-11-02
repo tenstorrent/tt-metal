@@ -9,6 +9,11 @@ from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 from tt_py_test_utils_common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
+# Fabric init rejects 1-chip meshes, so skip before the mesh fixture opens the device.
+pytestmark = pytest.mark.skipif(
+    ttnn.get_num_devices() < 2, reason="CCL stress tests require fabric, which needs at least 2 devices"
+)
+
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(

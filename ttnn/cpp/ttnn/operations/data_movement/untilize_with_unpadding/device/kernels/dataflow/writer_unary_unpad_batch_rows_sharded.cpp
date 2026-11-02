@@ -52,5 +52,4 @@ void kernel_main() {
         noc.async_read_barrier();
         dfb_untilize_out.pop_front(num_padded_tiles_per_batch);
     }
-    dfb_out.push_back(num_unpadded_output_rows);
 }

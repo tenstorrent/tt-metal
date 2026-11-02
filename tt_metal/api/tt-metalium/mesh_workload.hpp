@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <memory>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <unordered_map>
 
 #include <tt-metalium/core_coord.hpp>
