@@ -535,7 +535,10 @@ def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None, vl=None, pad=None):
         return sc_all, ix_all, ()
     if os.environ.get("DSV41_UNI_ROUTER", "batched") == "batched":
         # ONE router for all own rows (matmul / activations on n rows, router_select over n rows: bit-identical to the 32-row slices)
-        sc, ix = gate._forward_fused(hh_own, grid=(min(4, max(1, n // 128)), 8), vl=vl)
+        gy = int(os.environ.get("DSV41_PF_RT_GY", "0")) or min(
+            4, max(1, n // 128)
+        )  # DSV41_PF_RT_GY=4 (default OFF): router matmul on a 4x8 grid (32 cores, 106 -> 42 us at n = 128; the prefill loop agent's lever)
+        sc, ix = gate._forward_fused(hh_own, grid=(gy, 8), vl=vl)
         parts = []
     else:
         parts = [gate.forward(ttnn.slice(hh_own, [0, 0, 32 * i, 0], [1, 1, 32 * (i + 1), D])) for i in range(n // 32)]
