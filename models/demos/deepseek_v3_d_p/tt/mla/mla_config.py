@@ -924,6 +924,15 @@ MLA_SDPA_CONFIG = {
             "chunked_only": True,
         },
     ],
+    # 2k total seq_len → 256 per device on 8x4: Kimi-K3's TP-dedup-compatible small chunk (64 rows per TP rank).
+    256: [
+        {
+            "q_chunk_size": 32,
+            "k_chunk_size": 256,
+            "num_heads": 96,
+            "chunked_only": True,
+        },
+    ],
 }
 
 
