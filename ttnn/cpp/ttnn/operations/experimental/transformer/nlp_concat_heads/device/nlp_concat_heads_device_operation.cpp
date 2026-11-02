@@ -5,6 +5,7 @@
 #include "nlp_concat_heads_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::experimental::prim {
 void NLPConcatHeadsDeviceOperation::validate_on_program_cache_miss(
@@ -22,6 +23,14 @@ void NLPConcatHeadsDeviceOperation::validate_on_program_cache_miss(
         input_tensor.layout() == tt::tt_metal::Layout::TILE,
         "Input tensor layout must be TILE but got {}",
         input_tensor.layout());
+
+    // The kernels copy whole tiles per head, so tile padding inside a head would be written into the next head's
+    // columns. Same contract as ttnn.transformer.concatenate_heads.
+    TT_FATAL(
+        input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0,
+        "Head dim ({}) must be a multiple of {}; pad each head to a tile multiple before concatenating",
+        input_tensor.logical_shape()[-1],
+        tt::constants::TILE_WIDTH);
 
     if (input_tensor.is_sharded()) {
         TT_FATAL(

@@ -102,3 +102,11 @@ def test_nlp_concat_heads_with_program_cache(device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 2
+
+
+@pytest.mark.parametrize("head_dim", (16, 48, 80))
+def test_nlp_concat_heads_rejects_unaligned_head_dim(device, head_dim, expect_error):
+    # Each head is copied as whole tiles, so tile padding inside a head would overwrite the next head's columns.
+    x = ttnn.from_torch(torch.randn(1, 2, 32, head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must be a multiple of 32"):
+        ttnn.experimental.nlp_concat_heads(x)
