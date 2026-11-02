@@ -36,7 +36,7 @@ streaming_profiler::CaptureContext::Device one_tile_device() {
 }
 
 struct Harness {
-    // One buffer per record kind; the frames of one batch append to them.
+    // One buffer per record record_type; the frames of one batch append to them.
     std::vector<uint64_t> zone_buffer = std::vector<uint64_t>(64 * 1024), event_buffer = zone_buffer,
                           data_buffer = zone_buffer, value_buffer = zone_buffer;
     size_t zones = 0, events = 0, data_records = 0, value_count = 0;
@@ -126,8 +126,8 @@ struct Harness {
 };
 
 int main() {
-    // A decoder built for some record kinds produces only those, with the same times a decoder of every kind gives
-    // them.
+    // A decoder built for some record record_types produces only those, with the same times a decoder of every
+    // record_type gives them.
     {
         Harness h(true, experimental::streaming_profiler::detail::record_bit<experimental::streaming_profiler::Zone>);
         h.feed({word(PP_ZONE_ATOMIC), 40, 8, word(PP_EVENT), 50, word(PP_ZONE_ATOMIC), 70, 4});

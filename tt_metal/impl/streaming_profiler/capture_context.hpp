@@ -4,10 +4,12 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -61,6 +63,7 @@ struct CaptureContext {
         // for the whole capture.
         std::vector<int64_t> clock_offsets;
         CoreTable core_of_xy;  // a tile's xy to its core index
+
         uint32_t chip_id = 0;
         // The wall-clock core's wall clock minus the check core's, or 0 when the sync check is off.
         int64_t check_offset = 0;
@@ -94,5 +97,43 @@ std::vector<bool> reached_from_root(std::span<const CaptureContext::Link> links,
     }
     return reached;
 }
+
+}  // namespace tt::tt_metal::streaming_profiler
+
+namespace tt::tt_metal::experimental::streaming_profiler::detail {
+
+// A capture's lanes, by device, whose records name the call sites of the Metal process that runs them. Its receiver
+// holds a reference, as does every kept copy of their records (retain, release), and the last to let go deletes them,
+// and with them their call sites when that was the last reference to those.
+class CaptureLanes {
+public:
+    // The lanes of `capture`'s devices, holding one reference, which the caller lets go.
+    static const CaptureLanes& create(
+        const tt::tt_metal::streaming_profiler::CaptureContext& capture, std::shared_ptr<const CallSites> call_sites);
+
+    std::span<const RecordLane> device(uint32_t dev) const { return by_device_[dev]; }
+    const CallSites& call_sites() const { return *call_sites_; }
+
+private:
+    friend void retain(const CaptureLanes& lanes);
+    friend void release(const CaptureLanes& lanes);
+    CaptureLanes() = default;
+
+    std::vector<std::vector<RecordLane>> by_device_;
+    std::shared_ptr<const CallSites> call_sites_;
+    mutable std::atomic<uint32_t> references_{1};
+};
+
+}  // namespace tt::tt_metal::experimental::streaming_profiler::detail
+
+namespace tt::tt_metal::streaming_profiler {
+
+// One reference on a capture's lanes, which it lets go when it goes.
+struct ReleaseLanes {
+    void operator()(const experimental::streaming_profiler::detail::CaptureLanes* lanes) const {
+        experimental::streaming_profiler::detail::release(*lanes);
+    }
+};
+using LanesReference = std::unique_ptr<const experimental::streaming_profiler::detail::CaptureLanes, ReleaseLanes>;
 
 }  // namespace tt::tt_metal::streaming_profiler

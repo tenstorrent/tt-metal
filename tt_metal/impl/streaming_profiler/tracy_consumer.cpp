@@ -8,8 +8,6 @@
 
 #if defined(TRACY_ENABLE)
 
-#include "hostdev/observability_event_meta.h"
-
 #include <algorithm>
 
 #include <fmt/format.h>
@@ -40,19 +38,6 @@ constexpr uint32_t kProcessorColors[kProcessorCount] = {
     tracy::Color::Yellow3,
     tracy::Color::Yellow2};
 
-// A DeviceZoneScopedNC or DeviceZoneScopedNCU event's own colour (0xRRGGBB), or 0 for its processor's.
-uint32_t event_color(const experimental::streaming_profiler::ObservabilityEventDescriptor& event) {
-    if (event.meta != nullptr) {
-        if (auto m = event.meta->as<tt::observability_event::ZoneColorMeta>()) {
-            return m->color & 0xFFFFFFu;
-        }
-        if (auto m = event.meta->as<tt::observability_event::ZoneUnitMeta>()) {
-            return m->color & 0xFFFFFFu;
-        }
-    }
-    return 0;
-}
-
 // Each processor's row on the timeline, in the lane id space Tracy keeps apart from host threads. It uses the physical
 // coordinate, because an eth core's logical coordinate can equal a Tensix core's, and the low 3 bits are the processor.
 uint32_t lane_thread(const experimental::streaming_profiler::Core& core) {
@@ -70,18 +55,15 @@ void TracyConsumer::operator()(const Batch& batch) {
     using experimental::streaming_profiler::TimestampedData;
     using experimental::streaming_profiler::Zone;
     for (const Zone& zone : batch.records<Zone>()) {
-        push_zone(
-            zone.core(),
-            zone.descriptor().name,
-            event_color(zone.descriptor()),
-            zone.start_host_cycles(),
-            zone.end_host_cycles());
+        const auto& [start, end] = zone.payload();
+        push_zone(zone.core(), zone.metadata().name, zone.metadata().color, start.host_cycles(), end.host_cycles());
     }
     for (const TimestampedData& data : batch.records<TimestampedData>()) {
-        push_marker(data.core(), data.descriptor().name, data.host_cycles(), data.runtime_id(), data.payload());
+        push_marker(
+            data.core(), data.metadata().name, data.published_at().host_cycles(), data.runtime_id(), data.payload());
     }
     for (const Event& event : batch.records<Event>()) {
-        push_marker(event.core(), event.descriptor().name, event.host_cycles(), event.runtime_id(), {});
+        push_marker(event.core(), event.metadata().name, event.published_at().host_cycles(), event.runtime_id(), {});
     }
 }
 

@@ -10,20 +10,38 @@
 #include <cmath>
 #include <deque>
 #include <map>
+#include <mutex>
 #include <ranges>
 #include <span>
+#include <string>
+#include <unordered_set>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/indestructible.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <fmt/format.h>
 #include <client/TracyProfiler.hpp>
 
-#include "impl/streaming_profiler/service.hpp"
 #include "impl/streaming_profiler/sync/check.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
+
+namespace {
+
+// A copy of `name` that lives as long as the process, since Tracy keeps a plot's name by its address.
+const char* plot_name(const std::string& name) {
+    struct Names {
+        std::mutex mutex;
+        std::unordered_set<std::string> names;
+    };
+    static ttsl::Indestructible<Names> plot_names;
+    const std::lock_guard lock(plot_names.get().mutex);
+    return plot_names.get().names.insert(name).first->c_str();
+}
+
+}  // namespace
 
 // Every link gets the same weight, because a link's error is dominated by the fixed difference between its two
 // directions' delays, set each time the link trains, which its stamp scatter doesn't show.
@@ -123,10 +141,10 @@ ClockSolver::ClockSolver(const CaptureContext& ctx, const ClockBases& bases) :
         link_of_[{link.dev_a, link.core_a}] = link_index;
         link_of_[{link.dev_b, link.core_b}] = link_index;
     }
-    aiclk_mean_plot_ = service().plot_name("AICLK mean (GHz)");
+    aiclk_mean_plot_ = plot_name("AICLK mean (GHz)");
     if (ctx.sync_check) {
         for (size_t dev = 0; dev < chips_.size(); dev++) {
-            chips_[dev].aiclk_plot = service().plot_name(fmt::format("AICLK chip{} (GHz)", ctx.devices[dev].chip_id));
+            chips_[dev].aiclk_plot = plot_name(fmt::format("AICLK chip{} (GHz)", ctx.devices[dev].chip_id));
         }
         check_ = std::make_unique<SyncCheck>(ctx, map_);
     }
@@ -542,7 +560,7 @@ void ClockSolver::on_capture_end() {
         check_->submit();
         check_->finish();
         for (const auto& [name, points] : check_->plots()) {
-            plot(service().plot_name(name), points);
+            plot(plot_name(name), points);
         }
         check_.reset();
     }
