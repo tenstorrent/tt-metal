@@ -476,6 +476,11 @@ class TtKimiK3Transformer(LightweightModule):
 
         if self.is_first_rank:
             hidden, inherited = ttnn.unsqueeze_to_4D(self.embed(token_ids)), None
+            if self.inbound_planes > 1:
+                # A first rank past layer 0 exists only under the runner's PREFILL_PP_LAYER_OFFSET (capacity
+                # probes): it takes tokens, so no upstream rank sends the sealed snapshots. Stand copies of the
+                # live stream in for them, at the shape and sharding the D2D receive would give.
+                inherited = ttnn.concat([hidden] * (self.inbound_planes - 1), dim=1)
         else:
             hidden, inherited = self._unpack_handoff(token_ids)
         residual = self._residual_factory(hidden, inherited)
