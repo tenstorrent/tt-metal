@@ -95,6 +95,10 @@ class TtChronosTraceRunner:
                 f"({prepared.num_context_patches} context) != {tuple(self._prepared.patched_tokens.shape)} "
                 f"({self._prepared.num_context_patches} context)"
             )
+        if prepared.pack != self._prepared.pack:
+            raise ValueError(
+                f"trace token packing changed: {prepared.pack} != {self._prepared.pack} series per sequence"
+            )
         same_groups = prepared.unique_groups == self._prepared.unique_groups and (
             prepared.unique_groups
             or (
@@ -157,6 +161,7 @@ class TtChronosTraceRunner:
                 self._prepared.loc_scale,
                 num_output_patches=self._prepared.num_output_patches,
                 output_rows=self._prepared.output_rows,
+                pack=self._prepared.pack,
             ),
             prepared=self._prepared,
         )
