@@ -421,7 +421,7 @@ class TtVADPerceptionTransformer:
                 value=bev_embed,
                 query_pos=map_query_pos,
                 reference_points=map_reference_points,
-                reg_branches=map_reg_branches,
+                map_reg_branches=map_reg_branches,
                 cls_branches=map_cls_branches,
                 spatial_shapes=spatial_shapes,
                 level_start_index=self._map_decoder_level_start_index_cache,
