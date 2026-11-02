@@ -284,6 +284,33 @@ def test_program_cache(mesh_device):
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+def test_staging_tensor(mesh_device, expect_error):
+    """A caller-held staging (matmul_reduce_scatter_prefill_staging) serves repeated calls; one too small is refused."""
+    kwargs = dict(cluster_axis=1, scatter_dim=-1, topology=ttnn.Topology.Ring, num_links=2)
+    mesh_shape = tuple(mesh_device.shape)
+    a_shape, w_shape = (1, 1, 640, 2048), (2048, 7168)
+    a = random_stacked(mesh_shape, a_shape, seed=0)
+    w = quantize_like_device(random_stacked(mesh_shape, w_shape, seed=1, scale=w_shape[0] ** -0.5), ttnn.bfloat8_b)
+    ta = to_mesh(a, mesh_device, ttnn.bfloat16)
+    tw = to_mesh(w, mesh_device, ttnn.bfloat8_b)
+    expected = reference(a, w, 1, -1)
+    staging = ttnn.experimental.matmul_reduce_scatter_prefill_staging(ta, tw, **kwargs)
+    for _ in range(2):
+        out = ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, staging_tensor=staging, **kwargs)
+        ttnn.synchronize_device(mesh_device)
+        check(out, expected, mesh_device, ttnn.bfloat8_b)
+        ttnn.deallocate(out)
+    # chunked_n's plan needs a larger staging than this one
+    big_a = to_mesh(random_stacked(mesh_shape, (1, 1, 2048, 1024), seed=2), mesh_device, ttnn.bfloat16)
+    big_w = to_mesh(random_stacked(mesh_shape, (1024, 16384), seed=3), mesh_device, ttnn.bfloat16)
+    with expect_error(RuntimeError, "staging_tensor"):
+        ttnn.experimental.matmul_reduce_scatter_prefill(big_a, big_w, staging_tensor=staging, **kwargs)
+    ttnn.deallocate(staging)
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize(
     "overrides, message",
     [
