@@ -24,6 +24,6 @@ struct LLKMetadata {
 //                                  .num_faces_r_dim = 2u, .num_faces_c_dim = 2u}
 // `format` is the HW DataFormat code; the face fields are derived from `metadata.tile`.
 // The JIT's kernel bindings header and the emulator's both embed this string verbatim.
-std::string serialize_llk_metadata(const LLKMetadata& metadata);
+std::string serialize_llk_metadata(const LLKMetadata& metadata, tt::ARCH arch);
 
 }  // namespace tt::tt_metal

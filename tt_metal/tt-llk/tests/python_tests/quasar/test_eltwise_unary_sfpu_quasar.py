@@ -769,6 +769,11 @@ def _elwadd_datacopy_dest_image(src: torch.Tensor) -> torch.Tensor:
 # via the int->int path), so it is swept here too. Mirrors the UInt16 set; Int16
 # has a native Quasar dest format.
 #
+# Int8 is swept with Int8 circular buffers, not the UInt8-declared ones WH/BH needs:
+# Quasar's Int8 is a native dest format whose datums are sign-magnitude, which is
+# exactly what the kernel's SM8 load and store decode. Sign-magnitude has no -128, so
+# the stimuli stay inside [-127, 127] (see _prepare_typecast_input).
+#
 # The functor `calculate_typecast<IN_FMT, OUT_FMT>` needs the format pair at
 # COMPILE time, but the unified dispatcher only carries `SfpuType` at compile time
 # and formats at runtime. We bridge that with the `TYPECAST_FORMATS` template param,
@@ -805,6 +810,11 @@ TYPECAST_CASES = (
     TypecastCase(DataFormat.UInt8, DataFormat.Float16_b),
     TypecastCase(DataFormat.Float32, DataFormat.UInt8),
     TypecastCase(DataFormat.UInt8, DataFormat.Float32),
+    # float <-> int8: signed RNE narrow, no negative clamp
+    TypecastCase(DataFormat.Float16_b, DataFormat.Int8),
+    TypecastCase(DataFormat.Int8, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.Int8),
+    TypecastCase(DataFormat.Int8, DataFormat.Float32),
     # int <-> int: store sfpmem mode (widen/equal) or RNE narrow to 8-bit
     TypecastCase(DataFormat.UInt16, DataFormat.Int32),
     TypecastCase(DataFormat.Int32, DataFormat.UInt16),
@@ -814,6 +824,12 @@ TYPECAST_CASES = (
     TypecastCase(DataFormat.Int32, DataFormat.Int16),
     TypecastCase(DataFormat.Int16, DataFormat.UInt8),
     TypecastCase(DataFormat.UInt8, DataFormat.Int16),
+    TypecastCase(DataFormat.Int8, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.Int8),
+    TypecastCase(DataFormat.Int8, DataFormat.Int16),
+    TypecastCase(DataFormat.Int16, DataFormat.Int8),
+    TypecastCase(DataFormat.Int8, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.Int8),
 )
 
 _RANGE_SAFETY_FACTOR = 0.9
@@ -849,13 +865,18 @@ def _prepare_typecast_input(
         # format range) to an integer-valued band that BOTH endpoints represent exactly, so
         # the hardware's round-nearest-even and the golden's torch cast agree everywhere:
         #  - non-negative if either endpoint is unsigned (the hardware clamps negatives to 0);
-        #  - capped to the narrowest endpoint: UInt8 -> 255; a Float16_b/Float16 (bf16/fp16)
-        #    endpoint is integer-exact only up to 256, so cap there; otherwise a wide band.
+        #  - capped to the narrowest endpoint: Int8 -> 127; UInt8 -> 255; a Float16_b/Float16
+        #    (bf16/fp16) endpoint is integer-exact only up to 256, so cap there; otherwise a
+        #    wide band.
         # Normalising first makes this independent of the raw stimulus range (otherwise
         # scaling a full-range int32 overflows to INT32_MIN).
         formats = (src_format, dst_format)
         has_unsigned = any(f in (DataFormat.UInt8, DataFormat.UInt16) for f in formats)
-        if DataFormat.UInt8 in formats:
+        if DataFormat.Int8 in formats:
+            # Quasar's Int8 is sign-magnitude, so it spans [-127, 127] with no -128. Tightest
+            # endpoint in this matrix, and 127 stays integer-exact in every other endpoint.
+            cap = 127.0
+        elif DataFormat.UInt8 in formats:
             cap = 255.0
         elif any(f in (DataFormat.Float16_b, DataFormat.Float16) for f in formats):
             cap = 200.0  # bf16/fp16 is integer-exact only to 256

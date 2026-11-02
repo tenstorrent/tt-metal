@@ -1735,10 +1735,17 @@ inline bool typecast_is_mx(tt::DataFormat fmt) {
 
 // Integer endpoints whose value compares exactly (and that the SFPU round-to-nearest produces).
 inline bool typecast_is_int(tt::DataFormat fmt) {
-    return fmt == tt::DataFormat::Int32 || fmt == tt::DataFormat::Int16 || fmt == tt::DataFormat::UInt8;
+    return fmt == tt::DataFormat::Int32 || fmt == tt::DataFormat::Int16 || fmt == tt::DataFormat::Int8 ||
+           fmt == tt::DataFormat::UInt8;
 }
 
 inline bool typecast_is_unsigned(tt::DataFormat fmt) { return fmt == tt::DataFormat::UInt8; }
+
+// One-byte integer endpoints. Int8 and UInt8 share a datum width and a Dest slot, so they take the
+// same preserve-fp32 routing; only the L1 encoding (sign-magnitude vs raw unsigned) differs.
+inline bool typecast_is_8bit_int(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Int8 || fmt == tt::DataFormat::UInt8;
+}
 
 // Device-side ckernel::DataFormat enum NAME (the kernel chain references formats by name, since the
 // compute kernel compiles against the device enum whose values differ from the host tt::DataFormat).
@@ -1748,6 +1755,7 @@ inline std::string typecast_device_format_name(tt::DataFormat fmt) {
         case tt::DataFormat::Float32: return "Float32";
         case tt::DataFormat::Int32: return "Int32";
         case tt::DataFormat::Int16: return "Int16";
+        case tt::DataFormat::Int8: return "Int8";
         case tt::DataFormat::UInt8: return "UInt8";
         case tt::DataFormat::MxFp8R: return "MxFp8R";
         case tt::DataFormat::MxFp8P: return "MxFp8P";
@@ -1788,6 +1796,20 @@ inline std::vector<uint32_t> typecast_pack(tt::DataFormat fmt, const std::vector
                 const uint16_t enc =
                     static_cast<uint16_t>((s < 0 ? 0x8000u : 0u) | (static_cast<uint32_t>(std::abs(s)) & 0x7fffu));
                 out[i / 2] |= static_cast<uint32_t>(enc) << (16 * (i % 2));
+            }
+            return out;
+        }
+        case tt::DataFormat::Int8: {
+            // Quasar Int8 in L1 is sign-magnitude 8-bit (SMAG8): sign in bit 7, 7-bit magnitude; four
+            // elements packed per 32-bit word. Sign-magnitude has no -128, so the range is [-127, 127].
+            // (Wormhole/Blackhole instead store two's complement and have callers declare the buffer
+            // UInt8; the Quasar kernel decodes the byte natively, so no reinterpretation is needed.)
+            std::vector<uint32_t> out((vals.size() + 3) / 4, 0);
+            for (size_t i = 0; i < vals.size(); ++i) {
+                const int32_t s = std::clamp<int32_t>(static_cast<int32_t>(std::lround(vals[i])), -127, 127);
+                const uint8_t enc =
+                    static_cast<uint8_t>((s < 0 ? 0x80u : 0u) | (static_cast<uint32_t>(std::abs(s)) & 0x7fu));
+                out[i / 4] |= static_cast<uint32_t>(enc) << (8 * (i % 4));
             }
             return out;
         }
@@ -1842,6 +1864,15 @@ inline std::vector<float> typecast_decode(tt::DataFormat fmt, const std::vector<
             }
             return out;
         }
+        case tt::DataFormat::Int8: {
+            std::vector<float> out(bytes.size() * 4);
+            for (size_t i = 0; i < out.size(); ++i) {
+                const uint8_t b = static_cast<uint8_t>(bytes[i / 4] >> (8 * (i % 4)));
+                const int32_t mag = b & 0x7f;
+                out[i] = static_cast<float>((b & 0x80) ? -mag : mag);
+            }
+            return out;
+        }
         case tt::DataFormat::UInt8: {
             std::vector<float> out(bytes.size() * 4);
             for (size_t i = 0; i < out.size(); ++i) {
@@ -1857,6 +1888,7 @@ inline std::vector<float> typecast_decode(tt::DataFormat fmt, const std::vector<
 
 // Whole-number stimulus, range chosen so every endpoint represents it losslessly: small magnitudes
 // for MX (block-float steps), non-negative for an unsigned endpoint (UInt8), wider signed otherwise.
+// The signed +/-64 span stays inside Int8's sign-magnitude [-127, 127], so it needs no narrower case.
 inline std::vector<float> generate_typecast_input(
     size_t numel, int seed, tt::DataFormat in_fmt, tt::DataFormat out_fmt) {
     const bool mx = typecast_is_mx(in_fmt) || typecast_is_mx(out_fmt);
@@ -1887,6 +1919,8 @@ inline std::vector<float> typecast_golden(
             v = static_cast<float>(std::lround(v));  // float->int rounds to nearest
             if (typecast_is_unsigned(out_fmt)) {
                 v = std::clamp(v, 0.0f, 255.0f);
+            } else if (out_fmt == tt::DataFormat::Int8) {
+                v = std::clamp(v, -127.0f, 127.0f);  // sign-magnitude saturates, and has no -128
             }
         }
     }
@@ -3187,21 +3221,30 @@ bool run_sfpu_typecast(
     const bool in_is_32bit = in_fmt == tt::DataFormat::Float32 || in_fmt == tt::DataFormat::Int32;
     const bool out_is_32bit = out_fmt == tt::DataFormat::Float32 || out_fmt == tt::DataFormat::Int32;
 
-    // preserve_fp32_precision: a Float32 input, an 8-bit-output promotion from a bf16/MX source, or a
-    // UInt8 input.
+    // A narrow integer source (Int8 / Int16 / UInt8) is routed the way the tt-llk typecast variant
+    // resolver routes every typecast: through Unpack-to-Dest, so the datum reaches Dest still in its
+    // narrow L1 representation, and with Dest sized purely on whether either endpoint is 32-bit. The
+    // SFPU load decodes the source in place as SM8 / SM16 / U8, so widening it on the way in (the FPU
+    // A2D datacopy the non-narrow routes take) makes that load read the wrong bits.
+    // See param_config.py:_resolve_quasar_typecast_variant.
+    const bool narrow_int_source = sfpu_util::typecast_is_int(in_fmt) && !in_is_32bit;
+
+    // preserve_fp32_precision: a Float32 input, an 8-bit-output promotion from a bf16/MX source, or an
+    // 8-bit input. Int8 and UInt8 are routed identically here (see typecast_is_8bit_int).
     const bool preserve_fp32 = in_fmt == tt::DataFormat::Float32 ||
-                               (out_fmt == tt::DataFormat::UInt8 &&
+                               (sfpu_util::typecast_is_8bit_int(out_fmt) &&
                                 (in_fmt == tt::DataFormat::Float16_b || sfpu_util::typecast_is_mx(in_fmt))) ||
-                               in_fmt == tt::DataFormat::UInt8;
+                               sfpu_util::typecast_is_8bit_int(in_fmt);
 
     // dest_acc (fp32_dest_acc_en): a 32-bit endpoint or preserve_fp32. Narrow integer pairs (e.g. Int16 ->
     // Float16_b) stay in a 16-bit Dest, exactly as production runs them.
-    const bool fp32_dest_acc = preserve_fp32 || in_is_32bit || out_is_32bit;
+    const bool fp32_dest_acc = narrow_int_source ? out_is_32bit : (preserve_fp32 || in_is_32bit || out_is_32bit);
 
-    // unpack-to-Dest only changes the datapath for genuine 32-bit inputs (the narrow-input unpack MOP gates
-    // on is_32bit_input, so the flag is inert for Int16/UInt8 -- they reach Dest via FPU A2D datacopy).
-    // Wiring UnpackToDestFp32 for a narrow input drives the wrong datapath (UInt8 hangs, Int16 corrupts).
-    const bool unpack_to_dest = in_is_32bit;
+    // Unpack-to-Dest for genuine 32-bit inputs and for narrow integer sources (above). The older note
+    // here claimed the flag was inert for a narrow input; that applies to the fp32 flavour of
+    // unpack-to-dest, not to this one -- run_quasar_sfpu_unpack_to_dest_16b drives a 16-bit operand
+    // through UnpackToDest with en_32bit_dest false.
+    const bool unpack_to_dest = in_is_32bit || narrow_int_source;
 
     // typecast_tile_init<IN, OUT>() + typecast_tile<IN, OUT>(0), with the format pair baked into the
     // template args via the device-side ckernel::DataFormat enum names.
@@ -4386,9 +4429,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestDestIndex) {
     }
 }
 
-// Typecast test fixture: one (in_format -> out_format) pair per instance, covering the Quasar typecast
-// matrix over Float16_b, Float32, Int32, Int16 (SMAG16), UInt8, and MX (MxFp8P / MxFp8R). UInt16 maps to
-// Int16; UInt32 / MxFp4 are out of scope. Unsupported pairs are skipped by the gate in the test body.
+// Typecast test fixture: one (in_format -> out_format) pair per instance, covering the Quasar typecast matrix over all
+// data formats.
 class SingleCoreSingleMeshDeviceSfpuTypecastFixture
     : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<tt::DataFormat, tt::DataFormat>> {};
@@ -4399,26 +4441,6 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
 
     if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Typecast compute-API test is currently Quasar-only";
-    }
-
-    // Typecast pairs not yet wired through the metal2 compute-API datapath (they hang or throw today):
-    //  * any UInt8 endpoint;
-    //  * any Int16 endpoint (the full narrow-int datapath has not landed, and the data_format.cpp pack_src
-    //    derivation has no Int16 entry for a 32-bit Dest);
-    //  * a non-Float32 input widening into a 32-bit Int output (Float16_b/MX -> Int32);
-    //  * Int32 narrowed to Float16_b (hangs, tenstorrent/tt-metal#59923).
-    // Float32 <-> Int32 and Float16_b/MX <-> Float32 still run.
-    // Int16/UInt8 support through the metal2 compute-API path is tracked in tenstorrent/tt-metal#48601.
-    const bool uint8_endpoint = (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8);
-    const bool int16_endpoint = (in_fmt == tt::DataFormat::Int16 || out_fmt == tt::DataFormat::Int16);
-    const bool widen_to_int32 = (out_fmt == tt::DataFormat::Int32 && in_fmt != tt::DataFormat::Float32);
-    const bool int32_to_bf16 = (in_fmt == tt::DataFormat::Int32 && out_fmt == tt::DataFormat::Float16_b);
-    if (int32_to_bf16) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
-    if (uint8_endpoint || int16_endpoint || widen_to_int32) {
-        GTEST_SKIP() << "typecast format not yet supported through the metal2 compute-API path "
-                        "(tenstorrent/tt-metal#48601)";
     }
 
     log_info(
@@ -4439,6 +4461,7 @@ static std::vector<std::tuple<tt::DataFormat, tt::DataFormat>> typecast_pairs() 
         tt::DataFormat::Float32,
         tt::DataFormat::Int32,
         tt::DataFormat::Int16,
+        tt::DataFormat::Int8,
         tt::DataFormat::UInt8,
         tt::DataFormat::MxFp8P,
         tt::DataFormat::MxFp8R};

@@ -72,11 +72,15 @@ inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
  *
  * For input/output to be UInt32, Int32, or Float32, Dest must be in 32 bit mode.
  *
- * For input/output to be Int8, the caller must additionally declare the circular buffers as UInt8 instead
- * of Int8, so the raw 2's complement byte is zero-extended instead of being decoded as sign-magnitude,
- * and must put Dest in 32 bit mode, which is enforced by a static_assert. The kernels below do the sign
- * handling themselves on that raw byte.
- * Int8 is not available on Quasar.
+ * Int8 takes a different circular-buffer convention per architecture, because the two SFPU
+ * implementations disagree on how an Int8 byte in L1 is encoded:
+ *  - Wormhole/Blackhole: declare the circular buffers as UInt8 instead of Int8, so the raw 2's
+ *    complement byte is zero-extended instead of being decoded as sign-magnitude, and put Dest in
+ *    32 bit mode, which is enforced by a static_assert. The kernels below do the sign handling
+ *    themselves on that raw byte.
+ *  - Quasar: declare the circular buffers as Int8. Int8 is a native Dest format there and its datums
+ *    are sign-magnitude, which is exactly what the shared kernel's SM8 load and store decode, so the
+ *    byte needs no reinterpretation. Sign-magnitude has no -128, so the range is [-127, 127].
  *
  * Return value: None
  *
@@ -93,11 +97,6 @@ ALWI void typecast_tile(uint32_t idst) {
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
 
 #ifdef ARCH_QUASAR
-    // The shared Quasar kernel loads and stores Int8 as sign-magnitude, but callers configure Int8 CBs
-    // as UInt8. The byte would be decoded wrong with no error. Reject it here.
-    static_assert(
-        in_format != DataFormat::Int8 && out_format != DataFormat::Int8, "Int8 typecast is not supported on Quasar");
-
     // An MX endpoint is unpacked to / packed from Float16_b by the format, so at the SFPU level an MX
     // format behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX)
     // collapse to a pure format no-op, and so does MX <-> Float32, which reaches the Float16_b <-> Float32
