@@ -68,6 +68,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     const std::uint32_t num_faces_c_dim = tensor_shape_a.num_faces_c_dim;
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_mop_config_", tensor_shape_a);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_mop_config_", tensor_shape_b);
 
     if (transpose_of_faces)
     {
@@ -134,7 +135,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  * @param tensor_shape_a: Tensor shape of source A (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param tensor_shape_b: Tensor shape of source B, e.g. a [1,32] tile for a ROW/SCALAR broadcast operand
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
- * @note Call @ref _llk_unpack_AB_uninit_ after this function to restore the modified datum-count state.
+ * @note Leaves each unpacker's datum count (x_end) programmed, and SrcB's can differ from SrcA's. Each op's init
+ * reprograms the datum count it uses, so @ref _llk_unpack_AB_uninit_ is a no-op.
  * @ref _llk_unpack_AB_ is the matching execute call.
  * @ref _llk_math_eltwise_binary_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
@@ -143,6 +145,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape_a, cons
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape_a);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape_b);
     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
@@ -169,7 +172,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape_a, cons
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape of both sources (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
- * @note Call @ref _llk_unpack_AB_uninit_ after this function to restore the modified datum-count state.
+ * @note Forwards to the two-shape @ref _llk_unpack_AB_init_, whose notes apply.
  * @ref _llk_unpack_AB_ is the matching execute call.
  */
 template <BroadcastType BType = BroadcastType::NONE>
@@ -185,7 +188,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
- * @note Call @ref _llk_unpack_AB_uninit_ after this function to restore the modified datum-count state.
+ * @note Forwards to the two-shape @ref _llk_unpack_AB_init_, whose notes apply.
  * @ref _llk_unpack_AB_ is the matching execute call.
  */
 template <BroadcastType BType = BroadcastType::NONE>
@@ -203,7 +206,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckern
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Nonzero to enable both inter-face and within-face transpose, zero for none.
- * @note Call @ref _llk_unpack_AB_uninit_ after this function to restore the modified datum-count state.
+ * @note Forwards to the two-shape @ref _llk_unpack_AB_init_, whose notes apply.
  * @ref _llk_unpack_AB_ is the matching execute call.
  */
 template <BroadcastType BType = BroadcastType::NONE>

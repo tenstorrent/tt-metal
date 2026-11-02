@@ -101,25 +101,6 @@ def _unique_dimensions(dimensions):
     return [list(dim) for dim in dict.fromkeys(tuple(dim) for dim in dimensions)]
 
 
-def eltwise_binary_operand_shapes(tile_dimensions, tile_dimensions_B=None):
-    """Runtime parameters giving eltwise_binary_test.cpp the face geometry of SrcA and SrcB.
-
-    SrcB takes SrcA's shape unless tile_dimensions_B gives it its own.
-    """
-    tile_dimensions_B = tile_dimensions_B or tile_dimensions
-    face_r_dim_A, num_faces_r_dim_A, num_faces_c_dim_A = get_tile_params(
-        tile_dimensions
-    )
-    face_r_dim_B, num_faces_r_dim_B, num_faces_c_dim_B = get_tile_params(
-        tile_dimensions_B
-    )
-    return [
-        IN_FACE_DIMS(face_r_dim_A, FACE_C_DIM, face_r_dim_B, FACE_C_DIM),
-        NUM_FACES_R_DIM(num_faces_r_dim_A, num_faces_r_dim_B),
-        NUM_FACES_C_DIM(num_faces_c_dim_A, num_faces_c_dim_B),
-    ]
-
-
 # Fills every SrcB datum past its own tile. Large enough that a single poisoned datum reaching
 # math breaks the result.
 SRCB_POISON = 1024.0
@@ -346,6 +327,10 @@ def _run_eltwise_binary_test(
 
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
+    # SrcB takes SrcA's shape unless tile_dimensions_B gives it its own.
+    face_r_dim_B, num_faces_r_dim_B, num_faces_c_dim_B = get_tile_params(
+        tile_dimensions_B or tile_dimensions
+    )
 
     tile_rows, tile_cols = tile_dimensions
     tile_cnt_A = (input_dimensions[0] // tile_rows) * (input_dimensions[1] // tile_cols)
@@ -510,7 +495,9 @@ def _run_eltwise_binary_test(
                 input_num_blocks=num_blocks,
                 output_num_blocks=num_blocks,
             ),
-            *eltwise_binary_operand_shapes(tile_dimensions, tile_dimensions_B),
+            IN_FACE_DIMS(face_r_dim, FACE_C_DIM, face_r_dim_B, FACE_C_DIM),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim_B),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim_B),
             TEST_FACE_DIMS(face_r_dim=face_r_dim),
             LOOP_FACTOR(loop_factor),
         ],
@@ -1016,7 +1003,14 @@ def _run_eltwise_binary_dest_reuse_test(
                 input_num_blocks=prepared["input_num_blocks"],
                 output_num_blocks=prepared["output_num_blocks"],
             ),
-            *eltwise_binary_operand_shapes(tile_dimensions),
+            IN_FACE_DIMS(
+                prepared["face_r_dim"],
+                FACE_C_DIM,
+                prepared["face_r_dim"],
+                FACE_C_DIM,
+            ),
+            NUM_FACES_R_DIM(prepared["num_faces_r_dim"], prepared["num_faces_r_dim"]),
+            NUM_FACES_C_DIM(prepared["num_faces_c_dim"], prepared["num_faces_c_dim"]),
             TEST_FACE_DIMS(face_r_dim=prepared["face_r_dim"]),
             TILE_COUNT(prepared["tile_cnt_input"]),
             LOOP_FACTOR(loop_factor),

@@ -67,6 +67,7 @@ template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_shape, const ckernel::TensorShape tensor_shape_scaler)
 {
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_mop_config_", tensor_shape);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_mop_config_", tensor_shape_scaler);
 
     constexpr bool is_max        = pool_type == PoolType::MAX;
     constexpr bool is_scalar     = reduce_dim == ReduceDim::REDUCE_SCALAR;
@@ -155,6 +156,7 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape,
 
     // Validate tensor shape for tile-dependent operations
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_init_", tensor_shape);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_init_", tensor_shape_scaler);
 
     constexpr bool swap_operands       = _llk_unpack_AB_reduce_swaps_operands_<pool_type, reduce_dim>();
     constexpr std::uint32_t data_adc   = swap_operands ? p_setadc::UNP_B : p_setadc::UNP_A;
