@@ -27,12 +27,14 @@ void kernel_main() {
     constexpr auto state_a = TensorAccessorArgs<qkv_a.next_compile_time_args_offset()>();
     constexpr auto diag_a = TensorAccessorArgs<state_a.next_compile_time_args_offset()>();
 
-    // Runtime args, matching conv_silu.py's rt(): 0 qkv, 1 state, 2 diag, 3 nv, 4 gqa, 9 head.
+    // Runtime args, matching op.py's rt(): 0 qkv, 1 state, 2 diag, 3 conv, 4 shift, 5 nv, 6 gqa, 9 head.
+    // (nv/gqa were read from 3/4 -- the conv and shift ADDRESSES -- so every core got qk_h = 0 and a garbage
+    // nk: all q blocks carried head 0's q, and the k/v column bases were shifted. That was the "+30 blocks".)
     const uint32_t qkv_addr = get_arg_val<uint32_t>(0);
     const uint32_t state_addr = get_arg_val<uint32_t>(1);
     const uint32_t diag_addr = get_arg_val<uint32_t>(2);
-    const uint32_t nv = get_arg_val<uint32_t>(3);
-    const uint32_t gqa = get_arg_val<uint32_t>(4);
+    const uint32_t nv = get_arg_val<uint32_t>(5);
+    const uint32_t gqa = get_arg_val<uint32_t>(6);
     const uint32_t hv = get_arg_val<uint32_t>(9);
 
     const uint32_t qk_h = hv / gqa;

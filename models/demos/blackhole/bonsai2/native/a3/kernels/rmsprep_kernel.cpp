@@ -18,7 +18,7 @@
 //
 // Runtime args, per core:
 //   TRISC:  rb_addr
-//   NCRISC: x_addr, m_addr, g_addr, b, r, [emit] y_out_addr
+//   NCRISC: x_addr, m_addr, g_addr, b, r, [emit] y_out_addr, [add] d_addr, h_out_addr
 //   BRISC:  x8_addr, b, r, rb_addr, master_xy, is_master, num_cores, num_blocks, inv_k (fp32 bits),
 //           eps (fp32 bits), num_workers, worker xy..., [master only] core xy... for the rstd broadcast
 // Compile time: x_is_dram, m_page, units_per_bank.
@@ -50,6 +50,11 @@ constexpr uint32_t cb_yo = 14;   // emit: the normalized y = y' * rstd as one bf
 // GDN a|b matmul) into y_out [.., 32, K] 32x32 tiles, row 0 live, zeros elsewhere; unit r writes the
 // block's K-tiles 4r..4r+3.
 constexpr bool emit = get_named_compile_time_arg_val("rp_emit") == 1;
+// rp_add: the residual add fused in front: h = x + d (rounded to bf16 like the stock add) is normed and
+// written to h_out ([.., 32, K] 32x32 tiles, row 0 live, zeros elsewhere; unit r writes K-tiles 4r..4r+3)
+constexpr bool add = get_named_compile_time_arg_val("rp_add") == 1;
+constexpr uint32_t cb_d = 15;  // add: d as one bf16 32x32 tile, like cb_x
+constexpr uint32_t cb_h = 16;  // add: h = x + d as one bf16 32x32 tile (read by TRISC and NCRISC, never popped)
 // cb_sync (4 KB, same address on every core of the program): partial[b] at +16 b, rstd at +1024,
 // NoC staging words at +2048 / +2064 (16 B strides: NoC writes keep the 16 B phase)
 constexpr uint32_t cb_sync = 12;
@@ -70,6 +75,13 @@ inline void xg_and_sq() {  // slot 2 = slot 0 ^ 2 (for the partial), slot 0 = sl
         sfpi::vFloat v = sfpi::dst_reg[i];
         sfpi::dst_reg[2 * U + i] = v * v;
         sfpi::dst_reg[i] = v * sfpi::dst_reg[U + i];
+    }
+}
+inline void add_slot1_to_slot0() {
+#pragma GCC unroll 32
+    for (uint32_t i = 0; i < U; ++i) {
+        sfpi::vFloat a = sfpi::dst_reg[i], d = sfpi::dst_reg[U + i];
+        sfpi::dst_reg[i] = a + d;
     }
 }
 inline void scale_slot5(sfpi::vFloat r) {  // slot 5 (y') *= rstd, whole tile
@@ -122,25 +134,13 @@ inline float rsqrt_newton(float v) {  // soft-float rsqrt to full fp32 precision
 }
 #endif
 
-void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
-    constexpr bool x_is_dram = get_named_compile_time_arg_val("rp_x_is_dram") == 1;
-    constexpr uint32_t m_page = get_named_compile_time_arg_val("rp_m_page");
-    constexpr uint32_t upb = get_named_compile_time_arg_val("rp_units_per_bank");
-    const uint32_t x_addr = get_arg_val<uint32_t>(0), m_addr = get_arg_val<uint32_t>(1), g_addr = get_arg_val<uint32_t>(2);
-    const uint32_t b = get_arg_val<uint32_t>(3), r = get_arg_val<uint32_t>(4);
-    const InterleavedAddrGen<x_is_dram> xg{.bank_base_address = x_addr, .page_size = 2048};
-    const InterleavedAddrGen<true> gg{.bank_base_address = g_addr, .page_size = 4096};
-    // x row 0 of each K-tile: 64 B-aligned reads (rows 0-1 of face 0 at +0, of face 1 at +512) into scratch
-    cb_reserve_back(cb_scr, 1);
-    const uint32_t scr = get_write_ptr(cb_scr);
-    cb_reserve_back(cb_x, 1);
-    cb_reserve_back(cb_g, 1);
-    noc_async_read(get_noc_addr(b, gg, 0), get_write_ptr(cb_g), 4096);  // g for block b: one fp32 tile
-    // tile row i = K-tile i's row 0: cols 0-15 at face (i/16)*2 row i%16, cols 16-31 in the next face.
-    // NoC copies, not RISC word loops (512 volatile L1 words per pass cost several us).
-    const uint32_t xt = get_write_ptr(cb_x);
-    if constexpr (!x_is_dram) {
+// row 0 of block b's 32 K-tiles -> one 32x32 tile at xt: tile row i = K-tile i's row 0 (cols 0-15 at
+// face (i/16)*2 row i%16, cols 16-31 in the next face). NoC copies, not RISC word loops.
+template <bool dram>
+inline void gather_rows(uint32_t addr, uint32_t b, uint32_t xt, uint32_t scr) {
+    const InterleavedAddrGen<dram> xg{.bank_base_address = addr, .page_size = 2048};
+    if constexpr (!dram) {
         for (uint32_t i = 0; i < KT; ++i) {
             const uint32_t page = b * KT + i, f0 = xt + (i / 16) * 1024 + (i % 16) * 32;
             noc_async_read(get_noc_addr(page, xg, 0), f0, 32);
@@ -161,6 +161,46 @@ void kernel_main() {
         }
         noc_async_read_barrier();
     }
+}
+// rows 4r..4r+3 of a 32x32 tile at yt -> pages b*KT + t of an L1 interleaved [.., 32, K] tensor as full
+// 32x32 tiles, row 0 = the row, zeros elsewhere
+inline void write_rows(uint32_t yt, uint32_t addr, uint32_t b, uint32_t r) {
+    const InterleavedAddrGen<false> yg{.bank_base_address = addr, .page_size = 2048};
+    for (uint32_t t = 4 * r; t < 4 * r + 4; ++t) {
+        for (uint32_t c = 0; c < 4; ++c) {
+            noc_async_write(MEM_ZEROS_BASE, get_noc_addr(b * KT + t, yg, c * 512), 512);
+        }
+    }
+    noc_async_write_barrier();  // zeros land before the rows
+    for (uint32_t t = 4 * r; t < 4 * r + 4; ++t) {
+        const uint32_t f0 = yt + (t / 16) * 1024 + (t % 16) * 32;
+        noc_async_write(f0, get_noc_addr(b * KT + t, yg, 0), 32);
+        noc_async_write(f0 + 512, get_noc_addr(b * KT + t, yg, 512), 32);
+    }
+    noc_async_write_barrier();
+}
+#endif
+
+void kernel_main() {
+#if defined(COMPILE_FOR_NCRISC)
+    constexpr bool x_is_dram = get_named_compile_time_arg_val("rp_x_is_dram") == 1;
+    constexpr uint32_t m_page = get_named_compile_time_arg_val("rp_m_page");
+    constexpr uint32_t upb = get_named_compile_time_arg_val("rp_units_per_bank");
+    const uint32_t x_addr = get_arg_val<uint32_t>(0), m_addr = get_arg_val<uint32_t>(1), g_addr = get_arg_val<uint32_t>(2);
+    const uint32_t b = get_arg_val<uint32_t>(3), r = get_arg_val<uint32_t>(4);
+    const InterleavedAddrGen<true> gg{.bank_base_address = g_addr, .page_size = 4096};
+    cb_reserve_back(cb_scr, 1);
+    const uint32_t scr = get_write_ptr(cb_scr);
+    cb_reserve_back(cb_x, 1);
+    cb_reserve_back(cb_g, 1);
+    noc_async_read(get_noc_addr(b, gg, 0), get_write_ptr(cb_g), 4096);  // g for block b: one fp32 tile
+    gather_rows<x_is_dram>(x_addr, b, get_write_ptr(cb_x), scr);
+    if constexpr (add) {
+        constexpr bool d_is_dram = get_named_compile_time_arg_val("rp_d_is_dram") == 1;
+        cb_reserve_back(cb_d, 1);
+        gather_rows<d_is_dram>(get_arg_val<uint32_t>(5 + emit), b, get_write_ptr(cb_d), scr);
+        cb_push_back(cb_d, 1);
+    }
     cb_push_back(cb_x, 1);
     cb_push_back(cb_g, 1);
     const uint32_t unit = 8 * b + r;
@@ -173,24 +213,13 @@ void kernel_main() {
         src += KT * m_page;
         cb_push_back(cb_m, KT);
     }
-    if constexpr (emit) {
-        // y rows of this unit's K-tiles -> y_out pages as full 32x32 tiles, row 0 = y, zeros elsewhere.
-        // On NCRISC (idle by now), so it overlaps BRISC's scatter.
-        const InterleavedAddrGen<false> yg{.bank_base_address = get_arg_val<uint32_t>(5), .page_size = 2048};
-        for (uint32_t t = 4 * r; t < 4 * r + 4; ++t) {
-            for (uint32_t c = 0; c < 4; ++c) {
-                noc_async_write(MEM_ZEROS_BASE, get_noc_addr(b * KT + t, yg, c * 512), 512);
-            }
-        }
-        noc_async_write_barrier();  // zeros land before the rows
+    if constexpr (add) {  // the new residual h, written while BRISC scatters
+        cb_wait_front(cb_h, 1);
+        write_rows(get_read_ptr(cb_h), get_arg_val<uint32_t>(6 + emit), b, r);
+    }
+    if constexpr (emit) {  // the normalized rows, for consumers besides this projection
         cb_wait_front(cb_yo, 1);
-        const uint32_t yt = get_read_ptr(cb_yo);
-        for (uint32_t t = 4 * r; t < 4 * r + 4; ++t) {
-            const uint32_t f0 = yt + (t / 16) * 1024 + (t % 16) * 32;  // row t of the 32x32 y tile
-            noc_async_write(f0, get_noc_addr(b * KT + t, yg, 0), 32);
-            noc_async_write(f0 + 512, get_noc_addr(b * KT + t, yg, 512), 32);
-        }
-        noc_async_write_barrier();
+        write_rows(get_read_ptr(cb_yo), get_arg_val<uint32_t>(5), b, r);
         cb_pop_front(cb_yo, 1);
     }
 #elif defined(COMPILE_FOR_BRISC)
@@ -297,12 +326,32 @@ void kernel_main() {
     //    slot 0 = y' = x * g (-> cb_y32 as one bf16 tile; BRISC re-lays it for custom_mm). rstd is
     //    applied to the output rows at the end: H(D (x g rstd)) = rstd H(D (x g)), so the exchange
     //    overlaps the matmul instead of sitting in front of it.
-    cb_wait_front(cb_x, 1);
+    uint32_t cb_src = cb_x;
+    if constexpr (add) {  // 0. h = x + d -> bf16 cb_h (the new residual, and what gets normed)
+        cb_wait_front(cb_x, 1);
+        cb_wait_front(cb_d, 1);
+        tile_regs_acquire();
+        copy_init(cb_x);
+        copy_tile(cb_x, 0, 0);
+        copy_tile(cb_d, 0, 1);
+        MATH((sfpu_section([] { add_slot1_to_slot0(); })));
+        tile_regs_commit();
+        tile_regs_wait();
+        cb_reserve_back(cb_h, 1);
+        pack_reconfig_data_format(cb_h);
+        pack_block_contiguous_init(cb_h);
+        pack_block_contiguous(0, cb_h, 1);
+        cb_push_back(cb_h, 1);
+        tile_regs_release();
+        cb_pop_front(cb_d, 1);
+        cb_src = cb_h;
+    }
+    cb_wait_front(cb_src, 1);
     cb_wait_front(cb_g, 1);
     tile_regs_acquire();
-    copy_init(cb_x);
-    copy_tile(cb_x, 0, 0);
-    reconfig_data_format_srca(cb_x, cb_g);
+    copy_init(cb_src);
+    copy_tile(cb_src, 0, 0);
+    reconfig_data_format_srca(cb_src, cb_g);
     copy_init(cb_g);
     copy_tile(cb_g, 0, 1);
     constexpr uint32_t tdbg = get_named_compile_time_arg_val("rp_tdebug");  // 2: no reduce, 4: no x*g / x^2

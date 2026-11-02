@@ -71,10 +71,11 @@ class TernaryMLP:
         a3.prep(x, self.sh.m[5120], x8, self.sh.workers, src_tile32=True)
         return self._from_x8(x8, x.shape)
 
-    def forward_residual(self, h, gamma, eps):
-        """The decode RMSNorm fused in: h is the residual stream (pre-norm), gamma = a3.norm_gamma(1 + w)."""
+    def forward_residual(self, h, gamma, eps, add=None, h_out=None):
+        """The decode RMSNorm fused in: h is the residual stream (pre-norm), gamma = a3.norm_gamma(1 + w).
+        add: the residual add fused in too; h + add is normed and written to h_out."""
         x8 = a3.masked_input_buffer(self.sh.device, self.sh.workers, 5120)
-        a3.rmsprep(h, gamma, self.sh.m[5120], x8, self.sh.workers, eps)
+        a3.rmsprep(h, gamma, self.sh.m[5120], x8, self.sh.workers, eps, add=add, h_out=h_out)
         return self._from_x8(x8, h.shape)
 
     def _from_x8(self, x8, shape):

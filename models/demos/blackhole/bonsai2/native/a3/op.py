@@ -435,6 +435,7 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0, out2=None, n_split=0):
     banks = device.dram_grid_size().x
     wpb = len(workers) // banks
     packed = isinstance(w, PackedW)
+    s16 = isinstance(s, PackedS) and s.fp16
     cols_per_core = (w.cols_per_bank if packed else w.memory_config().shard_spec.shape[1] // 32) // wpb
     pcn = cols_per_core // cols
     tile_bytes = PackedW.TILE_BYTES if packed else w.get_tile().get_tile_size(w.dtype)
@@ -453,13 +454,14 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0, out2=None, n_split=0):
            ttnn.CBDescriptor(total_size=3 * 32 * tile_bytes, core_ranges=grid, format_descriptors=[
                ttnn.CBFormatDescriptor(buffer_index=1, data_format=ttnn.DataType.BFLOAT2_B, page_size=tile_bytes,
                                        tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])))]),
-           cb(2, ttnn.float32, 2 * cols * s_tiles, ttnn.Tile([32, 32])),
+           cb(2, s16 and ttnn.bfloat16 or ttnn.float32, 2 * cols * s_tiles, ttnn.Tile([32, 32])),
            cb(4, ttnn.bfloat16, 2, ttnn.Tile([1, 32])),
            cb(5, ttnn.bfloat16, 1, ttnn.Tile([32, 32])),
-           cb(6, ttnn.float32, 1, ttnn.Tile([32, 32]))]
+           cb(6, s16 and ttnn.bfloat16 or ttnn.float32, 1, ttnn.Tile([32, 32]))]
     packed_s = isinstance(s, PackedS)
     tail_t = s.tail_t if packed_s else 1
-    s_core_bytes = (cols_per_core // tail_t * s.tiles_per_group() if packed_s else cols_per_core * s_tiles) * 4096
+    s_core_bytes = (cols_per_core // tail_t * s.tiles_per_group() if packed_s else cols_per_core * s_tiles) * (
+        s.tile_bytes if packed_s else 4096)
     vcs, seen = [], []
     for core, bank, _ in workers:
         vc = bank & 0x3
@@ -468,9 +470,10 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0, out2=None, n_split=0):
         seen.append((core, bank))
         vcs.append((core, vc))
     common = [("tm_per_core_n", pcn), ("tm_num_g", num_g), ("tm_gu", int(gu)), ("tm_is_active_core", 1),
-              ("tm_shared_exp", int(packed)), ("tm_tail_t", tail_t)]
+              ("tm_shared_exp", int(packed)), ("tm_tail_t", tail_t), ("tm_s16", int(s16))]
     modes = [ttnn.UnpackToDestMode.Default] * 64
-    modes[2] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    if not s16:  # fp16 scales go through srcA (unpack-to-dest takes 32-bit inputs only); fp32 DST either way
+        modes[2] = ttnn.UnpackToDestMode.UnpackToDestFp32
     cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
                                        math_approx_mode=False, dst_full_sync_en=True)
     cfg.unpack_to_dest_mode = modes
@@ -520,9 +523,11 @@ class PackedS:
     one tail tile per tail_t consecutive columns; per DRAM bank, per group: [tail][main c0]...
     Raw bytes, uint32 row-major, height-sharded so each bank's bytes are contiguous."""
 
-    def __init__(self, t, tail_t, s_full, rem, cols_per_bank):
+    def __init__(self, t, tail_t, s_full, rem, cols_per_bank, fp16=False):
         self.t, self.tail_t, self.s_full, self.rem, self.cols_per_bank = t, tail_t, s_full, rem, cols_per_bank
         self.dtype, self.shape = ttnn.float32, tuple(t.shape)
+        self.fp16 = fp16  # 2 KB fp16 tiles (the GGUF's own scale type) instead of 4 KB fp32
+        self.tile_bytes = 2048 if fp16 else 4096
 
     def buffer_address(self):
         return self.t.buffer_address()
@@ -639,7 +644,14 @@ def weights_for_device(device, codes_kn, scales_gn=None, cache=None, shared_exp=
     s2 = host(f"s2t{tail_t}", lambda: torch.from_numpy(
         pack_scales(np.asarray(get()[1], dtype=np.float32), banks, tail_t).view(np.int32)), ttnn.int32,
         ttnn.ROW_MAJOR_LAYOUT)
-    s_dev = PackedS(banked(s2), tail_t, num_g // 4, num_g % 4, n // 32 // banks)
+    fp16 = os.environ.get("BONSAI_SCALE16", "0") == "1"
+    if fp16:  # the same layout as fp16: exact (the scales are fp16 in the GGUF); built from s2, no new cache file
+        f32 = s2.to_torch().numpy().view(np.float32)
+        f16 = f32.astype(np.float16)
+        assert np.array_equal(f16.astype(np.float32), f32), "scales not exactly fp16"
+        s2 = ttnn.from_torch(torch.from_numpy(f16.reshape(-1).view(np.int32).reshape(-1, 256)), dtype=ttnn.int32,
+                             layout=ttnn.ROW_MAJOR_LAYOUT)
+    s_dev = PackedS(banked(s2), tail_t, num_g // 4, num_g % 4, n // 32 // banks, fp16)
     if shared_exp:
         p = host("w256", lambda: torch.from_numpy(pack_shared_exp(np.asarray(get()[0]), banks).view(np.int32)),
                  ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
@@ -676,10 +688,12 @@ def norm_gamma(device, w):
                            memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
+def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None, add=None, h_out=None):
     """x: residual [.., 32, K] bf16 32x32 tiles (row 0 live), L1 or DRAM; g: norm_gamma; m: hadamard_tensor(K).
     Writes x8 = mask(H(D (rmsnorm(x) * g))) on every A3 worker, like rmsnorm -> prep.
-    y_out: optional L1-interleaved [.., 32, K] bf16 tensor that also gets rmsnorm(x) * g (row 0, rest zero)."""
+    y_out: optional L1-interleaved [.., 32, K] bf16 tensor that also gets rmsnorm(x) * g (row 0, rest zero).
+    add: the residual add fused in front: h = x + add (bf16, like ttnn.add) is normed instead of x and
+    written to h_out (L1-interleaved [.., 32, K] bf16, row 0, rest zero)."""
     import struct
 
     device = x.device()
@@ -708,7 +722,12 @@ def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
     cbs = [cb(0, ttnn.bfloat16, t32, 1), cb(1, m.dtype, t32, 64), cb(2, ttnn.bfloat16, t1, 4),
            cb(3, ttnn.bfloat16, ttnn.Tile([8, 32]), 1), cb(7, ttnn.float32, t32, 1), cb(8, ttnn.float32, t1, 1),
            cb(9, ttnn.float32, t1, 1), cb(10, ttnn.bfloat16, t1, 32), cb(11, ttnn.float32, t32, 1),
-           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1), cb(14, ttnn.bfloat16, t32, 1)]
+           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1), cb(14, ttnn.bfloat16, t32, 1),
+           cb(15, ttnn.bfloat16, t32, 1), cb(16, ttnn.bfloat16, t32, 1)]
+    assert (add is None) == (h_out is None)
+    if add is not None:
+        assert h_out.memory_config().buffer_type == ttnn.BufferType.L1 and not h_out.is_sharded()
+        assert add.dtype == ttnn.bfloat16 and not add.is_sharded() and add.shape[-1] == k
     emit = y_out is not None
     if emit:
         assert y_out.memory_config().buffer_type == ttnn.BufferType.L1 and not y_out.is_sharded()
@@ -732,20 +751,23 @@ def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
         kernel_source=KERNEL_RMSPREP,
         core_ranges=grid,
         ncrisc_named_compile_time_args=[("rp_x_is_dram", int(x_is_dram)), ("rp_m_page", m_page),
-                                        ("rp_units_per_bank", upb), ("rp_emit", int(emit))],
-        brisc_named_compile_time_args=[("rp_debug", debug), ("rp_emit", int(emit))],
-        trisc_named_compile_time_args=[("rp_tdebug", tdebug), ("rp_emit", int(emit))],
+                                        ("rp_units_per_bank", upb), ("rp_emit", int(emit)),
+                                        ("rp_add", int(add is not None)),
+                                        ("rp_d_is_dram", int(add is not None and add.memory_config().buffer_type == ttnn.BufferType.DRAM))],
+        brisc_named_compile_time_args=[("rp_debug", debug), ("rp_emit", int(emit)), ("rp_add", int(add is not None))],
+        trisc_named_compile_time_args=[("rp_tdebug", tdebug), ("rp_emit", int(emit)), ("rp_add", int(add is not None))],
         # full-sync DST: the SFPU steps address DST slots absolutely (half-sync alternates halves per acquire)
         trisc_compute_config=cfg,
         per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
             ncrisc_args=[(c, [x.buffer_address(), m.buffer_address(), g.buffer_address(), b, r]
-                          + ([y_out.buffer_address()] if emit else []))
+                          + ([y_out.buffer_address()] if emit else [])
+                          + ([add.buffer_address(), h_out.buffer_address()] if add is not None else []))
                          for c, (b, r) in zip(cores, units)],
             brisc_args=brisc,
             trisc_args=[(c, [rb.buffer_address()]) for c in cores],
         ),
     )
     prog = ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=sems, cbs=cbs)
-    ttnn.generic_op([x, g, m, rb] + ([y_out] if emit else []) + [x8], prog)
+    ttnn.generic_op([x, g, m, rb] + ([y_out] if emit else []) + ([add, h_out] if add is not None else []) + [x8], prog)
     ttnn.deallocate(rb)
     return x8

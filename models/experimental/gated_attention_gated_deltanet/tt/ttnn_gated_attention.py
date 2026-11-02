@@ -49,6 +49,54 @@ def apply_rotary_pos_emb_ttnn(q, k, cos, sin):
     return q_embed, k_embed
 
 
+# QWEN36_1C_ATTN_LEAN (one user, one token, paged decode): q/k/v stay [1, 1, H, D] -- the layout paged SDPA decode
+# and paged_update_cache already take -- so the transposes to [B, H, T, D] and back, and the reshape copies
+# before the cache update, go. RoPE becomes x*cos_full + (x @ P)*sin_full: P is a fixed [D, D] 0/+-1 matrix that
+# IS rotate_half on the rotary dims (zero elsewhere), and cos/sin are padded with 1/0 over the pass-through dims
+# once per step. Every element sees the same multiply, multiply, add as the slice/neg/concat chain, and the
+# +-1 matmul is exact, so the result is bit-identical (test_attn_lean.py).
+_ROPE_P = {}
+_ROPE_FULL = {}
+
+
+def _rope_rotate_matrix(device, rotary_dim, head_dim):
+    key = (id(device), rotary_dim, head_dim)
+    if key not in _ROPE_P:
+        import torch
+
+        P = torch.zeros(head_dim, head_dim)
+        h = rotary_dim // 2
+        for i in range(h):
+            P[i + h, i] = -1.0  # out[i] = -x[i + h]
+            P[i, i + h] = 1.0  # out[i + h] = x[i]
+        _ROPE_P[key] = ttnn.from_torch(P, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return _ROPE_P[key]
+
+
+def _rope_full(cos, sin, head_dim):
+    """cos/sin [.., rotary_dim] -> [1, 1, 1, head_dim] padded with 1 / 0. Built once per step: the 16 attention
+    layers get the same cos/sin objects, so it is cached on their identity (held, so the identity can't be reused)."""
+    hit = _ROPE_FULL.get("k")
+    if hit is not None and hit[0] is cos and hit[1] is sin:
+        return hit[2], hit[3]
+    pad = head_dim - cos.shape[-1]
+    c4 = ttnn.reshape(cos, [1, 1, 1, cos.shape[-1]])
+    s4 = ttnn.reshape(sin, [1, 1, 1, sin.shape[-1]])
+    cf = ttnn.pad(c4, [(0, 0), (0, 0), (0, 0), (0, pad)], value=1.0)
+    sf = ttnn.pad(s4, [(0, 0), (0, 0), (0, 0), (0, pad)], value=0.0)
+    _ROPE_FULL["k"] = (cos, sin, cf, sf)
+    return cf, sf
+
+
+def rope_lean_ttnn(x, cos_full, sin_full, P, memory_config=None):
+    """RoPE on x [1, 1, H, D] (rows are heads) with the padded cos/sin and the rotate matrix P."""
+    ckc = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+    xr = ttnn.matmul(x, P, compute_kernel_config=ckc)
+    return ttnn.add(ttnn.multiply(x, cos_full), ttnn.multiply(xr, sin_full), memory_config=memory_config)
+
+
 def rms_norm_zero_centered_ttnn(x, weight, eps=1e-6):
     """
     Zero-centered RMSNorm using TTNN: x * rsqrt(mean(x^2) + eps) * (1 + weight).
@@ -239,6 +287,14 @@ def gated_attention_forward_ttnn(
     B = hidden_states.shape[0]
     T = hidden_states.shape[1]
     scaling = head_dim**-0.5
+    lean = (
+        _os.environ.get("QWEN36_1C_ATTN_LEAN") == "1"
+        and B == 1
+        and T == 1
+        and page_table is not None
+        and paged_kv_cache_key is not None
+        and len(cos.shape) == 3
+    )
 
     # 2a (QWEN36_1C_FUSED_QKV): one in-projection instead of three. q+gate, k and v are three matmuls
     # on the same activation; k and v are only head_dim*num_kv_heads wide (1024 at TP=1), so at decode
@@ -267,10 +323,21 @@ def gated_attention_forward_ttnn(
         _k = ttnn.slice(qkv_fused, (0, 0, _qg_n), (B, T, _qg_n + _kv_n))
         _v = ttnn.slice(qkv_fused, (0, 0, _qg_n + _kv_n), (B, T, _total))
         ttnn.deallocate(qkv_fused)
-        qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
-        query_states, gate = ttnn.chunk(qg, 2, dim=-1)
-        ttnn.deallocate(qg)
-        gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
+        if lean and _os.environ.get("QWEN36_1C_ATTN_QGVIEW") == "1":
+            # [1,1,H*2D] and [H,1,2D] (one head per tile-row) hold the same tile sequence, so the head split is a
+            # view; q|gate are then tile-aligned slices, and the gate flattens back to [1,1,H*D] by a view too.
+            H, Dh = num_attention_heads, head_dim
+            qg_h = ttnn.experimental.view(qg, ttnn.Shape([H, 1, 2 * Dh]), ttnn.Shape([H, ttnn.TILE_SIZE, 2 * Dh]))
+            q_h = ttnn.slice(qg_h, (0, 0, 0), (H, 1, Dh))
+            gate_h = ttnn.slice(qg_h, (0, 0, Dh), (H, 1, 2 * Dh))
+            ttnn.deallocate(qg)
+            gate = ttnn.experimental.view(gate_h, ttnn.Shape([1, 1, H * Dh]), ttnn.Shape([1, ttnn.TILE_SIZE, H * Dh]))
+            query_states = q_h  # [H, 1, D]: normed per row below, then permuted to [1, 1, H, D]
+        else:
+            qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
+            query_states, gate = ttnn.chunk(qg, 2, dim=-1)
+            ttnn.deallocate(qg)
+            gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
     else:
         # Q projection: 2x wide
         qg = ttnn.linear(hidden_states, q_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
@@ -285,7 +352,10 @@ def gated_attention_forward_ttnn(
         query_states = ttnn.rms_norm(query_states, weight=q_norm_weight, epsilon=norm_eps)
     else:
         query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
-    query_states = ttnn.transpose(query_states, 1, 2)
+    if not lean:
+        query_states = ttnn.transpose(query_states, 1, 2)
+    elif len(query_states.shape) == 3:  # QGVIEW: [H, 1, D] -> [1, 1, H, D]
+        query_states = ttnn.reshape(ttnn.permute(query_states, (1, 0, 2)), [1, 1, num_attention_heads, head_dim])
 
     # K projection + norm + transpose to [B, H_kv, T, D]
     if qkv_fused is None:
@@ -297,7 +367,8 @@ def gated_attention_forward_ttnn(
         key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
     else:
         key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
-    key_states = ttnn.transpose(key_states, 1, 2)
+    if not lean:
+        key_states = ttnn.transpose(key_states, 1, 2)
 
     # V projection + transpose to [B, H_kv, T, D]
     if qkv_fused is None:
@@ -305,10 +376,17 @@ def gated_attention_forward_ttnn(
     else:
         value_states = _v
     value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
-    value_states = ttnn.transpose(value_states, 1, 2)
+    if not lean:
+        value_states = ttnn.transpose(value_states, 1, 2)
 
     # RoPE — for decode (T==1), use reshape (metadata-only) instead of unsqueeze (data movement)
-    if T == 1 and len(cos.shape) == 3:
+    if lean:
+        cos_full, sin_full = _rope_full(cos, sin, head_dim)
+        P = _rope_rotate_matrix(device, cos.shape[-1], head_dim)
+        # q goes to paged SDPA decode, which wants it in DRAM when interleaved.
+        query_states = rope_lean_ttnn(query_states, cos_full, sin_full, P, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        key_states = rope_lean_ttnn(key_states, cos_full, sin_full, P)
+    elif T == 1 and len(cos.shape) == 3:
         cos_4d = ttnn.reshape(cos, [cos.shape[0], 1, 1, cos.shape[-1]])
         sin_4d = ttnn.reshape(sin, [sin.shape[0], 1, 1, sin.shape[-1]])
         query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos_4d, sin_4d)
@@ -390,10 +468,13 @@ def gated_attention_forward_ttnn(
             paged_kv_cache_value, v_sharded, update_idxs_tensor=cur_pos_tensor, page_table=page_table
         )
         # Paged SDPA decode
-        q_decode = ttnn.transpose(query_states, 1, 2)  # [B, H_q, 1, D] -> [B, 1, H_q, D] = [1, B, H_q, D] for B=1
-        # paged_scaled_dot_product_attention_decode requires Q in DRAM when not sharded
-        # (sdpa_decode_device_operation.cpp:89). transpose preserves L1 layout from query_states.
-        q_decode = ttnn.to_memory_config(q_decode, ttnn.DRAM_MEMORY_CONFIG)
+        if lean:
+            q_decode = query_states  # already [1, B, H_q, D], in DRAM
+        else:
+            q_decode = ttnn.transpose(query_states, 1, 2)  # [B, H_q, 1, D] -> [B, 1, H_q, D] = [1, B, H_q, D] for B=1
+            # paged_scaled_dot_product_attention_decode requires Q in DRAM when not sharded
+            # (sdpa_decode_device_operation.cpp:89). transpose preserves L1 layout from query_states.
+            q_decode = ttnn.to_memory_config(q_decode, ttnn.DRAM_MEMORY_CONFIG)
         attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_decode,
             paged_kv_cache_key,
@@ -406,7 +487,8 @@ def gated_attention_forward_ttnn(
                 device, paged_kv_cache_key.shape[0] * paged_kv_cache_key.shape[2]
             ),
         )
-        attn_output = ttnn.transpose(attn_output, 1, 2)  # back to [B, H_q, 1, D]
+        if not (lean and _os.environ.get("QWEN36_1C_ATTN_TAIL") == "1"):
+            attn_output = ttnn.transpose(attn_output, 1, 2)  # back to [B, H_q, 1, D]
         new_key = paged_kv_cache_key
         new_value = paged_kv_cache_value
         _paged_sdpa_done = True  # Skip the bottom SDPA section (attn_output already computed)
@@ -586,18 +668,39 @@ def gated_attention_forward_ttnn(
     ttnn.deallocate(query_states)
 
     # Convert from [B, H, T, D] back to [B, T, H*D]
-    if use_optimized_concat:
+    attn_tail = lean and _os.environ.get("QWEN36_1C_ATTN_TAIL") == "1"
+    if attn_tail:
+        # QWEN36_1C_ATTN_TAIL: SDPA's [1, 1, H, D] -> [H, 1, 1, D] (one head per tile-row) by one permute, whose
+        # tile sequence IS [1, 1, H*D], so a view finishes the head concat (was transpose + concatenate_heads).
+        H, Dh = num_attention_heads, head_dim
+        attn_output = ttnn.permute(attn_output, (2, 0, 1, 3))
+        attn_output = ttnn.experimental.view(  # [1, 1, H*D], the rank concatenate_heads returns
+            attn_output, ttnn.Shape([1, 1, H * Dh]), ttnn.Shape([1, ttnn.TILE_SIZE, H * Dh])
+        )
+    elif use_optimized_concat:
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
     else:
         attn_output = ttnn.transpose(attn_output, 1, 2)
         attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
 
     # Apply sigmoid gate
-    gate = ttnn.sigmoid(gate)
-    # bonsai2 BONSAI_NATIVE: the exact-ternary o_proj reads L1, so the gate writes there (no copy op)
-    _l1 = (not isinstance(o_proj_weight, ttnn.Tensor) and _os.environ.get("BONSAI_ATTN_GATE_L1", "1") == "1"
-           and T <= ttnn.TILE_SIZE)  # decode only: a prefill-sized L1 activation clashes with the prefill CBs (C)
-    attn_output = ttnn.multiply(attn_output, gate, **({"memory_config": ttnn.L1_MEMORY_CONFIG} if _l1 else {}))
+    # One rule for both paths: the decode o_proj reads L1 (QWEN36_1C_OPROJ_1D's 1D config, or the exact-ternary
+    # TernaryLinear), so the gate multiply writes L1 and the o_proj's to_memory_config is a no-op. Under ATTN_TAIL
+    # always; for a ternary o_proj by default (A's BONSAI_ATTN_GATE_L1), decode only -- a prefill-sized L1
+    # activation clashes with the prefill CBs (C's 28e517fe401 guard).
+    _gate_l1 = attn_tail or (
+        not isinstance(o_proj_weight, ttnn.Tensor)
+        and _os.environ.get("BONSAI_ATTN_GATE_L1", "1") == "1"
+        and T <= ttnn.TILE_SIZE
+    )
+    _gate_mc = {"memory_config": ttnn.L1_MEMORY_CONFIG} if _gate_l1 else {}
+    if attn_tail:  # sigmoid rides on the multiply
+        attn_output = ttnn.multiply(
+            attn_output, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], **_gate_mc
+        )
+    else:
+        gate = ttnn.sigmoid(gate)
+        attn_output = ttnn.multiply(attn_output, gate, **_gate_mc)
     ttnn.deallocate(gate)
 
     # Output projection

@@ -142,6 +142,10 @@ class Qwen36Model:
         for i in tqdm(self.layer_indices, desc="Loading layers"):
             layer = Qwen36DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
             self.layers.append(layer)
+        # BONSAI_RES_ADD=2: a layer may hand its MLP output to the next one unadded when that one fuses the add
+        for a_, b_ in zip(self.layers, self.layers[1:]):
+            a_._res_next = getattr(a_, "_ff_gamma", None) is not None and getattr(b_, "_attn_native", None) is not None
+            b_._res_prev = a_
         # QWEN36_TP1_GDN: the TP=1 GDN layers decode with the fused recurrence (batch 1 = max_batch_size).
         if any(getattr(layer, "_tp1_gdn", False) for layer in self.layers):
             self.set_gdn_fused_decode(True)

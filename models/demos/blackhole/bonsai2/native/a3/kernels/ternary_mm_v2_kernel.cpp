@@ -52,6 +52,10 @@ constexpr uint32_t s_tiles = (num_g + 3) / 4;
 constexpr uint32_t s_full = num_g / 4;
 constexpr uint32_t rem = num_g % 4;
 constexpr uint32_t tail_t = get_named_compile_time_arg_val("tm_tail_t");
+// tm_s16: scale tiles are fp16 (2 KB, the GGUF's own type; the CB is declared bf16 as a carrier). TRISC
+// reprograms the unpacker's source format to Float16 for the scale copy; DST holds them as fp32 (exact).
+constexpr bool s16 = get_named_compile_time_arg_val("tm_s16") == 1;
+constexpr uint32_t s_tb = s16 ? 2048 : 4096;
 constexpr uint32_t pcn = get_named_compile_time_arg_val("tm_per_core_n");  // output tiles per core
 constexpr bool gu = get_named_compile_time_arg_val("tm_gu") == 1;
 constexpr uint32_t cols = gu ? 2 : 1;                                   // weight columns per output tile
@@ -251,19 +255,19 @@ void kernel_main() {
             for (uint32_t j = 0; j < cols; ++j) {
                 if constexpr (rem > 0) {
                     if ((n * cols + j) % tail_t == 0) {
-                        noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr), tail_l1, 4096);
-                        s_addr += 4096;
+                        noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr), tail_l1, s_tb);
+                        s_addr += s_tb;
                         noc_async_read_barrier();
                     }
                 }
                 if constexpr (s_full > 0) {
-                    noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr), l1, s_full * 4096);
-                    s_addr += s_full * 4096;
+                    noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr), l1, s_full * s_tb);
+                    s_addr += s_full * s_tb;
                 }
                 if constexpr (rem > 0) {
-                    noc_async_read(get_noc_addr(tail_l1), l1 + s_full * 4096, 4096);  // local copy
+                    noc_async_read(get_noc_addr(tail_l1), l1 + s_full * s_tb, s_tb);  // local copy
                 }
-                l1 += s_tiles * 4096;
+                l1 += s_tiles * s_tb;
             }
             noc_async_read_barrier();
             cb_push_back(cb_s, cols * s_tiles);
@@ -284,6 +288,11 @@ void kernel_main() {
             cb_wait_front(cb_s, cols * s_tiles);
             reconfig_data_format_srca(cb_in1, cb_s);
             copy_init(cb_s);
+            if constexpr (s16) {  // the CB says bf16; the bytes are fp16
+                UNPACK((_llk_unpack_reconfig_data_format_srca_impl_<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(
+                    (uint32_t)DataFormat::Float16, (uint32_t)DataFormat::Float16, 2048)));
+                MATH((_llk_math_reconfig_data_format_srca_<DST_ACCUM_MODE>((uint32_t)DataFormat::Float16)));
+            }
             for (uint32_t j = 0; j < cols * s_tiles; ++j) {
                 copy_tile(cb_s, j, 3 + j);  // gate scales at 3.., up scales at 3 + s_tiles..
             }
