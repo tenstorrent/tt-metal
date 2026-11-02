@@ -455,3 +455,180 @@ Artifacts: `perf_experiments/<slug>/`; raw profiler dumps over 400 KB are gitign
 
 The inv_rms multicast uses the kernel_lib `Mcast` helper (no bypass). The raw multicast variant was within the noise
 band of it.
+
+## Perf 2 — perf tournament round 2 (fan-out; nothing added to SUPPORTED)
+- Date: 2026-11-02. Board: Blackhole p150b, 13×10 = 130 Tensix cores, AICLK 1350 MHz. Instrument: device profiler
+  `DEVICE KERNEL DURATION [ns]` (same device timer as the grader's `device_kernel_ns`). Before → after pairs come from
+  one session: the round-start op (worktree of d521ece3aed = ebe9c9d1ebc + probe-only ablation hooks) vs the final op,
+  built by `tests/ttnn/unit_tests/operations/rms_norm/perf_p2_ab_rms_norm.py`; cells are built exactly like the golden
+  harness (`perf_p2_rms_norm.py`). Precision contract untouched (no change to `fp32_dest_acc_en` / `math_fidelity` /
+  `math_approx_mode` / dtypes). No `attention:`-flagged case exists in `LOOSE_CASES`.
+
+### Instrumentation (permanent)
+- Every Perf 1 zone kept. `RMS_ABLATE_DM` now also drops the ROW_MAJOR sharded stick staging / write-back payload
+  (probe only).
+- New kernels carry their own zones: `rms_norm_flat_*` (rd_block, cmp_wait_x, cmp_pass1, cmp_collapse, cmp_wait_gamma,
+  cmp_pass2, wr_gamma_issue / wr_gamma_finish, wr_store) and `rms_norm_narrow_flat_*` (reader stages incl.
+  rd_wait_peers / rd_inv_return / rd_lead_mcast, cmp_pass1 / cmp_combine / cmp_pass2, writer stages).
+
+### Earlier-snapshot check
+- Only INTERLEAVED had cells > 5 % slower than an earlier snapshot: 18 DRAM-bound cells vs `golden_refinement_5`
+  ((8192,7168) 593.6 vs 477.7 µs, (8192,5120) 419.5 vs 333.8 µs). Targeted anyway (idea `prefill_dram`).
+- Resolved as a measurement artifact, not a code regression: in the R5 snapshot every DRAM-bound interleaved cell is
+  0.735–0.79× of its R4 time while every L1-resident (compute-bound) cell is 1.00×. That is the signature of ticks
+  counted at a throttled AICLK and converted at 1350 MHz (DRAM time is fixed in real time, compute time is fixed in
+  cycles). The `prefill_dram` subagent caught the mirror effect in one of its own runs (every cell 1.2–1.6× slower for
+  ~10 minutes, normal again with no code change).
+
+### Measured breakdown (round start)
+- Empty-program floor (all kernels return at once, same Tensix cores): 0.29–0.48 µs.
+- Cumulative ablation, µs. "chains" = `CKL_ELTWISE_CHAIN_SKIP_COMPUTE`; "no DM" = x/out payload (interleaved TILE) or
+  stick staging + write-back payload (RM sharded) removed.
+
+  | cell | full | chains stubbed | no DM | no DM + chains | main zones |
+  |---|---|---|---|---|---|
+  | int_prefill_7168 | 598.0 | 571.6 | 82.6 | 28.8 | rd_read max 517 / p50 203 (2.5× Tensix-core imbalance) |
+  | int_prefill_5120 | 421.5 | 397.7 | 59.4 | 20.6 | |
+  | wid_tile_128x4096 (K = 128, b = 4) | 26.6 | 25.7 | — | — | wr_wait_inv 23.2, wr_xchg_send 12.1, owners' cmp_wait_gathered 12.4 |
+  | wid_tile_224x3072 (K = 96, b = 7) | 21.5 | 19.4 | — | — | exchange |
+  | wid_tile_13x777x1023 (K = 32, b = 325) | 386.8 | 322.2 | — | — | exchange + per-row collapse |
+  | wid_rm_5x3x928x544 ([13920, 8] × 68) | 850.2 | 765.0 | 469.9 | 384.6 | rd_block 817 (stick staging), wr_store 337 |
+  | wid_rm_13x777x1023 | 677.8 | 616.0 | 398.2 | 336.5 | |
+  | wid_rm_1024x1024 | 117.2 | 111.2 | 89.1 | 82.5 | exchange (K = 128) |
+  | wid_rm_f32_4x1x512x512 | 227.1 | 215.3 | 177.3 | 161.0 | |
+  | hgt_rm_f32_128x4096 (1 stick / core) | 93.8 | 86.9 | — | — | wr_gamma_stream 48.5; 32×-padded tilize / pass / untilize |
+  | hgt_rm_224x11008 (2 sticks / core) | 121.9 | 107.8 | — | — | pass 2 + untilize 87, wr_gamma_stream 22 |
+  | hgt_tile_res_128x8192 (fp32 RM gamma) | 124.1 | — | — | — | wr_gamma_stream 120.4 (resident-gamma twin: 68.7) |
+  | blk_rm_99991x64 ([10000, 8] × 80) | 513.2 | 452.2 | 236.6 | 174.1 | staging + write-back |
+
+- Ranked headroom (measured ÷ ceiling; L1-resident cells use the fastest large cell's ns per tile per Tensix core at
+  the same dtype and `Layout`):
+  1. WIDTH / BLOCK ROW_MAJOR with 16 B shards (the harness's ROW_MAJOR granule): 15–35× — 16 B stick staging,
+     75 %-padding tiles, per-tile-row K-way exchange.
+  2. HEIGHT ROW_MAJOR with 1–2 sticks per Tensix core: 13–25× — 32× tile padding, streamed RM gamma.
+  3. WIDTH TILE with large K (96–128): 20–49× vs that rule; 4.9× vs the catalog's measured K = 128, b = 4 all-reduce
+     (5.4 µs) — the owner combine.
+  4. Streamed gamma (HEIGHT wide W): ~1.8× (cmp_pass2 starved on wr_gamma_stream).
+  5. Interleaved prefill: 1.04–1.06× of the op's own copy-only run (≈ 405–415 GB/s, the catalog's full-grid copy
+     ceiling) → **close to ceiling**: (8192,7168) 600 µs vs copy-only 567–579 µs.
+
+### Classes targeted and why
+1. RM WIDTH / BLOCK narrow shards — the largest absolute times of the op (up to 850 µs) and the largest ratios.
+2. RM HEIGHT few sticks per core — 52–122 µs cells doing 1/32 useful work.
+3. TILE WIDTH large-K owner combine — exchange is the whole kernel time.
+4. Streamed gamma — a different mechanism (L1 fit), hits HEIGHT TILE cells too.
+5. Interleaved prefill — the earlier-snapshot priority rule. It turned out to be close to ceiling (see above).
+
+### Portfolio and verdicts
+Five `perf-part-optimizer` subagents ran in parallel. Artifacts: `perf_experiments/<slug>/` (raw profiler dumps are
+gitignored). Brief: `perf_experiments/BRIEF_perf2.md`.
+
+| idea | verdict | before → after, ns | domain / notes |
+|---|---|---|---|
+| `narrow_rm_flat`: read 16 B-wide RM shards as flat tiles; per-stick sums by 0/1 matmuls (S_j) into compressed unit tiles; combine over Q sub-blocks spread across members; the unit's leader multicasts inv; pass 2 = (inv @ E_j) · x with gamma folded into E_j | **WIN, graduated** | wid_rm_5x3x928x544 850 233 → 38 862 · wid_rm_13x777x1023 679 556 → 35 703 · wid_rm_1024x1024 117 210 → 15 947 · wid_rm_f32_4x1x512x512 227 556 → 14 191 · blk_rm_99991x64 513 351 → 28 597 | ROW_MAJOR WIDTH / BLOCK shards whose width divides a 16-datum face row (bf16 8/16, fp32 4/8/16 datums) and whose pitch equals the width. Menu: broadcast-form partials (no compression) 2–3× slower than compressed; one multicast per sub-unit 3–8× slower (collisions) → one leader multicast per unit. 1–2 bf16 ulp from the old output; PCC ≥ 0.99991. |
+| `row_partial_mcast`: row-form partial (ones-row matmul with transposed sumsq), K × 128 B into ⌈K/32⌉ gather tiles, REDUCE_COL + DEST transpose on the owner, root multicast return, owner spread | **WIN, graduated (with one carve-out)** | wid_tile_128x4096 26 659 → 6 955 · wid_tile_224x3072 20 973 → 7 795 · wid_tile_160x11008 23 093 → 9 522 · wid_tile_13x777x1023 386 850 → 229 669 · wid_rm_1024x1024 117 406 → 61 770 (before narrow-flat) | every owner-combine block. K sweep at b = 4: K = 8 1.05×, 16 1.27×, 32 1.78×, 64 2.58×, 128 3.83×. Carve-out below. ≤ 2 bf16 ulp. |
+| `height_rm_flat`: a HEIGHT RM stick = ⌈W/1024⌉ flat tiles; DEST-accumulated x², one REDUCE_SCALAR, one-vector finalize; resident RM gamma page (one read + multicast); cb_x / cb_out alias the shards | **WIN, graduated (cost-model gate)** | hgt_rm_f32_128x4096 93 223 → 3 279 · hgt_rm_224x11008 121 755 → 6 936 · (128,8192) 85 758 → 4 592 · (96,6144) 62 441 → 3 388 · (100,5120) 52 420 → 3 119 · (3104,4064) 24 sticks 43 239 → 29 499 | gate below. Error vs torch at or below the old path's on every measured cell but one (bf16, fp32 DEST, no gamma: rms 0.00145 vs 0.00122, PCC 0.999999 both). |
+| `compact_gamma`: cb_gamma page stride 192 B (row 0 of faces 0/1 at +0 / +face_bytes, host-checked non-overlap, tail pages) | **WIN, graduated, no carve-out** | hgt_tile_res_128x8192 124 128 → 68 270 · hgt_rm_f32_128x4096 93 178 → 53 756 · hgt_rm_f32_128x8192 178 298 → 106 285 · hgt_rm_224x11008 121 577 → 111 863 | everywhere, bit-identical (NaN-fill proof on unwritten bytes). Its menu option 2 (compact RM row + local chunk assembly) not built: option 1 already removes streaming on every target. |
+| `prefill_dram`: bank stagger (read / write / both), OVERLAP_BLOCKS 2, 32-tile output units, write split onto the read NoC, NoC-swap on top rows, static rebalance | **NULL** | (8192,7168): base 597–620k; stag_r 590–609k; ovl2 599–607k; write split 589–609k (ws2 regression); row swap 602–679k (regression); rebalance 633–675k (regression) | the op runs at its own copy ceiling. Starved Tensix cores (NoC arbitration by grid position) do not speed up with less work. Untested: dynamic tile-row claiming (rebalance data says it would not help). |
+
+### What graduated (commits), domain, deleted code
+- **9936df5e0dc, compact cb_gamma.** The single cb_gamma layout everywhere. Streaming stays only where even the compact
+  slice does not fit (bf16 TILE HEIGHT W = 11008 on 5–7 Tensix cores: flat there). RM sharded plans now prefer resident
+  gamma at any chunk cap before any streamed gamma (the old interleaved order was deleted).
+- **562855eea1f, row partial + root return + owner spread.** Every owner-combine block (sharded k > 1, interleaved
+  k > 8), TILE and RM. Deleted: the faces-0/2 owner partial path (`static_assert`s pin it), the k-tile owner add.
+  `cb_gathered` is ⌈k/32⌉ pages per owned row (k = 128: 16 KB instead of 512 KB).
+- **807efb3acbb, HEIGHT RM flat regime.** New kernels `rms_norm_flat_{reader,compute,writer}.cpp`; router in
+  `create_program_descriptor`. Also runs when the tilized plan does not fit L1 (new: fp32 [32,4096] shards).
+- **4952a4ae10b, narrow-flat regime.** New `rms_norm_narrow_flat_program_descriptor.py` + kernels
+  `rms_norm_narrow_flat_*`. For its domain it replaces the stick staging → tilize → per-tile-row owner combine →
+  untilize → stick write-back path.
+
+### Carve-outs and measured trades
+- **Narrow-flat — inexpressible elsewhere (feasibility).** A shard width that does not divide a 16-datum face row
+  (24, 40, 320 datums …) spans two logical rows of a flat tile, so one right-multiplication cannot reduce a stick; the
+  module returns None. Those cells measured unchanged (blk_rm_128x4096 13.4 → 13.0 µs, wid_rm_3x1x736x5119
+  198 → 197 µs in the subagent session; it still gains 1.41× from the row-partial exchange).
+- **HEIGHT RM flat — measured crossover.** Written as a cost model in portable units (S = sticks per Tensix core,
+  W): flat ≈ 1.2 µs + S·(150 + 230·⌈W/1024⌉ + 80·[W % 1024 ≠ 0]) ns vs tilized ≈ ⌈S/32⌉·(2300 + 310·⌈W/32⌉) ns.
+  Forcing flat above the crossover measured 0.54–0.58× ((2048,256), (3104,416)); the model picked the winner on every
+  measured cell. Also inexpressible: TILE-layout gamma (golden-INVALID with RM HEIGHT input) and bf8b.
+- **Root return — interleaved multi-row blocks keep the unicast return.** Root hop measured +2.2–3.7 % on DRAM-bound
+  interleaved k = 16, b = 2–8 (3 paired runs: (1024,16384) bf16 167.5 → 171.2 µs, fp32 167.3 → 173.6 µs,
+  (512,32768) 172.0 → 175.8 µs). Written as `root = sharded` in `_inv_mcast_order`.
+- **Combine pipeline K gate kept.** Lifting it with the root return measured 0.76–0.78× ((224,3072), (256,2048)).
+
+### Scoreboard — round start → final, same session (ns, speedup)
+
+| class (bottleneck) | cell | before | after | × |
+|---|---|---|---|---|
+| RM WIDTH 16 B shards (staging + exchange) | wid_rm_5x3x928x544 | 851 173 | 38 897 | 21.88 |
+| RM WIDTH 16 B, W tail (7 of 8 cols) | wid_rm_13x777x1023 | 678 635 | 35 352 | 19.20 |
+| RM WIDTH 16 B, fp32 DEST, fp32 RM gamma | wid_rm_1024x1024 | 118 068 | 15 901 | 7.43 |
+| RM WIDTH fp32 x, 16 B (4 datums) | wid_rm_f32_4x1x512x512 | 227 963 | 14 213 | 16.04 |
+| RM WIDTH (2048,256) 16 B | wid_rm_2048x256 | 141 762 | 12 822 | 11.06 |
+| RM WIDTH 48 B shards (not narrow; exchange) | wid_rm_224x3072 | 36 999 | 18 202 | 2.03 |
+| RM WIDTH 80 B shards (not narrow; exchange) | wid_rm_3x1x736x5119 | 197 919 | 140 322 | 1.41 |
+| RM BLOCK 16 B shards | blk_rm_99991x64 | 513 668 | 28 644 | 17.93 |
+| RM BLOCK 48 B | blk_rm_2048x256 | 18 186 | 17 000 | 1.07 |
+| RM BLOCK wide | blk_rm_128x4096 / blk_rm_96x6144 | 13 212 / 12 122 | 13 364 / 12 250 | 0.99 / 0.99 (noise; median of 3: 0.986) |
+| RM HEIGHT 1 stick / core, fp32 | hgt_rm_f32_128x4096 | 93 352 | 3 265 | 28.59 |
+| RM HEIGHT 1 stick / core, fp32 W = 8192 | hgt_rm_f32_128x8192 | 113 039 | 3 982 | 28.39 |
+| RM HEIGHT 2 sticks / core, W % 1024 ≠ 0 | hgt_rm_224x11008 | 121 784 | 6 944 | 17.54 |
+| RM HEIGHT 24 sticks / core | hgt_rm_3104x4064 | 43 224 | 29 543 | 1.46 |
+| RM HEIGHT many sticks (tilized by the gate) | hgt_rm_2048x256 | 5 046 | 5 010 | 1.01 |
+| TILE WIDTH K = 128 (owner combine) | wid_tile_128x4096 | 27 164 | 7 031 | 3.86 |
+| TILE WIDTH bf8b, no gamma | wid_tile_bf8_128x4096_nog | 26 051 | 6 430 | 4.05 |
+| TILE WIDTH K = 96 | wid_tile_224x3072 | 21 126 | 7 806 | 2.71 |
+| TILE WIDTH K = 115 | wid_tile_160x11008 | 23 182 | 9 672 | 2.40 |
+| TILE WIDTH K = 32, b = 325 (now pass-2 bound) | wid_tile_13x777x1023 | 386 804 | 229 841 | 1.68 |
+| TILE WIDTH K = 8, pipelined | wid_tile_2048x256 | 31 521 | 30 147 | 1.05 |
+| TILE WIDTH perf decode (achievable 5 481 / 5 267) | wid_perf_32x7168 / 32x5120 | 4 988 / 4 641 | 4 724 / 4 321 | 1.06 / 1.07 |
+| TILE HEIGHT, fp32 RM gamma (was streamed) | hgt_tile_res_128x8192 | 124 024 | 68 286 | 1.82 |
+| TILE HEIGHT compute-bound (4 Tensix cores) | hgt_tile_128x8192 / hgt_tile_4096_g | 68 710 / 35 089 | 68 747 / 35 031 | 1.00 / 1.00 |
+| TILE HEIGHT W = 11008 (still streams) | hgt_tile_160x11008 | 90 781 | 90 867 | 1.00 |
+| TILE HEIGHT bf8b | hgt_tile_bf8_2048x256 | 3 776 | 3 730 | 1.01 |
+| TILE BLOCK perf (achievable 18 871 / 25 947 / 25 640 / 19 039) | blk_perf_7168x1024 / 7168x2048 / 8192x1024 / 640x6144 | 22 423 / 30 730 / 29 275 / 14 714 | 22 188 / 30 339 / 29 201 / 14 852 | 1.01 / 1.01 / 1.00 / 0.99 |
+| TILE BLOCK | blk_tile_128x4096 / blk_tile_13x777x1023 | 10 072 / 33 079 | 10 090 / 33 004 | 1.00 / 1.00 |
+| interleaved prefill (DRAM, close to ceiling) | int_prefill_7168 / 5120 / 1024 | 603 890 / 419 431 / 83 116 | 606 974 / 419 355 / 82 818 | 0.99 / 1.00 / 1.00 (median of 3 on 7168: 0.991) |
+| interleaved perf | int_perf_7168x2048 / int_mid_7168 / int_perf_32x7168 | 144 470 / 45 628 / 7 570 | 145 938 / 45 063 / 7 337 | 0.99 / 1.01 / 1.03 |
+| interleaved decode, owner k = 49 | int_decode_32768 | 18 292 | 18 238 | 1.00 |
+| interleaved fp32 / bf8b | int_tile_f32_128x8192 / int_tile_bf8_128x8192 | 25 278 / 11 944 | 23 696 / 12 276 | 1.07 / 0.97 (median of 3: 0.994) |
+| interleaved RM | int_rm_99991x64 / int_rm_128x4096_gf32 / int_rm_160x11008 | 236 267 / 15 516 / 24 968 | 237 492 / 15 574 / 25 141 | 0.99 / 1.00 / 0.99 (medians of 3: 1.001 / — / 1.007) |
+| interleaved non-aligned | int_tile_13x777x1023 | 110 334 | 109 034 | 1.01 |
+
+- Every axis value appears above: dtype f32 / bf16 / bf8b; fp32 DEST on / off; `Layout::TILE` / ROW_MAJOR; alignment
+  tile / w_non (13x777x1023, 3x1x736x5119) / h_non (99991x64); rank 2 / 3 / 4; gamma none / bf16 / fp32 / bf8b,
+  TILE / RM; every `TensorMemoryLayout`.
+- Close to ceiling: interleaved prefill (8192,7168) 600 µs vs its copy-only 567–579 µs at ≈ 410 GB/s.
+
+### Guard set / golden (all green)
+- Golden `test_golden` (12 chunks: 4 placements × {bf8b, fp32, other}) + `test_regression` + `test_translated` after
+  each of the four graduations: every chunk passed (same pass / skip / xfail counts as round start; 0 failed, 0 hangs).
+- Unit dir `tests/ttnn/unit_tests/operations/rms_norm/`: 336 passed, 3 skipped after each graduation.
+- Same-session A/B over 48 cells (above): no cell slower beyond noise. The four cells that read 0.97–0.99× in the
+  single A/B were re-run 3× alternating: medians 0.986–1.007.
+
+### Next bottlenecks (for a Perf 3)
+- **TILE WIDTH K = 32, many rows** (13,777,1023): 230 µs, now pass 2 (≈ 180 µs on the pack thread).
+- **RM WIDTH shards wider than 16 datums but not narrow** (40-datum: 140 µs): staging + tilize; the narrow-flat
+  mechanism needs a two-sided (P @ x² @ B) reduction to reach them.
+- **TILE HEIGHT W = 11008** still streams gamma on 5–7 Tensix cores (flat: pass 2 runs at the resident rate).
+- **TILE HEIGHT compute** on 4 Tensix cores (harness geometry): 268 ns per tile at HiFi4 fp32 DEST.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::reduce` (owner combine + member collapse) | capability | No row-form output: its REDUCE_ROW leaves the sums in column 0, and `post_reduce_op` cannot call `transpose_dest` (it reprograms the FPU MOP / addressing the next `reduce_tile` needs). No "REDUCE_COL over gather tiles → DEST transpose → finalize" combine. Raw `matmul_init(…, transpose in1)` / `matmul_tiles` (member: ones-row × sumsq^T) and raw `reduce_init<REDUCE_COL>` / `reduce_tile` + `transpose_dest` (owner). | 26 659 (wid_tile_128x4096, helper combine of k face-0/2 tiles) | 6 955 | `kernels/rms_norm_compute.cpp:213` (`collapse_rows_to_row0` :226, `combine_rows_block` :255) |
+| no helper (dataflow: partial-row scatter) | capability | No kernel_lib helper writes partial tile rows (two 16-datum face rows into row m % 32 of a remote gather tile) or zero-fills gather rows from the NoC zeros region; raw `noc_async_write` / `noc_async_read(MEM_ZEROS_BASE)`. | n/a (no helper path) | — | `kernels/rms_norm_writer.cpp:499` (face rows), `:410` (`zero_unused_gather_rows`) |
+| `compute_kernel_lib::matmul_block` (narrow-flat pass 1 / pass 2) | capability | Built around K-blocked activations × weights with its own CB lifecycle: cannot index a per-tile resident constant (S_j / E_j selected by flat-tile index), reuse ONE inv tile as in0 across R outputs, or leave the product in DEST for a following DEST-reuse multiply before packing. Raw `matmul_init` / `matmul_tiles` / `matmul_block_init` / `matmul_block`. | n/a (no helper path; old op path 850 233 on wid_rm_5x3x928x544) | 38 862 | `kernels/rms_norm_narrow_flat_compute.cpp:22` (calls :145, :240) |
+| `eltwise_chain` `DestReuseBinary` (narrow-flat pass 2) | capability | A chain cannot start from a matmul result already in DEST; raw `mul_reuse_dest_tiles<DEST_TO_SRCA>` with the srcB reconfig done by hand. | n/a | — | `kernels/rms_norm_narrow_flat_compute.cpp:246` |
+| SFPU compute API (`binop_with_scalar` + `rsqrt_tile`) in narrow-flat combine | capability | No entry point sums the Q sub-blocks of one tile and then runs rsqrt on sub-block 0 only (`FoldFinalize`); stock calls scope only by face. | n/a | — | `kernels/rms_norm_narrow_flat_compute.cpp:105` |
+| kernel_lib `Mcast` (narrow-flat inv return) | capability | One fixed (or fixed-order rotating) sender per group; here the sender is the leader of each unit (owner of its first sub-unit) while every member is simultaneously a sender of other units. Raw multicast + per-unit flag. | n/a | — | `kernels/rms_norm_narrow_flat_reader.cpp:22` |
+| no helper (dataflow: 0/1 selection matrices) | capability | Nothing in kernel_lib builds constant 0/1 (or gamma-carrying) matrix tiles; the narrow-flat reader writes S_j / E_j with RISC-V stores from a table. | n/a | — | `kernels/rms_norm_narrow_flat_reader.cpp:22` |
+| `eltwise_chain` (HEIGHT RM flat pass 1 / pass 2) | capability | Inputs are addressed by tile index with a unit column step (`Strided{base, row_stride}`); flat tile j of stick s sits at page s·stick_pages + j·tile_pages of the zero-copy cb_x (page = gcd(stick pitch, tile bytes)), and a stick's last flat tile may come from a second CB (tail slot). Raw `mul_tiles`, `mul_tiles_bcast_scalar`, `mul_reuse_dest_tiles`, out-of-order `pack_tile`. | n/a (no helper path; old op path 93 223 on hgt_rm_f32_128x4096) | 3 279 | `kernels/rms_norm_flat_compute.cpp:16` |
+| SFPU compute API `rsqrt_tile` (HEIGHT RM flat finalize) | capability | Scope only by face (`VectorMode`), never to the ONE vector holding element (0, 0) of a REDUCE_SCALAR result; raw `_llk_math_eltwise_unary_sfpu_params_(…, VectorMode::RC_custom)`. Bit-identical. | 3 270 (8-vector column-0 finalize, per stick +~210 ns at 32 sticks) | 3 279 (1 stick: equal) | `kernels/rms_norm_flat_compute.cpp:72` |
+| `dataflow_kernel_lib` local copy (`set_read_state` / `read_with_state`) — flat tail staging | capability | The stateful copy fixes the source address and varies only the destination; the flat tail copy steps the source per stick (and the write-back steps the destination). Raw `noc_async_read` / `noc_async_write`. | n/a | — | `kernels/rms_norm_flat_reader.cpp:61`, `kernels/rms_norm_flat_writer.cpp:100` |
+
+Compact cb_gamma added no bypass (the existing `MulGammaRowBcast` row in Perf 1 covers the unpack it relies on). The
+root inv_rms return uses the kernel_lib `Mcast` helper (no bypass).

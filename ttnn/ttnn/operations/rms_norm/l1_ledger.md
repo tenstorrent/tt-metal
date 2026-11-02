@@ -183,3 +183,22 @@ NoC (R2 only) ≈ `k² · tensor_row_tiles · 4 KB`.
 - `cb_ones` (index 13, 1 bf16 page) added: the FPU row collapse's 1.0 scaler.
 - Combine pipeline (sharded owner combine): `cb_inv_rms`, `cb_partial_sumsq`, `cb_gathered_sumsq` sized per
   sub-block (see the footprint note); two extra semaphores (ids 2, 3 — only on paths with no `ttnn.Mcast` attached).
+
+### Perf 2 — CB changes
+- `cb_gamma` (compact): page STRIDE = 192 B for bf16 / fp32 / bfloat8_b (was 1024 / 2048 / 576 B). A page carries only
+  [exp section + face 0 row 0] at +0 and face 1 row 0 at +exp+face_bytes; pages interleave (host-checked: no page's
+  write footprint touches another page's row 0 / exponents). Every resident slice / streamed chunk owns
+  `RMS_GAMMA_TAIL_PAGES` extra pages (bf16 5, fp32 10, bfloat8_b 2) covering the last page's full-face unpacker read.
+  Resident slice = (S_x + tail) · 192 B — e.g. 256 tiles: 50 KB instead of 512 KB (fp32), so streaming survives only
+  where the shard-backed x / out leave < ~67 KB (bf16 TILE HEIGHT W = 11008 on 5–7 Tensix cores).
+- `cb_gathered_sumsq` (owner topology): ⌈k/32⌉ row-form gather tiles per owned row (k member rows of 32 datums each),
+  i.e. `pipe · ceil(b/k) · ceil(k/32)` T_acc pages — k = 128: 16 KB instead of 512 KB. The symmetric all-gather
+  (interleaved k ≤ 8) is unchanged.
+- RM HEIGHT flat regime (`rms_norm_flat_*`): cb_x / cb_out alias the shards (page = gcd(stick pitch, tile bytes), no
+  L1 of their own); per stick one T_acc page each in cb_sumsq / cb_inv_rms; cb_ones 1 T_acc page; resident gamma =
+  ⌈W/1024⌉ gamma tiles (the RM gamma page); W % 1024 ≠ 0 adds one T_in tail page per stick in cb_x_rm and cb_out_rm.
+  Rejected when the sum exceeds the budget or the shard needs ≥ 32768 CB pages.
+- RM narrow-flat regime (`rms_norm_narrow_flat_program_descriptor.py`): cb_x / cb_out alias the shards with tile pages;
+  x / out tail scratch 1 tile each; S_j / E_j constant matrices (≤ R tiles each, R = w_s); squares 2 units; partial
+  ring; gathered ⌈k/Q⌉ tiles per owned sub-unit; inv per unit; 16 B flags. The plan returns None (op keeps its path)
+  when it exceeds the budget.
