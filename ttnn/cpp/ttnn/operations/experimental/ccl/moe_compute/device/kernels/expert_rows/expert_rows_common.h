@@ -2,15 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sizes, layouts and schedule arithmetic shared by the expert rows host sources and kernels. Terms:
+// Sizes, layouts and schedule arithmetic shared by the expert rows host code and kernels. Terms:
 // - job: up to row_tiles x 32 routed rows of one local expert, computed in one pass over its weights.
-// - expert group: the cores that compute one job, one or more reader cores per DRAM bank (shard of the weights).
-// - column group: one block-column of W0/W1 (2 intermediate columns, 4 tiles per K row). Output group: 4 W2 output
-//   tiles.
-// - weight-stationary: jobs of several row tiles (row_tiles > 1). x moves in chunks of chunk_tiles hidden tiles; each
-//   unit (one chunk of one group's weights) stays in cb_w for all of the job's row tiles; partials spill to L1 between
-//   chunks; slots are handed back by credits; the root deals jobs by predicted time.
-// - pass: the gate/up or the down projection of one job; the stream runs gate/up(0), gate/up(1), down(0), ...
+// - expert group: the cores that compute one job, one or more reader cores per DRAM bank.
+// - column group: one W0/W1 block-column (2 intermediate columns, 4 tiles per K row); output group: 4 W2 output tiles.
+// - weight-stationary (row_tiles > 1): each unit (one x chunk of one group's weights) stays in cb_w for all of the
+//   job's row tiles.
+// - pass: the gate/up or the down projection of one job.
 #pragma once
 
 #include <stdint.h>
@@ -30,8 +28,7 @@ __attribute__((always_inline)) constexpr uint32_t align_up(uint32_t bytes, uint3
 
 // Rows of a row tile; a job of row_tiles row tiles holds at most tile_rows * row_tiles rows of one expert.
 constexpr uint32_t tile_rows = 32;
-// A tile is tile_rows x tile_rows values in four faces of face_rows x face_columns: rows 0..15 in faces 0 (columns
-// 0..15) and 1 (columns 16..31), rows 16..31 in faces 2 and 3.
+// Faces 0 and 1 hold tile rows 0..15, faces 2 and 3 rows 16..31.
 constexpr uint32_t face_rows = 16;
 constexpr uint32_t face_columns = 16;
 
@@ -63,22 +60,19 @@ __attribute__((always_inline)) constexpr uint32_t run_blocks(uint32_t width, uin
     return div_up(width * k_rows, block_tiles);
 }
 
-// Hidden tiles per x chunk of a job of one row tile: what an x slot of row_tiles chunks of chunk_tiles holds, at most
-// all of them.
+// Hidden tiles per x chunk of a one-row-tile job: one x slot of row_tiles chunks, capped at hidden_tiles.
 constexpr uint32_t single_chunk_tiles(uint32_t chunk_tiles, uint32_t row_tiles, uint32_t hidden_tiles) {
     return chunk_tiles * row_tiles < hidden_tiles ? chunk_tiles * row_tiles : hidden_tiles;
 }
 
 // NoC transfers between L1s move whole 16-byte words.
 constexpr uint32_t l1_word_bytes = 16;
-// Every part of the routing scratch and of the routing table block starts at a multiple of 64 bytes, the DRAM
-// alignment, so that each part of the table block can be read from DRAM on its own.
+// DRAM alignment: each part of the routing scratch and table block starts at a multiple, so it can be read on its own.
 constexpr uint32_t part_alignment = 64;
 
-// The routing table block (rows_reader.cpp writes it to DRAM, place.cpp and rows_combine.cpp read it), byte offsets
-// from its start, each part at a multiple of part_alignment: a head (u32 routed rows), u16 per-expert row counts and
-// first rows, each routed row's token and k, then the same entries in token order: expert, token, score and k (a token
-// that names one expert at several k has one entry per k).
+// Byte offsets in the routing table block (written by rows_reader.cpp, read by place.cpp and rows_combine.cpp): a u32
+// head (routed rows), u16 per-expert row counts and first rows, each routed row's token and k, then one entry per
+// (token, k) in token order: expert, token, score and k.
 struct TableLayout {
     uint32_t row_counts, first_rows, row_tokens, row_k, entry_experts, entry_tokens, entry_scores, entry_k, bytes;
 };
@@ -124,8 +118,8 @@ struct JobRecord {
 constexpr uint32_t job_record_bytes = sizeof(JobRecord);
 static_assert(job_record_bytes == 3 * u16_bytes, "job records are packed u16 triples");
 
-// This expert group's `count` jobs in the routing table, from its first, table job `first`. With one row tile per job
-// the group's job j is table job group + expert_groups j; weight-stationary, the root lists each group's jobs together.
+// This expert group's `count` jobs in the routing table. Weight-stationary jobs of a group are contiguous from `first`;
+// otherwise the group's job j is table job group + expert_groups * j.
 template <bool weight_stationary, uint32_t expert_groups, typename JobRecords>
 struct GroupJobs {
     JobRecords table;

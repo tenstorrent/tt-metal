@@ -123,11 +123,7 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::C
 template <uint32_t kPairs>
 struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU, kPairs> {
     static inline void compute() {
-        // GELU programs an SFPU LUT (gelu_init). The trailing binary MUL below clobbers that LUT,
-        // so when the activation loop runs >1 iteration per chunk (tiles_per_step > 2, which happens
-        // for ring sizes where ceil(Nt/ring) is odd — e.g. gemma at ring=8) the next iteration's
-        // gelu reads a stale LUT and produces garbage. Re-init the LUT here so every gelu is valid.
-        // SILU/SWIGLU don't use this LUT, so they keep their cheaper once-per-chunk init.
+        // The binary MUL below clobbers the GELU LUT, so re-init it on every call.
         PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, DST_ACCUM_MODE>)));
         PACK(SFPU_UNARY_CALL(
             DST_SYNC_MODE,

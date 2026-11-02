@@ -2,19 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// expert rows, the placement program's place.cpp (data movement only). Reads the routing table the expert rows program
-// wrote and writes moe_compute's outputs:
+// Placement program: reads the routing table and writes moe_compute's outputs.
 //   output 0  per-expert token counts, one row in every grid core's shard (same L1 address on every core)
-//   output 1  one activation row per token with >= 1 local expert, ascending: [token, k per expert (top_k + 1 = not
-//             routed; the ring writes top_k or top_k + 1 there, by tilize RISC), score bits per expert], then rows
-//             [-1, top_k + 1 .., 0 ..]
-//   output 2  page e: expert e's tokens ascending, one e_t_entry_words entry each [token, k, 0 ..], then end_of_list
-//   output 3  the double buffer: the last two local experts' rows, half e % 2, with moe_compute's geometry: expert
-//             e's rows split evenly over the height shards (earlier shards take the remainder), row i < half_rows of
-//             height shard h at (e % 2) * half_rows * segment_bytes + i * segment_bytes, bytes
-//             [w, w + 1) * segment_bytes of the row for width shard w.
-// Runs on the height_shards x width_shards combine cores, core i = shard (i / width_shards, i % width_shards); each
-// core places its own output-3 shard, and the metadata work is split over all of them.
+//   output 1  one row per token with >= 1 local expert, ascending: [token, k per expert (top_k + 1 = not routed),
+//             score bits per expert], then [-1, top_k + 1 .., 0 ..] rows
+//   output 2  page e: expert e's tokens ascending as [token, k, 0 ..] entries, then end_of_list
+//   output 3  the double buffer: the last two local experts' rows in half e % 2, split over the height shards as
+//             moe_compute splits them
+// Runs on the combine cores, core i = shard (i / width_shards, i % width_shards).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -51,8 +46,7 @@ constexpr uint32_t word_bytes = sizeof(uint32_t);
 constexpr uint32_t e_t_entry_words = get_named_compile_time_arg_val("e_t_entry_words");
 constexpr uint32_t end_of_list = 0xFFFFFFFFu;
 
-// The routing table into scratch: its head, row counts and first rows (everything before the row tokens), then (with
-// routed rows) the rows' tokens and k and the token-ordered entries. Returns the routed rows.
+// Reads the routing table into scratch: the parts before row_tokens, then the per-row parts. Returns the routed rows.
 template <typename TableAccessor>
 FORCE_INLINE uint32_t read_routing_table(const Noc& noc, const TableAccessor& table, uint32_t scratch) {
     const uint64_t table_noc_addr = table.get_noc_addr(0);

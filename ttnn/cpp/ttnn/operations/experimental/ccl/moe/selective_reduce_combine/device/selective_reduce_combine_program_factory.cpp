@@ -381,8 +381,7 @@ CombineFabric plan_combine_fabric(
             .page_size = tt::tt_fabric::CLIENT_INTERFACE_SIZE,
         }}},
     });
-    // Worker 0 of each link is its link sync core. With Mux V2 there is no termination master: the mux terminates by
-    // itself after its last client closes.
+    // Worker 0 of each link is its link sync core. Each mux terminates itself after its last client closes.
     const uint32_t link_sync_semaphore_id = add_semaphore_descriptor(desc, worker_set, 0);
     std::vector<tt::tt_fabric::FabricMuxV2Config::ClientSemaphores> client_semaphores;
     client_semaphores.reserve(neighbors.size());
@@ -459,8 +458,7 @@ tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor
 
     auto* mesh_device = tensor_args.dense_input_tensor.device();
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
-    // This op also TT_FATALs below if the device has no L1_SMALL region, so the barrier semaphores' general-L1
-    // fallback never reaches a mux.
+    // get_fabric_mux_config TT_FATALs without L1_SMALL, so these semaphores never fall back into the mux's L1.
     const auto [init_barrier_semaphore, final_barrier_semaphore] = add_selective_reduce_combine_barrier_semaphores(
         workload, mesh_device, worker_core_range_set, operation_attributes.optional_cross_device_semaphore);
 
@@ -935,9 +933,8 @@ std::pair<GlobalSemaphore, GlobalSemaphore> add_selective_reduce_combine_barrier
     ttnn::MeshDevice* mesh_device,
     const CoreRangeSet& combine_cores,
     const std::optional<GlobalSemaphore>& cross_device_semaphore) {
-    // The barrier semaphores live as long as the cached program. Keep them in L1_SMALL, above every L1 tensor, circular
-    // buffer and the mux's ceiling, where the device has one: created in general L1 while a call's outputs are alive,
-    // they would stay in the middle of L1 after those are freed and refuse later calls their outputs.
+    // These live as long as the cached program: keep them in L1_SMALL where the device has one, since in general L1
+    // they would fragment the space that later calls allocate their outputs from.
     const auto semaphore_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     GlobalSemaphore init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_cores, 0, semaphore_buffer_type);

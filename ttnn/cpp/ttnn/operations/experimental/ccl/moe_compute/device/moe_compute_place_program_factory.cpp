@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The placement program of the expert rows path (MoEComputePlaceFactory): moe_compute's outputs from the rows and the
-// routing table, on the height_shards x width_shards combine cores. place.cpp writes the metadata outputs and each
-// core's shard of the double buffer; with a combine (SingleDevice, FullCcl) rows_combine.cpp on the same cores sends
-// every routed row to the combine output, over the fabric with FullCcl.
+// The expert rows path's placement program, on the combine cores: place.cpp writes moe_compute's outputs from the rows
+// and the routing table; with a combine, rows_combine.cpp sends every routed row to the combine output.
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "moe_compute_device_operation.hpp"

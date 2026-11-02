@@ -48,9 +48,8 @@ void get_token_activation_offsets(
         const auto token_split_offset = token_split_offsets[e];
         const auto st_start = dense_token_maps_ptr[(e * (GlobalNumTokens + 1) + token_split_offset) * MapStride];
 
-        // The activation row of st_start. The rows are in e_t order (tilize merges both the same way), so it is at or
-        // after the split offset when every token names the expert once. The offset counts e_t entries: a token that
-        // names the expert at several k has one entry per k but one row, so the row can then lie before the offset.
+        // Rows are in e_t order, so st_start's row is at or after the split offset unless a token names the expert at
+        // several k (one e_t entry per k but one row), in which case it can lie before it.
         uint32_t row = token_split_offset;
         while (row < GlobalNumTokens && token_activations_ptr[row * ActivationStride] != st_start) {
             ++row;

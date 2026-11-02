@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The host side of moe_compute's expert rows path, shared by its sources: constants, the layouts and the plan of the
-// expert rows program (program 1), the placement program's (program 2) layouts.
+// Host side of moe_compute's expert rows path: the layouts and plan of the expert rows program (program 1) and the
+// placement program's (program 2) layouts.
 //   moe_expert_rows_plan.cpp               program 1's plan search and the layouts
-//   moe_expert_rows_select.cpp             the cost model; the choice between the ring and the expert rows path
+//   moe_expert_rows_select.cpp             path selection and the job cost model
 //   moe_expert_rows.cpp                    the expert rows device operation and program 1's factory
 //   moe_compute_place_program_factory.cpp  program 2's factory
 #pragma once
@@ -60,15 +60,10 @@ inline tt::DataFormat partials_format(bool fp32_dest_acc_en) {
 
 inline uint32_t aligned_page(const ttnn::Tensor& tensor) { return tensor.buffer()->aligned_page_size(); }
 
-// moe_compute's prepared weights (prepare_w0_w1_tensor_for_moe_compute / prepare_w2_tensor_for_moe_compute in
-// moe_compute_utils.py, moe_ring_common.h) as the expert rows reader addresses them, in tiles. W0/W1, per (layer,
-// expert): the ring positions' slices back to back (ShardLayout::w0_w1_first_tile), each its column groups (4 tiles per
-// K row) at a stride of w0_w1_group_tiles, then, for an odd count in the compact layout, one half block-column (one
-// column, 2 tiles per K row); that stream is cut into one piece of w0_w1_piece_tiles per DRAM bank, so a slice can go
-// on in the next bank (with equal even counts and 14-tile transactions, piece r is position r's slice). W2, per (layer,
-// expert): w2_slice_tiles in position r's own bank, its output groups (4 tiles per K row) at a stride of
-// w2_group_tiles; the last of the w2_groups can be 2 output tiles wide. The K padding at the end of each group is not
-// read.
+// moe_compute's prepared weights (prepare_w0_w1/w2_tensor_for_moe_compute in moe_compute_utils.py), in tiles. W0/W1 per
+// (layer, expert): the ring positions' column groups back to back, cut into one piece of w0_w1_piece_tiles per DRAM
+// bank, so a position's slice can continue in the next bank. W2 per (layer, expert): w2_slice_tiles in each position's
+// own bank. The K padding at the end of each group is not read.
 struct PreparedLayout {
     uint32_t w0_w1_piece_tiles = 0, w0_w1_group_tiles = 0;
     uint32_t w2_slice_tiles = 0, w2_group_tiles = 0;
@@ -126,15 +121,13 @@ struct ExpertRowsCore {
     GroupRun output_run() const { return {output_groups, half_output}; }
 };
 
-// One buffering choice of a plan. Without credits the intermediate exchange orders slot reuse: one x chunk per job and
-// at least three intermediate slots (rows_writer.cpp).
+// One buffering choice of a plan. Without credits, a plan needs one x chunk per job and at least three intermediate
+// slots (rows_writer.cpp).
 struct Buffering {
     uint32_t row_tiles = 1;
     uint32_t x_slots = 0, intermediate_slots = 0;
     uint32_t block_slots = 0;  // weight blocks of cb_w
-    // hidden tiles per x chunk (all of them with one row tile per job), the most one core owns of a chunk, weight
-    // blocks per chunk unit (the weight tiles of one chunk of one column group, or of one W2 chunk of one output
-    // group), W2 rows per chunk
+    // hidden tiles per x chunk, the most one core owns of a chunk, weight blocks per chunk unit, W2 rows per chunk
     uint32_t chunk_tiles = 0, chunk_piece_max = 0, chunk_blocks = 0, w2_chunk_rows = 0;
     uint32_t ctl_bytes = 0;
 };
@@ -156,9 +149,8 @@ struct ExpertRowsPlan : Buffering {
 // The plan, or why there is none.
 using PlanOrRefusal = std::variant<ExpertRowsPlan, std::string>;
 
-// The plan for `shape` with jobs of `row_tiles` row tiles on this device within `cb_budget` bytes of circular buffers
-// per core, or why there is none. shard_banks[r]: DRAM bank of the prepared weights' shard r (= moe_compute ring
-// position r).
+// The plan for `shape` with jobs of `row_tiles` row tiles within `cb_budget` CB bytes per core, or why there is none.
+// shard_banks[r] is the DRAM bank of the prepared weights' shard r (moe_compute ring position r).
 PlanOrRefusal plan_expert_rows(
     ttnn::MeshDevice* mesh_device,
     const MoEExpertRowsShape& shape,
@@ -188,13 +180,11 @@ struct PlaceLayout {
 
 PlaceLayout place_layout(uint32_t tokens, uint32_t top_k, uint32_t local_experts);
 
-// Rows of one double-buffer half on one core (output kTilizeOutput), in selective_reduce_combine's fused-source layout,
-// which the ring's dm1 and the combine also use.
+// Rows of one double-buffer half on one core (output kTilizeOutput), in selective_reduce_combine's fused-source layout.
 uint32_t double_buffer_half_rows(const tt::tt_metal::TensorSpec& dense, uint32_t hidden_size, uint32_t width_shards);
 
-// rows_combine.cpp's scratch: the table head; the sender's row tokens and row k (a DRAM read keeps its source offset
-// modulo part_alignment, so each slice has part_alignment bytes of slack); its rows in send order; two staging buffers
-// of batch_rows rows.
+// rows_combine.cpp's scratch: the table head; the sender's row tokens and row k, each with part_alignment bytes of
+// slack for the DRAM read's source offset; its rows in send order; two staging buffers of batch_rows rows.
 struct CombineLayout {
     uint32_t sender_rows_max = 0, row_stride = 0, batch_rows = 0;
     uint32_t scratch_head = 0, scratch_tokens = 0, scratch_k = 0, scratch_order = 0, scratch_stage = 0, bytes = 0;
@@ -205,8 +195,8 @@ CombineLayout combine_layout(uint32_t tokens, uint32_t top_k, uint32_t hidden_si
 // The first rule of the expert rows path that `shape` breaks, with its values, or nullopt.
 std::optional<std::string> shape_refusal(const MoEExpertRowsShape& shape);
 
-// The cost model's cycles of one job of a plan, by which rows_reader.cpp deals the jobs to the expert groups: the
-// weight stream of the expert groups' jobs in flight, one row tile, and a job of one row tile.
+// Job cycles by which rows_reader.cpp deals jobs to the expert groups: the weight stream of the jobs in flight, one row
+// tile of a held job, and a one-row-tile job.
 struct JobCycles {
     double stream = 0, row_tile = 0, single = 0;
 };

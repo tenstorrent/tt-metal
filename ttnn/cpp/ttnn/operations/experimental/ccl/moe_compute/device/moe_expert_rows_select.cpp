@@ -26,20 +26,16 @@ using namespace expert_rows_host;
 
 namespace {
 
-// The cost model of a job, by which the expert rows path picks its row tiles per job and rows_reader.cpp deals the
-// jobs to the expert groups. Cycles are AI clock cycles, at the clock under load (tt-smi): the live clock idles lower
-// (800 MHz on Blackhole) and would make the choice depend on what ran before.
+// Job cost model, used to pick the row tiles per job and by rows_reader.cpp to deal jobs to the expert groups. Cycles
+// are at the AI clock under load, not the live clock, which idles lower and would make the choice history-dependent.
 constexpr double kAiClockHzBlackhole = 1.35e9;
 constexpr double kAiClockHzWormhole = 1.0e9;
-// Peak DRAM bandwidth, decimal GB / s: Blackhole 512 (32 GB GDDR6 at 16 GT/s), Wormhole 12 x 21.5
-// (ttnn/core/operation.cpp)
+// Peak DRAM bandwidth in bytes / s (Wormhole: 12 x 21.5 GB / s, ttnn/core/operation.cpp)
 constexpr double kDramPeakBytesPerSecondBlackhole = 512e9;
 constexpr double kDramPeakBytesPerSecondWormhole = 258e9;
-// One 32 x 32 x 32 tile matmul per fidelity phase: 32768 multiply-adds at 2048 per cycle (8x16 x 16x16,
-// tech_reports/matrix_engine/matrix_engine.md).
+// Cycles of one tile matmul per fidelity phase (tech_reports/matrix_engine/matrix_engine.md)
 constexpr double kMatmulCyclesPerFidelityPhase = 16.0;
-// Fitted to Blackhole p150b device profiles: writing one FP32 partial tile to L1 and reading it back into DEST, and one
-// NoC command of the writer RISC (address and issue), both at the fastest row tiles per job.
+// Cycles measured on Blackhole: one FP32 partial tile written to L1 and reloaded into DEST, and one writer NoC command.
 constexpr double kReloadTileCycles = 64.0;
 constexpr double kWriterOpCycles = 60.0;
 constexpr uint32_t kCombinePacketHeaders = 3;  // combine_fabric.hpp: row unicasts, the barrier's two directions
@@ -75,10 +71,8 @@ double expected_jobs(const MoEExpertRowsShape& shape, uint32_t job_rows) {
     return shape.local_experts * jobs;
 }
 
-// The cost model's terms of one plan, per job: the stream time of its weights at the DRAM peak (the busiest bank's
-// share of the group's weights x banks); per row tile, the busiest core's matmul tiles and the partial tiles it writes
-// and reads back between chunks, for a job of several row tiles and for a one-row-tile job of the same program (x in
-// chunks of single_chunk_tiles hidden tiles, W2 whole).
+// Per-job cost terms of one plan: the weight stream time at the DRAM peak (busiest bank), and per row tile the busiest
+// core's matmul tiles and the partial tiles it reloads between chunks, for held and for one-row-tile jobs.
 struct JobCost {
     double stream_s = 0, busiest = 0, reloads = 0, single_reloads = 0;
 };
@@ -287,14 +281,9 @@ uint64_t l1_outputs_per_core(ttnn::MeshDevice& mesh_device, const std::vector<tt
     return bytes;
 }
 
-// Weight-stationary jobs: the most row tiles per job that keep the weight stream the longest part of a job while the
-// jobs in flight (the expert groups, fewer when the call has fewer expected jobs) share DRAM: the busiest core's
-// matmuls and the writer's NoC commands for the job's rows (x reads per chunk, tile build, row writes) both within one
-// job's stream. The compute bound is rounded when the call has at least two expected jobs per group (the deal in
-// rows_reader.cpp then balances the groups' work) and rounded down otherwise (a longer job holds up its group while the
-// others have nothing left to do). Rows per expert are not known on the host; uniform routing rarely gives an expert
-// more than 32 rows of a call, hot experts and longer calls do, so several row tiles are kept on a tie (they cost about
-// the same when they merge nothing). Returns the chosen plan, or why a forced row-tile count cannot run.
+// Weight-stationary jobs: the most row tiles per job for which the busiest core's matmuls and the writer's NoC commands
+// stay within the job's weight stream time while the groups share DRAM. Returns the chosen plan, or why a forced
+// row-tile count cannot run.
 std::variant<CostedPlan, std::string> choose_row_tiles(
     ttnn::MeshDevice* mesh_device,
     const CostModel& model,
