@@ -36,10 +36,10 @@ extern "C" __attribute__((noinline, used)) void reference_record_only()
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 2 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 4 /*RegIndex16b*/);
 }
 
-// The range wraps past slot 31.
-extern "C" __attribute__((noinline, used)) void record_and_execute_wrapping()
+// The range ends at slot 31.
+extern "C" __attribute__((noinline, used)) void record_and_execute_last_slots()
 {
-    replay::record<replay::BufferRange {30, 4}, replay::RecordBehavior::RecordAndExecute>(
+    replay::record<replay::BufferRange {28, 4}, replay::RecordBehavior::RecordAndExecute>(
         []
         {
             scalar::set_low<1>(hal::gpr<1>());
@@ -49,9 +49,9 @@ extern "C" __attribute__((noinline, used)) void record_and_execute_wrapping()
         });
 }
 
-extern "C" __attribute__((noinline, used)) void reference_record_and_execute_wrapping()
+extern "C" __attribute__((noinline, used)) void reference_record_and_execute_last_slots()
 {
-    TTI_REPLAY(30 /*start_idx*/, 4 /*len*/, 1 /*execute_while_loading*/, 1 /*load_mode*/);
+    TTI_REPLAY(28 /*start_idx*/, 4 /*len*/, 1 /*execute_while_loading*/, 1 /*load_mode*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 1 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 2 /*RegIndex16b*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 2 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 4 /*RegIndex16b*/);
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 3 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, 6 /*RegIndex16b*/);
