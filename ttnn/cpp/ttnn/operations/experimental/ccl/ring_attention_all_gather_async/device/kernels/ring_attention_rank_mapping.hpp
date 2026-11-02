@@ -26,12 +26,11 @@ template <uint32_t RankMapping>
 constexpr uint32_t tensor_rank_from_transport_rank(
     uint32_t transport_rank, uint32_t mesh_rows, uint32_t mesh_cols, ttnn::ccl::snake_ring::Orientation orientation) {
     static_assert(RankMapping <= kColumnMajorRankMapping, "unknown rank mapping");
-    if constexpr (RankMapping == kColumnMajorRankMapping) {
-        return ttnn::ccl::snake_ring::column_major_index(transport_rank, mesh_rows, mesh_cols, orientation);
-    } else if constexpr (RankMapping == kRowMajorRankMapping) {
-        return ttnn::ccl::snake_ring::row_major_index(transport_rank, mesh_rows, mesh_cols, orientation);
-    } else {
+    if constexpr (RankMapping == kAxisRankMapping) {
         return transport_rank;
+    } else {
+        return ttnn::ccl::snake_ring::tensor_index(
+            transport_rank, mesh_rows, mesh_cols, orientation, RankMapping == kColumnMajorRankMapping);
     }
 }
 
