@@ -41,6 +41,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 
 
 class TtKimiK3Transformer(LightweightModule):
@@ -116,16 +117,17 @@ class TtKimiK3Transformer(LightweightModule):
         mtp_predictor=None,
         # KV dedup for the MLA layers only; must match the KVPE cache allocation.
         tp_shard_kv: Optional[bool] = None,
-        # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget). Named so it never reaches
-        # TtKimiK3Block through **block_kwargs; Kimi-K3 runs one chunk per forward.
+        # Chunks per packed forward (TtPrefillRuntime forward_tokens_budget); see forward_packed. Named so the
+        # runtime's value reaches every block explicitly rather than through **block_kwargs.
         forward_chunks: int = 1,
         **block_kwargs,
     ):
         super().__init__()
         if mtp_predictor is not None:
             raise ValueError("Kimi-K3 has no MTP predictor; got a non-None mtp_predictor")
-        if forward_chunks != 1:
-            raise NotImplementedError(f"Kimi-K3 has no packed forward yet; got forward_chunks={forward_chunks}")
+        assert forward_chunks >= 1, f"forward_chunks must be positive, got {forward_chunks}"
+        # Chunks per packed forward; seq_len stays the per-chunk size.
+        self.forward_chunks = forward_chunks
         # Kimi-K3's MLA cache is dense: `zero_padded_kv_cache` asserts TILE layout, which a sparse
         # kvpe cache (bf16/fp8 ROW_MAJOR, read natively by sparse_sdpa) does not satisfy. Accepting a
         # sparse format silently would produce a cache the pad-zero path cannot touch, so refuse it.
@@ -135,6 +137,7 @@ class TtKimiK3Transformer(LightweightModule):
             )
         self.padding_side = padding_side
         self.mesh_device = mesh_device
+        self.sp_axis = sp_axis
         # Resolve once, here, rather than letting `None` reach a collective. The MoE's
         # `reduce_scatter_minimal_async` validates `topology == Ring or Linear` and a None is a
         # TT_FATAL eight frames deep in `all_reduce_async`. Everything below wants the per-axis pair
@@ -290,6 +293,7 @@ class TtKimiK3Transformer(LightweightModule):
                     gate_fallback_mode=gate_fallback_mode,
                     weight_cache_path=weight_cache_path,
                     kv_only=kv_only_last_layer and is_last,
+                    forward_chunks=forward_chunks,
                     **block_kwargs,
                 )
             )
@@ -462,7 +466,17 @@ class TtKimiK3Transformer(LightweightModule):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
         if chunks is not None:
-            raise NotImplementedError("Kimi-K3 has no packed forward yet; chunks must be None")
+            if d2h_service is not None or metadata is not None or metadata_msg is not None or layer_tap is not None:
+                raise ValueError("a Kimi-K3 packed forward is eager and host-acked (no d2h_service, metadata or taps)")
+            return self.forward_packed(
+                token_ids,
+                kvpe_cache,
+                chunks,
+                index_kv_cache=index_kv_cache,
+                on_layer_complete=on_layer_complete,
+                on_layer_hidden=on_layer_hidden,
+                rope_tensors=rope_tensors,
+            )
         if index_kv_cache is not None:
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:
@@ -542,5 +556,113 @@ class TtKimiK3Transformer(LightweightModule):
             # to the last rank. Hand the live stream and the sealed set on instead.
             return self._pack_handoff(*residual.handoff())
 
+        hidden = residual.finish()
+        return self.norm(hidden) if self.norm is not None else hidden
+
+    def forward_packed(
+        self,
+        token_ids,
+        kvpe_cache,
+        chunks: Optional[list],
+        index_kv_cache=None,
+        on_layer_complete: Optional[Callable] = None,
+        on_layer_hidden: Optional[Callable] = None,
+        metadata: Optional[list] = None,
+        padding_config=None,
+        rope_tensors=None,
+    ):
+        """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them, any users at any depth): every
+        layer runs its attention once per non-empty chunk against that chunk's slot and offset (MLA: its KV slab;
+        KDA: its slot's carry in the engine's slabs), then its FFN once over every chunk's rows
+        (TtKimiK3Block.forward_packed). One AttnRes walk covers all rows: its state is per token.
+
+        Single-rank only: a pipeline handoff would carry several chunks' rows, which nothing downstream expects.
+
+        on_layer_complete: ``(global layer index, chunk)`` once per non-empty chunk per layer.
+        metadata / padding_config: the traced form. One ``(slot, actual_start, actual_end)`` device triple per
+            chunk position replaces ``chunks`` (then None), and the persistent MoE padding config replaces the
+            host row counts. Every position runs (an empty one points at a scratch slot); no acks.
+
+        Returns the post-norm hidden state over all rows, or None with kv_only_last_layer.
+        """
+        traced = metadata is not None
+        n = len(metadata) if traced else len(chunks)
+        if n != self.forward_chunks:
+            raise ValueError(f"{n} chunks for a model built for {self.forward_chunks}")
+        if index_kv_cache is not None:
+            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
+        if not (self.is_first_rank and self.is_last_rank):
+            raise NotImplementedError("a Kimi-K3 packed forward is single-rank")
+        if traced and (padding_config is None or on_layer_complete is not None):
+            raise ValueError("a traced packed forward takes the persistent padding_config and no host acks")
+
+        attn_input_tap = None
+        if on_layer_hidden is not None:
+            first = self.first_layer_idx
+
+            def attn_input_tap(local_idx, hidden):
+                on_layer_hidden(first + local_idx - 1, hidden)
+
+        hidden = ttnn.unsqueeze_to_4D(self.embed(token_ids))  # [1, 1, n * chunk_local, emb/tp]
+        residual = self._residual_factory(hidden, None)
+        rows = hidden.shape[2] // n
+        sp_factor = tuple(self.mesh_device.shape)[self.sp_axis]
+        empty = [False] * n if traced else [c.is_empty for c in chunks]
+        padding_real_rows = None if traced else packed_real_rows(chunks, sp_factor, rows)
+
+        # Each chunk's KDA scalars, built once per forward like the single-chunk path builds them once per
+        # chunk: borrowed from its metadata when traced, uploaded from its host ints when eager.
+        ctxs, owned = [], []
+        try:
+            for k in range(n):
+                chunk = None if traced else chunks[k]
+                if not traced and chunk.is_empty:
+                    ctxs.append(None)
+                    continue
+                slot = 0 if traced else chunk.slot_id
+                start = None if traced else chunk.actual_start
+                end = None if traced else chunk.actual_end
+                kda_scalars = None
+                if self.kda_scratch is not None:
+                    kda_scalars, owned_k = build_kda_scalars(
+                        self.mesh_device, metadata[k] if traced else None, slot, start, end
+                    )
+                    owned.extend(owned_k)
+                ctxs.append(
+                    dict(
+                        rope_tensors=rope_tensors,
+                        kvpe_cache=kvpe_cache,
+                        cache_user_id=slot,
+                        actual_start=start,
+                        actual_end=end,
+                        metadata=metadata[k] if traced else None,
+                        kda_scalars=kda_scalars,
+                        kda_states=self.kda_states,
+                    )
+                )
+
+            for local_idx, layer in enumerate(self.layers):
+                cache_layer_idx = self.schedule.kv_slot(local_idx)
+                layer_ctxs = [None if c is None else K3AttnContext(cache_layer_idx=cache_layer_idx, **c) for c in ctxs]
+                layer.forward_packed(
+                    residual,
+                    layer_ctxs,
+                    empty,
+                    on_layer_complete=(
+                        None
+                        if on_layer_complete is None
+                        else (lambda layer_idx, k: on_layer_complete(layer_idx, chunks[k]))
+                    ),
+                    padding_real_rows=padding_real_rows,
+                    packed_padding_config=padding_config,
+                    attn_input_tap=attn_input_tap,
+                )
+        finally:
+            for scalar in owned:
+                ttnn.deallocate(scalar)
+
+        if self.kv_only_last_layer:
+            residual.discard()
+            return None
         hidden = residual.finish()
         return self.norm(hidden) if self.norm is not None else hidden

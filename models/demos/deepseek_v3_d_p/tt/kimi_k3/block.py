@@ -66,8 +66,14 @@ class TtKimiK3Block(LightweightModule):
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
+        forward_chunks: int = 1,
     ):
         super().__init__()
+        # Packed forward (forward_packed): `forward_chunks` chunks of `seq_len` tokens back to back. The
+        # attention runs per chunk at the per-chunk size; the FFN (ffn_norm, MoE / dense FFN) runs once over
+        # all forward_chunks * seq_len tokens, so the MoE is sized for them.
+        assert forward_chunks >= 1, f"forward_chunks must be positive, got {forward_chunks}"
+        self.forward_chunks = forward_chunks
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
         self.local_idx = local_idx
@@ -125,7 +131,7 @@ class TtKimiK3Block(LightweightModule):
                 model_cfg=model_cfg,
                 config=config,
                 state_dict=state_dict,
-                seq_len=seq_len,
+                seq_len=seq_len * forward_chunks,
                 sp_axis=sp_axis,
                 emb_dim=emb_dim,
                 num_links=num_links,
@@ -262,7 +268,127 @@ class TtKimiK3Block(LightweightModule):
         residual.write(ffn_out)
         residual.release(pre_ffn)
 
-    def _ffn_path(self, ffn_norm_out, *, actual_isl, padding_side, ctx) -> ttnn.Tensor:
+    def forward_packed(
+        self,
+        residual,
+        ctxs: list,
+        empty: list,
+        *,
+        on_layer_complete=None,
+        padding_real_rows: Optional[tuple] = None,
+        packed_padding_config=None,
+        attn_input_tap=None,
+    ) -> None:
+        """One layer of a packed forward, folded into `residual`: ``len(ctxs)`` chunks back to back on each SP
+        chip, ``rows // len(ctxs)`` rows each.
+
+        The attention (attn_norm, MLA with its KV write and pad-zero, or KDA with its slot's carry) runs once per
+        non-empty chunk on that chunk's rows with that chunk's context; an empty chunk contributes zeros, so its
+        rows pass through the residual unchanged. The FFN (ffn_norm, MoE or dense FFN) then runs ONCE over all
+        rows, the MoE skipping each chunk's pad rows (``padding_real_rows`` eager, ``packed_padding_config``
+        traced). AttnRes reduces over the hidden dimension only, so one walk serves every chunk's rows.
+
+        on_layer_complete: ``(global layer index, k)`` once per non-empty chunk k, after its attention (and, on an
+            MLA layer, its KV write and pad-zero).
+        empty: per chunk, whether it is empty. A traced forward runs every position (an empty one in a scratch
+            slot) and passes all False.
+        """
+        n = len(ctxs)
+        assert n == self.forward_chunks, f"{n} chunks for a block built for {self.forward_chunks}"
+        assert len(empty) == n
+        hidden = residual.open(self.local_idx)
+        if attn_input_tap is not None:
+            attn_input_tap(self.local_idx, hidden)
+        normed = self.attn_norm(hidden)
+        rows = normed.shape[2] // n
+        assert rows * n == normed.shape[2], f"{normed.shape[2]} rows do not split into {n} chunks"
+        width = normed.shape[-1]
+
+        outs = []
+        for k, ctx in enumerate(ctxs):
+            if empty[k]:
+                outs.append(None)
+                continue
+            normed_k = ttnn.slice(normed, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, width))
+            out_k = self.attention.forward(normed_k, ctx)
+            ttnn.deallocate(normed_k)
+            ack = None if on_layer_complete is None else (lambda layer, _k=k: on_layer_complete(layer, _k))
+            if self.attention.writes_kv:
+                zero_pad_and_ack(
+                    kvpe_cache=ctx.kvpe_cache,
+                    mesh_device=self.mesh_device,
+                    cache_layer_idx=ctx.cache_layer_idx,
+                    cache_user_id=ctx.cache_user_id,
+                    layer_num=self.attention.mla.layer_num,
+                    sp_factor=self.attention.sp_factor,
+                    sp_axis=self.attention.sp_axis,
+                    global_layer_idx=self.layer_idx,
+                    seq_len_local=rows,
+                    actual_end=ctx.actual_end,
+                    metadata=ctx.metadata,
+                    d2h_service=None,
+                    metadata_msg=None,
+                    on_layer_complete=ack,
+                    trace_controller=getattr(self, "_trace_controller", None),
+                    tp_axis=self.attention.mla.tp_shard_kv_axis,
+                )
+            elif ack is not None:
+                send_layer_ack(
+                    mesh_device=self.mesh_device,
+                    global_layer_idx=self.layer_idx,
+                    d2h_service=None,
+                    metadata_msg=None,
+                    on_layer_complete=ack,
+                    trace_controller=getattr(self, "_trace_controller", None),
+                )
+            outs.append(out_k)
+        ttnn.deallocate(normed)
+
+        if self.kv_only:
+            for out in outs:
+                if out is not None:
+                    ttnn.deallocate(out)
+            residual.release(hidden)
+            return
+
+        for k in range(n):
+            if outs[k] is None:
+                hidden_k = ttnn.slice(hidden, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, hidden.shape[-1]))
+                outs[k] = ttnn.zeros_like(hidden_k)
+                ttnn.deallocate(hidden_k)
+        attn_out = outs[0] if n == 1 else ttnn.concat(outs, dim=2)
+        if n > 1:
+            for out in outs:
+                ttnn.deallocate(out)
+        residual.write(attn_out)
+        residual.release(hidden)
+
+        pre_ffn = residual.read()
+        ffn_norm_out = self.ffn_norm(pre_ffn)
+        ffn_out = self._ffn_path(
+            ffn_norm_out,
+            actual_isl=None,
+            padding_side="right",
+            ctx=None,
+            padding_real_rows=padding_real_rows,
+            packed_padding_config=packed_padding_config,
+        )
+        ttnn.deallocate(ffn_norm_out)
+        residual.write(ffn_out)
+        residual.release(pre_ffn)
+
+    def _ffn_path(
+        self,
+        ffn_norm_out,
+        *,
+        actual_isl,
+        padding_side,
+        ctx,
+        padding_real_rows: Optional[tuple] = None,
+        packed_padding_config=None,
+    ) -> ttnn.Tensor:
+        """`ctx` is None for a packed forward, which passes its MoE padding as ``padding_real_rows`` (eager) or
+        ``packed_padding_config`` (traced) instead of one chunk's bounds."""
         if self.is_moe:
             # 4D TILE -> 3D -> MoE -> 3D -> 4D, matching TtPrefillBlock._moe_path exactly. `TtMoe`
             # returns `(out, intermediates)`, and the squeezed input is NOT freed here: upstream
@@ -273,12 +399,15 @@ class TtKimiK3Block(LightweightModule):
                 return_intermediates=False,
                 actual_isl=actual_isl,
                 padding_side=padding_side,
-                actual_start=ctx.actual_start,
-                metadata=ctx.metadata,
+                actual_start=None if ctx is None else ctx.actual_start,
+                metadata=None if ctx is None else ctx.metadata,
                 # Kimi-K3 is the model the routing dump exists for, so this must not default to 0:
                 # with two KV slots in flight both would be written under slot0 at the same
-                # layer/start key and one would silently overwrite the other.
-                cache_user_id=ctx.cache_user_id,
+                # layer/start key and one would silently overwrite the other. A packed forward's rows
+                # belong to several slots; it dumps under slot 0.
+                cache_user_id=0 if ctx is None else ctx.cache_user_id,
+                padding_real_rows=padding_real_rows,
+                packed_padding_config=packed_padding_config,
             )
             return ttnn.unsqueeze(moe_out, dim=0)
 
