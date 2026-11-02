@@ -100,6 +100,15 @@ ALWI void tile_regs_commit() {
 }
 
 /**
+ * Release the DST section to the MATH thread early, before the section's SrcA/SrcB unpacks. Call it after the last
+ * unpack-to-dest copy_tile / copy_block / transpose_tile of a section and before any SrcA/SrcB unpack in the same
+ * section, at most once per section: MATH then consumes those unpacks as they arrive instead of after
+ * tile_regs_commit, so a src-path run longer than the source banks can share a section with unpack-to-dest copies.
+ * A no-op on Wormhole and Blackhole, and on Quasar when nothing routes to DST.
+ */
+ALWI void tile_regs_handoff() { UNPACK((llk_unpack_dest_handoff())); }
+
+/**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
