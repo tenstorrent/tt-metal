@@ -2470,6 +2470,7 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeaderGappedDeviceSlots) {
     const uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
 
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const auto& impl = program.impl();
@@ -2484,11 +2485,19 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeaderGappedDeviceSlots) {
 
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
     EXPECT_EQ(ghdr->num_dfbs, 2u);
-    constexpr uint32_t slots_0_and_3 = 0b1001;
-    EXPECT_EQ(ghdr->participation_mask[0], slots_0_and_3);  // producer_risc_mask 0x1
-    EXPECT_EQ(ghdr->participation_mask[1], slots_0_and_3);  // consumer_risc_mask 0x2
-    for (uint8_t h = 2; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
-        EXPECT_EQ(ghdr->participation_mask[h], 0u) << "hart " << static_cast<int>(h);
+    // Harts 0 (producer_risc_mask 0x1) and 1 (consumer_risc_mask 0x2) each init both DFBs; no other
+    // hart has an entry.
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+        EXPECT_EQ(ghdr->hart_desc[h].num_entries, h < 2 ? 2u : 0u) << "hart " << static_cast<int>(h);
+    }
+    // Each DM entry names its slot through iface_byte_off (slot * sizeof(LocalDFBInterface)), so the
+    // two entries carry slots 0 and 3, leaving 1 and 2 untouched.
+    for (uint8_t h = 0; h < 2; ++h) {
+        SCOPED_TRACE("hart " + std::to_string(h));
+        const uint8_t* entry = buf.data() + ghdr->hart_desc[h].blob_start;
+        EXPECT_EQ(dm_entry_u16(entry, 0), 0u * DFB_DM_IFACE_SIZE);
+        entry += entry[kDmEntryBytesOff];
+        EXPECT_EQ(dm_entry_u16(entry, 0), 3u * DFB_DM_IFACE_SIZE);
     }
 }
 
@@ -2609,8 +2618,9 @@ TEST_F(UnitMeshFixture, B10_Blocked_Rejected_2_0) {
 }
 
 // A program with DFBs and no CBs reserves no CB config region, so its DFB config follows its semaphores directly and
-// dispatch sends both in one write. local_cb_mask describes the DFBs once the offsets are finalized: bit 0 for slot 0
-// on WH/BH, a count of 1 on Quasar.
+// dispatch sends both in one write. On Quasar the DFB config instead starts on the next 64B cache line for best
+// performance, since the DMs read it through the cache. local_cb_mask describes the DFBs once the offsets are
+// finalized: bit 0 for slot 0 on WH/BH, a count of 1 on Quasar.
 TEST_F(UnitMeshAnyDispatchFixture, TensixDFBConfigFollowsSemaphoresWithoutCBRegion) {
     const bool is_quasar = this->device().arch() == ARCH::QUASAR;
     experimental::ProgramSpec spec = is_quasar ? experimental::test_helpers::MakeMinimalValidProgramSpec()
@@ -2626,7 +2636,8 @@ TEST_F(UnitMeshAnyDispatchFixture, TensixDFBConfigFollowsSemaphoresWithoutCBRegi
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     const ProgramConfig& config = program.impl().get_program_config(index);
     EXPECT_EQ(config.cb_size, 0u);
-    EXPECT_EQ(config.dfb_offset, config.sem_offset + config.sem_size);
+    const uint32_t sem_end = config.sem_offset + config.sem_size;
+    EXPECT_EQ(config.dfb_offset, is_quasar ? tt::align(sem_end, 64u) : sem_end);
     for (const auto& kernel_group : program.impl().get_kernel_groups(index)) {
         EXPECT_EQ(kernel_group->launch_msg.view().kernel_config().local_cb_mask(), 1u);
     }
