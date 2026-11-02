@@ -285,6 +285,7 @@ tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisi
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/hardware_free/perf/ @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tests/pipeline_reorg/llk_perf_placement_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tests/pipeline_reorg/llk_perf_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tt_llk_blackhole/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
 tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
