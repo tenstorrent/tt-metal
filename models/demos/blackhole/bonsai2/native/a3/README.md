@@ -40,9 +40,10 @@ once, never rewritten), `linear.TernaryLinear` (one projection), `mlp.TernaryMLP
 | + norm sites ffnorm, attnnorm, lmnorm (rmsprep; same count) | 34.97 | 96.09 / 100.00 |
 | + glue ops removed at the GDN/attention sites (count 20:17, vs 34.76 same session) | 33.92 | 96.09 / 100.00 |
 | + B's attention flags ATTN_LEAN/QGVIEW/TAIL (count 22:04, vs 33.92 same session) | 32.74 | 96.09 / 100.00 |
-| + fp16 scale tiles, BONSAI_SCALE16 (count 22:26, vs 32.75 same session) -- current default | 31.94 | 96.09 / 100.00 |
+| + fp16 scale tiles, BONSAI_SCALE16 (count 22:26, vs 32.75 same session) | 31.94 | 96.09 / 100.00 |
+| + gate|up silu on row 0 only (count 22:58, vs 31.86 same session) -- current default | 31.11 | 96.09 / 100.00 |
 
-Against the six-flag control: 2.48x (12.6 -> 31.3 tok/s). Q2_0 runs number for number as PQ2_0
+Against the six-flag control: 2.54x (12.6 -> 32.1 tok/s). Q2_0 runs number for number as PQ2_0
 (bit-identical codes, deduplicated scales; the cost of finer groups was not measured).
 
 Op level (device us, real weights, PCC >= 0.99999 vs float64 cpu_ref): MLP 240 per layer (dense
