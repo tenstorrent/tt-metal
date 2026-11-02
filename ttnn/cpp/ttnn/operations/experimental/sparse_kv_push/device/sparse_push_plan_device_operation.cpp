@@ -51,7 +51,10 @@ void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
     const auto& idx = args.indices;
     TT_FATAL(idx.dtype() == DataType::UINT32 && idx.layout() == Layout::ROW_MAJOR, "indices must be UINT32 ROW_MAJOR");
     TT_FATAL(idx.buffer() != nullptr && idx.buffer()->buffer_type() == BufferType::DRAM, "indices must be in DRAM");
-    TT_FATAL(idx.padded_shape().rank() == 4, "indices must be [1, 1, rows, topk]");
+    TT_FATAL(
+        idx.padded_shape().rank() == 4 && idx.padded_shape()[0] == 1 && idx.padded_shape()[1] == 1,
+        "indices must be [1, 1, rows, topk], got {}",
+        idx.padded_shape());
     const uint32_t topk = idx.padded_shape()[3];
     TT_FATAL(topk % kIdxAlign == 0, "sparse push plan needs top-k {} to be a multiple of {}", topk, kIdxAlign);
     TT_FATAL(

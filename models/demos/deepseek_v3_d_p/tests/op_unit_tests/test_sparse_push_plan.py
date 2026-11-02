@@ -76,15 +76,27 @@ def _clustered_indices(rng, n_dev, rows, topk, prefix):
 @pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize(
     "max_rows, prefix",
-    [(10240, 10240), (1044480, 1044480), (1044480, 61440), (1044480, "L14"), (1044480, "L58"), (1044480, "L62")],
-    ids=["10k", "1M", "1M_cap_60k_prefix", "1M_real_L14", "1M_real_L58", "1M_real_L62"],
+    [
+        (10240, 10240),
+        (10240, "masked_chip"),
+        (1044480, 1044480),
+        (1044480, 61440),
+        (1044480, "L14"),
+        (1044480, "L58"),
+        (1044480, "L62"),
+    ],
+    ids=["10k", "10k_one_chip_all_masked", "1M", "1M_cap_60k_prefix", "1M_real_L14", "1M_real_L58", "1M_real_L62"],
 )
 def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix):
     n_dev = mesh_device.get_num_devices()
     rows, topk, sc, page_bytes = 160, 2048, 160, 704
     p, banks = packet_shape(mesh_device, page_bytes)
     rng = np.random.default_rng(0)
-    if isinstance(prefix, str):
+    if prefix == "masked_chip":
+        # A chip whose every query row is masked (e.g. all padding) plans nothing and needs nothing pushed.
+        idx = _clustered_indices(rng, n_dev, rows, topk, max_rows)
+        idx[3] = SENTINEL
+    elif isinstance(prefix, str):
         from safetensors.numpy import load_file
 
         f = TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{prefix[1:]}" / "rows_00000000_00005120.safetensors"
@@ -156,3 +168,20 @@ def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix):
         }
         bad += [(d, k) for k, ok in checks.items() if not ok]
     assert not bad, f"device plan differs from the host reference: {bad[:8]}"
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+def test_sparse_push_plan_rejects_batched_indices(mesh_device, expect_error):
+    # The plan reads one [rows, topk] block per chip; a second batch would be left unplanned.
+    tt_idx = ttnn.from_torch(
+        torch.zeros(2, 1, 160, 2048, dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    with expect_error(RuntimeError, r"indices must be \[1, 1, rows, topk\]"):
+        ttnn.experimental.sparse_push_plan(
+            tt_idx, num_devices=mesh_device.get_num_devices(), stripe_chunk=160, max_rows=10240, page_bytes=704
+        )

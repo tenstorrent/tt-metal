@@ -695,7 +695,7 @@ class ttMLA:
         if (
             self._sparse_kv_gather_buffer is not None
             and sparse_kv_push_supported(mesh_device)
-            and sparse_kv_push_fits(push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2])
+            and sparse_kv_push_fits(mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2])
         ):
             dense = self._sparse_kv_gather_buffer
             self._push = self.tt_ccl.get_sparse_kv_push_planner(self.ccl_num_links)

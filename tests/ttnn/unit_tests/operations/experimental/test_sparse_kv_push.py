@@ -371,6 +371,23 @@ def test_sparse_kv_push_real_topk(mesh_device, layer):
 
 
 @galaxy
+@pytest.mark.parametrize("query_rows", [96, 160, 192, 480])
+def test_sparse_kv_push_overlap_grids(mesh_device, query_rows):
+    """Attention beside the push always leaves the push its cores: 96, 192 and 480 query rows (3072-, 6144- and
+    15360-token chunks on 8x4) would take whole columns the push needs. The sub-device manager rejects overlapping
+    or missing cores."""
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import PUSH_CORES_PER_LINK, SparseKvPushPlanner
+
+    planner = SparseKvPushPlanner(mesh_device, links=2)
+    attention, push = planner.grids(query_rows)
+    assert push.num_cores() >= 2 * PUSH_CORES_PER_LINK, f"{push.num_cores()} push cores"
+    try:
+        planner.prefetch_manager(query_rows)
+    finally:
+        planner.release()
+
+
+@galaxy
 def test_sparse_kv_push_worst_case_union(mesh_device):
     """Every query names 2048 rows no other query names, the most a chip can need: the model's buffer cap
     (query rows x top-k + one unit per owner) must hold it."""
@@ -451,7 +468,7 @@ def test_sparse_kv_push_traced(mesh_device):
 @galaxy
 @pytest.mark.parametrize(
     "case",
-    ["stripe_0", "stripe_48", "stripe_1024", "tile_input", "same_semaphore", "output_below_minimum"],
+    ["stripe_0", "stripe_48", "stripe_1024", "tile_input", "same_semaphore", "output_below_minimum", "output_is_cache"],
 )
 def test_sparse_kv_push_rejects(mesh_device, case, expect_error):
     sc, page_bytes, max_rows = 160, 704, 10240
@@ -479,10 +496,13 @@ def test_sparse_kv_push_rejects(mesh_device, case, expect_error):
         push.sems = [push.sems[0], push.sems[0]]
     elif case == "output_below_minimum":
         out = _filled_buffer(mesh_device, 8, push.width)
+    elif case == "output_is_cache":
+        push.cache = out
     message = {
         "tile_input": "must be a ROW_MAJOR DRAM tensor",
         "same_semaphore": "two semaphores must differ",
         "output_below_minimum": "output needs at least",
+        "output_is_cache": "must not overlap the cache",
     }[case]
     with expect_error(RuntimeError, message):
         push.push(out, Part.ALL, batch_index=0)
