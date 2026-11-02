@@ -6,11 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#ifdef ARCH_QUASAR
 #include "ckernel_sfpu_rounding_ops.h"
-#else
-#include "ckernel_sfpu_rounding_ops.h"
-#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
