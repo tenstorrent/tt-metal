@@ -57,6 +57,13 @@ def test_gate_hm(mesh_device, out_dtype):
         per_t = [(got[:, 32 * t:32 * t + 32].abs().mean() / want[:, 32 * t:32 * t + 32].abs().mean()).item() for t in range(4)]
         err = ((got - want).abs().max() / want.abs().max()).item()
         print(f"  stage {st_i}: max rel err {err:.3e}  magnitude per channel tile {[round(x, 4) for x in per_t]}")
+    # v2 stages 4 / 5: sum(o^2) and rinv, which land in columns 0..3 of every packed row t (channels 32t..32t+3).
+    for st_i, want in ((4, oo64.pow(2).sum(-1, keepdim=True)), (5, rinv64)):
+        got = ttnn.to_torch(_op.gate_hm(o, z, w, _op.alloc_output(mesh_device, NV * D, dtype=out_dtype), stage=st_i))
+        got = got.double().reshape(NV, 4, 32)[:, :, :4]  # [head, packed row t, column c < 4]
+        rel = ((got - want.reshape(NV, 1, 1)).abs() / want.abs().reshape(NV, 1, 1)).amax(dim=(0, 2))
+        print(f"  stage {st_i}: max rel err per packed row {[f'{x:.2e}' for x in rel.tolist()]}  "
+              f"head 0 got {got[0, :, 0].tolist()} want {want[0].item():.5g}")
     assert chain.shape == fused.shape, (chain.shape, fused.shape)
     ec = ((chain - ref).abs().max() / ref.abs().max()).item()
     ef = ((fused - ref).abs().max() / ref.abs().max()).item()
