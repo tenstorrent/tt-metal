@@ -31,6 +31,7 @@ set(TTNN_CORE_SRCS
     core/graph/levelized_graph.cpp
     core/prefetcher_pipe.cpp
     core/reports.cpp
+    core/assigned_sub_device.cpp
     core/tensor/flatbuffer/tensor_file_layout.cpp
     core/tensor/flatbuffer/tensor_flatbuffer.cpp
     core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
@@ -195,6 +196,8 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/core.hpp
     api/ttnn/device.hpp
     api/ttnn/device_operation.hpp
+    api/ttnn/assigned_sub_device.hpp
+    api/ttnn/sub_device_scope.hpp
     api/ttnn/device_operation_detail.hpp
     api/ttnn/distributed/api.hpp
     api/ttnn/distributed/bidirectional_fabric_socket.hpp

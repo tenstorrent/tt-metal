@@ -26,6 +26,7 @@
 #include <vector>
 #include <array>
 #include <tuple>
+#include "ttnn/assigned_sub_device.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/config.hpp"
@@ -223,6 +224,12 @@ public:
     // Used for logging and debugging; in particular, Tracy profiler uses this to identify operations.
     static std::string get_type_name(const operation_attributes_t& /* attribute */) {
         return std::string(ttsl::get_type_name<device_operation_t>());
+    }
+
+    static const ttnn::AssignedSubDevice& assigned_sub_device(const operation_attributes_t& attrs)
+        requires RecordsSubDevice<DeviceOperation>
+    {
+        return DeviceOperation::assigned_sub_device(attrs);
     }
 
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
