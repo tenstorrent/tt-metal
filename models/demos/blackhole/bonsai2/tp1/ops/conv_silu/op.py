@@ -84,7 +84,7 @@ def tap_diagonals(taps: torch.Tensor) -> torch.Tensor:
     return out.reshape(K, C // TILE, TILE, TILE)
 
 
-def conv_silu(qkv, state, taps, key_dim: int, value_dim: int, num_value_heads: int, gqa: int):
+def conv_silu(qkv, state, taps, key_dim: int, value_dim: int, num_value_heads: int, gqa: int, compute_config=None, chain_round=False, silu=True):
     """See the module docstring. Returns (conv, shift). `taps` may be raw taps or diagonals."""
     g = geometry(int(key_dim), int(value_dim), int(num_value_heads), int(gqa), int(state.shape[0]))
     device = qkv.device()
@@ -163,9 +163,9 @@ def conv_silu(qkv, state, taps, key_dim: int, value_dim: int, num_value_heads: i
         kernel_source=f"{KERNEL_ROOT}/compute_conv_silu.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cores,
-        compile_time_args=[g["kd_t"], g["v_t"], K, per_core],
+        compile_time_args=[g["kd_t"], g["v_t"], K, per_core, int(chain_round), int(silu)],
         runtime_args=list(rt_args),
-        config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True),
+        config=compute_config or ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=f"{KERNEL_ROOT}/writer_conv_silu.cpp",
