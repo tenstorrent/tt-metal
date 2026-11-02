@@ -23,8 +23,25 @@ def main():
                             memory_config=ttnn.L1_MEMORY_CONFIG)
         w = ttnn.from_torch(torch.randn(6144, 5120), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device,
                             memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        from models.demos.blackhole.bonsai2.native.a3.linear import gdn_in_rows, gdn_in_shape
+
+        lin2 = TernaryLinear(sh, "blk.0.gdn_in", os.path.expanduser("~/avan/native2bit/agentA/tt_cache/pq2_0/a3_linear"),
+                             rows=lambda: gdn_in_rows(sh, 0), shape=gdn_in_shape(sh, 0))
+        x2 = ttnn.from_torch(torch.randn(1, 1, 1, 5120), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+                             memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        def alternate():
+            a = lin.forward(x)
+            b = lin2.forward(x2)
+            c = ttnn.add(x, x)
+            ttnn.deallocate(a)
+            ttnn.deallocate(c)
+            return b
+
         n = 50
-        for name, f in (("ternary prep+A3", lambda: lin.forward(x)), ("stock linear bfp8", lambda: ttnn.linear(x, w))):
+        for name, f in (("ternary prep+A3", lambda: lin.forward(x)), ("stock linear bfp8", lambda: ttnn.linear(x, w)),
+                        ("ssm_out|gdn_in|add alternating", alternate), ("gdn_in alone", lambda: lin2.forward(x2)),
+                        ("add alone", lambda: ttnn.add(x, x))):
             ttnn.deallocate(f())
             ttnn.synchronize_device(device)
             tid = ttnn.begin_trace_capture(device, cq_id=0)
