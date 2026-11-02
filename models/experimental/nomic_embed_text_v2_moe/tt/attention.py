@@ -37,10 +37,6 @@ from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 QKV_IMPL = os.environ.get("NOMIC_QKV_IMPL", "fused")
 if QKV_IMPL not in ("fused", "stock"):
     raise ValueError(f"NOMIC_QKV_IMPL must be 'fused' or 'stock', got {QKV_IMPL!r}")
-# The op's contract: S up to the tokenizer's 512 and at most 4096 tokens a batch. Longer inputs take the
-# four-op sequence.
-FUSED_QKV_MAX_SEQLEN = 512
-FUSED_QKV_MAX_TOKENS = 4096
 
 # The largest fp32 score block, in tiles, that fit L1 beside the rest of SDPA's buffers.
 _FP32_SCORE_TILES = 144
@@ -266,20 +262,25 @@ class TtNomicBertAttention(LightweightModule):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Rotated q, rotated k and v, each (B, A, S, D) on heads_memory."""
         cos, sin = rot_mats
-        batch, seqlen = x.shape[0], x.shape[-2]
-        if QKV_IMPL == "fused" and seqlen <= FUSED_QKV_MAX_SEQLEN and batch * seqlen <= FUSED_QKV_MAX_TOKENS:
+        if QKV_IMPL == "fused":
+            from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
             from ttnn.operations.qkv_proj_heads_rope import qkv_proj_heads_rope
 
-            return qkv_proj_heads_rope(
-                x,
-                self.qkv_weight,
-                self.qkv_bias,
-                cos,
-                sin,
-                num_heads=self.num_heads,
-                compute_kernel_config=compute_config_descriptor(self.tt_config.compute_kernel_config(OpGroup.QKV)),
-                memory_config=heads_memory,
-            )
+            # The op refuses what its contract excludes (S > 512, > 4096 tokens, other dtypes or model sizes)
+            # before it allocates anything; those calls take the four-op sequence.
+            try:
+                return qkv_proj_heads_rope(
+                    x,
+                    self.qkv_weight,
+                    self.qkv_bias,
+                    cos,
+                    sin,
+                    num_heads=self.num_heads,
+                    compute_kernel_config=compute_config_descriptor(self.tt_config.compute_kernel_config(OpGroup.QKV)),
+                    memory_config=heads_memory,
+                )
+            except (UnsupportedAxisValue, ExcludedCell):
+                pass
 
         qkv = dense_linear(x, self.qkv_weight, self.qkv_bias, OpGroup.QKV, self.tt_config)
         # Three-major, heads contiguous inside each of q, k and v. transpose_k_heads stays False
