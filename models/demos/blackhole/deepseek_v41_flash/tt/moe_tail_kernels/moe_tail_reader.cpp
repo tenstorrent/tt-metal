@@ -8,6 +8,7 @@
 // lives in this device's mesh column, else 0; padding rows 0) -- the same masking as the fused fast_reduce reader.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
@@ -56,26 +57,40 @@ void kernel_main() {
     tmp.reserve_back(1);
     const uint32_t tbase = tmp.get_write_ptr();
 
+    DeviceZoneScopedN("MT_ALL");
     act.reserve_back(K * TPC);
     scb.reserve_back(K);
-    noc.async_write_zeros(act, K * TPC * 2048, {.offset_bytes = 0});
-    noc.async_write_zeros(scb, K * 2048, {.offset_bytes = 0});
-    noc.write_zeros_l1_barrier();
-
-    for (uint32_t t = 0; t < T; ++t) {
-        noc.async_read(scA, tmp, sc_page, {.page_id = t, .offset_bytes = 0}, {.offset_bytes = OFF_SC + t * STRIDE});
-        noc.async_read(idxA, tmp, idx_page, {.page_id = t, .offset_bytes = 0}, {.offset_bytes = OFF_IDX + t * STRIDE});
+    {
+        DeviceZoneScopedN("MT_ZERO");
+        noc.async_write_zeros(act, K * TPC * 2048, {.offset_bytes = 0});
+        noc.async_write_zeros(scb, K * 2048, {.offset_bytes = 0});
+        noc.write_zeros_l1_barrier();
     }
-    noc.async_read(colA, tmp, 256, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = OFF_COL});
-    noc.async_read(mapA, tmp, map_page, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = OFF_MAP});
-    for (uint32_t k = 0; k < K; ++k) {
+    {
+        DeviceZoneScopedN("MT_READ");
+
         for (uint32_t t = 0; t < T; ++t) {
+            noc.async_read(scA, tmp, sc_page, {.page_id = t, .offset_bytes = 0}, {.offset_bytes = OFF_SC + t * STRIDE});
             noc.async_read(
-                cmb, tmp, SEG, {.page_id = k * T + t, .offset_bytes = j0 * 64}, {.offset_bytes = (k * T + t) * SEG});
+                idxA, tmp, idx_page, {.page_id = t, .offset_bytes = 0}, {.offset_bytes = OFF_IDX + t * STRIDE});
         }
+        noc.async_read(colA, tmp, 256, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = OFF_COL});
+        noc.async_read(mapA, tmp, map_page, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = OFF_MAP});
+        for (uint32_t k = 0; k < K; ++k) {
+            for (uint32_t t = 0; t < T; ++t) {
+                noc.async_read(
+                    cmb,
+                    tmp,
+                    SEG,
+                    {.page_id = k * T + t, .offset_bytes = j0 * 64},
+                    {.offset_bytes = (k * T + t) * SEG});
+            }
+        }
+        noc.async_read_barrier();
     }
-    noc.async_read_barrier();
 
+    {
+        DeviceZoneScopedN("MT_SCAT");
 #ifdef TAIL_V2
     {
         // L1 -> L1 NoC copies (2 x 32 B per segment) instead of the RISC-V word loops
@@ -110,7 +125,7 @@ void kernel_main() {
         }
     }
 #endif
-
+    }
     // score tiles: tile k, column 0 of row t
     volatile tt_l1_ptr uint16_t* sc16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tbase + OFF_SC);
     volatile tt_l1_ptr uint16_t* ix16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tbase + OFF_IDX);

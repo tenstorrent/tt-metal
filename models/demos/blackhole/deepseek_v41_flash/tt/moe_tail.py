@@ -60,6 +60,7 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80, fold=None):
     K, T, H = sh[0], sh[-2], sh[-1]
     assert T <= 32 and H % 32 == 0
     nt = H // 32
+    n_cores = int(os.environ.get("DSV41_TAIL_CORES", n_cores))  # call-time arm: columns tiles per core = 160 / cores
     while nt % n_cores:
         n_cores -= 1
     tpc = nt // n_cores
