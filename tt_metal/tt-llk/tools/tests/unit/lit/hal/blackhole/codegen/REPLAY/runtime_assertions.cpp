@@ -39,8 +39,8 @@ extern "C" __attribute__((noinline, used)) void run_runtime_count(const std::uin
 
 extern "C" __attribute__((noinline, used)) void reference_run_runtime_count(const std::uint32_t count)
 {
-    LLK_ASSERT(count >= 1 && count <= 64, "Replay range requires start < 32 and count in [1, 64]");
-    lltt::replay(5 /*start*/, count & 63);
+    LLK_ASSERT(count >= 1 && count <= 27, "Replay range requires count >= 1 and start + count <= 32");
+    lltt::replay(5 /*start*/, count);
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t get_operation_runtime(const std::uint32_t start, const std::uint32_t count)
@@ -50,7 +50,7 @@ extern "C" __attribute__((noinline, used)) std::uint32_t get_operation_runtime(c
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_get_operation_runtime(const std::uint32_t start, const std::uint32_t count)
 {
-    const bool valid = start < 32 && count >= 1 && count <= 64;
-    LLK_ASSERT(valid, "Replay range requires start < 32 and count in [1, 64]");
-    return TT_OP_REPLAY(start, count & 63, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+    const bool valid = start < 32 && count >= 1 && count <= 32 - start;
+    LLK_ASSERT(valid, "Replay range requires count >= 1 and start + count <= 32");
+    return TT_OP_REPLAY(start, count, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 }
