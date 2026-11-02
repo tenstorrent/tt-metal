@@ -411,6 +411,8 @@ def run_demo(args):
                 end_to_end_start = time.perf_counter()
                 host_image, metas, token = host_inputs(index)
                 tt_image = ttnn.to_device(host_image, device)
+                # The write is queued, not done: as in run_traced, the upload stays out of the device latency.
+                ttnn.synchronize_device(device)
                 # Preparing the frame projects the cameras on device and queues their visible counts' readback.
                 device_start = time.perf_counter()
                 prepared = tt_model.prepare_frame(metas, prepared)

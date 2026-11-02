@@ -39,7 +39,7 @@ NUM_FRAMES = 9
 # Per frame, the rig turns by this much, so each camera sees a different number of BEV cells.
 RIG_YAW_STEP_DEG = 5.0
 # The same programs on the same inputs: anything but bit-exact would be a replay reading a buffer
-# the live run does not. PCC rather than equality only keeps the failure readable.
+# the live run does not. Equality is the check; PCC, logged before it, makes a mismatch readable.
 PCC_THRESHOLD = 0.99999
 # Measured: base's three traces take well under this.
 TRACE_REGION_SIZE = 256 << 20
@@ -56,9 +56,12 @@ def _sequence(generator):
     frames = frame_metas(1, NUM_FRAMES, generator)
     for i, (meta,) in enumerate(frames):
         _turn_rig(meta, i * RIG_YAW_STEP_DEG)
-    # Negating lidar2img puts every point behind every camera.
+    # A depth row of constant -1 puts every point behind every camera. Negating the whole matrix
+    # would not: it flips each camera to face backwards, and the surround rig still sees the BEV.
     (empty,) = frames[EMPTY_FRAME]
-    empty["lidar2img"] = (-torch.tensor(empty["lidar2img"])).tolist()
+    projection = torch.tensor(empty["lidar2img"])
+    projection[:, 2, :] = torch.tensor([0.0, 0.0, 0.0, -1.0])
+    empty["lidar2img"] = projection.tolist()
     return frames
 
 
@@ -102,6 +105,8 @@ def test_bevformer_trace_matches_live(device, reset_seeds, expect_error):
     for i in range(NUM_FRAMES):
         frame, prev_bev, outputs = live_frame(i, frame, prev_bev)
         expected.append(outputs)
+        visible = int(ttnn.to_torch(frame.cameras.visibility.host_counts[0]).sum())
+        assert (visible == 0) == (i == EMPTY_FRAME), f"frame {i}: {visible} visible queries"
 
     frame = prev_bev = None
     for i in range(LIVE_FRAMES):
@@ -143,10 +148,9 @@ def test_bevformer_trace_matches_live(device, reset_seeds, expect_error):
             assert len(runner.captures) == 1 + (i >= GROWTH_FRAME) + (i >= RESERVE_FRAME), f"frame {i}"
 
             for name, want, have in zip(("scores", "labels", "boxes", "valid", "BEV"), expected[i], got):
-                if name in ("labels", "valid"):
-                    assert torch.equal(want, have), f"frame {i}: {name} differ"
-                else:
+                if want.is_floating_point():
                     assert_pcc(want, have, PCC_THRESHOLD)
+                assert torch.equal(want, have), f"frame {i}: {name} differ"
         # One set of output buffers per capture: replays keep their buffers.
         assert len(replayed_addresses) == 3, replayed_addresses
         # A frame's host inputs refill only that frame, before anything reaches the device.
