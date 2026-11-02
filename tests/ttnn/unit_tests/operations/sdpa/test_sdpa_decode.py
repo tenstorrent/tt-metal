@@ -547,3 +547,18 @@ def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_
         grid_size=grid_size,
         mask_dtype=mask_dtype,
     )
+
+
+@pytest.mark.parametrize("cur_pos_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_sdpa_decode_rejects_float_cur_pos_tensor(device, cur_pos_dtype, expect_error):
+    # The reader reads cur_pos as 32-bit integers, so float positions would be misread as huge or wrong positions.
+    b, nh, nkv, s, d = 4, 8, 1, 256, 64
+    tt = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    q, k, v = tt(torch.randn(1, b, nh, d)), tt(torch.randn(b, nkv, s, d)), tt(torch.randn(b, nkv, s, d))
+    cur_pos = ttnn.from_torch(
+        torch.tensor([30.0, 100.0, 7.0, 200.0]), dtype=cur_pos_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "Expect cur_pos to be INT32 or UINT32"):
+        ttnn.transformer.scaled_dot_product_attention_decode(
+            q, k, v, cur_pos_tensor=cur_pos, is_causal=True, scale=d**-0.5
+        )

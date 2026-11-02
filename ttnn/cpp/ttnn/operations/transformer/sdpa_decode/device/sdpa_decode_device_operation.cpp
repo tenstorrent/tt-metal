@@ -263,6 +263,20 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    if (tensor_args.cur_pos_tensor.has_value()) {
+        // The reader reads cur_pos as 32-bit integers (reader_decode_all.cpp), so other dtypes or a tiled
+        // layout would be reinterpreted as wrong positions.
+        const auto& cur_pos_tensor = tensor_args.cur_pos_tensor.value();
+        TT_FATAL(
+            cur_pos_tensor.dtype() == DataType::INT32 || cur_pos_tensor.dtype() == DataType::UINT32,
+            "Expect cur_pos to be INT32 or UINT32, got {}",
+            cur_pos_tensor.dtype());
+        TT_FATAL(
+            cur_pos_tensor.layout() == Layout::ROW_MAJOR,
+            "Expect cur_pos to be ROW_MAJOR, got {}",
+            cur_pos_tensor.layout());
+    }
+
     if (operation_attributes.is_causal && tensor_args.cur_pos_tensor.has_value() &&
         !tensor_args.cur_pos_tensor->is_sharded()) {
         // The reader fetches only page 0 of an interleaved cur_pos tensor and indexes it by batch,
