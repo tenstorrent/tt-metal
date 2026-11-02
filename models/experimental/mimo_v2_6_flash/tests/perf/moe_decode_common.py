@@ -11,7 +11,7 @@ import ttnn
 from models.experimental.mimo_v2_6_flash.reference import model as ref
 from models.experimental.mimo_v2_6_flash.reference.checkpoint import MiMoCheckpoint, default_model_path
 from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
-from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan
+from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan, fabric_config
 from models.experimental.mimo_v2_6_flash.tt.moe import TtMiMoMoE
 
 LAYER = 1
@@ -26,14 +26,7 @@ GOLDEN = os.environ.get("MIMO_GOLDEN", os.path.join(GOLDEN_DIR, "golden_48l.pt")
 
 def open_row(trace_region_size=0):
     """Open the 4x8 Galaxy with the ring fabric and return (parent mesh, row-0 1x8 submesh)."""
-    ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D_RING,
-        ttnn.FabricReliabilityMode.STRICT_INIT,
-        None,
-        ttnn.FabricTensixConfig.DISABLED,
-        ttnn.FabricUDMMode.DISABLED,
-        ttnn.FabricManagerMode.DEFAULT,
-    )
+    ttnn.set_fabric_config(**fabric_config(), reliability_mode=ttnn.FabricReliabilityMode.STRICT_INIT)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=65536, trace_region_size=trace_region_size)
     row = mesh.create_submeshes(ttnn.MeshShape(1, 8))[0]
     return mesh, row

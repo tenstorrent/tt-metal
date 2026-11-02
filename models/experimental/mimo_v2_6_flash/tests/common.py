@@ -11,20 +11,25 @@ import pytest
 import torch
 from loguru import logger
 
-import ttnn
 from models.experimental.mimo_v2_6_flash.reference.checkpoint import MiMoCheckpoint, default_model_path
 from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
+from models.experimental.mimo_v2_6_flash.tt.common import fabric_config
 from models.experimental.mimo_v2_6_flash.tt.generator import create_dp_submeshes
 
 # CCL ops keep their semaphores for the program's lifetime. Without an L1_SMALL region they go in the
 # main L1 pool, and after enough distinct prefill shapes they fragment it badly enough to clash with
 # later ops' static circular buffers. all_gather places them in L1_SMALL when one exists.
 L1_SMALL_SIZE = 65536
+# The serving fabric (generator_vllm's model_capabilities): the ring with the model's packet payload, which the fabric
+# row gather sizes its packets by.
+_FABRIC = fabric_config()
 GALAXY_DEVICE_PARAMS = {
-    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+    "fabric_config": _FABRIC["config"],
     "trace_region_size": 0,
     "l1_small_size": L1_SMALL_SIZE,
 }
+if "router_config" in _FABRIC:
+    GALAXY_DEVICE_PARAMS["fabric_router_config"] = _FABRIC["router_config"]
 DP = 4
 TP = 8
 
