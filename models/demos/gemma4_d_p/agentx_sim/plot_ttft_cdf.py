@@ -33,6 +33,7 @@ KNOBS = (
     "decode_tps",
     "chunk_overhead_ms",
     "request_overhead_ms",
+    "request_overhead_ms_per_1k",
     "inject_depth",
 )
 # Categorical palette in a fixed order, so a run keeps its color across plots of the same sweep.
@@ -57,6 +58,7 @@ def load_runs(paths, where):
                 r.setdefault("mid_cost", 0.0)  # exports from before --mid-cost
                 r.setdefault("chunk_overhead_ms", 0.0)  # and from before the overhead knobs
                 r.setdefault("request_overhead_ms", 0.0)
+                r.setdefault("request_overhead_ms_per_1k", 0.0)
                 r.setdefault("inject_depth", 1)
                 if all(matches(r.get(k), v) for k, v in where):
                     runs.append(r)
@@ -92,6 +94,8 @@ def knob(k, v):
         return f"+{float(v):g} ms a chunk"
     if k == "request_overhead_ms":
         return f"+{float(v):g} ms a request"
+    if k == "request_overhead_ms_per_1k":
+        return f"+{float(v):g} ms per 1k prompt tokens"
     if k == "inject_depth":
         return f"{v} chunks queued ahead"
     return f"decode {float(v):g} tok/s"

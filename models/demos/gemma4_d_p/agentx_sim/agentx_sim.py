@@ -355,6 +355,7 @@ def run(
     max_seq_len=262144,
     chunk_overhead_s=0.0,
     request_overhead_s=0.0,
+    request_overhead_per_token_s=0.0,
     inject_depth=1,
 ):
     rng = random.Random(seed)
@@ -380,6 +381,10 @@ def run(
     nxt = 0
     t_fed = None  # when the last session started: the load is at full concurrency until then
 
+    def overhead_s(n):
+        """From send to reaching the engine: tt-d-gen tokenizes and hashes the whole prompt."""
+        return request_overhead_s + request_overhead_per_token_s * n["in"]
+
     def start_session(t):
         nonlocal next_sess, nxt, t_fed
         if next_sess >= len(order):
@@ -399,7 +404,7 @@ def run(
         sess_done_t[s] = t
         for i, n in enumerate(nodes):
             if not n["deps"]:
-                heapq.heappush(arrivals, (t + request_overhead_s, nxt + i))
+                heapq.heappush(arrivals, (t + overhead_s(n), nxt + i))
         nxt += len(nodes)
 
     for _ in range(min(concurrency, len(order))):
@@ -421,8 +426,8 @@ def run(
     step_log = []  # (t_end, dt, rows)
 
     def admit(g, arrive):
-        """A request reaches the engine request_overhead_s after it is sent; with KV slots, it waits for one."""
-        send = arrive - request_overhead_s
+        """A request reaches the engine overhead_s() after it is sent; with KV slots, it waits for one."""
+        send = arrive - overhead_s(sessions[sess_of[g]][local_of[g]])
         if slot_cache and (waiting or not slot_cache.can_seat()):
             waiting.append((g, send))
         else:
@@ -472,7 +477,7 @@ def run(
             if nleft[c] == 0:
                 cn = sessions[s][local_of[c]]
                 think = min(max(cn["t"] - rec_ready[c], 0.0), max_think_s)
-                heapq.heappush(arrivals, (ready[c] + think + request_overhead_s, c))
+                heapq.heappush(arrivals, (ready[c] + think + overhead_s(cn), c))
         left_in_session[s] -= 1
         if left_in_session[s] == 0:
             heapq.heappush(freed, sess_done_t[s])  # the next session starts when this one's response ends
@@ -680,9 +685,9 @@ def ttft_record(knobs, stats):
 
 def run_config(job):
     """One run of the grid, job = (UNITxBUDGET:POLICY, concurrency, cache, align, max_think_s, decode_tps,
-    chunk_overhead_ms, request_overhead_ms, inject_depth); returns its JSON record (the knobs, the metrics and the run's wall time),
-    and its --ttft-out record when that is set."""
-    cfg, concurrency, cache, align, max_think_s, decode_tps, chunk_ms, request_ms, inject_depth = job
+    chunk_overhead_ms, request_overhead_ms, request_overhead_ms_per_1k, inject_depth); returns its JSON record (the
+    knobs, the metrics and the run's wall time), and its --ttft-out record when that is set."""
+    cfg, concurrency, cache, align, max_think_s, decode_tps, chunk_ms, request_ms, request_ms_per_1k, inject_depth = job
     t0 = time.time()
     C, budget, policy = parse_config(cfg, G["model"])  # checked in main() before the workers fork
     cache_tokens, slots = parse_cache(cache)
@@ -703,6 +708,7 @@ def run_config(job):
         max_sessions=G["max_sessions"],
         chunk_overhead_s=chunk_ms / 1e3,
         request_overhead_s=request_ms / 1e3,
+        request_overhead_per_token_s=request_ms_per_1k / 1e6,
         inject_depth=inject_depth,
     )
     knobs = dict(
@@ -714,6 +720,7 @@ def run_config(job):
         mid_cost=G["mid_cost"],
         chunk_overhead_ms=chunk_ms,
         request_overhead_ms=request_ms,
+        request_overhead_ms_per_1k=request_ms_per_1k,
         inject_depth=inject_depth,
     )
     record = {
@@ -743,7 +750,12 @@ def main():
     ap.add_argument("--decode-tps", default="100", help="per-request decode rate for the closed loop")
     ap.add_argument("--chunk-overhead-ms", default="0", help="added to every step")
     ap.add_argument(
-        "--request-overhead-ms", default="0", help="from send to reaching the engine (tt-d-gen on silicon: 95)"
+        "--request-overhead-ms", default="0", help="from send to reaching the engine (tt-d-gen on silicon: 15)"
+    )
+    ap.add_argument(
+        "--request-overhead-ms-per-1k",
+        default="0",
+        help="added to --request-overhead-ms per 1000 prompt tokens (tt-d-gen on silicon: 0.87)",
     )
     ap.add_argument(
         "--inject-depth", default="1", help="rr: chunks queued ahead of the device (tt-d-gen on silicon: 9)"
@@ -767,7 +779,7 @@ def main():
             ap.error(f"bad --align {align!r}: choose chunk, resume or exact")
     if any(d < 1 for d in split(a.inject_depth, int)):
         ap.error(f"bad --inject-depth {a.inject_depth!r}: each must be at least 1")
-    for name in ("chunk_overhead_ms", "request_overhead_ms"):
+    for name in ("chunk_overhead_ms", "request_overhead_ms", "request_overhead_ms_per_1k"):
         if any(ms < 0 for ms in split(getattr(a, name), float)):
             ap.error(f"bad --{name.replace('_', '-')} {getattr(a, name)!r}: must not be negative")
     G["sessions"] = load_sessions(a.traces)
@@ -781,6 +793,7 @@ def main():
             split(a.decode_tps, float),
             split(a.chunk_overhead_ms, float),
             split(a.request_overhead_ms, float),
+            split(a.request_overhead_ms_per_1k, float),
             split(a.inject_depth, int),
         )
     )

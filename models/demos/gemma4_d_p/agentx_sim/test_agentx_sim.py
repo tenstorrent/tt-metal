@@ -311,6 +311,22 @@ def test_overheads_add_to_every_step_and_delay_every_request():
     assert res["busy_s"] == pytest.approx(1.5)
 
 
+def test_per_token_request_overhead_scales_with_the_prompt():
+    """2 ms + 1 ms per 1000 tokens: a 64-token request reaches the engine 2.064 ms after it is sent."""
+    res = run(
+        _OneSecondSteps(),
+        [[_node(BLOCK, [1])]],
+        BLOCK,
+        BLOCK,
+        "fcfs",
+        1,
+        request_overhead_s=0.002,
+        request_overhead_per_token_s=1e-6,
+    )
+    (stat,) = res["_stats"]
+    assert stat.done - stat.send == pytest.approx(1.0 + 0.002 + BLOCK * 1e-6)
+
+
 @pytest.mark.parametrize("cache, parsed", [("inf", (None, None)), ("4e6", (4_000_000, None)), ("slot6", (None, 6))])
 def test_parse_cache(cache, parsed):
     assert parse_cache(cache) == parsed
@@ -323,7 +339,13 @@ def test_parse_cache_rejects(cache):
 
 
 @pytest.mark.parametrize(
-    "flag, value", [("--inject-depth", "9,0"), ("--chunk-overhead-ms", "-1"), ("--request-overhead-ms", "95,-5")]
+    "flag, value",
+    [
+        ("--inject-depth", "9,0"),
+        ("--chunk-overhead-ms", "-1"),
+        ("--request-overhead-ms", "95,-5"),
+        ("--request-overhead-ms-per-1k", "-0.5"),
+    ],
 )
 def test_main_rejects_bad_knobs_before_loading_traces(monkeypatch, capsys, flag, value):
     monkeypatch.setattr(sys, "argv", ["agentx_sim.py", "--traces", "/nonexistent", flag, value])
