@@ -21,6 +21,7 @@ No projection or residual branch is silently replicated.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, NoReturn, Sequence
@@ -45,7 +46,25 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     TensorPlacement,
     same_buffer,
 )
-from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import dense_dtype_tag, dense_math_fidelity_name
+from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
+    bank_tiles,
+    dense_dtype_tag,
+    dense_math_fidelity_name,
+    dram_sharded_matmul_configs,
+    dram_sharded_weight_memory_config,
+    validate_dram_sharded_weight,
+)
+
+# QWEN38_MTP_MIXER_SHARDED (default "1"; "0" keeps the interleaved path and builds no sharded copy): the 1-row mixer (__call__, the MTP draft rows) runs fc_embedding and fc_hidden as
+# stock DRAM-sharded matmuls on a second, bank-sharded copy of the two weights (cache files named *.dram-sharded-bank<N>,
+# beside the interleaved ones: a tensorbin of one layout is never loaded as the other).  rows() keeps the interleaved weights.
+MIXER_SHARDED_ENV = "QWEN38_MTP_MIXER_SHARDED"
+MIXER_STORAGE_CORES = 5  # activation L1 storage cores of the mixer matmuls (K = 2560 -> 512 per core)
+
+
+def mixer_sharded_enabled() -> bool:
+    return os.environ.get(MIXER_SHARDED_ENV, "1").strip() == "1"
+
 
 TP_AXIS = 1
 HIDDEN_SIZE = 2560
@@ -314,6 +333,8 @@ class Qwen38TTNNMTPInputWeights:
     epsilon: float
     cache_directory: Path
     projection_dtype: Any = ttnn.bfloat16  # fc_embedding / fc_hidden dtype (QWEN38_DENSE_WEIGHT_DTYPE)
+    fc_embedding_ws: Any | None = None  # bank-sharded copies for the 1-row path (QWEN38_MTP_MIXER_SHARDED)
+    fc_hidden_ws: Any | None = None
     _released: bool = field(default=False, init=False, repr=False)
 
     @classmethod
@@ -358,8 +379,37 @@ class Qwen38TTNNMTPInputWeights:
             uploads.append(tensor)
             return tensor
 
+        sharded: dict[str, Any] = {}
+        if mixer_sharded_enabled():
+            bank_cols = bank_tiles(mesh_device, HIDDEN_SIZE, LOCAL_HIDDEN_SIZE) * ttnn.TILE_SIZE
+            ws_config = dram_sharded_weight_memory_config(mesh_device, HIDDEN_SIZE, LOCAL_HIDDEN_SIZE)
+
+            def upload_sharded(value: torch.Tensor, name: str, dtype):
+                tensor = ttnn.as_tensor(
+                    value.contiguous(),
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    memory_config=ws_config,
+                    mesh_mapper=mapper,
+                    cache_file_name=cache / f"{name}.dram-sharded-bank{bank_cols}",
+                )
+                uploads.append(tensor)
+                validate_dram_sharded_weight(
+                    tensor, mesh_device, HIDDEN_SIZE, LOCAL_HIDDEN_SIZE, num_workers_per_dram_bank=1
+                )
+                return tensor
+
         try:
+            if mixer_sharded_enabled():
+                sharded = dict(
+                    fc_embedding_ws=upload_sharded(
+                        prepared["fc_embedding"], f"fc-embedding.{projection_tag}", projection_dtype
+                    ),
+                    fc_hidden_ws=upload_sharded(prepared["fc_hidden"], f"fc-hidden.{projection_tag}", projection_dtype),
+                )
             result = cls(
+                **sharded,
                 embedding_norm_scale=upload(
                     prepared["embedding_norm_scale"], "embedding-norm-scale.fp32", ttnn.float32
                 ),
@@ -404,11 +454,25 @@ class Qwen38TTNNMTPInputWeights:
     def deallocate(self) -> None:
         if self._released:
             raise RuntimeError("MTP input weights are already deallocated")
-        slots = [self.embedding_norm_scale, self.hidden_norm_scale, self.fc_embedding, self.fc_hidden]
+        slots = [
+            self.embedding_norm_scale,
+            self.hidden_norm_scale,
+            self.fc_embedding,
+            self.fc_hidden,
+            self.fc_embedding_ws,
+            self.fc_hidden_ws,
+        ]
         try:
             _release_slots(slots, label="MTP input weights")
         finally:
-            self.embedding_norm_scale, self.hidden_norm_scale, self.fc_embedding, self.fc_hidden = slots
+            (
+                self.embedding_norm_scale,
+                self.hidden_norm_scale,
+                self.fc_embedding,
+                self.fc_hidden,
+                self.fc_embedding_ws,
+                self.fc_hidden_ws,
+            ) = slots
             self._released = all(tensor is None for tensor in slots)
 
 
@@ -585,6 +649,48 @@ class Qwen38TTNNMTPInput:
             _cleanup_after_failure([gathered], label=f"invalid MTP {label} all-gather", primary=error)
         return gathered
 
+    def _dram_sharded_programs(self):
+        cached = getattr(self, "_ws_programs", None)
+        if cached is None:
+            cached = dram_sharded_matmul_configs(
+                self.mesh_device, HIDDEN_SIZE, LOCAL_HIDDEN_SIZE, num_cores=MIXER_STORAGE_CORES
+            )
+            self._ws_programs = cached
+        return cached
+
+    def project_dram_sharded(self, full_embedding, full_hidden, temporaries: list):
+        """fc_embedding (1 row) and fc_hidden (4 rows) as stock DRAM-sharded matmuls, then the branch sum: the same
+        ``[1,4,1,320]`` DRAM TILE bf16 result as the interleaved path.  Every intermediate lands in ``temporaries``."""
+
+        act_config, program_config = self._dram_sharded_programs()
+        dram = ttnn.DRAM_MEMORY_CONFIG
+
+        def project(act, weight):
+            act_ws = ttnn.to_memory_config(act, act_config)
+            temporaries.append(act_ws)
+            out_ws = ttnn.linear(
+                act_ws,
+                weight,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=program_config,
+                compute_kernel_config=self.projection_compute_config,
+            )
+            temporaries.append(out_ws)
+            out = ttnn.to_memory_config(out_ws, dram)
+            temporaries.append(out)
+            return out
+
+        embedding_rows = project(full_embedding, self.weights.fc_embedding_ws)  # [1,1,1,320]
+        hidden_rows_in = ttnn.reshape(full_hidden, (1, 1, RESIDUAL_BRANCHES, HIDDEN_SIZE))
+        temporaries.append(hidden_rows_in)
+        hidden_rows = project(hidden_rows_in, self.weights.fc_hidden_ws)  # [1,1,4,320]
+        summed = ttnn.add(hidden_rows, embedding_rows, memory_config=dram)  # row broadcast replaces the repeat
+        temporaries.append(summed)
+        output = ttnn.reshape(summed, RESIDUAL_LOCAL_SHAPE)
+        self._validate_input(output, label="fused output", shape=RESIDUAL_LOCAL_SHAPE)
+        return output
+
     def __call__(self, input_embedding, hidden_residual):
         if self.weights.released:
             raise RuntimeError("cannot run MTP input fusion after its weights were deallocated")
@@ -623,6 +729,14 @@ class Qwen38TTNNMTPInput:
             )
             temporaries.append(full_hidden)
 
+            if (
+                mixer_sharded_enabled()
+                and self.weights.fc_embedding_ws is not None
+                and self.weights.fc_hidden_ws is not None
+            ):
+                output = self.project_dram_sharded(full_embedding, full_hidden, temporaries)
+                _release_slots(temporaries, label="MTP input fusion temporaries")
+                return output
             projected_embedding = ttnn.linear(
                 full_embedding,
                 self.weights.fc_embedding,

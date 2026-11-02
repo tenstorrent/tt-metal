@@ -341,6 +341,7 @@ MM_WIDE_BLOCKS: dict[tuple[int, int], int] = {
     (2560, 2304): 20,  # QSA merged projection
     (2560, 512): 16,  # MoE router
     (2560, 352): 16,  # shared gate | up | scalar
+    (2560, 320): 16,  # MTP input mixer fc_embedding / fc_hidden (QWEN38_MTP_MIXER_SHARDED): 10.3 -> 8.1 us
     (2560, 8000): 10,  # LM-head chunk
     (2560, 7040): 16,  # LM-head chunk
 }
