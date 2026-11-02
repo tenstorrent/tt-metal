@@ -184,7 +184,7 @@ jobs:
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
       ttsim-ci-changed: ${{ steps.find-changes.outputs.ttsim-ci-changed }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: 1
@@ -200,7 +200,7 @@ jobs:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 5
         with:
           fetch-depth: 1
@@ -474,7 +474,7 @@ jobs:
     runs-on: ubuntu-slim
     steps:
     - name: Checkout repo
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
       timeout-minutes: 20
     - name: Set up Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -632,10 +632,13 @@ jobs:
 
   # Quasar LLK tests on ttsim, two shards (llk_pr_gate_tests.yaml, sim_quasar_xl).
   # Sanity runs the same shards. The skip list is the script default.
+  # Disabled on merge_group: it was holding up the merge queue for too long.
+  # Still runs on PR gate and push-to-main.
   llk-quasar-tests:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
         github.event.action != 'destroyed' &&
+        github.event_name != 'merge_group' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
@@ -653,10 +656,14 @@ jobs:
   # Same change set as llk-smoke-tests, plus a hardware-free-only change and a
   # Quasar change: the stall-wrapper probe used to run inside the Quasar compile
   # job because it lived under python_tests/quasar.
+  # Disabled on merge_group: cpu_xlarge (tt-ubuntu-2204-xlarge-stable) has no
+  # merge-queue prio pool, same contended-runner issue as llk-quasar-tests. Still
+  # runs on PR gate and push-to-main.
   llk-hardware-free-tests:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
         github.event.action != 'destroyed' &&
+        github.event_name != 'merge_group' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
@@ -702,7 +709,7 @@ jobs:
       - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 5
         with:
           sparse-checkout: .github

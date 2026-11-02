@@ -32,6 +32,8 @@ tt_dtype_to_torch_dtype = {
     # fail today). The C++ side converts the float32 input to FP8 on the way in
     # via the FP8_E4M3 <-> FLOAT32 path in transform_buffers.
     ttnn.fp8_e4m3: torch.float,
+    # MX tensors are packed from and unpacked to float32 on the host, like BFP.
+    **{mx_dtype: torch.float for mx_dtype in ttnn.MX_DTYPES},
 }
 
 tt_dtype_to_np_dtype = {
@@ -43,6 +45,7 @@ tt_dtype_to_np_dtype = {
     ttnn.float32: np.float32,
     ttnn.bfloat8_b: np.float32,
     ttnn.bfloat4_b: np.float32,
+    **{mx_dtype: np.float32 for mx_dtype in ttnn.MX_DTYPES},
 }
 
 TORCH_INTEGER_DTYPES = [

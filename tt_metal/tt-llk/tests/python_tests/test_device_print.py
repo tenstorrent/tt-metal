@@ -8,6 +8,7 @@ import torch
 from conftest import skip_for_coverage
 from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, Tilize
 from helpers.logger import strip_ansi
@@ -175,11 +176,7 @@ _TILE_TEST_FORMATS = (
 )
 def test_dprint_tile(formats):
     formats = formats[0]
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.input_format)
     src_A, tile_cnt_A, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=[32, 32],

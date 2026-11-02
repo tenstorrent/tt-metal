@@ -10,6 +10,9 @@ TRISC_L0_LENGTH = 4K;
 NCRISC_L0_LENGTH = 8K;
 
 L1_BASE = 0x0;
+/* BRISC starts at L1 0, where the loader writes a jump to _start. The ARC firmware writes 0x10-0x1F in every
+ * Tensix at any time (tt-metal's MEM_L1_ARC_FW_SCRATCH), so nothing is linked below 0x20. */
+L1_RESERVED_SIZE = 0x20;
 RUNTIME_ARGS_START = 0x6E000;
 UNDEFINED = 0;
 
@@ -31,7 +34,7 @@ MEMORY
 
 
     /* L1 layout */
-    BRISC_CODE              : ORIGIN = L1_BASE, LENGTH = 32K
+    BRISC_CODE              : ORIGIN = L1_BASE + L1_RESERVED_SIZE, LENGTH = 32K - L1_RESERVED_SIZE
     BRISC_LOCAL_DATA_MEM    : ORIGIN = ORIGIN(BRISC_CODE) + LENGTH(BRISC_CODE), LENGTH = 32K
     BRISC_GCOV_MEM          : ORIGIN = ORIGIN(BRISC_LOCAL_DATA_MEM) + LENGTH(BRISC_LOCAL_DATA_MEM), LENGTH = 8K
 

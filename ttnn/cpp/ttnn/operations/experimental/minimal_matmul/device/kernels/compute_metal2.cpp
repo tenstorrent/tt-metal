@@ -463,6 +463,7 @@ void matmul_blocks(
 // subblock, and no epilogue pass re-reads the intermediate (which cost ~2100 cycles per output tile on the math
 // thread). The out tiles land row-major in a half-width block, as swiglu_block writes them. block_float_output selects
 // the cheaper sigmoid (swiglu_sfpu.hpp).
+#ifndef ARCH_QUASAR  // drives the SFPU from the pack thread with WH/BH-only instructions (TTI_SEMWAIT, SETC16)
 template <bool block_float_output, typename In0Tok, typename In1Tok, typename IntermTok, typename OutTok>
 void matmul_blocks_swiglu(
     const In0Tok in0_dfb,
@@ -476,6 +477,7 @@ void matmul_blocks_swiglu(
     const uint32_t subblock_h,
     const uint32_t subblock_w,
     const bool add_partials) {
+#ifndef ARCH_QUASAR  // Wormhole/Blackhole LLK internals; kernel_main refuses fused SwiGLU on Quasar
     const uint32_t out_full_N_block_tiles = full_N_block_tiles >> 1;
     uint32_t in0_index_offset = 0;
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
@@ -542,7 +544,9 @@ void matmul_blocks_swiglu(
         }
         in0_index_offset += subblock_h * K_block_tiles;
     }
+#endif
 }
+#endif  // !ARCH_QUASAR
 
 void kernel_main() {
     constexpr auto K_num_blocks = get_arg(args::K_num_blocks);
@@ -595,6 +599,9 @@ void kernel_main() {
 #endif
 
     matmul_init(dfb::in0, dfb::in1);
+#ifdef ARCH_QUASAR
+    static_assert(!swiglu_in_k_loop, "fused SwiGLU (matmul_blocks_swiglu) is not ported to Quasar");
+#endif
     if constexpr (swiglu_in_k_loop) {
         PACK((minimal_matmul_swiglu_tile_init()));  // once: nothing else on the pack thread reprograms the SFPU
     }
@@ -643,6 +650,7 @@ void kernel_main() {
                 dfb_in0.wait_front(in0_block_num_tiles);
                 dfb_in1.wait_front(in1_block_num_tiles);
 
+#ifndef ARCH_QUASAR  // the host never selects swiglu_in_k_loop on Quasar (see matmul_blocks_swiglu)
                 if (swiglu_in_k_loop && k_block == K_num_blocks - 1) {
                     if (K_num_blocks > 1) {  // publish the partial sums of K blocks 0..K-2 for the add
                         dfb_intermediate.push_back(out_block_num_tiles);
@@ -668,7 +676,9 @@ void kernel_main() {
                     if (K_num_blocks > 1) {
                         dfb_intermediate.pop_front(out_block_num_tiles);
                     }
-                } else {
+                } else
+#endif  // !ARCH_QUASAR
+                {
                     matmul_blocks(
                         dfb::in0,
                         dfb::in1,

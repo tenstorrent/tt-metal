@@ -53,11 +53,11 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     constexpr uint32_t kWindowedCreditFromEnd = 2;
 
     TT_FATAL(output_tensor.size() == 3, "minimal_matmul_strided_reduce_scatter returns 3 tensors");
-    TT_FATAL(output_tensor[0].buffer() != nullptr, "matmul output must have a buffer");
-    TT_FATAL(output_tensor[1].buffer() != nullptr, "reduce-scatter intermediate must have a buffer");
-    TT_FATAL(output_tensor[2].buffer() != nullptr, "reduce-scatter output must have a buffer");
-    TT_FATAL(tensor_args.input_tensor.buffer() != nullptr, "matmul input must have a buffer");
-    TT_FATAL(tensor_args.weight_tensor.buffer() != nullptr, "matmul weight must have a buffer");
+    TT_FATAL(output_tensor[0].is_allocated(), "matmul output must have a buffer");
+    TT_FATAL(output_tensor[1].is_allocated(), "reduce-scatter intermediate must have a buffer");
+    TT_FATAL(output_tensor[2].is_allocated(), "reduce-scatter output must have a buffer");
+    TT_FATAL(tensor_args.input_tensor.is_allocated(), "matmul input must have a buffer");
+    TT_FATAL(tensor_args.weight_tensor.is_allocated(), "matmul weight must have a buffer");
 
     // output_tensor[0] = MM output = RS input, [1] = RS intermediate, [2] = RS output. The reduce-scattered
     // height is the activations' height (the MM output may be a window).
@@ -112,12 +112,12 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     }
     uint32_t progress_addr = 0;
     if (caller_progress) {
-        TT_FATAL(tensor_args.mm_progress_counters->buffer() != nullptr, "mm_progress_counters must have a buffer");
+        TT_FATAL(tensor_args.mm_progress_counters->is_allocated(), "mm_progress_counters must have a buffer");
         progress_addr = static_cast<uint32_t>(tensor_args.mm_progress_counters->buffer()->address());
     }
     uint32_t credit_addr = 0;
     if (caller_credit) {
-        TT_FATAL(tensor_args.mm_credit_counters->buffer() != nullptr, "mm_credit_counters must have a buffer");
+        TT_FATAL(tensor_args.mm_credit_counters->is_allocated(), "mm_credit_counters must have a buffer");
         credit_addr = static_cast<uint32_t>(tensor_args.mm_credit_counters->buffer()->address());
     }
     uint32_t reader_progress_arg = kReaderArgPrefix;
