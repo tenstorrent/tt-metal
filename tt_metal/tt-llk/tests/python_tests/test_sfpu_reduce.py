@@ -22,19 +22,22 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     MathOperation,
+    PerfRunType,
     ReducePool,
     format_dict,
 )
 from helpers.logger import logger
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
     parametrize,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.sfpu_domains import generated_nan_sign_is_asserted, specials_safe
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    LOOP_FACTOR,
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
@@ -95,6 +98,17 @@ def get_supported_reduce_axioms(
     return [MathOperation.ReduceColumn]
 
 
+SFPU_REDUCE_PERF_SWEEP = dict(
+    formats=input_output_formats(
+        [DataFormat.Float32, DataFormat.Int32],
+        same=True,
+    ),
+    dest_acc=[DestAccumulation.Yes],
+    reduce_pool=[ReducePool.Max, ReducePool.Sum, ReducePool.Average],
+    mathop=get_supported_reduce_axioms,
+)
+
+
 def use_int32_twos_complement(
     formats: InputOutputFormat, reduce_pool: ReducePool, mathop: MathOperation
 ) -> bool:
@@ -127,6 +141,110 @@ def use_int32_twos_complement(
         # the chained multi-axis reduce is consistent).
         return True
     return False
+
+
+def _sfpu_reduce_config_kwargs(
+    formats,
+    dest_acc,
+    mathop,
+    reduce_pool,
+    input_dimensions,
+    tile_cnt,
+    src_A,
+    src_B,
+    *,
+    is_perf,
+    loop_factor,
+    twos_complement=False,
+):
+    runtimes = [
+        TILE_COUNT(tile_cnt),
+        LOOP_FACTOR(loop_factor),
+    ]
+
+    return {
+        "test_name": "sources/sfpu_reduce_test.cpp",
+        "formats": formats,
+        "templates": [
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+        ],
+        "runtimes": runtimes,
+        "variant_stimuli": StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt if is_perf else 1,
+            tile_count_res=tile_cnt,
+            twos_complement=twos_complement,
+        ),
+        "dest_acc": dest_acc,
+        "unpack_to_dest": True,
+        "disable_format_inference": True,
+        "compile_time_formats": True,
+    }
+
+
+def _run_sfpu_reduce(
+    test_config_kwargs,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+):
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
+    if is_perf:
+        configuration.run(perf_report)
+        return None
+    return configuration.run().result
+
+
+def _run_functional_sfpu_reduce(
+    formats,
+    dest_acc,
+    mathop,
+    reduce_pool,
+    input_dimensions,
+    tile_cnt,
+    src_A=None,
+    src_B=None,
+    *,
+    num_blocks,
+    num_tiles_in_block,
+    twos_complement=False,
+):
+    test_config_kwargs = _sfpu_reduce_config_kwargs(
+        formats,
+        dest_acc,
+        mathop,
+        reduce_pool,
+        input_dimensions,
+        tile_cnt,
+        src_A,
+        src_B,
+        is_perf=False,
+        loop_factor=1,
+        twos_complement=twos_complement,
+    )
+    test_config_kwargs["runtimes"] = [
+        NUM_BLOCKS(num_blocks),
+        NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        *test_config_kwargs["runtimes"],
+    ]
+    return _run_sfpu_reduce(test_config_kwargs)
 
 
 def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
@@ -407,36 +525,19 @@ def test_sfpu_reduce(
         reduce_pool=reduce_pool,
     )
 
-    configuration = TestConfig(
-        "sources/sfpu_reduce_test.cpp",
+    res_from_L1 = _run_functional_sfpu_reduce(
         formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
-        ],
-        runtimes=[
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            TILE_COUNT(tile_cnt),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=1,
-            tile_count_res=tile_cnt,
-            twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
-        disable_format_inference=True,
-        compile_time_formats=True,
+        dest_acc,
+        mathop,
+        reduce_pool,
+        input_dimensions,
+        tile_cnt,
+        src_A,
+        src_B,
+        num_blocks=num_blocks,
+        num_tiles_in_block=num_tiles_in_block,
+        twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
     )
-    res_from_L1 = configuration.run().result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
@@ -535,37 +636,20 @@ def _run_integer_reduce(
 
     src_B = torch.zeros_like(src_A)
 
-    configuration = TestConfig(
-        "sources/sfpu_reduce_test.cpp",
+    res_from_L1 = _run_functional_sfpu_reduce(
         formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
-        ],
-        runtimes=[
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            TILE_COUNT(tile_cnt),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=1,
-            tile_count_res=tile_cnt,
-            # Int32 MAX/MIN operands sit in DEST as two's-complement (centralized in one helper).
-            twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
-        disable_format_inference=True,
-        compile_time_formats=True,
+        dest_acc,
+        mathop,
+        reduce_pool,
+        input_dimensions,
+        tile_cnt,
+        src_A,
+        src_B,
+        num_blocks=num_blocks,
+        num_tiles_in_block=num_tiles_in_block,
+        # Int32 MAX/MIN operands sit in DEST as two's-complement.
+        twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
     )
-    res_from_L1 = configuration.run().result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
@@ -914,35 +998,18 @@ def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_ac
 
     src_B = torch.zeros_like(src_A)
 
-    configuration = TestConfig(
-        "sources/sfpu_reduce_test.cpp",
+    res_from_L1 = _run_functional_sfpu_reduce(
         formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
-        ],
-        runtimes=[
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            TILE_COUNT(tile_cnt),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=1,
-            tile_count_res=tile_cnt,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
-        disable_format_inference=True,
-        compile_time_formats=True,
+        dest_acc,
+        mathop,
+        reduce_pool,
+        input_dimensions,
+        tile_cnt,
+        src_A,
+        src_B,
+        num_blocks=num_blocks,
+        num_tiles_in_block=num_tiles_in_block,
     )
-    res_from_L1 = configuration.run().result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
@@ -1127,36 +1194,19 @@ def _run_integer_column_average(grid: torch.Tensor, data_format: DataFormat):
     ).flatten()
     src_B = torch.zeros_like(src_A)
 
-    configuration = TestConfig(
-        "sources/sfpu_reduce_test.cpp",
+    res_from_L1 = _run_functional_sfpu_reduce(
         formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
-        ],
-        runtimes=[
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            TILE_COUNT(tile_cnt),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=1,
-            tile_count_res=tile_cnt,
-            twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
-        disable_format_inference=True,
-        compile_time_formats=True,
+        dest_acc,
+        mathop,
+        reduce_pool,
+        input_dimensions,
+        tile_cnt,
+        src_A,
+        src_B,
+        num_blocks=num_blocks,
+        num_tiles_in_block=num_tiles_in_block,
+        twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
     )
-    res_from_L1 = configuration.run().result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
