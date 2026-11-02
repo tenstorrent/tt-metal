@@ -199,6 +199,10 @@ TT_ALWAYS_INLINE void device_setup()
     ckernel::t6_semaphore_init(ckernel::semaphore::PACK_DONE, 0, 1);
     ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_OPERAND_SYNC, 0, 1);
 #endif
+    // The REG_RMW mutex keeps its last grantee across kernels (chip reset only) and the unpack and pack inits race for
+    // it, so take and release it here: every launch then starts with the same thread ahead in its round robin.
+    TTI_ATGETM(ckernel::mutex::REG_RMW);
+    TTI_ATRELM(ckernel::mutex::REG_RMW);
 #endif
 }
 
