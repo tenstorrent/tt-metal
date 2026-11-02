@@ -68,6 +68,7 @@ def conv_hm(qkv, state, taps, q, k, v):
         _cb(2, K, ttnn.bfloat16, cores),  # taps
         _cb(3, 1, ttnn.float32, cores),  # conv + silu, fp32
         _cb(4, K, ttnn.bfloat16, cores),  # old rows 1..K-1 + new row, for the writer
+        _cb(5, 2, ttnn.bfloat16, cores),  # reader scratch: 64 B-aligned slots for the 2 x 32 B runs per head
     ]
     rd_rt, wr_rt = [], []
     for r_t in range(rt_n):

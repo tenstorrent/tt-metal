@@ -16,7 +16,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
-constexpr uint32_t cb_new = 0, cb_cst = 1, cb_tap = 2, cb_out = 3, cb_wst = 4;
+constexpr uint32_t cb_new = 0, cb_cst = 1, cb_tap = 2, cb_out = 3, cb_wst = 4, cb_scr = 5;
 
 void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(0);  // conv taps (4)
@@ -35,7 +35,18 @@ void kernel_main() {
     const auto qkv = TensorAccessor(qkv_a, qkv_addr, tb);
     Noc noc;
 
-    // The new row tile, assembled twice (compute and writer each consume their own copy).
+    // The new row: each head's two 32 B runs are read into 64 B-aligned scratch slots first. A NoC read keeps the
+    // source and destination at the same offset within a 64 B line, so reading straight to row i of the tile
+    // (offset i*32) loses every odd row from a DRAM source (A's 23:05 run: odd heads of state row 3 were zero).
+    CircularBuffer scr(cb_scr);
+    for (uint32_t i = 0; i < rows; i++) {
+        const uint32_t h = 32 * r_t + i;
+        noc.async_read(qkv, scr, 32, {.page_id = h * 4 + c_t, .offset_bytes = 0}, {.offset_bytes = (2 * i) * 64});
+        noc.async_read(qkv, scr, 32, {.page_id = h * 4 + c_t, .offset_bytes = 512}, {.offset_bytes = (2 * i + 1) * 64});
+    }
+    noc.async_read_barrier();
+    const CoreLocalMem<volatile uint32_t> sw(scr.get_write_ptr());
+    // ...then placed into the tile (assembled twice: compute and writer each consume their own copy).
     auto gather_new = [&](uint32_t cb_id, uint32_t page) {
         CircularBuffer cb(cb_id);
         const CoreLocalMem<volatile uint32_t> w(cb.get_write_ptr() + page * tb);
@@ -43,11 +54,12 @@ void kernel_main() {
             w[i] = 0;  // padding rows must be finite: they go through the SFPU and get written back to the state
         }
         for (uint32_t i = 0; i < rows; i++) {
-            const uint32_t h = 32 * r_t + i;
             const uint32_t f = (i < 16) ? 0u : 2u;  // faces 0|1 hold rows 0-15, faces 2|3 rows 16-31
-            const uint32_t dst = page * tb + (f * 256 + (i % 16) * 16) * 2;
-            noc.async_read(qkv, cb, 32, {.page_id = h * 4 + c_t, .offset_bytes = 0}, {.offset_bytes = dst});
-            noc.async_read(qkv, cb, 32, {.page_id = h * 4 + c_t, .offset_bytes = 512}, {.offset_bytes = dst + 512});
+            const uint32_t dw = (f * 256 + (i % 16) * 16) / 2;  // word offset of row i in face f (bf16 pairs)
+            for (uint32_t x = 0; x < 8; x++) {
+                w[dw + x] = sw[(2 * i) * 16 + x];             // face f   (cols 0-15)
+                w[dw + 128 + x] = sw[(2 * i + 1) * 16 + x];   // face f+1 (cols 16-31), 512 B = 128 words on
+            }
         }
     };
     auto read_tile = [&](uint32_t cb_id, uint32_t page, uint32_t addr, const auto& args) {
