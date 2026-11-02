@@ -1,0 +1,19 @@
+node=bh-glx-120-c04u08 job=167441 start=2026-11-01T20:13:07Z tree=vc2l_p4 steps=allvc allvc_1e allvc_os allvc_small allvc_r2 allvc_r3 perf capself
+=== tt-smi -glx_reset (before the steps) 20:14:03: 6.6.0
+reset: exit 0, Blackhole chips listed: 64
+=== allvc (20:15:07): glx_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3
+allvc: exit 0 in 40 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== allvc_1e (20:15:47): glx_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+allvc_1e: exit 0 in 40 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== allvc_os (20:16:27): glx_allvc.yaml, timeout 600 s 
+allvc_os: exit 0 in 40 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== allvc_small (20:17:07): glx_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_SLOTS_VC1=0,7,16,4,4,4,2,4
+allvc_small: exit 0 in 40 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== allvc_r2 (20:17:47): glx_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3
+allvc_r2: exit 0 in 51 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== allvc_r3 (20:18:38): glx_allvc.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3
+allvc_r3: exit 0 in 40 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== perf (20:19:18): glx_allvc_perf.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3
+perf: exit 0 in 40 s; per rank:       2 Tests: 14 executed, 0 failed;
+=== hang capture capself_after_perf (20:19:58)
+hang capture: exit 0 (64M); output: /data/aagarwal/frs-glx/jobs/167441/results/capself_after_perf

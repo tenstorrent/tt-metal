@@ -1,0 +1,20 @@
+node=bh-glx-120-c04u08 job=167481 start=2026-11-01T21:39:05Z tree=vc2l_p4d steps=idle_off idle_nbr idle_line idle_off_1e idle_nbr_1e idle_line_1e idle_off_r2 idle_line_r2
+=== tt-smi -glx_reset (before the steps) 21:40:09: 6.6.0
+reset: exit 0, Blackhole chips listed: 64
+=== idle_off (21:41:13): glx_idle_mesh.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_LOG_SLOTS=1 TT_FABRIC_EXP_SLOTS=16,7,16
+idle_off: exit 0 in 50 s; Tests: 15 executed, 0 failed
+=== idle_nbr (21:42:03): glx_idle_mesh.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_LOG_SLOTS=1 TT_METAL_ENABLE_FABRIC_VC2=1 TT_FABRIC_EXP_SLOTS_VC2=16,7,16,4,4
+idle_nbr: exit 0 in 50 s; Tests: 15 executed, 0 failed
+=== idle_line (21:42:53): glx_idle_mesh.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_LOG_SLOTS=1 TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1 TT_FABRIC_EXP_SLOTS_VC2=16,7,16,4,4,4
+idle_line: exit 0 in 50 s; Tests: 15 executed, 0 failed
+=== idle_off_1e (21:43:43): glx_idle_mesh.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_LOG_SLOTS=1 TT_FABRIC_EXP_SLOTS=16,7,16 TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+idle_off_1e: exit 0 in 50 s; Tests: 15 executed, 0 failed
+=== idle_nbr_1e (21:44:33): glx_idle_mesh.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_LOG_SLOTS=1 TT_METAL_ENABLE_FABRIC_VC2=1 TT_FABRIC_EXP_SLOTS_VC2=16,7,16,4,4 TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+idle_nbr_1e: exit 0 in 50 s; Tests: 15 executed, 0 failed
+=== idle_line_1e (21:45:23): glx_idle_mesh.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_LOG_SLOTS=1 TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1 TT_FABRIC_EXP_SLOTS_VC2=16,7,16,4,4,4 TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+idle_line_1e: exit 0 in 50 s; Tests: 15 executed, 0 failed
+=== idle_off_r2 (21:46:13): glx_idle_mesh.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_LOG_SLOTS=1 TT_FABRIC_EXP_SLOTS=16,7,16
+idle_off_r2: exit 0 in 51 s; Tests: 15 executed, 0 failed
+=== idle_line_r2 (21:47:04): glx_idle_mesh.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_LOG_SLOTS=1 TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1 TT_FABRIC_EXP_SLOTS_VC2=16,7,16,4,4,4
+idle_line_r2: exit 0 in 50 s; Tests: 15 executed, 0 failed
+done 21:47:54

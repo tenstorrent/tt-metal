@@ -1,0 +1,106 @@
+# Full VCs and total throughput on the Galaxy 2x2 split (VC2_LINE_BRINGUP.md, "Perf: idle and full VCs"): VC2 line
+# mode, benchmark without sync (per-flow cycles from the profiler's per-sender log lines), one sender per chip, first
+# hop and VC (no test-infra mux). Devices [mesh, chip]; mesh 0 leaves at chip 3 east into mesh 1's chip 2 (facing S).
+#   L*   one link inside mesh 1, chip 2 -> chip 3 (east), from the intermesh router's chip: VC0 and VC2 from chip 2's
+#        workers, VC1 from mesh 0's chip 3 (VC0 over the intermesh link, crossover at the landing router, VC1 on the
+#        link). Each alone, VC0+VC2, all three.
+#   I*   the intermesh link itself, mesh 0 chip 3 -> mesh 1 chip 2: VC0 and VC2 from chip 3's workers, both delivered at
+#        the landing chip after the crossover. Each alone, together.
+#   RAll one chip's three links loaded at once: mesh 1 chip 2 sends VC0 and VC2 east (chip 3), north (chip 0) and south
+#        (out of the mesh, to mesh 0 chip 3), and VC1 arrives for chip 3 as in L*.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+
+Tests:
+  - name: "LVC0"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}
+
+  - name: "LVC2"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [1, 3]}}]}
+
+  - name: "LVC1"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, 3], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}
+
+  - name: "LVC0VC2"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [1, 3]}}]}
+
+  - name: "LAll"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [1, 3]}}]}
+      - {device: [0, 3], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}
+
+  - name: "IVC0"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, 3], vc_id: 0, patterns: [{destination: {device: [1, 2]}}]}
+
+  - name: "IVC2"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, 3], vc_id: 2, patterns: [{destination: {device: [1, 2]}}]}
+
+  - name: "IVC0VC2"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, 3], vc_id: 0, patterns: [{destination: {device: [1, 2]}}]}
+      - {device: [0, 3], vc_id: 2, patterns: [{destination: {device: [1, 2]}}]}
+
+  - name: "RAll"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [1, 3]}}]}
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [1, 0]}}]}
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [1, 0]}}]}
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [0, 3]}}]}
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [0, 3]}}]}
+      - {device: [0, 3], vc_id: 0, patterns: [{destination: {device: [1, 3]}}]}

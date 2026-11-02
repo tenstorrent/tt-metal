@@ -52,6 +52,10 @@ struct IntermeshVCConfig {
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
     bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
+    // VC2's mode (a host config flag, TT_METAL_FABRIC_VC2_LINE): neighbour exchange (false) or line mode (true), where
+    // VC2 routes like 1D along one mesh axis: each cardinal router gets a second VC2 sender channel (forwarding, fed by
+    // the router facing the opposite way on its chip) and VC2's receiver forwards straight on.
+    bool vc2_line = false;
 
     IntermeshVCConfig() = default;
 

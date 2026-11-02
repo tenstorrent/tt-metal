@@ -195,6 +195,30 @@ TEST_F(RouterWiringRulesTest, VC2FlatLayoutByRouterFamily) {
     }
 }
 
+// VC2 line mode (VC2_LINE_BRINGUP.md): a cardinal router gets VC2's forwarding channel after its worker, fed by the
+// router facing the opposite way, and turns VC2 only straight on.
+TEST_F(RouterWiringRulesTest, VC2LineModeShapeAndTurns) {
+    auto config = IntermeshVCConfig::disabled();
+    config.requires_vc2 = true;
+    config.vc2_line = true;
+    for (const auto facing : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+        const auto archetype = router_archetype(Topology::Mesh, facing, chip_with_z(std::nullopt), false, &config);
+        EXPECT_EQ(archetype.shape.num_vcs, 3);
+        EXPECT_EQ(archetype.shape.sender_counts[2], 2u);
+        EXPECT_EQ(archetype.shape.flat_sender_id(2, 0), 4u);
+        EXPECT_EQ(archetype.shape.flat_sender_id(2, 1), 5u);
+        EXPECT_EQ(archetype.shape.receiver_counts[2], 1u);
+        ASSERT_EQ(archetype.turns[2].size(), 1u);
+        EXPECT_EQ(archetype.turns[2][0].target_vc, 2u);
+        EXPECT_EQ(archetype.turns[2][0].target_direction, get_opposite_direction(facing));
+    }
+    // Neighbour mode: the worker only, no VC2 turns.
+    config.vc2_line = false;
+    const auto neighbour = router_archetype(Topology::Mesh, RoutingDirection::E, chip_with_z(std::nullopt), false, &config);
+    EXPECT_EQ(neighbour.shape.sender_counts[2], 1u);
+    EXPECT_TRUE(neighbour.turns[2].empty());
+}
+
 // ============ IntermeshVCConfig factories ============
 
 TEST_F(RouterWiringRulesTest, IntermeshVCConfig_FactoryFlags) {

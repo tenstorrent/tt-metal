@@ -1,0 +1,61 @@
+## Steps
+  perf           no summary
+
+## Slot rows (distinct rows per step; count = router configs that logged it, both ranks: the router config
+   once per rank, and the five per-direction MUX-mode configs, fabric_builder_context.cpp, unused here)
+  perf:
+     VC0 sender slots {16, 7, 7, 7} receiver slots {16}  x2
+     VC0 sender slots {4, 0, 0, 0} receiver slots {8}  x10
+     VC1 sender slots {0, 0, 0} receiver slots {4}  x10
+     VC1 sender slots {4, 4, 4} receiver slots {4}  x2
+     VC2 sender slots {4, 4} receiver slots {4}  x2
+
+## perf: per-sender lines (42; clock 1350 MHz)
+  test              size  sender     dir  flows                          packets     cycles  cyc/pkt    GB/s
+  PerfInterVC0      1024  VC0 m0c2     E  ->m1c1                           20000   10495992    524.8    2.63
+  PerfInterVC0      4096  VC0 m0c2     E  ->m1c1                           20000   11564869    578.2    9.56
+  PerfInterVC2      1024  VC2 m0c3     E  ->m1c1                           20000   11097278    554.9    2.49
+  PerfInterVC2      4096  VC2 m0c3     E  ->m1c1                           20000   12050110    602.5    9.18
+  PerfInterVC0VC2   1024  VC2 m0c3     E  ->m1c1                           20000   19958284    997.9    1.39
+  PerfInterVC0VC2   1024  VC0 m0c2     E  ->m1c1                           20000   19958617    997.9    1.39
+  PerfInterVC0VC2   4096  VC2 m0c3     E  ->m1c1                           20000   22067028   1103.4    5.01
+  PerfInterVC0VC2   4096  VC0 m0c2     E  ->m1c1                           20000   22067157   1103.4    5.01
+  PerfIntraVC0      1024  VC0 m0c2     N  ->m0c1                           20000    7084388    354.2    3.90
+  PerfIntraVC0      4096  VC0 m0c2     N  ->m0c1                           20000    8049254    402.5   13.74
+  PerfIntraVC2      1024  VC2 m0c0     E  ->m0c1                           20000    9297898    464.9    2.97
+  PerfIntraVC2      4096  VC2 m0c0     E  ->m0c1                           20000   10137654    506.9   10.91
+  PerfIntraVC0VC2   1024  VC0 m0c2     N  ->m0c1                           20000   10354502    517.7    2.67
+  PerfIntraVC0VC2   1024  VC2 m0c0     E  ->m0c1                           20000   10352602    517.6    2.67
+  PerfIntraVC0VC2   4096  VC0 m0c2     N  ->m0c1                           20000   11728355    586.4    9.43
+  PerfIntraVC0VC2   4096  VC2 m0c0     E  ->m0c1                           20000   11726333    586.3    9.43
+  PerfAll           1024  VC2 m1c3     N  ->m1c1                           16000   11106090    694.1    1.99
+  PerfAll           1024  VC2 m1c2     S  ->m0c1                           16000   11105442    694.1    1.99
+  PerfAll           1024  VC0 m1c2     E  ->m1c3                           16000   11105440    694.1    1.99
+  PerfAll           1024  VC0 m1c1     W  ->m0c3                           16000   11104917    694.1    1.99
+  PerfAll           1024  VC2 m1c0     N  ->m0c0                           16000   11103650    694.0    1.99
+  PerfAll           1024  VC0 m1c0     E  ->m1c1                           16000   11103661    694.0    1.99
+  PerfAll           1024  VC2 m0c3     E  ->m1c2                           20000   14483607    724.2    1.91
+  PerfAll           1024  VC0 m0c3     N  ->m0c1                           20000   14483635    724.2    1.91
+  PerfAll           1024  VC0 m0c2     E  ->m1c1                           20000   14484165    724.2    1.91
+  PerfAll           1024  VC2 m0c1     N  ->m1c1                           20000   14482498    724.1    1.91
+  PerfAll           1024  VC0 m0c1     S  ->m0c3                           20000   14482494    724.1    1.91
+  PerfAll           1024  VC2 m0c0     E  ->m0c1                           20000   14482135    724.1    1.91
+  PerfAll           1024  VC0 m0c0     S  ->m0c2                           20000   14482165    724.1    1.91
+  PerfAll           4096  VC2 m1c3     N  ->m1c1                           16000   12941265    808.8    6.84
+  PerfAll           4096  VC2 m1c2     S  ->m0c1                           16000   12941184    808.8    6.84
+  PerfAll           4096  VC0 m1c2     E  ->m1c3                           16000   12941195    808.8    6.84
+  PerfAll           4096  VC0 m1c1     W  ->m0c3                           16000   12939311    808.7    6.84
+  PerfAll           4096  VC2 m1c0     N  ->m0c0                           16000   12943317    809.0    6.84
+  PerfAll           4096  VC0 m1c0     E  ->m1c1                           16000   12943324    809.0    6.84
+  PerfAll           4096  VC2 m0c3     E  ->m1c2                           20000   19333540    966.7    5.72
+  PerfAll           4096  VC0 m0c3     N  ->m0c1                           20000   19333562    966.7    5.72
+  PerfAll           4096  VC0 m0c2     E  ->m1c1                           20000   19334568    966.7    5.72
+  PerfAll           4096  VC2 m0c1     N  ->m1c1                           20000   19332179    966.6    5.72
+  PerfAll           4096  VC0 m0c1     S  ->m0c3                           20000   19332204    966.6    5.72
+  PerfAll           4096  VC2 m0c0     E  ->m0c1                           20000   19331978    966.6    5.72
+  PerfAll           4096  VC0 m0c0     S  ->m0c2                           20000   19331992    966.6    5.72
+  shared paths (all members' packets over the slowest member's cycles):
+    PerfInterVC0VC2   1024  m0 chip 3 east exit + m1 landing VC1     40000 pkts / 19958617 cyc: 499.0 cyc/pkt, 2.77 GB/s; members finish within 0.00%
+    PerfInterVC0VC2   4096  m0 chip 3 east exit + m1 landing VC1     40000 pkts / 22067157 cyc: 551.7 cyc/pkt, 10.02 GB/s; members finish within 0.00%
+    PerfIntraVC0VC2   1024  m0 chip 0 -> chip 1 link                 40000 pkts / 10354502 cyc: 258.9 cyc/pkt, 5.34 GB/s; members finish within 0.02%
+    PerfIntraVC0VC2   4096  m0 chip 0 -> chip 1 link                 40000 pkts / 11728355 cyc: 293.2 cyc/pkt, 18.86 GB/s; members finish within 0.02%

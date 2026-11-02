@@ -12,7 +12,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_phase_profiler.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "api/alignment.h"
@@ -67,6 +66,8 @@ constexpr uint32_t vc_1_free_slots_from_downstream_edge_3_stream_id =
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_4_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID");
 constexpr uint32_t vc2_receiver_free_slots_stream_id = NAMED_CT_ARG("VC2_RECEIVER_FREE_SLOTS_STREAM_ID");
+// VC2 line mode: this router's copy of the free slots of its one VC2 downstream (the router facing the opposite way).
+constexpr uint32_t vc_2_free_slots_from_downstream_stream_id = NAMED_CT_ARG("VC2_FREE_SLOTS_FROM_DOWNSTREAM_STREAM_ID");
 constexpr uint32_t sender_channel_0_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_1_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_2_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_2_FREE_SLOTS_STREAM_ID");
@@ -152,6 +153,7 @@ constexpr size_t NUM_RECEIVER_CHANNELS = NAMED_CT_ARG("NUM_RECEIVER_CHANNELS");
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = NAMED_CT_ARG("NUM_DOWNSTREAM_CHANNELS");
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC0");
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC1 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC1");
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC2 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC2");
 constexpr bool wait_for_host_signal = NAMED_CT_ARG("WAIT_FOR_HOST_SIGNAL");
 
 static_assert(
@@ -200,9 +202,16 @@ constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC0");
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC1");
+// VC2 in line mode on a ring axis (a torus): first-level acks, as VC0's there (VC2's bubble flow control needs them).
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC2 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC2");
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = NAMED_CT_ARG("ENABLE_RISC_CPU_DATA_CACHE");
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC0_DOWNSTREAM_EDM_SIZE");
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC1_DOWNSTREAM_EDM_SIZE");
+constexpr size_t VC2_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC2_DOWNSTREAM_EDM_SIZE");
+// VC2's mode (a host config flag): neighbour exchange (0: its receiver channel delivers every packet to this chip) or
+// line mode (1: VC2 routes like 1D along one mesh axis; its receiver channel forwards straight on, to the router facing
+// the opposite way, and/or delivers, and a second VC2 sender channel takes the packets that router forwards here).
+constexpr bool vc2_line_mode = NAMED_CT_ARG("VC2_LINE_MODE") != 0;
 // Remote channel info (always available; 0 when inactive)
 constexpr size_t remote_worker_sender_channel = NAMED_CT_ARG("REMOTE_WORKER_SENDER_CHANNEL");
 
@@ -250,6 +259,7 @@ constexpr std::array<size_t, MAX_NUM_RECEIVER_CHANNELS> DOWNSTREAM_SENDER_NUM_BU
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[1];
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC2 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[2];
 
 constexpr size_t ANOTHER_SPECIAL_TAG_2 = 0xabaddad9;
 constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + MAX_NUM_RECEIVER_CHANNELS;
@@ -271,6 +281,27 @@ constexpr size_t local_sender_channel_6_connection_info_addr = NAMED_CT_ARG("LOC
 constexpr size_t local_sender_channel_7_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_7_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_8_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_8_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_9_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_9_CONN_INFO_ADDR");
+// Each sender channel's connection semaphore (the address its runtime arg also carries).
+constexpr size_t local_sender_channel_0_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_0_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_1_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_1_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_2_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_2_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_3_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_3_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_4_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_4_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_5_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_5_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_6_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_6_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_7_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_7_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_8_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_8_CONNECTION_SEMAPHORE_ADDR");
+constexpr size_t local_sender_channel_9_connection_semaphore_addr =
+    NAMED_CT_ARG("SENDER_CH_9_CONNECTION_SEMAPHORE_ADDR");
 
 // ============================================================================
 // Status pointers
@@ -329,6 +360,8 @@ constexpr bool any_receiver_channel_serviced = []() {
 // routers — receiver 1 is legitimately trimmed on crossover routers even when VC1 traffic flows.
 constexpr bool open_downstream_vc0_connections = static_cast<bool>(NAMED_CT_ARG("OPEN_DOWNSTREAM_VC0_CONNECTIONS"));
 constexpr bool open_downstream_vc1_connections = static_cast<bool>(NAMED_CT_ARG("OPEN_DOWNSTREAM_VC1_CONNECTIONS"));
+// VC2 line mode: VC2's downstream connection opens when its receiver channel is serviced.
+constexpr bool open_downstream_vc2_connections = static_cast<bool>(NAMED_CT_ARG("OPEN_DOWNSTREAM_VC2_CONNECTIONS"));
 
 // Structural per-RISC role flags (2-erisc split), deliberately independent of trimming.
 constexpr bool risc_services_sender_channels = static_cast<bool>(NAMED_CT_ARG("RISC_SERVICES_SENDER_CHANNELS"));
@@ -635,110 +668,6 @@ constexpr uint32_t code_profiling_enabled_timers_bitfield = NAMED_CT_ARG("CODE_P
 constexpr size_t code_profiling_buffer_base_addr = NAMED_CT_ARG("CODE_PROFILING_BUFFER_ADDR");
 
 // ============================================================================
-// Experimental phase profiling and throughput experiments (see fabric_phase_profile_types.hpp)
-// ============================================================================
-constexpr uint32_t phase_profile_mode = NAMED_CT_ARG("PHASE_PROFILE_MODE");
-constexpr size_t phase_profile_buffer_addr = NAMED_CT_ARG("PHASE_PROFILE_BUFFER_ADDR");
-constexpr uint32_t phase_profile_mask = NAMED_CT_ARG("PHASE_PROFILE_MASK");
-constexpr bool phase_profile_iter_timing = NAMED_CT_ARG("PHASE_PROFILE_ITER_TIMING") != 0;
-// Profile level of this router's offload DRISC (TT_FABRIC_DRISC_PHASE_PROFILE, else TT_FABRIC_PHASE_PROFILE).
-constexpr uint32_t drisc_phase_profile_mode = NAMED_CT_ARG("PHASE_PROFILE_DRISC_MODE");
-// Ethernet TX queues whose registers the profiler samples (TT_FABRIC_TXQ_COUNTERS): the ones this ERISC issues on.
-constexpr uint32_t phase_profile_txq_mask = NAMED_CT_ARG("PHASE_PROFILE_TXQ_COUNTERS") == 0
-                                                ? 0u
-                                                : ((any_sender_channel_serviced ? 1u << sender_txq_id : 0u) |
-                                                   (any_receiver_channel_serviced ? 1u << receiver_txq_id : 0u));
-constexpr uint32_t fabric_exp_flags = NAMED_CT_ARG("EXP_FLAGS");
-constexpr uint32_t fabric_exp_tx_delay = NAMED_CT_ARG("EXP_TX_DELAY");
-constexpr uint32_t fabric_exp_rx_delay = NAMED_CT_ARG("EXP_RX_DELAY");
-constexpr uint32_t fabric_exp_drisc_delay = NAMED_CT_ARG("EXP_DRISC_DELAY");
-// Keepalive (TT-link sequence update) period in cycles for this tile's TX queues; 0 keeps the firmware value (8000).
-constexpr uint32_t fabric_exp_seq_update_timeout = NAMED_CT_ARG("EXP_SEQ_UPDATE_TIMEOUT");
-// Stack depth measurement (TT_FABRIC_EXP_STACK_PAINT), reported in this ERISC's phase-profile block.
-constexpr bool fabric_exp_stack_paint = NAMED_CT_ARG("EXP_STACK_PAINT") != 0;
-static_assert(
-    !fabric_exp_stack_paint || (phase_profile_buffer_addr != 0 && phase_profile_mode == 0),
-    "TT_FABRIC_EXP_STACK_PAINT needs the profile buffer and no phase profiling (which rewrites the block)");
-constexpr bool fabric_exp_rx_skip_local_delivery = (fabric_exp_flags & EXP_RX_SKIP_LOCAL_DELIVERY) != 0;
-constexpr bool fabric_exp_rx_local_as_single_write = (fabric_exp_flags & EXP_RX_LOCAL_AS_SINGLE_WRITE) != 0;
-constexpr bool fabric_exp_tx_amortize_worker_credits = (fabric_exp_flags & EXP_TX_AMORTIZE_WORKER_CREDITS) != 0;
-constexpr bool fabric_exp_tx_lazy_conn_check = (fabric_exp_flags & EXP_TX_LAZY_CONN_CHECK) != 0;
-constexpr bool fabric_exp_rx_local_as_push = (fabric_exp_flags & EXP_RX_LOCAL_AS_PUSH) != 0;
-constexpr bool fabric_exp_rx_push_lean = (fabric_exp_flags & EXP_RX_PUSH_LEAN) != 0;
-static_assert(!fabric_exp_rx_push_lean || fabric_exp_rx_local_as_push, "EXP_RX_PUSH_LEAN needs EXP_RX_LOCAL_AS_PUSH");
-constexpr bool fabric_exp_drisc_offload = (fabric_exp_flags & EXP_DRISC_OFFLOAD) != 0;
-constexpr bool fabric_exp_rx_blind_push_drisc = false;
-constexpr bool fabric_exp_rx_batch_completion = (fabric_exp_flags & EXP_RX_BATCH_COMPLETION) != 0;
-constexpr bool fabric_exp_rx_push_drisc = (fabric_exp_flags & EXP_RX_PUSH_DRISC) != 0;
-static_assert(
-    !(fabric_exp_flags & EXP_RX_PUSH_DRISC) || fabric_exp_rx_local_as_push,
-    "EXP_RX_PUSH_DRISC needs EXP_RX_LOCAL_AS_PUSH");
-// EXP_RX_PUSH_DRISC / EXP_DRISC_OFFLOAD: this router's DRISC (translated NoC coordinates) and its free L1 (unreserved
-// region); the builder sets size 0 when it found none for this router.
-constexpr uint32_t exp_push_drisc_x = NAMED_CT_ARG("EXP_PUSH_DRISC_X");
-constexpr uint32_t exp_push_drisc_y = NAMED_CT_ARG("EXP_PUSH_DRISC_Y");
-constexpr uint32_t exp_push_drisc_l1_base = NAMED_CT_ARG("EXP_PUSH_DRISC_L1_BASE");
-constexpr uint32_t exp_push_drisc_l1_size = NAMED_CT_ARG("EXP_PUSH_DRISC_L1_SIZE");
-constexpr uint32_t peer_erisc_noc_x = NAMED_CT_ARG("PEER_ERISC_NOC_X");
-constexpr uint32_t peer_erisc_noc_y = NAMED_CT_ARG("PEER_ERISC_NOC_Y");
-
-// DRISC offload L1 memory layout (inside DRISC UNRESERVED L1, all 16-byte aligned):
-//   [+0x0000 .. +0x0A8F] routing_l1_info_t (2,704 B)
-//   [+0x0A90 .. +0x0A9F] drisc_e1_ready word (16 B)
-//   [+0x0AA0 .. +0x0AAF] drisc_termination_signal word (16 B)
-//   [+0x0AB0 .. +0x0AEF] 4 x 16B downstream EDM teardown semaphores (64 B)
-//   [+0x0B00 ..        ] 16-slot packet staging ring (16 * channel_buffer_size B)
-//   [ring end ..       ] phase profile staging block (sizeof(FabricPhaseProfile) B, TT_FABRIC_PHASE_PROFILE only)
-constexpr uint32_t drisc_routing_table_l1_addr = exp_push_drisc_l1_base;
-constexpr uint32_t drisc_e1_ready_l1_addr = exp_push_drisc_l1_base + 0x0A90;
-constexpr uint32_t drisc_termination_signal_l1_addr = exp_push_drisc_l1_base + 0x0AA0;
-constexpr uint32_t drisc_teardown_sem_base_addr = exp_push_drisc_l1_base + 0x0AB0;
-constexpr uint32_t drisc_ring_base_addr = exp_push_drisc_l1_base + 0x0B00;
-constexpr uint32_t drisc_ring_slots = 16;
-constexpr uint32_t drisc_ring_end_addr = drisc_ring_base_addr + drisc_ring_slots * channel_buffer_size;
-constexpr uint32_t drisc_phase_profile_staging_addr = drisc_ring_end_addr;
-// drisc_free_slots_stream_id is on the ERISC (32 stream registers); drisc_doorbell_stream_id is on the DRISC, whose
-// tile has only 16 (DRAM_NOC_NUM_STREAMS). 13 is the doorbell the DRISC microbenchmark and EXP_RX_PUSH_DRISC used.
-constexpr uint32_t drisc_free_slots_stream_id = 26;
-constexpr uint32_t drisc_doorbell_stream_id = 13;
-constexpr bool fabric_exp_tx_drop_dead_txq_read = (fabric_exp_flags & EXP_TX_DROP_DEAD_TXQ_READ) != 0;
-constexpr bool fabric_exp_tx_no_send_txq_check = (fabric_exp_flags & EXP_TX_NO_SEND_TXQ_CHECK) != 0;
-constexpr bool fabric_exp_tx_lean_completions = (fabric_exp_flags & EXP_TX_LEAN_COMPLETIONS) != 0;
-constexpr bool fabric_exp_tx_grouped_packet_check = (fabric_exp_flags & EXP_TX_GROUPED_PACKET_CHECK) != 0;
-constexpr bool fabric_exp_tx_send_no_write_counter = (fabric_exp_flags & EXP_TX_SEND_NO_WRITE_COUNTER) != 0;
-constexpr bool fabric_exp_tx_send_early_txq_read = (fabric_exp_flags & EXP_TX_SEND_EARLY_TXQ_READ) != 0;
-constexpr bool fabric_exp_tx_send_stride_slot = (fabric_exp_flags & EXP_TX_SEND_STRIDE_SLOT) != 0;
-constexpr bool fabric_exp_tx_send_ct_free_slot_stream = (fabric_exp_flags & EXP_TX_SEND_CT_FREE_SLOT_STREAM) != 0;
-constexpr bool fabric_exp_tx_send_early_size_read = (fabric_exp_flags & EXP_TX_SEND_EARLY_SIZE_READ) != 0;
-constexpr bool fabric_exp_tx_send_overlap_completion = (fabric_exp_flags & EXP_TX_SEND_OVERLAP_COMPLETION) != 0;
-constexpr bool fabric_exp_tx_lean_vc0_loop = (fabric_exp_flags & EXP_TX_LEAN_VC0_LOOP) != 0;
-constexpr bool fabric_exp_tx_idle_likely = (fabric_exp_flags & EXP_TX_IDLE_LIKELY) != 0;
-// EXP_RX_GROUPED_READS reads the receiver's TX-queue busy status inside a group of reads just before the completion
-// ack, in place of eth_txq_is_busy. It assumes this ERISC is the queue's only user (two ERISCs, separate sender and
-// receiver queues), that the step sends no first-level ack (checked where it is used), and that the ack does not
-// spin on the queue itself (ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK off).
-#if !defined(ARCH_WORMHOLE)
-constexpr bool fabric_exp_rx_grouped_reads = (fabric_exp_flags & EXP_RX_GROUPED_READS) != 0 && multi_txq_enabled &&
-                                             NUM_ACTIVE_ERISCS > 1 && !ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK;
-#else
-constexpr bool fabric_exp_rx_grouped_reads = false;
-#endif
-constexpr bool fabric_exp_rx_grouped_prefetch =
-    fabric_exp_rx_grouped_reads && (fabric_exp_flags & EXP_RX_GROUPED_NO_PREFETCH) == 0;
-static_assert(
-    !fabric_exp_tx_send_early_txq_read || !ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA,
-    "EXP_TX_SEND_EARLY_TXQ_READ assumes the busy check is in the can-send decision");
-constexpr size_t phase_profile_microbench_results_addr = phase_profile_buffer_addr + PHASE_PROFILE_BUFFER_SIZE;
-constexpr size_t phase_profile_microbench_scratch_addr =
-    phase_profile_microbench_results_addr + PHASE_PROFILE_MICROBENCH_RESULTS_SIZE;
-constexpr size_t exp_push_loopback_scratch_addr = phase_profile_mode >= 3
-                                                      ? phase_profile_microbench_scratch_addr
-                                                      : ((phase_profile_mode != 0 || phase_profile_txq_mask != 0 ||
-                                                          fabric_exp_stack_paint || drisc_phase_profile_mode != 0)
-                                                             ? phase_profile_buffer_addr + PHASE_PROFILE_BUFFER_SIZE
-                                                             : phase_profile_buffer_addr);
-
-// ============================================================================
 // Multi-TXQ credit counters (always available; 0 when inactive)
 // ============================================================================
 constexpr size_t to_sender_remote_ack_counters_base_address = NAMED_CT_ARG("TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR");
@@ -810,19 +739,35 @@ constexpr size_t NUM_FORWARDED_SENDER_CHANNELS = NUM_SENDER_CHANNELS - 1;
 constexpr size_t sender_channel_base_id = 0;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
+// Receiver completion batching (router v3): one completion credit frame per batch of written slots, one transaction ID
+// per slot (16) on a lone receiver channel without deadlock avoidance, a single global check for strict flushes, and
+// deferred flushed atomics. Each use adds the structural conditions it needs.
+#if defined(FABRIC_ERISC_ROUTER_V3) || defined(FABRIC_ERISC_ROUTER_V4)
+constexpr bool rx_batch_completion = true;
+#else
+constexpr bool rx_batch_completion = false;
+#endif
+
 // TRANSACTION IDS
 // TODO: Pass this value from host
+// A receiver channel's IDs are a range of its own (RX_CH_TRID_STARTS: channel c from c * NUM_TRANSACTION_IDS), and the
+// NoC has 16 (4 bits): three receiver channels (VC0, VC1 and VC2) get 4 each, also under deadlock avoidance (8 each
+// would put channel 2's at 16-23, past the ID field). Fewer IDs than slot groups only makes a completion's proof
+// conservative (router_completions.hpp).
 #if !defined(FABRIC_2D_VC1_ACTIVE) && !defined(FABRIC_2D_VC2_SERVICED)
 constexpr uint8_t NUM_TRANSACTION_IDS =
-    (fabric_exp_rx_batch_completion && !enable_deadlock_avoidance && NUM_RECEIVER_CHANNELS == 1)
+    (rx_batch_completion && !enable_deadlock_avoidance && NUM_RECEIVER_CHANNELS == 1)
         ? 16
         : (enable_deadlock_avoidance ? 8 : 4);
 #else
-constexpr uint8_t NUM_TRANSACTION_IDS = enable_deadlock_avoidance ? 8 : 4;
+constexpr uint8_t NUM_TRANSACTION_IDS = enable_deadlock_avoidance && NUM_RECEIVER_CHANNELS <= 2 ? 8 : 4;
 #endif
 
 constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
     initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();
+static_assert(
+    RX_CH_TRID_STARTS[NUM_RECEIVER_CHANNELS - 1] + NUM_TRANSACTION_IDS - 1 <= NOC_MAX_TRANSACTION_ID,
+    "every receiver channel's transaction IDs must fit the NoC's ID field");
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
@@ -943,11 +888,13 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
 // channel trimming is a feature that allows the router to trim channels that are not used.
 // this is useful for reducing the amount of compute needed by the router.
 
-// RX channel forwarding disable flags (from imported trimming profile)
+// RX forwarding disable flags (from imported trimming profile). The host computes DISABLE_RX_CH<n>_FORWARDING per VC
+// (n is the VC; VC2's is always set), so the array is indexed by VC, not by receiver channel: VC2's receiver channel
+// is channel 1 on routers without VC1 (vc_of_receiver_channel).
 constexpr bool disable_rx_ch0_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH0_FORWARDING") != 0;
 constexpr bool disable_rx_ch1_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH1_FORWARDING") != 0;
 constexpr bool disable_rx_ch2_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH2_FORWARDING") != 0;
-constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_forwarding_disabled = {
+constexpr std::array<bool, MAX_NUM_VCS> is_vc_forwarding_disabled = {
     disable_rx_ch0_forwarding, disable_rx_ch1_forwarding, disable_rx_ch2_forwarding};
 
 constexpr bool ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE =
@@ -964,6 +911,10 @@ constexpr uint32_t PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS =
     ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE && is_2d_fabric
         ? get_named_compile_time_arg_val("PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS")
         : 0;
+constexpr uint32_t PACKED_DOWNSTREAM_VC2_SENDER_CHANNEL_IDS =
+    ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE && is_2d_fabric && vc2_line_mode
+        ? get_named_compile_time_arg_val("PACKED_DOWNSTREAM_VC2_SENDER_CHANNEL_IDS")
+        : 0;
 
 using ChannelTrimmingUsagePtr = tt::tt_fabric::FabricDatapathUsageL1Ptr<
     ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE,
@@ -978,33 +929,6 @@ constexpr uint32_t SENDER_CREDIT_AMORTIZATION_FREQUENCY =
 constexpr uint32_t RECEIVER_CREDIT_AMORTIZATION_FREQUENCY =
     get_named_compile_time_arg_val("RECEIVER_CREDIT_AMORTIZATION_FREQUENCY");
 constexpr bool super_speedy_mode = enable_speedy_vc0;
-
-// Experiment (EXP_TX_UPSTREAM_ON_E1): in two-ERISC mode on the generic path, E1 handles the upstream side of the sender
-// channels E0 services: completions turned into credits for the upstream worker or router, and worker connection
-// open/teardown. E0 still reads the completion counters for its own receiver-slot accounting; each core keeps its own
-// processed count, so this needs counter credits and no first-level ack.
-static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> peer_sender_channel_serviced = {
-    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_0_SERVICED")),
-    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_1_SERVICED")),
-    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_2_SERVICED")),
-    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_3_SERVICED")),
-    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_4_SERVICED")),
-    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_5_SERVICED")),
-    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_6_SERVICED")),
-    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_7_SERVICED")),
-    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_8_SERVICED")),
-    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_9_SERVICED")),
-};
-constexpr bool fabric_exp_tx_upstream_on_e1 =
-    (fabric_exp_flags & EXP_TX_UPSTREAM_ON_E1) != 0 && NUM_ACTIVE_ERISCS > 1 && !super_speedy_mode;
-constexpr bool exp_tx_upstream_on_this_erisc = fabric_exp_tx_upstream_on_e1 && MY_ERISC_ID == 1;
-constexpr bool exp_tx_upstream_moved_off_this_erisc = fabric_exp_tx_upstream_on_e1 && MY_ERISC_ID == 0;
-static_assert(
-    !fabric_exp_tx_upstream_on_e1 ||
-        (vc0_uses_counter_credits && (ACTUAL_VC1_SENDER_CHANNELS == 0 || vc1_uses_counter_credits) &&
-         (ACTUAL_VC2_SENDER_CHANNELS == 0 || vc2_uses_counter_credits) && !ENABLE_FIRST_LEVEL_ACK_VC0 &&
-         !ENABLE_FIRST_LEVEL_ACK_VC1 && !fabric_exp_tx_amortize_worker_credits),
-    "EXP_TX_UPSTREAM_ON_E1 needs counter credits, no first-level ack and no amortized worker credits");
 static_assert(
     !super_speedy_mode || SENDER_CREDIT_AMORTIZATION_FREQUENCY > 0,
     "super_speedy_mode requires sender credit amortization to be enabled");

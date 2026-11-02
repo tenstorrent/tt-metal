@@ -1,0 +1,26 @@
+node=bh-glx-120-c04u08 job=167482 start=2026-11-01T21:48:06Z tree=vc2l_p4d steps=split_idle_off split_idle_nbr split_idle_line split_idle_off_1e split_idle_nbr_1e split_idle_line_1e full full_vc1x2 full_vc2x2 split_idle_off_r2 full_r2
+=== tt-smi -glx_reset (before the steps) 21:49:36: 6.6.0
+reset: exit 0, Blackhole chips listed: 64
+=== split_idle_off (21:50:40): glx_idle_split.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_SLOTS_VC1=16,7,16,4,4
+split_idle_off: exit 0 in 40 s; per rank:       2 Tests: 12 executed, 0 failed;
+=== split_idle_nbr (21:51:20): glx_idle_split.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_ENABLE_FABRIC_VC2=1 TT_FABRIC_EXP_SLOTS_VC1=16,7,16,4,4,4,4
+split_idle_nbr: exit 0 in 40 s; per rank:       2 Tests: 12 executed, 0 failed;
+=== split_idle_line (21:52:00): glx_idle_split.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1 TT_FABRIC_EXP_SLOTS_VC1=16,7,16,4,4,4,4,4
+split_idle_line: exit 0 in 30 s; per rank:       2 Tests: 12 executed, 0 failed;
+=== split_idle_off_1e (21:52:30): glx_idle_split.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_SLOTS_VC1=16,7,16,4,4 TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+split_idle_off_1e: exit 0 in 30 s; per rank:       2 Tests: 12 executed, 0 failed;
+=== split_idle_nbr_1e (21:53:00): glx_idle_split.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_ENABLE_FABRIC_VC2=1 TT_FABRIC_EXP_SLOTS_VC1=16,7,16,4,4,4,4 TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+split_idle_nbr_1e: exit 0 in 40 s; per rank:       2 Tests: 12 executed, 0 failed;
+=== split_idle_line_1e (21:53:40): glx_idle_split.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_METAL_ENABLE_FABRIC_VC2=1 TT_METAL_FABRIC_VC2_LINE=1 TT_FABRIC_EXP_SLOTS_VC1=16,7,16,4,4,4,4,4 TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+split_idle_line_1e: exit 0 in 40 s; per rank:       2 Tests: 12 executed, 0 failed;
+=== full (21:54:20): glx_full_split.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3
+full: exit 0 in 40 s; per rank:       2 Tests: 27 executed, 0 failed;
+=== full_vc1x2 (21:55:00): glx_full_split.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_SLOTS_VC1=16,2,15,8,8,4,4,4
+full_vc1x2: exit 0 in 40 s; per rank:       2 Tests: 27 executed, 0 failed;
+=== full_vc2x2 (21:55:40): glx_full_split.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_SLOTS_VC1=16,3,16,4,4,8,8,8
+full_vc2x2: exit 0 in 40 s; per rank:       2 Tests: 27 executed, 0 failed;
+=== split_idle_off_r2 (21:56:20): glx_idle_split.yaml, timeout 900 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_SLOTS_VC1=16,7,16,4,4
+split_idle_off_r2: exit 0 in 40 s; per rank:       2 Tests: 12 executed, 0 failed;
+=== full_r2 (21:57:00): glx_full_split.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3
+full_r2: exit 0 in 51 s; per rank:       2 Tests: 27 executed, 0 failed;
+done 21:57:51

@@ -95,16 +95,18 @@ public:
     // guard is not decided here.
     std::optional<uint32_t> worker_channel(uint32_t vc) const;
 
-    // The producer feeding `channel` on `vc`, or nullopt: the worker slot, a channel this router
-    // does not have, and VC2 (whose single sender is worker-type) have no producer.
+    // The producer feeding `channel` on `vc`, or nullopt: the worker slot and a channel this router
+    // does not have have no producer. VC2's one forwarding channel (line mode: channel 1, after its
+    // worker) is fed by the router facing the opposite way; neighbour-mode VC2 has only its worker.
     std::optional<eth_chan_directions> producer_at(uint32_t vc, uint32_t channel) const;
 
-    // The channel `producer` feeds on `vc`, or nullopt for the facing direction itself, a VC with
-    // no producer mapping (VC2), or a slot this router does not have.
+    // The channel `producer` feeds on `vc`, or nullopt for the facing direction itself, a producer
+    // with no slot on the VC (on VC2 all but the opposite direction), or a slot this router does
+    // not have.
     std::optional<uint32_t> channel_for(uint32_t vc, eth_chan_directions producer) const;
 
     // Only the producer slots this router actually has (bounded by its own count), in eth order;
-    // empty on VC2.
+    // on VC2 at most the opposite direction's (line mode).
     ttsl::SmallVector<Slot, 4> producer_slots(uint32_t vc) const;
 
     uint32_t sender_count(uint32_t vc) const;
@@ -113,7 +115,9 @@ private:
     eth_chan_directions facing_;
     std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_counts_;
 
-    static constexpr uint32_t worker_offset(uint32_t vc) { return vc == 0 ? 1 : 0; }  // the ONE place the VC rule lives
+    static constexpr uint32_t worker_offset(uint32_t vc) { return vc == 1 ? 0 : 1; }  // the ONE place the VC rule lives
+    // VC2 routes as a line: its one producer is the direction opposite the facing (none for Z).
+    std::optional<eth_chan_directions> line_producer() const;
 };
 
 eth_chan_directions get_sender_channel_direction(eth_chan_directions my_direction, size_t sender_channel_index);

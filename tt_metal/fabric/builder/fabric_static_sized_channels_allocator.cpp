@@ -144,7 +144,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         if (std::getenv("TT_FABRIC_EXP_LOG_SLOTS") != nullptr && num_used_sender_channels_per_vc[vc] > 0) {
             log_info(
                 tt::LogFabric,
-                "VC{} sender slots {} receiver slots {} (channel buffer {} B)",
+                "VC{} sender slots {} receiver slots {} (channel buffer {} B; buffering space {} B = {} slots)",
                 vc,
                 std::vector<size_t>(
                     num_sender_buffer_slots_per_vc[vc].begin(),
@@ -152,7 +152,9 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
                 std::vector<size_t>(
                     num_receiver_buffer_slots_per_vc[vc].begin(),
                     num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc]),
-                channel_buffer_size_bytes);
+                channel_buffer_size_bytes,
+                available_channel_buffering_space,
+                available_channel_buffering_space / channel_buffer_size_bytes);
         }
         log_trace(
             tt::LogFabric, "VC{} num_remote_sender_buffer_slots: {}", vc, num_remote_sender_buffer_slots_per_vc[vc]);
@@ -873,11 +875,12 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
     // Study rows (fabric_exp, slot allocation) for fabrics with VC1 and/or VC2. A row is the depths
     //   {VC0 worker, every VC0 forwarding channel, VC0 receiver, every VC1 sender channel (all forwarding),
-    //    VC1 receiver, VC2's sender channel (its worker), VC2 receiver},
+    //    VC1 receiver, VC2's worker channel, VC2 receiver, VC2's forwarding channel (line mode)},
     // the entries of an absent VC 0. Every router gets the same row, so a receiver's depth matches at both ends of a link.
     // Switches: TT_FABRIC_EXP_SLOTS_VC1=worker,forwarding0,receiver0,forwarding1,receiver1 on VC0+VC1 fabrics, with
     // ",worker2,receiver2" added on VC0+VC1+VC2 fabrics; TT_FABRIC_EXP_SLOTS_VC2=worker,forwarding0,receiver0,worker2,
-    // receiver2 on VC0+VC2 fabrics. A worker of 0 takes every slot the others leave, up to MAX_CHANNEL_BUFFER_SLOTS.
+    // receiver2 on VC0+VC2 fabrics; in VC2 line mode either switch takes ",forwarding2" at the end. A worker of 0 takes
+    // every slot the others leave, up to MAX_CHANNEL_BUFFER_SLOTS.
     // Without a switch, the study's router in the v2 slot (TT_FABRIC_KERNEL_VERSION=2, v4) on Blackhole gets the
     // study's row for its shape (4 VC0 sender channels, 3 VC1 and 1 VC2 where present, one receiver channel per VC),
     // its worker the rest of the slots, when the row's design worker fits (the rows are set at the default 4352 B
@@ -889,27 +892,43 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     //   VC0+VC2      17, 14, 16 + VC2 2, 4: VC0 as on VC0-only fabrics (17, 16, 16) but 2 forwarding slots fewer per
     //                channel for VC2's tier depths (the tier row's 43, 7, 11 makes VC0's receiver ring 11 slots);
     //   VC0+VC1+VC2  19, 8, 16, 4, 4 + VC2 2, 4: the VC0+VC1 row, one forwarding slot fewer per VC0 and VC1 channel
-    //                for VC2 (not yet measured).
+    //                for VC2 (not yet measured);
+    //   VC0+VC2 line 17, 12, 16 + VC2 4, 4, 4 (worker, receiver, forwarding): VC2's forwarding channel takes 2 slots
+    //                from each VC0 forwarding channel, its worker 2 more (a line's source, not a neighbour's); the
+    //                receiver at 4 keeps the 2 slots bubble flow control needs on VC2 rings (VC2_LINE_BRINGUP.md;
+    //                correctness first, not tuned);
+    //   VC0+VC1+VC2 line  16, 7, 16, 4, 4 + VC2 4, 4, 4: the VC0+VC1+VC2 row, one VC0 forwarding slot fewer per channel
+    //                and VC2's worker 2 more for VC2's forwarding channel (worker 16 at 4352 B; not tuned).
     // Main's router keeps the tier table; TT_FABRIC_EXP_TIER_SLOTS=1 keeps it for the study's router too.
-    using StudyRow = std::array<size_t, 7>;
+    using StudyRow = std::array<size_t, 8>;
+    // VC2 in line mode: VC2's channels past its worker are forwarding channels (one, fed by the router facing the
+    // opposite way).
+    const size_t vc2_forwarding_channels =
+        num_used_sender_channels_per_vc[2] > 1 ? num_used_sender_channels_per_vc[2] - 1 : 0;
     const auto parse_row = [](const char* name, const char* text, size_t fields, bool vc1) {
-        size_t v[7] = {};
+        size_t v[8] = {};
         TT_FATAL(
-            std::sscanf(text, "%zu,%zu,%zu,%zu,%zu,%zu,%zu", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6]) ==
+            std::sscanf(
+                text, "%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]) ==
                 static_cast<int>(fields),
             "{}={}: expected {} depths",
             name,
             text,
             fields);
-        // TT_FABRIC_EXP_SLOTS_VC2 has no VC1 fields: worker, forwarding0, receiver0, worker2, receiver2.
-        return vc1 ? StudyRow{v[0], v[1], v[2], v[3], v[4], v[5], v[6]} : StudyRow{v[0], v[1], v[2], 0, 0, v[3], v[4]};
+        // TT_FABRIC_EXP_SLOTS_VC2 has no VC1 fields: worker, forwarding0, receiver0, worker2, receiver2[, forwarding2].
+        return vc1 ? StudyRow{v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]}
+                   : StudyRow{v[0], v[1], v[2], 0, 0, v[3], v[4], v[5]};
     };
     const char* const row_switch = vc1_present ? "TT_FABRIC_EXP_SLOTS_VC1" : "TT_FABRIC_EXP_SLOTS_VC2";
     const char* const row_text = std::getenv(row_switch);
     std::optional<StudyRow> row;
     if ((vc1_present || vc2_present) && options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
         if (row_text != nullptr) {
-            row = parse_row(row_switch, row_text, vc1_present && vc2_present ? 7 : 5, vc1_present);
+            row = parse_row(
+                row_switch,
+                row_text,
+                (vc1_present && vc2_present ? 7 : 5) + (vc2_forwarding_channels > 0 ? 1 : 0),
+                vc1_present);
         } else if (
             kernel_version != nullptr && std::string_view(kernel_version) == "2" && arch == tt::ARCH::BLACKHOLE &&
             std::getenv("TT_FABRIC_EXP_TIER_SLOTS") == nullptr &&
@@ -919,16 +938,21 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             num_used_sender_channels_per_vc[0] == 4 && num_used_receiver_channels_per_vc[0] == 1 &&
             num_used_sender_channels_per_vc[1] == (vc1_present ? 3 : 0) &&
             num_used_receiver_channels_per_vc[1] == (vc1_present ? 1 : 0) &&
-            num_used_sender_channels_per_vc[2] == (vc2_present ? 1 : 0) &&
+            (num_used_sender_channels_per_vc[2] == (vc2_present ? 1 : 0) ||
+             (vc2_present && num_used_sender_channels_per_vc[2] == 2)) &&
             num_used_receiver_channels_per_vc[2] == (vc2_present ? 1 : 0)) {
-            const StudyRow design = !vc2_present   ? StudyRow{19, 9, 16, 5, 4, 0, 0}
-                                    : !vc1_present ? StudyRow{17, 14, 16, 0, 0, 2, 4}
-                                                   : StudyRow{19, 8, 16, 4, 4, 2, 4};
-            size_t design_total = design[0];
+            const StudyRow design = !vc2_present ? StudyRow{19, 9, 16, 5, 4, 0, 0, 0}
+                                    : vc2_forwarding_channels > 0
+                                        ? (vc1_present ? StudyRow{16, 7, 16, 4, 4, 4, 4, 4} : StudyRow{17, 12, 16, 0, 0, 4, 4, 4})
+                                    : !vc1_present ? StudyRow{17, 14, 16, 0, 0, 2, 4, 0}
+                                                   : StudyRow{19, 8, 16, 4, 4, 2, 4, 0};
+            size_t design_total = design[0] + vc2_forwarding_channels * design[7];
             for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+                // Per VC: its forwarding channels' depth (VC2: its worker's; its forwarding channels are added above).
                 const size_t forwarding = vc == 0 ? design[1] : vc == 1 ? design[3] : design[5];
-                const size_t forwarding_channels =
-                    vc == 0 ? num_used_sender_channels_per_vc[0] - 1 : num_used_sender_channels_per_vc[vc];
+                const size_t forwarding_channels = vc == 0   ? num_used_sender_channels_per_vc[0] - 1
+                                                   : vc == 1 ? num_used_sender_channels_per_vc[1]
+                                                             : num_used_sender_channels_per_vc[2] - vc2_forwarding_channels;
                 const size_t receiver = vc == 0 ? design[2] : vc == 1 ? design[4] : design[6];
                 design_total += forwarding_channels * forwarding + num_used_receiver_channels_per_vc[vc] * receiver;
             }
@@ -939,21 +963,29 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         }
     }
     if (row.has_value()) {
-        const auto [worker_in, forwarding0, receiver0, forwarding1, receiver1, worker2, receiver2] = *row;
+        const auto [worker_in, forwarding0, receiver0, forwarding1, receiver1, worker2, receiver2, forwarding2] = *row;
         const char* const name = row_text != nullptr ? row_switch : "study slot row";
         const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
         const size_t others = (num_used_sender_channels_per_vc[0] - 1) * forwarding0 +
                               num_used_receiver_channels_per_vc[0] * receiver0 +
                               num_used_sender_channels_per_vc[1] * forwarding1 +
                               num_used_receiver_channels_per_vc[1] * receiver1 +
-                              num_used_sender_channels_per_vc[2] * worker2 +
+                              (num_used_sender_channels_per_vc[2] - vc2_forwarding_channels) * worker2 +
+                              vc2_forwarding_channels * forwarding2 +
                               num_used_receiver_channels_per_vc[2] * receiver2;
         TT_FATAL(others < slot_capacity, "{}: no slots left for the worker", name);
         const size_t worker = worker_in != 0 ? worker_in : std::min(slot_capacity - others, MAX_CHANNEL_BUFFER_SLOTS);
-        const size_t present[7] = {
-            1, 1, 1, vc1_present ? 1u : 0u, vc1_present ? 1u : 0u, vc2_present ? 1u : 0u, vc2_present ? 1u : 0u};
-        const size_t depths[7] = {worker, forwarding0, receiver0, forwarding1, receiver1, worker2, receiver2};
-        for (size_t i = 0; i < 7; ++i) {
+        const size_t present[8] = {
+            1,
+            1,
+            1,
+            vc1_present ? 1u : 0u,
+            vc1_present ? 1u : 0u,
+            vc2_present ? 1u : 0u,
+            vc2_present ? 1u : 0u,
+            vc2_forwarding_channels > 0 ? 1u : 0u};
+        const size_t depths[8] = {worker, forwarding0, receiver0, forwarding1, receiver1, worker2, receiver2, forwarding2};
+        for (size_t i = 0; i < 8; ++i) {
             TT_FATAL(
                 present[i] == 0 || (depths[i] > 0 && depths[i] <= MAX_CHANNEL_BUFFER_SLOTS),
                 "{}: every depth of a present VC must be 1 to {}",
@@ -981,8 +1013,11 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             num_remote_receiver_buffer_slots_per_vc[1].fill(receiver1);
         }
         if (vc2_present) {
-            num_sender_buffer_slots_per_vc[2].fill(worker2);
-            num_remote_sender_buffer_slots_per_vc[2].fill(worker2);
+            // VC2's worker channel (0), then its forwarding channels (line mode).
+            num_sender_buffer_slots_per_vc[2].fill(vc2_forwarding_channels > 0 ? forwarding2 : worker2);
+            num_remote_sender_buffer_slots_per_vc[2].fill(vc2_forwarding_channels > 0 ? forwarding2 : worker2);
+            num_sender_buffer_slots_per_vc[2][0] = worker2;
+            num_remote_sender_buffer_slots_per_vc[2][0] = worker2;
             num_receiver_buffer_slots_per_vc[2].fill(receiver2);
             num_remote_receiver_buffer_slots_per_vc[2].fill(receiver2);
         }

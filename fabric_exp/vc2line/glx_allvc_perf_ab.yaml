@@ -1,0 +1,30 @@
+# Phase 4 window A/B (VC2_LINE_BRINGUP.md): the VC2 flows of glx_allvc_perf.yaml alone, run under three slot rows
+# (vc2l_glx_mm.sbatch steps perfab, perfab_vc1x2, perfab_vc2x2). Neither flow's path has a VC0 channel:
+#   InterVC2  mesh 0 chip 3 -> mesh 1 chip 1: VC2 worker, the landing router's VC2 receiver, its VC1 sender channel,
+#             the VC1 receiver on chip 1
+#   IntraVC2  mesh 0 chip 0 -> chip 1: VC2 worker, VC2 receiver
+# so VC1 8/8 (slots from VC0) changes only InterVC2's VC1 hop, and VC2 8/8/8 (slots from VC0's worker) only the VC2
+# windows: each row isolates one VC's window, the other flow is its control.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+
+Tests:
+  - name: "AbInterVC2"
+    benchmark_mode: true
+    sync: true
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 3], vc_id: 2, patterns: [{destination: {device: [1, 1]}}]}
+
+  - name: "AbIntraVC2"
+    benchmark_mode: true
+    sync: true
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 0], vc_id: 2, patterns: [{destination: {device: [0, 1]}}]}

@@ -78,12 +78,15 @@ constexpr uint32_t num_receiver_pkts_sent_names = 3;            // TO_RECEIVER_{
 constexpr uint32_t num_pkts_acked_names = 5;                    // TO_SENDER_{0..4}_PKTS_ACKED_ID
 constexpr uint32_t num_pkts_completed_names = 9;                // TO_SENDER_{0..8}_PKTS_COMPLETED_ID
 constexpr uint32_t num_downstream_free_slots_names_per_vc = 4;  // VC{0,1}_..._EDGE_{1..4}
+// VC2 in line mode has one downstream (straight on): one name, VC2_FREE_SLOTS_FROM_DOWNSTREAM_STREAM_ID.
+constexpr uint32_t num_vc2_downstream_free_slots_names = 1;
 // Sender free slots: builder_config::num_max_sender_channels is already the kernel's extent.
 
-// The total declared set size: receivers + acked + completed + both VCs' downstream + sender free
+// The total declared set size: receivers + acked + completed + both VCs' downstream + VC2's downstream + sender free
 // + the two pinned entries + the two scratch entries.
 constexpr uint32_t num_stream_register_names = num_receiver_pkts_sent_names + num_pkts_acked_names +
                                                num_pkts_completed_names + 2 * num_downstream_free_slots_names_per_vc +
+                                               num_vc2_downstream_free_slots_names +
                                                builder_config::num_max_sender_channels + 2 + 2;
 
 // ============================================================================
@@ -98,8 +101,8 @@ enum class StreamRole : uint8_t {
     RECEIVER_PKTS_SENT,       // per receiver CHANNEL (not VC -- VC2's receiver densifies), need-driven
     SENDER_PKTS_ACKED,        // per sender channel; VC0 only, and only while VC0 is on registers
     SENDER_PKTS_COMPLETED,    // per sender channel, per VC still on registers
-    DOWNSTREAM_FREE_SLOTS,    // per downstream compact index (span 4, direction-keyed), per VC
-    SENDER_FREE_SLOTS,        // per sender channel
+    DOWNSTREAM_FREE_SLOTS,    // per downstream compact index (span 4, direction-keyed), per VC; VC2 (line mode): 1
+    SENDER_FREE_SLOTS,        // per sender channel; VC2's: its forwarding channels only (its worker's is pinned)
     VC2_SENDER_FREE_SLOTS,    // pinned to id 30 -- dual-use with tensix relay; see the aliasing note
     VC2_RECEIVER_FREE_SLOTS,  // pinned to id 31
     TENSIX_RELAY_FREE_SLOTS,  // pinned to id 30 -- dual-use with VC2 sender; see the aliasing note

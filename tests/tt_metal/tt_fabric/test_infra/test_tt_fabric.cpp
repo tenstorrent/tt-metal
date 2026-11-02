@@ -221,6 +221,10 @@ int main(int argc, char** argv) {
     // Per-group outcome (name, status) for the end-of-run report, in execution order.
     std::vector<std::pair<std::string, std::string>> group_results;
     group_results.reserve(raw_test_configs.size());
+    // The VC2 options as the environment set them (TT_METAL_ENABLE_FABRIC_VC2, TT_METAL_FABRIC_VC2_LINE): each test group
+    // sets them to these or to its own fabric_setup's, so one group's VC2 does not carry over to the next.
+    const bool env_enable_fabric_vc2 = tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_vc2();
+    const bool env_fabric_vc2_line = tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_vc2_line();
     for (auto& test_config : raw_test_configs) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
@@ -255,9 +259,10 @@ int main(int argc, char** argv) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
-        if (test_config.fabric_setup.use_vc2) {
-            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_vc2(true);
-        }
+        tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_vc2(
+            env_enable_fabric_vc2 || test_config.fabric_setup.use_vc2);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fabric_vc2_line(
+            env_fabric_vc2_line || test_config.fabric_setup.vc2_line);
 
         log_info(
             tt::LogTest,

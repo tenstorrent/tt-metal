@@ -108,7 +108,7 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 #if defined(COMPILE_FOR_DRISC)
                                           true
 #else
-                                          fabric_exp_rx_batch_completion &&
+                                          rx_batch_completion &&
                                           tt::tt_fabric::local_chip_noc_equals_downstream_noc &&
                                           tt::tt_fabric::edm_to_local_chip_noc == noc_index
 #endif
@@ -185,7 +185,8 @@ FORCE_INLINE void execute_local_semaphore_inc(
     uint8_t rx_channel_id,
     [[maybe_unused]] uint32_t* pending_atomic_flush = nullptr,
     [[maybe_unused]] uint8_t last_write_trid = 0) {
-#if defined(FABRIC_ERISC_ROUTER_V2)
+#if defined(FABRIC_ERISC_ROUTER_V2) || defined(FABRIC_ERISC_ROUTER_V3)
+    // Routers v2 and v3 stage a flushed atomic before its flush, and can defer it (pending_atomic_flush != nullptr).
     if (flush != tt::tt_fabric::NocFlushType::FLUSH_NONE) {
         noc_semaphore_inc_set_state<true>(
             addr, incr, tt::tt_fabric::edm_to_local_chip_noc, tt::tt_fabric::forward_and_local_write_noc_vc);

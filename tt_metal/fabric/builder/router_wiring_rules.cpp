@@ -306,8 +306,10 @@ RouterVcShape router_vc_shape(
             }
         }
 
-        // VC2: one sender by VC2's own definition.
-        vc2_senders = requires_vc2 ? 1 : 0;
+        // VC2: its worker, and in line mode, on a cardinal router, the forwarding channel the router facing the opposite
+        // way feeds (a line goes straight on).
+        const bool vc2_line = vc_config && vc_config->vc2_line;
+        vc2_senders = requires_vc2 ? 1 + ((vc2_line && facing != RoutingDirection::Z) ? 1 : 0) : 0;
 
         // Receivers: one per active carrier VC. The boundary services no VC2 receiver.
         vc1_receivers = requires_vc1 ? 1 : 0;
@@ -384,6 +386,13 @@ RouterTurnSet turn_set_for_router(
         }
         check_vc0_downstream_capacity(turn_set, express_routing_enabled);
         return turn_set;
+    }
+
+    // VC2 in line mode: straight on, to the router facing the opposite way (its VC2 forwarding channel), on every
+    // 2D cardinal router. Emitted for the router's own VC set only; the shape gives VC2's channels.
+    const bool vc2_line = vc_config && vc_config->requires_vc2 && vc_config->vc2_line;
+    if (vc2_line && is_2D_topology(topology) && facing != RoutingDirection::Z) {
+        turn_set[2].push_back(ConnectionTarget(2, get_opposite_direction(facing)));
     }
 
     // 1D: opposite only. There is no 1D boundary target: intermesh connections are rejected

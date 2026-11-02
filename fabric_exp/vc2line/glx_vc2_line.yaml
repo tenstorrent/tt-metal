@@ -1,0 +1,182 @@
+# VC2 line mode on one Blackhole Galaxy (8x4 2D mesh, device [0, [row, col]]: rows 0-7, columns 0-3; E increases col,
+# S increases row). Data-checked (validation mode, flow control on). VC2_LINE_BRINGUP.md, phase 1.
+# Every test sets vc2_line (implies use_vc2): VC2 routes like 1D along one mesh axis. VC2 flows go straight along a row
+# or a column; VC0 flows in the mixed tests turn (2D, Y first).
+Tests:
+  # Unicast along a row, every length (1-3 hops), both directions, one row each.
+  - name: "VC2LineUnicastEW"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      vc2_line: true
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+      size: [1024, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 10000
+    senders:
+      - device: [0, [0, 0]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [0, 3]]}
+      - device: [0, [1, 3]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [1, 0]]}
+      - device: [0, [2, 0]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [2, 2]]}
+      - device: [0, [3, 3]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [3, 1]]}
+      - device: [0, [4, 1]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [4, 2]]}
+
+  # Unicast along a column, 7 / 4 / 2 hops, both directions.
+  - name: "VC2LineUnicastNS"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      vc2_line: true
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+      size: [1024, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 10000
+    senders:
+      - device: [0, [0, 0]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [7, 0]]}
+      - device: [0, [7, 1]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [0, 1]]}
+      - device: [0, [1, 2]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [5, 2]]}
+      - device: [0, [6, 3]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [4, 3]]}
+
+  # Both directions on the same lines at once: every chip of row 0 and column 0 forwards VC2 both ways.
+  - name: "VC2LineUnicastBidirectional"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      vc2_line: true
+    parametrization_params:
+      size: [4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 20000
+    senders:
+      - device: [0, [0, 0]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [0, 3]]}
+      - device: [0, [0, 3]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [0, 0]]}
+      - device: [0, [1, 0]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [7, 0]]}
+      - device: [0, [7, 0]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [1, 0]]}
+
+  # Multicast along a row and along a column (one direction each: a straight line), every chip on the way checked.
+  - name: "VC2LineMcast"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      vc2_line: true
+    parametrization_params:
+      size: [1024, 4096]
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 10000
+    senders:
+      - device: [0, [0, 0]]
+        vc_id: 2
+        patterns:
+          - destination: {hops: {E: 3}}
+      - device: [0, [1, 3]]
+        vc_id: 2
+        patterns:
+          - destination: {hops: {W: 3}}
+      - device: [0, [0, 1]]
+        vc_id: 2
+        patterns:
+          - destination: {hops: {S: 7}}
+      - device: [0, [7, 2]]
+        vc_id: 2
+        patterns:
+          - destination: {hops: {N: 7}}
+      - device: [0, [3, 3]]
+        vc_id: 2
+        patterns:
+          - destination: {hops: {S: 3}}
+
+  # VC0 2D traffic that turns (Y then X) on the same chips and links as VC2 lines, on separate worker cores.
+  - name: "VC2LineMixedWithVC0"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      vc2_line: true
+    parametrization_params:
+      size: [4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 20000
+    senders:
+      # VC0, turning
+      - device: [0, [0, 0]]
+        vc_id: 0
+        patterns:
+          - destination: {device: [0, [7, 3]]}
+      - device: [0, [7, 0]]
+        vc_id: 0
+        patterns:
+          - destination: {device: [0, [0, 3]]}
+      - device: [0, [0, 3]]
+        vc_id: 0
+        patterns:
+          - destination: {device: [0, [5, 0]]}
+      # VC0, straight (shares the VC2 lines' routers and links)
+      - device: [0, [3, 0]]
+        vc_id: 0
+        patterns:
+          - destination: {device: [0, [3, 3]]}
+      # VC2 lines through the same chips
+      - device: [0, [0, 0]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [7, 0]]}
+      - device: [0, [7, 3]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [0, 3]]}
+      - device: [0, [3, 3]]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, [3, 0]]}
+      - device: [0, [7, 0]]
+        vc_id: 2
+        patterns:
+          - ftype: mcast
+            destination: {hops: {E: 3}}

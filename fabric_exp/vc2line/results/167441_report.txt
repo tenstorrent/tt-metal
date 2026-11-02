@@ -1,0 +1,50 @@
+## Steps
+  allvc          4 executed, 0 failed; 4 executed, 0 failed
+  allvc_1e       4 executed, 0 failed; 4 executed, 0 failed
+  allvc_os       4 executed, 0 failed; 4 executed, 0 failed
+  allvc_r2       4 executed, 0 failed; 4 executed, 0 failed
+  allvc_r3       4 executed, 0 failed; 4 executed, 0 failed
+  allvc_small    4 executed, 0 failed; 4 executed, 0 failed
+  capself_after_perf no summary
+  perf           14 executed, 0 failed; 14 executed, 0 failed
+
+## Slot rows (distinct rows per step; count = router configs that logged it, both ranks: the router config
+   once per rank, and the five per-direction MUX-mode configs, fabric_builder_context.cpp, unused here)
+  allvc, allvc_1e, allvc_os, allvc_r2, allvc_r3, perf:
+     VC0 sender slots {16, 7, 7, 7} receiver slots {16}  x2
+     VC0 sender slots {4, 0, 0, 0} receiver slots {8}  x10
+     VC1 sender slots {0, 0, 0} receiver slots {4}  x10
+     VC1 sender slots {4, 4, 4} receiver slots {4}  x2
+     VC2 sender slots {4, 4} receiver slots {4}  x2
+  allvc_small:
+     VC0 sender slots {18, 7, 7, 7} receiver slots {16}  x2
+     VC0 sender slots {4, 0, 0, 0} receiver slots {8}  x10
+     VC1 sender slots {0, 0, 0} receiver slots {4}  x10
+     VC1 sender slots {4, 4, 4} receiver slots {4}  x2
+     VC2 sender slots {4, 4} receiver slots {2}  x2
+  capself_after_perf:
+
+## Perf (per-sender rows, 16 rows)
+  test                size  flow                               dir    cycles  cyc/pkt    GB/s  boundary GB/s clock MHz
+  PerfInterVC0        1024  VC0 m0c2->m1c1                       E  10523166    526.2    2.63           2.63      1350
+  PerfInterVC0        4096  VC0 m0c2->m1c1                       E  11572372    578.6    9.56           9.56      1350
+  PerfInterVC2        1024  VC2 m0c3->m1c1                       E  11109254    555.5    2.49           2.49      1350
+  PerfInterVC2        4096  VC2 m0c3->m1c1                       E  11986879    599.3    9.23           9.23      1350
+  PerfInterVC0VC2     1024  VC2 m0c3->m1c1                       E  19938905    996.9    1.39           2.77      1350
+  PerfInterVC0VC2     4096  VC2 m0c3->m1c1                       E  22044817   1102.2    5.02          10.03      1350
+  PerfIntraVC0        1024  VC0 m0c2->m0c1                       N   7073515    353.7    3.91           3.91      1350
+  PerfIntraVC0        4096  VC0 m0c2->m0c1                       N   8049491    402.5   13.74          13.74      1350
+  PerfIntraVC2        1024  VC2 m0c0->m0c1                       E   9298047    464.9    2.97           2.97      1350
+  PerfIntraVC2        4096  VC2 m0c0->m0c1                       E  10132524    506.6   10.91          10.91      1350
+  PerfIntraVC0VC2     1024  VC0 m0c2->m0c1                       N  10362368    518.1    2.67           2.67      1350
+  PerfIntraVC0VC2     4096  VC0 m0c2->m0c1                       N  11738709    586.9    9.42           9.42      1350
+  PerfAll             1024  VC2 m1c3->m1c1                       N  11145475    696.6    1.98           1.98      1350
+  PerfAll             1024  VC2 m0c3->m1c2                       E  14502524    725.1    1.91           3.81      1350
+  PerfAll             4096  VC2 m1c3->m1c1                       N  12964709    810.3    6.82           6.82      1350
+  PerfAll             4096  VC2 m0c3->m1c2                       E  19344675    967.2    5.72          11.43      1350
+
+## Shared links (both flows' packets over the slower sender's cycles)
+  PerfInterVC0VC2 1024: missing rows [None, (20000, 19938905, 1349999999.8784697)]
+  PerfInterVC0VC2 4096: missing rows [None, (20000, 22044817, 1349999999.882155)]
+  PerfIntraVC0VC2 1024: missing rows [(20000, 10362368, 1350000000.224128), None]
+  PerfIntraVC0VC2 4096: missing rows [(20000, 11738709, 1350000000.0209126), None]

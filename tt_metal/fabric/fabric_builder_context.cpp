@@ -401,6 +401,22 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         bool is_udm_mode = (tensix_config == FabricTensixConfig::UDM);
         bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
         config.requires_vc2 = is_blackhole && !is_udm_mode && !is_mux_extension;
+        // Line mode applies where VC2 has channels: 2D fabrics (1D fabrics create none, router_wiring_rules.cpp).
+        config.vc2_line = config.requires_vc2 && fabric_context_.get_rtoptions().get_fabric_vc2_line() &&
+                          is_2D_topology(fabric_context_.get_fabric_topology());
+    }
+    if (config.vc2_line) {
+        // Brought up so far (VC2_LINE_BRINGUP.md): 2D fabrics, lines on mesh axes and rings on torus axes (bubble flow
+        // control and first-level acks on VC2), and on multi-mesh fabrics VC2's fan-in into VC1 at the intermesh
+        // routers. Express meshes would put VC2's forwarding channel past the flat sender table (5 + 4 + 2 > 10) and
+        // have no line through Z; so would a Z intermesh boundary (the stream assignment refuses that one).
+        const auto& control_plane = fabric_context_.get_control_plane();
+        for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+            TT_FATAL(
+                !control_plane.express_routing_enabled(mesh_id),
+                "VC2 line mode on express meshes is not brought up (mesh {})",
+                *mesh_id);
+        }
     }
 
     return config;

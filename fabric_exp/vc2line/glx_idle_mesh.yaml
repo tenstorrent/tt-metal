@@ -1,0 +1,55 @@
+# Idle-VC cost on one Galaxy mesh (VC2_LINE_BRINGUP.md, "Perf: idle and full VCs"): VC0 rows, one flow per test,
+# benchmark mode without sync (each sender times its own send loop; the profiler's per-sender log lines give its
+# cycles). The fabric's VC2 (off, neighbour or line mode, idle) comes from the environment (vc2l_glx.sbatch steps idle_*),
+# with VC0's depths pinned the same in every configuration, so a row's change is the idle VC's per-pass cost.
+# 8x4 mesh, device [0, [row, col]]: E increases col, S increases row; 2D routing goes Y first.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+
+Tests:
+  - name: "Idle1HopEW"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, [1, 1]], vc_id: 0, patterns: [{destination: {device: [0, [1, 2]]}}]}
+
+  - name: "Idle1HopNS"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, [2, 1]], vc_id: 0, patterns: [{destination: {device: [0, [3, 1]]}}]}
+
+  - name: "Idle3HopEW"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, [2, 0]], vc_id: 0, patterns: [{destination: {device: [0, [2, 3]]}}]}
+
+  - name: "Idle4HopNS"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, [1, 2]], vc_id: 0, patterns: [{destination: {device: [0, [5, 2]]}}]}
+
+  - name: "IdleMcastEW"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, [3, 0]], vc_id: 0, patterns: [{ftype: mcast, destination: {hops: {E: 3}}}]}

@@ -1152,9 +1152,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
  * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | True     |
  */
 // clang-format on
+// skip_cmdbuf_chk: the caller has already seen the command buffer ready (and issued nothing on it since).
+template <bool skip_cmdbuf_chk = false>
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
 }
 
@@ -1507,7 +1511,8 @@ template <
     bool update_val = false,
     bool posted = false,
     bool update_counter = true,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>  // the caller has already seen the command buffer ready
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
     static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
@@ -1520,7 +1525,9 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
         }
     }
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
 
     if constexpr (update_addr_lo) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr);

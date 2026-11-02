@@ -109,6 +109,27 @@ TEST(DirectionSlotBijectionTest, ProducerSlotsRoundTripsAndNeverNamesFacing) {
         EXPECT_EQ(*slots.worker_channel(2), 0u);
     }
 
+    // VC2 line mode: VC2's channel 1, after its worker, is fed by the direction opposite the facing, and only by it.
+    for (const auto facing : {EAST, WEST, NORTH, SOUTH}) {
+        const builder::RouterProducerSlots line(facing, {4, 0, 2});
+        const auto opposite = facing == EAST ? WEST : facing == WEST ? EAST : facing == NORTH ? SOUTH : NORTH;
+        EXPECT_EQ(*line.worker_channel(2), 0u);
+        EXPECT_FALSE(line.producer_at(2, 0).has_value());
+        ASSERT_TRUE(line.producer_at(2, 1).has_value());
+        EXPECT_EQ(*line.producer_at(2, 1), opposite);
+        ASSERT_TRUE(line.channel_for(2, opposite).has_value());
+        EXPECT_EQ(*line.channel_for(2, opposite), 1u);
+        const auto producers = line.producer_slots(2);
+        ASSERT_EQ(producers.size(), 1u);
+        EXPECT_EQ(producers[0].channel, 1u);
+        EXPECT_EQ(producers[0].producer, opposite);
+        for (const auto other : {EAST, WEST, NORTH, SOUTH, Z}) {
+            if (other != opposite) {
+                EXPECT_FALSE(line.channel_for(2, other).has_value());
+            }
+        }
+    }
+
     // A router narrower than the family max exposes only its own slots.
     const builder::RouterProducerSlots narrow(EAST, {3, 2, 0});
     EXPECT_EQ(narrow.producer_slots(0).size(), 2u);  // channels 1, 2

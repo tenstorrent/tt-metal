@@ -229,8 +229,10 @@
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
-// Must fit the largest erisc kernel config: the 2D-torus fabric_erisc_router needs 25680B.
-#define MEM_ERISC_KERNEL_CONFIG_SIZE (26 * 1024)
+// Must fit the largest erisc kernel config: the 2D-torus fabric_erisc_router needs 25680B; the study router (v2 slot)
+// with VC1 and VC2 in line mode needs 28,412 B of code at -O3 plus its runtime args (VC2_LINE_BRINGUP.md, phase 3).
+// 29 KiB keeps the 2D fabric's 81 channel slots at 4352 B packets (1D: 83 -> 82).
+#define MEM_ERISC_KERNEL_CONFIG_SIZE (29 * 1024)
 #define MEM_ERISC_BASE 0
 
 // From the top of L1. Common.

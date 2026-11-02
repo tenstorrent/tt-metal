@@ -105,6 +105,7 @@ enum class EnvVarID {
     TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
     TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_FABRIC_VC2_LINE,                           // VC2 line mode (1D routing along a mesh axis)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
@@ -812,6 +813,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_ENABLE_FABRIC_VC2=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_VC2: this->enable_fabric_vc2 = true; break;
+
+        // TT_METAL_FABRIC_VC2_LINE
+        // VC2's mode, with TT_METAL_ENABLE_FABRIC_VC2: line mode, where VC2 routes like 1D along one mesh axis (its
+        // packets go straight on: lines on mesh axes) next to VC0's 2D routing, instead of neighbour exchange only.
+        // Default: false (neighbour exchange)
+        // Usage: export TT_METAL_FABRIC_VC2_LINE=1
+        case EnvVarID::TT_METAL_FABRIC_VC2_LINE: this->fabric_vc2_line = true; break;
 
         // TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH
         // EXPERIMENTAL: Enables VC1 inter-mesh pass-through routing (e.g. A->B->C), where inter-mesh

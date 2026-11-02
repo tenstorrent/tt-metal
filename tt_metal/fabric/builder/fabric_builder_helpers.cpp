@@ -42,7 +42,7 @@ uint32_t RouterProducerSlots::sender_count(uint32_t vc) const {
 }
 
 std::optional<uint32_t> RouterProducerSlots::worker_channel(uint32_t vc) const {
-    // VC0's channel 0 is the local worker; VC2's single sender is worker-type by definition. VC1
+    // VC0's channel 0 is the local worker; so is VC2's (its only channel in neighbour mode). VC1
     // has no worker channel.
     if (vc == 1 || sender_count(vc) == 0) {
         return std::nullopt;
@@ -50,16 +50,34 @@ std::optional<uint32_t> RouterProducerSlots::worker_channel(uint32_t vc) const {
     return 0;
 }
 
+std::optional<eth_chan_directions> RouterProducerSlots::line_producer() const {
+    switch (facing_) {
+        case eth_chan_directions::EAST: return eth_chan_directions::WEST;
+        case eth_chan_directions::WEST: return eth_chan_directions::EAST;
+        case eth_chan_directions::NORTH: return eth_chan_directions::SOUTH;
+        case eth_chan_directions::SOUTH: return eth_chan_directions::NORTH;
+        default: return std::nullopt;
+    }
+}
+
 std::optional<eth_chan_directions> RouterProducerSlots::producer_at(uint32_t vc, uint32_t channel) const {
-    if (vc >= 2 || channel < worker_offset(vc) || channel >= sender_count(vc)) {
+    if (vc >= builder_config::MAX_NUM_VCS || channel < worker_offset(vc) || channel >= sender_count(vc)) {
         return std::nullopt;
+    }
+    if (vc == 2) {
+        // Line mode: one forwarding channel, right after the worker.
+        return channel == worker_offset(vc) ? line_producer() : std::nullopt;
     }
     return direction_from_compact_index(facing_, channel - worker_offset(vc));
 }
 
 std::optional<uint32_t> RouterProducerSlots::channel_for(uint32_t vc, eth_chan_directions producer) const {
-    if (vc >= 2 || producer == facing_) {
+    if (vc >= builder_config::MAX_NUM_VCS || producer == facing_) {
         return std::nullopt;
+    }
+    if (vc == 2) {
+        const uint32_t channel = worker_offset(vc);
+        return producer == line_producer() && channel < sender_count(vc) ? std::optional{channel} : std::nullopt;
     }
     const uint32_t channel = worker_offset(vc) + direction_compact_index(producer, facing_);
     return channel < sender_count(vc) ? std::optional{channel} : std::nullopt;
@@ -67,7 +85,13 @@ std::optional<uint32_t> RouterProducerSlots::channel_for(uint32_t vc, eth_chan_d
 
 ttsl::SmallVector<RouterProducerSlots::Slot, 4> RouterProducerSlots::producer_slots(uint32_t vc) const {
     ttsl::SmallVector<Slot, 4> slots;
-    if (vc >= 2) {
+    if (vc >= builder_config::MAX_NUM_VCS) {
+        return slots;
+    }
+    if (vc == 2) {
+        if (const auto producer = line_producer(); producer.has_value() && worker_offset(vc) < sender_count(vc)) {
+            slots.push_back(Slot{worker_offset(vc), *producer});
+        }
         return slots;
     }
     for (uint32_t compact = 0; compact < 4; ++compact) {

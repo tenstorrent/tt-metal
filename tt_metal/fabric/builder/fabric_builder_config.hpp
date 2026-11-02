@@ -110,11 +110,12 @@ static constexpr uint32_t num_mesh_directions_2d = 4;
 // the host cannot include the device constant.
 static constexpr uint32_t bubble_flow_control_protected_receiver_min_slots = 2;
 
-// Only VC0 uses bubble flow control. VC1's intermesh dependency graph has no bubble proof for
-// arbitrary cross-mesh patterns, so its senders remain unguarded. Injection flags and protected-slot
-// validation must share this predicate. First-level ACK is independent; VC1 ACK paths do not fit in
-// the ACTIVE_ETH kernel config window (see ENABLE_FIRST_LEVEL_ACK_VC1 in erisc_datamover_builder.cpp).
-constexpr bool bubble_flow_control_enabled_on_vc(uint32_t vc) { return vc == 0; }
+// VC0 uses bubble flow control, and VC2 in line mode (its rings on torus axes, VC2_LINE_BRINGUP.md). VC1's intermesh
+// dependency graph has no bubble proof for arbitrary cross-mesh patterns, so its senders remain unguarded; neighbour-mode
+// VC2 forwards nothing, so it has no ring to guard. Injection flags and protected-slot validation must share this
+// predicate. First-level ACK goes with it per VC (VC1's ACK paths do not fit in the ACTIVE_ETH kernel config window, see
+// ENABLE_FIRST_LEVEL_ACK_VC1 in erisc_datamover_builder.cpp).
+constexpr bool bubble_flow_control_enabled_on_vc(uint32_t vc, bool vc2_line) { return vc == 0 || (vc == 2 && vc2_line); }
 
 uint32_t get_sender_channel_count(bool is_2D_routing);
 

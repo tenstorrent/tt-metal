@@ -101,6 +101,11 @@ size_t FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(tt::ARC
  * @param is_receiver_channel_serviced Output parameter for receiver channel service flags
  */
 namespace {
+// VC2's mode on this fabric: line mode (VC2 routes like 1D along a mesh axis) or neighbour exchange.
+bool builder_context_vc2_line(const FabricContext& fabric_context) {
+    return fabric_context.get_builder_context().get_intermesh_vc_config().vc2_line;
+}
+
 // Returns true when fabric 2-ERISC should be considered enabled for builders.
 // This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to
 // and if we are not building with the tensix mux extension (due to stack size issue).
@@ -1175,6 +1180,18 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     if (needs_vc1 && vc1_downstream_edm_size == 0) {
         vc1_downstream_edm_size = 1;
     }
+    // VC2 in line mode: VC2's receiver forwards straight on, to its one downstream (the router facing the opposite way).
+    const bool vc2_line_mode = builder_context_vc2_line(fabric_context);
+    const bool vc2_forwards = vc2_line_mode && config.num_used_receiver_channels_per_vc[2] > 0;
+    const uint32_t num_vc2_downstream_edms =
+        vc2_forwards ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(2) : 0;
+    uint32_t vc2_downstream_edm_size =
+        vc2_forwards
+            ? calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(2))
+            : 0;
+    if (vc2_forwards && vc2_downstream_edm_size == 0) {
+        vc2_downstream_edm_size = 1;
+    }
 
     auto actual_sender_channels_vc0 = actual_sender_channels_per_vc_.has_value()
                                           ? actual_sender_channels_per_vc_.value()[0]
@@ -1242,9 +1259,13 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         vc0_trim_fast_path_usable && vc0_trim_fast_path_info_->terminal_or_source_only;
     const bool base_enable_deadlock_avoidance =
         !this->is_inter_mesh && fabric_context.need_deadlock_avoidance_support(control_plane, this->local_fabric_node_id, this->direction_);
+    // VC2's rings (line mode on a ring axis: this router's axis needs deadlock avoidance) take VC0's bubble flow control
+    // and first-level acks, whatever VC0's trimmed shape is (the far end of the link, on the same axis, agrees).
+    const bool vc2_rings = vc2_forwards && base_enable_deadlock_avoidance;
     const bool final_enable_deadlock_avoidance =
-        base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
+        base_enable_deadlock_avoidance && (!vc0_is_terminal_or_source_only_after_trim || vc2_rings);
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
+    const bool final_enable_first_level_ack_vc2 = vc2_rings;
 
     // Bubble flow control requires the downstream receiver to hold at least two slots: an injection
     // channel only sends when it sees that many free, so a single-slot receiver stalls it forever.
@@ -1253,22 +1274,24 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     if (final_enable_deadlock_avoidance) {
         constexpr uint32_t k_bfc_protected_receiver_min_slots =
             builder_config::bubble_flow_control_protected_receiver_min_slots;
-        constexpr size_t k_bfc_vc = 0;  // v1 enables bubble flow control on VC0 only
-        static_assert(
-            builder_config::bubble_flow_control_enabled_on_vc(k_bfc_vc),
-            "The protected-receiver slot check must inspect a VC that actually runs bubble flow control");
-        constexpr size_t k_receiver_channel = 0;
-        const size_t remote_slots =
-            static_channel_allocator->get_remote_receiver_channel_number_of_slots(k_bfc_vc, k_receiver_channel);
-        TT_FATAL(
-            remote_slots >= k_bfc_protected_receiver_min_slots,
-            "Bubble flow control is enabled on VC{} but its downstream receiver has only {} buffer slot(s); at least "
-            "{} are required or injection channels can never send. The channel allocator selected a buffer-slot "
-            "option too small for this configuration, so either the available channel buffering must grow or bubble "
-            "flow control must not be enabled here.",
-            k_bfc_vc,
-            remote_slots,
-            k_bfc_protected_receiver_min_slots);
+        // Every VC that runs bubble flow control here: VC0, and VC2 on its rings.
+        for (const size_t bfc_vc : {size_t{0}, size_t{2}}) {
+            if (!builder_config::bubble_flow_control_enabled_on_vc(bfc_vc, vc2_line_mode) || (bfc_vc == 2 && !vc2_rings)) {
+                continue;
+            }
+            constexpr size_t k_receiver_channel = 0;
+            const size_t remote_slots =
+                static_channel_allocator->get_remote_receiver_channel_number_of_slots(bfc_vc, k_receiver_channel);
+            TT_FATAL(
+                remote_slots >= k_bfc_protected_receiver_min_slots,
+                "Bubble flow control is enabled on VC{} but its downstream receiver has only {} buffer slot(s); at "
+                "least {} are required or injection channels can never send. The channel allocator selected a "
+                "buffer-slot option too small for this configuration, so either the available channel buffering must "
+                "grow or bubble flow control must not be enabled here.",
+                bfc_vc,
+                remote_slots,
+                k_bfc_protected_receiver_min_slots);
+        }
     }
     // Preserve the existing explicit single-sender behavior, allow the same
     // fast path when trimming collapses a wider VC0 router to the worker-only
@@ -1291,6 +1314,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             receiver_channel_to_downstream_adapter->get_packed_downstream_sender_channel_ids(0);
         named_args["PACKED_DOWNSTREAM_VC1_SENDER_CHANNEL_IDS"] =
             needs_vc1 ? receiver_channel_to_downstream_adapter->get_packed_downstream_sender_channel_ids(1) : 0;
+        named_args["PACKED_DOWNSTREAM_VC2_SENDER_CHANNEL_IDS"] =
+            vc2_forwards ? receiver_channel_to_downstream_adapter->get_packed_downstream_sender_channel_ids(2) : 0;
     }
 
     // --- Stream IDs (increment-on-write registers) ---
@@ -1329,6 +1354,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["NUM_DOWNSTREAM_CHANNELS"] = static_cast<uint32_t>(config.num_fwd_paths);
     named_args["NUM_DOWNSTREAM_SENDERS_VC0"] = num_vc0_downstream_edms;
     named_args["NUM_DOWNSTREAM_SENDERS_VC1"] = num_vc1_downstream_edms;
+    named_args["NUM_DOWNSTREAM_SENDERS_VC2"] = num_vc2_downstream_edms;
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);
     named_args["ETH_TXQ_SEQ_UPDATE_TIMEOUT"] = this->eth_txq_seq_update_timeout;
@@ -1351,9 +1377,13 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // agree across every VC1 link, since the acking receiver and upstream sender are on different
     // routers, so it cannot be enabled per-router.
     named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;
+    named_args["ENABLE_FIRST_LEVEL_ACK_VC2"] = final_enable_first_level_ack_vc2 ? 1 : 0;
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["VC0_DOWNSTREAM_EDM_SIZE"] = vc0_downstream_edm_size;
     named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;
+    named_args["VC2_DOWNSTREAM_EDM_SIZE"] = vc2_downstream_edm_size;
+    // VC2's mode (TT_METAL_FABRIC_VC2_LINE): line mode routes VC2 like 1D along one mesh axis.
+    named_args["VC2_LINE_MODE"] = vc2_line_mode ? 1 : 0;
     named_args["ACTUAL_VC0_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc0);
     named_args["ACTUAL_VC1_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc1);
     named_args["ACTUAL_VC2_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc2);
@@ -1413,10 +1443,19 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         const bool vc0_crossover_to_vc1 = intermesh_config.vc0_crossover_to_vc1_for(this->is_inter_mesh);
         const bool vc1_serviced = intermesh_config.vc1_serviced_for(this->is_inter_mesh);
         const bool open_vc0_downstreams = this->is_receiver_channel_serviced_[risc_id][0];
+        // VC2 line mode: VC2's receiver crosses over onto VC1 too (its packets from another mesh fan into VC1).
+        const size_t vc2_receiver = config.num_used_receiver_channels_per_vc[1] > 0 ? 2 : 1;
+        const bool vc2_crossover = vc0_crossover_to_vc1 && vc2_forwards &&
+                                   this->is_receiver_channel_serviced_[risc_id][vc2_receiver];
         const bool open_vc1_downstreams = (vc0_crossover_to_vc1 && this->is_receiver_channel_serviced_[risc_id][0]) ||
-                                          (vc1_serviced && this->is_receiver_channel_serviced_[risc_id][1]);
+                                          (vc1_serviced && this->is_receiver_channel_serviced_[risc_id][1]) ||
+                                          vc2_crossover;
         named_args["OPEN_DOWNSTREAM_VC0_CONNECTIONS"] = static_cast<uint32_t>(open_vc0_downstreams);
         named_args["OPEN_DOWNSTREAM_VC1_CONNECTIONS"] = static_cast<uint32_t>(open_vc1_downstreams);
+        // VC2 (line mode): its receiver channel forwards on VC2's connection.
+        const size_t vc2_receiver_channel = config.num_used_receiver_channels_per_vc[1] > 0 ? 2 : 1;
+        named_args["OPEN_DOWNSTREAM_VC2_CONNECTIONS"] =
+            static_cast<uint32_t>(vc2_forwards && this->is_receiver_channel_serviced_[risc_id][vc2_receiver_channel]);
     }
 
     // --- Structural per-RISC role flags (untrimmed — do NOT gate on trimming) ---
@@ -1464,9 +1503,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["MESH_Y_SIZE"] = mesh_shape[0];
         named_args["MESH_X_SIZE"] = mesh_shape[1];
         // Both carrier VCs accept intermesh landings: neighboring workers inject on VC0, so landings
-        // are not confined to VC1. VC2 is excluded by builder policy.
+        // are not confined to VC1. Neighbour-mode VC2 only delivers, so it never lands.
         for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-            named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] = (is_inter_mesh && i < 2) ? 1 : 0;
+            // VC2 in line mode lands too: its packets from another mesh fan into VC1 here, as VC0's.
+            const bool vc2_lands = vc2_forwards && i == (config.num_used_receiver_channels_per_vc[1] > 0 ? 2u : 1u);
+            named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] =
+                (is_inter_mesh && (i < 2 || vc2_lands)) ? 1 : 0;
         }
     }
 
@@ -1584,16 +1626,19 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     };
     named_args["DISABLE_RX_CH0_FORWARDING"] = compute_disable_rx_forwarding(0);
     named_args["DISABLE_RX_CH1_FORWARDING"] = compute_disable_rx_forwarding(1);
-    named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
+    // VC2's receiver forwards in line mode only (neighbour exchange: it delivers every packet).
+    named_args["DISABLE_RX_CH2_FORWARDING"] = vc2_line_mode ? compute_disable_rx_forwarding(2) : 1;
     // A receiver channel left serviced (the capture saw it consume packets) while its VC shows neither forwards nor
     // local writes contradicts itself: every packet a receiver consumes is forwarded or written here. The router takes
     // the two flags as agreeing (forwarding is off on a serviced channel only where the channel delivers every packet:
     // VC2's, VC0's on a speedy router), so such a capture is a capture failure.
-    for (size_t vc = 0; vc < 2; vc++) {
-        const bool vc_has_receiver = vc == 0 || config.num_used_receiver_channels_per_vc[1] != 0;
-        const bool delivers_only = vc == 0 && enable_speedy_vc0 && !this->has_drisc_offload();
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; vc++) {
+        const bool vc_has_receiver = vc == 0 || config.num_used_receiver_channels_per_vc[vc] != 0;
+        const bool delivers_only = (vc == 0 && enable_speedy_vc0 && !this->has_drisc_offload()) || (vc == 2 && !vc2_line_mode);
+        // The VC's receiver channel: VC2's is channel 1 on routers without VC1.
+        const size_t receiver_channel = vc == 2 && config.num_used_receiver_channels_per_vc[1] == 0 ? 1 : vc;
         TT_FATAL(
-            !vc_has_receiver || delivers_only || !this->is_receiver_channel_serviced_[risc_id][vc] ||
+            !vc_has_receiver || delivers_only || !this->is_receiver_channel_serviced_[risc_id][receiver_channel] ||
                 compute_disable_rx_forwarding(vc) == 0,
             "Channel trimming capture is inconsistent for the router at fabric node {}, Ethernet channel {}: receiver "
             "channel {} (VC{}) consumed packets but the capture records neither forwards nor local writes on its VC. "
@@ -1755,6 +1800,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
     if (needs_vc1) {
         receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
+    }
+    // VC2's, where VC2's receiver forwards (line mode).
+    if (builder_context_vc2_line(fabric_context_) && config.num_used_receiver_channels_per_vc[2] > 0) {
+        receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(2, rt_args);
     }
 
     // Pack runtime args - device side reads fixed MAX_NUM_SENDER_CHANNELS values

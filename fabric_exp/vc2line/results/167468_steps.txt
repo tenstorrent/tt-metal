@@ -1,0 +1,14 @@
+node=bh-glx-120-c04u08 job=167468 start=2026-11-01T21:00:54Z tree=vc2l_p4c steps=perfab perfab_vc1x2 perfab_vc2x2 perfns perf
+=== tt-smi -glx_reset (before the steps) 21:01:50: 6.6.0
+reset: exit 0, Blackhole chips listed: 64
+=== perfab (21:02:56): glx_allvc_perf_ab.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3
+perfab: exit 0 in 50 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== perfab_vc1x2 (21:03:46): glx_allvc_perf_ab.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_SLOTS_VC1=6,5,16,8,8,4,4,4
+perfab_vc1x2: exit 0 in 40 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== perfab_vc2x2 (21:04:26): glx_allvc_perf_ab.yaml, timeout 600 s TT_METAL_FABRIC_OPT_LEVEL=O3 TT_FABRIC_EXP_SLOTS_VC1=4,7,16,4,4,8,8,8
+perfab_vc2x2: exit 0 in 40 s; per rank:       2 Tests: 4 executed, 0 failed;
+=== perfns (21:05:06): glx_allvc_perf_nosync.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3
+perfns: exit 0 in 50 s; per rank:       2 Tests: 10 executed, 0 failed;
+=== perf (21:05:56): glx_allvc_perf.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3
+perf: exit 0 in 40 s; per rank:       2 Tests: 14 executed, 0 failed;
+done 21:06:36

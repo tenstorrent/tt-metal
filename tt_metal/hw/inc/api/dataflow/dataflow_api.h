@@ -2351,7 +2351,8 @@ template <
     bool posted = false,
     bool update_addr_hi = false,
     bool update_val = false,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>  // the caller has already seen the command buffer ready
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
 #ifdef ARCH_BLACKHOLE
@@ -2371,7 +2372,8 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
         update_val,
         posted,
         update_counter_in_callee,
-        dst_type>(noc, cmd_buf, val, addr);
+        dst_type,
+        skip_cmdbuf_chk>(noc, cmd_buf, val, addr);
     WAYPOINT("NWID");
 }
 

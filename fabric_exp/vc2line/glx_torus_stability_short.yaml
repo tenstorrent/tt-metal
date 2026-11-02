@@ -1,0 +1,90 @@
+# test_fabric_2d_torus_stability.yaml's _short tests (one iteration each): Mesh, 2D torus XY, Linear, Ring all-to-all.
+Tests:
+- name: AllToAllMesh_short
+  enable_flow_control: true
+  fabric_setup:
+    topology: Mesh
+    num_links: max
+  top_level_iterations: 1
+  parametrization_params:
+    ftype:
+    - unicast
+    - mcast
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+- name: AllToAll2DTorus_short
+  enable_flow_control: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+    num_links: max
+  top_level_iterations: 1
+  parametrization_params:
+    ftype:
+    - unicast
+    - mcast
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+- name: AllToAllLinear_short
+  enable_flow_control: true
+  fabric_setup:
+    topology: Linear
+    num_links: max
+  top_level_iterations: 1
+  parametrization_params:
+    ftype:
+    - unicast
+    - mcast
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+- name: AllToAllRing_short
+  enable_flow_control: true
+  fabric_setup:
+    topology: Ring
+    num_links: max
+  top_level_iterations: 1
+  parametrization_params:
+    ftype:
+    - mcast
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+    size:
+    - 2048
+    - 4096
+  defaults:
+    num_packets: 20000
+  patterns:
+  - type: all_to_all

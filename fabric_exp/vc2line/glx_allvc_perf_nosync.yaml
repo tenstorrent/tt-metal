@@ -1,0 +1,75 @@
+# Phase 4 per-flow rates without sync (VC2_LINE_BRINGUP.md): glx_allvc_perf.yaml's several-flow tests with sync off, so
+# each sender times only its own send loop (tt_fabric_test_sender.cpp) and the profiler's per-sender lines give each
+# flow's own rate; with sync the senders of a mesh all report the end of the global sync. Without sync the flows start
+# at their programs' launch, so start skew between chips of a rank enters each flow's time; the one-flow tests here
+# (against the same tests with sync in glx_allvc_perf.yaml) show its size.
+#   NsInterVC0, NsInterVC2, NsInterVC0VC2   mesh 0 chip 2 (VC0, east through chip 3) and chip 3 (VC2) to mesh 1 chip 1:
+#                                           one intermesh exit, one landing router, its VC1 shared by both crossovers
+#   NsIntraVC0VC2                           mesh 0 chip 2 (VC0, north then east) and chip 0 (VC2) to chip 1
+#   NsAll                                   glx_allvc_perf.yaml's All: one flow per sender chip and first hop
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+
+Tests:
+  - name: "NsInterVC0"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 2], vc_id: 0, patterns: [{destination: {device: [1, 1]}}]}
+
+  - name: "NsInterVC2"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 3], vc_id: 2, patterns: [{destination: {device: [1, 1]}}]}
+
+  - name: "NsInterVC0VC2"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 2], vc_id: 0, patterns: [{destination: {device: [1, 1]}}]}
+      - {device: [0, 3], vc_id: 2, patterns: [{destination: {device: [1, 1]}}]}
+
+  - name: "NsIntraVC0VC2"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 2], vc_id: 0, patterns: [{destination: {device: [0, 1]}}]}
+      - {device: [0, 0], vc_id: 2, patterns: [{destination: {device: [0, 1]}}]}
+
+  - name: "NsAll"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      # mesh 0 (20000 packets per flow)
+      - {device: [0, 0], vc_id: 0, patterns: [{destination: {device: [0, 2]}}]}
+      - {device: [0, 0], vc_id: 2, patterns: [{destination: {device: [0, 1]}}]}
+      - {device: [0, 1], vc_id: 0, patterns: [{destination: {device: [0, 3]}}]}
+      - {device: [0, 1], vc_id: 2, patterns: [{destination: {device: [1, 1]}}]}
+      - {device: [0, 2], vc_id: 0, patterns: [{destination: {device: [1, 1]}}]}
+      - {device: [0, 3], vc_id: 0, patterns: [{destination: {device: [0, 1]}}]}
+      - {device: [0, 3], vc_id: 2, patterns: [{destination: {device: [1, 2]}}]}
+      # mesh 1 (16000 packets per flow)
+      - {device: [1, 0], vc_id: 0, patterns: [{destination: {device: [1, 1]}, num_packets: 16000}]}
+      - {device: [1, 0], vc_id: 2, patterns: [{destination: {device: [0, 0]}, num_packets: 16000}]}
+      - {device: [1, 1], vc_id: 0, patterns: [{destination: {device: [0, 3]}, num_packets: 16000}]}
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [1, 3]}, num_packets: 16000}]}
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [0, 1]}, num_packets: 16000}]}
+      - {device: [1, 3], vc_id: 2, patterns: [{destination: {device: [1, 1]}, num_packets: 16000}]}

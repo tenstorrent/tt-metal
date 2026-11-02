@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Verifies requirement-driven stream-register placement, budget enforcement, pinned-id exclusivity,
-// deterministic layout, the kernel's 38-name CT-arg set, and inactive-consumer sentinels. The
+// deterministic layout, the kernel's 39-name CT-arg set, and inactive-consumer sentinels. The
 // {express, VC1 absent} case requires 20 of 32 registers.
 
 #include <gtest/gtest.h>
@@ -105,6 +105,42 @@ TEST(StreamAssignmentTest, ExpressFullFitsWithVc1OnCounters) {
     EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 1, 3), 29u);
     EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 0));
     EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_ACKED, 1, 0));
+}
+
+// VC2 line mode: VC2's forwarding channel (flat position after its pinned worker) and its one downstream (straight on)
+// take registers of their own from the run; neighbour mode takes none.
+TEST(StreamAssignmentTest, Vc2LineModeForwardingChannelAndDownstream) {
+    CreditTransportPlan plan{};
+    plan.vc0_uses_counters = true;
+    plan.vc2_uses_counters = true;
+    const StreamPlacementInputs line{
+        .max_sender_counts = {4, 0, 2}, .max_receiver_counts = {1, 0, 1}, .vc2_present = true, .tensix_relay_present = false};
+    const auto a = make_stream_assignment(stream_requirements(line, plan));
+    ASSERT_TRUE(a.has(StreamRole::SENDER_FREE_SLOTS, 2, 0));
+    ASSERT_TRUE(a.has(StreamRole::DOWNSTREAM_FREE_SLOTS, 2, 0));
+    std::map<std::string, uint32_t> args;
+    for (const auto& [name, value] : a.named_args()) {
+        args[name] = value;
+    }
+    EXPECT_EQ(args.at("SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"), 30u);  // VC2's worker: pinned
+    EXPECT_EQ(args.at("SENDER_CHANNEL_5_FREE_SLOTS_STREAM_ID"), a.id(StreamRole::SENDER_FREE_SLOTS, 2, 0));
+    EXPECT_EQ(args.at("VC2_FREE_SLOTS_FROM_DOWNSTREAM_STREAM_ID"), a.id(StreamRole::DOWNSTREAM_FREE_SLOTS, 2, 0));
+    EXPECT_LT(a.id(StreamRole::SENDER_FREE_SLOTS, 2, 0), 30u);
+    EXPECT_LT(a.id(StreamRole::DOWNSTREAM_FREE_SLOTS, 2, 0), 30u);
+    // Every allocated register is distinct.
+    std::set<uint32_t> ids;
+    size_t allocated = 0;
+    for (const auto& [name, value] : args) {
+        if (value < 30u && name.find("SYNC") == std::string::npos) {
+            ids.insert(value);
+            allocated++;
+        }
+    }
+    EXPECT_EQ(ids.size(), allocated);
+
+    const auto neighbour = make_stream_assignment(stream_requirements(vc2_without_vc1_placement(), plan));
+    EXPECT_FALSE(neighbour.has(StreamRole::SENDER_FREE_SLOTS, 2, 0));
+    EXPECT_FALSE(neighbour.has(StreamRole::DOWNSTREAM_FREE_SLOTS, 2, 0));
 }
 
 TEST(StreamAssignmentTest, Vc2ReceiverTakesChannelOneWhenVc1IsAbsent) {

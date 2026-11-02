@@ -1,0 +1,119 @@
+# VC0, VC1 and VC2 carrying traffic at once (VC2_LINE_BRINGUP.md, phase 4): one Blackhole Galaxy split into two 2x2
+# meshes (glx_2x2_split_*, one MPI rank per mesh), every flow below concurrent, data-checked, flow control on, VC2 in
+# line mode. Devices are [mesh_id, chip_id]; a 2x2 mesh's chips are 0 (row 0, col 0), 1 (0, 1), 2 (1, 0), 3 (1, 1).
+# Placement (phase 3, mock and Galaxy agree): mesh 0 leaves at chip 1 (facing N) and chip 3 (facing E); mesh 1 at chip 0
+# (facing N) and chip 2 (facing S).
+#   VC0 inside each mesh   2D unicast that turns (both ways) and a 2D multicast over the mesh
+#   VC0 between meshes     from mesh 0's exit chips and chip 2, and from three of mesh 1's chips: VC0 in the source mesh,
+#                          VC1 (crossover at the intermesh router) in the destination mesh
+#   VC2 inside each mesh   1-hop lines (straight)
+#   VC2 between meshes     from every exit chip and mesh 0's chip 2 (its line runs to chip 3 and out east): VC2 in the
+#                          source mesh, VC1 after the crossover
+# VC0's and VC2's flows between the meshes leave through the same exit routers (mesh 0's chips 1 and 3, mesh 1's 0 and 2)
+# and land on the same intermesh routers, so their crossovers share VC1's downstream connections while both are busy.
+# Multicasts are writes (pattern-level ntype); every other flow takes the parametrized ntype.
+Tests:
+  - name: "AllVCsConcurrent"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      vc2_line: true
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+      size: [1024, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 5000
+    senders:
+      # --- VC0 inside each mesh ---
+      - device: [0, 0]
+        vc_id: 0
+        patterns:
+          - destination: {device: [0, 3]}
+      - device: [0, 3]
+        vc_id: 0
+        patterns:
+          - destination: {device: [0, 0]}
+      - device: [0, 0]
+        vc_id: 0
+        patterns:
+          - {ftype: mcast, ntype: unicast_write, destination: {hops: {E: 1, S: 1}}}
+      - device: [1, 1]
+        vc_id: 0
+        patterns:
+          - destination: {device: [1, 2]}
+      - device: [1, 2]
+        vc_id: 0
+        patterns:
+          - destination: {device: [1, 1]}
+      - device: [1, 1]
+        vc_id: 0
+        patterns:
+          - {ftype: mcast, ntype: unicast_write, destination: {hops: {W: 1, S: 1}}}
+      # --- VC0 between the meshes (VC1 in the destination mesh) ---
+      - device: [0, 1]
+        vc_id: 0
+        patterns:
+          - destination: {device: [1, 2]}
+      - device: [0, 3]
+        vc_id: 0
+        patterns:
+          - destination: {device: [1, 1]}
+      - device: [0, 2]
+        vc_id: 0
+        patterns:
+          - destination: {device: [1, 3]}
+      - device: [1, 0]
+        vc_id: 0
+        patterns:
+          - destination: {device: [0, 3]}
+      - device: [1, 2]
+        vc_id: 0
+        patterns:
+          - destination: {device: [0, 1]}
+      - device: [1, 3]
+        vc_id: 0
+        patterns:
+          - destination: {device: [0, 0]}
+      # --- VC2 inside each mesh (straight lines) ---
+      - device: [0, 0]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, 1]}
+      - device: [0, 2]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, 0]}
+      - device: [1, 3]
+        vc_id: 2
+        patterns:
+          - destination: {device: [1, 2]}
+      - device: [1, 1]
+        vc_id: 2
+        patterns:
+          - destination: {device: [1, 3]}
+      # --- VC2 between the meshes (fanning into VC1) ---
+      - device: [0, 1]
+        vc_id: 2
+        patterns:
+          - destination: {device: [1, 1]}
+          - destination: {device: [1, 3]}
+      - device: [0, 3]
+        vc_id: 2
+        patterns:
+          - destination: {device: [1, 0]}
+          - destination: {device: [1, 2]}
+      - device: [0, 2]
+        vc_id: 2
+        patterns:
+          - destination: {device: [1, 0]}
+      - device: [1, 0]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, 0]}
+          - destination: {device: [0, 2]}
+      - device: [1, 2]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, 1]}
+          - destination: {device: [0, 3]}

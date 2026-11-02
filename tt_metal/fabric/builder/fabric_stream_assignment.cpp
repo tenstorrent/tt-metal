@@ -78,9 +78,15 @@ StreamRequirements stream_requirements(const StreamPlacementInputs& placement, c
     need.add(StreamRole::DOWNSTREAM_FREE_SLOTS, 0, placement.max_receiver_counts[0] > 0 ? downstream_span_per_vc : 0);
     need.add(StreamRole::DOWNSTREAM_FREE_SLOTS, 1, placement.max_receiver_counts[1] > 0 ? downstream_span_per_vc : 0);
 
-    // VC2's sender and receiver ride pinned registers, so VC2 takes no group here.
+    // VC2's worker channel and receiver ride pinned registers. In line mode VC2 also has forwarding channels (its
+    // channels past the worker; one, fed by the router facing the opposite way) and one downstream (straight on): a
+    // group each. Neighbour exchange takes no group here.
+    const uint32_t vc2_forwarding_channels =
+        placement.vc2_present && placement.max_sender_counts[2] > 1 ? placement.max_sender_counts[2] - 1 : 0;
+    need.add(StreamRole::DOWNSTREAM_FREE_SLOTS, 2, vc2_forwarding_channels > 0 ? num_vc2_downstream_free_slots_names : 0);
     need.add(StreamRole::SENDER_FREE_SLOTS, 0, placement.max_sender_counts[0]);
     need.add(StreamRole::SENDER_FREE_SLOTS, 1, placement.max_sender_counts[1]);
+    need.add(StreamRole::SENDER_FREE_SLOTS, 2, vc2_forwarding_channels);
 
     need.vc2_present = placement.vc2_present;
     need.tensix_relay_present = placement.tensix_relay_present;
@@ -125,6 +131,7 @@ std::set<std::string> expected_stream_name_set() {
             names.insert(fmt::format("VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID", vc, compact));
         }
     }
+    names.insert("VC2_FREE_SLOTS_FROM_DOWNSTREAM_STREAM_ID");
     for (uint32_t flat = 0; flat < builder_config::num_max_sender_channels; ++flat) {
         names.insert(fmt::format("SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", flat));
     }
@@ -183,12 +190,24 @@ void StreamAssignment::emit_flat_table(
     // The walk may not overrun the declared table: if it does, the group's flat span exceeds the
     // kernel's declared extent, and that failure belongs to this table, not the aggregate count.
     TT_FATAL(flat <= extent, "Table {} walked {} flat positions, the kernel declares {}", pattern, flat, extent);
+    // VC2's channels past its worker (line mode: its forwarding channel) take the group's registers.
+    const uint32_t vc2_forwarding = group_count(role, 2);
+    TT_FATAL(
+        vc2_forwarding == 0 || sender_flat_base_[2] + 1 + vc2_forwarding <= extent,
+        "Table {}: VC2's forwarding channels end at flat position {}, past the kernel's {}",
+        pattern,
+        sender_flat_base_[2] + 1 + vc2_forwarding,
+        extent);
     for (; flat < extent; ++flat) {
         // The VC2 sender's flat slot rides its pinned register, not the sentinel.
         const bool is_vc2_slot = role == StreamRole::SENDER_FREE_SLOTS && vc2_present_ && flat == sender_flat_base_[2];
+        const bool is_vc2_forwarding = vc2_forwarding > 0 && flat > sender_flat_base_[2] &&
+                                       flat <= sender_flat_base_[2] + vc2_forwarding;
         out.emplace_back(
             fmt::format(fmt::runtime(pattern), flat),
-            is_vc2_slot ? StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id : k_unused_stream_id);
+            is_vc2_slot         ? StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id
+            : is_vc2_forwarding ? id(role, 2, flat - sender_flat_base_[2] - 1)
+                                : k_unused_stream_id);
     }
 }
 
@@ -216,6 +235,11 @@ std::vector<std::pair<std::string, uint32_t>> StreamAssignment::named_args() con
                                                                     : k_unused_stream_id);
         }
     }
+
+    // VC2's one downstream (line mode).
+    out.emplace_back(
+        "VC2_FREE_SLOTS_FROM_DOWNSTREAM_STREAM_ID",
+        has(StreamRole::DOWNSTREAM_FREE_SLOTS, 2, 0) ? id(StreamRole::DOWNSTREAM_FREE_SLOTS, 2, 0) : k_unused_stream_id);
 
     emit_flat_table(
         StreamRole::SENDER_FREE_SLOTS,

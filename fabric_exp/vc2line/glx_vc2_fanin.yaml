@@ -1,0 +1,87 @@
+# VC2 fan-in into VC1 on one Blackhole Galaxy split into two 2x2 meshes (glx_2x2_split_mgd.textproto, one MPI rank per
+# mesh; VC2_LINE_BRINGUP.md, phase 3). Data-checked, flow control on, VC2 in line mode. Devices are [mesh_id, chip_id];
+# a 2x2 mesh's chips are 0 (row 0, col 0), 1 (0, 1), 2 (1, 0), 3 (1, 1).
+# Placement on the mock of this split (the router-arg dump): mesh 0 leaves the mesh at chip 1 (facing N) and chip 3
+# (facing E); mesh 1 at chip 0 (facing N) and chip 2 (facing S). A VC2 flow to another mesh must go straight to its exit
+# and leave in the same direction (the test infra refuses any other at setup): here, from an exit chip itself, or mesh
+# 0's chip 2 through chip 3 (east). VC2 then crosses the intermesh link, lands at the other mesh's intermesh router and
+# fans into VC1, which carries it to its chip. VC0 is idle in every test here (VC0, VC1 and VC2 together is phase 4).
+Tests:
+  - name: "VC2FaninFromExitChips"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      vc2_line: true
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+      size: [1024, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 2000
+    senders:
+      - device: [0, 1]
+        vc_id: 2
+        patterns:
+          - destination: {device: [1, 0]}
+          - destination: {device: [1, 1]}
+          - destination: {device: [1, 2]}
+          - destination: {device: [1, 3]}
+      - device: [0, 3]
+        vc_id: 2
+        patterns:
+          - destination: {device: [1, 0]}
+          - destination: {device: [1, 1]}
+          - destination: {device: [1, 2]}
+          - destination: {device: [1, 3]}
+      - device: [1, 0]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, 0]}
+          - destination: {device: [0, 1]}
+          - destination: {device: [0, 2]}
+          - destination: {device: [0, 3]}
+      - device: [1, 2]
+        vc_id: 2
+        patterns:
+          - destination: {device: [0, 0]}
+          - destination: {device: [0, 1]}
+          - destination: {device: [0, 2]}
+          - destination: {device: [0, 3]}
+
+  # A VC2 line that runs through its mesh to the edge first: mesh 0's chip 2 -> chip 3 -> east into mesh 1.
+  - name: "VC2FaninLineToEdge"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      vc2_line: true
+    parametrization_params:
+      ntype: [unicast_write, fused_atomic_inc]
+      size: [1024, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 2000
+    senders:
+      - device: [0, 2]
+        vc_id: 2
+        patterns:
+          - destination: {device: [1, 0]}
+          - destination: {device: [1, 1]}
+          - destination: {device: [1, 2]}
+          - destination: {device: [1, 3]}
+
+  # One hop over every intermesh link, both ways, on VC2 (lands and is delivered at the intermesh router's chip).
+  - name: "VC2FaninNeighbourExchangeInter"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      vc2_line: true
+    parametrization_params:
+      size: [1024, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 5000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+        vc_id: 2

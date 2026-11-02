@@ -42,8 +42,9 @@ using WorkerToFabricEdmSenderVC2Impl =
 using WorkerToFabricEdmSenderVC2 = WorkerToFabricEdmSenderVC2Impl<false, 0>;
 
 namespace fabric_detail{
-    template <bool STATEFUL_NOC>
-    void update_credits_and_slots(WorkerToFabricEdmSender*);
+    // Any worker-to-fabric sender (VC0/VC1's, VC2's): the benchmark-mode send's credit update.
+    template <bool STATEFUL_NOC, typename EdmSenderT>
+    void update_credits_and_slots(EdmSenderT*);
     }
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
@@ -676,8 +677,8 @@ struct WorkerToFabricEdmSenderBase {
     uint8_t sync_noc_cmd_buf;
 
 private:
-    template <bool STATEFUL_NOC>
-    friend void fabric_detail::update_credits_and_slots(WorkerToFabricEdmSender*);
+    template <bool STATEFUL_NOC, typename EdmSenderT>
+    friend void fabric_detail::update_credits_and_slots(EdmSenderT*);
 
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
@@ -806,10 +807,10 @@ private:
 };
 
 namespace fabric_detail{
-    template <bool STATEFUL_NOC>
-    void update_credits_and_slots(WorkerToFabricEdmSender* conn){
+    template <bool STATEFUL_NOC, typename EdmSenderT>
+    void update_credits_and_slots(EdmSenderT* conn){
         conn->advance_buffer_slot_write_index();
-        conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
+        conn->template update_edm_buffer_free_slots<STATEFUL_NOC>();
     }
 } // namespace fabric_detail
 

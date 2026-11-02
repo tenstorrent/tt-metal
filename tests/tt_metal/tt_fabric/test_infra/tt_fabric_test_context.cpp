@@ -838,6 +838,49 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         }
     }
 
+    // VC2 in line mode routes like 1D: a VC2 flow goes straight along one mesh axis, in one direction (its router masks a
+    // turn and the packet would not arrive).
+    if (traffic_config.vc_id == tt::tt_fabric::fabric_tests::vc2_worker_vc_id && hops.has_value() &&
+        tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_vc2_line()) {
+        uint32_t directions = 0;
+        for (const auto& [direction, count] : hops.value()) {
+            directions += count > 0 ? 1 : 0;
+        }
+        TT_FATAL(
+            directions <= 1,
+            "VC2 line mode: the flow from {} goes in {} directions; a VC2 flow must go straight along one mesh axis",
+            src_node_id,
+            directions);
+    }
+    // A VC2 flow to another mesh leaves its mesh only where its line meets the mesh edge: every hop to the exit chip,
+    // and the exit itself, in one direction (then VC1 carries it in the destination mesh). Checked where the source is
+    // this process's, by walking the routing tables.
+    if (traffic_config.vc_id == tt::tt_fabric::fabric_tests::vc2_worker_vc_id &&
+        tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_vc2_line() &&
+        src_node_id.mesh_id != dst_node_ids[0].mesh_id && this->fixture_->is_local_fabric_node_id(src_node_id)) {
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        std::optional<RoutingDirection> line;
+        FabricNodeId at = src_node_id;
+        for (uint32_t steps = 0; at.mesh_id == src_node_id.mesh_id; steps++) {
+            TT_FATAL(steps < 256, "VC2 line mode: the route from {} to {} does not leave its mesh", src_node_id, dst_node_ids[0]);
+            const auto direction = control_plane.get_forwarding_direction(at, dst_node_ids[0]);
+            TT_FATAL(direction.has_value(), "VC2 line mode: no route from {} to {}", at, dst_node_ids[0]);
+            TT_FATAL(
+                !line.has_value() || *line == *direction,
+                "VC2 line mode: the flow from {} to {} turns at {} ({} then {}); a VC2 flow to another mesh must go "
+                "straight to its exit and leave the mesh in the same direction",
+                src_node_id,
+                dst_node_ids[0],
+                at,
+                *line,
+                *direction);
+            line = direction;
+            const auto neighbors = control_plane.get_chip_neighbors(at, *direction);
+            TT_FATAL(!neighbors.empty() && !neighbors.begin()->second.empty(), "VC2 line mode: no neighbor of {}", at);
+            at = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second.front());
+        }
+    }
+
     std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
     if (fixture_->is_2D_routing_enabled() && traffic_config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
         mcast_start_node_id = fixture_->get_mcast_start_node_id(src_node_id, hops.value());

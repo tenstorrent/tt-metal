@@ -534,6 +534,10 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
     if (fabric_setup_yaml["use_vc2"]) {
         fabric_setup.use_vc2 = parse_scalar<bool>(fabric_setup_yaml["use_vc2"]);
     }
+    if (fabric_setup_yaml["vc2_line"]) {
+        fabric_setup.vc2_line = parse_scalar<bool>(fabric_setup_yaml["vc2_line"]);
+        fabric_setup.use_vc2 = fabric_setup.use_vc2 || fabric_setup.vc2_line;
+    }
 
     return fabric_setup;
 }
@@ -3645,6 +3649,9 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TestFabricSetup
     }
     if (config.use_vc2) {
         out << YAML::Key << "use_vc2" << YAML::Value << true;
+    }
+    if (config.vc2_line) {
+        out << YAML::Key << "vc2_line" << YAML::Value << true;
     }
     out << YAML::EndMap;
 }

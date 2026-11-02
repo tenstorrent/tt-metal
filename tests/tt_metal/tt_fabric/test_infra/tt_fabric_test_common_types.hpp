@@ -280,6 +280,7 @@ struct TestFabricSetup {
     //   nullopt (key absent) → obey TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE / TT_METAL_FABRIC_TRIMMING_PROFILE
     std::optional<bool> enable_channel_trimming;
     bool use_vc2 = false;                     // When true, use private VC2 connection API instead of public API
+    bool vc2_line = false;  // VC2 line mode (TT_METAL_FABRIC_VC2_LINE): VC2 routes like 1D along one mesh axis; implies use_vc2
 };
 
 struct HighLevelPatternConfig {

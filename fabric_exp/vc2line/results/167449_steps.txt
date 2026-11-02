@@ -1,0 +1,10 @@
+node=bh-glx-120-c04u08 job=167449 start=2026-11-01T20:28:43Z tree=vc2l_p4b steps=perf perfab perfab_vc1x2 perfab_vc2x2 perf_r2
+=== tt-smi -glx_reset (before the steps) 20:29:20: 6.6.0
+reset: exit 0, Blackhole chips listed: 64
+=== perf (20:30:24): glx_allvc_perf.yaml, timeout 1200 s TT_METAL_FABRIC_OPT_LEVEL=O3
+perf: exit 124 in 1201 s; per rank: NO RESULT
+!!! perf timed out (hang?): killing this job's processes, capturing, resetting the Galaxy, stopping
+=== hang capture perf_hangcap (20:50:30)
+hang capture: exit 0 (133M); output: /data/aagarwal/frs-glx/jobs/167449/results/perf_hangcap
+=== tt-smi -glx_reset (after a timeout in perf) 20:50:40: 6.6.0
+reset: exit 0, Blackhole chips listed: 64

@@ -1,0 +1,112 @@
+# First performance look at VC0, VC1 and VC2 together on the Galaxy 2x2 split (VC2_LINE_BRINGUP.md, phase 4; no
+# tuning). Benchmark mode (no data check; glx_allvc.yaml is the data-checked run). The bandwidth profiler reports one row
+# per (sender device, first-hop direction, link), so each VC's flow starts on a chip and direction of its own while the
+# flows share the link and the landing router under study:
+#   Inter   VC0 from mesh 0's chip 2 (east to chip 3, out of the mesh east, VC1 in mesh 1) and VC2 from chip 3 itself
+#           (out east at once, VC1 in mesh 1), both to mesh 1's chip 1: the same intermesh link, the same landing router,
+#           its VC1 downstream shared by both crossovers. Each alone, then together.
+#   Intra   VC0 from mesh 0's chip 2 (north to chip 0, then east) and VC2 from chip 0 (east), both to chip 1: the same
+#           chip 0 -> chip 1 link, VC0 forwarded on it, VC2 injected. Each alone, then together.
+#   All     VC0 and VC2 in both meshes and across, VC1 in both, one flow per (sender chip, first-hop direction): no
+#           test-infra mux, and the shape checkpoint 12's profiler accepts (two senders on one chip leaving the same way
+#           aborted it; the main tree's profiler change, used since job 167449, logs every sender). First hops
+#           are certain: 1-hop flows, straight VC2 lines, mesh 0's chip 2 to mesh 1 through chip 3 (phase 3); mesh 1's
+#           chip 1 sends alone. Mesh 1's flows send 16000 packets, mesh 0's 20000. Mesh 0's chip 3 exit carries VC0
+#           (from chip 2) and VC2 (from chip 3) into one landing router's VC1.
+# Timing: with sync (LINE_SYNC) a sender's cycles run from its first packet to the end of the test's global sync
+# (tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp, the timed region), so in a test with several
+# flows every sender reports about the slowest flow of its mesh: one-flow tests give that flow's rate, several-flow
+# tests the combined rate (all packets over the cycles); per-flow rates of several flows come from
+# glx_allvc_perf_nosync.yaml. Per-sender lines: the profiler's log ("Sender core ... (VCn) on device d direction D link
+# l: P packets in C cycles"; the per-sender CSV keeps one row per test and rank).
+# Not here: every flow of glx_allvc.yaml at once (job 167449, PerfAllFlows): two VC0 senders on one chip with one first
+# hop get a test-infra mux, and with sync but no flow control the sync core keeps its own connection manager
+# (tt_fabric_test_context.cpp, unified only with both), so it opens the same router worker channel directly; the
+# mux-fed senders on mesh 0 chip 0 and mesh 1 chip 1 sent nothing, every router was empty (hang capture). A hang rules
+# the shape out.
+# Devices are [mesh_id, chip_id]; 2x2 chips 0 (row 0, col 0), 1 (0, 1), 2 (1, 0), 3 (1, 1).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+
+Tests:
+  - name: "PerfInterVC0"
+    benchmark_mode: true
+    sync: true
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 2], vc_id: 0, patterns: [{destination: {device: [1, 1]}}]}
+
+  - name: "PerfInterVC2"
+    benchmark_mode: true
+    sync: true
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 3], vc_id: 2, patterns: [{destination: {device: [1, 1]}}]}
+
+  - name: "PerfInterVC0VC2"
+    benchmark_mode: true
+    sync: true
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 2], vc_id: 0, patterns: [{destination: {device: [1, 1]}}]}
+      - {device: [0, 3], vc_id: 2, patterns: [{destination: {device: [1, 1]}}]}
+
+  - name: "PerfIntraVC0"
+    benchmark_mode: true
+    sync: true
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 2], vc_id: 0, patterns: [{destination: {device: [0, 1]}}]}
+
+  - name: "PerfIntraVC2"
+    benchmark_mode: true
+    sync: true
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 0], vc_id: 2, patterns: [{destination: {device: [0, 1]}}]}
+
+  - name: "PerfIntraVC0VC2"
+    benchmark_mode: true
+    sync: true
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      - {device: [0, 2], vc_id: 0, patterns: [{destination: {device: [0, 1]}}]}
+      - {device: [0, 0], vc_id: 2, patterns: [{destination: {device: [0, 1]}}]}
+
+  - name: "PerfAll"
+    benchmark_mode: true
+    sync: true
+    fabric_setup: {topology: Mesh, vc2_line: true}
+    parametrization_params: {ntype: [unicast_write], size: [1024, 4096]}
+    defaults: {ftype: unicast, num_packets: 20000}
+    senders:
+      # mesh 0 (20000 packets per flow)
+      - {device: [0, 0], vc_id: 0, patterns: [{destination: {device: [0, 2]}}]}
+      - {device: [0, 0], vc_id: 2, patterns: [{destination: {device: [0, 1]}}]}
+      - {device: [0, 1], vc_id: 0, patterns: [{destination: {device: [0, 3]}}]}
+      - {device: [0, 1], vc_id: 2, patterns: [{destination: {device: [1, 1]}}]}
+      - {device: [0, 2], vc_id: 0, patterns: [{destination: {device: [1, 1]}}]}
+      - {device: [0, 3], vc_id: 0, patterns: [{destination: {device: [0, 1]}}]}
+      - {device: [0, 3], vc_id: 2, patterns: [{destination: {device: [1, 2]}}]}
+      # mesh 1 (16000 packets per flow)
+      - {device: [1, 0], vc_id: 0, patterns: [{destination: {device: [1, 1]}, num_packets: 16000}]}
+      - {device: [1, 0], vc_id: 2, patterns: [{destination: {device: [0, 0]}, num_packets: 16000}]}
+      - {device: [1, 1], vc_id: 0, patterns: [{destination: {device: [0, 3]}, num_packets: 16000}]}
+      - {device: [1, 2], vc_id: 0, patterns: [{destination: {device: [1, 3]}, num_packets: 16000}]}
+      - {device: [1, 2], vc_id: 2, patterns: [{destination: {device: [0, 1]}, num_packets: 16000}]}
+      - {device: [1, 3], vc_id: 2, patterns: [{destination: {device: [1, 1]}, num_packets: 16000}]}
+

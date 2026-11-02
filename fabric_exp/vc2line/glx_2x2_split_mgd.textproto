@@ -1,0 +1,27 @@
+# One Blackhole Galaxy's first tray split into two 2x2 meshes (VC2_LINE_BRINGUP.md, phase 3): cluster-descriptor chips
+# {0, 1, 4, 5} and {2, 3, 6, 7} (single_bh_galaxy_clus_desc: 0-1-2-3 and 4-5-6-7 are rows, 0-4 ... 3-7 columns), joined by
+# chip pairs 1-2 and 5-6, two links each. Two meshes with an intermesh connection turn VC1 on. Every mesh is 2x2, so no
+# E/W router inside a mesh forwards VC1 (the command-buffer-2 problem of larger meshes cannot occur; see the log).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 2 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

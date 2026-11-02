@@ -1,0 +1,45 @@
+# Idle-VC cost on the Galaxy 2x2 split (VC1 compiled in, idle): VC0 rows inside mesh 0, one flow per test, benchmark
+# without sync. VC2 (off, neighbour or line mode, idle) comes from the environment (vc2l_glx_mm.sbatch steps
+# split_idle_*), VC0 and VC1 depths pinned the same in every configuration. Devices [mesh, chip]; 2x2 chips 0 (row 0,
+# col 0), 1 (0, 1), 2 (1, 0), 3 (1, 1).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+
+Tests:
+  - name: "SIdle1HopEW"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, 0], vc_id: 0, patterns: [{destination: {device: [0, 1]}}]}
+
+  - name: "SIdle1HopNS"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, 0], vc_id: 0, patterns: [{destination: {device: [0, 2]}}]}
+
+  - name: "SIdle2Hop"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, 1], vc_id: 0, patterns: [{destination: {device: [0, 2]}}]}
+
+  - name: "SIdleMcast"
+    benchmark_mode: true
+    sync: false
+    fabric_setup: {topology: Mesh}
+    parametrization_params: {ntype: [unicast_write], size: [256, 1024, 4352]}
+    defaults: {ftype: unicast, num_packets: 40000}
+    senders:
+      - {device: [0, 0], vc_id: 0, patterns: [{ftype: mcast, destination: {hops: {E: 1, S: 1}}}]}

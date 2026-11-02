@@ -385,7 +385,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         // derivation classifies a VC1 intermesh landing's first protected egress as an acquisition,
         // which is the correct classification, but VC1 runs unguarded today -- so emitting the flag
         // there would demand a bubble the rest of the stack does not provide.
-        auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(vc)
+        auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(vc, intermesh_config.vc2_line)
                                       ? compute_sender_channel_injection_flags(producer_slots, vc, injection_policy)
                                       : std::vector<bool>(num_channels_in_vc, false);
         // Flatten into router-level vector

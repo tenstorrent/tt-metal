@@ -1,0 +1,206 @@
+
+## Idle VCs: split_idle two ERISCs (VC0 cycles per packet; deltas against split_idle_off)
+  test            size      split_idle_off      split_idle_nbr     split_idle_line   split_idle_off_r2
+  SIdle1HopEW      256               141.8      167.0 ( +25.3)      177.3 ( +35.5)      141.8 (  +0.0)
+  SIdle1HopEW     1024               143.5      167.3 ( +23.7)      177.4 ( +33.9)      143.6 (  +0.0)
+  SIdle1HopEW     4352               252.0      252.0 (  +0.0)      252.1 (  +0.0)      252.1 (  +0.0)
+  SIdle1HopNS      256               141.7      167.1 ( +25.4)      177.4 ( +35.8)      141.7 (  +0.0)
+  SIdle1HopNS     1024               142.4      167.5 ( +25.1)      177.4 ( +35.0)      142.4 (  -0.0)
+  SIdle1HopNS     4352               252.1      252.0 (  -0.0)      252.1 (  +0.0)      252.1 (  +0.0)
+  SIdle2Hop        256               310.4      332.2 ( +21.7)      335.0 ( +24.6)      310.6 (  +0.1)
+  SIdle2Hop       1024               315.4      337.2 ( +21.8)      343.4 ( +27.9)      315.3 (  -0.2)
+  SIdle2Hop       4352               334.2      382.1 ( +47.8)      389.4 ( +55.2)      334.5 (  +0.3)
+  SIdleMcast       256               141.8      167.1 ( +25.2)      177.2 ( +35.4)      141.9 (  +0.0)
+  SIdleMcast      1024               143.6      167.3 ( +23.7)      177.4 ( +33.8)      143.6 (  +0.0)
+  SIdleMcast      4352               252.0      252.0 (  +0.0)      252.1 (  +0.0)      252.1 (  +0.0)
+
+## Idle VCs: split_idle one ERISC (VC0 cycles per packet; deltas against split_idle_off_1e)
+  test            size   split_idle_off_1e   split_idle_nbr_1e  split_idle_line_1e
+  SIdle1HopEW      256               266.7      305.4 ( +38.7)      330.7 ( +64.0)
+  SIdle1HopEW     1024               266.8      305.3 ( +38.6)      330.9 ( +64.2)
+  SIdle1HopEW     4352               267.1      305.6 ( +38.5)      331.0 ( +63.9)
+  SIdle1HopNS      256               252.9      287.2 ( +34.3)      300.3 ( +47.4)
+  SIdle1HopNS     1024               253.0      287.2 ( +34.2)      300.4 ( +47.4)
+  SIdle1HopNS     4352               253.5      287.5 ( +34.0)      300.7 ( +47.2)
+  SIdle2Hop        256               453.5      495.4 ( +41.9)      518.2 ( +64.8)
+  SIdle2Hop       1024               460.4      500.1 ( +39.7)      523.5 ( +63.1)
+  SIdle2Hop       4352               491.6      536.9 ( +45.2)      555.7 ( +64.1)
+  SIdleMcast       256               266.7      305.3 ( +38.6)      330.7 ( +64.0)
+  SIdleMcast      1024               266.8      305.4 ( +38.7)      330.8 ( +64.0)
+  SIdleMcast      4352               267.2      305.7 ( +38.6)      331.2 ( +64.0)
+
+## Full VCs: full (per flow: VC, sender, cycles per packet, packets per us, GB/s; aggregate = all flows' packets over the slowest flow's cycles)
+  LVC0        256  aggregate   177.6 cyc/pkt =   7.60 pkt/us =   1.95 GB/s | best one-VC 177.6 | wire est 19.6 | VC0 m1c2E 177.6
+  LVC0       1024  aggregate   177.5 cyc/pkt =   7.61 pkt/us =   7.79 GB/s | best one-VC 177.5 | wire est 62.4 | VC0 m1c2E 177.5
+  LVC0       4352  aggregate   252.1 cyc/pkt =   5.36 pkt/us =  23.31 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m1c2E 252.1
+  LVC2        256  aggregate   448.0 cyc/pkt =   3.01 pkt/us =   0.77 GB/s | best one-VC 177.6 | wire est 19.6 | VC2 m1c2E 448.0
+  LVC2       1024  aggregate   459.1 cyc/pkt =   2.94 pkt/us =   3.01 GB/s | best one-VC 177.5 | wire est 62.4 | VC2 m1c2E 459.1
+  LVC2       4352  aggregate   507.2 cyc/pkt =   2.66 pkt/us =  11.58 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m1c2E 507.2
+  LVC1        256  aggregate   467.2 cyc/pkt =   2.89 pkt/us =   0.74 GB/s | best one-VC 177.6 | wire est 19.6 | VC0 m0c3E 467.2
+  LVC1       1024  aggregate   483.9 cyc/pkt =   2.79 pkt/us =   2.86 GB/s | best one-VC 177.5 | wire est 62.4 | VC0 m0c3E 483.9
+  LVC1       4352  aggregate   556.5 cyc/pkt =   2.43 pkt/us =  10.56 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m0c3E 556.5
+  LVC0VC2     256  aggregate   239.1 cyc/pkt =   5.65 pkt/us =   1.45 GB/s | best one-VC 177.6 | wire est 19.6 | VC2 m1c2E 478.2; VC0 m1c2E 239.7
+  LVC0VC2    1024  aggregate   244.0 cyc/pkt =   5.53 pkt/us =   5.67 GB/s | best one-VC 177.5 | wire est 62.4 | VC2 m1c2E 487.9; VC0 m1c2E 238.6
+  LVC0VC2    4352  aggregate   345.1 cyc/pkt =   3.91 pkt/us =  17.03 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m1c2E 690.1; VC0 m1c2E 320.2
+  LAll        256  aggregate   186.1 cyc/pkt =   7.25 pkt/us =   1.86 GB/s | best one-VC 177.6 | wire est 19.6 | VC0 m0c3E 543.3; VC2 m1c2E 558.4; VC0 m1c2E 327.0
+  LAll       1024  aggregate   188.7 cyc/pkt =   7.15 pkt/us =   7.33 GB/s | best one-VC 177.5 | wire est 62.4 | VC0 m0c3E 553.0; VC2 m1c2E 566.1; VC0 m1c2E 325.8
+  LAll       4352  aggregate   270.2 cyc/pkt =   5.00 pkt/us =  21.74 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m0c3E 810.7; VC2 m1c2E 807.3; VC0 m1c2E 397.4
+  IVC0        256  aggregate   222.6 cyc/pkt =   6.06 pkt/us =   1.55 GB/s | best one-VC 222.6 | wire est 19.6 | VC0 m0c3E 222.6
+  IVC0       1024  aggregate   222.8 cyc/pkt =   6.06 pkt/us =   6.21 GB/s | best one-VC 222.8 | wire est 62.4 | VC0 m0c3E 222.8
+  IVC0       4352  aggregate   252.1 cyc/pkt =   5.36 pkt/us =  23.31 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m0c3E 252.1
+  IVC2        256  aggregate   494.8 cyc/pkt =   2.73 pkt/us =   0.70 GB/s | best one-VC 222.6 | wire est 19.6 | VC2 m0c3E 494.8
+  IVC2       1024  aggregate   505.9 cyc/pkt =   2.67 pkt/us =   2.73 GB/s | best one-VC 222.8 | wire est 62.4 | VC2 m0c3E 505.9
+  IVC2       4352  aggregate   575.3 cyc/pkt =   2.35 pkt/us =  10.21 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m0c3E 575.3
+  IVC0VC2     256  aggregate   290.6 cyc/pkt =   4.65 pkt/us =   1.19 GB/s | best one-VC 222.6 | wire est 19.6 | VC2 m0c3E 581.1; VC0 m0c3E 353.0
+  IVC0VC2    1024  aggregate   295.3 cyc/pkt =   4.57 pkt/us =   4.68 GB/s | best one-VC 222.8 | wire est 62.4 | VC2 m0c3E 590.5; VC0 m0c3E 349.4
+  IVC0VC2    4352  aggregate   368.6 cyc/pkt =   3.66 pkt/us =  15.94 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m0c3E 737.2; VC0 m0c3E 322.1
+  RAll        256  aggregate    82.5 cyc/pkt =  16.37 pkt/us =   4.19 GB/s | best one-VC None | wire est 19.6 | VC0 m0c3E 467.2; VC0 m1c2S 347.1; VC2 m1c2N 496.5; VC0 m1c2N 234.3; VC2 m1c2E 478.0; VC2 m1c2S 577.4; VC0 m1c2E 239.7
+  RAll       1024  aggregate    83.9 cyc/pkt =  16.10 pkt/us =  16.48 GB/s | best one-VC None | wire est 62.4 | VC0 m0c3E 551.2; VC0 m1c2S 343.4; VC2 m1c2N 505.2; VC0 m1c2N 234.2; VC2 m1c2E 564.0; VC2 m1c2S 587.0; VC0 m1c2E 325.9
+  RAll       4352  aggregate   115.8 cyc/pkt =  11.66 pkt/us =  50.74 GB/s | best one-VC None | wire est 248.0 | VC0 m0c3E 810.6; VC0 m1c2S 322.9; VC2 m1c2N 690.8; VC0 m1c2N 322.1; VC2 m1c2E 806.8; VC2 m1c2S 748.9; VC0 m1c2E 397.3
+
+## Full VCs: full_r2 (per flow: VC, sender, cycles per packet, packets per us, GB/s; aggregate = all flows' packets over the slowest flow's cycles)
+  LVC0        256  aggregate   177.3 cyc/pkt =   7.61 pkt/us =   1.95 GB/s | best one-VC 177.3 | wire est 19.6 | VC0 m1c2E 177.3
+  LVC0       1024  aggregate   177.5 cyc/pkt =   7.60 pkt/us =   7.79 GB/s | best one-VC 177.5 | wire est 62.4 | VC0 m1c2E 177.5
+  LVC0       4352  aggregate   252.1 cyc/pkt =   5.36 pkt/us =  23.31 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m1c2E 252.1
+  LVC2        256  aggregate   448.1 cyc/pkt =   3.01 pkt/us =   0.77 GB/s | best one-VC 177.3 | wire est 19.6 | VC2 m1c2E 448.1
+  LVC2       1024  aggregate   458.9 cyc/pkt =   2.94 pkt/us =   3.01 GB/s | best one-VC 177.5 | wire est 62.4 | VC2 m1c2E 458.9
+  LVC2       4352  aggregate   507.5 cyc/pkt =   2.66 pkt/us =  11.58 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m1c2E 507.5
+  LVC1        256  aggregate   467.1 cyc/pkt =   2.89 pkt/us =   0.74 GB/s | best one-VC 177.3 | wire est 19.6 | VC0 m0c3E 467.1
+  LVC1       1024  aggregate   483.8 cyc/pkt =   2.79 pkt/us =   2.86 GB/s | best one-VC 177.5 | wire est 62.4 | VC0 m0c3E 483.8
+  LVC1       4352  aggregate   556.4 cyc/pkt =   2.43 pkt/us =  10.56 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m0c3E 556.4
+  LVC0VC2     256  aggregate   239.0 cyc/pkt =   5.65 pkt/us =   1.45 GB/s | best one-VC 177.3 | wire est 19.6 | VC2 m1c2E 478.1; VC0 m1c2E 239.7
+  LVC0VC2    1024  aggregate   244.1 cyc/pkt =   5.53 pkt/us =   5.66 GB/s | best one-VC 177.5 | wire est 62.4 | VC2 m1c2E 488.2; VC0 m1c2E 238.9
+  LVC0VC2    4352  aggregate   345.7 cyc/pkt =   3.91 pkt/us =  17.00 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m1c2E 691.4; VC0 m1c2E 320.2
+  LAll        256  aggregate   186.0 cyc/pkt =   7.26 pkt/us =   1.86 GB/s | best one-VC 177.3 | wire est 19.6 | VC0 m0c3E 542.1; VC2 m1c2E 558.1; VC0 m1c2E 325.6
+  LAll       1024  aggregate   188.8 cyc/pkt =   7.15 pkt/us =   7.32 GB/s | best one-VC 177.5 | wire est 62.4 | VC0 m0c3E 553.4; VC2 m1c2E 566.4; VC0 m1c2E 325.7
+  LAll       4352  aggregate   270.2 cyc/pkt =   5.00 pkt/us =  21.74 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m0c3E 810.6; VC2 m1c2E 806.7; VC0 m1c2E 397.3
+  IVC0        256  aggregate   222.6 cyc/pkt =   6.06 pkt/us =   1.55 GB/s | best one-VC 222.6 | wire est 19.6 | VC0 m0c3E 222.6
+  IVC0       1024  aggregate   222.8 cyc/pkt =   6.06 pkt/us =   6.21 GB/s | best one-VC 222.8 | wire est 62.4 | VC0 m0c3E 222.8
+  IVC0       4352  aggregate   252.1 cyc/pkt =   5.36 pkt/us =  23.31 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m0c3E 252.1
+  IVC2        256  aggregate   495.0 cyc/pkt =   2.73 pkt/us =   0.70 GB/s | best one-VC 222.6 | wire est 19.6 | VC2 m0c3E 495.0
+  IVC2       1024  aggregate   505.9 cyc/pkt =   2.67 pkt/us =   2.73 GB/s | best one-VC 222.8 | wire est 62.4 | VC2 m0c3E 505.9
+  IVC2       4352  aggregate   574.2 cyc/pkt =   2.35 pkt/us =  10.23 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m0c3E 574.2
+  IVC0VC2     256  aggregate   290.4 cyc/pkt =   4.65 pkt/us =   1.19 GB/s | best one-VC 222.6 | wire est 19.6 | VC2 m0c3E 580.8; VC0 m0c3E 353.5
+  IVC0VC2    1024  aggregate   295.1 cyc/pkt =   4.57 pkt/us =   4.68 GB/s | best one-VC 222.8 | wire est 62.4 | VC2 m0c3E 590.2; VC0 m0c3E 348.8
+  IVC0VC2    4352  aggregate   368.8 cyc/pkt =   3.66 pkt/us =  15.93 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m0c3E 737.7; VC0 m0c3E 322.1
+  RAll        256  aggregate    82.5 cyc/pkt =  16.36 pkt/us =   4.19 GB/s | best one-VC None | wire est 19.6 | VC0 m0c3E 466.9; VC0 m1c2S 346.7; VC2 m1c2N 496.5; VC0 m1c2N 234.7; VC2 m1c2E 478.2; VC2 m1c2S 577.5; VC0 m1c2E 239.8
+  RAll       1024  aggregate    84.0 cyc/pkt =  16.08 pkt/us =  16.47 GB/s | best one-VC None | wire est 62.4 | VC0 m0c3E 550.2; VC0 m1c2S 342.4; VC2 m1c2N 505.2; VC0 m1c2N 234.6; VC2 m1c2E 561.8; VC2 m1c2S 587.7; VC0 m1c2E 325.6
+  RAll       4352  aggregate   115.8 cyc/pkt =  11.66 pkt/us =  50.73 GB/s | best one-VC None | wire est 248.0 | VC0 m0c3E 810.7; VC0 m1c2S 323.0; VC2 m1c2N 691.5; VC0 m1c2N 322.0; VC2 m1c2E 807.1; VC2 m1c2S 748.4; VC0 m1c2E 397.2
+
+## Full VCs: full_vc1x2 (per flow: VC, sender, cycles per packet, packets per us, GB/s; aggregate = all flows' packets over the slowest flow's cycles)
+  LVC0        256  aggregate   186.6 cyc/pkt =   7.23 pkt/us =   1.85 GB/s | best one-VC 186.6 | wire est 19.6 | VC0 m1c2E 186.6
+  LVC0       1024  aggregate   186.9 cyc/pkt =   7.22 pkt/us =   7.39 GB/s | best one-VC 186.9 | wire est 62.4 | VC0 m1c2E 186.9
+  LVC0       4352  aggregate   252.0 cyc/pkt =   5.36 pkt/us =  23.31 GB/s | best one-VC 252.0 | wire est 248.0 | VC0 m1c2E 252.0
+  LVC2        256  aggregate   448.0 cyc/pkt =   3.01 pkt/us =   0.77 GB/s | best one-VC 186.6 | wire est 19.6 | VC2 m1c2E 448.0
+  LVC2       1024  aggregate   458.9 cyc/pkt =   2.94 pkt/us =   3.01 GB/s | best one-VC 186.9 | wire est 62.4 | VC2 m1c2E 458.9
+  LVC2       4352  aggregate   508.9 cyc/pkt =   2.65 pkt/us =  11.54 GB/s | best one-VC 252.0 | wire est 248.0 | VC2 m1c2E 508.9
+  LVC1        256  aggregate   332.2 cyc/pkt =   4.06 pkt/us =   1.04 GB/s | best one-VC 186.6 | wire est 19.6 | VC0 m0c3E 332.2
+  LVC1       1024  aggregate   332.7 cyc/pkt =   4.06 pkt/us =   4.16 GB/s | best one-VC 186.9 | wire est 62.4 | VC0 m0c3E 332.7
+  LVC1       4352  aggregate   338.2 cyc/pkt =   3.99 pkt/us =  17.37 GB/s | best one-VC 252.0 | wire est 248.0 | VC0 m0c3E 338.2
+  LVC0VC2     256  aggregate   244.7 cyc/pkt =   5.52 pkt/us =   1.41 GB/s | best one-VC 186.6 | wire est 19.6 | VC2 m1c2E 489.4; VC0 m1c2E 248.8
+  LVC0VC2    1024  aggregate   249.1 cyc/pkt =   5.42 pkt/us =   5.55 GB/s | best one-VC 186.9 | wire est 62.4 | VC2 m1c2E 498.3; VC0 m1c2E 246.9
+  LVC0VC2    4352  aggregate   347.2 cyc/pkt =   3.89 pkt/us =  16.92 GB/s | best one-VC 252.0 | wire est 248.0 | VC2 m1c2E 694.3; VC0 m1c2E 317.7
+  LAll        256  aggregate   185.8 cyc/pkt =   7.26 pkt/us =   1.86 GB/s | best one-VC 186.6 | wire est 19.6 | VC0 m0c3E 367.8; VC2 m1c2E 557.5; VC0 m1c2E 341.2
+  LAll       1024  aggregate   191.2 cyc/pkt =   7.06 pkt/us =   7.23 GB/s | best one-VC 186.9 | wire est 62.4 | VC0 m0c3E 373.1; VC2 m1c2E 573.5; VC0 m1c2E 347.4
+  LAll       4352  aggregate   290.9 cyc/pkt =   4.64 pkt/us =  20.20 GB/s | best one-VC 252.0 | wire est 248.0 | VC0 m0c3E 637.6; VC2 m1c2E 872.8; VC0 m1c2E 505.1
+  IVC0        256  aggregate   251.7 cyc/pkt =   5.36 pkt/us =   1.37 GB/s | best one-VC 251.7 | wire est 19.6 | VC0 m0c3E 251.7
+  IVC0       1024  aggregate   251.8 cyc/pkt =   5.36 pkt/us =   5.49 GB/s | best one-VC 251.8 | wire est 62.4 | VC0 m0c3E 251.8
+  IVC0       4352  aggregate   252.5 cyc/pkt =   5.35 pkt/us =  23.27 GB/s | best one-VC 252.5 | wire est 248.0 | VC0 m0c3E 252.5
+  IVC2        256  aggregate   494.5 cyc/pkt =   2.73 pkt/us =   0.70 GB/s | best one-VC 251.7 | wire est 19.6 | VC2 m0c3E 494.5
+  IVC2       1024  aggregate   506.0 cyc/pkt =   2.67 pkt/us =   2.73 GB/s | best one-VC 251.8 | wire est 62.4 | VC2 m0c3E 506.0
+  IVC2       4352  aggregate   574.2 cyc/pkt =   2.35 pkt/us =  10.23 GB/s | best one-VC 252.5 | wire est 248.0 | VC2 m0c3E 574.2
+  IVC0VC2     256  aggregate   297.7 cyc/pkt =   4.54 pkt/us =   1.16 GB/s | best one-VC 251.7 | wire est 19.6 | VC2 m0c3E 595.4; VC0 m0c3E 384.5
+  IVC0VC2    1024  aggregate   301.4 cyc/pkt =   4.48 pkt/us =   4.59 GB/s | best one-VC 251.8 | wire est 62.4 | VC2 m0c3E 602.7; VC0 m0c3E 382.8
+  IVC0VC2    4352  aggregate   369.5 cyc/pkt =   3.65 pkt/us =  15.90 GB/s | best one-VC 252.5 | wire est 248.0 | VC2 m0c3E 739.0; VC0 m0c3E 320.5
+  RAll        256  aggregate    84.6 cyc/pkt =  15.95 pkt/us =   4.08 GB/s | best one-VC None | wire est 19.6 | VC0 m0c3E 332.0; VC0 m1c2S 380.6; VC2 m1c2N 513.9; VC0 m1c2N 246.2; VC2 m1c2E 489.8; VC2 m1c2S 592.5; VC0 m1c2E 248.8
+  RAll       1024  aggregate    85.8 cyc/pkt =  15.73 pkt/us =  16.10 GB/s | best one-VC None | wire est 62.4 | VC0 m0c3E 371.1; VC0 m1c2S 377.4; VC2 m1c2N 524.0; VC0 m1c2N 245.2; VC2 m1c2E 567.4; VC2 m1c2S 600.9; VC0 m1c2E 342.6
+  RAll       4352  aggregate   123.0 cyc/pkt =  10.98 pkt/us =  47.78 GB/s | best one-VC None | wire est 248.0 | VC0 m0c3E 631.4; VC0 m1c2S 320.0; VC2 m1c2N 695.5; VC0 m1c2N 319.0; VC2 m1c2E 860.8; VC2 m1c2S 750.2; VC0 m1c2E 505.5
+
+## Full VCs: full_vc2x2 (per flow: VC, sender, cycles per packet, packets per us, GB/s; aggregate = all flows' packets over the slowest flow's cycles)
+  LVC0        256  aggregate   177.4 cyc/pkt =   7.61 pkt/us =   1.95 GB/s | best one-VC 177.4 | wire est 19.6 | VC0 m1c2E 177.4
+  LVC0       1024  aggregate   177.4 cyc/pkt =   7.61 pkt/us =   7.79 GB/s | best one-VC 177.4 | wire est 62.4 | VC0 m1c2E 177.4
+  LVC0       4352  aggregate   252.1 cyc/pkt =   5.36 pkt/us =  23.31 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m1c2E 252.1
+  LVC2        256  aggregate   253.9 cyc/pkt =   5.32 pkt/us =   1.36 GB/s | best one-VC 177.4 | wire est 19.6 | VC2 m1c2E 253.9
+  LVC2       1024  aggregate   262.3 cyc/pkt =   5.15 pkt/us =   5.27 GB/s | best one-VC 177.4 | wire est 62.4 | VC2 m1c2E 262.3
+  LVC2       4352  aggregate   294.3 cyc/pkt =   4.59 pkt/us =  19.97 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m1c2E 294.3
+  LVC1        256  aggregate   467.7 cyc/pkt =   2.89 pkt/us =   0.74 GB/s | best one-VC 177.4 | wire est 19.6 | VC0 m0c3E 467.7
+  LVC1       1024  aggregate   483.8 cyc/pkt =   2.79 pkt/us =   2.86 GB/s | best one-VC 177.4 | wire est 62.4 | VC0 m0c3E 483.8
+  LVC1       4352  aggregate   554.8 cyc/pkt =   2.43 pkt/us =  10.59 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m0c3E 554.8
+  LVC0VC2     256  aggregate   149.7 cyc/pkt =   9.02 pkt/us =   2.31 GB/s | best one-VC 177.4 | wire est 19.6 | VC2 m1c2E 299.4; VC0 m1c2E 254.3
+  LVC0VC2    1024  aggregate   152.5 cyc/pkt =   8.85 pkt/us =   9.06 GB/s | best one-VC 177.4 | wire est 62.4 | VC2 m1c2E 305.1; VC0 m1c2E 253.0
+  LVC0VC2    4352  aggregate   261.9 cyc/pkt =   5.15 pkt/us =  22.43 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m1c2E 523.8; VC0 m1c2E 386.8
+  LAll        256  aggregate   182.6 cyc/pkt =   7.39 pkt/us =   1.89 GB/s | best one-VC 177.4 | wire est 19.6 | VC2 m1c2E 365.1; VC0 m1c2E 341.9; VC0 m0c3E 547.9
+  LAll       1024  aggregate   187.0 cyc/pkt =   7.22 pkt/us =   7.39 GB/s | best one-VC 177.4 | wire est 62.4 | VC2 m1c2E 369.1; VC0 m1c2E 342.7; VC0 m0c3E 560.9
+  LAll       4352  aggregate   299.4 cyc/pkt =   4.51 pkt/us =  19.62 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m1c2E 638.0; VC0 m1c2E 511.6; VC0 m0c3E 898.3
+  IVC0        256  aggregate   223.1 cyc/pkt =   6.05 pkt/us =   1.55 GB/s | best one-VC 223.1 | wire est 19.6 | VC0 m0c3E 223.1
+  IVC0       1024  aggregate   223.3 cyc/pkt =   6.05 pkt/us =   6.19 GB/s | best one-VC 223.3 | wire est 62.4 | VC0 m0c3E 223.3
+  IVC0       4352  aggregate   252.1 cyc/pkt =   5.36 pkt/us =  23.31 GB/s | best one-VC 252.1 | wire est 248.0 | VC0 m0c3E 252.1
+  IVC2        256  aggregate   289.5 cyc/pkt =   4.66 pkt/us =   1.19 GB/s | best one-VC 223.1 | wire est 19.6 | VC2 m0c3E 289.5
+  IVC2       1024  aggregate   294.4 cyc/pkt =   4.59 pkt/us =   4.70 GB/s | best one-VC 223.3 | wire est 62.4 | VC2 m0c3E 294.4
+  IVC2       4352  aggregate   323.4 cyc/pkt =   4.17 pkt/us =  18.17 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m0c3E 323.4
+  IVC0VC2     256  aggregate   230.6 cyc/pkt =   5.85 pkt/us =   1.50 GB/s | best one-VC 223.1 | wire est 19.6 | VC2 m0c3E 461.2; VC0 m0c3E 461.1
+  IVC0VC2    1024  aggregate   227.6 cyc/pkt =   5.93 pkt/us =   6.07 GB/s | best one-VC 223.3 | wire est 62.4 | VC2 m0c3E 455.2; VC0 m0c3E 455.1
+  IVC0VC2    4352  aggregate   269.1 cyc/pkt =   5.02 pkt/us =  21.83 GB/s | best one-VC 252.1 | wire est 248.0 | VC2 m0c3E 538.2; VC0 m0c3E 382.5
+  RAll        256  aggregate    66.8 cyc/pkt =  20.20 pkt/us =   5.17 GB/s | best one-VC None | wire est 19.6 | VC0 m0c3E 467.7; VC0 m1c2S 455.1; VC2 m1c2N 315.8; VC0 m1c2N 258.7; VC2 m1c2E 299.5; VC2 m1c2S 455.2; VC0 m1c2E 254.3
+  RAll       1024  aggregate    80.1 cyc/pkt =  16.85 pkt/us =  17.25 GB/s | best one-VC None | wire est 62.4 | VC0 m1c2S 448.7; VC2 m1c2N 319.8; VC0 m1c2N 256.1; VC2 m1c2E 369.7; VC2 m1c2S 448.8; VC0 m1c2E 342.6; VC0 m0c3E 561.0
+  RAll       4352  aggregate   128.3 cyc/pkt =  10.52 pkt/us =  45.80 GB/s | best one-VC None | wire est 248.0 | VC0 m1c2S 383.4; VC2 m1c2N 526.1; VC0 m1c2N 384.7; VC2 m1c2E 637.9; VC2 m1c2S 540.7; VC0 m1c2E 511.5; VC0 m0c3E 898.0
+
+## Window rows (cycles per packet per flow)
+  test       size flow                   full      full_r2   full_vc1x2   full_vc2x2
+  LVC0        256 VC0 m1c2E           177.6        177.3        186.6        177.4
+  LVC0       1024 VC0 m1c2E           177.5        177.5        186.9        177.4
+  LVC0       4352 VC0 m1c2E           252.1        252.1        252.0        252.1
+  LVC2        256 VC2 m1c2E           448.0        448.1        448.0        253.9
+  LVC2       1024 VC2 m1c2E           459.1        458.9        458.9        262.3
+  LVC2       4352 VC2 m1c2E           507.2        507.5        508.9        294.3
+  LVC1        256 VC0 m0c3E           467.2        467.1        332.2        467.7
+  LVC1       1024 VC0 m0c3E           483.9        483.8        332.7        483.8
+  LVC1       4352 VC0 m0c3E           556.5        556.4        338.2        554.8
+  LVC0VC2     256 VC2 m1c2E           478.2        478.1        489.4        299.4
+  LVC0VC2     256 VC0 m1c2E           239.7        239.7        248.8        254.3
+  LVC0VC2    1024 VC2 m1c2E           487.9        488.2        498.3        305.1
+  LVC0VC2    1024 VC0 m1c2E           238.6        238.9        246.9        253.0
+  LVC0VC2    4352 VC2 m1c2E           690.1        691.4        694.3        523.8
+  LVC0VC2    4352 VC0 m1c2E           320.2        320.2        317.7        386.8
+  LAll        256 VC0 m0c3E           543.3        542.1        367.8        547.9
+  LAll        256 VC2 m1c2E           558.4        558.1        557.5        365.1
+  LAll        256 VC0 m1c2E           327.0        325.6        341.2        341.9
+  LAll       1024 VC0 m0c3E           553.0        553.4        373.1        560.9
+  LAll       1024 VC2 m1c2E           566.1        566.4        573.5        369.1
+  LAll       1024 VC0 m1c2E           325.8        325.7        347.4        342.7
+  LAll       4352 VC0 m0c3E           810.7        810.6        637.6        898.3
+  LAll       4352 VC2 m1c2E           807.3        806.7        872.8        638.0
+  LAll       4352 VC0 m1c2E           397.4        397.3        505.1        511.6
+  IVC0        256 VC0 m0c3E           222.6        222.6        251.7        223.1
+  IVC0       1024 VC0 m0c3E           222.8        222.8        251.8        223.3
+  IVC0       4352 VC0 m0c3E           252.1        252.1        252.5        252.1
+  IVC2        256 VC2 m0c3E           494.8        495.0        494.5        289.5
+  IVC2       1024 VC2 m0c3E           505.9        505.9        506.0        294.4
+  IVC2       4352 VC2 m0c3E           575.3        574.2        574.2        323.4
+  IVC0VC2     256 VC2 m0c3E           581.1        580.8        595.4        461.2
+  IVC0VC2     256 VC0 m0c3E           353.0        353.5        384.5        461.1
+  IVC0VC2    1024 VC2 m0c3E           590.5        590.2        602.7        455.2
+  IVC0VC2    1024 VC0 m0c3E           349.4        348.8        382.8        455.1
+  IVC0VC2    4352 VC2 m0c3E           737.2        737.7        739.0        538.2
+  IVC0VC2    4352 VC0 m0c3E           322.1        322.1        320.5        382.5
+  RAll        256 VC0 m0c3E           467.2        466.9        332.0        467.7
+  RAll        256 VC0 m1c2S           347.1        346.7        380.6        455.1
+  RAll        256 VC2 m1c2N           496.5        496.5        513.9        315.8
+  RAll        256 VC0 m1c2N           234.3        234.7        246.2        258.7
+  RAll        256 VC2 m1c2E           478.0        478.2        489.8        299.5
+  RAll        256 VC2 m1c2S           577.4        577.5        592.5        455.2
+  RAll        256 VC0 m1c2E           239.7        239.8        248.8        254.3
+  RAll       1024 VC0 m0c3E           551.2        550.2        371.1        561.0
+  RAll       1024 VC0 m1c2S           343.4        342.4        377.4        448.7
+  RAll       1024 VC2 m1c2N           505.2        505.2        524.0        319.8
+  RAll       1024 VC0 m1c2N           234.2        234.6        245.2        256.1
+  RAll       1024 VC2 m1c2E           564.0        561.8        567.4        369.7
+  RAll       1024 VC2 m1c2S           587.0        587.7        600.9        448.8
+  RAll       1024 VC0 m1c2E           325.9        325.6        342.6        342.6
+  RAll       4352 VC0 m0c3E           810.6        810.7        631.4        898.0
+  RAll       4352 VC0 m1c2S           322.9        323.0        320.0        383.4
+  RAll       4352 VC2 m1c2N           690.8        691.5        695.5        526.1
+  RAll       4352 VC0 m1c2N           322.1        322.0        319.0        384.7
+  RAll       4352 VC2 m1c2E           806.8        807.1        860.8        637.9
+  RAll       4352 VC2 m1c2S           748.9        748.4        750.2        540.7
+  RAll       4352 VC0 m1c2E           397.3        397.2        505.5        511.5
