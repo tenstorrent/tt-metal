@@ -314,13 +314,10 @@ inline __attribute__((always_inline)) void pack_configure(bool l1_acc = false)
     constexpr std::uint32_t next_rows_op = pacr(pack_next_rows, hal::pack::TileBoundary::NotLast);
     constexpr std::uint32_t next_face_op = pacr(pack_next_face, hal::pack::TileBoundary::NotLast);
     constexpr std::uint32_t tile_end_op  = pacr(pack_tile_end, hal::pack::TileBoundary::Last);
-    hal::mop::program<hal::mop::MopConfig<hal::mop::MopTemplate::Template1> {
-        .outer_loop = {.count = P.num_faces},
-        .inner_loop = {
-            .count                               = P.face_r_dim / rows_per_pacr,
-            .body_op                             = next_rows_op,
-            .last_op_on_final_outer_iteration    = tile_end_op,
-            .last_op_on_nonfinal_outer_iteration = next_face_op}}>();
+    constexpr auto tile_mop = hal::mop::loop(P.num_faces, hal::mop::loop(P.face_r_dim / rows_per_pacr, next_rows_op))
+                                  .patch(hal::mop::last_outer, tile_end_op)
+                                  .patch(hal::mop::last_inner, next_face_op);
+    hal::mop::program(tile_mop);
 }
 
 // ---- execute -------------------------------------------------------------------------------------------------------

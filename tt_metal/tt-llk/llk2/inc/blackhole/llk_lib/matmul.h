@@ -168,14 +168,14 @@ inline __attribute__((always_inline)) void matmul_configure()
     {
         constexpr std::uint32_t release_streamed_op =
             MathCounter {.src_a = Set(0), .src_b = Set(0), .dest = Set(0), .flip = P.reuse_in0 ? Src::A : Src::B, .clear_fidelity = true}.operation();
-        hal::mop::program<hal::mop::MopConfig<hal::mop::MopTemplate::Template1> {
-            .outer_loop = {.count = 1 /* one pass */, .end_op = release_streamed_op},
-            .inner_loop = {.count = P.math_fidelity /* phases */, .body_op = tile_op}}>();
+        constexpr auto tile_mop = hal::mop::loop(1 /* one pass */, hal::mop::loop(P.math_fidelity /* phases */, tile_op), release_streamed_op);
+        hal::mop::program(tile_mop);
     }
     else
     {
         // One pass of the outer loop, one of the inner: the tile replay once.
-        hal::mop::program<hal::mop::MopConfig<hal::mop::MopTemplate::Template1> {.outer_loop = {.count = 1}, .inner_loop = {.count = 1, .body_op = tile_op}}>();
+        constexpr auto tile_mop = hal::mop::loop(1, hal::mop::loop(1, tile_op));
+        hal::mop::program(tile_mop);
     }
     reset_math_counters();
 }
