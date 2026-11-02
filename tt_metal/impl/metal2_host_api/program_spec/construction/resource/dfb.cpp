@@ -130,7 +130,7 @@ void ValidateDFBSlotFormats(
     // JIT metadata includes every DFB on the kernel's nodes, including unbound DFBs.
     for (const auto& dfb : spec.dataflow_buffers) {
         if (!dfb.data_format_metadata || *dfb.data_format_metadata == DataFormat::Invalid ||
-            !collected.dfb_node_set.at(dfb.unique_id).intersects(kernel_nodes)) {
+            !collected.dfb_placements.at(dfb.unique_id).configuration.intersects(kernel_nodes)) {
             continue;
         }
         const auto slot = slots.at(dfb.unique_id);
@@ -176,7 +176,7 @@ void ValidateContiguousDFBSlots(
     const ProgramSpec& spec, const CollectedSpecData& collected, const DFBNameToSlotMap& slots) {
     std::map<NodeCoord, std::set<uint32_t>> slots_by_node;
     for (const auto& dfb : spec.dataflow_buffers) {
-        for (const auto& node : corerange_to_cores(collected.dfb_node_set.at(dfb.unique_id))) {
+        for (const auto& node : corerange_to_cores(collected.dfb_placements.at(dfb.unique_id).configuration)) {
             slots_by_node[node].insert(slots.at(dfb.unique_id));
         }
     }
@@ -333,7 +333,8 @@ DataflowBufferHandles RegisterDataflowBuffers(
         // Allocation nodes use the DFB's effective placement.
         // (For externally placed DFB storage, config.borrows_memory was set in MakeDataflowBufferConfig;
         // the device-side runtime uses that to skip regular L1 allocation.)
-        uint32_t dfb_id = program_impl.add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
+        const auto& placement = collected.dfb_placements.at(dfb_name);
+        uint32_t dfb_id = program_impl.add_dataflow_buffer(placement.configuration, config, placement.allocation);
         program_impl.register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
         const auto& created_config = program_impl.get_dataflow_buffer(dfb_id)->config;
