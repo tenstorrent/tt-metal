@@ -36,6 +36,9 @@ constexpr auto indices_accessor_args =
     TensorAccessorArgs<dispatch_table_accessor_args.next_compile_time_args_offset()>();
 constexpr bool use_dispatch_table_skip =
     get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset()) != 0;
+constexpr uint32_t emb_dim_row_tiles = get_compile_time_arg_val(
+    indices_accessor_args.next_compile_time_args_offset() +
+    1);  // tiles per 32-token row block (appended by the factory)
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
@@ -47,18 +50,18 @@ void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(1);
     uint32_t dispatch_table_addr;
     uint32_t indices_addr;
-    uint32_t token_start_idx;
+    uint32_t pair_base;  // index of the first (token_start, out_tile_col) runtime-arg pair
     uint32_t num_chunks;
     if constexpr (use_dispatch_table_skip) {
         dispatch_table_addr = get_arg_val<uint32_t>(2);
         indices_addr = get_arg_val<uint32_t>(3);
-        token_start_idx = get_arg_val<uint32_t>(4);
-        num_chunks = get_arg_val<uint32_t>(5);
+        pair_base = 5;
+        num_chunks = get_arg_val<uint32_t>(4);
     } else {
         dispatch_table_addr = 0;
         indices_addr = 0;
-        token_start_idx = get_arg_val<uint32_t>(2);
-        num_chunks = get_arg_val<uint32_t>(3);
+        pair_base = 3;
+        num_chunks = get_arg_val<uint32_t>(2);
     }
 
     Noc noc;
@@ -97,6 +100,8 @@ void kernel_main() {
     constexpr uint32_t cb_output_tiles = emb_dim_cb_tiles * TOKENS_PER_CHUNK;
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        uint32_t token_start_idx = get_arg_val<uint32_t>(pair_base + 2 * chunk);
+        const uint32_t out_tile_col = get_arg_val<uint32_t>(pair_base + 2 * chunk + 1);
         // Load indices for this chunk into CB (c_3) — one chunk at a time to save L1
         uint32_t indices_write_addr = 0;
         if constexpr (use_dispatch_table_skip) {
@@ -136,37 +141,34 @@ void kernel_main() {
                 }
             }
 
+            // the weights of all experts of the token: reads back to back, one barrier (cores-for-prefill)
+            cb_weights.reserve_back(num_experts);
             for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-                cb_weights.reserve_back(1);
-
                 if constexpr (use_dispatch_table_skip) {
                     bool is_last = (expert_idx == num_experts - 1);
                     if (!has_local && is_last) {
                         // No local experts for this token — zero the weight tile so compute's
                         // must_zero_init multiply produces zeros regardless of combine_output.
-                        volatile tt_l1_ptr uint32_t* ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_weights.get_write_ptr());
+                        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                            cb_weights.get_write_ptr() + expert_idx * weight_tile_size);
                         for (uint32_t w = 0; w < weight_tile_size / sizeof(uint32_t); w++) {
                             ptr[w] = 0;
                         }
-                    } else {
-                        uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
-                        noc.async_read(
-                            weight_addrg,
-                            cb_weights,
-                            weight_tile_size,
-                            {.page_id = weight_page_idx},
-                            {.offset_bytes = 0});
-                        noc.async_read_barrier();
+                        continue;
                     }
-                } else {
-                    uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
-                    noc.async_read(
-                        weight_addrg, cb_weights, weight_tile_size, {.page_id = weight_page_idx}, {.offset_bytes = 0});
-                    noc.async_read_barrier();
                 }
-                cb_weights.push_back(1);
+                uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
+                noc.async_read(
+                    weight_addrg,
+                    cb_weights,
+                    (weight_tile_size < 64 ? weight_tile_size
+                                           : 64u),  // only the first 64 B of the weight tile are read (element 0 is the
+                                                    // scalar; word 0 the zero test)
+                    {.page_id = weight_page_idx},
+                    {.offset_bytes = expert_idx * weight_tile_size});
             }
+            noc.async_read_barrier();
+            cb_weights.push_back(num_experts);
         }
 
         // Phase 2: Write output tiles after compute finishes this chunk.
@@ -176,7 +178,7 @@ void kernel_main() {
         cb_output.wait_front(cb_output_tiles);
 
         uint32_t tile_row = token_start_idx / TOKENS_PER_CHUNK;
-        uint32_t start_tile_idx = tile_row * emb_dim_out_tiles;
+        uint32_t start_tile_idx = tile_row * emb_dim_row_tiles + out_tile_col;
 
         for (uint32_t tile_idx = 0; tile_idx < emb_dim_out_tiles; ++tile_idx) {
             noc.async_write(
@@ -190,7 +192,5 @@ void kernel_main() {
         noc.async_write_barrier();
 
         cb_output.pop_front(cb_output_tiles);
-
-        token_start_idx += TOKENS_PER_CHUNK;
     }
 }

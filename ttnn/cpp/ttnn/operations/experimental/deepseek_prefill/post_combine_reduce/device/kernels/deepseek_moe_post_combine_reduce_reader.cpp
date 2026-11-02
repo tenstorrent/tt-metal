@@ -22,8 +22,8 @@ constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
 void kernel_main() {
     uint32_t combine_addr = get_arg_val<uint32_t>(0);
-    uint32_t token_start_idx = get_arg_val<uint32_t>(1);
-    uint32_t num_chunks = get_arg_val<uint32_t>(2);
+    uint32_t num_chunks =
+        get_arg_val<uint32_t>(1);  // work items: (token_start, column byte offset in the row) pairs from arg 2 on
 
     Noc noc;
     CircularBuffer cb_combine_input(cb_combine_input_id);
@@ -31,19 +31,26 @@ void kernel_main() {
     const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr);
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        const uint32_t token_start_idx = get_arg_val<uint32_t>(2 + 2 * chunk);
+        const uint32_t col_off_bytes = get_arg_val<uint32_t>(3 + 2 * chunk);
         for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CHUNK; ++token_idx) {
             uint32_t global_token_idx = token_start_idx + token_idx;
 
+            // all num_experts rows of the token in flight, one barrier (the compute kernel still consumes one row =
+            // emb_dim_cb_tiles pages at a time)
+            cb_combine_input.reserve_back(num_experts * emb_dim_cb_tiles);
+            const uint32_t row_stride = emb_dim_cb_tiles * cb_combine_input.get_tile_size();
             for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-                cb_combine_input.reserve_back(emb_dim_cb_tiles);
-
                 uint32_t expert_page_idx = global_token_idx * num_experts + expert_idx;
                 noc.async_read(
-                    combine_addrg, cb_combine_input, emb_dim_bytes, {.page_id = expert_page_idx}, {.offset_bytes = 0});
-                noc.async_read_barrier();
-                cb_combine_input.push_back(emb_dim_cb_tiles);
+                    combine_addrg,
+                    cb_combine_input,
+                    emb_dim_bytes,
+                    {.page_id = expert_page_idx, .offset_bytes = col_off_bytes},
+                    {.offset_bytes = expert_idx * row_stride});
             }
+            noc.async_read_barrier();
+            cb_combine_input.push_back(num_experts * emb_dim_cb_tiles);
         }
-        token_start_idx += TOKENS_PER_CHUNK;
     }
 }

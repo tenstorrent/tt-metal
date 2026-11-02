@@ -344,8 +344,12 @@ def paged_scatter_rows(pool, src, row_ids, n_cores=16, base_offset=0):
     md = pool.device()
     N = int(src.shape[-2])
     assert src.dtype == ttnn.bfloat16 and src.layout == ttnn.ROW_MAJOR_LAYOUT and row_ids.dtype == ttnn.uint32
+    # DSV41_PF_SCATTER_CORES (default OFF = n_cores): the fp8 pool conversion runs on scalar RISC code, ~6 us per row, so 1024 rows on 16 cores took 378 us in the prefill layer
+    # (cores-for-prefill study); the rows are independent, so more cores scale it (up to the 12x10 worker grid).
+    n_cores = int(os.environ.get("DSV41_PF_SCATTER_CORES", n_cores))
     n_cores = min(n_cores, N)
-    cores = [ttnn.CoreCoord(i % 8, i // 8) for i in range(n_cores)]
+    gx = 8 if n_cores <= 64 else int(md.compute_with_storage_grid_size().x)
+    cores = [ttnn.CoreCoord(i % gx, i // gx) for i in range(n_cores)]
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
     total = ((N * 4 + 63) // 64) * 64 + 8 * 1024  # ids + 8 rows in flight
     cb = ttnn.CBDescriptor(

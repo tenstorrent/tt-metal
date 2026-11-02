@@ -4,6 +4,7 @@
 
 #include "post_combine_reduce_program_factory.hpp"
 
+#include <cstdlib>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -52,11 +53,22 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     // Number of tile-sized CB pages needed to hold one emb_dim row.
     // ceil(emb_dim / 1024) supports non-1024-aligned dims (e.g. GPT-OSS 2880).
-    const uint32_t emb_dim_cb_tiles = (emb_dim + TILE_SIZE - 1) / TILE_SIZE;
-    // Number of real 32x32 output tiles per 32-token block.
-    const uint32_t emb_dim_out_tiles = emb_dim / TILE_WIDTH;
+    const uint32_t emb_dim_cb_tiles_total = (emb_dim + TILE_SIZE - 1) / TILE_SIZE;
+    // Work items are (32-token chunk, column slice). With DSV41_PCR_SPLIT=1 (cores-for-prefill) and emb_dim a multiple
+    // of 1024 a slice is ONE 1024-element page, so a chunk is spread over emb_dim/1024 cores (5 for 5120): 32 chunks
+    // used 32 of 120 cores and each core was bound by its own NoC read bandwidth.
+    const char* split_env = std::getenv("DSV41_PCR_SPLIT");
+    const bool split =
+        split_env != nullptr && split_env[0] == '1' && emb_dim % TILE_SIZE == 0 && emb_dim_cb_tiles_total > 1;
+    const uint32_t n_slices = split ? emb_dim_cb_tiles_total : 1;
+    // Per-item values (the whole row when not split).
+    const uint32_t emb_dim_cb_tiles = split ? 1 : emb_dim_cb_tiles_total;
+    // Number of real 32x32 output tiles per 32-token block and item.
+    const uint32_t emb_dim_out_tiles = split ? TILE_SIZE / TILE_WIDTH : emb_dim / TILE_WIDTH;
+    // Output tiles per full row block (tile stride between 32-token blocks).
+    const uint32_t emb_dim_row_tiles = emb_dim / TILE_WIDTH;
     // Raw byte count for NoC reads in the reader (handles non-aligned emb_dim).
-    const uint32_t emb_dim_bytes = emb_dim * BF16_BYTES;
+    const uint32_t emb_dim_bytes = split ? TILE_SIZE * BF16_BYTES : emb_dim * BF16_BYTES;
 
     TT_FATAL(
         emb_dim % TILE_WIDTH == 0,
@@ -83,9 +95,10 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     const uint32_t total_chunks = num_tokens / TOKENS_PER_CHUNK;
-    const uint32_t num_cores = std::min(total_chunks, num_cores_total);
-    const uint32_t base_chunks_per_core = total_chunks / num_cores;
-    const uint32_t extra_chunks = total_chunks % num_cores;
+    const uint32_t total_items = total_chunks * n_slices;  // item i = (chunk i / n_slices, slice i % n_slices)
+    const uint32_t num_cores = std::min(total_items, num_cores_total);
+    const uint32_t base_chunks_per_core = total_items / num_cores;  // items per core
+    const uint32_t extra_chunks = total_items % num_cores;
 
     constexpr bool row_major = true;
 
@@ -100,7 +113,9 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
 
     // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
-    uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
+    // (cores-for-prefill: two tokens x all experts, so the reader issues the num_experts row reads of a token back to
+    // back and waits once)
+    uint32_t combine_cb_size = 2 * num_experts * emb_dim_cb_tiles * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = combine_cb_size,
         .core_ranges = core_range_set,
@@ -112,7 +127,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     });
 
     // c_1: Stream one weight at a time (matching expert-by-expert input streaming).
-    uint32_t weight_cb_size = tile_size;
+    uint32_t weight_cb_size = 2 * num_experts * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = weight_cb_size,
         .core_ranges = core_range_set,
@@ -242,6 +257,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     tt::tt_metal::TensorAccessorArgs(use_dispatch_table_skip ? indices_buffer : weight_buffer)
         .append_to(writer_compile_time_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0));
+    writer_compile_time_args.push_back(
+        emb_dim_row_tiles);  // appended last (cores-for-prefill): tiles per 32-token row block
 
     // Build kernel descriptors and push them onto desc.kernels.  Stable indices
     // (0=reader, 1=compute, 2=writer) below let emplace_runtime_args identify
@@ -277,31 +294,37 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
-    // Distribute chunks of 32 tokens across cores. The first `extra_chunks` cores
-    // get (base_chunks_per_core + 1) chunks; the remaining get base_chunks_per_core.
-    uint32_t token_start = 0;
+    // Distribute the work items (32-token chunk x column slice, chunk-major) over the cores: the first `extra_chunks`
+    // cores get one item more. Per-item runtime args: reader (token_start, column byte offset in the row), writer
+    // (token_start, first output tile column).
+    uint32_t item = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores[i];
-        const uint32_t chunks_this_core = base_chunks_per_core + (i < extra_chunks ? 1 : 0);
+        const uint32_t items_this_core = base_chunks_per_core + (i < extra_chunks ? 1 : 0);
 
-        // Reader RT args: [combine_buffer*, token_start, chunks_this_core].
+        // Reader RT args: [combine_buffer*, num_items, (token_start, col_byte_offset) x num_items].
         // Push the buffer pointer first so the framework records a BufferBinding
         // for the cache-hit fast path.
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.push_back(combine_buffer);
-        reader_rt_args.push_back(token_start);
-        reader_rt_args.push_back(chunks_this_core);
+        reader_rt_args.push_back(items_this_core);
+        for (uint32_t k = 0; k < items_this_core; ++k) {
+            const uint32_t chunk = (item + k) / n_slices;
+            const uint32_t slice = (item + k) % n_slices;
+            reader_rt_args.push_back(chunk * TOKENS_PER_CHUNK);
+            reader_rt_args.push_back(slice * emb_dim_bytes);
+        }
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
 
-        // Compute RT args (no Buffer*).
+        // Compute RT args (no Buffer*): [unused, num_items].
         tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
-        compute_rt_args.push_back(token_start);
-        compute_rt_args.push_back(chunks_this_core);
+        compute_rt_args.push_back(0u);
+        compute_rt_args.push_back(items_this_core);
         compute_kernel_desc.emplace_runtime_args(core, compute_rt_args);
 
         // Writer runtime args: weight_addr, output_addr,
         //   (deepseek only: dispatch_table_addr, indices_addr),
-        //   token_start, chunks_this_core.  All buffer addresses are pushed as
+        //   num_items, (token_start, out_tile_col) x num_items.  All buffer addresses are pushed as
         //   Buffer* so the framework records bindings for the fast path.
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
         writer_rt_args.push_back(weight_buffer);
@@ -310,11 +333,16 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
             writer_rt_args.push_back(dispatch_table_buffer);
             writer_rt_args.push_back(indices_buffer);
         }
-        writer_rt_args.push_back(token_start);
-        writer_rt_args.push_back(chunks_this_core);
+        writer_rt_args.push_back(items_this_core);
+        for (uint32_t k = 0; k < items_this_core; ++k) {
+            const uint32_t chunk = (item + k) / n_slices;
+            const uint32_t slice = (item + k) % n_slices;
+            writer_rt_args.push_back(chunk * TOKENS_PER_CHUNK);
+            writer_rt_args.push_back(slice * emb_dim_out_tiles);
+        }
         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
 
-        token_start += chunks_this_core * TOKENS_PER_CHUNK;
+        item += items_this_core;
     }
 
     desc.kernels.push_back(std::move(reader_kernel_desc));
