@@ -11,9 +11,8 @@
 #include "cmath_common.h"  // math::reset_counters, p_setrwc
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
-#include "sfpu/ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
@@ -305,7 +304,9 @@ inline void calculate_gelu() {
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat x = sfpi::dst_reg[0];
-            sfpi::vFloat result = 0.0f;  // default 0 for x <= GELU_SAT
+            // Default for lanes that fail `x > GELU_SAT` below. x - x is 0 for finite x and NaN for
+            // NaN, so a negative NaN (which also fails the compare) still propagates (#59247).
+            sfpi::vFloat result = x - x;
             v_if(x > GELU_SAT) {
                 sfpi::vFloat scaled = x * INV_SQRT2;
                 scaled = sfpi::min(scaled, 10.0f);
@@ -484,9 +485,19 @@ constexpr float GELU_DERIV_H8 = 4.2734988881e-09f;
 // - Zero saturation: x <= -13.375 (GELU'(x) becomes 0 in BF16)
 // - One saturation: x >= 3.1719 (GELU'(x) becomes exactly 1 in BF16)
 // Note: GELU'(x) has a "hump" exceeding 1.0 for x in [0.77, 3.16]
+// NaN: an fp32 destination returns x (NaN in, NaN out); a bf16 destination still gives
+// 1.0 / 0 by the NaN's sign, since convert<vFloat16b> could not carry a NaN anyway.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
+
+    // fp32 destination: x*x is computed once, on every lane, because the NaN case after the
+    // region chain needs it; the polynomial and tail regions reuse it. A bfloat16 destination
+    // never reads x2_all and keeps computing x*x inside each region, as before.
+    sfpi::vFloat x2_all;
+    if constexpr (is_fp32_dest_acc_en) {
+        x2_all = x * x;
+    }
 
     // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
     v_if(x >= 3.1719f) { result = 1.0f; }
@@ -494,7 +505,12 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
     v_elseif(x >= -3.0f) {
-        sfpi::vFloat u = x * x;
+        sfpi::vFloat u;
+        if constexpr (is_fp32_dest_acc_en) {
+            u = x2_all;
+        } else {
+            u = x * x;
+        }
         sfpi::vFloat h = PolynomialEvaluator::eval(
             u,
             GELU_DERIV_H0,
@@ -522,7 +538,12 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     v_elseif(x > -13.375f) {
         constexpr float INV_SQRT_2PI = 0.3989422804014327f;  // 1/sqrt(2*pi)
 
-        sfpi::vFloat x2 = x * x;
+        sfpi::vFloat x2;
+        if constexpr (is_fp32_dest_acc_en) {
+            x2 = x2_all;
+        } else {
+            x2 = x * x;
+        }
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
         sfpi::vFloat x_exp = x_times_exp_negative_tail(x, t);
@@ -539,6 +560,20 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     }
     // For x <= -13.375, saturate to 0
     v_endif;
+
+    // NaN (fp32 destination only; tenstorrent/tt-llk#1701 item 12). Every region test above is
+    // an SFPMAD subtract followed by a sign test, and a NaN out of SFPMAD carries the product's
+    // sign, so a NaN routes like an infinity of its own sign: +NaN saturated to 1.0 and -NaN
+    // fell through to 0. The polynomial region is bounded, so no rewrite of those compares can
+    // send both signs into it; test for NaN explicitly instead. x*x is +NaN for either NaN sign
+    // and lies in [+0, +inf] for every other input, so its bits exceed +inf's exactly on NaN.
+    // A bfloat16 destination is left alone: convert<vFloat16b> in the caller (SFPSTOCHRND)
+    // turns any NaN into an infinity, so that arm could not return NaN anyway.
+    if constexpr (is_fp32_dest_acc_en) {
+        constexpr std::int32_t kInfBits = 0x7F800000;
+        v_if(sfpi::as<sfpi::vInt>(x2_all) > kInfBits) { result = x; }
+        v_endif;
+    }
 
     return result;
 }

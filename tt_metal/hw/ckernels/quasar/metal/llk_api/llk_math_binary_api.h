@@ -44,17 +44,20 @@ inline void llk_math_eltwise_binary_init(
 
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
 
-    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
-        srcA_format, srcB_format);
+    _configure_default_alu_data_format_state_<DST_ACCUM_MODE>(srcA_format, srcB_format);
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
+        const DataFormat dest_src_format = ckernel::math::dest_src_format<DST_ACCUM_MODE>(srcA_format);
         _llk_math_eltwise_binary_init_<eltwise_binary_type, effective_math_fidelity, binary_reuse_dest>(
-            tensor_shape_A, acc_to_dest);
+            binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? dest_src_format : srcA_format,
+            binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB ? dest_src_format : srcB_format,
+            tensor_shape_A,
+            acc_to_dest);
     } else {
         static_assert(
             binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
             "Quasar: dest reuse (binary_reuse_dest) is not supported on the broadcast eltwise binary init path");
         _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, effective_math_fidelity>(
-            tensor_shape_A, acc_to_dest);
+            srcA_format, srcB_format, tensor_shape_A, acc_to_dest);
     }
 }
 
@@ -83,6 +86,9 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(std::uint32_t dst_index, [[maybe_unused]] const bool clear_fp32_dst_acc = true) {
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_eltwise_binary: dst_index exceeds dest capacity");
 
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
@@ -127,6 +133,10 @@ inline void llk_math_eltwise_binary(
     [[maybe_unused]] const std::uint32_t operand_B,
     std::uint32_t dst_index,
     [[maybe_unused]] const bool clear_fp32_dst_acc) {
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_eltwise_binary: dst_index exceeds dest capacity");
+
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         const std::uint32_t operand_id = get_operand_id(operand_A);

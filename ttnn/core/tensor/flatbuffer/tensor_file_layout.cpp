@@ -25,7 +25,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/cleanup.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn {
 namespace {

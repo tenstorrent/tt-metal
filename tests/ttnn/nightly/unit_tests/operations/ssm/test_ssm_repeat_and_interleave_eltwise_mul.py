@@ -9,7 +9,7 @@ import ttnn
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import tt2torch_tensor, comp_pcc
+from tt_py_test_utils_common.utility_functions import tt2torch_tensor, comp_pcc
 
 
 def run_ssm_eltwise_mul_test(batch_size, in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):

@@ -27,7 +27,7 @@ cat > "$MANIFEST" <<JSON
   "env": {
     "PREFILL_MODEL": "minimax_m3",
     "PREFILL_NUM_LAYERS": "60",
-    "M3_INDEX_CACHE_BF16": "1",
+    "M3_INDEX_CACHE_BF16": "0",
     "EXPERT_DTYPE": "${EXPERT_DTYPE:-bf4}",
     "HF_MODEL": "$HF_MODEL",
     "PREFILL_SYNC_PER_CHUNK": "1",

@@ -44,6 +44,10 @@ class KimiK27Adapter(MLAPrefillAdapter):
     # it. No other model may enable PREFILL_DFLASH.
     supports_dflash = True
 
+    # PREFILL_TP_SHARD_KV=0 rolls back to the TP-replicated KV cache.
+    supports_tp_shard_kv = True
+    tp_shard_kv_default = True
+
     # --- test metadata (HF download coordinates + PCC thresholds) ---
     hf_repo_id = "moonshotai/Kimi-K2.7-Code"
     env_var = "KIMI_K2_7_HF_MODEL"

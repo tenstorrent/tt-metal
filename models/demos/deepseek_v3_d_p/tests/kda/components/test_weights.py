@@ -209,4 +209,4 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
         ("recurrent state", golden_state.recurrent, actual_recurrent),
         ("convolution state", golden_convolution, actual_convolution),
     ):
-        assert_accurate(golden, actual, name=f"TP=8 {name}", pcc_threshold=0.999)
+        assert_accurate(golden, actual, name=f"TP=8 {name}", pcc_threshold=0.999, nrmse_threshold=0.03)

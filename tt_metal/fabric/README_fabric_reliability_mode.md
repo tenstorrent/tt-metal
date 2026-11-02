@@ -85,6 +85,10 @@ No routing planes. Registered is `min(MGD, PSD)`, the live cables pairing binds.
 | 2 | 4 | 3 | 2 | 0 | 1 | 0 |
 | 4 | 2 | 1 | 1 | 1 | 0 | 2 |
 | 8 | 4 | 1 | 1 | 3 | 0 | 4 |
+| 4 | 16 | 0 | 0 | 4 | 12 | 0 |
+| 16 | 16 | 0 | 0 | 16 | 0 | 0 |
+
+A `RELAXED` boundary with no live cable (last two rows) still finishes init as a logical-only connection (issue #56762); a boundary the factory never cabled files nothing. `STRICT` fails either way.
 
 Pod cable chip 5 chan 9 ↔ chip 29 chan 9, FSD 16, PSD 15:
 

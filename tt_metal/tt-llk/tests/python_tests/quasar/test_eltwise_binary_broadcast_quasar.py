@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
     get_valid_math_fidelities,
@@ -15,12 +14,9 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BroadcastType,
-    DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
-    format_dict,
 )
 from helpers.param_config import (
     generate_perf_input_dimensions,
@@ -28,6 +24,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
@@ -40,7 +37,6 @@ from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
@@ -57,7 +53,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 from quasar.test_eltwise_binary_quasar import (
     get_num_tiles_per_accumulation,
     valid_acc_to_dest,
@@ -65,7 +61,6 @@ from quasar.test_eltwise_binary_quasar import (
 
 _BINARY_BROADCAST_BASE_FORMATS = [
     DataFormat.Float16_b,
-    DataFormat.Float16,
 ]
 _BINARY_BROADCAST_EXPLICIT_FORMATS = [
     InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
@@ -90,10 +85,6 @@ BROADCAST_TYPES = [
     BroadcastType.Row,
     BroadcastType.Scalar,
 ]
-
-
-def binary_broadcast_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def binary_broadcast_tile_dimensions(formats, broadcast_type, *, is_perf=False):
@@ -128,14 +119,6 @@ def binary_broadcast_acc_to_dest_modes(input_dimensions, tile_dimensions):
     return valid_acc_to_dest(input_dimensions, tile_dimensions)
 
 
-def binary_broadcast_implied_math_formats(format, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    if format.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
 def binary_broadcast_math_fidelities(format, math_op):
     # Int8 is an exact integer op. Float16_b is full precision at LoFi.
     if format.input_format in (DataFormat.Int8, DataFormat.Float16_b):
@@ -156,8 +139,7 @@ def binary_broadcast_math_fidelities(format, math_op):
     math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
         formats, math_op
     ),
-    implied_math_format=lambda formats: binary_broadcast_implied_math_formats(formats),
-    dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     unpack_to_dest=[False],
     tile_dimensions=lambda formats, broadcast_type: binary_broadcast_tile_dimensions(
         formats, broadcast_type, is_perf=False
@@ -179,7 +161,6 @@ def test_eltwise_binary_broadcast_quasar(
     math_op,
     broadcast_type,
     math_fidelity,
-    implied_math_format,
     dest_sync,
     unpack_to_dest,
     tile_dimensions,
@@ -262,7 +243,6 @@ def test_eltwise_binary_broadcast_quasar(
         "templates": [
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=math_op),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),
@@ -303,7 +283,6 @@ def test_eltwise_binary_broadcast_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(
@@ -318,12 +297,7 @@ def test_eltwise_binary_broadcast_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

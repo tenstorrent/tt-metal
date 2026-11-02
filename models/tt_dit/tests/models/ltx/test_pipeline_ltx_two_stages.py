@@ -122,6 +122,9 @@ def test_pipeline_two_stages(
             topology=topology,
             output_path=output_filename,
             prompt=prompt,
+            # This is the text-only two-stages test; the I2V rate is reported by
+            # test_pipeline_two_stages_i2v_smoke (the leg CI selects for ltx-2.3-pro-i2v).
+            report_model="ltx-2.3-pro-t2v",
         )
 
     if no_prompt:
@@ -212,6 +215,15 @@ def test_pipeline_two_stages_i2v_smoke(
         num_inference_steps=num_inference_steps,
         seed=int(os.environ.get("SEED", "10")),
     )
+
+    # Publish the Pro I2V generation rate for the dashboard (#58596); this is the leg CI selects for
+    # ltx-2.3-pro-i2v and it does not call print_ltx_timing_table, so report from the run's timings.
+    # No-op outside CI (report_generation_rate -> report_vision_fps guards on IS_CI_ENV).
+    i2v_timings = getattr(pipeline, "last_timings", None)
+    if i2v_timings:
+        from models.demos.utils.common_demo_utils import report_generation_rate
+
+        report_generation_rate("ltx-2.3-pro-i2v", sum(secs for _, secs in i2v_timings), num_frames, batch_size=1)
 
     assert os.path.exists(output_filename), f"no MP4 produced at {output_filename}"
     assert os.path.getsize(output_filename) > 0, "produced MP4 is empty"

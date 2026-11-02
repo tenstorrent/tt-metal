@@ -21,7 +21,7 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <fmt/base.h>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
 class PhysicalGroupingDescriptor;

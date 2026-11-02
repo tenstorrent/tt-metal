@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     SUB_DEVICE_CRS,

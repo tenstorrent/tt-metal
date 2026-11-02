@@ -326,6 +326,7 @@ void expect_tables_equal(const KvChunkAddressTable& a, const KvChunkAddressTable
         EXPECT_EQ(ca.max_sequence_length, cb.max_sequence_length);
         EXPECT_EQ(ca.num_slots, cb.num_slots);
         EXPECT_EQ(ca.chunk_n_tokens, cb.chunk_n_tokens);
+        EXPECT_EQ(ca.tensor_type, cb.tensor_type) << "tensor_type mismatch at id " << c;
         for (uint32_t slot = 0; slot < ca.num_slots; slot++) {
             for (uint32_t layer = 0; layer < ca.num_layers; layer++) {
                 for (uint32_t pos = 0; pos < ca.max_sequence_length; pos += ca.chunk_n_tokens) {
@@ -418,7 +419,113 @@ TEST(KvChunkAddressTableProtobuf, LegacySingleConfigWireStillReads) {
     auto restored = import_from_protobuf(pb.SerializeAsString());
     ASSERT_EQ(restored.num_configs(), 1u);
     EXPECT_EQ(restored.config_name(0), "0");
+    EXPECT_EQ(restored.config().tensor_type, KvChunkTensorType::Kv);  // legacy = KV
     EXPECT_EQ(restored.lookup(1, 32, 0).noc_addr, 0xABCDu);
+}
+
+// --- Per-config tensor type (KvChunkConfig.tensor_type) ---
+
+// Two configs of different tensor types: a positional KV config and a snapshot config with a
+// single chunk per (layer, slot) row (no sequence axis).
+KvChunkAddressTable make_mixed_tensor_type_table() {
+    std::map<std::string, KvChunkAddressTableConfig> configs = {
+        {"kv", {.num_layers = 2, .max_sequence_length = 128, .num_slots = 2, .chunk_n_tokens = 32}},
+        {"snap",
+         {.num_layers = 2,
+          .max_sequence_length = 32,
+          .num_slots = 2,
+          .chunk_n_tokens = 32,
+          .tensor_type = KvChunkTensorType::Snapshot}},
+    };
+    KvChunkAddressTable table(configs);
+    auto grp = table.add_device_group({make_proto_fnid(0, 0)});
+    table.set_fabric_node_host(make_proto_fnid(0, 0), "alpha-host");
+    for (uint32_t c = 0; c < table.num_configs(); c++) {
+        const auto& cfg = table.config(c);
+        for (uint32_t slot = 0; slot < cfg.num_slots; slot++) {
+            for (uint32_t layer = 0; layer < cfg.num_layers; layer++) {
+                for (uint32_t pos = 0; pos < cfg.max_sequence_length; pos += cfg.chunk_n_tokens) {
+                    const uint64_t h = pseudo_rand(c * 100 + slot, layer, pos);
+                    table.set(
+                        layer,
+                        pos,
+                        slot,
+                        KvCacheLocation{
+                            .noc_addr = 0x1'0000'0000ULL + (h & 0xFFFF'FF00ULL),
+                            .size_bytes = 512,
+                            .device_group_index = grp},
+                        c);
+                }
+            }
+        }
+    }
+    return table;
+}
+
+void expect_mixed_tensor_types(const KvChunkAddressTable& table) {
+    EXPECT_EQ(table.config(table.config_id_of("kv")).tensor_type, KvChunkTensorType::Kv);
+    EXPECT_EQ(table.config(table.config_id_of("snap")).tensor_type, KvChunkTensorType::Snapshot);
+}
+
+TEST(KvChunkAddressTableProtobuf, MixedTensorTypeWireTags) {
+    auto original = make_mixed_tensor_type_table();
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    ASSERT_EQ(pb.configs_size(), 2);
+    for (const auto& c : pb.configs()) {
+        EXPECT_EQ(
+            c.tensor_type(),
+            c.name() == "snap" ? ::tt::disaggregation::proto::SNAPSHOT : ::tt::disaggregation::proto::KV)
+            << "config " << c.name();
+    }
+}
+
+TEST(KvChunkAddressTableProtobuf, MixedTensorTypeRoundTripViaString) {
+    auto original = make_mixed_tensor_type_table();
+    auto restored = import_from_protobuf(export_to_protobuf(original));
+    expect_mixed_tensor_types(restored);
+    expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, MixedTensorTypeRoundTripViaFile) {
+    auto original = make_mixed_tensor_type_table();
+    std::string tmp_path = std::filesystem::temp_directory_path() / "kv_mixed_tensor_type_table_test.pb";
+    export_to_protobuf_file(original, tmp_path);
+    auto restored = import_from_protobuf_file(tmp_path);
+    expect_mixed_tensor_types(restored);
+    expect_tables_equal(original, restored);
+    std::filesystem::remove(tmp_path);
+}
+
+TEST(KvChunkAddressTableProtobuf, MixedTensorTypeTextFormatRoundTrip) {
+    auto original = make_mixed_tensor_type_table();
+    const std::string text = export_to_protobuf_text(original);
+    EXPECT_NE(text.find("SNAPSHOT"), std::string::npos);
+    auto restored = import_from_protobuf_text(text);
+    expect_mixed_tensor_types(restored);
+    expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, ConfigWithoutTensorTypeReadsAsKv) {
+    // A `configs` entry written before tensor_type existed (field 8 absent) must import as KV.
+    auto original = make_mixed_tensor_type_table();
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    for (auto& c : *pb.mutable_configs()) {
+        c.clear_tensor_type();
+    }
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    EXPECT_EQ(restored.config(restored.config_id_of("kv")).tensor_type, KvChunkTensorType::Kv);
+    EXPECT_EQ(restored.config(restored.config_id_of("snap")).tensor_type, KvChunkTensorType::Kv);
+}
+
+TEST(KvChunkAddressTableProtobuf, UnknownTensorTypeRejected) {
+    // A tensor_type written by a newer format is rejected loudly (fail-closed versioning).
+    auto original = make_mixed_tensor_type_table();
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    pb.mutable_configs(0)->set_tensor_type(static_cast<::tt::disaggregation::proto::KvChunkTensorType>(7));
+    EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
 }
 
 // --- Strided-run compression (field 11 `runs`) ---
@@ -803,6 +910,7 @@ TEST(KvChunkAddressTableProtobuf, GoldenV1ArtifactReads) {
     EXPECT_EQ(cfg.num_slots, 2u);
     EXPECT_EQ(cfg.max_sequence_length, 96 * 32u);
     EXPECT_EQ(restored.compression(0), ChunkCompression::kUnrolled);  // legacy = unrolled
+    EXPECT_EQ(cfg.tensor_type, KvChunkTensorType::Kv);                // legacy = KV
     EXPECT_EQ(restored.get_host(make_proto_fnid(0, 0)), "legacy-host");
     for (uint32_t slot = 0; slot < 2; slot++) {
         for (uint32_t layer = 0; layer < 2; layer++) {
