@@ -239,6 +239,9 @@ jobs:
 
   stage2-baseline:
     name: "Stage 2: read the merge baseline"
+    permissions:
+      actions: read
+      contents: read
     if: ${{ inputs.stage2-baseline-ref != '' }}
     continue-on-error: true
     runs-on: ubuntu-slim
@@ -257,24 +260,17 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install pandas snowflake-connector-python cryptography
-      - name: Read the baseline from the warehouse
+      - name: "Trial: the baseline is run 41333218573 (same code), not the warehouse"
         env:
-          SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
-          SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
-          SNOWFLAKE_WAREHOUSE: PUBLIC
-          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
-          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
-          MATCH_REF: ${{ inputs.stage2-baseline-ref }}
-          LLK_PERF_WAREHOUSE_TABLE: ${{ vars.LLK_PERF_WAREHOUSE_TABLE }}
+          GH_TOKEN: ${{ github.token }}
           STAGE2_THRESHOLDS: ${{ inputs.stage2-thresholds }}
         run: |
-          COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF" | paste -sd, -) || COMMITS=""
           for ARCH in $(python3 -c 'import json, os; print(*json.loads(os.environ["STAGE2_THRESHOLDS"]))'); do
-            python3 tt_metal/tt-llk/perf/baseline_from_warehouse.py \
-              --arch "$ARCH" --pipeline merge_baseline --speed-of-light "$SPEED_OF_LIGHT" \
-              --exclude-workflow-run "$GITHUB_RUN_ID" --commits "$COMMITS" --wait-minutes 0 \
-              --out "stage2-baseline/${ARCH}/baseline.csv" --metadata "stage2-baseline/${ARCH}/baseline_metadata.json" \
-              || echo "::warning::No ${ARCH} merge baseline; its legs skip stage 2."
+            mkdir -p "stage2-baseline/$ARCH"
+            gh run download 41333218573 -R "$GITHUB_REPOSITORY" -p "perf-data-$ARCH-*" -D "stage2-baseline/$ARCH/runs"
+            printf 'marker\n' > "stage2-baseline/$ARCH/baseline.csv"
+            echo '{"commit_sha": "f0acd49d3e13cbadadb13d3789ab2087f74a69aa"}' > "stage2-baseline/$ARCH/baseline_metadata.json"
+            find "stage2-baseline/$ARCH" -name '*.csv' | wc -l
           done
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
