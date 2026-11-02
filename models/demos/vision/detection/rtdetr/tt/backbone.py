@@ -493,6 +493,14 @@ class TtRTDetrResNetConvLayer:
             shard_layout=shard_layout,
             reshard_if_not_optimal=True,
         )
+        # bf16 dest accumulation over the deep stage-4 reductions drops the
+        # backbone output below the reference tolerance.
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
     def __call__(
         self, x: ttnn.Tensor, batch_size: int, input_height: int, input_width: int
@@ -514,6 +522,7 @@ class TtRTDetrResNetConvLayer:
                 "device": self.device,
                 "input_dtype": self.dtype,
                 "conv_config": self.conv_config,
+                "compute_config": self.compute_config,
             }
             self.conv_weight = ttnn.prepare_conv_weights(
                 weight_tensor=self.conv_weight,
@@ -553,6 +562,7 @@ class TtRTDetrResNetConvLayer:
             dilation=(1, 1),
             groups=1,
             conv_config=self.conv_config,
+            compute_config=self.compute_config,
         )
 
         return x, output_height, output_width
