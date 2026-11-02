@@ -40,7 +40,7 @@ fields:
 # Keys: path (repo-relative), function, field, restored_by, reason.
 sites:
   - path: tt_metal/tt-llk/tt_llk_blackhole/common/inc/cmath_common.h
-    function: _dest_32b_lo_moves_begin_
+    function: _dest_32b_lo_moves_enter_
     field: ALU_ACC_CTRL_Fp32_enabled
     restored_by: _dest_32b_lo_moves_end_
-    reason: every caller pairs it with _dest_32b_lo_moves_end_, which puts back the value begin read.
+    reason: every caller pairs it with _dest_32b_lo_moves_end_, which puts back the value _dest_32b_lo_moves_save_ read.
