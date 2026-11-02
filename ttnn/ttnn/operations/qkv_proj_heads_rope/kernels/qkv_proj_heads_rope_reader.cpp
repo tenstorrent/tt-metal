@@ -100,12 +100,14 @@ void kernel_main() {
     const auto k_accessor = TensorAccessor(k_args, k_addr, tile_bytes);
     const auto v_accessor = TensorAccessor(v_args, v_addr, tile_bytes);
 
+    // Once per core; compute keeps the tiles fronted for every block. The seed is a ROW broadcast, so only
+    // tile row 0 is consumed: one 64 B DRAM-aligned span from face 0 and one from face 1 per tile (rows 2..15
+    // of the faces stay stale and are never read). Full tiles from all 108 cores at t = 0 burst DRAM ahead of
+    // W round 0 (measured: W round 0's multicast moved 4.0 -> 11.6 us). On NoC0, so the writer's W reads
+    // never wait on it. Perf 2: the round-0 x sender issues its x reads behind the bias spans under one
+    // barrier instead of waiting for the bias barrier first (8x512 x arrival 6.9 -> 6.0 us, -1.0 us e2e).
+    bool bias_pending = false;
     {
-        // Once per core; compute keeps the tiles fronted for every block. The seed is a ROW broadcast, so
-        // only tile row 0 is consumed: one 64 B DRAM-aligned span from face 0 and one from face 1 per tile
-        // (rows 2..15 of the faces stay stale and are never read). Full tiles from all 108 cores at t = 0
-        // burst DRAM ahead of W round 0 (measured: W round 0's multicast moved 4.0 -> 11.6 us). On NoC0,
-        // so the writer's W reads never wait on it.
         MaybeDeviceZoneScope("reader_bias");
         const auto bias_accessor = TensorAccessor(bias_args, bias_addr, tile_bytes);
         constexpr uint32_t face_bytes = 16 * 16 * 2;
@@ -118,9 +120,16 @@ void kernel_main() {
             noc_async_read(src, dst, span_bytes);
             noc_async_read(src + face_bytes, dst + face_bytes, span_bytes);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_bias, n_tiles);
+        bias_pending = true;
     }
+    auto finish_bias = [&]() {
+        if (bias_pending) {
+            MaybeDeviceZoneScope("reader_bias_barrier");
+            noc_async_read_barrier();
+            cb_push_back(cb_bias, n_tiles);
+            bias_pending = false;
+        }
+    };
 
     Noc noc;
     auto x_sender = x_mcast.sender(noc);
@@ -143,6 +152,10 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("reader_x_read_barrier");
             noc_async_read_barrier();
+        }
+        if (bias_pending) {
+            cb_push_back(cb_bias, n_tiles);
+            bias_pending = false;
         }
         // Valid rows are the leading `rows * k_block` tiles of the slot.
         MaybeDeviceZoneScope("reader_x_mcast_send");
@@ -178,6 +191,9 @@ void kernel_main() {
 
     // Every core of an M-group has the same rows, so all walk the same rounds and CB slot sequence.
     uint32_t round = 0;
+    if (!(core_rows > 0 && x_mcast.should_send(0))) {
+        finish_bias();
+    }
 
     for (uint32_t block_row = 0; block_row < core_rows; block_row += block_m) {
         const uint32_t rows = (core_rows - block_row) < block_m ? (core_rows - block_row) : block_m;
@@ -227,6 +243,7 @@ void kernel_main() {
             }
         }
     }
+    finish_bias();
     MaybeDeviceZoneScope("reader_write_barrier");
     noc_async_write_barrier();
 }
