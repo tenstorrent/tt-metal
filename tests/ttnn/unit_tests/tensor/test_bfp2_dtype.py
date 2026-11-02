@@ -13,6 +13,7 @@ import pytest
 import torch
 
 import ttnn
+from ttnn.operations.golden_common import golden_to_output_dtype
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -60,6 +61,14 @@ def test_bfp2_quantizes_general_values():
     assert torch.equal(_round_trip(y), y)
     nonzero = y != 0
     assert torch.equal(torch.sign(y[nonzero]), torch.sign(x[nonzero]))
+
+
+def test_bfp2_golden_to_output_dtype_quantizes():
+    # Comparison mode models a BFLOAT2_B output by packing the golden result through BFLOAT2_B on the host.
+    torch.manual_seed(0)
+    x = torch.randn((64, 64), dtype=torch.float32)
+
+    assert torch.equal(golden_to_output_dtype(x, ttnn.bfloat2_b), _round_trip(x))
 
 
 def test_bfp2_requires_tile_layout(expect_error):
