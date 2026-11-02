@@ -56,7 +56,7 @@ void kernel_main() {
 
     Noc noc;
 #if ROW_BCAST_CACHE
-    UnicastEndpoint self_ep;
+    PrecomposedUnicastEndpoint self_ep;
 #endif
     CircularBuffer cb_src(cb_id_src);
     CircularBuffer cb_src_b(cb_id_src_b);
@@ -186,9 +186,7 @@ void kernel_main() {
                                     self_ep,
                                     CoreLocalMem<uint32_t>(l1_write_addr_src),
                                     chunk.read_len_a,
-                                    {.noc_x = my_x[noc_id],
-                                     .noc_y = my_y[noc_id],
-                                     .addr = row_cache_addr + chunk.offset_a},
+                                    {.noc_addr = get_noc_addr(row_cache_addr + chunk.offset_a, noc_id)},
                                     {});
                             } else
 #endif
@@ -243,9 +241,7 @@ void kernel_main() {
                                     self_ep,
                                     CoreLocalMem<uint32_t>(l1_write_addr_src_b),
                                     chunk.read_len_b,
-                                    {.noc_x = my_x[noc_id],
-                                     .noc_y = my_y[noc_id],
-                                     .addr = row_cache_addr + chunk.offset_b},
+                                    {.noc_addr = get_noc_addr(row_cache_addr + chunk.offset_b, noc_id)},
                                     {});
                             } else
 #endif

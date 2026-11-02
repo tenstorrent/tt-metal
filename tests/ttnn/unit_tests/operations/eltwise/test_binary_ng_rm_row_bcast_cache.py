@@ -92,5 +92,11 @@ def test_rm_row_bcast_mixed_dtype(device, a_dtype, b_dtype, width, bcast_b):
 
 def test_rm_row_bcast_program_cache_reuse(device):
     # One cached program serves several shapes, including a broadcast page above the cache capacity.
-    for width, height in [(1000, 64), (4096, 33), (9000, 40), (33, 300), (1000, 65)]:
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    for i, (width, height) in enumerate([(1000, 64), (4096, 33), (9000, 40), (33, 300), (1000, 65)]):
         _run(device, (1, 1, height, width), (1, 1, 1, width), ttnn.bfloat16, ttnn.bfloat16)
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries > 0, "The first call must populate the program cache"
+        assert device.num_program_cache_entries() == entries, "Every shape must reuse the cached program"
