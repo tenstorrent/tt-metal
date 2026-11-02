@@ -465,6 +465,15 @@ class TPGatedDeltaNet:
         # [80, 1, 128] (one head per tile-row) once; q/k/v are slices of that, and the recurrence takes them as is
         # (head_major_input). Replaces three typecasts and the op's three head-split permutes with one of each.
         self._gdn_hmi = self._gdn_hmo and self._conv_hm and os.environ.get("QWEN36_1C_GDN_HMI") == "1"
+        # QWEN36_1C_GDN_GB (with TRIM, one user): the recurrence op computes decay and beta from the raw a|b row
+        # itself (fused_gating), so the a|b split, sigmoid, softplus-add, multiply, beta typecast, exp and the two
+        # scalar reshapes go. The constants row is the same bf16 -exp(A_log) and dt_bias today's chain uses.
+        self._gdn_gb = self._gdn_trim and self.B == 1 and os.environ.get("QWEN36_1C_GDN_GB") == "1"
+        self._gb_consts = (
+            ttnn.typecast(ttnn.concat([self.tw["neg_exp_A"], self.tw["dt_bias"]], dim=-1), ttnn.float32)
+            if self._gdn_gb
+            else None
+        )
         self._conv_state_shape = (
             (1, self.qkv_dim_tp // 128, 128) if self._conv_hm else (1, self.B, self.qkv_dim_tp)
         )
@@ -787,7 +796,10 @@ class TPGatedDeltaNet:
                 )
                 if S <= tpc.TILE_SIZE
                 else None,  # prefill (C): per_core_M=1 on 3 cores can't hold S/32 row blocks; ttnn auto
+                **({"dtype": ttnn.float32} if (self._gdn_gb and S == 1) else {}),
             )
+            if self._gdn_gb and S == 1:  # the recurrence op takes the fp32 a|b row as is
+                return qkv, z, ab, None
             a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=_proj_mc)
             b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=_proj_mc)
             ttnn.deallocate(ab)
@@ -857,6 +869,8 @@ class TPGatedDeltaNet:
             _ab_end = min(az + -(-2 * Nv // tpc.TILE_SIZE) * tpc.TILE_SIZE, qkvzab.shape[-1])  # 2*Nv up to a tile
             ab = ttnn.slice(qkvzab, (0, 0, az), (1, S, _ab_end), memory_config=out_mc)
             ttnn.deallocate(qkvzab)
+            if self._gdn_gb and S == 1 and _ab_end - az == 2 * Nv:  # the recurrence op takes the a|b row as is
+                return qkv, z, ttnn.typecast(ab, ttnn.float32), None
             a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=out_mc)
             b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=out_mc)
             ttnn.deallocate(ab)
@@ -1689,16 +1703,19 @@ class TPGatedDeltaNet:
             k = ttnn.reshape(k, (B, 1, n_qk, Dk), memory_config=_L1)
             v = ttnn.reshape(v, (B, 1, Nv, Dv), memory_config=_L1)
 
-        beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
-        ttnn.deallocate(b)
-        g = ttnn.multiply(
-            tw["neg_exp_A"],
-            _softplus_add(a, tw["dt_bias"]),
-            memory_config=_L1,
-            **({"dtype": ttnn.float32} if self._gdn_trim else {}),
-        )
-        ttnn.deallocate(a)
-        g = ttnn.reshape(g, (B, 1, Nv))
+        if b is None:  # QWEN36_1C_GDN_GB: `a` is the fp32 a|b row; the recurrence op does the gating math
+            g, beta = a, self._gb_consts
+        else:
+            beta = ttnn.reshape(ttnn.sigmoid(b, memory_config=_L1), (B, 1, Nv))
+            ttnn.deallocate(b)
+            g = ttnn.multiply(
+                tw["neg_exp_A"],
+                _softplus_add(a, tw["dt_bias"]),
+                memory_config=_L1,
+                **({"dtype": ttnn.float32} if self._gdn_trim else {}),
+            )
+            ttnn.deallocate(a)
+            g = ttnn.reshape(g, (B, 1, Nv))
 
         # fp32 decode step by default (QWEN35_GDN_DECODE_BF16=1 reverts)
         init_state = self.rec_state if B == Bmax else self._slice_along(self.rec_state, 0, 0, B)
@@ -1731,6 +1748,7 @@ class TPGatedDeltaNet:
                     output_per_token_state=True,
                     **({"head_major_output": True} if self._gdn_hmo else {}),
                     **({"head_major_input": True} if self._gdn_hmi else {}),
+                    **({"fused_gating": True} if b is None else {}),
                 )
             elif rec_in_place:
                 o, new_rec = fused_recurrent_gated_delta_rule_ttnn(

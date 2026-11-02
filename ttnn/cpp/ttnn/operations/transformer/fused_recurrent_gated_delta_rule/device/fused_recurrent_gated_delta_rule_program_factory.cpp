@@ -42,7 +42,10 @@ constexpr uint32_t sd = tt::CBIndex::c_10;        // [K,V]  decayed state (S*dec
 constexpr uint32_t vread = tt::CBIndex::c_11;     // [1,V]  k . S'
 constexpr uint32_t u = tt::CBIndex::c_12;         // [1,V]  beta*(v - vread)
 constexpr uint32_t kcol = tt::CBIndex::c_13;      // [K,1]  transpose(k)
+constexpr uint32_t gdec = tt::CBIndex::c_14;      // [1,1]  gb_fused: decay computed in-kernel
+constexpr uint32_t gbeta = tt::CBIndex::c_15;     // [1,1]  gb_fused: beta computed in-kernel
 constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring mode only
+constexpr uint32_t gbscr = tt::CBIndex::c_17;     // 1 tile gb_fused reader scratch (a|b / constants tile)
 }  // namespace cb
 
 tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::create_descriptor(
@@ -105,8 +108,17 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::q, Kt);
     add_cb(cb::k, Kt);
     add_cb(cb::v, Vt);
-    add_cb(cb::decay, 1, T > 1 ? 2 : 1);
-    add_cb(cb::beta, 1, T > 1 ? 2 : 1);
+    const uint32_t gb = attrs.gb_fused ? 1u : 0u;
+    if (gb) {
+        add_cb(cb::decay, 3);  // raw a, dt_bias, -exp(A_log): each a zero tile with the value at [0,0]
+        add_cb(cb::beta, 1);   // raw b, same form
+        add_cb(cb::gdec, 1);
+        add_cb(cb::gbeta, 1);
+        add_cb(cb::gbscr, 1);
+    } else {
+        add_cb(cb::decay, 1, T > 1 ? 2 : 1);
+        add_cb(cb::beta, 1, T > 1 ? 2 : 1);
+    }
     add_cb(cb::S, kv);
     add_cb(cb::out, Vt, 2);
     add_cb(cb::state_out, kv, 2);
@@ -128,9 +140,9 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/";
-    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token};
+    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token, gb};
 
-    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx};
+    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx, gb};
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);

@@ -97,8 +97,14 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     check(in.q, "q", {BHTQ, 1u, K});
     check(in.k, "k", {BHTQ, 1u, K});
     check(in.v, "v", {BHT, 1u, V});
-    check(in.decay, "decay", {BHT, 1u, 1u});
-    check(in.beta, "beta", {BHT, 1u, 1u});
+    if (attrs.gb_fused) {
+        TT_FATAL(attrs.T == 1, "fused_recurrent_gated_delta_rule: gb_fused is decode-only (T == 1), got T={}", attrs.T);
+        check(in.decay, "a|b row (gb_fused)", {1u, 1u, 2 * attrs.BH});
+        check(in.beta, "gating constants (gb_fused)", {1u, 1u, 2 * attrs.BH});
+    } else {
+        check(in.decay, "decay", {BHT, 1u, 1u});
+        check(in.beta, "beta", {BHT, 1u, 1u});
+    }
     // Ring mode: initial_state is the [BH*T,K,V] ring (also the in-place state output); otherwise [BH,K,V].
     const bool ring = in.initial_state_block_idx.has_value();
     if (in.initial_state.has_value()) {
@@ -186,7 +192,8 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     bool output_final_state,
     bool output_per_token_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool gb_fused) {
     using OperationType = FusedRecurrentGatedDeltaRuleDeviceOperation;
 
     const auto& q_shape = q.logical_shape();  // [BH*T, 1, K]
@@ -219,6 +226,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         .output_per_token_state = output_per_token_state,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
+        .gb_fused = gb_fused,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .q = q,
