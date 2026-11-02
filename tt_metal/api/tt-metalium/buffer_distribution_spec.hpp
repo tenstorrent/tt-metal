@@ -46,6 +46,13 @@ public:
     const Shape& tensor_shape_in_pages() const { return tensor_shape_in_pages_; }
     const Shape& shard_shape_in_pages() const { return shard_shape_in_pages_; }
 
+    // Host twins of TensorAccessor::contiguous_page_stride() / num_contiguous_pages(), same semantics:
+    // page ids page_id + k * contiguous_page_stride(), k < num_contiguous_pages(page_id), are contiguous in memory.
+    uint32_t contiguous_page_stride() const;
+    uint32_t num_contiguous_pages(uint32_t page_id) const;
+    // As above, but the run also stops before end_page_id, an exclusive page id (not a count).
+    uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const;
+
     size_t num_shards() const;
     size_t max_num_shards_per_core() const;
     size_t max_num_dev_pages_per_core() const;
@@ -82,6 +89,7 @@ private:
         ShardOrientation shard_orientation,
         ShardDistributionStrategy shard_distribution_strategy);
     void init_precomputed_data();
+    int contiguous_page_dim() const;
 
     Shape tensor_shape_in_pages_;
     Shape shard_shape_in_pages_;

@@ -5,6 +5,9 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 // Fills one full tile of bfloat16 with a scalar value
 // Scalar is assumed to be a 16-bit value double packed into a u32
@@ -378,13 +381,29 @@ FORCE_INLINE void fill_tile_with_first_row(uint32_t l1_write_ptr) {
     constexpr uint32_t kRowBytes = 64;
     const uint32_t f0 = l1_write_ptr;
     const uint32_t f1 = f0 + kFaceBytes;
+    Noc noc;
     for (uint32_t n = kRowBytes; n < kFaceBytes; n <<= 1) {
-        noc_async_read(get_noc_addr(f0), f0 + n, n);
-        noc_async_read(get_noc_addr(f1), f1 + n, n);
-        noc_async_read_barrier();
+        noc.async_read(
+            PrecomposedUnicastEndpoint{},
+            CoreLocalMem<uint32_t>(f0 + n),
+            n,
+            {.noc_addr = get_noc_addr(f0, noc.get_noc_id())},
+            {.offset_bytes = 0});
+        noc.async_read(
+            PrecomposedUnicastEndpoint{},
+            CoreLocalMem<uint32_t>(f1 + n),
+            n,
+            {.noc_addr = get_noc_addr(f1, noc.get_noc_id())},
+            {.offset_bytes = 0});
+        noc.async_read_barrier();
     }
-    noc_async_read(get_noc_addr(f0), f0 + 2 * kFaceBytes, 2 * kFaceBytes);
-    noc_async_read_barrier();
+    noc.async_read(
+        PrecomposedUnicastEndpoint{},
+        CoreLocalMem<uint32_t>(f0 + 2 * kFaceBytes),
+        2 * kFaceBytes,
+        {.noc_addr = get_noc_addr(f0, noc.get_noc_id())},
+        {.offset_bytes = 0});
+    noc.async_read_barrier();
 }
 
 // Reads the very first column of the CB and fills the entire tile with the same column.

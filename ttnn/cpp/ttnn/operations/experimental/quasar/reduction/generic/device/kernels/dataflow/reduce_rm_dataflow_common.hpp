@@ -7,7 +7,7 @@
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
 
 #define RM_DF_ALWI inline __attribute__((always_inline))

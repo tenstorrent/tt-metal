@@ -85,10 +85,8 @@ std::string fds_tests_skip_reason(const distributed::MeshDevice& mesh_device) {
 }
 
 bool are_group_status_registers_sticky() {
-    // TODO: Use UMD supplied variant instead of env var
-    const char* quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
-    return quasar_variant != nullptr && std::string(quasar_variant) != "quasar" &&
-           std::string(quasar_variant) != "2.0.0";
+    const auto ip_variant = MetalContext::instance().get_cluster().get_quasar_ip_variant();
+    return ip_variant != IpVariant::GRENDEL;
 }
 
 std::string fds_kernel_path(const std::string& kernel_name) {
@@ -180,7 +178,7 @@ FdsProgramResult run_fds_program(distributed::MeshDevice& mesh_device, FdsProgra
     std::vector<uint32_t> cleared_dispatch(spec.num_dispatch_slots, 0);
     std::vector<uint32_t> cleared_worker(spec.num_worker_slots, 0);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     for (const CoreCoord& core : spec.dispatch_cores) {
         slow_dispatch::WriteToL1(mesh_device, core, dispatch_l1, cleared_dispatch, CoreType::DISPATCH);
         detail::CreateDispatchEngineKernel(

@@ -8,7 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
