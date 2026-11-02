@@ -22,6 +22,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_activation_block = get_compile_time_arg_val(0);
@@ -131,23 +132,30 @@ void kernel_main() {
         const uint32_t rows = (core_rows - block_row) < block_m ? (core_rows - block_row) : block_m;
 
         // project_block: the whole nominal block accumulates in place (caller-owned pack target).
-        partials.reserve_back(partials_tiles);
-        matmul_block<
-            false,
-            true,
-            LastBlockTarget::Interm,
-            OutputCBLayout::TileRowMajor,
-            matmul_config::InitMode::Short,
-            InputPolicy::WaitAndPopPerKBlock,
-            InputPolicy::WaitAndPopPerKBlock,
-            NoPostCompute,
-            NoPreKBlock,
-            NoPostKBlock,
-            0,
-            NoKBlockInnerDimFn,
-            NoIn0Source,
-            NoIn1BaseOffset,
-            true>(activation, weight, partials, partials, shape, {}, {}, n_tiles, n_tiles);
+        {
+            MaybeDeviceZoneScope("compute_partials_reserve");
+            partials.reserve_back(partials_tiles);
+        }
+        {
+            // Occupancy: matmul_block waits per K-block on x / W inside the helper.
+            MaybeDeviceZoneScope("compute_matmul");
+            matmul_block<
+                false,
+                true,
+                LastBlockTarget::Interm,
+                OutputCBLayout::TileRowMajor,
+                matmul_config::InitMode::Short,
+                InputPolicy::WaitAndPopPerKBlock,
+                InputPolicy::WaitAndPopPerKBlock,
+                NoPostCompute,
+                NoPreKBlock,
+                NoPostKBlock,
+                0,
+                NoKBlockInnerDimFn,
+                NoIn0Source,
+                NoIn1BaseOffset,
+                true>(activation, weight, partials, partials, shape, {}, {}, n_tiles, n_tiles);
+        }
         partials.push_back(partials_tiles);
         pack_reconfig_l1_acc(0);
 
@@ -164,10 +172,15 @@ void kernel_main() {
 
         // Table slot j holds the block's sequence position (block start + j) % seq_tiles.
         const uint32_t table_tiles = (rows < seq_tiles ? rows : seq_tiles) * table_tiles_per_row;
-        if (is_rotary) {
-            cb_wait_front(cb_rotary_table, table_tiles);
+        {
+            MaybeDeviceZoneScope("compute_epilogue_wait");
+            if (is_rotary) {
+                cb_wait_front(cb_rotary_table, table_tiles);
+            }
+            partials.wait_front(partials_tiles);
         }
-        partials.wait_front(partials_tiles);
+        // Occupancy: the pack elements reserve cb_out_tiles / cb_out_tiles_noc0 per row.
+        MaybeDeviceZoneScope("compute_epilogue");
         for (uint32_t row = 0; row < rows; ++row) {
             if constexpr (out_write_nocs == 2) {
                 if (row & 1) {

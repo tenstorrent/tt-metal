@@ -17,6 +17,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "qkv_proj_heads_rope_store.hpp"
 
 void kernel_main() {
@@ -120,6 +121,7 @@ void kernel_main() {
     };
 
     auto read_weight_block = [&](uint32_t k_blk, uint32_t block_addr) {
+        MaybeDeviceZoneScope("writer_w_read");
         issue_weight_reads(k_blk, block_addr);
         finish_weight_block(k_blk);
     };
@@ -146,6 +148,7 @@ void kernel_main() {
         if constexpr (std::decay_t<decltype(channel)>::active) {
             const bool sending = channel.should_send(round);
             if (sending) {
+                MaybeDeviceZoneScope("writer_w_read");
                 if (!issued_ahead) {
                     issue_weight_reads(k_blk, block_addr);
                 }
@@ -167,8 +170,10 @@ void kernel_main() {
                 }
             }
             if (sending) {
+                MaybeDeviceZoneScope("writer_w_mcast_send");
                 channel.sender(noc).send(block_addr, block_addr, weight_block_tiles * tile_bytes);
             } else {
+                MaybeDeviceZoneScope("writer_w_receive");
                 channel.receiver(noc).receive(round);
             }
             if (read_ahead && round == 0) {
@@ -188,18 +193,28 @@ void kernel_main() {
         const uint32_t rows = (core_rows - block_row) < block_m ? (core_rows - block_row) : block_m;
 
         for (uint32_t k_blk = 0; k_blk < num_k_blocks; ++k_blk, ++round) {
-            cb_reserve_back(cb_weight_block, weight_block_tiles);
+            {
+                MaybeDeviceZoneScope("writer_w_reserve");
+                cb_reserve_back(cb_weight_block, weight_block_tiles);
+            }
             const uint32_t block_addr = get_write_ptr(cb_weight_block);
             with_channel(round, [&](const auto& channel) { fill_weight_slot(channel, k_blk, round, block_addr); });
             cb_push_back(cb_weight_block, weight_block_tiles);
         }
 
+        {
+            // Waiting for the block's first row = waiting for the K-loop + the first epilogue row.
+            MaybeDeviceZoneScope("writer_store_wait_first");
+            cb_wait_front(cb_out_tiles, n_tiles);
+        }
         // Rows alternate between this kernel's output CB and the reader's (out_write_nocs == 2).
+        MaybeDeviceZoneScope("writer_store");
         for (uint32_t row = 0; row < rows; row += out_write_nocs) {
             qkv_store::
                 store_row<cb_out_tiles, n_tiles, tiles_per_head, num_heads, seq_tiles, tile_bytes, last_valid_rows>(
                     noc, row_start + block_row + row, third, first_head, q_accessor, k_accessor, v_accessor);
         }
     }
+    MaybeDeviceZoneScope("writer_write_barrier");
     noc_async_write_barrier();
 }

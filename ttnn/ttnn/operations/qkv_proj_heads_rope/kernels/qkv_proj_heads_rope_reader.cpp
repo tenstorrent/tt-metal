@@ -18,6 +18,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "qkv_proj_heads_rope_store.hpp"
 
 namespace {
@@ -124,15 +125,21 @@ void kernel_main() {
                     activation, tile_bytes, {.offset_bytes = (row * k_block + ones_col) * tile_bytes});
             }
         }
-        for (uint32_t row = 0; row < rows; ++row) {
-            for (uint32_t col = 0; col < x_cols; ++col) {
-                noc_async_read_page(
-                    (first_row + row) * hidden_tiles + k_first + col,
-                    x_accessor,
-                    block_addr + (row * k_block + col) * tile_bytes);
+        {
+            MaybeDeviceZoneScope("reader_x_read_issue");
+            for (uint32_t row = 0; row < rows; ++row) {
+                for (uint32_t col = 0; col < x_cols; ++col) {
+                    noc_async_read_page(
+                        (first_row + row) * hidden_tiles + k_first + col,
+                        x_accessor,
+                        block_addr + (row * k_block + col) * tile_bytes);
+                }
             }
         }
-        noc_async_read_barrier();
+        {
+            MaybeDeviceZoneScope("reader_x_read_barrier");
+            noc_async_read_barrier();
+        }
         if (has_ones) {
             noc.write_zeros_l1_barrier();
             for (uint32_t row = 0; row < rows; ++row) {
@@ -140,6 +147,7 @@ void kernel_main() {
             }
         }
         // Valid rows are the leading `rows * k_block` tiles of the slot.
+        MaybeDeviceZoneScope("reader_x_mcast_send");
         x_sender.send(block_addr, block_addr, rows * k_block * tile_bytes);
     };
 
@@ -149,6 +157,7 @@ void kernel_main() {
         if (first == last) {
             return;
         }
+        MaybeDeviceZoneScope("reader_table");
         const uint32_t num_tiles = (last - first) * table_tiles_per_row;
         cb_reserve_back(cb_rotary_table, num_tiles);
         uint32_t table_addr = get_write_ptr(cb_rotary_table);
@@ -183,10 +192,14 @@ void kernel_main() {
         const uint32_t table_rows = rows < seq_tiles ? rows : seq_tiles;
         uint32_t table_rows_done = 0;
         for (uint32_t k_blk = 0; k_blk < num_k_blocks; ++k_blk, ++round) {
-            cb_reserve_back(cb_activation_block, act_block_tiles);
+            {
+                MaybeDeviceZoneScope("reader_x_reserve");
+                cb_reserve_back(cb_activation_block, act_block_tiles);
+            }
             if (x_mcast.should_send(round)) {
                 read_x_block(k_blk * k_block, rows, first_row);
             } else {
+                MaybeDeviceZoneScope("reader_x_receive");
                 x_receiver.receive(round);
             }
             cb_push_back(cb_activation_block, act_block_tiles);
@@ -198,6 +211,12 @@ void kernel_main() {
         }
 
         if constexpr (out_write_nocs > 1) {
+            if (rows > 1) {
+                // Waiting for the block's first odd row = waiting for the K-loop + first epilogue rows.
+                MaybeDeviceZoneScope("reader_store_wait_first");
+                cb_wait_front(cb_out_tiles_noc0, n_tiles);
+            }
+            MaybeDeviceZoneScope("reader_store");
             for (uint32_t row = 1; row < rows; row += out_write_nocs) {
                 qkv_store::store_row<
                     cb_out_tiles_noc0,
@@ -210,5 +229,6 @@ void kernel_main() {
             }
         }
     }
+    MaybeDeviceZoneScope("reader_write_barrier");
     noc_async_write_barrier();
 }

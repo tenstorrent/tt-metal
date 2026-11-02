@@ -1,0 +1,350 @@
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_compute.cpp b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_compute.cpp
+index 432b21d1298..c88c87758f4 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_compute.cpp
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_compute.cpp
+@@ -22,6 +22,7 @@
+ #include "api/dataflow/circular_buffer.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_activation_block = get_compile_time_arg_val(0);
+@@ -131,28 +132,37 @@ void kernel_main() {
+         const uint32_t rows = (core_rows - block_row) < block_m ? (core_rows - block_row) : block_m;
+ 
+         // project_block: the whole nominal block accumulates in place (caller-owned pack target).
+-        partials.reserve_back(partials_tiles);
+-        matmul_block<
+-            false,
+-            true,
+-            LastBlockTarget::Interm,
+-            OutputCBLayout::TileRowMajor,
+-            matmul_config::InitMode::Short,
+-            InputPolicy::WaitAndPopPerKBlock,
+-            InputPolicy::WaitAndPopPerKBlock,
+-            NoPostCompute,
+-            NoPreKBlock,
+-            NoPostKBlock,
+-            0,
+-            NoKBlockInnerDimFn,
+-            NoIn0Source,
+-            NoIn1BaseOffset,
+-            true>(activation, weight, partials, partials, shape, {}, {}, n_tiles, n_tiles);
++        {
++            MaybeDeviceZoneScope("compute_partials_reserve");
++            partials.reserve_back(partials_tiles);
++        }
++        {
++            // Occupancy: matmul_block waits per K-block on x / W inside the helper.
++            MaybeDeviceZoneScope("compute_matmul");
++            matmul_block<
++                false,
++                true,
++                LastBlockTarget::Interm,
++                OutputCBLayout::TileRowMajor,
++                matmul_config::InitMode::Short,
++                InputPolicy::WaitAndPopPerKBlock,
++                InputPolicy::WaitAndPopPerKBlock,
++                NoPostCompute,
++                NoPreKBlock,
++                NoPostKBlock,
++                0,
++                NoKBlockInnerDimFn,
++                NoIn0Source,
++                NoIn1BaseOffset,
++                true>(activation, weight, partials, partials, shape, {}, {}, n_tiles, n_tiles);
++        }
+         partials.push_back(partials_tiles);
+         pack_reconfig_l1_acc(0);
+ 
+         // The epilogue chains' one-time setup, once per block (InitReconfigOwner::Caller): both output
+         // CBs are bf16, so one pack reconfig serves either.
++        {
++        DeviceZoneScopedN("TMP_epi_setup");  // ABLATION-TMP
+         if (is_rotary) {
+             reconfig_data_format(cb_matmul_partials, cb_rotary_table);
+             mul_init(cb_matmul_partials, cb_rotary_table, true);
+@@ -161,14 +171,21 @@ void kernel_main() {
+             copy_init(cb_matmul_partials);
+         }
+         pack_reconfig_data_format(cb_out_tiles);
++        }  // ABLATION-TMP
+ 
+         // Table slot j holds the block's sequence position (block start + j) % seq_tiles.
+         const uint32_t table_tiles = (rows < seq_tiles ? rows : seq_tiles) * table_tiles_per_row;
+-        if (is_rotary) {
+-            cb_wait_front(cb_rotary_table, table_tiles);
++        {
++            MaybeDeviceZoneScope("compute_epilogue_wait");
++            if (is_rotary) {
++                cb_wait_front(cb_rotary_table, table_tiles);
++            }
++            partials.wait_front(partials_tiles);
+         }
+-        partials.wait_front(partials_tiles);
++        // Occupancy: the pack elements reserve cb_out_tiles / cb_out_tiles_noc0 per row.
++        MaybeDeviceZoneScope("compute_epilogue");
+         for (uint32_t row = 0; row < rows; ++row) {
++            MaybeDeviceZoneScope("TMP_epi_row");  // ABLATION-TMP
+             if constexpr (out_write_nocs == 2) {
+                 if (row & 1) {
+                     DataflowBuffer out_noc0_dfb(cb_out_tiles_noc0);
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp
+index 6728a164611..5af1a9b242f 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_reader.cpp
+@@ -18,6 +18,7 @@
+ #include "api/dataflow/noc.h"
+ #include "api/dataflow/circular_buffer.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "qkv_proj_heads_rope_store.hpp"
+ 
+ namespace {
+@@ -124,15 +125,25 @@ void kernel_main() {
+                     activation, tile_bytes, {.offset_bytes = (row * k_block + ones_col) * tile_bytes});
+             }
+         }
+-        for (uint32_t row = 0; row < rows; ++row) {
+-            for (uint32_t col = 0; col < x_cols; ++col) {
+-                noc_async_read_page(
+-                    (first_row + row) * hidden_tiles + k_first + col,
+-                    x_accessor,
+-                    block_addr + (row * k_block + col) * tile_bytes);
++        {
++            MaybeDeviceZoneScope("reader_x_read_issue");
++#ifndef ABL_NO_XREAD  // ABLATION-TMP
++            for (uint32_t row = 0; row < rows; ++row) {
++#else
++            for (uint32_t row = 0; row < 0; ++row) {
++#endif
++                for (uint32_t col = 0; col < x_cols; ++col) {
++                    noc_async_read_page(
++                        (first_row + row) * hidden_tiles + k_first + col,
++                        x_accessor,
++                        block_addr + (row * k_block + col) * tile_bytes);
++                }
+             }
+         }
+-        noc_async_read_barrier();
++        {
++            MaybeDeviceZoneScope("reader_x_read_barrier");
++            noc_async_read_barrier();
++        }
+         if (has_ones) {
+             noc.write_zeros_l1_barrier();
+             for (uint32_t row = 0; row < rows; ++row) {
+@@ -140,7 +151,10 @@ void kernel_main() {
+             }
+         }
+         // Valid rows are the leading `rows * k_block` tiles of the slot.
++        MaybeDeviceZoneScope("reader_x_mcast_send");
++#ifndef ABL_NO_MCAST  // ABLATION-TMP
+         x_sender.send(block_addr, block_addr, rows * k_block * tile_bytes);
++#endif
+     };
+ 
+     // Table slots [first, last) of the block starting at tile-row first_row; slot j holds sequence
+@@ -149,9 +163,14 @@ void kernel_main() {
+         if (first == last) {
+             return;
+         }
++        MaybeDeviceZoneScope("reader_table");
+         const uint32_t num_tiles = (last - first) * table_tiles_per_row;
+         cb_reserve_back(cb_rotary_table, num_tiles);
+         uint32_t table_addr = get_write_ptr(cb_rotary_table);
++#ifdef ABL_NO_TABLE  // ABLATION-TMP
++        cb_push_back(cb_rotary_table, num_tiles);
++        return;
++#endif
+         for (uint32_t row = first; row < last; ++row) {
+             const uint32_t lo_page = ((first_row + row) % seq_tiles) * tiles_per_head;
+             noc_async_read_page(lo_page, cos_accessor, table_addr);
+@@ -183,11 +202,17 @@ void kernel_main() {
+         const uint32_t table_rows = rows < seq_tiles ? rows : seq_tiles;
+         uint32_t table_rows_done = 0;
+         for (uint32_t k_blk = 0; k_blk < num_k_blocks; ++k_blk, ++round) {
+-            cb_reserve_back(cb_activation_block, act_block_tiles);
++            {
++                MaybeDeviceZoneScope("reader_x_reserve");
++                cb_reserve_back(cb_activation_block, act_block_tiles);
++            }
+             if (x_mcast.should_send(round)) {
+                 read_x_block(k_blk * k_block, rows, first_row);
+             } else {
++                MaybeDeviceZoneScope("reader_x_receive");
++#ifndef ABL_NO_MCAST  // ABLATION-TMP
+                 x_receiver.receive(round);
++#endif
+             }
+             cb_push_back(cb_activation_block, act_block_tiles);
+             if (is_rotary) {
+@@ -198,6 +223,12 @@ void kernel_main() {
+         }
+ 
+         if constexpr (out_write_nocs > 1) {
++            if (rows > 1) {
++                // Waiting for the block's first odd row = waiting for the K-loop + first epilogue rows.
++                MaybeDeviceZoneScope("reader_store_wait_first");
++                cb_wait_front(cb_out_tiles_noc0, n_tiles);
++            }
++            MaybeDeviceZoneScope("reader_store");
+             for (uint32_t row = 1; row < rows; row += out_write_nocs) {
+                 qkv_store::store_row<
+                     cb_out_tiles_noc0,
+@@ -210,5 +241,6 @@ void kernel_main() {
+             }
+         }
+     }
++    MaybeDeviceZoneScope("reader_write_barrier");
+     noc_async_write_barrier();
+ }
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_store.hpp b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_store.hpp
+index cb471a91fcd..77e636c4821 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_store.hpp
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_store.hpp
+@@ -38,7 +38,11 @@ FORCE_INLINE void store_row(
+     constexpr uint32_t face_bytes = 16 * face_row_bytes;
+     const uint32_t batch = r / seq_tiles;
+     const uint32_t st = r % seq_tiles;
+-    cb_wait_front(cb_out, n_tiles);
++    {
++        DeviceZoneScopedN("TMP_store_wait");  // ABLATION-TMP
++        cb_wait_front(cb_out, n_tiles);
++    }
++    DeviceZoneScopedN("TMP_store_row");  // ABLATION-TMP
+     uint32_t l1_addr = get_read_ptr(cb_out);
+     if constexpr (last_valid_rows != 0) {
+         // Output pad rows must be exactly 0 whatever x / table padding held.
+@@ -66,6 +70,9 @@ FORCE_INLINE void store_row(
+     for (uint32_t n = 0; n < n_tiles; ++n) {
+         const uint32_t head = first_head + n / tiles_per_head;
+         const uint32_t page = ((batch * num_heads + head) * seq_tiles + st) * tiles_per_head + n % tiles_per_head;
++#ifdef ABL_NO_STORE  // ABLATION-TMP
++        continue;
++#endif
+         if (third == 0) {
+             noc_async_write_page(page, q_accessor, l1_addr);
+         } else if (third == 1) {
+@@ -75,8 +82,13 @@ FORCE_INLINE void store_row(
+         }
+         l1_addr += tile_bytes;
+     }
++#ifndef ABL_NO_STORE  // ABLATION-TMP
+     noc_async_writes_flushed();
++#endif
++    {
++    DeviceZoneScopedN("TMP_store_pop");  // ABLATION-TMP
+     cb_pop_front(cb_out, n_tiles);
++    }
+ }
+ 
+ }  // namespace qkv_store
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp
+index d1f5f9b8b3b..363ea05e1eb 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/kernels/qkv_proj_heads_rope_writer.cpp
+@@ -17,6 +17,7 @@
+ #include "api/dataflow/noc.h"
+ #include "api/dataflow/circular_buffer.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "qkv_proj_heads_rope_store.hpp"
+ 
+ void kernel_main() {
+@@ -86,10 +87,16 @@ void kernel_main() {
+         for (uint32_t tile = 0; tile < weight_block_tiles; ++tile) {
+             const uint32_t kt = k_blk * k_block + k;
+             const uint32_t l1_addr = block_addr + (k * n_tiles + n) * tile_bytes;
++#ifdef ABL_NO_WREAD  // ABLATION-TMP
++            if (false) {
++#else
+             if (kt < hidden_tiles) {
++#endif
+                 noc_async_read_page(kt * weight_width_tiles + first_col_tile + n, weight_accessor, l1_addr);
+             } else {
++#ifndef ABL_NO_WREAD  // ABLATION-TMP
+                 noc_async_read_page(first_col_tile + n, bias_accessor, l1_addr);
++#endif
+             }
+             if (++n == n_tiles) {
+                 n = 0;
+@@ -120,6 +127,7 @@ void kernel_main() {
+     };
+ 
+     auto read_weight_block = [&](uint32_t k_blk, uint32_t block_addr) {
++        MaybeDeviceZoneScope("writer_w_read");
+         issue_weight_reads(k_blk, block_addr);
+         finish_weight_block(k_blk);
+     };
+@@ -146,6 +154,7 @@ void kernel_main() {
+         if constexpr (std::decay_t<decltype(channel)>::active) {
+             const bool sending = channel.should_send(round);
+             if (sending) {
++                MaybeDeviceZoneScope("writer_w_read");
+                 if (!issued_ahead) {
+                     issue_weight_reads(k_blk, block_addr);
+                 }
+@@ -167,9 +176,15 @@ void kernel_main() {
+                 }
+             }
+             if (sending) {
++                MaybeDeviceZoneScope("writer_w_mcast_send");
++#ifndef ABL_NO_MCAST  // ABLATION-TMP
+                 channel.sender(noc).send(block_addr, block_addr, weight_block_tiles * tile_bytes);
++#endif
+             } else {
++                MaybeDeviceZoneScope("writer_w_receive");
++#ifndef ABL_NO_MCAST  // ABLATION-TMP
+                 channel.receiver(noc).receive(round);
++#endif
+             }
+             if (read_ahead && round == 0) {
+                 issue_weight_reads(next % num_k_blocks, slot_addr(next));
+@@ -188,18 +203,28 @@ void kernel_main() {
+         const uint32_t rows = (core_rows - block_row) < block_m ? (core_rows - block_row) : block_m;
+ 
+         for (uint32_t k_blk = 0; k_blk < num_k_blocks; ++k_blk, ++round) {
+-            cb_reserve_back(cb_weight_block, weight_block_tiles);
++            {
++                MaybeDeviceZoneScope("writer_w_reserve");
++                cb_reserve_back(cb_weight_block, weight_block_tiles);
++            }
+             const uint32_t block_addr = get_write_ptr(cb_weight_block);
+             with_channel(round, [&](const auto& channel) { fill_weight_slot(channel, k_blk, round, block_addr); });
+             cb_push_back(cb_weight_block, weight_block_tiles);
+         }
+ 
++        {
++            // Waiting for the block's first row = waiting for the K-loop + the first epilogue row.
++            MaybeDeviceZoneScope("writer_store_wait_first");
++            cb_wait_front(cb_out_tiles, n_tiles);
++        }
+         // Rows alternate between this kernel's output CB and the reader's (out_write_nocs == 2).
++        MaybeDeviceZoneScope("writer_store");
+         for (uint32_t row = 0; row < rows; row += out_write_nocs) {
+             qkv_store::
+                 store_row<cb_out_tiles, n_tiles, tiles_per_head, num_heads, seq_tiles, tile_bytes, last_valid_rows>(
+                     noc, row_start + block_row + row, third, first_head, q_accessor, k_accessor, v_accessor);
+         }
+     }
++    MaybeDeviceZoneScope("writer_write_barrier");
+     noc_async_write_barrier();
+ }
+diff --git a/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py b/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py
+index 3a5d7552bf9..6694199cc4b 100644
+--- a/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py
++++ b/ttnn/ttnn/operations/qkv_proj_heads_rope/qkv_proj_heads_rope_program_descriptor.py
+@@ -571,4 +571,11 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
+         config=compute_kernel_config,
+     )
+     descriptor.kernels = [*readers, *writers, compute]
++    import os  # ABLATION-TMP
++
++    if os.environ.get("QKV_ABLATE"):  # ABLATION-TMP
++        kernels = list(descriptor.kernels)  # ABLATION-TMP
++        for kernel in kernels:  # ABLATION-TMP
++            kernel.defines = [(d, "1") for d in os.environ["QKV_ABLATE"].split(",")]  # ABLATION-TMP
++        descriptor.kernels = kernels  # ABLATION-TMP
+     return descriptor
