@@ -43,6 +43,11 @@ created, except WH QuietBox / T3K (2x4), which only has 1024x1024: the larger si
 there with the text encoder on the device. Pass `width` and `height` to the pipeline call to choose
 one.
 
+The edit checkpoints have their own set: diffusers' sizes of about 1024² pixels for the same aspect
+ratios, 1024x1024, 1376x768 (16:9), 1184x896 (4:3) and 1248x832 (3:2), and the transposes of the
+last three. Without `width` and `height`, an edit's output takes the one closest in aspect ratio to
+the last input image.
+
 The transformer pads the image's sequence to one of a few lengths, so sizes of similar area share a
 trace.
 
