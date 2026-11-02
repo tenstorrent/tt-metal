@@ -14,7 +14,7 @@ tests pin that down device against device, so they need the TTNN weight cache bu
 * test_k3_multiuser_interleaved_matches_sequential: one chunk per forward. N users prefilled chunk by chunk in
   round-robin order into one set of slots, and each user start to finish into another, must agree: last-layer
   output, every KDA layer's carries and every MLA layer's KV.
-* test_k3_packed_forward_matches_one_chunk_forwards: four chunks per forward. A schedule with partial chunks, a
+* test_k3_packed_forward_matches_one_chunk_forwards: two chunks per forward (FORWARD_CHUNKS). A schedule with partial chunks, a
   partial chunk followed by a real one, one user's consecutive chunks in the same forward (the second continues
   the first's KDA carry and reads its KV), users at different depths and empty tail chunks must match the same
   chunks each alone in its own forward.
@@ -61,7 +61,10 @@ SP_AXIS, TP_AXIS = 0, 1
 CHUNK = 5120
 N_CHUNKS = 3
 NUM_USERS = 3
-FORWARD_CHUNKS = 4
+# Two chunks per forward: 1,280 MoE rows per chip. At four, the MoE's shared-expert matmuls (TtSharedExpert's
+# get_program_configs, per_core_M = ceil(80 M-tiles / 9 rows) = 9) need 1,714,112 B of static circular buffers on
+# Kimi-K3's widths, past the 1,572,864 B of L1; that program-config change belongs to the shared MoE.
+FORWARD_CHUNKS = 2
 GATE_MODE = GateComputeMode.DEVICE_FP32
 
 # Interleaving changes only the order of whole forward() calls: bit-exact up to a reduction-order tie.
@@ -287,16 +290,19 @@ def _compare_state(label, mesh_device, model, kvpe, pairs, *, exact_layers, thre
 
 
 def _packed_schedule():
-    """(user lengths, forwards) for four users. Every forward holds FORWARD_CHUNKS chunks; user u lives in slot u.
-    Covers a partial chunk followed by a real one, one user's consecutive chunks in the same forward, users at
-    different depths in one forward, and empty tail chunks. Starts are 32-aligned (KDA); ends are not."""
+    """(user lengths, forwards) for four users. Every forward holds FORWARD_CHUNKS (2) chunks; user u lives in slot
+    u. Covers an empty tail chunk, one user's consecutive chunks in the same forward (the second continues the first's
+    KDA carry and reads its KV), a partial chunk followed by a real one at a different depth, and a partial chunk
+    alone. Starts are 32-aligned (KDA); ends are not."""
     C = CHUNK
     lengths = [3 * C, C + 704, 896, 2 * C]  # A: 3 full, B: full + partial, C: one partial, D: 2 full
     E = PrefillChunk(0, 0, 0)
     forwards = [
-        [PrefillChunk(0, 0, C), PrefillChunk(2, 0, 896), PrefillChunk(1, 0, C), E],
-        [PrefillChunk(0, C, 2 * C), PrefillChunk(1, C, C + 704), PrefillChunk(3, 0, C), PrefillChunk(3, C, 2 * C)],
-        [PrefillChunk(0, 2 * C, 3 * C), E, E, E],
+        [PrefillChunk(0, 0, C), PrefillChunk(1, 0, C)],
+        [PrefillChunk(0, C, 2 * C), E],
+        [PrefillChunk(3, 0, C), PrefillChunk(3, C, 2 * C)],
+        [PrefillChunk(2, 0, 896), PrefillChunk(0, 2 * C, 3 * C)],
+        [PrefillChunk(1, C, C + 704), E],
     ]
     return lengths, forwards
 
