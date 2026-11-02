@@ -438,9 +438,13 @@ GatherPlan build_gather_plan(
     std::stable_partition(local_copy_core_order.begin(), local_copy_core_order.end(), [&](const auto& core) {
         return core.y >= middle_y;
     });
-    // one per link; a non-interleaved input takes two per link, since they also convert the own shard page by page for
-    // the link workers (QuietBox, GLM KV cache, 6 KiB: 4 is fastest; 6 wins only at 14 KiB)
-    const uint32_t num_local_copy_cores = input_interleaved ? L : 2 * L;
+    // one per link; a non-interleaved input takes two per link where the grid has room for them beside the link
+    // workers, since they also convert the own shard page by page for the link workers (QuietBox, GLM KV cache, 6 KiB:
+    // 4 is fastest; 6 wins only at 14 KiB). A grid without that room keeps every link and copies with one core per
+    // link.
+    const uint32_t link_worker_cores = plan.num_rings * 2 * L;
+    const uint32_t num_local_copy_cores =
+        input_interleaved || allowed_cores.size() < link_worker_cores + 2 * L ? L : 2 * L;
     for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
         const Coord chip(chip_index / mesh_cols, chip_index % mesh_cols);
         auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
