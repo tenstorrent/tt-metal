@@ -856,7 +856,9 @@ class TPGatedDeltaNet:
         # Prefill qkvzab in L1 (DRAM above S=2048): keeps proj + q/k/v/z/a/b resident for conv+gate prep.
         # prefill_l1_seq_scale: per-chip activations are that many times the TP=4 ones (4 at TP=1).
         _L1 = tpc.prefill_act_mem(T * getattr(self.args, "prefill_l1_seq_scale", 1), ttnn.L1_MEMORY_CONFIG)
-        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_L1)
+        from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
+
+        qkv, z, a, b = pftime.timed("gdn_in", T, self._project_qkvzab, x, T, out_mc=_L1)
 
         # Causal conv + SiLU; conv_state = previous chunk's last K-1 inputs (None/zero from scratch).
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
@@ -1081,7 +1083,9 @@ class TPGatedDeltaNet:
             if return_state:
                 return out, captured[0], captured[1]
             return out
-        partial = self._row_proj(gated, tw["out"])
+        from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
+
+        partial = pftime.timed("gdn_out", gated.shape[-2], self._row_proj, gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
         if getattr(self.args, "num_devices", 1) == 1:
@@ -1684,7 +1688,9 @@ class TPGatedDeltaNet:
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 
-        partial = self._row_proj(gated, tw["out"])
+        from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
+
+        partial = pftime.timed("gdn_out", gated.shape[-2], self._row_proj, gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
         out = tt_all_reduce(
@@ -2084,7 +2090,9 @@ class TPGatedDeltaNet:
         gated = _silu_mul(out_f_b, z_all, mc)
         ttnn.deallocate(out_f_b)
         ttnn.deallocate(z_all)
-        partial = self._row_proj(gated, tw["out"])
+        from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
+
+        partial = pftime.timed("gdn_out", gated.shape[-2], self._row_proj, gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, R, partial.shape[-1]))
         o_red = tt_all_reduce(

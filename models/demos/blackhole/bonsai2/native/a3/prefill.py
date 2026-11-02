@@ -142,10 +142,15 @@ def wide_pc(s: int, k: int, n: int):
         per_core_M=-(-s // 32 // gy), per_core_N=pcn, transpose_mcast=False, fused_activation=None, fuse_batch=False)
 
 
+def _pf_dtype():
+    """BONSAI_PF_W=bfp4: every prefill scratch except MLP gate/up (BONSAI_PF_GU) in bfp4 instead of bfp8."""
+    return ttnn.bfloat4_b if os.environ.get("BONSAI_PF_W") == "bfp4" else ttnn.bfloat8_b
+
+
 def prefill_linear(tl, x, mem=ttnn.DRAM_MEMORY_CONFIG, program_config=None):
     """Prefill for any a3.linear.TernaryLinear site: x [.., S, K] -> [1, 1, S, N] bf16."""
     xr = rotator(tl.sh)(x)
-    wd = dequant(tl.w, tl.s, tl.k, tl.n)
+    wd = dequant(tl.w, tl.s, tl.k, tl.n, dtype=_pf_dtype())
     pc = program_config or wide_pc(xr.shape[-2], tl.k, tl.n)
     y = ttnn.linear(xr, wd, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
     ttnn.deallocate(wd)
@@ -172,7 +177,7 @@ def prefill_mlp(mlp, x, mem=ttnn.DRAM_MEMORY_CONFIG, down_pc=None):
     ttnn.deallocate(u)
     hr = rot(hid)
     ttnn.deallocate(hid)
-    wd = dequant(mlp.w_d, mlp.s_d, h, k)
+    wd = dequant(mlp.w_d, mlp.s_d, h, k, dtype=_pf_dtype())
     y = ttnn.linear(hr, wd, compute_kernel_config=_LOFI, memory_config=mem, program_config=down_pc)
     ttnn.deallocate(wd)
     ttnn.deallocate(hr)
