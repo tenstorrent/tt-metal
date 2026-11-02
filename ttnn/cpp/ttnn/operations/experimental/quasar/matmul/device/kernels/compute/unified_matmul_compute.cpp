@@ -158,6 +158,9 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                             subblock_M_tiles,
                             K_chunk_tiles);
                     }
+                    // The partials reload is the section's only unpack-to-dest; release the section to math now so
+                    // the matmul and bias unpacks after this point (SrcA/SrcB) are consumed as they arrive.
+                    tile_regs_handoff();
 #ifdef FUSE_BIAS
                     if (K_chunk == 0) {
                         // The bias tile over each subblock column, broadcast down every row of the DST tiles
