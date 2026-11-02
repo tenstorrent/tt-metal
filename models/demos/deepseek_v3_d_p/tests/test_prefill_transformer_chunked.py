@@ -243,8 +243,8 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, fabric2d MoE transport.
-    (78, 11, 10): [0.388, 0.387, 0.392, 0.391, 0.397, 0.396, 0.393, 0.394, 0.401, 0.406, 0.412],
+    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1. CI run 41433485152 / job 125242838736.
+    (78, 11, 10): [0.363, 0.362, 0.367, 0.366, 0.371, 0.371, 0.367, 0.369, 0.376, 0.381, 0.387],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 

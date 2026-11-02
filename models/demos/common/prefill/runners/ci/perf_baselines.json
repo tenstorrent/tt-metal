@@ -34,9 +34,9 @@
           }
         },
         "8kw": {
-          "throughput_tok_s": 23450,
-          "ttft_s": 33.8,
-          "chunk_time_ms": 980
+          "throughput_tok_s": 23434,
+          "ttft_s": 32.67,
+          "chunk_time_ms": 814
         }
       },
       "sc1": {
@@ -48,9 +48,9 @@
           }
         },
         "14kw": {
-          "throughput_tok_s": 6400,
-          "ttft_s": 123.0,
-          "chunk_time_ms": 805
+          "throughput_tok_s": 6733,
+          "ttft_s": 115.26,
+          "chunk_time_ms": 761
         }
       }
     },
