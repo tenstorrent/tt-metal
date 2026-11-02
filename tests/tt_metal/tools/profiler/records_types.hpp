@@ -382,8 +382,10 @@ constexpr uint64_t stamp_delta(uint32_t iteration, uint32_t which) {
 // The record test_streaming_profiler_external's kernel publishes to each destination.
 namespace external_test {
 
-// Which of the test's two call sites sent it, the iteration that sent it, and a value derived from both.
+// When the kernel took it, which of the test's two call sites sent it, the iteration that sent it, and a value derived
+// from both.
 struct Reading {
+    tt::tt_metal::experimental::device_observability::Timestamp taken;  // just before the kernel published it
     uint32_t destination;  // 0 this process alone, 1 the external process too
     uint32_t iteration;
     uint32_t value;

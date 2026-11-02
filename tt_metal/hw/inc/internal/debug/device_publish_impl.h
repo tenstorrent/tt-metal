@@ -269,7 +269,7 @@ template <auto kLocation, auto kMetadata, typename Payload>
 [[gnu::section(DEVICE_PUBLISH_DESCRIPTOR_IDS_SECTION_NAME),
   maybe_unused]] static char device_publish_descriptor_id_handle = 0;
 
-template <auto kLocation, auto kMetadata, typename Payload, bool kWholeTime>
+template <auto kLocation, auto kMetadata, typename Payload, bool kSendsToExternalProcess>
 [[gnu::section(DEVICE_PUBLISH_DESCRIPTORS_SECTION_NAME),
   maybe_unused]] static const detail::CallSiteDescriptor call_site_descriptor = {
     .file = kLocation.file.hash,
@@ -287,8 +287,9 @@ template <auto kLocation, auto kMetadata, typename Payload, bool kWholeTime>
     .payload_arguments = section_arguments<typename Described<Payload>::type>.data(),
     .payload_argument_count = uint32_t(section_arguments<typename Described<Payload>::type>.size()),
     .payload_publish_time_field = uint32_t(kUnsentLeaf<Payload>),
-    .packet_layouts = section_layouts<Payload, kWholeTime>.data(),
-    .packet_layout_count = uint32_t(section_layouts<Payload, kWholeTime>.size()),
+    .packet_layouts = section_layouts<Payload, kSendsToExternalProcess>.data(),
+    .packet_layout_count = uint32_t(section_layouts<Payload, kSendsToExternalProcess>.size()),
+    .sends_to_external_process = kSendsToExternalProcess,
 };
 
 // A call site, unique to the file, line and function TT_DEVICE_PUBLISH_INTERNAL names: DevicePublish's entry point in

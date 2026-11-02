@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -52,11 +53,16 @@ constexpr std::string_view kNames[] = {"metal", "both"};
 // How far apart the two processes may put a "both" reading on the host's steady clock: each process maps the TSC onto
 // it from samples of its own.
 constexpr int64_t kSteadyAgreementNs = 1000;
+// How many cycles before its record's own time a reading's Timestamp may be: the kernel takes it just before
+// publishing.
+constexpr uint64_t kTakenWithinCycles = 100'000;
 
 // The file the external process creates once it listens, which the Metal process waits for before it opens the
-// device; the one the Metal process creates once it has closed the device; and where the external process leaves
-// what it saw of the "both" readings.
+// device; the one it creates once a "probe" reading reaches it, which the Metal process waits for before it runs
+// the kernel; the one the Metal process creates once it has closed the device; and where the external process
+// leaves what it saw of the "both" readings.
 std::string ready_path(const std::string& path) { return path + ".ready"; }
+std::string attached_path(const std::string& path) { return path + ".attached"; }
 std::string closed_path(const std::string& path) { return path + ".closed"; }
 std::string both_path(const std::string& path) { return path + ".both"; }
 
@@ -71,15 +77,19 @@ bool wait_for_file(const std::string& path, std::chrono::seconds timeout) {
     return true;
 }
 
-// What a process saw of the "both" readings: the sum of their device times' high words, and their earliest and latest
-// host times.
+// What a process saw of the "both" readings: the sum of their device times' high words, their chip's ids, and their
+// earliest and latest host times.
 struct BothSeen {
     uint64_t hi = 0;
+    uint64_t asic_id = 0;
+    ChipId chip_id = 0;
     int64_t first_ns = std::numeric_limits<int64_t>::max();
     int64_t last_ns = std::numeric_limits<int64_t>::min();
 
-    void add(const api::Timestamp& time) {
+    void add(const api::Timestamp& time, const api::Core& core) {
         hi += time.device_cycles() >> 32;
+        asic_id = core.asic_id;
+        chip_id = core.chip_id;
         const int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(time.time().time_since_epoch()).count();
         first_ns = std::min(first_ns, ns);
         last_ns = std::max(last_ns, ns);
@@ -92,22 +102,29 @@ struct Readings {
     std::array<uint64_t, 2> counts{};
     uint64_t wrong = 0;
     BothSeen both;
+    bool probed = false;  // a "probe" reading arrived
 
     void add(const api::Record<Reading, Name>& record) {
         const Reading& reading = record.payload();
+        if (record.metadata().name == "probe") {
+            probed = true;
+            return;
+        }
+        const uint64_t taken = reading.taken.device_cycles(), published = record.published_at().device_cycles();
         if (reading.destination > 1 || record.metadata().name != kNames[reading.destination] ||
-            reading.value != reading_value(reading.destination, reading.iteration)) {
+            reading.value != reading_value(reading.destination, reading.iteration) || taken > published ||
+            published - taken > kTakenWithinCycles) {
             wrong++;
             return;
         }
         counts[reading.destination]++;
         if (reading.destination == 1) {
-            both.add(record.published_at());
+            both.add(record.published_at(), record.core());
         }
     }
 };
 
-// The external process: having no MetalContext, it listens once it registers a callback. With `drain`, it only
+// The external process, which it becomes by registering its callback with external_process set. With `drain`, it only
 // receives, until it is killed.
 int run_reader(const std::string& path, bool drain) {
     Readings readings;
@@ -117,8 +134,12 @@ int run_reader(const std::string& path, bool drain) {
             for (const auto& record : batch.records<api::Record<Reading, Name>>()) {
                 readings.add(record);
             }
+            if (std::exchange(readings.probed, false)) {
+                std::ofstream(attached_path(path)) << 1;
+            }
         },
-        "external-reader");
+        "external-reader",
+        /*external_process=*/true);
     std::ofstream(ready_path(path)) << 1;
     if (drain) {
         while (true) {
@@ -137,7 +158,8 @@ int run_reader(const std::string& path, bool drain) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     callback.reset();
-    std::ofstream(both_path(path)) << readings.both.hi << ' ' << readings.both.first_ns << ' ' << readings.both.last_ns;
+    std::ofstream(both_path(path)) << readings.both.hi << ' ' << readings.both.asic_id << ' ' << readings.both.chip_id
+                                   << ' ' << readings.both.first_ns << ' ' << readings.both.last_ns;
     fmt::print(
         "[external] external process: {} both, {} metal, {} wrong; want {} both{}\n",
         readings.counts[1],
@@ -160,13 +182,12 @@ int main(int argc, char** argv) {
         ::execl("/proc/self/exe", argv[0], "--reader", path.c_str(), nullptr);
         ::_exit(127);
     }
-    // Once the external process listens, opening the device connects to it and waits for it to attach.
+    // Once the external process listens, opening the device connects to it.
     wait_for_file(ready_path(path), std::chrono::seconds(120));
     std::remove(ready_path(path).c_str());
 
     auto mesh_device =
         distributed::MeshDevice::create_unit_mesh(0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1);
-    // Registered once the device is open, so this process has a MetalContext and doesn't listen as an external process.
     Readings readings;
     uint64_t dispatch_zones = 0;
     auto callback = api::RegisterCallback(
@@ -180,21 +201,31 @@ int main(int argc, char** argv) {
             }
         },
         "external-test");
-    Program program = CreateProgram();
-    const CoreRange cores(CoreCoord{0, 0}, CoreCoord{kGridSide - 1, kGridSide - 1});
-    for (const auto& [processor, noc] : kDmRiscs) {
-        CreateKernel(
-            program,
-            "tests/tt_metal/tools/profiler/kernels/external_dm.cpp",
-            cores,
-            DataMovementConfig{
-                .processor = processor, .noc = noc, .defines = {{"N_ITERS", std::to_string(kIterations) + "u"}}});
-    }
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-    distributed::Finish(cq);
+    const auto run = [&](const std::map<std::string, std::string>& defines) {
+        Program program = CreateProgram();
+        const CoreRange cores(CoreCoord{0, 0}, CoreCoord{kGridSide - 1, kGridSide - 1});
+        for (const auto& [processor, noc] : kDmRiscs) {
+            CreateKernel(
+                program,
+                "tests/tt_metal/tools/profiler/kernels/external_dm.cpp",
+                cores,
+                DataMovementConfig{.processor = processor, .noc = noc, .defines = defines});
+        }
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        distributed::Finish(cq);
+    };
+    // The external process attaches the relays a moment after the device opens: probe readings go out until one
+    // reaches it.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+    while (!std::ifstream(attached_path(path)) && std::chrono::steady_clock::now() < deadline) {
+        run({{"PROBE", "1"}});
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    std::remove(attached_path(path).c_str());
+    run({{"N_ITERS", std::to_string(kIterations) + "u"}});
     mesh_device->close();
     callback.reset();
     std::ofstream(closed_path(path)) << 1;
@@ -203,22 +234,30 @@ int main(int argc, char** argv) {
 
     const bool reader_ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
     BothSeen theirs{.hi = ~uint64_t{0}};
-    std::ifstream(both_path(path)) >> theirs.hi >> theirs.first_ns >> theirs.last_ns;
+    std::ifstream(both_path(path)) >> theirs.hi >> theirs.asic_id >> theirs.chip_id >> theirs.first_ns >>
+        theirs.last_ns;
     std::remove(both_path(path).c_str());
     const BothSeen& ours = readings.both;
     const int64_t first_apart = theirs.first_ns - ours.first_ns, last_apart = theirs.last_ns - ours.last_ns;
     fmt::print(
-        "[external] \"both\" readings: time high words {} here, {} in the external process; there, the first is {} ns "
-        "and the last {} ns from here on the steady clock\n",
+        "[external] \"both\" readings: time high words {} here, {} in the external process; ASIC id {:#x} here, {:#x} "
+        "there; chip id {} here, {} there; there, the first is {} ns and the last {} ns from here on the steady "
+        "clock\n",
         ours.hi,
         theirs.hi,
+        ours.asic_id,
+        theirs.asic_id,
+        ours.chip_id,
+        theirs.chip_id,
         first_apart,
         last_apart);
     const bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
     fmt::print("[external] {} zones from the dispatch kernels\n", dispatch_zones);
     const bool ok = readings.counts[0] == kPerDestination && readings.counts[1] == kPerDestination &&
-                    readings.wrong == 0 && ours.hi == theirs.hi && std::abs(first_apart) <= kSteadyAgreementNs &&
-                    std::abs(last_apart) <= kSteadyAgreementNs && (slow_dispatch || dispatch_zones != 0);
+                    readings.wrong == 0 && ours.hi == theirs.hi && ours.asic_id != 0 &&
+                    ours.asic_id == theirs.asic_id && ours.chip_id == theirs.chip_id &&
+                    std::abs(first_apart) <= kSteadyAgreementNs && std::abs(last_apart) <= kSteadyAgreementNs &&
+                    (slow_dispatch || dispatch_zones != 0);
     fmt::print(
         "[external] Metal process: {} metal, {} both, {} wrong; want {} each\n",
         readings.counts[0],
