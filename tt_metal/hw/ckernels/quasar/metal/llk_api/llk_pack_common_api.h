@@ -192,11 +192,11 @@ inline void llk_pack_dest_init() {
  * @param config Packed uint32: bits [1:0] = ReluType, bits [31:16] = threshold.
  */
 TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
-    _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(ckernel::ReluConfig::from_packed(config));
+    _llk_pack_relu_config_<p_pacr::PACK0, DST_ACCUM_MODE>(ckernel::ReluConfig::from_packed(config));
 }
 
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
-    _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(relu_config);
+    _llk_pack_relu_config_<p_pacr::PACK0, DST_ACCUM_MODE>(relu_config);
 }
 
 /**
