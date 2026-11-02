@@ -76,8 +76,9 @@ void kernel_main() {
         const CoreLocalMem<volatile uint32_t> sp(scr.get_write_ptr());
         constexpr uint32_t words = 1024;  // fp32 32x32 tile
         const uint32_t cols[4] = {h, BH + h, h, BH + h};  // a, b (a|b row); -exp(A_log), dt_bias (constants row)
-        for (uint32_t i = 0; i < 4; i++) {
-            noc.async_read(i < 2 ? d_acc : b_acc, scr, tb, {.page_id = cols[i] / 32}, {.offset_bytes = i * tb});
+        for (uint32_t i = 0; i < 2; i++) {  // two calls: d_acc and b_acc are different TensorAccessor types
+            noc.async_read(d_acc, scr, tb, {.page_id = cols[i] / 32}, {.offset_bytes = i * tb});
+            noc.async_read(b_acc, scr, tb, {.page_id = cols[i + 2] / 32}, {.offset_bytes = (i + 2) * tb});
         }
         noc.async_read_barrier();
         auto elem = [&](uint32_t i) -> uint32_t {
