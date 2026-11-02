@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -2498,6 +2499,253 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeaderGappedDeviceSlots) {
         EXPECT_EQ(dm_entry_u16(entry, 0), 0u * DFB_DM_IFACE_SIZE);
         entry += entry[kDmEntryBytesOff];
         EXPECT_EQ(dm_entry_u16(entry, 0), 3u * DFB_DM_IFACE_SIZE);
+    }
+}
+
+// Checks that no 64B line is read cached by two DMs, and that no cached line holds header or signal bytes.
+static uint32_t expect_dm_cached_lines_disjoint(const std::vector<uint8_t>& buf, size_t nbytes) {
+    constexpr uint32_t kLineBytes = 64;
+    const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+    std::array<std::set<uint32_t>, ::dfb::TENSIX_RISC_OFFSET> lines;
+    const auto add = [&](uint8_t dm, uint32_t off, uint32_t len) {
+        if (len == 0) {
+            return;
+        }
+        EXPECT_LE(off + len, nbytes) << "DM " << static_cast<int>(dm) << " range [" << off << ", +" << len << ")";
+        for (uint32_t l = off / kLineBytes; l <= (off + len - 1) / kLineBytes; ++l) {
+            lines[dm].insert(l);
+        }
+    };
+    for (uint8_t dm = 0; dm < ::dfb::TENSIX_RISC_OFFSET; ++dm) {
+        if (ghdr->hart_desc[dm].num_entries > 0) {
+            add(dm, ghdr->hart_desc[dm].blob_start, ghdr->hart_desc[dm].blob_len);
+        }
+    }
+    add(1, ghdr->dm1_slots & 0xFFFFu, (ghdr->dm1_slots >> 16) * static_cast<uint32_t>(sizeof(dfb_dm1_remapper_slot_t)));
+    if (ghdr->has_dm0_isr) {
+        add(0,
+            dfb_dm0_packed_blob_offset(ghdr->dm0_packed) + DFB_DM0_CACHED_PAYLOAD_OFFSET,
+            dm0_isr_txn_desc_pool_byte_size(
+                dfb_dm0_packed_producer_mask(ghdr->dm0_packed), dfb_dm0_packed_consumer_mask(ghdr->dm0_packed)));
+    }
+
+    std::map<uint32_t, uint8_t> owner;
+    uint32_t num_dms = 0;
+    for (uint8_t dm = 0; dm < ::dfb::TENSIX_RISC_OFFSET; ++dm) {
+        num_dms += lines[dm].empty() ? 0u : 1u;
+        for (const uint32_t l : lines[dm]) {
+            const auto [it, inserted] = owner.emplace(l, dm);
+            EXPECT_TRUE(inserted) << "line " << l << " is read cached by DM " << static_cast<int>(it->second)
+                                  << " and DM " << static_cast<int>(dm);
+        }
+    }
+
+    const uint32_t signal_bytes = static_cast<uint32_t>(::dfb::NUM_DFBS) *
+                                  (static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB) + sizeof(uint32_t));
+    const std::pair<uint32_t, uint32_t> uncached[] = {
+        {0u, static_cast<uint32_t>(sizeof(dfb_global_header_t))}, {ghdr->dfb_signal_region_off, signal_bytes}};
+    for (const auto& [off, len] : uncached) {
+        for (uint32_t l = off / kLineBytes; l <= (off + len - 1) / kLineBytes; ++l) {
+            if (const auto it = owner.find(l); it != owner.end()) {
+                ADD_FAILURE() << "line " << l << " holds uncached bytes [" << off << ", +" << len
+                              << ") but is read cached by DM " << static_cast<int>(it->second);
+            }
+        }
+    }
+    return num_dms;
+}
+
+// Each DM's cached part of the DFB config sits on its own cache lines, for a DM-only topology (many small
+// blobs) and for a mixed one that also fills DM1's remapper slots and DM0's ISR descriptor pool.
+TEST_F(UnitMeshFixture, DfbConfigDmCachedLinesDisjoint) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar-only DFB config layout";
+    }
+    constexpr uint16_t DM0 = 1u << 0, DM2 = 1u << 2, DM3 = 1u << 3, DM4 = 1u << 4, DM5 = 1u << 5, DM6 = 1u << 6,
+                       DM7 = 1u << 7;
+    constexpr uint16_t NEO0 = 1u << 8, NEO1 = 1u << 9, NEO2 = 1u << 10, NEO3 = 1u << 11;
+    const auto make = [](uint16_t producer, uint16_t consumers, dfb::AccessPattern cap, bool implicit_sync) {
+        return experimental::dfb::DataflowBufferConfig{
+            .entry_size = 1024,
+            .num_entries = 16,
+            .producer_risc_mask = producer,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = consumers,
+            .num_consumers = static_cast<uint8_t>(__builtin_popcount(consumers)),
+            .cap = cap,
+            .enable_producer_implicit_sync = implicit_sync,
+            .enable_consumer_implicit_sync = implicit_sync};
+    };
+    constexpr auto ALL = dfb::AccessPattern::ALL;
+    constexpr auto STRIDED = dfb::AccessPattern::STRIDED;
+    struct Topology {
+        const char* name;
+        std::vector<experimental::dfb::DataflowBufferConfig> dfbs;
+        uint32_t min_dms;
+        bool expect_dm1_slots;
+        bool expect_dm0_isr;
+    };
+    const Topology topologies[] = {
+        {"dm_only",
+         {make(DM0, DM6, STRIDED, false),
+          make(DM2, DM7, STRIDED, false),
+          make(DM3, DM6, STRIDED, false),
+          make(DM4, DM7, STRIDED, false),
+          make(DM5, DM6, STRIDED, false)},
+         7,
+         false,
+         false},
+        {"mixed",
+         {make(DM0, NEO0, STRIDED, true),
+          make(DM2, NEO0 | NEO2, ALL, true),
+          make(DM3, NEO1 | NEO3, ALL, true),
+          make(DM4, NEO1, STRIDED, true),
+          make(DM5, DM6, STRIDED, true),
+          make(DM7, NEO2, STRIDED, false)},
+         8,
+         true,
+         true},
+    };
+
+    const CoreCoord core(0, 0);
+    for (const auto& topology : topologies) {
+        SCOPED_TRACE(topology.name);
+        Program program = CreateProgram(this->device());
+        for (const auto& config : topology.dfbs) {
+            experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(core)), config);
+        }
+        program.impl().finalize_dataflow_buffer_configs();
+        program.impl().prepare_ephemeral_allocation(this->device().get_devices()[0]);
+        program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+
+        const auto dfbs = program.impl().dataflow_buffers_on_core(core);
+        ASSERT_EQ(dfbs.size(), topology.dfbs.size());
+        std::vector<uint8_t> buf(8192, 0);
+        const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(core, dfbs, buf);
+        ASSERT_GT(nbytes, 0u);
+
+        const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+        EXPECT_EQ((ghdr->dm1_slots >> 16) > 0, topology.expect_dm1_slots);
+        EXPECT_EQ(ghdr->has_dm0_isr != 0, topology.expect_dm0_isr);
+        EXPECT_GE(expect_dm_cached_lines_disjoint(buf, nbytes), topology.min_dms);
+    }
+}
+
+// The serializer places every region of the DFB config on a 64B line counted from the config's start, so the DMs
+// only get line-aligned reads if that start address is itself a multiple of 64. Checks the address each DM read,
+// for four programs launched back to back.
+TEST_F(UnitMeshAnyDispatchFixture, DfbConfigBaseIsCacheLineAlignedOnDevice) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar-only DFB config layout";
+    }
+    constexpr uint32_t kLineBytes = 64;
+    constexpr uint32_t num_programs = 4;
+    constexpr uint32_t extent_record_bytes = 8 * sizeof(uint32_t);
+
+    distributed::MeshDevice& mesh_device = this->device();
+    const experimental::NodeCoord node{0, 0};
+    const CoreCoord core{0, 0};
+    const experimental::DFBSpecName DFB_NAME{"dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
+
+    const uint32_t base_results_l1 =
+        top_of_l1_scratch_addr(mesh_device, num_programs * (sizeof(uint32_t) + extent_record_bytes));
+    const uint32_t consumer_results_l1 = base_results_l1 + num_programs * sizeof(uint32_t);
+    std::vector<uint32_t> zeros(num_programs, 0u);
+    slow_dispatch::WriteToL1(mesh_device, core, base_results_l1, zeros);
+
+    const distributed::MeshCoordinateRange device_range(mesh_device.shape());
+    std::vector<distributed::MeshWorkload> workloads(num_programs);
+    for (uint32_t i = 0; i < num_programs; ++i) {
+        experimental::KernelSpec producer_spec{
+            .unique_id = PRODUCER,
+            .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_config_base_probe_dm.cpp",
+            .num_threads = 1,
+            .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
+            .compile_time_args = {{"pad_nops", 4 * i}},
+            .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
+            .hw_config = experimental::DataMovementHardwareConfig{
+                .config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for = {DFB_NAME}}}};
+        experimental::KernelSpec consumer_spec{
+            .unique_id = CONSUMER,
+            .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_extent_probe_compute.cpp",
+            .num_threads = 1,
+            .dfb_bindings = {{
+                .dfb_spec_name = DFB_NAME,
+                .accessor_name = "in",
+                .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                .access_pattern = experimental::DFBAccessPattern::STRIDED,
+            }},
+            .compile_time_args =
+                {{"num_tc_snapshots", 1u},
+                 {"rotate_tc", 0u},
+                 {"drain_producer_rotate_credits", 0u},
+                 {"drain_last_tc_credit", 0u},
+                 {"num_producers", 1u}},
+            .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
+            .hw_config = experimental::ComputeHardwareConfig{},
+        };
+        experimental::ProgramSpec spec{
+            .name = "dfb_config_base_alignment",
+            .kernels = {producer_spec, consumer_spec},
+            .dataflow_buffers = {{
+                .unique_id = DFB_NAME,
+                .entry_size = 1024,
+                .num_entries = 4,
+                .data_format_metadata = tt::DataFormat::Float16_b,
+            }},
+            .work_units = {{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node}},
+        };
+
+        workloads[i].add_program(device_range, experimental::MakeProgramFromSpec(mesh_device, spec));
+        experimental::ProgramRunArgs run_params;
+        run_params.kernel_run_args = {
+            {.kernel = PRODUCER,
+             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                 node, {{"result_l1_addr", base_results_l1 + i * static_cast<uint32_t>(sizeof(uint32_t))}})},
+            {.kernel = CONSUMER,
+             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                 node, {{"result_l1_addr", consumer_results_l1 + i * extent_record_bytes}})},
+        };
+        experimental::SetProgramRunArgs(workloads[i].get_programs().at(device_range), run_params);
+    }
+
+    // Queued without blocking so fast dispatch keeps every config live in the ring at once.
+    for (auto& workload : workloads) {
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/false);
+    }
+    distributed::Finish(mesh_device.mesh_command_queue());
+
+    std::vector<uint32_t> bases;
+    slow_dispatch::ReadFromL1(mesh_device, core, base_results_l1, num_programs * sizeof(uint32_t), bases);
+    ASSERT_EQ(bases.size(), num_programs);
+    const uint32_t tensix_index =
+        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    std::set<uint32_t> size_phases;
+    for (uint32_t i = 0; i < num_programs; ++i) {
+        auto& impl = workloads[i].get_programs().at(device_range).impl();
+        size_phases.insert(impl.get_program_config_sizes()[tensix_index] % kLineBytes);
+        const ProgramConfig& config = impl.get_program_config(tensix_index);
+        log_info(
+            tt::LogTest,
+            "program {}: DFB config base {:#x}, config size {:#x}, rta_offset {:#x}, sem_offset {:#x}, dfb_offset "
+            "{:#x}, kernel_text_offset {:#x}",
+            i,
+            bases[i],
+            impl.get_program_config_sizes()[tensix_index],
+            config.rta_offset,
+            config.sem_offset,
+            config.dfb_offset,
+            config.kernel_text_offset);
+    }
+    // Otherwise every fast-dispatch launch would land on the same 64B phase and the check below proves nothing.
+    EXPECT_GT(size_phases.size(), 1u) << "every program's kernel config is the same size modulo 64";
+    for (uint32_t i = 0; i < num_programs; ++i) {
+        EXPECT_NE(bases[i], 0u) << "program " << i << " never recorded its DFB config base";
+        EXPECT_EQ(bases[i] % kLineBytes, 0u) << "program " << i << " DFB config base 0x" << std::hex << bases[i];
     }
 }
 
