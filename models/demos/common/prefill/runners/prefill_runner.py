@@ -1045,8 +1045,10 @@ def run_request_loop(
             )
         except BaseException:
             # The next rank waits in _d2d_recv for this forward; the shutdown sentinel releases it. The
-            # input may already be freed here, so this frees nothing. The reclaim after the receive
-            # already took the senders' links back, so the sentinel goes out without another one.
+            # input may already be freed here, so this frees nothing. _compute_and_send may have granted the
+            # activation sender before it raised (e.g. in the index send), so take the senders' links back
+            # before the sentinel goes out, as the receive-failure path does.
+            _lease_reclaim(D2DBoundary(), outbound)
             forward_shutdown()
             raise
         _lease_grant_receive(inbound)
