@@ -344,6 +344,71 @@ FORCE_INLINE void fill_tile_with_first_row_bfp8(uint32_t l1_write_ptr) {
     }
 }
 
+// Reads the very first element of the CB and fills the entire tile with that value.
+// Tile is assumed to be in BFP2 format (Bfp2 or Bfp2_b).
+// BFP2 tile layout (32x32 = 1024 elements, 320 bytes total):
+//   Bytes 0-63:   Exponent section (16 uint32_t words = 64 bytes)
+//                 4 faces x 16 rows/face, one exponent byte per row of 16 elements
+//   Bytes 64-319: Data section (64 uint32_t words = 256 bytes)
+//                 4 faces x 16 words/face, one word per row of 16 elements
+// BFP2 packing: element k of a row is in bits [2k, 2k+1] of the row's word.
+FORCE_INLINE void fill_tile_with_first_element_bfp2(uint32_t l1_write_ptr) {
+    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
+    uint32_t packed_exp = (word_ptr[0] & 0xFF) * 0x01010101u;
+    uint32_t packed_data = (word_ptr[16] & 0x3) * 0x55555555u;
+
+    for (uint32_t i = 0; i < 16; ++i) {
+        word_ptr[i] = packed_exp;
+    }
+    for (uint32_t i = 16; i < 80; ++i) {
+        word_ptr[i] = packed_data;
+    }
+}
+
+// Reads the very first column of the CB and fills the entire tile with the same column.
+// Tile is assumed to be in BFP2 format (Bfp2 or Bfp2_b).
+// BFP2 tile layout (320 bytes):
+//   Exponents: face0 words [0..3], face1 [4..7], face2 [8..11], face3 [12..15]
+//   Data:      face0 words [16..31], face1 [32..47], face2 [48..63], face3 [64..79]
+// Column broadcast: left faces (0,2) have column 0 data; right faces (1,3) are zero.
+//   -> Replicate column 0 across each left face row, then copy left faces to right faces.
+FORCE_INLINE void fill_tile_with_first_column_bfp2(uint32_t l1_write_ptr) {
+    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
+
+    for (uint32_t left = 0; left < 4; left += 2) {
+        const uint32_t right = left + 1;
+        for (uint32_t i = 0; i < 4; ++i) {
+            word_ptr[right * 4 + i] = word_ptr[left * 4 + i];
+        }
+        for (uint32_t row = 0; row < 16; ++row) {
+            const uint32_t packed = (word_ptr[16 + left * 16 + row] & 0x3) * 0x55555555u;
+            word_ptr[16 + left * 16 + row] = packed;
+            word_ptr[16 + right * 16 + row] = packed;
+        }
+    }
+}
+
+// Reads the very first row of the CB and fills the entire tile with the same row.
+// Tile is assumed to be in BFP2 format (Bfp2 or Bfp2_b).
+// Row broadcast: top faces (0,1) have row 0 data; bottom faces (2,3) are zero.
+//   -> Faces 0 and 2 take face 0's row 0; faces 1 and 3 take face 1's row 0.
+FORCE_INLINE void fill_tile_with_first_row_bfp2(uint32_t l1_write_ptr) {
+    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_ptr);
+    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
+
+    const uint32_t packed_exp[2] = {
+        static_cast<uint32_t>(byte_ptr[0]) * 0x01010101u, static_cast<uint32_t>(byte_ptr[16]) * 0x01010101u};
+    const uint32_t row0[2] = {word_ptr[16], word_ptr[32]};
+    for (uint32_t face = 0; face < 4; ++face) {
+        for (uint32_t i = 0; i < 4; ++i) {
+            word_ptr[face * 4 + i] = packed_exp[face & 1];
+        }
+        for (uint32_t row = 0; row < 16; ++row) {
+            word_ptr[16 + face * 16 + row] = row0[face & 1];
+        }
+    }
+}
+
 // Reads the very first row of the CB and fills the entire tile with the same row.
 // Tile is assumed to have 16-bit elements.
 FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t l1_write_ptr) {
