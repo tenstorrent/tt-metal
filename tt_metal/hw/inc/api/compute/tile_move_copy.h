@@ -63,10 +63,11 @@ ALWI void copy_init(
 #ifndef ARCH_QUASAR
     // Src zero-substitution flag, chosen by source format: preserve (keep) bf16 -0.0 and 16b integer
     // datums (drop-in for the eltwise-unary short init and the plain-copy path), but flush fp8
-    // (e4m3/e5m2) whose zero widens to a nonzero SrcA residual and must read back as 0. MATH-only
-    // config: records no format-reconfig diff, so single-SrcA reconfig tracking is unchanged. Not on Quasar.
-    // Set before the datacopy init, which clears it again when the copy runs as ELWADD.
-    MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
+    // (e4m3/e5m2) whose zero widens to a nonzero SrcA residual and must read back as 0. A copy that runs
+    // as ELWADD gets the flag clear instead, the value the datacopy init sets, so this is one write at most.
+    // MATH-only config: records no format-reconfig diff, so single-SrcA reconfig tracking is unchanged. Not on
+    // Quasar.
+    MATH((_configure_datacopy_a2d_zero_flag_state_<is_fp32_dest_acc_en>(get_operand_dst_format(cbid))));
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(cbid)));
 #else
     MATH((llk_math_eltwise_unary_datacopy_init<

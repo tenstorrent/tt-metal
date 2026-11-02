@@ -28,7 +28,8 @@ namespace experimental {
  * compute_kernel_hw_startup). Blackhole only.
  *
  * fp8 (Fp8_e4m3 / Lf8 e5m2) is supported: the format-driven Src zero-substitution flag is programmed so fp8
- * zeros read back correctly, while other formats (e.g. bf16 -0.0 / 16b-int) keep their residual value.
+ * zeros read back correctly, while other formats (e.g. bf16 -0.0 / 16b-int) keep their residual value. A copy that
+ * runs as ELWADD (32-bit DST, UInt8) runs with the flag clear, as ELW* need.
  *
  * transpose / transpose_within_16x16_face support copy-with-transpose; both default off (0), so the default
  * copy path is unaffected.
@@ -60,11 +61,11 @@ ALWI void copy_init(
             EltwiseBinaryReuseDestType::NONE,
             UnpackToDestEn>(transpose, transpose_within_16x16_face)));
     // Src zero-substitution flag, chosen by the derived register format (id-free equivalent of legacy
-    // copy_init's ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))): preserve
+    // copy_init's _configure_datacopy_a2d_zero_flag_state_(get_operand_dst_format(cbid))): preserve
     // bf16 -0.0 / 16b-int residuals, but flush fp8 (e4m3/e5m2) whose zero widens to a nonzero SrcA residual
-    // and must read back as 0. MATH-only config; records no format-reconfig diff. The fn masks to 0x1F.
-    // Set before the datacopy init, which clears it again when the copy runs as ELWADD.
-    MATH((ckernel::math::_configure_copy_zero_flag_state_(
+    // and must read back as 0; clear when the copy runs as ELWADD, as the datacopy init sets it. MATH-only
+    // config; records no format-reconfig diff.
+    MATH((_configure_datacopy_a2d_zero_flag_state_<is_fp32_dest_acc_en>(
         static_cast<std::uint32_t>(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en)))));
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<Format, Shape>::descriptor,
