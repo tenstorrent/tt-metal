@@ -47,6 +47,16 @@ def test_gate_hm(mesh_device, out_dtype):
     oo = o_t.double().reshape(NV, D)
     ref = (oo * torch.rsqrt(oo.pow(2).mean(-1, keepdim=True) + 1e-6) * w_t.double()).reshape(1, 1, NV * D)
     ref = ref * torch.nn.functional.silu(z_t.double())
+    # Stage diagnostics: each intermediate against its own float64 value, magnitude per channel tile (t = 0..3).
+    oo64 = o_t.double().reshape(NV, D)
+    rinv64 = torch.rsqrt(oo64.pow(2).mean(-1, keepdim=True) + 1e-6)
+    stages = [oo64, oo64 * w_t.double(), oo64 * w_t.double() * rinv64]
+    for st_i, want in enumerate(stages):
+        got = ttnn.to_torch(_op.gate_hm(o, z, w, _op.alloc_output(mesh_device, NV * D, dtype=out_dtype), stage=st_i))
+        got = got.double().reshape(NV, D)
+        per_t = [(got[:, 32 * t:32 * t + 32].abs().mean() / want[:, 32 * t:32 * t + 32].abs().mean()).item() for t in range(4)]
+        err = ((got - want).abs().max() / want.abs().max()).item()
+        print(f"  stage {st_i}: max rel err {err:.3e}  magnitude per channel tile {[round(x, 4) for x in per_t]}")
     assert chain.shape == fused.shape, (chain.shape, fused.shape)
     ec = ((chain - ref).abs().max() / ref.abs().max()).item()
     ef = ((fused - ref).abs().max() / ref.abs().max()).item()

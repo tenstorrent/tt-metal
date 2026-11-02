@@ -22,6 +22,8 @@ constexpr uint32_t cb_o = 0, cb_z = 1, cb_w = 2, cb_ss = 3, cb_out = 4;
 
 void kernel_main() {
     constexpr uint32_t Dt = get_compile_time_arg_val(0);
+    // Debug stage (test only): 0 = o, 1 = o*w, 2 = o*w*rinv, 3 = the full gate (default).
+    constexpr uint32_t stage = get_compile_time_arg_val(1);
     const uint32_t inv_d_bits = get_arg_val<uint32_t>(0);  // 1/D as fp32 bits
     const uint32_t eps_bits = get_arg_val<uint32_t>(1);
 
@@ -58,18 +60,24 @@ void kernel_main() {
         rsqrt_tile(2);  // DST[2] = rinv (row 0, column 0 is what the broadcast reads)
         copy_init(cb_o);
         copy_tile(cb_o, t, 0);
-        copy_init(cb_w);
-        copy_tile(cb_w, t, 1);
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);  // o * w
-        sfpu_mul_bcast_col_init();
-        sfpu_mul_bcast_col(0, 2);  // * rinv, per row from column 0
-        copy_init(cb_z);
-        copy_tile(cb_z, t, 1);
-        silu_tile_init();
-        silu_tile(1);
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);  // * silu(z)
+        if constexpr (stage >= 1) {
+            copy_init(cb_w);
+            copy_tile(cb_w, t, 1);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1, 0);  // o * w
+        }
+        if constexpr (stage >= 2) {
+            sfpu_mul_bcast_col_init();
+            sfpu_mul_bcast_col(0, 2);  // * rinv, per row from column 0
+        }
+        if constexpr (stage >= 3) {
+            copy_init(cb_z);
+            copy_tile(cb_z, t, 1);
+            silu_tile_init();
+            silu_tile(1);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1, 0);  // * silu(z)
+        }
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb_out, t);

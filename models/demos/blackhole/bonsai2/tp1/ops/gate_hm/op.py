@@ -50,7 +50,7 @@ def alloc_output(device, width, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMOR
     )
 
 
-def gate_hm(o, z, w, out, eps=1e-6, grid_w=8):
+def gate_hm(o, z, w, out, eps=1e-6, grid_w=8, stage=3):
     H, _, D = o.shape
     Dt = D // 32
     assert z.shape[-1] == H * D and out.shape[-1] == H * D and w.shape[-1] == D, (o.shape, z.shape, w.shape)
@@ -77,7 +77,7 @@ def gate_hm(o, z, w, out, eps=1e-6, grid_w=8):
         kernel_source=f"{KERNELS}/compute_gate_hm.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cores,
-        compile_time_args=[Dt],
+        compile_time_args=[Dt, stage],  # stage < 3: debug output of an intermediate (test_gate_hm.py)
         runtime_args=[(c, [_f32_bits(1.0 / D), _f32_bits(eps)]) for c, _ in heads],
         config=ttnn.ComputeConfigDescriptor(
             fp32_dest_acc_en=True, math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False
