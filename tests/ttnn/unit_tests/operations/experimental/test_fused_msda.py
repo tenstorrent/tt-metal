@@ -124,21 +124,23 @@ def _pack_value(value: torch.Tensor) -> torch.Tensor:
     return value.reshape(B, S, H * D).contiguous()
 
 
-def _per_head_stride_supported(num_heads: int, head_dim: int) -> bool:
-    """Can the writer place this many heads side by side in one output page?
+def _per_head_stride_supported(num_heads: int, head_dim: int, output_memory: str = "dram") -> bool:
+    """Does the op accept this many heads side by side in one output page?
 
-    The output is (B, Q, H*D) and the writer emits head h as a D*2-byte NoC
-    write at byte offset h*D*2 inside query (b, q)'s page, so that stride must
-    satisfy the device's DRAM alignment as soon as there is more than one head.
-    D=16 gives a 32-byte stride: legal on a 32-byte-aligned target, rejected on
-    a 64-byte one (Blackhole). D=32 and up are unconstrained everywhere.
+    The output is (B, Q, H*D) and the writer places head h at byte offset h*D*2
+    inside query (b, q)'s page. The program factory requires that stride to be a
+    multiple of the output buffer's alignment as soon as there is more than one
+    head. D=16 gives a 32-byte stride: accepted in L1 (16 B) and on a 32-byte
+    DRAM alignment, rejected on a 64-byte one (Blackhole DRAM). D=32 and up are
+    unconstrained everywhere.
 
     See test_fused_msda_rejects_unaligned_per_head_stride, which pins the
     rejection itself; this helper only tells the sweep what to expect.
     """
     if num_heads == 1:
         return True
-    return (head_dim * 2) % ttnn.device.get_dram_alignment() == 0
+    alignment = ttnn.device.get_l1_alignment() if output_memory == "l1" else ttnn.device.get_dram_alignment()
+    return (head_dim * 2) % alignment == 0
 
 
 def _num_valid_queries_case(B, Q, H, seed, packed=True, D=32, ref_fp32=False):
@@ -535,6 +537,42 @@ def test_fused_msda_v1(device, B, Q, H, spatial_shapes, P, D, align_corners):
 
     assert list(got.shape) == [B, Q, H * D]
     _assert_close(ref, got)
+
+
+@pytest.mark.parametrize("value_memory", ["dram", "l1"])
+@pytest.mark.parametrize(
+    "Q,H,D",
+    [(33, 1, 16), (33, 8, 16), (49, 2, 48), (17, 1, 48), (33, 8, 32), (17, 4, 64)],
+    ids=["d16_h1", "d16_h8", "d48_h2", "d48_h1", "d32_h8", "d64_h4"],
+)
+def test_fused_msda_output_placement(device, value_memory, Q, H, D):
+    """The writer sends every 16-value half of a tile row straight to its byte
+    offset in the output page, so the output buffer, not value's, decides where
+    the writes land. D=16 and D=48 end on a half with no partner, D=64 spans two
+    d-tiles, and Q leaves a tail block. L1 and DRAM output of the same inputs
+    must be bit-identical: the writer only moves bytes.
+    """
+    spatial_shapes = _V1_FOUR_LEVELS
+    L, P = len(spatial_shapes), 4
+    value, loc, attn = _random_case(1, Q, H, L, P, D, spatial_shapes)
+    ref = _msda_reference(value, loc, attn, spatial_shapes)
+
+    value_t = _to_device_in(value, device, value_memory)
+    loc_t = _to_device(loc, device)
+    attn_t = _to_device(attn, device)
+    outputs = {}
+    for output_memory, memory_config in (("l1", ttnn.L1_MEMORY_CONFIG), ("dram", ttnn.DRAM_MEMORY_CONFIG)):
+        if not _per_head_stride_supported(H, D, output_memory):
+            continue
+        out = ttnn.experimental.fused_msda(value_t, loc_t, attn_t, spatial_shapes, memory_config=memory_config)
+        assert out.memory_config().buffer_type == memory_config.buffer_type
+        outputs[output_memory] = ttnn.to_torch(out).to(torch.float32)
+        assert list(outputs[output_memory].shape) == [1, Q, H * D]
+        _assert_close(ref, outputs[output_memory])
+
+    assert "l1" in outputs
+    if "dram" in outputs:
+        torch.testing.assert_close(outputs["l1"], outputs["dram"], rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("B,Q,H,L,P,D", [(1, 64, 2, 2, 4, 32)])

@@ -145,9 +145,9 @@ nothing. The two forms build separate programs; pass at most one.
 
 `(B, Q, H*D)` ROW_MAJOR bf16 — chosen, not accidental. Every consumer in this
 repo (BEVFormer, UniAD, VADv2) wants `(bs, num_queries, embed_dims)` immediately
-after MSDA. The writer emits each head's `D` values as a `D*2`-byte NoC write at
-byte offset `h * D * 2` inside query `(b, q)`'s output page, so the head
-concatenation costs nothing and no post-op `reshape`/`permute` is needed.
+after MSDA. The writer places each head's `D` values at byte offset `h * D * 2`
+inside query `(b, q)`'s output page, so the head concatenation costs nothing and
+no post-op `reshape`/`permute` is needed.
 `(B, Q, H, D)` is deliberately **not** offered; it would be a strictly worse
 default and is one `ttnn.reshape` away for anyone who wants it.
 
@@ -319,7 +319,6 @@ reader pops a point's corner tile, or a tiled block's corner tiles, only after
 | `c_2` `loc_scratch` | reader-only arena for sampling locations (V1) / offsets (V2) | 32 (packed) or 32*L*P | `align(loc_stick)` |
 | `c_3` `input_tile` | reader → compute, the `V_corner` values: tiles, or a row-major `[NW \| NE \| SW \| SE]` block per point when `D % 32 == 0` | `8 * n_d_tiles` | 2048 |
 | `c_4` `scalar_tile` | compute → compute, `attn * bilinear_coeff` per row | 8 | 2048 |
-| `c_5` `output_scratch` | writer-only assembly of one head's `D`-stick | 1 | `align(D*2)` |
 | `c_6` `ref_scratch` | **V2 only** — reference points arena, in the tensor's dtype. float32 builds a separate program, which keeps the point float32 through `geom_x` / `geom_y`, or `ref_tile` and its exact three-way bf16 split | 32*R | `align(2*sizeof(ref))` (raw stick 4 B bf16, 8 B fp32) |
 | `c_7` `geom_x`, `c_8` `geom_y` | reader → compute, the primary operand (location, or reference point for V2) in column 0 and, on V2, the raw sampling offset in column 16 (per-point geometry) | 4 | 2048, or 4096 when the reference point is float32 |
 | `c_11` `attn_tile` | reader → compute, the attention weight (per-point geometry) | 4 | 2048 |
@@ -543,9 +542,11 @@ float32 when `reference_points` are float32.
   first, so the accumulator lives in L1 on the owning core for the whole
   reduction. Nothing is written back to DRAM per sample.
 
-**Writer** (shared). Waits on `n_d_tiles` accumulated tiles, gathers each query
-row's `D` values across them into a stick, and writes it at
-`page_id = b*Q + q`, `offset_bytes = h*D*2`. No SCA/BEV scatter logic, ever.
+**Writer** (shared). Waits on `n_d_tiles` accumulated tiles and NoC-writes each
+query row straight from them: every 16-value face half (32 B) of d-tile `k` goes
+to `page_id = b*Q + q`, `offset_bytes = h*D*2 + k*64 (+32 for the high half)`.
+No RISC copies the block, and 32 B is above the 16 B NoC write alignment of L1
+and DRAM. No SCA/BEV scatter logic, ever.
 With the split gather it first gathers rows `[SPLIT_ROW, 32)` of every point of
 the block. It always receives the `value` accessor and address, and reads them
 only then.
