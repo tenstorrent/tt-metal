@@ -7,4 +7,3 @@ chip 0: total 42.603 -> 42.995 (+0.392); collectives 5.050 -> 5.744 (+0.694); ke
   gate_up dB (ttnn matmul -> SkinnyContract big_transposed)       0.369 ->  0.474 (+0.105)
   gate_up tail column write (WriteTileBlock 16384x5184)           0.000 ->  0.034 (+0.034)
   B transpose 32x16384                                            0.021 ->  0.023 (+0.002)
-chip 2: total 0.000 -> 41.812 (+41.812); collectives 0.000 -> 4.883 (+4.883); kernels without collectives 0.000 -> 36.929 (+36.929)

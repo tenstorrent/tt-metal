@@ -1,0 +1,22 @@
+kernel ms per profiled 4-layer step, iteration 40 -> 41 (O/iter40_tp_ranked_ops_full.txt vs O/iter41_tp_ranked_ops_full.txt)
+chip 0: total 42.895 -> 45.189 (+2.294); collectives 6.100 -> 8.620 (+2.520); kernels without collectives 36.795 -> 36.569 (-0.226)
+    0.749 ->   1.853 (+1.104)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    2.857 ->   3.921 (+1.064)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    0.086 ->   0.366 (+0.280)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    1.201 ->   1.129 (-0.072)  RMSNormBackwardRows | 1x1x1024x5120 | 1x1x32[1]x5120 | 96
+    0.205 ->   0.142 (-0.063)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    1.569 ->   1.626 (+0.057)  AllGatherAsync | 1x1x1024x1280 |  | 20
+    0.461 ->   0.510 (+0.049)  AllGatherAsync | 1x1x5120x256 |  | 20
+    0.520 ->   0.472 (-0.048)  AddRMSNormForwardRows | 1x1x1024x5120 | 1x1x1024x5120 | 96
+    0.030 ->   0.072 (+0.042)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+    0.512 ->   0.480 (-0.032)  AddRMSNormForwardRows | 1x1x1024x5120 | 1x1x5120x1024 | 96
+    0.171 ->   0.156 (-0.015)  Embeddings | 1x1x1x1024 | 1x1x32768x5120 | 32
+    0.059 ->   0.046 (-0.013)  ReduceScatterMinimalAsync | 1x1x5120x128 |  | 12
+chip 2: total 42.161 -> 41.036 (-1.125); collectives 5.714 -> 4.906 (-0.808); kernels without collectives 36.447 -> 36.130 (-0.317)
+
+repeat profile (O/iter41b_tp_ranked_ops_full.txt) vs iteration 40:
+chip 0: total 42.895 -> 44.274 (+1.379); collectives 6.100 -> 7.802 (+1.702); kernels without collectives 36.795 -> 36.472 (-0.323)
+    0.520 ->   0.469  AddRMSNormForwardRows | 1x1x1024x5120 | 1x1x1024x5120 | 96
+    0.512 ->   0.466  AddRMSNormForwardRows | 1x1x1024x5120 | 1x1x5120x1024 | 96
+    1.201 ->   1.113  RMSNormBackwardRows | 1x1x1024x5120 | 1x1x32[1]x5120 | 96
+chip 2: total 42.161 -> 41.961 (-0.200); collectives 5.714 -> 5.804 (+0.090); kernels without collectives 36.447 -> 36.157 (-0.290)

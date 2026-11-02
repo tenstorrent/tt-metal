@@ -1,0 +1,8 @@
+=== iter41b_tp TP=4 MFU after 900s cool-down 2026-11-02T16:14:06Z
+rc=0
+40 of 40 layers, tp 4: 454.9 ms/step over 6 steps (best 448.1), 211.8 TFLOP/s, MFU 35.66%
+=== iter41b_tp TP=4 Tracy 4 layers 2026-11-02T16:32:26Z
+rc=0
+4 of 40 layers, tp 4: 56.1 ms/step over 2 steps (best 56.1), 215.8 TFLOP/s, MFU 36.34%
+=== done 2026-11-02T16:33:53Z
+=== iter41b MFU chain finished 2026-11-02T16:33:53Z
