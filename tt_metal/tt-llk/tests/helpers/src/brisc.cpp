@@ -130,8 +130,9 @@ int main()
 
                 device_setup();
 
-                // Configure + arm counters before releasing TRISCs (no-op in NC builds).
-                llk_perf::configure_and_arm_from_brisc();
+                llk_perf::clear_debug_features();
+                // Counters on only (empty otherwise, counters.h): set up the counter banks before the TRISCs start.
+                llk_perf::configure_from_brisc();
 
                 clear_trisc_soft_reset();
 
