@@ -133,6 +133,10 @@ void kernel_main() {
         real_faces_w = NUM_FACES_W;
     }
 
+    // One DataflowBuffer for the whole loop: on Quasar a DataflowBuffer drains when it goes out of scope (#60848),
+    // so a per-block one would wait after every push for the compute to pop that block (no double buffering).
+    DataflowBuffer dfb(dfb::cb_in);
+
     // ------------------------------------------------------------------------
     // 5) Main loop over [start_block..end_block)
     // ------------------------------------------------------------------------
@@ -185,7 +189,6 @@ void kernel_main() {
         }
 
         // Reserve a slot in the circular buffer, get L1 pointer
-        DataflowBuffer dfb(dfb::cb_in);
         dfb.reserve_back(1);
         uint32_t src_buffer_l1_addr = dfb.get_write_ptr();
 

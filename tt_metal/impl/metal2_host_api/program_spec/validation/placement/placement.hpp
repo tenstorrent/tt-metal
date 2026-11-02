@@ -37,6 +37,6 @@ void ValidateDFBSlotsPerNode(
 void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch);
 
 // scratchpad.cpp
-void ValidateScratchpadBindersPerNode(const ValidationContext& ctx);
+void ValidateScratchpadBindersPerNode(const ValidationContext& ctx, tt::ARCH arch);
 
 }  // namespace tt::tt_metal::experimental

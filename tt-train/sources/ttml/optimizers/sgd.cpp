@@ -15,12 +15,18 @@
 
 namespace ttml::optimizers {
 
-SGD::SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& config) :
-    OptimizerBase(std::move(parameters)), m_config(config) {
+SGD::SGD(
+    ttml::serialization::NamedParameters parameters, const SGDConfig& config, std::vector<ParamGroup> param_groups) :
+    OptimizerBase(std::move(parameters)), m_nesterov(config.nesterov) {
     require_bf16_parameters(m_parameters, "SGD");
+    init_param_groups(param_group_defaults(config), std::move(param_groups));
     validate_config();
-    if (m_config.momentum > 0.0) {
-        for (const auto& [name, tensor_ptr] : m_parameters) {
+    for (const auto& group : m_param_groups) {
+        if (group.options.at("momentum") <= 0.0F) {
+            continue;
+        }
+        for (const auto& name : group.params) {
+            const auto& tensor_ptr = m_parameters.at(name);
             if (tensor_ptr->get_requires_grad()) {
                 m_momentum.emplace(
                     name,
@@ -47,40 +53,50 @@ void SGD::step() {
         print_stats();
     }
 
-    for (const auto& [name, theta_ptr] : m_parameters) {
-        if (!theta_ptr->is_grad_initialized()) {
-            continue;
-        }
-        auto gradients = theta_ptr->get_grad();
-        // The kernel updates the parameter and the momentum buffer in place, and only exists for bf16.
-        auto param = theta_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
+    for (const auto& group : m_param_groups) {
+        const float lr = group.options.at("lr");
+        const float momentum = group.options.at("momentum");
+        const float group_dampening = group.options.at("dampening");
+        const float weight_decay = group.options.at("weight_decay");
 
-        std::optional<autograd::MutableTensorView> momentum_buffer;
-        bool first_momentum_update = false;
-        if (m_config.momentum > 0.0) {
-            auto it = m_momentum.find(name);
-            if (it == m_momentum.end()) {
-                auto buf = autograd::create_tensor(
-                    core::zeros_like(param.tensor()),
-                    /* requires_grad */ false);
-                it = m_momentum.emplace(name, std::move(buf)).first;
+        for (const auto& name : group.params) {
+            const auto& theta_ptr = m_parameters.at(name);
+            if (!theta_ptr->is_grad_initialized()) {
+                continue;
             }
-            first_momentum_update = m_momentum_initialized.insert(name).second;
-            momentum_buffer.emplace(it->second->get_value_for_update(autograd::PreferredPrecision::HALF));
-        }
 
-        // A buffer's first update must produce buf = g (PyTorch seeds fresh buffers with the raw
-        // gradient); the buffer is zero at that point, so skipping dampening is sufficient.
-        float dampening = first_momentum_update ? 0.0f : m_config.dampening;
-        ttml::metal::sgd(
-            param.tensor(),
-            gradients,
-            m_config.lr,
-            m_config.momentum,
-            dampening,
-            m_config.weight_decay,
-            m_config.nesterov,
-            autograd::optional_tensor(momentum_buffer));
+            auto gradients = theta_ptr->get_grad();
+            // The kernel updates the parameter and the momentum buffer in place, and only exists for bf16.
+            auto param = theta_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
+
+            std::optional<autograd::MutableTensorView> momentum_buffer;
+            bool first_momentum_update = false;
+            if (momentum > 0.0F) {
+                auto it = m_momentum.find(name);
+                if (it == m_momentum.end()) {
+                    auto buf = autograd::create_tensor(
+                        core::zeros_like(param.tensor()),
+                        /* requires_grad */ false);
+                    it = m_momentum.emplace(name, std::move(buf)).first;
+                }
+                first_momentum_update = m_momentum_initialized.insert(name).second;
+                momentum_buffer.emplace(it->second->get_value_for_update(autograd::PreferredPrecision::HALF));
+            }
+
+            // A buffer's first update must produce buf = g (PyTorch seeds fresh buffers with the raw
+            // gradient); the buffer is zero at that point, so skipping dampening is sufficient.
+            const float dampening = first_momentum_update ? 0.0F : group_dampening;
+
+            ttml::metal::sgd(
+                param.tensor(),
+                gradients,
+                lr,
+                momentum,
+                dampening,
+                weight_decay,
+                m_nesterov,
+                autograd::optional_tensor(momentum_buffer));
+        }
     }
     m_steps++;
 }
@@ -88,24 +104,16 @@ void SGD::step() {
 serialization::StateDict SGD::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
-    dict["lr"] = m_config.lr;
-    dict["momentum_factor"] = m_config.momentum;
-    dict["dampening"] = m_config.dampening;
-    dict["weight_decay"] = m_config.weight_decay;
-    dict["nesterov"] = m_config.nesterov;
+    dict["nesterov"] = m_nesterov;
     dict["momentum"] = m_momentum;
-    save_initial_lr(dict);
+    save_param_groups(dict);
     return dict;
 }
 
 void SGD::set_state_dict(const serialization::StateDict& dict) {
+    restore_param_groups(dict);
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
-    set_lr(serialization::get_value_type<float>(dict, "lr"));
-    restore_initial_lr(dict);
-    m_config.momentum = serialization::get_value_type<float>(dict, "momentum_factor");
-    m_config.dampening = serialization::get_value_type<float>(dict, "dampening");
-    m_config.weight_decay = serialization::get_value_type<float>(dict, "weight_decay");
-    m_config.nesterov = serialization::get_value_type<bool>(dict, "nesterov");
+    m_nesterov = serialization::get_value_type<bool>(dict, "nesterov");
     m_momentum = std::get<serialization::NamedParameters>(dict.at("momentum"));
     // Restored buffers are treated as past their first update. Buffers are preallocated
     // for every trainable parameter, so a buffer that never received a gradient before the
@@ -126,59 +134,35 @@ void SGD::set_steps(size_t steps) {
     this->m_steps = steps;
 }
 
-float SGD::get_lr() const {
-    return m_config.lr;
-}
-
-void SGD::set_lr(float lr) {
-    m_config.lr = lr;
-}
-
-float SGD::get_momentum() const {
-    return m_config.momentum;
-}
-
-void SGD::set_momentum(float momentum) {
-    m_config.momentum = momentum;
-}
-
-float SGD::get_dampening() const {
-    return m_config.dampening;
-}
-
-void SGD::set_dampening(float dampening) {
-    m_config.dampening = dampening;
-}
-
-float SGD::get_weight_decay() const {
-    return m_config.weight_decay;
-}
-
-void SGD::set_weight_decay(float weight_decay) {
-    m_config.weight_decay = weight_decay;
-}
-
 bool SGD::get_nesterov() const {
-    return m_config.nesterov;
+    return m_nesterov;
 }
 
 void SGD::set_nesterov(bool nesterov) {
-    m_config.nesterov = nesterov;
+    m_nesterov = nesterov;
 }
 
 void SGD::validate_config() const {
-    if (m_config.nesterov) {
-        if (m_config.dampening != 0.0) {
-            throw std::runtime_error(
-                fmt::format("Nesterov momentum requires zero dampening! dampening={}", m_config.dampening));
+    for (size_t group_idx = 0; group_idx < m_param_groups.size(); ++group_idx) {
+        const auto& options = m_param_groups[group_idx].options;
+        const float momentum = options.at("momentum");
+        const float dampening = options.at("dampening");
+        if (m_nesterov) {
+            if (dampening != 0.0F) {
+                throw std::runtime_error(fmt::format(
+                    "Nesterov momentum requires zero dampening! dampening={} (param group {})", dampening, group_idx));
+            }
+            if (momentum <= 0.0F) {
+                throw std::runtime_error(fmt::format(
+                    "Nesterov momentum requires a positive momentum! momentum={} (param group {})",
+                    momentum,
+                    group_idx));
+            }
         }
-        if (m_config.momentum <= 0.0) {
-            throw std::runtime_error(
-                fmt::format("Nesterov momentum requires a positive momentum! momentum={}", m_config.momentum));
+        if (dampening != 0.0F && momentum == 0.0F) {
+            throw std::runtime_error(fmt::format(
+                "Dampening requires a positive momentum! momentum={} (param group {})", momentum, group_idx));
         }
-    }
-    if (m_config.dampening != 0.0 && m_config.momentum == 0.0) {
-        throw std::runtime_error(fmt::format("Dampening requires a positive momentum! momentum={}", m_config.momentum));
     }
 }
 

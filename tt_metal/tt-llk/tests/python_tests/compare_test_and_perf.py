@@ -85,8 +85,11 @@ def _reload_local_dependencies(module: ModuleType, root: Path) -> None:
 
 
 def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    # tt_llk_perf lives outside the test tree; the pytest plugin adds it, this script must too.
+    tools_python = str(root.parent.parent / "tools" / "python")
+    for import_root in (tools_python, str(root)):
+        if import_root not in sys.path:
+            sys.path.insert(0, import_root)
     os.environ.setdefault("LLK_HOME", str(root.parent.parent))
     os.environ["CHIP_ARCH"] = arch
     _clear_chip_arch_cache()

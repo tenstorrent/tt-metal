@@ -74,7 +74,7 @@ def _cp_or_replicate_mapper(mesh_config, seq_dim=-2):
 # under the same context_cache the tt_transformers demos populate, keyed by URL digest, so
 # a run needs the network once per machine and never again.
 _TOKEN_TEXT_URL = "https://www.gutenberg.org/cache/epub/135/pg135.txt"
-_TOKEN_TEXT_CACHE = pathlib.Path("models/tt_transformers/demo/context_cache")
+_TOKEN_TEXT_CACHE = pathlib.Path("models/ttt_compat/demo/context_cache")
 
 
 @functools.lru_cache(maxsize=None)
@@ -175,6 +175,7 @@ def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None)
         force_rebuild=_load_full_weights(),
         hf_model_id=hf_model_id,
         prefill_chunk_size=chunk_size,
+        dflash_enabled=os.environ.get("PREFILL_DFLASH", "0") == "1",
     )
     logger.info(f"Model ready in {time.time() - t0:.1f}s")
 

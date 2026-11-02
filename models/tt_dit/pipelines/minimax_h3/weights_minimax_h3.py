@@ -16,6 +16,7 @@ are never read here, so skipping them takes the full 498 GB repo down to ~144 GB
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
@@ -147,3 +148,55 @@ def resolve_weights_dir(
     if missing:
         raise WeightsNotFoundError(f"downloaded MiniMax-H3 snapshot at {snapshot} is missing {missing}")
     return snapshot
+
+
+# Fallbacks for the Turbo factory's adapter arguments when the caller passes nothing.
+LORA_PATH_ENV = "MINIMAX_H3_LORA_PATH"
+LORA_STRENGTH_ENV = "MINIMAX_H3_LORA_STRENGTH"
+VIDEO_SHIFT_ENV = "MINIMAX_H3_VIDEO_SHIFT"
+AUDIO_SHIFT_ENV = "MINIMAX_H3_AUDIO_SHIFT"
+
+
+@dataclass(frozen=True)
+class AdapterSettings:
+    """Adapter settings resolved from arguments and environment.
+
+    `lora_strength` multiplies the file's `alpha / rank` (applied by the loader), so 1.0 is "as trained";
+    passing the published 0.0625 here would apply it twice.
+    """
+
+    lora_path: Path | None
+    lora_strength: float
+    video_shift: float
+    audio_shift: float
+
+
+def resolve_adapter_settings(
+    *,
+    lora_path: str | os.PathLike | None = None,
+    lora_strength: float | None = None,
+    video_shift: float | None = None,
+    audio_shift: float | None = None,
+    default_video_shift: float,
+    default_audio_shift: float,
+) -> AdapterSettings:
+    """Explicit arguments win, then the environment, then the checkpoint's defaults.
+
+    Shifts travel with the adapter: a wrong one is a valid schedule over the wrong grid, so nothing catches it.
+    """
+    env = os.environ
+    path = lora_path or env.get(LORA_PATH_ENV) or None
+    strength = float(env.get(LORA_STRENGTH_ENV, 1.0)) if lora_strength is None else float(lora_strength)
+    if strength <= 0:
+        raise ValueError(f"lora_strength must be positive, got {strength}")
+    video = float(env.get(VIDEO_SHIFT_ENV, default_video_shift)) if video_shift is None else float(video_shift)
+    audio = float(env.get(AUDIO_SHIFT_ENV, default_audio_shift)) if audio_shift is None else float(audio_shift)
+    for name, value in (("video_shift", video), ("audio_shift", audio)):
+        if value <= 0:
+            raise ValueError(f"{name} must be positive, got {value}")
+    return AdapterSettings(
+        lora_path=None if path is None else Path(path),
+        lora_strength=strength,
+        video_shift=video,
+        audio_shift=audio,
+    )
