@@ -84,8 +84,9 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const m2::DFBSpecName final_decay_dfb{"final_decay"};
     const m2::DFBSpecName k_decay_transposed_dfb{"k_decay_transposed"};
     const m2::DFBSpecName anchor_decay_dfb{"anchor_decay"};
-    // The centered gate mask gate_tril - gate_ones / 2 that forms G - G_last/2 in DST.
+    // The gate masks gate_tril - gate_ones / 2 and gate_ones / 2 that form G - G_last/2 and the anchor G_last/2 in DST.
     const m2::DFBSpecName gate_centered_dfb{"gate_centered"};
+    const m2::DFBSpecName gate_half_dfb{"gate_half"};
     const m2::DFBSpecName normalized_q_dfb{"normalized_q"};
     const m2::DFBSpecName normalized_k_dfb{"normalized_k"};
     const m2::DFBSpecName tile_workspace_0_dfb{"tile_workspace_0"};
@@ -148,6 +149,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(k_decay_transposed_dfb, 2 * kc, output_formats[4]),
         make_dfb(anchor_decay_dfb, kv, fp32),
         make_dfb(gate_centered_dfb, cc, fp32),
+        make_dfb(gate_half_dfb, cc, fp32),
         make_dfb(normalized_q_dfb, ck, fp32),
         make_dfb(normalized_k_dfb, ck, fp32),
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
@@ -255,6 +257,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     unpack_modes[k_decay_transposed_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[anchor_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[gate_centered_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[gate_half_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_k_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_0_dfb] = UnpackMode::UnpackToSrc;
@@ -296,6 +299,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{anchor_decay_dfb, "anchor_decay", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{gate_centered_dfb, "gate_centered", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{gate_centered_dfb, "gate_centered", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{gate_half_dfb, "gate_half", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{gate_half_dfb, "gate_half", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::PRODUCER},
