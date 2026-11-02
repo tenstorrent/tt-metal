@@ -408,3 +408,62 @@ class DSV41DeviceEngram:
         )
         out = ttnn.addcmul(xr, gate, value)  # [1,1,R,D]
         return ttnn.reshape(out, [T, 1, hc, D])
+
+    def _weight_rows_sm(self, T):
+        """weight rows in STREAM-major order, [1,1,hc*T,D] fp32 (rows i*T .. (i+1)*T = stream i's weight)."""
+        key = ("sm", T)
+        if key not in self._w_rows:
+            self._w_rows[key] = ttnn.from_torch(
+                self._w_scaled_torch.repeat_interleave(T, dim=0).reshape(1, 1, T * self.hc, self.dim),
+                device=self.md,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self._rep,
+            )
+        return self._w_rows[key]
+
+    def forward_v2_own_pk(self, xp, rows):
+        """``forward_v2_own`` on the PACKED stream layout (DSV41_PF_ENGRAM_PK=1, default OFF; cores-for-prefill): ``xp`` [1,1,T,hc*D] fp32 (stream i at columns [i*D, (i+1)*D), the layout of
+        tt/mhc_packed.py) -> the same layout. The 4 streams are split / joined by TILE-ALIGNED column slices (no row-major round trip, no 4-rows-in-a-32-row-tile padding): the gate runs on
+        the rows in stream-major order [1,1,hc*T,D], every reduction is still over one row's D elements, so the values are those of ``forward_v2_own``.
+        """
+        kv = ttnn.matmul(
+            rows, self.wkv_T, compute_kernel_config=self.ckc, dtype=ttnn.bfloat16, core_grid=ttnn.CoreGrid(y=8, x=8)
+        )  # [1,1,n*T,(hc+1)D/n]
+        kv = ttnn.experimental.all_to_all_async_generic(
+            kv, in_dim=3, out_dim=2, num_links=self.ccl.num_links, topology=ttnn.Topology.Ring, cluster_axis=1
+        )  # [1,1,T,(hc+1)D]
+        return self._gate_packed(xp, kv)
+
+    def _gate_packed(self, xp, kv):
+        T, hc, D = int(xp.shape[2]), self.hc, self.dim
+        U, UT = ttnn.UnaryWithParam, ttnn.UnaryOpType
+        cols = lambda t, i: ttnn.slice(t, [0, 0, 0, i * D], [1, 1, T, (i + 1) * D])
+        xr = ttnn.concat([cols(xp, i) for i in range(hc)], dim=2)  # [1,1,hc*T,D] stream-major
+        key = ttnn.typecast(ttnn.concat([cols(kv, i) for i in range(hc)], dim=2), ttnn.float32)
+        v1 = ttnn.typecast(cols(kv, hc), ttnn.float32)  # [1,1,T,D]
+        value = ttnn.concat([v1] * hc, dim=2)
+        w = self._weight_rows_sm(T)
+        mm = lambda t: ttnn.matmul(
+            t,
+            self._ones_col,
+            compute_kernel_config=self.ckc_norm,
+            dtype=ttnn.float32,
+            core_grid=ttnn.CoreGrid(y=2, x=8),
+        )
+        a = mm(ttnn.multiply(xr, xr))
+        b = mm(ttnn.multiply(key, key))
+        c = mm(ttnn.multiply(ttnn.multiply(xr, w), key))
+        pre = [U(UT.MUL_UNARY_SFPU, 1.0 / D), U(UT.ADD_UNARY_SFPU, self.eps), U(UT.RSQRT)]
+        rstd = ttnn.multiply(a, b, input_tensor_a_activations=pre, input_tensor_b_activations=pre)
+        dot = ttnn.multiply(c, rstd)
+        gate = ttnn.multiply(
+            dot,
+            dot,
+            input_tensor_a_activations=[U(UT.ABS), U(UT.MAXIMUM, 1e-6), U(UT.SQRT)],
+            input_tensor_b_activations=[U(UT.SIGN)],
+            activations=[U(UT.SIGMOID)],
+        )
+        out = ttnn.addcmul(xr, gate, value)  # [1,1,hc*T,D]
+        return ttnn.concat([ttnn.slice(out, [0, 0, i * T, 0], [1, 1, (i + 1) * T, D]) for i in range(hc)], dim=3)

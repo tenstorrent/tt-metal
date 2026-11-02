@@ -25,7 +25,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as _PS
 from models.demos.blackhole.deepseek_v41_flash.tt import trace_dump as _TD  # noqa: E402
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d, recording, replay
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
-from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import PkList, colsplit_active, unpack_streams
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_taps import TAP_LAYERS
 from models.demos.blackhole.deepseek_v41_flash.tt.replay_cfg import replay_tokens, split_enabled
 
@@ -61,6 +61,11 @@ def er_shard():
     the layout of ``tok``) and gathered over the 8 columns on the device (all_gather, [n8, 8, T, Kin] -> [1, 1, R, Kin]) instead of being replicated 8x over PCIe: 2 layers x R x Kin x 2 B x 32 chips =
     805 MB per Up=2 window (about 28 ms of host-to-device time between two replays)."""
     return os.environ.get("DSV41_PF_ER_SHARD", "0") == "1" and ER_RM
+
+
+def engram_pk():
+    """DSV41_PF_ENGRAM_PK=1 (default OFF, needs DSV41_PF_ENGRAM_OWN=1 and the packed mHC carrier): the Engram layers keep the packed [1,1,N,4C] streams (no unpack / pack, tile-aligned stream splits)."""
+    return os.environ.get("DSV41_PF_ENGRAM_PK", "0") == "1"
 
 
 def engram_own():
@@ -510,7 +515,16 @@ class DSV41PrefillModel:
             if dyn and split_enabled():
                 self.dyn.back = lid >= REPLAY_BACK  # (the layers of trace B read the first-replay-chunk window tensors)
             if lid in self.engram:
-                xs, pres = unpack_streams(xs, pres)
+                pk_eng = (
+                    engram_pk()
+                    and engram_own()
+                    and self.cs
+                    and getattr(xs, "packed", False)
+                    and self.engram[lid].mesh_config is not None
+                    and os.environ.get("DSV41_ENGRAM_V2") != "0"
+                )
+                if not pk_eng:
+                    xs, pres = unpack_streams(xs, pres)
                 t0 = time.perf_counter()
                 fe = (
                     self.engram[lid].forward
@@ -531,13 +545,27 @@ class DSV41PrefillModel:
                 ):
                     # own chunks only: one kv matmul per 8-chunk group + all_to_all of the kv shards (no gather of x, no 8 calls, no reduce_scatter)
                     new = []
-                    for g, x in enumerate(xs):
-                        rg = ttnn.to_layout(
-                            ttnn.slice(erl, [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]),
-                            ttnn.TILE_LAYOUT,
-                        )
-                        new.append(self.engram[lid].forward_v2_own(x, rg))
-                        ttnn.deallocate(rg)
+                    if pk_eng:  # packed carrier: the chunks are row blocks [32g, 32g+32) of the one packed tensor
+                        xp_all = xs[0]
+                        n_g = int(xp_all.shape[2]) // T
+                        for g in range(n_g):
+                            xg_ = ttnn.slice(xp_all, [0, 0, g * T, 0], [1, 1, (g + 1) * T, int(xp_all.shape[3])])
+                            rg = ttnn.to_layout(
+                                ttnn.slice(erl, [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]),
+                                ttnn.TILE_LAYOUT,
+                            )
+                            new.append(self.engram[lid].forward_v2_own_pk(xg_, rg))
+                            ttnn.deallocate(rg)
+                            ttnn.deallocate(xg_)
+                        new = [ttnn.concat(new, dim=2) if len(new) > 1 else new[0]]
+                    else:
+                        for g, x in enumerate(xs):
+                            rg = ttnn.to_layout(
+                                ttnn.slice(erl, [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]),
+                                ttnn.TILE_LAYOUT,
+                            )
+                            new.append(self.engram[lid].forward_v2_own(x, rg))
+                            ttnn.deallocate(rg)
                 elif (
                     self.cs
                 ):  # own-token chunks -> replicated 8-chunk groups -> Engram -> back (reduce_scatter of 8 identical copies, x1/8 exact)
@@ -581,7 +609,7 @@ class DSV41PrefillModel:
                     ]
                 for x in xs:
                     ttnn.deallocate(x)
-                xs = new
+                xs = PkList(new) if pk_eng else new
                 if er_g is not None:
                     ttnn.deallocate(er_g)
                 sync("engram_dev", t0)
