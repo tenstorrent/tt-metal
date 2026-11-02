@@ -221,9 +221,11 @@ class DSV41Attention:
         self.cache = up(torch.zeros(self.T, 1, max_seq, HEAD_DIM), dtype=_kv_dtype())
         self.ckc = ttnn.init_device_compute_kernel_config(
             md.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=getattr(
+                ttnn.MathFidelity, os.environ.get("DSV41_ATTN_LIN_FID", "HiFi4")
+            ),  # precision lever (default HiFi4 = unchanged)
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=os.environ.get("DSV41_ATTN_LIN_FP32", "1") == "1",
             packer_l1_acc=False,
         )
         self.ckc_sdpa = ttnn.init_device_compute_kernel_config(

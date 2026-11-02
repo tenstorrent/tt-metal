@@ -150,6 +150,15 @@ def trace_table(run, O, name, tid):
         x["g"].append(f(r[G]))
         x["s"].append(f(r[SC]))
         x["e"].append(f(r[EC]))
+        for key, col in (
+            ("br", "DEVICE BRISC KERNEL DURATION [ns]"),
+            ("nc", "DEVICE NCRISC KERNEL DURATION [ns]"),
+            ("t0", "DEVICE TRISC0 KERNEL DURATION [ns]"),
+            ("t1", "DEVICE TRISC1 KERNEL DURATION [ns]"),
+            ("t2", "DEVICE TRISC2 KERNEL DURATION [ns]"),
+            ("cc", "CORE COUNT"),
+        ):
+            x[key].append(f(r.get(col, "")))
     devs = sorted({d for o in dev.values() for d in o})
     ops = []
     for oid in sorted(dev):
@@ -161,11 +170,17 @@ def trace_table(run, O, name, tid):
             per[d] = (
                 statistics.mean(ks) if ks else 0.0,
                 statistics.mean(gs) if gs else 0.0,
-                statistics.mean(x["s"]),
-                statistics.mean(x["e"]),
+                x["s"][-1],
+                x["e"][-1],
             )
         ops.append((oid, row, phase(oid), per))
-    return dict(ops=ops, devs=devs, sessions=sorted(sess), rows=len(rows))
+    risc = {}
+    for oid, dd in dev.items():
+        risc[oid] = {
+            k: statistics.mean([v for d in dd.values() for v in d[k] if v == v] or [0.0])
+            for k in ("br", "nc", "t0", "t1", "t2", "cc")
+        }
+    return dict(ops=ops, devs=devs, sessions=sorted(sess), rows=len(rows), risc=risc)
 
 
 def summarize(T, top=40):

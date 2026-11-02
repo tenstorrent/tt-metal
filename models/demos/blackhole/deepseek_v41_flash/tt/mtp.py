@@ -316,7 +316,11 @@ class DraftMoEBlock:
         ttnn.deallocate(fence)
         _l1v(md, "    warmup: end")
 
-    def forward(self, tt_x_gate, tt_x_tokens, forced_routing=None):
+    def can_fold(self):
+        """True when ``forward(..., fold=partial)`` is supported (fused tail path, DSV41_DRAFT_MOE_TAIL=1)."""
+        return hasattr(self.decode, "tail_ok") and self.decode.tail_ok()
+
+    def forward(self, tt_x_gate, tt_x_tokens, forced_routing=None, fold=None):
         w, idx = self.gate.forward(tt_x_gate)
         if idx.dtype != ttnn.uint16:
             idx = ttnn.typecast(idx, ttnn.uint16)
@@ -326,7 +330,15 @@ class DraftMoEBlock:
             w = ttnn.typecast(w, ttnn.bfloat16)
         if w.layout != ttnn.ROW_MAJOR_LAYOUT:
             w = ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT)
-        return self.decode.forward(tt_x=tt_x_tokens, tt_scores=w, tt_indices=idx, layer_id=0)
+        if (
+            fold is not None
+        ):  # DSV41_DRAFT_SHARED_TP=1: this column's partial of the shared expert, added to the routed partial before the reduce_scatter
+            self.decode.fold = fold
+        try:
+            return self.decode.forward(tt_x=tt_x_tokens, tt_scores=w, tt_indices=idx, layer_id=0)
+        finally:
+            if fold is not None:
+                self.decode.fold = None
 
 
 class DraftLayer(DSV41Layer):
@@ -361,6 +373,15 @@ class DraftLayer(DSV41Layer):
         self.shared = DSV41SharedExpert(
             md, w0, w1, w2, dtype=ttnn.bfloat16 if os.environ.get("DSV41_DRAFT_SHARED_DT") == "bf16" else ttnn.bfloat8_b
         )  # DSV41_DRAFT_SHARED_DT=bf16: numerics probe
+        self.shared_tp = None
+        if (
+            os.environ.get("DSV41_DRAFT_SHARED_TP", "0") == "1"
+            and self.moe.can_fold()
+            and os.environ.get("DSV41_DRAFT_SHARED_DT") != "bf16"
+        ):  # the column-sharded shared expert of the verify layers (tt/shared_expert_tp.py), folded into the draft MoE's tail: 3 x ~100 us of replicated linears per round -> ~3 x 27 us
+            from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_tp import DSV41SharedExpertColTP
+
+            self.shared_tp = DSV41SharedExpertColTP(md, w0, w1, w2)
         _l1v(md, "  layer: after shared expert")
         up = lambda t: ttnn.from_torch(
             t.reshape(1, 1, 1, -1).float(),

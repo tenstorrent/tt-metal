@@ -59,6 +59,10 @@ WALL = os.environ.get("FD_WALL", "1") == "1"
 ROUTES = [p for p in os.environ.get("FD_ROUTES", "").split(",") if p]
 ONLY = os.environ.get("FD_ONLY", "M,A,S,B").split(",")
 GSM = "models/demos/blackhole/deepseek_v41_flash/demo/sample_prompts/input_data_gsm8k_128.json"
+REAL = (
+    os.environ.get("FD_REAL") == "1"
+)  # real prefill of FD_PROMPTS (B distinct prompts of several k tokens), spec seed from the prefill taps, natural routing, no forced accepts
+PROMPTS = os.environ.get("FD_PROMPTS", "")
 
 PARAMS = [
     pytest.param(
@@ -222,6 +226,9 @@ def _setup(md, rec):
     gen.enable_spec()
     spec = gen.spec
     runner = spec.runners[K] if hasattr(spec, "runners") else spec
+    if REAL:  # real prefill + seed happen in the test body (the pool pages are admitted by the prefill)
+        gen.fd_args = args
+        return gen, runner, None, None
     # real text: B windows of the GSM8K prompts
     X = None
     try:
@@ -230,7 +237,7 @@ def _setup(md, rec):
         rows = []
         for b in range(B):
             ids = args.tokenizer.encode(texts[b % len(texts)])
-            off = 24 + 5 * b
+            off = (7 + 3 * b) % max(1, len(ids) - 6)
             w = ids[off : off + 6]
             assert len(w) == 6
             rows.append(w)
@@ -294,18 +301,62 @@ def test_fusedec_round_prof(mesh_device):
             md, dec, _load_routes(ROUTES), runner.U, runner.n, int(os.environ.get("FD_ROUTE_SEED", "7"))
         )
         _log(f"FD real routes injected from {ROUTES}")
-    Xw = torch.cat([X, X[:, :1].repeat(1, 8)], dim=1)[:, :8]  # >= n columns for every runner of the set
-    master = gen.spec.seedr if hasattr(gen.spec, "seedr") else runner
-    if getattr(master, "siblings", None):
-        master._capture_all(lambda nn: Xw[:, :nn], base)
+    if REAL:
+        from models.common.sampling import SamplingParams
+        from models.tt_transformers.demo.simple_text_demo import load_inputs
+        from models.tt_transformers.tt.common import preprocess_inputs_prefill
+
+        args = gen.fd_args
+        prompts, _ = load_inputs(PROMPTS, B, instruct=True)
+        toks, _, pos, _ = preprocess_inputs_prefill(
+            prompts[:B], args.tokenizer, [args], instruct=True, max_generated_tokens=64, max_prefill_len=MAX_CTX
+        )
+        toks = torch.stack(toks).view(B, -1)
+        _log(f"FD real prefill: tokens {tuple(toks.shape)} prompt lens {[int(p) for p in pos]}")
+        kw = dict(
+            prompt_lens=pos,
+            sampling_params=SamplingParams(temperature=0, top_k=1, top_p=1.0),
+            enable_trace=True,
+            chunk=512,
+        )
+        gen.prefill_forward_text(toks, **kw)  # compile / trace capture
+        first, _ = gen.prefill_forward_text(toks, **kw)
+        first = first.view(-1)
+        lens = torch.as_tensor(pos).long()
+        X, base = runner.seed(
+            toks, lens, first
+        )  # drafter seeded from the prefill taps; captures the traces of every runner of the set
+        ttnn.synchronize_device(md)
+        Xr = X
+        _log(f"FD real seed done: X {X.tolist()} base {base.tolist()}")
     else:
-        runner.capture(Xw[:, : runner.n], base)
-    Xr = Xw[:, : runner.n]
+        Xw = torch.cat([X, X[:, :1].repeat(1, 8)], dim=1)[:, :8]  # >= n columns for every runner of the set
+        master = gen.spec.seedr if hasattr(gen.spec, "seedr") else runner
+        if getattr(master, "siblings", None):
+            master._capture_all(lambda nn: Xw[:, :nn], base)
+        else:
+            runner.capture(Xw[:, : runner.n], base)
+        Xr = Xw[:, : runner.n]
     snaps = dec.snapshot_states()
     runner._ensure(base)
     runner._use(base)
-    dec.set_force(runner.n - 1)
+    dec.set_force(-1 if REAL else runner.n - 1)
     runner._feed(Xr, base)
+    if (
+        REAL
+    ):  # the REAL routed expert ids of every MoE layer of this round: one eager round (same state, same block), state restored
+        from models.demos.blackhole.deepseek_v41_flash.tt import moe_block as _mb
+
+        if _mb.ROUTE_LOG is not None:
+            _mb.ROUTE_LOG.clear()
+            _mb.ROUTE_ON[0] = True
+            dec.forward()
+            ttnn.synchronize_device(md)
+            _mb.ROUTE_ON[0] = False
+            json.dump([t.tolist() for t in _mb.ROUTE_LOG], open(os.path.join(OUT, "routes_round.json"), "w"))
+            _log(f"FD routes of the round saved: {len(_mb.ROUTE_LOG)} layers")
+            dec.restore_states(snaps)
+            runner._feed(Xr, base)
     tids = dict(M=runner.tid, A=runner.tid_a, B=runner.tid_b)
     meta = dict(
         layers=LAYERS,
@@ -348,6 +399,25 @@ def test_fusedec_round_prof(mesh_device):
         _log("FD_WALL_MS " + json.dumps({k: round(v, 4) for k, v in walls.items()}))
     json.dump(dict(meta=meta, walls=walls), open(os.path.join(OUT, "walls.json"), "w"))
     # ---- profiled replays
+    if (
+        os.environ.get("FD_DUMP") == "1"
+    ):  # state after exactly one replay of the mono trace from the captured state: pack, logits, compressor state of every owner (bit comparison of two runs)
+        dec.restore_states(snaps)
+        ttnn.execute_trace(md, tids["M"], cq_id=0, blocking=False)
+        ttnn.synchronize_device(md)
+        dump = {
+            "pack": [t.clone() if torch.is_tensor(t) else t for t in runner._readback(runner.pack_mono)],
+            "prev_cs": {},
+        }
+        lg = runner.cur_logits if runner.cur_logits is not None else dec.logits
+        dump["logits0"] = ttnn.to_torch(ttnn.get_device_tensors(lg)[0]).float()
+        for lid, layer, _ in dec.layers:
+            pc = getattr(layer.attention, "prev_cs", None)
+            if pc is not None:
+                dump["prev_cs"][lid] = [ttnn.to_torch(ttnn.get_device_tensors(pc)[i]).float() for i in (0, 9, 18, 31)]
+        torch.save(dump, os.path.join(OUT, "dump.pt"))
+        _log("FD_DUMP saved")
+        dec.restore_states(snaps)
     profmap = {}
     if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
         order = [n for n in ("M", "A", "B") if n in ONLY]

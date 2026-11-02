@@ -73,3 +73,44 @@ def commit_select(cs, prev_cs, idx3, U, n):
     prog = _prog(mesh, "cmp_commit.cpp", [U, n, mode], [cs, ix, prev_cs], 4, 0xC52)
     ttnn.generic_op([cs, prev_cs] if idx3 is None else [cs, ix, prev_cs], prog)
     return prev_cs
+
+
+def rope_full_enabled():
+    return os.environ.get("DSV41_ROPE_FULL_FUSE", "0") == "1"
+
+
+def rope_full(row64, shape, width, cos, nc=100):
+    """CompactRope.full as one program (tt/attn_kernels/rope_full.cpp): row64 [T,1,64] bf16 row-major -> bf16 TILE tensor ``shape`` ([A,T,1,W] / [T,1,1,W]: one tile per user and column tile;
+    [1,1,T,W]: one tile row of T rows), columns 0..W-65 = 1.0 (cos) / 0.0 (sin), the last 64 = the row. Bit-identical to concat + reshape + to_layout(TILE).
+    """
+    mesh = row64.device()
+    T = int(row64.shape[0])
+    shape = [int(s) for s in shape]
+    nct = width // 32
+    rows_layout = T > 1 and shape[0] == 1 and shape[1] == 1 and shape[2] == T
+    pages = nct if rows_layout else T * nct
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+    )
+    ncore = min(nc, pages)
+    grid = mesh.compute_with_storage_grid_size()
+    cores = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)][:ncore]
+    cset = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for cx, cy in cores])
+    rt = ttnn.RuntimeArgs()
+    for i, (cx, cy) in enumerate(cores):
+        rt[cx][cy] = [i]
+    ct = [0, nct, 1 if rows_layout else 0, 1 if cos else 0, T, pages, ncore]
+    accs = _acc(row64) + _acc(out)
+    cb = _cb(cset, 0, 1, 2048 + T * 128, ttnn.bfloat16)
+    kd = _k5(
+        "rope_full.cpp",
+        cset,
+        ct + accs,
+        rt,
+        ttnn.ReaderConfigDescriptor(),
+        [row64.buffer_address(), out.buffer_address()],
+    )
+    prog = ttnn.ProgramDescriptor(kernels=[kd], semaphores=[], cbs=[cb])
+    prog.custom_program_hash = _hash(0xC53, tuple(ct), tuple(accs))
+    ttnn.generic_op([row64, out], prog)
+    return out

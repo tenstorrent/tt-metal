@@ -150,6 +150,16 @@ class CompactRope:
         cos = name in ("C", "iC")
         width = HEAD_DIM if name in ("C", "S") else INDEX_DIM
         T = int(row64.shape[0])
+        if (
+            os.environ.get("DSV41_ROPE_FULL_FUSE", "0") == "1"
+            and row64.dtype == ttnn.bfloat16
+            and row64.layout == ttnn.ROW_MAJOR_LAYOUT
+            and T <= 32
+            and int(row64.shape[-1]) == ROPE_DIM
+        ):  # one program (tt/cmp_fuse.py::rope_full) instead of concat + reshape + to_layout
+            from models.demos.blackhole.deepseek_v41_flash.tt import cmp_fuse
+
+            return cmp_fuse.rope_full(row64, shape, width, cos)
         full = ttnn.concat([self._const(1.0 if cos else 0.0, T, width - ROPE_DIM), row64], dim=-1)
         return ttnn.to_layout(ttnn.reshape(full, shape), ttnn.TILE_LAYOUT)
 
