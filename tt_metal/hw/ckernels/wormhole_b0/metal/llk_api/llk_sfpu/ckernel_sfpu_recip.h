@@ -26,7 +26,8 @@ namespace sfpu {
 // reciprocal ±2^-126 at input ±2^126 instead of flushing an intermediate result.
 // normalized=true requires a finite input with magnitude in [1, 2) and skips scaling.
 // _softsign_x2_ in ckernel_sfpu_softsign.h carries a two-row interleaved copy of this
-// algorithm (seed, scale, Newton-Raphson steps); keep it in sync with changes here.
+// algorithm (seed, scale, Newton-Raphson steps) on values scaled by -1/2; keep it in sync
+// with changes here.
 template <int max_iter = 2, bool round_to_bf16 = false, bool normalized = false>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Combines the sign and exponent of -1.0 with the mantissa of `in`.
@@ -130,6 +131,12 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
     return sfpu_reciprocal_iter<APPROXIMATE ? 0 : 2>(in);
 }
 
+// Shared minimax seed y = k2 - k1*x + k0*x**2 for unrounded one- and two-step reciprocals
+// of x in [1, 2); init_softsign programs a power-of-two rescaling of it.
+static constexpr float RECIPROCAL_SEED_K0 = 0.3232325017452239990234375f;
+static constexpr float RECIPROCAL_SEED_K1 = 1.4545459747314453125f;
+static constexpr float RECIPROCAL_SEED_K2 = 2.121212482452392578125f;
+
 template <bool APPROXIMATE = false, bool round_to_bf16 = false>
 sfpi_inline void sfpu_reciprocal_init() {
     if constexpr (round_to_bf16) {
@@ -147,9 +154,9 @@ sfpi_inline void sfpu_reciprocal_init() {
     } else {
         // Shared minimax seed for unrounded one- and two-step reciprocals,
         // including intermediate reciprocals in compound BF16 operations.
-        sfpi::vConstFloatPrgm0 = 0.3232325017452239990234375f;
-        sfpi::vConstFloatPrgm1 = 1.4545459747314453125f;
-        sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;
+        sfpi::vConstFloatPrgm0 = RECIPROCAL_SEED_K0;
+        sfpi::vConstFloatPrgm1 = RECIPROCAL_SEED_K1;
+        sfpi::vConstFloatPrgm2 = RECIPROCAL_SEED_K2;
     }
 }
 
