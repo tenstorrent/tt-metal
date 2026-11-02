@@ -120,7 +120,8 @@ Key layers above tt-llk:
 
 ## MCP Integration
 
-This repo uses three MCP servers: DeepWiki, Atlassian (Confluence), and Glean.
+This repo uses four MCP servers: DeepWiki, Atlassian (Confluence), Glean, and llk-tools.
 - **DeepWiki** — ISA documentation for WH/BH (NOT available for Quasar)
 - **Atlassian** — Confluence hardware documentation
 - **Glean** — Internal documentation search
+- **llk-tools** — perf regression check on the attached card (`tools/mcp/README.md`). For a perf check, use its `perf_compare` (or the `perf-regression-check` skill) first; do not add the `llk-perf-gate` label or start a CI perf run unless no card is attached.

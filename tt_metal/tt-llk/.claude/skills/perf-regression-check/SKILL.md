@@ -7,13 +7,20 @@ description: >
   on both, several iterations each, and reports per-config regressions and improvements.
   Use when a developer asks "did my branch make perf worse", "check my changes for
   regressions", "compare my branch to where I branched off", or "compare perf between
-  these two commits". Needs Tenstorrent hardware (runs the real perf sweep).
+  these two commits", and before you add the llk-perf-gate label or wait for CI to
+  check perf. Needs Tenstorrent hardware (runs the real perf sweep).
 ---
 
 # Perf compare (one test, two commits)
 
+This is the default perf check for a change: run it on the attached card before you
+push. Do not add the `llk-perf-gate` label or start a CI perf run to get a verdict: CI
+runner time is expensive, and the merge queue runs the gate anyway. Use the CI gate
+only when no card is attached, or as the final confirmation.
+
 If the `llk-tools` MCP server is connected (`tools/mcp/README.md`), call its
-`perf_compare` tool; it runs this same script. Otherwise run the script yourself:
+`perf_compare` tool, and `perf_placement_check` for a regression; they run this same
+script. Otherwise run the script yourself:
 
 `perf_compare_commits.sh` does the whole job: resolve both refs, sweep each, compare
 median-vs-median, write the report. Do not hand-roll the checkout/sweep loop — the script
@@ -27,6 +34,9 @@ SCRIPT="$(git rev-parse --show-toplevel)/tt_metal/tt-llk/.claude/scripts/perf_co
 
 # any two commits
 "$SCRIPT" <arch> <test> --baseline <ref> --current <ref>
+
+# a stage-2 code position: the TRISC code moved by 4, 24, 44 or 60 bytes (needs #62981)
+"$SCRIPT" <arch> <test> --code-shift 24
 ```
 
 It prints the report, writes it under `~/.cache/tt-llk-perf-compare/reports/…`, and exits
@@ -38,7 +48,11 @@ already cached) without running a sweep — cheap, use it to confirm the refs fi
 - **arch** (required): `wormhole` or `blackhole`. Infer from the machine (`tt-smi`) if possible.
 - **baseline / current**: any refs. Default: baseline = `git merge-base origin/main HEAD`,
   current = `HEAD`. If the user names commits ("compare abc123 and def456"), pass both.
-- **threshold**: `--threshold`, default `0.02` (2%).
+- **threshold**: `--threshold`, a fraction. Default: the merge gate's, `0.02` on
+  blackhole and `0.13` on wormhole. `--module-threshold` sets it per module; the
+  default on wormhole is `perf_matmul=0.25,perf_math_matmul=0.25`.
+- **run types**: `--run-types`, default `L1_TO_L1` (as the gates). `all` measures and
+  compares every run type.
 - **min cycles**: `--min-cycles`, default `30`. A point is a regression only when it is
   **both** more than `--threshold` slower **and** more than `--min-cycles` slower. The
   percentage clause alone fires on small markers such as `INIT`; the cycle clause alone
@@ -57,6 +71,11 @@ already cached) without running a sweep — cheap, use it to confirm the refs fi
   re-measures. Cached runs from another host are refused (cycles are not comparable).
 - **Iterations are interleaved** baseline, current, baseline, current…, so machine drift
   hits both sides equally instead of biasing one.
+- **As CI:** `TT_LLK_DISABLE_ASSERTS=1`, `LLK_PERF_RUN_TYPES` set to the run types, and
+  `--dist loadgroup` for the run step. The cache key holds the run types, `CONSUMER_JOBS`,
+  the asserts setting and the code shift.
+- **One sweep per card.** A sweep holds `/tmp/tt-llk-test-<arch>.lock`, the lock that
+  `run_test.sh` takes.
 
 ## Present the result
 Show the verdict, the top regressions, and the improvements if any. Point at
@@ -70,7 +89,19 @@ Show the verdict, the top regressions, and the improvements if any. Point at
   changed, expect "new points" — those are reported, never counted as regressions.
 - **Noise:** 3 iterations + median reduces it, but deltas near the threshold can still be
   noise. Suggest more iterations (cheap — cached runs are reused, so `--iterations 5` after
-  a 3-iteration run only measures 2 more per side) or a higher threshold.
+  a 3-iteration run only measures 2 more per side).
+- **Wormhole on main is noisy.** Results move from run to run with test order and worker
+  assignment until #60892, #58068 and #60894 are merged. Before you report a Wormhole
+  regression, repeat with more iterations, or with `CONSUMER_JOBS=1` (one fixed order),
+  and run the placement check. A move that is gone in a repeat is noise.
+- **Placement:** a change can move code, and the same loop then runs faster or slower at
+  its new address. Stage 2 of the gate (#62981, #63686) re-measures each regression with
+  the code at 0, 4, 24, 44 and 60 bytes: slower at every position is a regression, at
+  some positions only is placement. `perf_placement_check` (MCP) or `--code-shift` (script)
+  does the same here. Both commits need the `LLK_CODE_SHIFT` knob (#62981).
+- **Local and gate baselines differ.** Here the baseline is a commit measured on this
+  card. The gates use the warehouse baseline (pinned, or `merge_baseline` in the merge
+  queue), so an old warehouse baseline can add moves that the local compare does not show.
 - The further apart the two commits are, the more unrelated change is in the delta. For
   "did *this* work regress perf", the merge-base default is the honest baseline.
 - `TILE_LOOP` is the steady-state per-tile cost; `INIT`/`KERNEL` include one-time overheads.

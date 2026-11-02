@@ -14,9 +14,10 @@
         },
         "llk-tools": {
             "type": "stdio",
-            "command": "python3",
+            "command": "sh",
             "args": [
-                "tools/mcp/llk_tools.py"
+                "-c",
+                "py=tests/.venv/bin/python; [ -x \"$py\" ] || py=python3; exec \"$py\" tools/mcp/llk_tools.py"
             ]
         }
     }
