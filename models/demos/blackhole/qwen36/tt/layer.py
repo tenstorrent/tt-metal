@@ -267,6 +267,20 @@ class Qwen36DecoderLayer:
                     mesh_device, state_dict[f"layers.{layer_num}.post_attention_layernorm.weight"]
                 )
                 self._norm_eps = args.norm_eps
+        # BONSAI_NATIVE site attnnorm: the decode attention RMSNorm runs fused into the prep of the exact-ternary
+        # attention qkv / GDN in-projection; GDN also takes the normalized rows (for its dense a|b matmul).
+        self._attn_native = None
+        if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
+            from models.demos.blackhole.bonsai2.native.a3 import op as _a3op
+            from models.demos.blackhole.bonsai2.native.a3.linear import TernaryLinear as _TL
+            from models.demos.blackhole.bonsai2.native.a3.linear import sites as _sites
+
+            _nat = (getattr(getattr(self.attention, "weights", None), "fused_qkv", None) if self.is_full_attention
+                    else getattr(self.attention, "_native_in", None))
+            if "attnnorm" in _sites() and isinstance(_nat, _TL):
+                self._attn_native = _nat
+                self._attn_gamma = _a3op.norm_gamma(mesh_device, state_dict[f"layers.{layer_num}.input_layernorm.weight"])
+                self._norm_eps = args.norm_eps
 
     def _make_norm(
         self,
@@ -390,7 +404,12 @@ class Qwen36DecoderLayer:
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
         sharded_norm = self._sharded_norm_1c and mode == "decode"
-        if sharded_norm:
+        fuse_attn = self._attn_native is not None and mode == "decode"
+        if fuse_attn:  # rmsprep; full attention passes x itself (its qkv picks up the fused prep)
+            attn_input = self._attn_native.norm(x, self._attn_gamma, self._norm_eps, emit=not self.is_full_attention)
+            if attn_input is None:
+                attn_input = x
+        elif sharded_norm:
             attn_input = sharded_decode_norm(self.attention_norm, x, self.args, ttnn.L1_MEMORY_CONFIG)
         else:
             attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
@@ -499,7 +518,8 @@ class Qwen36DecoderLayer:
             attn_output = self.attention.forward(
                 attn_input, mode=deltanet_mode, chunk_size=chunk_size, valid_len=valid_len
             )
-        ttnn.deallocate(attn_input)
+        if attn_input is not x:
+            ttnn.deallocate(attn_input)
 
         fuse_ff = self._ff_gamma is not None and mode == "decode"
         h = ttnn.add(x, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG) if fuse_ff else ttnn.add(x, attn_output)
