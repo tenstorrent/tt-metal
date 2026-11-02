@@ -43,6 +43,10 @@ def l1_cap_bytes():
 
 ACT_RM_DEPTH = 2  # cb_act_rm depth, in (1 tile-row x bk) quanta
 WEIGHT_DEPTH = 2  # cb_weight_tiles depth, in (bk x bn) K-blocks
+# R4/R5 cb_weight_tiles depth. The writer runs the weight stream depth - 2 K-blocks ahead of
+# the act exchange (weight block j + lead is fetched / column-multicast around act block j), so
+# the weight DRAM latency and column handshake leave the row exchange's critical chain. 2 = no lead.
+SHARDED_WEIGHT_DEPTH = 6
 OUT_RM_DEPTH = 2  # cb_out_rm depth, in (1 tile-row x bn) quanta
 ACT_SEND_DEPTH = 1  # R4/R5 cb_act_send depth, in own (bm x bk) K-blocks (tilized, awaiting multicast);
 # >= kblocks_per_slice tilizes the whole own slice at m-block start (the former own-slice prefetch).
@@ -54,7 +58,7 @@ ACT_RM_KBLOCKS = 1
 # R4/R5 preferred CB footprint target (perf lamp L5). The shard-backed input / output CBs are
 # extra (they are the tensors), so this sits well under CB_BUDGET_BYTES: SDXL L1 3x3 BLOCK must
 # stay under production's 618,992 B per-core L1 peak including both shards and L1_SMALL.
-SHARDED_CB_BUDGET_BYTES = 448 * 1024
+SHARDED_CB_BUDGET_BYTES = 480 * 1024
 WEIGHT_MCAST = True  # R4: read each weight K-block once per grid column and multicast it down the column
 BK_FLOOR = 4  # bk >= min(K_t, BK_FLOOR) on the first walk (perf lamp L7)
 # Compute config policy, per (activation dtype, weight dtype): the single source for the
@@ -326,6 +330,7 @@ def select_blocking(
         "num_k_blocks": K_t // bk,
         "num_n_blocks": core_n_tiles // bn,
         "act_rm_rows": ACT_RM_DEPTH,
+        "weight_depth": WEIGHT_DEPTH,
         "window_sticks_max": window_sticks_max,
         "out_subblock_h": sb_h,
         "out_subblock_w": sb_w,
@@ -438,7 +443,7 @@ def select_blocking_sharded(
             + rm_rows(bm) * bk * T
             + (send_depth(bk) * bm * bk * T if act_mcast else 0)
             + (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk * T
-            + WEIGHT_DEPTH * bk * nt_s * T_w
+            + SHARDED_WEIGHT_DEPTH * bk * nt_s * T_w
             + bm * nt_s * T_acc
             + (nt_s * T_w if has_bias else 0)
             + (nt_s * T if out_tail else 0)
@@ -470,6 +475,7 @@ def select_blocking_sharded(
         "act_mcast": act_mcast,
         "act_send_depth": send_depth(bk),
         "act_rm_rows": rm_rows(bm),
+        "weight_depth": SHARDED_WEIGHT_DEPTH,
         # Every grid row must run the same number of m-blocks (= column multicast rounds).
         "weight_mcast": WEIGHT_MCAST
         and memory_layout == _ML.BLOCK_SHARDED
@@ -628,7 +634,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         # R0: the DRAM window; R4/R5: the halo sticks (window minus the resident shard).
         _cb(CB_ACT_WINDOW, act_dtype, tap_bytes, p["window_sticks_max"], cores),
         _cb(CB_ACT_RM, act_dtype, p["T"], p["act_rm_rows"] * bk, cores),
-        _cb(CB_WEIGHT_TILES, w_dtype, p["T_w"], WEIGHT_DEPTH * bk * bn, cores),
+        _cb(CB_WEIGHT_TILES, w_dtype, p["T_w"], p["weight_depth"] * bk * bn, cores),
         # Multicast landing zone: same address on every group core (incl. sinks).
         _cb(CB_ACT_TILES, act_dtype, p["T"], (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk, mcast_cores),
     ]
@@ -712,6 +718,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         1 if p.get("out_tail", False) else 0,
         1 if act_mcast else 0,
         1 if weight_mcast else 0,
+        p["weight_depth"],
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct.extend(

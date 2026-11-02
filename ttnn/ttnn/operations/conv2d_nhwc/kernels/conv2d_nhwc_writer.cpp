@@ -45,7 +45,10 @@ constexpr uint32_t kblocks_per_slice = get_compile_time_arg_val(16);
 constexpr bool has_out_tail = get_compile_time_arg_val(17) != 0;  // WIDTH shard, M % 32 != 0
 constexpr bool act_mcast = get_compile_time_arg_val(18) != 0;     // > 1 channel slice
 constexpr bool weight_mcast = get_compile_time_arg_val(19) != 0;  // BLOCK: weights down each column
-constexpr auto weight_args = TensorAccessorArgs<20>();
+// cb_weight_tiles depth in K-blocks; the weight stream runs weight_depth - 2 blocks ahead.
+constexpr uint32_t weight_depth = get_compile_time_arg_val(20);
+constexpr uint32_t weight_lead = weight_depth - 2;
+constexpr auto weight_args = TensorAccessorArgs<21>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
 constexpr auto act_channel = dataflow_kernel_lib::McastArgs<
@@ -144,8 +147,13 @@ void kernel_main() {
             const uint32_t n0 = n_tile_start + n_block * block_n_tiles;
 
             // ---- weight K-blocks for this (m, n) block ----
-            for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
-                cb_reserve_back(cb_weight_tiles, block_k_tiles * block_n_tiles);
+            // issue_weights: reserve K-block k_block's slot and (column reader) issue its DRAM
+            // reads without waiting; land_weights: barrier, column multicast / receive, push.
+            // R4/R5 runs the act exchange of a K-block between the two, so the weight DRAM
+            // latency overlaps the row handshake instead of serializing ahead of it.
+            constexpr uint32_t weight_block_tiles = block_k_tiles * block_n_tiles;
+            auto issue_weights = [&](uint32_t k_block) {
+                cb_reserve_back(cb_weight_tiles, weight_block_tiles);
                 const uint32_t weight_slot = get_write_ptr(cb_weight_tiles);  // lockstep across the column
                 if (reads_weights) {
                     uint32_t dst = weight_slot;
@@ -161,6 +169,11 @@ void kernel_main() {
                         }
                         row_page += N_t;
                     }
+                }
+                return weight_slot;
+            };
+            auto land_weights = [&](uint32_t weight_slot) {
+                if (reads_weights) {
                     noc_async_read_barrier();
                     if constexpr (weight_mcast) {
                         weight_sender->send(weight_slot, weight_slot, weight_block_bytes);  // self-excluded
@@ -168,8 +181,19 @@ void kernel_main() {
                 } else {
                     weight_receiver->receive();
                 }
-                cb_push_back(cb_weight_tiles, block_k_tiles * block_n_tiles);
+                cb_push_back(cb_weight_tiles, weight_block_tiles);
+            };
 
+            // Weight block w is issued before act block w - weight_lead and landed after it; its
+            // slot frees when compute is done with w - weight_depth (= the act block 2 back, the
+            // same gate as the double-buffered landing reserve).
+            uint32_t w_next = 0;
+            for (; w_next < weight_lead && w_next < num_k_blocks; ++w_next) {
+                land_weights(issue_weights(w_next));
+            }
+            for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
+                const bool w_pending = w_next < num_k_blocks;
+                const uint32_t weight_slot = w_pending ? issue_weights(w_next) : 0;
                 // ---- act_exchange: K-block k_block's in0, from its slice owner ----
                 if constexpr (act_mcast) {
                     const uint32_t owner = kblock_owner(k_block);
@@ -183,6 +207,10 @@ void kernel_main() {
                         act_receiver->receive(owner);  // round = owner -> sender phase
                     }
                     cb_push_back(cb_act_tiles, act_block_tiles);
+                }
+                if (w_pending) {
+                    land_weights(weight_slot);
+                    ++w_next;
                 }
             }
 

@@ -41,3 +41,33 @@ def test_perf_probe_block_sdxl_l1_bf16_bf8b(device):
         shard_shape=(410, 64),
         core_grid=(10, 10),
     )
+
+
+def test_l1_peak_block_sdxl_l1_bf16_bf8b(device):
+    """Per-core L1 peak (graph capture, as the eval harness's device_l1_peak_bytes) of the
+    perf-1 contract config; the target is production's 618,992 B."""
+    device.disable_and_clear_program_cache()
+    ttnn.graph._cpp_begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        test_perf_probe_block_sdxl_l1_bf16_bf8b(device)
+    finally:
+        trace = ttnn.graph._cpp_end_graph_capture()
+        device.enable_program_cache()
+    peak = int(ttnn.graph.extract_resource_usage_per_core(trace).peak_total)
+    print(f"L1_PEAK_BYTES={peak}")
+    assert peak > 0
+
+
+# Regression-guard representatives: one per kernel path x layout x placement.
+def test_guard_interleaved_bf16_relu(device):
+    run_sharded(
+        device, (1, 28, 28, 256), 256, 3, 1, 1, ML.INTERLEAVED, True, ttnn.bfloat16, ttnn.bfloat8_b, activation="relu"
+    )
+
+
+def test_guard_block_bf16_nobias(device):
+    run_sharded(device, (1, 28, 28, 256), 256, 3, 1, 1, ML.BLOCK_SHARDED, False, ttnn.bfloat16, ttnn.bfloat8_b)
+
+
+def test_guard_width_strided(device):
+    run_sharded(device, (1, 14, 14, 256), 512, 3, 1, 2, ML.WIDTH_SHARDED, True)
