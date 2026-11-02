@@ -178,3 +178,27 @@
 - Tests added:
   - `tests/ttnn/unit_tests/operations/conv2d_nhwc/test_conv2d_nhwc_depthwise.py`: 26 cases, including the multiplier refusal.
   - Depthwise perf probes in `test_conv2d_nhwc_perf_probe.py`.
+
+## Refinement 5 — HEIGHT_SHARDED placement (regime R3) + weight multicast (R1)
+- Date: 2026-11-02
+- What was done: `SUPPORTED["memory_layout"] += HEIGHT_SHARDED`, natively, for the dense and depthwise paths. One `generic_op` dispatch; the output is HEIGHT-sharded in L1.
+  - **Reused**: the whole R4 sharded path with one channel slice (S = 1: no K exchange, compute tilizes straight into in0). That covers the shard-backed input CB (`cb_in_shard`, zero-copy), the `ShardSource` gather with halo fetch (`fetch_sticks`, one NoC read per owner run), the whole-shard bm walk, the writer weight stream, and untilize into the shard-backed output CB. No kernel changed. The prepared K order is the interleaved one (= the S = 1 slice order), so `prepare_*` is unchanged.
+  - **Added** (host only):
+    - `sharded_slices`: HEIGHT gives one whole-C_in slice. COL_MAJOR orientation and a shard width ≠ C_in are typed refusals.
+    - `height_shard_cores`: input shard cores in shard order. They are the halo sources, and the first `g_m` are the compute cores.
+    - HEIGHT branches in `_sharded_core_map`, `output_memory_config` (first `g_m` input cores, `core_m_tiles·32` rows × C_out each) and the reader halo RT args.
+    - Weight multicast (R1) on HEIGHT: one group of all compute cores, row-major, fixed sender = core 0, dense and depthwise. It reuses the BLOCK column-multicast channel (`w_mcast`) and the writer's `reads_weights` path. Guarded by `MCAST_MAX_RECTANGLES = 3` (the helper's limit) and uniform m-block counts. Otherwise each core reads its own weights.
+  - Output split: `core_m_tiles = ceil(M_t / num_input_shards)`, whole tiles. This aligns with the input shards for stride-1 convs. For strided convs most of each core's window is halo (correct, but traffic left for Refinement 6).
+- Accuracy achieved: fp32 PCC ≥ 0.999 / rel-RMS ≤ 0.02; bf16 (× bf8b, relu) PCC ≥ 0.995 / rel-RMS ≤ 0.05. Shapes: 56×56×64 (s1, s2), 2×28×28×64, 17×17×32, 8×8×32 (1-stick shards), 56×56×256 1×1, ResNet50 layer2 pinned (128, 98 cores); depthwise 112×112×32, 56×56×128 s2, 2×9×11×64, 28×28×64 bf16×bf8b relu.
+- Golden test progress:
+  - `test_golden.py -k HEIGHT`: 100 passed, 124 xfailed, 72 skipped, 0 failed, 0 XPASS. This includes all 4 ResNet50 HEIGHT perf cases (bf16 × bf8b).
+  - `test_translated.py -k HEIGHT`: 137 passed, 131 xfailed, 0 failed.
+  - Remaining HEIGHT xfails: unaligned channels, dilation, grouped, TILE.
+- Issues encountered: None. Not measured here: device time for the ResNet HEIGHT perf cases. That is Refinement 6's baseline.
+- Tests added: `test_conv2d_nhwc_sharded.py`:
+  - `test_conv2d_nhwc_height` (6 shapes × bias / no bias)
+  - `test_conv2d_nhwc_height_bf16_bf8b` (none / relu)
+  - `test_conv2d_nhwc_height_resnet_layer2_pinned`
+  - `_sharded_config` gained a HEIGHT branch
+
+  `test_conv2d_nhwc_depthwise.py`: 3 HEIGHT cases plus HEIGHT bf16 × bf8b relu.

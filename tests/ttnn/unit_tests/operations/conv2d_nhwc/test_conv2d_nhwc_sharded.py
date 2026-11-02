@@ -29,12 +29,32 @@ def _ceil(a, b):
     return -(-a // b)
 
 
-def _sharded_config(memory_layout, shape, device, shard_shape=None, core_grid=None, orientation=None):
+def _row_major_cores(ncores, gx):
+    full, rem = divmod(ncores, gx)
+    ranges = []
+    if full:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, full - 1)))
+    if rem:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full), ttnn.CoreCoord(rem - 1, full)))
+    return ttnn.CoreRangeSet(ranges)
+
+
+def _sharded_config(memory_layout, shape, device, shard_shape=None, core_grid=None, orientation=None, num_cores=None):
     if memory_layout == ML.INTERLEAVED:
         return ttnn.DRAM_MEMORY_CONFIG
     N, H, W, C = shape
     grid = device.compute_with_storage_grid_size()
     rows, c_tiles = N * H * W, C // 32
+    if memory_layout == ML.HEIGHT_SHARDED:
+        # Golden-harness rule: ragged stick split over the whole grid, row-major (or pinned).
+        if shard_shape is not None:
+            sshape, ncores = list(shard_shape), num_cores
+        else:
+            per_h = _ceil(rows, grid.x * grid.y)
+            ncores = _ceil(rows, per_h)
+            sshape = [per_h, C]
+        spec = ttnn.ShardSpec(_row_major_cores(ncores, grid.x), sshape, ttnn.ShardOrientation.ROW_MAJOR)
+        return ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, spec)
     if memory_layout == ML.WIDTH_SHARDED:
         per_c = _ceil(c_tiles, grid.x * grid.y)
         ncores = _ceil(c_tiles, per_c)
@@ -220,4 +240,49 @@ def test_conv2d_nhwc_block_col_major(device, input_shape, C_out, stride):
         ttnn.bfloat16,
         ttnn.bfloat16,
         orientation=ttnn.ShardOrientation.COL_MAJOR,
+    )
+
+
+# Refinement 5: HEIGHT_SHARDED (regime R3) — resident shard + NoC halo runs, weight multicast
+# (R1) from core 0 to every compute core, HEIGHT-sharded output on the first g_m input cores.
+HEIGHT_CASES = [
+    pytest.param((1, 56, 56, 64), 64, 3, 1, 1, id="resnet_stage1"),
+    pytest.param((1, 56, 56, 64), 128, 3, 1, 2, id="strided"),
+    pytest.param((2, 28, 28, 64), 64, 3, 1, 1, id="n2_straddle"),
+    pytest.param((1, 17, 17, 32), 64, 3, 1, 1, id="ragged_odd_w"),
+    pytest.param((1, 8, 8, 32), 32, 3, 1, 1, id="shard_shorter_than_row"),
+    pytest.param((1, 56, 56, 256), 64, 1, 0, 1, id="pointwise"),
+]
+
+
+@pytest.mark.parametrize("with_bias", [True, False], ids=["bias", "no_bias"])
+@pytest.mark.parametrize("input_shape, C_out, k, padding, stride", HEIGHT_CASES)
+def test_conv2d_nhwc_height(device, input_shape, C_out, k, padding, stride, with_bias):
+    run_sharded(device, input_shape, C_out, k, padding, stride, ML.HEIGHT_SHARDED, with_bias)
+
+
+@pytest.mark.parametrize("activation", [None, "relu"], ids=["none", "relu"])
+def test_conv2d_nhwc_height_bf16_bf8b(device, activation):
+    run_sharded(
+        device, (2, 28, 28, 64), 64, 3, 1, 1, ML.HEIGHT_SHARDED, True, ttnn.bfloat16, ttnn.bfloat8_b, activation
+    )
+
+
+def test_conv2d_nhwc_height_resnet_layer2_pinned(device):
+    """ResNet50 layer2 3x3 at its production HEIGHT geometry (128-stick shards on 98 cores)."""
+    if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < 98:
+        pytest.skip("needs 98 cores")
+    run_sharded(
+        device,
+        (16, 28, 28, 128),
+        128,
+        3,
+        1,
+        1,
+        ML.HEIGHT_SHARDED,
+        True,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        shard_shape=(128, 128),
+        num_cores=98,
     )

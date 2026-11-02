@@ -122,7 +122,7 @@ No SUPPORTED change.
 
 **Outcome**: landed. All golden depthwise cells inside SUPPORTED pass (interleaved, WIDTH 1024, strided, 5×5, bf16 × bf8b loose), plus the 99 newly reachable depthwise pytorch-sweep cells. The channel multiplier (C_out = m·C_in, m > 1) is a typed refusal: no golden or translated cell uses it (finding, not a follow-up). Perf (BH, bf16 × bf8b, per-core kernel max): 112×112×32 77 µs, 56×56×128 35 µs, 112×112×64 s2 56 µs, WIDTH 7×7×1024 10 µs, BLOCK 28×28×256 15 µs. The interleaved shapes are bound by the DRAM window fetch: one 64–256 B page per stick, with each core re-reading its halo rows (~3× at 1.1 output rows per core). `DW_CORE_M_TILES_MIN` (taller per-core blocks) is a live knob at its no-op default: 7 gives −16% on 112×112×32 but +70% on 56×56×128.
 
-### [ ] Refinement 5 — HEIGHT_SHARDED placement (regime R3) + weight multicast (R1)
+### [x] Refinement 5 — HEIGHT_SHARDED placement (regime R3) + weight multicast (R1)
 
 **Goal**: add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED` to `SUPPORTED["memory_layout"]`, natively.
 - The input shard (a contiguous, ragged stick run, possibly shorter than one image row and straddling images for N > 1) is consumed in place through a shard-backed CB. The halo sticks the window needs come from the neighbouring shards over the NoC, one remote read per owner run.

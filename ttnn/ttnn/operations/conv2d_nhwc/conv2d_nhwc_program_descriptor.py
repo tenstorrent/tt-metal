@@ -11,6 +11,10 @@ Regimes built:
            same-column shards) and multicasts it along its row (rotating sender); every
            core accumulates all S slices against its own output-column slice. Output is
            a shard-backed CB on the sharded output tensor (zero-copy).
+  R3+R1  — HEIGHT sharded: the R4 path with one channel slice (S = 1, no K exchange). The
+           halo-source "column" is every input shard in shard order over the grid; the output
+           is HEIGHT-sharded over the first g_m input cores (core_m_tiles*32 rows each), and
+           each weight K-block is read once from DRAM by core 0 and multicast to all of them.
 
 Every knob (core split, bm / bk / bn, buffer depths) is defined once here and
 every CB size, loop trip count and kernel arg derives from it.
@@ -59,6 +63,7 @@ ACT_RM_KBLOCKS = 1
 # extra (they are the tensors), so this sits well under CB_BUDGET_BYTES: SDXL L1 3x3 BLOCK must
 # stay under production's 618,992 B per-core L1 peak including both shards and L1_SMALL.
 SHARDED_CB_BUDGET_BYTES = 480 * 1024
+MCAST_MAX_RECTANGLES = 3  # receiver rectangles one Mcast channel supports (mcast_protocol.hpp)
 WEIGHT_MCAST = True  # R4: read each weight K-block once per grid column and multicast it down the column
 BK_FLOOR = 4  # bk >= min(K_t, BK_FLOOR) on the first walk (perf lamp L7)
 # R11 depthwise: cb_act_tiles depth in tilized tile-rows (taps x bn tiles each). Compute tilizes a
@@ -152,6 +157,26 @@ def channel_slices(memory_config):
     else:
         S = spec.grid.num_cores()
     return S, int(spec.shape[1])
+
+
+def sharded_slices(memory_config, C_in):
+    """(S, slice_width) the sharded program runs with: channel_slices for BLOCK / WIDTH, one
+    whole-C_in slice for HEIGHT (R3: every core holds full sticks; the prepared K order is the
+    interleaved one, which is the S = 1 slice order)."""
+    if memory_config.memory_layout != _ML.HEIGHT_SHARDED:
+        return channel_slices(memory_config)
+    spec = memory_config.shard_spec
+    if spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
+        raise UnsupportedAxisValue("conv2d_nhwc: HEIGHT_SHARDED input needs ROW_MAJOR shard orientation")
+    if int(spec.shape[1]) != C_in:
+        raise UnsupportedAxisValue(f"conv2d_nhwc: HEIGHT shard width {int(spec.shape[1])} != C_in {C_in}")
+    return 1, C_in
+
+
+def height_shard_cores(memory_config, num_shards):
+    """Logical cores holding HEIGHT shards 0 .. num_shards-1 (ROW_MAJOR shard order)."""
+    cores = sorted(ttnn.corerange_to_cores(memory_config.shard_spec.grid), key=lambda c: (c.y, c.x))
+    return cores[:num_shards]
 
 
 def is_depthwise(C_in, groups):
@@ -573,9 +598,9 @@ def select_blocking_sharded(
         "weight_depth": DW_WEIGHT_DEPTH if dw else SHARDED_WEIGHT_DEPTH,
         # Every grid row must run the same number of m-blocks (= column multicast rounds).
         # Depthwise weights are a few tap tiles per slice: each core reads its own.
+        # HEIGHT (R1): every core needs the same weights (dense and depthwise): one group.
         "weight_mcast": WEIGHT_MCAST
-        and not dw
-        and memory_layout == _ML.BLOCK_SHARDED
+        and (memory_layout == _ML.HEIGHT_SHARDED or (memory_layout == _ML.BLOCK_SHARDED and not dw))
         and g_m > 1
         and len({_div_up(min(core_m_tiles, M_t - r * core_m_tiles), bm) for r in range(g_m)}) == 1,
         "memory_layout": memory_layout,
@@ -635,6 +660,10 @@ def output_memory_config(plan, input_memory_config):
         end = _block_core(start, p["g_n"] - 1, p["g_m"] - 1, _block_col_major(input_memory_config))
         grid = ttnn.CoreRangeSet([ttnn.CoreRange(start, end)])
         shape = [p["core_m_tiles"] * TILE, width]
+    elif p["memory_layout"] == _ML.HEIGHT_SHARDED:
+        # R3: the first g_m input cores, core_m_tiles whole tile-rows each (all C_out channels).
+        grid = _core_range_set(height_shard_cores(input_memory_config, p["g_m"]))
+        shape = [p["core_m_tiles"] * TILE, width]
     else:
         grid = spec.grid
         shape = [p["M"], width]
@@ -650,6 +679,8 @@ def _sharded_core_map(plan, input_memory_config):
         start = spec.grid.bounding_box().start
         cm = _block_col_major(input_memory_config)
         return [(_block_core(start, s, r, cm), s, r) for r in range(p["g_m"]) for s in range(p["g_n"])]
+    if p["memory_layout"] == _ML.HEIGHT_SHARDED:
+        return [(c, 0, r) for r, c in enumerate(height_shard_cores(input_memory_config, p["g_m"]))]
     cores = sorted(ttnn.corerange_to_cores(spec.grid), key=lambda c: (c.y, c.x))
     return [(c, s, 0) for s, c in enumerate(cores[: p["g_n"]])]
 
@@ -704,7 +735,10 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     # column and a weight-multicast group (one channel slice) is a grid row.
     col_major = kx and _block_col_major(input_tensor.memory_config())
     act_order = ttnn.McastCoreOrder.ColumnMajor if col_major else ttnn.McastCoreOrder.RowMajor
-    weight_order = ttnn.McastCoreOrder.RowMajor if col_major else ttnn.McastCoreOrder.ColumnMajor
+    is_height = kx and p["memory_layout"] == _ML.HEIGHT_SHARDED
+    # Weight multicast groups: BLOCK = one channel slice (a grid column / row for COL_MAJOR);
+    # HEIGHT = all compute cores in shard order, sender = core 0 (row-major first).
+    weight_order = ttnn.McastCoreOrder.RowMajor if (col_major or is_height) else ttnn.McastCoreOrder.ColumnMajor
     math_fidelity, fp32_acc, _, acc_dtype = compute_policy(p["dtype"], p["weight_dtype"])
 
     # ---- Core map: (core, n-slice index, m-row index) ----
@@ -713,6 +747,9 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     else:
         core_map = _interleaved_core_map(p, grid)
     cores = _core_range_set([c for c, _, _ in core_map])
+    # The multicast helper covers at most 3 receiver rectangles; beyond that each core reads
+    # its own weights (same writer path, weight_mcast off).
+    weight_mcast = weight_mcast and len(cores.ranges()) <= MCAST_MAX_RECTANGLES
     # Rotating multicast groups must be rectangles: a WIDTH core set spanning grid rows
     # multicasts over its bounding rectangle, the extra cores being receive-only sinks.
     sink_cores = []
@@ -870,6 +907,8 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     b_addr = bias_tensor.buffer_address() if has_bias else 0
     out_addr = output_tensor.buffer_address()
     NHW = p["N"] * p["H"] * p["W"]
+    # R3: every input shard is a potential halo source (shard order over the grid).
+    halo_cores = height_shard_cores(input_tensor.memory_config(), rows_in) if is_height else []
     for xy, ni, mi in core_map:
         m_tile_start = mi * p["core_m_tiles"]
         m_tiles = min(p["core_m_tiles"], p["M_t"] - m_tile_start)
@@ -891,6 +930,9 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             # Resident stick range + the NoC coords of this column's input shards (halo sources).
             if p["memory_layout"] == _ML.WIDTH_SHARDED:
                 own_lo, own_hi, col = 0, NHW, [xy]
+            elif p["memory_layout"] == _ML.HEIGHT_SHARDED:
+                own_lo, own_hi = mi * p["shard_h"], min(NHW, (mi + 1) * p["shard_h"])
+                col = halo_cores
             else:
                 own_lo, own_hi = mi * p["shard_h"], min(NHW, (mi + 1) * p["shard_h"])
                 start = input_tensor.memory_config().shard_spec.grid.bounding_box().start
@@ -957,7 +999,8 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         ttnn.attach_absent_mcast(writer, "act_mcast")
         next_sem = 0
     if weight_mcast:
-        # Weights: groups = grid columns (column-major), fixed sender = the row-0 core.
+        # Weights: groups = grid columns (BLOCK, column-major) / all cores (HEIGHT, row-major),
+        # fixed sender = the group's first core (writer RT `mi == 0`).
         w_mcast = ttnn.Mcast(
             device,
             ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),

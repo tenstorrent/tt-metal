@@ -121,3 +121,30 @@ Depthwise footprint: `F_dw = window·tap_bytes + (ACT_RM_DEPTH + DW_ACT_TILE_ROW
 | input (BLOCK/WIDTH) | 0 (resident shard); halo from same-column shards over the NoC | no row multicast |
 | weight | `g_m · nb_m` per channel slice (`taps · core_n_tiles` tiles each) | no column multicast (tiny) |
 | output | 1 | |
+
+## Refinement 5 — HEIGHT_SHARDED (regime R3) + weight multicast (R1) deltas
+
+No CB added, removed or resized: HEIGHT runs the R4 sharded path with one channel slice
+(`S = 1`, `act_mcast = False`, no `cb_act_send`). Rows that change meaning:
+
+| CB | HEIGHT capacity / meaning | Shares with / why not |
+|----|---------------------------|-----------------------|
+| `cb_in_shard` (8) | the core's resident HEIGHT shard (`shard_h` sticks × C_in, zero-copy) | is the input tensor; no CB bytes |
+| `cb_act_window` (0) | the halo: window sticks outside the resident shard, from any input shard (shard order over the grid), one NoC read per owner run | the output split (`core_m_tiles = ceil(M_t / num_shards)`) need not align with the input shards (strided convs), so the halo can be most of the window; sized by `halo_max(bm)` |
+| `cb_out_shard` (9) | the output HEIGHT shard: `core_m_tiles` whole tile-rows × all `N_t` channel tiles, on the first `g_m` input cores | is the output tensor. Allocated per core at the full shard size, so the last core's ragged tile-rows untilize in place (no `out_tail`) |
+| `cb_weight_tiles` (2) | as R4 (`SHARDED_WEIGHT_DEPTH · bk · N_t`; depthwise `DW_WEIGHT_DEPTH · taps · N_t`) — lockstep slot on every core for the multicast | unchanged |
+
+Measured plans (bf16 × bf8b, bias; F = CB footprint, shards extra):
+- ResNet50 layer1 3×3 (480-stick shards, 105 cores): bm = 15, bk = 6, 3 K-blocks, halo 114 sticks, F = 426,880 B.
+- layer2 downsample s2 (457, 110): bm = 4, bk = 6, 6 K-blocks, halo 649 sticks, F = 466,432 B.
+- layer2 3×3 (128, 98): bm = 4, bk = 9, 4 K-blocks, halo 58, F = 430,336 B.
+- 1×1 s2 shortcut (457, 110): bm = 4, bk = 2, 1 K-block, halo 535, F = 337,280 B.
+
+### Data-movement budget (HEIGHT)
+
+| Tensor | DRAM crossings | Cross-core traffic added |
+|--------|----------------|--------------------------|
+| input | 0 (L1 resident) | halo sticks from neighbour shards, one NoC read per owner run (strided: most of the window) |
+| weight | 1 per m-block (core 0 reads; `ceil(core_m_tiles/bm)` = 1 at the whole-shard default) | multicast `(g_m − 1)·|W|` per m-block (dense and depthwise); off when the core set needs > 3 rectangles or m-block counts differ |
+| bias | 1 per core | none |
+| output | 0 (untilized into the L1 output shard) | none |

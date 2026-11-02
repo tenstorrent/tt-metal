@@ -9,6 +9,8 @@ output (writer). Regimes (op_design.md, Blocking Model):
   R0    DRAM interleaved: 2-D (output-pixel x output-channel) core split.
   R4/R5 BLOCK / WIDTH sharded: resident shard + NoC halo, own-slice im2col tilized and
         multicast along the grid row (K exchange), output into the sharded L1 output.
+  R3    HEIGHT sharded: resident shard + NoC halo (one read per owner run), weights read once
+        and multicast to every core (R1), output into a HEIGHT-sharded L1 output.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from .conv2d_nhwc_program_descriptor import (
     output_memory_config,
     select_blocking,
     select_blocking_sharded,
+    sharded_slices,
     tile_bytes,
 )
 
@@ -109,6 +112,7 @@ SUPPORTED = {
         ttnn.TensorMemoryLayout.INTERLEAVED,
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,  # R4: row multicast of tilized channel-slice im2col
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,  # R5: R4 with one multicast group
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,  # R3: shard + NoC halo, weight multicast (R1)
     ],
 }
 
@@ -386,7 +390,7 @@ def conv2d_nhwc(
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
     in_mc = input_tensor.memory_config()
-    slices = channel_slices(in_mc)
+    slices = sharded_slices(in_mc, C_in) if in_mc.is_sharded() else None
     common = dict(
         N=N,
         H=H,
@@ -409,7 +413,8 @@ def conv2d_nhwc(
     )
     if slices is not None:
         shard_h = int(in_mc.shard_spec.shape[0])
-        rows_in = -(-(N * H * W) // shard_h) if in_mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else 1
+        # Input shards along m (BLOCK: grid rows; HEIGHT: every shard core; WIDTH: one).
+        rows_in = -(-(N * H * W) // shard_h) if in_mc.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED else 1
         plan = select_blocking_sharded(
             **common,
             memory_layout=in_mc.memory_layout,

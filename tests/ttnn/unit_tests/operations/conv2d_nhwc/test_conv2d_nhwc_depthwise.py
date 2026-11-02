@@ -85,6 +85,10 @@ CASES = [
     pytest.param((1, 14, 14, 256), 3, 1, 2, ML.WIDTH_SHARDED, id="width_strided"),
     pytest.param((1, 28, 28, 256), 3, 1, 1, ML.BLOCK_SHARDED, id="block_256"),
     pytest.param((2, 14, 14, 128), 5, 2, 1, ML.BLOCK_SHARDED, id="block_n2_5x5"),
+    # Refinement 5: HEIGHT (R3) — shard + halo, tap weights multicast from core 0.
+    pytest.param((1, 112, 112, 32), 3, 1, 1, ML.HEIGHT_SHARDED, id="height_112x112x32"),
+    pytest.param((1, 56, 56, 128), 3, 1, 2, ML.HEIGHT_SHARDED, id="height_strided_128"),
+    pytest.param((2, 9, 11, 64), 3, 1, 1, ML.HEIGHT_SHARDED, id="height_n2_odd_hw"),
 ]
 
 
@@ -100,6 +104,7 @@ def test_conv2d_nhwc_depthwise(device, input_shape, k, padding, stride, memory_l
         (ML.INTERLEAVED, ttnn.bfloat8_b, None),
         (ML.INTERLEAVED, ttnn.bfloat16, "relu"),
         (ML.BLOCK_SHARDED, ttnn.bfloat8_b, "relu"),
+        (ML.HEIGHT_SHARDED, ttnn.bfloat8_b, "relu"),
     ],
 )
 def test_conv2d_nhwc_depthwise_bf16(device, memory_layout, weight_dtype, activation):
