@@ -126,7 +126,7 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
 
     nrecv = max(1, G - 1)
     cbs = [
-        cb(Q_RM, D * 2, H, bf),
+        cb(Q_RM, D * 2, 1 if qt else H, bf),  # unused with tile-page q (QTILE): keep the L1 footprint low
         cb(Q_IN, TILE, Sqt * DHt, bf),
         cb(K_RM, D * kv_b, k_chunk, kv.dtype),
         cb(K_IN, k_in_tile, Skt * DHt, k_in_df),
