@@ -387,7 +387,7 @@ int main(int argc, char** argv) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     std::vector<CoreCoord> worker_logical_cores;
     auto grid_size = mesh_device->compute_with_storage_grid_size();

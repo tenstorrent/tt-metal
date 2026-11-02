@@ -139,3 +139,48 @@ def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device
             run_clip_grad_norm()
     else:
         run_clip_grad_norm()
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [[50]],
+        [[32, 64]],
+        [[2, 40, 50]],
+        [[1, 1, 1, 40, 50]],
+        [[2, 1, 3, 40, 50]],
+        [[40, 50], [1, 1, 64, 32], [3, 70, 33]],
+    ],
+    ids=["rank1", "rank2", "rank3", "rank5", "rank5_batched", "mixed_ranks"],
+)
+@pytest.mark.parametrize("norm_type", [2.0, 1.0])
+def test_moreh_clip_grad_norm_non_4d_inputs(input_shapes, norm_type, device):
+    torch.manual_seed(2023)
+
+    max_norm = 1.0
+    cpu_inputs = []
+    npu_inputs = []
+    for input_shape in input_shapes:
+        param = torch.nn.Parameter(torch.empty(input_shape, dtype=torch.float32))
+        grad = torch.empty(input_shape, dtype=torch.float32).uniform_(0, 2.5).bfloat16()
+        param.grad = grad.float()
+        cpu_inputs.append(param)
+        npu_inputs.append(ttnn.from_torch(grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device))
+
+    expected_total_norm = torch.nn.utils.clip_grad_norm_(cpu_inputs, max_norm, norm_type)
+    npu_total_norm = ttnn.operations.moreh.clip_grad_norm(npu_inputs, max_norm, norm_type)
+    actual_total_norm = ttnn.to_torch(npu_total_norm).reshape(1)
+
+    rtol = atol = 0.1
+    pass_total_norm, out_total_norm = comp_allclose_and_pcc(
+        actual_total_norm, expected_total_norm, rtol=rtol, atol=atol
+    )
+    logger.debug(f"total_norm's {out_total_norm}")
+    assert pass_total_norm
+
+    for i, input_shape in enumerate(input_shapes):
+        actual_input_i = ttnn.to_torch(npu_inputs[i])
+        assert list(actual_input_i.shape) == list(input_shape)
+        pass_input_i, out_input_i = comp_allclose_and_pcc(cpu_inputs[i].grad, actual_input_i, rtol=rtol, atol=atol)
+        logger.debug(f"inputs[{i}]-shape[{input_shape}]'s {out_input_i}")
+        assert pass_input_i

@@ -47,6 +47,16 @@ inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
         static_cast<std::uint32_t>(unpack_src_format[operand_id]));
 }
 
+namespace ckernel::trisc {
+// The scaler DFB whose unpacker (UNP_B) llk_unpack_AB_reduce_init moved to MxFp4_2x_B for a 2x column reduce, as
+// operand id + 1 so that 0 (REDUCE_2X_SCALER_NONE) means none and the definition stays in .tbss. thread_local because
+// each Neo has its own UNP_B and runs its own init/uninit (tt-llk#1678). Firmware TLS outlives a kernel, so
+// llk_unpack_hw_configure clears it at kernel start. Defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
+extern thread_local std::uint32_t reduce_2x_scaler_operand_plus_one;
+}  // namespace ckernel::trisc
+
+constexpr std::uint32_t REDUCE_2X_SCALER_NONE = 0;
+
 /**
  * @brief Programs source register format for both UNP_A and UNP_B
  *
@@ -69,6 +79,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(unpack_dst_format[unpA_operand_id]),
         static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
+    // UNP_B is back on its table format, and a previous kernel's 2x reduce scaler record must not leak.
+    ckernel::trisc::reduce_2x_scaler_operand_plus_one = REDUCE_2X_SCALER_NONE;
 
     // Unpack-to-dest: the unpack thread carries its DEST bank in the UNP_DEST tile index (the SEC registers do not move
     // UNPACR_DEST), and this is the once-per-program reset of that bank. Every compute-API site that calls
