@@ -142,7 +142,7 @@ class KdaContractGeometry:
 
     @property
     def convolution_segment_bytes(self) -> int:
-        return self.conv_history * KDA_CONVOLUTION_SEGMENT_CHANNELS * _CONVOLUTION_ELEMENT_BYTES
+        return self.convolution_slab_row_width * _CONVOLUTION_ELEMENT_BYTES
 
     @property
     def recurrent_segments_per_layer(self) -> int:

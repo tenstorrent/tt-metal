@@ -75,15 +75,15 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const uint32_t local_split_row = topology.local_split ? topology.head_rows : 0;
     const bool initial_from_predecessor = topology.rank != topology.first_rank;
 
-    // Read history_rows rows of this channel block's columns into the rows staging area, from full-row pages (the
-    // exchange buffer).
-    const auto read_rows = [&](const auto& source, uint32_t first_row, uint32_t ct_start) {
+    // Read the predecessor's history_rows rows of this channel block's columns into the rows staging area, from the
+    // exchange buffer's full-row pages.
+    const auto read_exchange_rows = [&](const auto& source, uint32_t ct_start) {
         for (uint32_t row = 0; row < history_rows; ++row) {
             noc.async_read(
                 source,
                 scratch,
                 block_row_bytes,
-                {.page_id = first_row + row, .offset_bytes = ct_start * tile_row_bytes},
+                {.page_id = predecessor_page + row, .offset_bytes = ct_start * tile_row_bytes},
                 {.offset_bytes = offset_of(rows) + row * block_row_bytes});
         }
     };
@@ -156,7 +156,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 predecessor_arrived = true;
             }
             if constexpr (exchange) {
-                read_rows(predecessor, predecessor_page, ct_start);
+                read_exchange_rows(predecessor, ct_start);
             } else {
                 // Without the exchange, predecessor is a bare carry in the history's segment-page layout.
                 read_tail(predecessor, ct_start);
