@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""qkv_proj_heads_rope ProgramDescriptor: regime R1 (2D token_rows x head_cols output-stationary, unicast reads)."""
+"""qkv_proj_heads_rope ProgramDescriptor: 2D token_rows x head_cols output-stationary grid; x K-blocks multicast
+within each M-group (regime R3), W unicast per core (R1)."""
 
 from __future__ import annotations
 
@@ -170,7 +171,11 @@ def _cb(index, num_pages, cores):
 
 
 def _core_assignment(device, blocking):
-    """Logical core l = n_group*grid_m + m_group, row-major over the compute grid (an N-group is consecutive)."""
+    """Logical core l = m_group*grid_n + n_group, row-major over the compute grid.
+
+    An M-group (the grid_n cores sharing x rows) is consecutive, which is the receiver-group shape
+    ttnn.Mcast partitions for the R3 x multicast.
+    """
     grid_x = device.compute_with_storage_grid_size().x
     mt, grid_m = blocking.tensor_row_tiles, blocking.grid_m
     base, extra = divmod(mt, grid_m)
@@ -181,9 +186,9 @@ def _core_assignment(device, blocking):
         row_ranges.append((start, rows))
         start += rows
     assignment = []
-    for n_group in range(blocking.grid_n):
-        for m_group in range(grid_m):
-            logical = n_group * grid_m + m_group
+    for m_group in range(grid_m):
+        for n_group in range(blocking.grid_n):
+            logical = m_group * blocking.grid_n + n_group
             core = ttnn.CoreCoord(logical % grid_x, logical // grid_x)
             assignment.append((core, n_group, m_group, *row_ranges[m_group]))
     return assignment
@@ -270,8 +275,6 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
             row_start,
             core_rows,
             is_rotary,
-            n_group,
-            blocking.grid_n,
         ]
         writer_rt[core.x][core.y] = [
             w_addr,
@@ -287,14 +290,15 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         ]
         compute_rt[core.x][core.y] = [core_rows, is_rotary]
 
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_reader.cpp"),
+        core_ranges=cores,
+        compile_time_args=reader_ct_args,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
     kernels = [
-        ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_reader.cpp"),
-            core_ranges=cores,
-            compile_time_args=reader_ct_args,
-            runtime_args=reader_rt,
-            config=ttnn.ReaderConfigDescriptor(),
-        ),
+        reader,
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_writer.cpp"),
             core_ranges=cores,
@@ -310,4 +314,20 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
             config=compute_kernel_config,
         ),
     ]
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+    descriptor = ttnn.ProgramDescriptor(cbs=cbs)
+    # R3: x does not vary along head_cols, so each M-group's grid_n cores share every x K-block: one core
+    # reads it and multicasts it. Fixed sender, staggered across groups so the injectors land on different
+    # grid columns; a rotating sender needs rectangular groups, which consecutive runs of grid_n cores on
+    # the compute grid generally are not. Handshake: the landing slot is a double-buffered CB slot a
+    # receiver may still be consuming.
+    x_mcast = ttnn.Mcast(
+        device,
+        ttnn.McastConfig(handshake=True, noc=ttnn.NOC.NOC_0),
+        cores,
+        blocking.grid_n,
+        ttnn.McastFixedSenderConfig(sender_index=0, placement=ttnn.McastSenderPlacement.Staggered),
+        ttnn.McastCoreOrder.RowMajor,
+    )
+    x_mcast.attach(descriptor, "xmc", [reader], 0)
+    descriptor.kernels = kernels
+    return descriptor

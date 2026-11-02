@@ -3,6 +3,8 @@
 
 // qkv_proj_heads_rope reader (NCRISC): x K-blocks (+ the synthesized ones-column bias tile) into
 // cb_activation_block, then per valid row the rotary table tiles [cos_lo, -sin_lo, sin_hi, cos_hi].
+// R3: one core of the M-group reads each x K-block and multicasts it into the same cb_activation_block
+// slot on the rest of the group (sender choice is host-side; should_send() covers fixed and rotating).
 // The ones tile and the sin sign flip are tile-content transforms no dataflow helper provides.
 
 #include <cstdint>
@@ -10,6 +12,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 namespace {
 
@@ -68,9 +71,8 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(3);
     const uint32_t core_rows = get_arg_val<uint32_t>(4);
     const bool is_rotary = get_arg_val<uint32_t>(5) != 0;
-    // Cores sharing x rows (one M-group) start each K-block at different tiles so they don't hit one bank in lockstep.
-    const uint32_t stagger_idx = get_arg_val<uint32_t>(6);
-    const uint32_t stagger_count = get_arg_val<uint32_t>(7);
+    constexpr auto x_mcast = dataflow_kernel_lib::
+        McastArgs<get_named_compile_time_arg_val("xmc_ct_offset"), get_named_compile_time_arg_val("xmc_rt_offset")>();
 
     // K' = hidden tiles + the bias K tile.
     static_assert(num_k_blocks * k_block == hidden_tiles + 1);
@@ -85,48 +87,54 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer activation(cb_activation_block);
+    auto x_sender = x_mcast.sender(noc);
+    auto x_receiver = x_mcast.receiver(noc);
+
+    // Sender side of one round: fill this core's slot (x tiles + ones column), then multicast it.
+    auto read_x_block = [&](uint32_t k_first, uint32_t rows, uint32_t first_row) {
+        const bool has_ones = k_first + k_block > hidden_tiles;
+        const uint32_t ones_col = hidden_tiles - k_first;
+        const uint32_t x_cols = has_ones ? ones_col : k_block;
+        const uint32_t block_addr = get_write_ptr(cb_activation_block);
+        if (has_ones) {
+            for (uint32_t row = 0; row < rows; ++row) {
+                noc.async_write_zeros(
+                    activation, tile_bytes, {.offset_bytes = (row * k_block + ones_col) * tile_bytes});
+            }
+        }
+        for (uint32_t row = 0; row < rows; ++row) {
+            for (uint32_t col = 0; col < x_cols; ++col) {
+                noc_async_read_page(
+                    (first_row + row) * hidden_tiles + k_first + col,
+                    x_accessor,
+                    block_addr + (row * k_block + col) * tile_bytes);
+            }
+        }
+        noc_async_read_barrier();
+        if (has_ones) {
+            noc.write_zeros_l1_barrier();
+            for (uint32_t row = 0; row < rows; ++row) {
+                write_ones_column(block_addr + (row * k_block + ones_col) * tile_bytes);
+            }
+        }
+        // Valid rows are the leading `rows * k_block` tiles of the slot.
+        x_sender.send(block_addr, block_addr, rows * k_block * tile_bytes);
+    };
+
+    // Every core of an M-group has the same rows, so all walk the same rounds and CB slot sequence.
+    uint32_t round = 0;
 
     for (uint32_t block_row = 0; block_row < core_rows; block_row += block_m) {
         const uint32_t rows = (core_rows - block_row) < block_m ? (core_rows - block_row) : block_m;
         const uint32_t first_row = row_start + block_row;
 
         // Nominal block quantum keeps the ring aligned; rows past `rows` stay stale and are never consumed.
-        for (uint32_t k_blk = 0; k_blk < num_k_blocks; ++k_blk) {
-            const uint32_t k_first = k_blk * k_block;
-            const bool has_ones = k_first + k_block > hidden_tiles;
-            const uint32_t ones_col = hidden_tiles - k_first;
-            const uint32_t x_cols = has_ones ? ones_col : k_block;
-
+        for (uint32_t k_blk = 0; k_blk < num_k_blocks; ++k_blk, ++round) {
             cb_reserve_back(cb_activation_block, act_block_tiles);
-            const uint32_t block_addr = get_write_ptr(cb_activation_block);
-            if (has_ones) {
-                for (uint32_t row = 0; row < rows; ++row) {
-                    noc.async_write_zeros(
-                        activation, tile_bytes, {.offset_bytes = (row * k_block + ones_col) * tile_bytes});
-                }
-            }
-            const uint32_t x_tiles = rows * x_cols;
-            const uint32_t start = stagger_idx * x_tiles / stagger_count;
-            uint32_t row = start / x_cols;
-            uint32_t col = start % x_cols;
-            for (uint32_t tile = 0; tile < x_tiles; ++tile) {
-                noc_async_read_page(
-                    (first_row + row) * hidden_tiles + k_first + col,
-                    x_accessor,
-                    block_addr + (row * k_block + col) * tile_bytes);
-                if (++col == x_cols) {
-                    col = 0;
-                    if (++row == rows) {
-                        row = 0;
-                    }
-                }
-            }
-            noc_async_read_barrier();
-            if (has_ones) {
-                noc.write_zeros_l1_barrier();
-                for (uint32_t row = 0; row < rows; ++row) {
-                    write_ones_column(block_addr + (row * k_block + ones_col) * tile_bytes);
-                }
+            if (x_mcast.should_send(round)) {
+                read_x_block(k_blk * k_block, rows, first_row);
+            } else {
+                x_receiver.receive(round);
             }
             cb_push_back(cb_activation_block, act_block_tiles);
         }

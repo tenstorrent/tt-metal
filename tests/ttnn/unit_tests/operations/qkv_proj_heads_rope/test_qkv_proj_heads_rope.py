@@ -72,9 +72,9 @@ def to_device(tensor, device, memory_config):
     )
 
 
-def device_inputs(device, x, w, b, cos, sin):
+def device_inputs(device, x, w, b, cos, sin, x_memory_config=ttnn.L1_MEMORY_CONFIG):
     return (
-        to_device(x, device, ttnn.L1_MEMORY_CONFIG),
+        to_device(x, device, x_memory_config),
         to_device(w, device, ttnn.DRAM_MEMORY_CONFIG),
         to_device(b, device, ttnn.DRAM_MEMORY_CONFIG),
         to_device(cos, device, ttnn.L1_MEMORY_CONFIG),
@@ -167,3 +167,18 @@ def test_rejects_short_tables(device, expect_error):
     x, w, b, cos, sin = make_inputs(1, 64, 32)
     with expect_error(ValueError, r"(?i)(cos|sin|table)"):
         qkv_proj_heads_rope(*device_inputs(device, x, w, b, cos, sin))
+
+
+# x in DRAM (R3 x multicast): one shape per grid class (h_c = 1 / 2 / 4) plus a single tile-row.
+DRAM_X_SHAPES = [(1, 32, 32), (2, 512, 512), (4, 256, 256), (8, 384, 384), (8, 512, 512)]
+
+
+@pytest.mark.parametrize("batch, seq, seq_tab", DRAM_X_SHAPES, ids=[f"{b}x{s}_tab{t}" for b, s, t in DRAM_X_SHAPES])
+def test_x_in_dram(device, batch, seq, seq_tab):
+    x, w, b, cos, sin = make_inputs(batch, seq, seq_tab)
+    expected = reference(x, w, b, cos, sin)
+    outputs = qkv_proj_heads_rope(
+        *device_inputs(device, x, w, b, cos, sin, x_memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    check_outputs(outputs, expected)
