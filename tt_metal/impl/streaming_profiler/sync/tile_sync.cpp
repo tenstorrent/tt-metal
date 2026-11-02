@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <future>
 #include <map>
 #include <mutex>
@@ -449,27 +450,43 @@ void measure_tile_clock_offsets(std::span<Device* const> devices, ContextId cont
             launches.push_back(std::async(std::launch::async, launch_network, device, context_id));
         }
     }
+    // Every network that launches is retired, even when a launch or a measurement fails: a tile kernel left in place
+    // would rerun on fast dispatch's next go signal.
     std::vector<Network> nets;
+    std::exception_ptr failure;
     size_t most_tiles = 0;
     for (auto& launch : launches) {
-        nets.push_back(launch.get());
-        most_tiles = std::max(most_tiles, nets.back().tiles.size());
+        try {
+            nets.push_back(launch.get());
+            most_tiles = std::max(most_tiles, nets.back().tiles.size());
+        } catch (...) {
+            failure = failure ? failure : std::current_exception();
+        }
     }
     // Only one tile per chip reads at a time, but chips have their own NoCs, so they all measure in parallel.
-    for (size_t t = 0; t < most_tiles; t++) {
-        for (const Network& net : nets) {
-            if (t < net.tiles.size()) {
-                start_tile_reads(cluster, net, net.tiles[t]);
+    for (size_t t = 0; t < most_tiles && !failure; t++) {
+        try {
+            for (const Network& net : nets) {
+                if (t < net.tiles.size()) {
+                    start_tile_reads(cluster, net, net.tiles[t]);
+                }
             }
-        }
-        for (Network& net : nets) {
-            if (t < net.tiles.size()) {
-                collect_tile_reads(cluster, net, net.tiles[t]);
+            for (Network& net : nets) {
+                if (t < net.tiles.size()) {
+                    collect_tile_reads(cluster, net, net.tiles[t]);
+                }
             }
+        } catch (...) {
+            failure = std::current_exception();
         }
     }
     for (Network& net : nets) {
         retire_network(context_id, net);
+    }
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    for (Network& net : nets) {
         std::vector<Placement> placed = place_mirrored(net.tiles, net.chip);
         place_active_eth(net.tiles, net.chip, placed);
         TileClockOffsets offsets;
