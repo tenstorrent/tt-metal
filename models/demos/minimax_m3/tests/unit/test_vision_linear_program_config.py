@@ -20,6 +20,9 @@ and checked on the host.
   with fewer than LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core.
 - linear() gives ttnn.linear the helper's config for the tiles of its operands' padded shapes and runs the activation,
   the accurate GELU in the MLPs, as an op of its own on the matmul's output.
+- M3VLMLP.fuse_gelu, off as built, runs the accurate GELU as that op; on, it puts the GELU into fc1's config where
+  fc1 gets one (256, 2160 and 2304 patches on each grid) and runs it as that op where fc1 keeps ttnn's own (324).
+  linear() takes the fused form only with the activation.
 
 The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
 
@@ -32,10 +35,12 @@ import math
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 import ttnn
 from models.common.tensor_utils import nearest_32
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
+from models.demos.minimax_m3.tt.vision import mlp
 from models.demos.minimax_m3.tt.vision.common import (
     LINEAR_L1_BYTES,
     LINEAR_MIN_TRANSPOSED_PER_CORE_M,
@@ -217,3 +222,65 @@ def test_vision_linear(monkeypatch):
         assert gelu == ("gelu", "linear output", (), {"fast_and_approximate_mode": False}), gelu
         calls.clear()
         assert linear(x, w, None, compute_kernel_config) == "linear output" and len(calls) == 1
+
+
+def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
+    """M3VLMLP.fuse_gelu, False as built, on each grid. Off, ttnn.gelu runs once, on fc1's output, and no config
+    carries an activation. On, where fc1 gets a config (256, 2160 and 2304 patches), that config, with the same
+    blocking, carries the accurate GELU and ttnn.gelu does not run; where fc1 keeps ttnn's own (324 patches), ttnn.gelu
+    runs as off. fc2 fuses nothing, and a forward with the switch off after one with it on fuses nothing. linear()
+    refuses the fused GELU without the separate one, which would leave fc1 without a GELU where it has no config."""
+    calls = []
+
+    # Each recorder returns its call, with the padded shape and device that linear() reads, so an op's x is the call
+    # whose output it reads.
+    def record_linear(x, w, program_config, **kwargs):
+        shape = (*x.padded_shape[:-1], w.padded_shape[-1])
+        calls.append(SimpleNamespace(op="linear", x=x, config=program_config, padded_shape=shape, device=x.device))
+        return calls[-1]
+
+    def record_gelu(x, **kwargs):
+        calls.append(SimpleNamespace(op="gelu", x=x, kwargs=kwargs, padded_shape=x.padded_shape, device=x.device))
+        return calls[-1]
+
+    monkeypatch.setattr(mlp, "as_linear_weight", lambda mesh_device, w, dtype: SimpleNamespace(padded_shape=w.T.shape))
+    monkeypatch.setattr(mlp, "as_linear_bias", lambda mesh_device, b, dtype: b)
+    monkeypatch.setattr(ttnn, "linear", record_linear)
+    monkeypatch.setattr(ttnn, "gelu", record_gelu)
+    monkeypatch.setattr(ttnn, "deallocate", lambda x: None)
+    hidden, intermediate, _ = LINEARS["fc1"]
+    weights = dict(
+        fc1_weight=torch.empty(intermediate, hidden),
+        fc1_bias=torch.empty(intermediate),
+        fc2_weight=torch.empty(hidden, intermediate),
+        fc2_bias=torch.empty(hidden),
+    )
+    for grid in GRIDS.values():
+        device = _Device(*grid)
+        model = mlp.M3VLMLP(device, **weights)
+        assert model.fuse_gelu is False
+        fused = set()
+        for patches in (256, 324, 2160, 2304):
+            x = SimpleNamespace(padded_shape=(1, 1, nearest_32(patches), hidden), device=lambda: device)
+            want = _config("fc1", patches, grid)
+            for fuse_gelu in (True, False):
+                model.fuse_gelu = fuse_gelu
+                calls.clear()
+                out = model(x)
+                fc1, *between, fc2 = calls
+                assert fc1.op == fc2.op == "linear" and fc1.x is x and out is fc2, (grid, patches, calls)
+                assert fc2.config is None or fc2.config.fused_activation is None, (grid, patches)
+                if fuse_gelu and want is not None:
+                    assert not between and fc2.x is fc1, (grid, patches, calls)
+                    assert tuple(getattr(fc1.config, f) for f in FIELDS) == tuple(getattr(want, f) for f in FIELDS)
+                    # A param of 1.0 would select the fast approximation.
+                    assert fc1.config.fused_activation.op_type == ttnn.UnaryOpType.GELU, (grid, patches)
+                    assert list(fc1.config.fused_activation.params) == [0.0], (grid, patches)
+                    fused.add(patches)
+                else:
+                    assert fc1.config is None or fc1.config.fused_activation is None, (grid, patches, fuse_gelu)
+                    assert [c.op for c in between] == ["gelu"] and between[0].x is fc1 and fc2.x is between[0], calls
+                    assert between[0].kwargs == {"fast_and_approximate_mode": False}, (grid, patches)
+        assert fused == {256, 2160, 2304}, (grid, fused)
+    with expect_error(AssertionError, "fused_activation needs activation"):
+        linear(None, None, None, linear_compute_config(), fused_activation=mlp.ACCURATE_GELU_FUSED)

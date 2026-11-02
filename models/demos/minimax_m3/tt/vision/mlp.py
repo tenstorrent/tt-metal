@@ -9,7 +9,9 @@ same form with other widths (projector.py).
 
 The HF activation is `gelu` (the accurate, erf-based GELU — config
 `hidden_act="gelu"`, not the tanh approximation). We map it to
-`ttnn.gelu(..., fast_and_approximate_mode=False)` (accurate_gelu).
+`ttnn.gelu(..., fast_and_approximate_mode=False)` (accurate_gelu), or, with
+M3VLMLP.fuse_gelu and where fc1 gets a program config, to the same GELU
+inside fc1's matmul (ACCURATE_GELU_FUSED).
 
 Reference: `MiniMaxM3VLVisionMLP` — attributes:
     self.fc1 = nn.Linear(hidden_size, intermediate_size, bias=True)
@@ -28,6 +30,10 @@ from models.demos.minimax_m3.tt.vision.common import as_linear_bias, as_linear_w
 def accurate_gelu(x: ttnn.Tensor) -> ttnn.Tensor:
     """The accurate (erf) GELU of HF's `gelu`."""
     return ttnn.gelu(x, fast_and_approximate_mode=False)
+
+
+# The same GELU as a matmul's fused_activation: ttnn.gelu with fast_and_approximate_mode=False runs this unary.
+ACCURATE_GELU_FUSED = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)
 
 
 class M3VLMLP(LightweightModule):
@@ -59,6 +65,11 @@ class M3VLMLP(LightweightModule):
 
         # HiFi4 + FP32 dst accum for the matmuls (small accuracy boost), partial sums accumulated in L1.
         self.compute_kernel_config = linear_compute_config()
+        # On: where fc1 gets a program config, its matmul applies the GELU in the fp32 dest register before rounding
+        # to bf16; elsewhere, and off, accurate_gelu runs on fc1's bf16 output. Off as built: on one P150 the fused
+        # GELU made a 672x672 forward faster but a 448x448 one slower, and left real images' outputs no closer to
+        # Hugging Face's, one of them clearly further.
+        self.fuse_gelu = False
 
     @classmethod
     def from_torch(
@@ -82,7 +93,14 @@ class M3VLMLP(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        hidden = linear(x, self.fc1_weight, self.fc1_bias, self.compute_kernel_config, activation=accurate_gelu)
+        hidden = linear(
+            x,
+            self.fc1_weight,
+            self.fc1_bias,
+            self.compute_kernel_config,
+            activation=accurate_gelu,
+            fused_activation=ACCURATE_GELU_FUSED if self.fuse_gelu else None,
+        )
         out = linear(hidden, self.fc2_weight, self.fc2_bias, self.compute_kernel_config)
         ttnn.deallocate(hidden)
         return out
