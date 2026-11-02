@@ -33,7 +33,7 @@ PAGE = qsa_block.SCORE_CHUNK  # the all-gather page: 1024 bf16 block scores
 DEVICES = qsa_block.DEVICES
 
 
-def _score_rows_shape(score_rows, mask):
+def _score_rows_shape(score_rows, mask, allow_fewer=False):
     shape, mshape = tuple(score_rows.shape), tuple(mask.shape)
     if (
         len(shape) != 4
@@ -46,7 +46,14 @@ def _score_rows_shape(score_rows, mask):
         raise ValueError(
             f"score rows must be ROW_MAJOR bf16 [1, 1, 1..32, k * {PAGE}], got {score_rows.layout} {shape}"
         )
-    if mshape != shape or mask.dtype != ttnn.bfloat16 or mask.layout != ttnn.ROW_MAJOR_LAYOUT:
+    if (
+        (
+            mshape != shape
+            and not (allow_fewer and mshape[:2] == shape[:2] and mshape[3] == shape[3] and mshape[2] >= shape[2])
+        )
+        or mask.dtype != ttnn.bfloat16
+        or mask.layout != ttnn.ROW_MAJOR_LAYOUT
+    ):
         raise ValueError(
             f"the block mask must be ROW_MAJOR bf16 of the rows' shape {shape}, got {mask.layout} {mshape}"
         )
@@ -58,24 +65,32 @@ def score_blocks_rows(score_rows, mask, *, cluster_axis: int):
     ``cluster_axis`` devices and masked with ``mask`` (the same shape): the pages all-gathered, the fused merge over
     the rows.  Returns the masked scores ``[1, 1, rows, blocks]`` bf16 ROW_MAJOR (the top-k's input)."""
 
-    rows, blocks = _score_rows_shape(score_rows, mask)
+    rows, blocks = _score_rows_shape(score_rows, mask, allow_fewer=True)
     pages = blocks // PAGE
     # row r's chunk c at page r * pages + c; the gather stacks the devices' page runs, device-major
     paged = ttnn.reshape(score_rows, (1, 1, rows * pages, PAGE))
-    return _gather_and_merge(paged, rows, pages, mask, cluster_axis)
+    # score_rows may carry only the first `rows` of the mask's rows (QWEN38_QSA_SCORE_LIVE_ROWS): the merge then writes
+    # the mask's rows, rows past the gathered ones being row 0's merge plus their own mask row
+    out_rows = int(mask.shape[2])
+    return _gather_and_merge(paged, rows, pages, mask, cluster_axis, out_rows=out_rows if out_rows != rows else None)
 
 
-def score_blocks_rows_from_scores(local_scores, mask, *, cluster_axis: int, pages):
+def score_blocks_rows_from_scores(local_scores, mask, *, cluster_axis: int, pages, live_rows=None):
     """Program 1 fed by program 4: the indexer's local score rows ``[1, 1, rows, W >= blocks]`` (the resident blocks
     and the cache's spare tile of columns) repaged by ``pages`` (:func:`score_pages`, or its composed slice + reshape)
     straight into the gather's 2 KB pages, then the same all-gather and fused merge as :func:`score_blocks_rows`."""
 
     rows, blocks = _mask_shape(mask)
+    # live_rows (QWEN38_QSA_SCORE_LIVE_ROWS): only rows 0 .. live_rows-1 are repaged and gathered; the merge still writes
+    # all `rows` rows (rows past live_rows are row 0's merge plus their own mask: finite, and no live row reads them)
+    if live_rows is not None and live_rows < rows:
+        paged = pages(local_scores, blocks, live_rows)
+        return _gather_and_merge(paged, live_rows, blocks // PAGE, mask, cluster_axis, out_rows=rows)
     paged = pages(local_scores, blocks)
     return _gather_and_merge(paged, rows, blocks // PAGE, mask, cluster_axis)
 
 
-def _gather_and_merge(paged, rows: int, pages: int, mask, cluster_axis: int):
+def _gather_and_merge(paged, rows: int, pages: int, mask, cluster_axis: int, out_rows=None):
     dram = ttnn.DRAM_MEMORY_CONFIG
     gathered = ttnn.all_gather(paged, dim=2, cluster_axis=cluster_axis, memory_config=dram)
     ttnn.deallocate(paged)
@@ -83,7 +98,7 @@ def _gather_and_merge(paged, rows: int, pages: int, mask, cluster_axis: int):
         raise RuntimeError(
             f"gathered score pages have shape {tuple(gathered.shape)}, expected [1, 1, {DEVICES * rows * pages}, {PAGE}]"
         )
-    masked = qsa_block.score_merge(gathered, mask)
+    masked = qsa_block.score_merge(gathered, mask, out_rows=out_rows)
     ttnn.deallocate(gathered)
     return masked
 
@@ -128,7 +143,7 @@ def score_pages_admits(local_scores, blocks) -> bool:
     )
 
 
-def score_pages(local_scores, blocks: int):
+def score_pages(local_scores, blocks: int, live_rows=None):
     """Program 4: the indexer's local score rows ``[1, 1, rows, W]`` bf16 ROW_MAJOR with ``W >= blocks`` (the chain
     slices the ``blocks`` resident columns off the cache's spare tile) repaged as the all-gather's pages
     ``[1, 1, rows * blocks // 1024, 1024]``: row r's chunk c at page ``r * chunks + c``.  One data-movement program
@@ -148,6 +163,10 @@ def score_pages(local_scores, blocks: int):
             f"blocks must be a positive multiple of {PAGE} within the rows' width {shape[3]}, got {blocks!r}"
         )
     rows, chunks = shape[2], blocks // PAGE
+    if live_rows is not None:  # only the first live_rows rows are repaged (the kernel indexes pages from row 0)
+        if not 1 <= live_rows <= rows:
+            raise ValueError(f"live_rows must be in 1..{rows}, got {live_rows!r}")
+        rows = live_rows
     mesh = local_scores.device()
     out = fp.allocate((1, 1, rows * chunks, PAGE), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh)
     work = fp.split_work(rows * chunks, mesh)

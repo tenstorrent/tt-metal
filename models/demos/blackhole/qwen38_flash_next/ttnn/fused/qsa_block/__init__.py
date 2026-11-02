@@ -1734,7 +1734,7 @@ DEVICES = TP_SIZE
 DEVICES_DEFINE = ("SCORE_MERGE_DEVICES", str(DEVICES))
 
 
-def score_merge(gathered, mask):
+def score_merge(gathered, mask, *, out_rows=None):
     """The gathered score rows as 2 KB pages, ``[1, 1, DEVICES * rows * chunks, 1024]`` bf16 ROW_MAJOR (device d's row r,
     chunk c at page ``(d * rows + r) * chunks + c``: the all_gather of the rows reshaped to ``[1, 1, rows * chunks, 1024]``,
     the page form ttnn.all_gather takes at every context), + mask ``[1, 1, >= rows, W]`` (rows 0 .. rows-1 read: the
@@ -1763,8 +1763,11 @@ def score_merge(gathered, mask):
         raise ValueError(
             f"gathered score pages must be ROW_MAJOR bf16 [1, 1, {DEVICES} * rows * {chunks}, {SCORE_CHUNK}], got {gathered.layout} {shape}"
         )
-    rows = shape[2] // (DEVICES * chunks)
-    if not 1 <= rows <= ttnn.TILE_SIZE or mshape[2] < rows:
+    live_rows = shape[2] // (DEVICES * chunks)
+    # out_rows: the output (and mask) rows when the gather carried only the first live_rows rows of them; the rows past
+    # live_rows are the merge of row 0's pages plus their own mask row (the verify tile's dead rows).
+    rows = live_rows if out_rows is None else out_rows
+    if not 1 <= live_rows <= rows <= ttnn.TILE_SIZE or mshape[2] < rows:
         raise ValueError(
             f"score merge takes 1..{ttnn.TILE_SIZE} rows with a mask of at least as many rows, got {rows} rows, mask {mshape}"
         )
@@ -1780,7 +1783,10 @@ def score_merge(gathered, mask):
         SCORE_MERGE["reader"],
         cores,
         [*fp.accessor_args(gathered), *fp.accessor_args(mask)],
-        [(w.core, [gathered.buffer_address(), mask.buffer_address(), rows, w.start, w.count, chunks]) for w in work],
+        [
+            (w.core, [gathered.buffer_address(), mask.buffer_address(), rows, w.start, w.count, chunks, live_rows])
+            for w in work
+        ],
         defines=[DEVICES_DEFINE],
     )
     compute = fp.compute_kernel(

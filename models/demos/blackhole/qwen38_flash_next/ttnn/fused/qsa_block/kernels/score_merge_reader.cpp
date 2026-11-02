@@ -20,6 +20,9 @@ void kernel_main() {
     const uint32_t first_chunk = get_arg_val<uint32_t>(3);
     const uint32_t chunks = get_arg_val<uint32_t>(4);
     const uint32_t total_chunks = get_arg_val<uint32_t>(5);  // pages per device row in the gathered tensor
+    // gathered rows per device (arg 6): <= rows.  Rows past it (the verify tile's dead rows) re-read row 0's pages, so
+    // they hold finite, deterministic merged scores plus their own mask row.
+    const uint32_t live_rows = get_arg_val<uint32_t>(6);
     constexpr uint32_t CB_IN = 0, CB_ZERO = 1, CB_MASK = 2, CHUNK_BYTES = tile_rows::TILE_BYTES;
     constexpr uint32_t DEVICES = SCORE_MERGE_DEVICES;
     constexpr auto gathered_args = TensorAccessorArgs<0>();
@@ -36,9 +39,10 @@ void kernel_main() {
             cb_reserve_back(CB_IN, DEVICES);
             cb_reserve_back(CB_MASK, 1);
             const uint32_t in_l1 = get_write_ptr(CB_IN);
+            const uint32_t src_row = r < live_rows ? r : 0;
             for (uint32_t d = 0; d < DEVICES; ++d) {
                 noc_async_read(  // device d's row r, chunk c = one 2 KB page of the gathered pages
-                    gathered.get_noc_addr((d * rows + r) * total_chunks + chunk, 0),
+                    gathered.get_noc_addr((d * live_rows + src_row) * total_chunks + chunk, 0),
                     in_l1 + d * CHUNK_BYTES,
                     CHUNK_BYTES);
             }

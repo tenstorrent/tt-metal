@@ -312,6 +312,10 @@ def _tensor_key(tensor) -> tuple[str, int]:
     return ("ttnn", int(tensor_id)) if tensor_id is not None else ("python", id(tensor))
 
 
+def _score_live_rows_enabled() -> bool:
+    return os.environ.get("QWEN38_QSA_SCORE_LIVE_ROWS", "1") == "1"
+
+
 def _deallocate(*tensors) -> None:
     seen: set[tuple[str, int]] = set()
     for tensor in tensors:
@@ -5973,7 +5977,13 @@ class Qwen38TTNNQSA:
             _deallocate(row_sharded)
         _deallocate(rotated)
 
-    def _score_blocks_chunk(self, index_query, state: Qwen38TTNNQSAGenericState, chunk: Qwen38TTNNQSAChunkInputs):
+    def _score_blocks_chunk(
+        self,
+        index_query,
+        state: Qwen38TTNNQSAGenericState,
+        chunk: Qwen38TTNNQSAChunkInputs,
+        live_rows: int | None = None,
+    ):
         # The query rows are scored one 32-row tile at a time (the indexer's query window is the cache's one
         # extra tile); the window past the last resident block ends at the cache's last row, so every
         # resident column is visible to every row and the per-row additive mask hides the blocks at or past
@@ -6009,19 +6019,36 @@ class Qwen38TTNNQSA:
             ):
                 # qsa_rows program 4 + program 1: the indexer's rows repaged straight into the gather's pages (no slice
                 # to the resident blocks, no row-major reshape), then the all-gather and the fused merge as below
+                # QWEN38_QSA_SCORE_LIVE_ROWS (default on): the verify pass gathers its R live rows, not the tile's 32
+                gather_rows = live_rows if live_rows is not None and _score_live_rows_enabled() else None
                 masked = self._rows_fused.score_blocks_rows_from_scores(
-                    local_scores, chunk.indexer_neg_mask, cluster_axis=TP_AXIS, pages=self._score_pages
+                    local_scores,
+                    chunk.indexer_neg_mask,
+                    cluster_axis=TP_AXIS,
+                    pages=self._score_pages,
+                    live_rows=gather_rows,
                 )
                 _deallocate(local_scores)
                 _retag_tensor(masked, reference=state.compressed_index_cache, shard_dim=None)
                 self.mesh_contract.validate_tensor(masked, placement=TensorPlacement.REPLICATED)
                 _require_shape(masked, (1, 1, rows, self.allocated_compressed_blocks), "masked QSA chunk block scores")
                 return masked
+            # QWEN38_QSA_SCORE_LIVE_ROWS: the fused verify merge below gathers only the R live rows, so the slice keeps R
+            slice_rows = CHUNK_ROWS
+            if (
+                live_rows is not None
+                and live_rows < CHUNK_ROWS
+                and _score_live_rows_enabled()
+                and self._rows_fused is not None
+                and rows == CHUNK_ROWS
+                and chunk.indexer_neg_mask is not None
+            ):
+                slice_rows = live_rows
             score_tiles.append(
                 ttnn.slice(
                     local_scores,
                     (0, 0, 0, 0),
-                    (1, 1, CHUNK_ROWS, self.allocated_compressed_blocks),
+                    (1, 1, slice_rows, self.allocated_compressed_blocks),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             )
@@ -6034,7 +6061,7 @@ class Qwen38TTNNQSA:
         self.mesh_contract.mark_local_partial(
             score_rows,
             replicated_reference=state.compressed_index_cache,
-            expected_shape=(1, 1, rows, self.allocated_compressed_blocks),
+            expected_shape=(1, 1, int(score_rows.shape[2]), self.allocated_compressed_blocks),
         )
         if self._rows_fused is not None and rows == CHUNK_ROWS and chunk.indexer_neg_mask is not None:
             # qsa_rows program 1: the all-reduce composite + mask add as one all-gather + the fused merge over the
@@ -6199,10 +6226,26 @@ class Qwen38TTNNQSA:
         return sparse_indices
 
     def _materialize_rows_chunk(
-        self, masked_scores, chunk: Qwen38TTNNQSAChunkInputs, constants: Qwen38TTNNQSAChunkConstants
+        self,
+        masked_scores,
+        chunk: Qwen38TTNNQSAChunkInputs,
+        constants: Qwen38TTNNQSAChunkConstants,
+        live_rows: int | None = None,
     ):
         rows = chunk.rows
-        block_ids = ttnn.experimental.topk_large_indices(masked_scores, k=BLOCK_TOPK)
+        if (
+            live_rows is not None
+            and _score_live_rows_enabled()
+            and os.environ.get("QWEN38_QSA_SCORE_LIVE_TOPK", "0") == "1"
+        ):
+            # opt-in (default off): the order of equal-score ids follows the search length, so the ids are not bit-identical
+            # to the full-width search on ties.  Verify pass: search (P & ~31) + 32 blocks (chunk.kv_block_start = P & ~31, read on device each replay), at
+            # least every live block of every row; the slots past a row's live count are overwritten by row_fill
+            block_ids = ttnn.experimental.topk_large_indices(
+                masked_scores, k=BLOCK_TOPK, valid_length_tensor=chunk.kv_block_start, valid_length_offset=32
+            )
+        else:
+            block_ids = ttnn.experimental.topk_large_indices(masked_scores, k=BLOCK_TOPK)
         _deallocate(masked_scores)
         _require_shape(block_ids, (1, 1, rows, BLOCK_TOPK), "top-k QSA chunk block IDs")
         if block_ids.dtype != ttnn.uint32 or block_ids.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -7437,9 +7480,9 @@ class Qwen38TTNNQSA:
         self._write_compressed_index_verify(
             state, verify_state, raw_key, block_start_cos, block_start_sin, verify, constants
         )
-        masked_scores = self._score_blocks_chunk(index_query, state, verify.chunk)
+        masked_scores = self._score_blocks_chunk(index_query, state, verify.chunk, live_rows=live_rows)
         _deallocate(index_query)
-        sparse_indices = self._materialize_rows_chunk(masked_scores, verify.chunk, constants)
+        sparse_indices = self._materialize_rows_chunk(masked_scores, verify.chunk, constants, live_rows=live_rows)
 
         if self._rows_fused is not None and verify.position is not None:
             sparse_query, gate, qg_ws, qg_first = self._main_tail_rows_step(
