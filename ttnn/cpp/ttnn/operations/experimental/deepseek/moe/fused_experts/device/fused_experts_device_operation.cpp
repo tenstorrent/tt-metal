@@ -86,17 +86,27 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t num_weights_arg = static_cast<uint32_t>(tensor_args.gate_up_weights.size());
 
-    {
-        const auto& scores = tensor_args.routing_scores;
-        TT_FATAL(scores.storage_type() == StorageType::DEVICE, "fused_experts: routing_scores must be on device");
+    // Exactly one selection source: the router's ids, the ranking score row the op top-k's itself, or
+    // the router weight the op runs itself. More than one would be ambiguous (which one wins?) and
+    // none leaves the op no way to know which experts to run.
+    const bool run_router = tensor_args.router_weight.has_value();
+    TT_FATAL(
+        static_cast<int>(tensor_args.routing_indices.has_value()) +
+                static_cast<int>(tensor_args.ranking_scores.has_value()) + static_cast<int>(run_router) ==
+            1,
+        "fused_experts: exactly one of routing_indices (the router's selected ids), ranking_scores (an E-wide row "
+        "to top-k on device) or router_weight (the router, run inside the op) must be provided");
+    TT_FATAL(
+        tensor_args.routing_scores.has_value() != run_router,
+        "fused_experts: routing_scores is required with routing_indices / ranking_scores and must be absent with "
+        "router_weight (the op computes the scores itself)");
+    TT_FATAL(
+        tensor_args.router_bias.has_value() == run_router,
+        "fused_experts: router_weight and router_bias must be given together");
 
-        // Exactly one selection source: the router's ids, or the ranking score row the op top-k's
-        // itself. Both would be ambiguous (which one wins?) and neither leaves the op no way to
-        // know which experts to run.
-        TT_FATAL(
-            tensor_args.routing_indices.has_value() != tensor_args.ranking_scores.has_value(),
-            "fused_experts: exactly one of routing_indices (the router's selected ids) or ranking_scores "
-            "(an E-wide row to top-k on device) must be provided");
+    if (tensor_args.routing_scores.has_value()) {
+        const auto& scores = *tensor_args.routing_scores;
+        TT_FATAL(scores.storage_type() == StorageType::DEVICE, "fused_experts: routing_scores must be on device");
 
         // Scores may be TILE (prefill) or ROW_MAJOR (decode), where each token's LinearDecode stick is
         // a linear [1, E] page and is indexed as b * page_stride + e*2 rather than tilized.
@@ -241,14 +251,72 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
                 batch,
                 ranking.logical_shape()[-2]);
         }
-
-        TT_FATAL(
-            attributes.top_k > 0 && attributes.top_k <= num_weights_arg,
-            "fused_experts: top_k ({}) must be in [1, {}] (with ranking_scores it must be passed "
-            "explicitly: there is no id tensor to infer it from)",
-            attributes.top_k,
-            num_weights_arg);
     }
+
+    if (run_router) {
+        const auto& gate = *tensor_args.router_weight;
+        const auto& bias = *tensor_args.router_bias;
+        const uint32_t hidden_dim = static_cast<uint32_t>(x.logical_shape()[-1]);
+        // The router cores alias their activation over the same one-row replica the expert cores use.
+        TT_FATAL(
+            input_replicated && batch == 1,
+            "fused_experts: router_weight needs the one-row ROW_MAJOR HEIGHT_SHARDED L1 replica as input, got {} "
+            "rows ({})",
+            batch,
+            x.memory_config());
+        TT_FATAL(gate.storage_type() == StorageType::DEVICE, "fused_experts: router_weight must be on device");
+        TT_FATAL(gate.layout() == tt::tt_metal::Layout::TILE, "fused_experts: router_weight must be TILE layout");
+        TT_FATAL(
+            gate.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+            "fused_experts: router_weight must be resident in L1 (ND-sharded over the router cores)");
+        TT_FATAL(
+            static_cast<uint32_t>(gate.logical_shape()[-2]) == hidden_dim &&
+                static_cast<uint32_t>(gate.logical_shape()[-1]) == num_weights_arg,
+            "fused_experts: router_weight must be [{}, {}] (hidden x experts), got [{}, {}]",
+            hidden_dim,
+            num_weights_arg,
+            gate.logical_shape()[-2],
+            gate.logical_shape()[-1]);
+        TT_FATAL(
+            num_weights_arg % tt::constants::TILE_WIDTH == 0,
+            "fused_experts: router_weight needs a whole number of 32-expert tile columns, got {} experts",
+            num_weights_arg);
+        const auto& nd = gate.memory_config().nd_shard_spec();
+        TT_FATAL(
+            nd.has_value() && static_cast<uint32_t>(nd->shard_shape[-2]) == hidden_dim &&
+                static_cast<uint32_t>(nd->shard_shape[-1]) == tt::constants::TILE_WIDTH,
+            "fused_experts: router_weight must be ND-sharded [{}, {}] (one 32-expert tile column per shard)",
+            hidden_dim,
+            tt::constants::TILE_WIDTH);
+        TT_FATAL(bias.storage_type() == StorageType::DEVICE, "fused_experts: router_bias must be on device");
+        TT_FATAL(
+            bias.layout() == tt::tt_metal::Layout::ROW_MAJOR && bias.dtype() == tt::tt_metal::DataType::BFLOAT16,
+            "fused_experts: router_bias must be ROW_MAJOR BFLOAT16, got {} {}",
+            bias.layout(),
+            bias.dtype());
+        TT_FATAL(
+            bias.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM && !bias.memory_config().is_sharded(),
+            "fused_experts: router_bias must be DRAM interleaved (read as one page)");
+        TT_FATAL(
+            static_cast<uint32_t>(bias.logical_shape()[-1]) == num_weights_arg &&
+                bias.logical_shape().volume() == num_weights_arg,
+            "fused_experts: router_bias must be one row of {} experts, got {}",
+            num_weights_arg,
+            bias.logical_shape());
+        // Each router core ranks at least one 32-expert tile and hands the leader its k best.
+        TT_FATAL(
+            attributes.top_k <= tt::constants::TILE_WIDTH,
+            "fused_experts: top_k ({}) must be <= {} with router_weight",
+            attributes.top_k,
+            tt::constants::TILE_WIDTH);
+    }
+
+    TT_FATAL(
+        attributes.top_k > 0 && attributes.top_k <= num_weights_arg,
+        "fused_experts: top_k ({}) must be in [1, {}] (with ranking_scores or router_weight it must be passed "
+        "explicitly: there is no id tensor to infer it from)",
+        attributes.top_k,
+        num_weights_arg);
 
     TT_FATAL(
         tensor_args.gate_up_weights.size() == tensor_args.down_weights.size(),
@@ -565,18 +633,22 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         // skips the second read and scans the score region, the other reads a region of its own, and
         // their cb_routing layouts differ. Reusing one for the other selects on the wrong row.
         !tensor_args.routing_indices.has_value(),
-        tensor_args.ranking_scores.has_value() &&
-            tensor_args.ranking_scores->buffer() == tensor_args.routing_scores.buffer(),
+        tensor_args.ranking_scores.has_value() && tensor_args.routing_scores.has_value() &&
+            tensor_args.ranking_scores->buffer() == tensor_args.routing_scores->buffer(),
         tensor_args.gate_up_weights.front(),
         tensor_args.down_weights.front(),
         weight_addresses,
         input_tile.get_height(),
         input_tile.get_width(),
-        tensor_args.routing_scores.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        tensor_args.routing_scores.has_value() &&
+            tensor_args.routing_scores->layout() == tt::tt_metal::Layout::ROW_MAJOR,
         // The shared expert's addresses are runtime args, so only its specs and clamp key the program.
         tensor_args.shared_gate_up_weights,
         tensor_args.shared_down_weights,
-        attributes.shared_swiglu_limit);
+        attributes.shared_swiglu_limit,
+        // The same goes for the router's weight and bias.
+        tensor_args.router_weight,
+        tensor_args.router_bias);
     return hash;
 }
 
@@ -615,7 +687,6 @@ FusedExpertsDeviceOperation::tensor_return_value_t FusedExpertsDeviceOperation::
 std::tuple<FusedExpertsDeviceOperation::operation_attributes_t, FusedExpertsDeviceOperation::tensor_args_t>
 FusedExpertsDeviceOperation::invoke(
     const Tensor& input_tensor,
-    const Tensor& routing_scores,
     const std::vector<Tensor>& gate_up_weights,
     const std::vector<Tensor>& down_weights,
     uint32_t num_experts,
@@ -627,11 +698,14 @@ FusedExpertsDeviceOperation::invoke(
     uint32_t experts_block_size,
     bool two_hub_gather,
     const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& routing_scores,
     const std::optional<Tensor>& routing_indices,
     const std::optional<Tensor>& ranking_scores,
     const std::optional<Tensor>& shared_gate_up_weights,
     const std::optional<Tensor>& shared_down_weights,
-    std::optional<float> shared_swiglu_limit) {
+    std::optional<float> shared_swiglu_limit,
+    const std::optional<Tensor>& router_weight,
+    const std::optional<Tensor>& router_bias) {
     operation_attributes_t attributes{
         .num_experts = num_experts,
         .intermediate_size = intermediate_size,
@@ -663,6 +737,8 @@ FusedExpertsDeviceOperation::invoke(
         .down_weights = down_weights,
         .shared_gate_up_weights = shared_gate_up_weights,
         .shared_down_weights = shared_down_weights,
+        .router_weight = router_weight,
+        .router_bias = router_bias,
     };
     return {std::move(attributes), std::move(tensor_args)};
 }
@@ -673,7 +749,6 @@ namespace ttnn::prim {
 ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation::tensor_return_value_t
 fused_experts(
     const Tensor& input_tensor,
-    const Tensor& routing_scores,
     const std::vector<Tensor>& gate_up_weights,
     const std::vector<Tensor>& down_weights,
     uint32_t num_experts,
@@ -685,15 +760,17 @@ fused_experts(
     uint32_t experts_block_size,
     bool two_hub_gather,
     const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& routing_scores,
     const std::optional<Tensor>& routing_indices,
     const std::optional<Tensor>& ranking_scores,
     const std::optional<Tensor>& shared_gate_up_weights,
     const std::optional<Tensor>& shared_down_weights,
-    std::optional<float> shared_swiglu_limit) {
+    std::optional<float> shared_swiglu_limit,
+    const std::optional<Tensor>& router_weight,
+    const std::optional<Tensor>& router_bias) {
     using OperationType = ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation;
     auto [operation_attributes, tensor_args] = OperationType::invoke(
         input_tensor,
-        routing_scores,
         gate_up_weights,
         down_weights,
         num_experts,
@@ -705,11 +782,14 @@ fused_experts(
         experts_block_size,
         two_hub_gather,
         memory_config,
+        routing_scores,
         routing_indices,
         ranking_scores,
         shared_gate_up_weights,
         shared_down_weights,
-        shared_swiglu_limit);
+        shared_swiglu_limit,
+        router_weight,
+        router_bias);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

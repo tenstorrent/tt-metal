@@ -17,8 +17,9 @@ void bind_fused_experts(nb::module_& mod) {
 
         Fuses the per-expert matmul -> SwiGLU -> matmul -> weighted-accumulate loop
         into a single device operation. The expert selection is derived on-device (no host-side
-        expert-id list). It comes from one of two mutually exclusive inputs:
+        expert-id list). It comes from one of three mutually exclusive inputs:
 
+        * ``router_weight`` + ``router_bias`` -- the learned router, run inside the op (see below);
         * ``routing_indices`` -- the router's own top-k output (each token's selected expert ids),
           passed through unmodified; and
         * ``ranking_scores`` -- the E-wide score row the router would have ranked (typically a
@@ -69,7 +70,8 @@ void bind_fused_experts(nb::module_& mod) {
             routing_scores: Unbiased per-expert scores, [1, 1, B, E] bfloat16 -- TILE, or ROW_MAJOR
                 (decode; one LinearDecode stick per token, no tilize). The tensor the selection
                 indexes into. If the selection ranked by a bias-corrected copy, pass the uncorrected
-                scores here -- those are the ones that become weights.
+                scores here -- those are the ones that become weights. Required with
+                ``routing_indices`` / ``ranking_scores``; omitted with ``router_weight``.
             gate_up_weights: List of [H, 2I] weight tensors, one per expert (all experts provided),
                 with gate/up columns interleaved at tile (32-col) granularity.
             down_weights: List of [I, H] weight tensors, one per expert.
@@ -114,11 +116,20 @@ void bind_fused_experts(nb::module_& mod) {
             shared_down_weights: The shared expert's down, [Is, H], DRAM ND-sharded [32, 64].
             shared_swiglu_limit: Clamp limit for the shared expert's SwiGLU. Defaults to
                 ``swiglu_limit``; ``float("inf")`` leaves it unclamped.
+            router_weight: The learned router's [H, E] gate, TILE, resident in L1: ND-sharded
+                [H, 32] (one 32-expert tile column per shard), ROW_MAJOR, ROUND_ROBIN_1D over
+                exactly the router cores. Given (with ``router_bias``) instead of any routing
+                tensor, the op runs the router itself on those cores -- the first
+                min(12, E / 32) cores of the first grid row below the expert grid, core c holding
+                tile columns c, c + 12, ...: each computes sqrt(softplus(x @ gate)) for its experts
+                (a LoFi matmul in bf16, as matmul_decode's), adds the bias and hands its ``top_k``
+                best to {0,0}, which merges them and weights the winners by their scores. Needs the 6-expert path and the one-row
+                L1 replica, and the replica must cover the router cores too.
+            router_bias: The [1, 1, 1, E] bfloat16 ROW_MAJOR ranking bias, DRAM interleaved.
         )doc",
         &ttnn::experimental::deepseek::moe::fused_experts,
         nb::arg("input_tensor"),
         nb::kw_only(),
-        nb::arg("routing_scores"),
         nb::arg("gate_up_weights"),
         nb::arg("down_weights"),
         nb::arg("num_experts"),
@@ -130,11 +141,14 @@ void bind_fused_experts(nb::module_& mod) {
         nb::arg("experts_block_size") = 0,
         nb::arg("two_hub_gather") = true,
         nb::arg("memory_config") = std::nullopt,
+        nb::arg("routing_scores") = std::nullopt,
         nb::arg("routing_indices") = std::nullopt,
         nb::arg("ranking_scores") = std::nullopt,
         nb::arg("shared_gate_up_weights") = std::nullopt,
         nb::arg("shared_down_weights") = std::nullopt,
-        nb::arg("shared_swiglu_limit") = std::nullopt);
+        nb::arg("shared_swiglu_limit") = std::nullopt,
+        nb::arg("router_weight") = std::nullopt,
+        nb::arg("router_bias") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts::detail
