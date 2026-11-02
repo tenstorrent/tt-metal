@@ -2376,3 +2376,15 @@ chunk tokens); the 8 x 20 K two-round wave smoke on the STOCK runtime (the row-l
 `TtKDA.local_bounds`): round 1 8/8 needles at TTFT 59.1 s each (one wave of 8; 69 s before the pick-combine
 kernel), round 2 8/8 prefix-cache hits at 11.9-36.8 s, texts identical across rounds 8/8. Release #9 (tt-shield run
 41423561217) runs on the image of this head. The stock-runtime c1 1 M needle is the last proof row (queued).
+
+### 2026-11-02 14:08: the capstone on the final tree and the stock runtime: 32 x 1 M in 3 h 29 min, the repeat in 134 s
+
+`served_8x4_needle1m_32_stock` (32 x 1 038 673-token prompts submitted together, 256 forced tokens, then all 32
+repeated; the folder-only tree with the exchange-per-mode fix and the pick-combine default; the stock ttnn runtime):
+round 1 32/32 needles in 12 554 s (3 h 29 min; 14 101 s = 3 h 55 min on the override build before the pick-combine
+kernel, 16 723 s on 10-31), TTFT 12 450-12 547 s (every user prefilled in lockstep: waves of 8 x 2048 rows per step);
+round 2 32/32 prefix-cache hits in 134 s (145 s before), TTFT 25.6-127.4 s; texts identical across rounds 31/32;
+client-side decode 13.4-15.4 tok/s per user (unchanged). The smoke's only flag was its cross-talk check on one user
+(7415's forced continuation recited the template sentence with a digit flipped, "7405", right after answering 7415
+correctly; the 11-01 capstone had the same single flag on 7416): a hallucination under forced continuation, not a
+leak; the client now judges cross-talk on the answer's first 160 characters.
