@@ -548,15 +548,27 @@ class DSV41PrefillModel:
                     if pk_eng:  # packed carrier: the chunks are row blocks [32g, 32g+32) of the one packed tensor
                         xp_all = xs[0]
                         n_g = int(xp_all.shape[2]) // T
+                        erl_t = None
+                        if os.environ.get("DSV41_PF_ENGRAM_RT", "0") == "1" and erl.layout == ttnn.ROW_MAJOR_LAYOUT:
+                            erl_t = ttnn.to_layout(
+                                erl, ttnn.TILE_LAYOUT
+                            )  # ONE row-major -> tile conversion of all the Engram rows instead of one per group (DSV41_PF_ENGRAM_RT=1, default OFF)
                         for g in range(n_g):
                             xg_ = ttnn.slice(xp_all, [0, 0, g * T, 0], [1, 1, (g + 1) * T, int(xp_all.shape[3])])
-                            rg = ttnn.to_layout(
-                                ttnn.slice(erl, [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]),
-                                ttnn.TILE_LAYOUT,
-                            )
+                            if erl_t is not None:
+                                rg = ttnn.slice(
+                                    erl_t, [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]
+                                )
+                            else:
+                                rg = ttnn.to_layout(
+                                    ttnn.slice(erl, [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]),
+                                    ttnn.TILE_LAYOUT,
+                                )
                             new.append(self.engram[lid].forward_v2_own_pk(xg_, rg))
                             ttnn.deallocate(rg)
                             ttnn.deallocate(xg_)
+                        if erl_t is not None:
+                            ttnn.deallocate(erl_t)
                         new = [ttnn.concat(new, dim=2) if len(new) > 1 else new[0]]
                     else:
                         for g, x in enumerate(xs):
