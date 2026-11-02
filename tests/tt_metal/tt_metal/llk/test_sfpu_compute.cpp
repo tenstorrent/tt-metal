@@ -341,6 +341,37 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_GT_INT_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "ne_int_tile_init<DataFormat::Int32>();"},
       {"SFPU_OP_CHAIN_0", "ne_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    // Float compares and rsub on a 32-bit Dest (is_fp32_dest_float_binary_op): bf16 whole-number operands, the
+    // compares with planted +-0, NaN and inf lanes; results are exact.
+    {"eq_binary",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "eq_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "eq_binary_tile(0, 1, 0);"}}},
+    {"ne_binary",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "ne_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "ne_binary_tile(0, 1, 0);"}}},
+    {"lt_binary",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "lt_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "lt_binary_tile(0, 1, 0);"}}},
+    {"gt_binary",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "gt_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "gt_binary_tile(0, 1, 0);"}}},
+    {"le_binary",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "le_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "le_binary_tile(0, 1, 0);"}}},
+    {"ge_binary",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "ge_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "ge_binary_tile(0, 1, 0);"}}},
+    // DST[1] - DST[0]
+    {"rsub_binary",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "rsub_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "rsub_binary_tile(0, 1, 0);"}}},
     {"binary_max",
      {{"SFPU_OP_BINARY_MAX_MIN_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "binary_max_tile_init();"},
@@ -987,6 +1018,41 @@ bool is_int32_binary_sfpu_op(const std::string& op_name) {
            op_name == "eq_int32" || op_name == "ne_int32";
 }
 
+bool is_float_compare_binary_op(const std::string& op_name) {
+    return op_name == "eq_binary" || op_name == "ne_binary" || op_name == "lt_binary" || op_name == "gt_binary" ||
+           op_name == "le_binary" || op_name == "ge_binary";
+}
+
+// bf16 ops run on a 32-bit Dest with whole-number operands, so their goldens are exact.
+bool is_fp32_dest_float_binary_op(const std::string& op_name) {
+    return is_float_compare_binary_op(op_name) || op_name == "rsub_binary";
+}
+
+// Whole numbers in [-8, 8] with ties on every fourth lane; the compares also get +-0, NaN and inf lanes.
+std::pair<vector<uint32_t>, vector<uint32_t>> generate_fp32_dest_float_binary_inputs(
+    const unsigned int numel, const std::string& op_name, const int seed) {
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> dist(-8, 8);
+    constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    constexpr float inf = std::numeric_limits<float>::infinity();
+    constexpr std::pair<float, float> specials[] = {
+        {0.0f, -0.0f}, {-0.0f, 0.0f}, {nan, 1.0f}, {1.0f, nan}, {nan, nan}, {inf, inf}, {-inf, inf}, {inf, -inf}};
+    vector<bfloat16> lhs(numel), rhs(numel);
+    for (size_t i = 0; i < numel; ++i) {
+        float a = static_cast<float>(dist(rng));
+        float b = static_cast<float>(dist(rng));
+        if (is_float_compare_binary_op(op_name) && i < std::size(specials)) {
+            a = specials[i].first;
+            b = specials[i].second;
+        } else if (i % 4 == 3) {
+            b = a;
+        }
+        lhs[i] = bfloat16(a);
+        rhs[i] = bfloat16(b);
+    }
+    return {pack_vector<uint32_t, bfloat16>(lhs), pack_vector<uint32_t, bfloat16>(rhs)};
+}
+
 // Two's-complement Int32 operand pairs: a band on both sides of zero, with the extremes, zero and equal pairs
 // planted first so every compare sees ties, sign changes and the differences that overflow.
 std::pair<vector<uint32_t>, vector<uint32_t>> generate_int32_binary_inputs(const unsigned int numel, const int seed) {
@@ -1383,6 +1449,27 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs_bf
     if (op_name == "mul_float") {
         return bfloat16(lhs * rhs);
     }
+    if (op_name == "rsub_binary") {
+        return bfloat16(rhs - lhs);
+    }
+    if (op_name == "eq_binary") {
+        return bfloat16(lhs == rhs ? 1.0f : 0.0f);
+    }
+    if (op_name == "ne_binary") {
+        return bfloat16(lhs != rhs ? 1.0f : 0.0f);
+    }
+    if (op_name == "lt_binary") {
+        return bfloat16(lhs < rhs ? 1.0f : 0.0f);
+    }
+    if (op_name == "gt_binary") {
+        return bfloat16(lhs > rhs ? 1.0f : 0.0f);
+    }
+    if (op_name == "le_binary") {
+        return bfloat16(lhs <= rhs ? 1.0f : 0.0f);
+    }
+    if (op_name == "ge_binary") {
+        return bfloat16(lhs >= rhs ? 1.0f : 0.0f);
+    }
     if (op_name == "atan2") {
         // Compute API convention: the first operand is y and the second is x.
         return bfloat16(std::atan2(lhs, rhs));
@@ -1742,6 +1829,9 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
     if (is_int32_binary_sfpu_op(op_name)) {
         return generate_int32_binary_inputs(numel, seed);
     }
+    if (is_fp32_dest_float_binary_op(op_name)) {
+        return generate_fp32_dest_float_binary_inputs(numel, op_name, seed);
+    }
     const auto uniform = [&](float lo, float hi, int s) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, s);
     };
@@ -1897,9 +1987,9 @@ bool is_close_packed_sfpu_output(
     if (op_name == "div_int32") {
         return is_close_packed_sfpu_output_f32(vec_a, vec_b, op_name);
     }
-    if (is_int8_binary_sfpu_op(op_name) || is_int32_binary_sfpu_op(op_name) || op_name == "binary_max" ||
-        op_name == "binary_min" || op_name == "reshuffle_rows" || op_name == "copy_dest" || op_name == "mask" ||
-        op_name == "mask_posinf" || op_name == "isclose") {
+    if (is_int8_binary_sfpu_op(op_name) || is_int32_binary_sfpu_op(op_name) || is_fp32_dest_float_binary_op(op_name) ||
+        op_name == "binary_max" || op_name == "binary_min" || op_name == "reshuffle_rows" || op_name == "copy_dest" ||
+        op_name == "mask" || op_name == "mask_posinf" || op_name == "isclose") {
         return vec_a == vec_b;
     }
     if (is_exact_unary_sfpu_op(op_name)) {
@@ -2998,7 +3088,8 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         .sfpu_precision_mode =
             test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
         .enable_32_bit_dest = is_int8_op || is_int32_op || test_config.sfpu_op == "add_top_row" ||
-                              sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op),
+                              sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op) ||
+                              sfpu_util::is_fp32_dest_float_binary_op(test_config.sfpu_op),
         .unpack_modes = unpack_modes,
     };
 
@@ -4209,6 +4300,13 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "ge_int32"),
         std::make_tuple(1, "eq_int32"),
         std::make_tuple(1, "ne_int32"),
+        std::make_tuple(1, "eq_binary"),
+        std::make_tuple(1, "ne_binary"),
+        std::make_tuple(1, "lt_binary"),
+        std::make_tuple(1, "gt_binary"),
+        std::make_tuple(1, "le_binary"),
+        std::make_tuple(1, "ge_binary"),
+        std::make_tuple(1, "rsub_binary"),
         std::make_tuple(1, "binary_max"),
         std::make_tuple(1, "binary_min"),
         std::make_tuple(1, "binary_max_int32"),
