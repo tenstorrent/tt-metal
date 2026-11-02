@@ -24,7 +24,11 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
-from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
+from models.demos.deepseek_v3_d_p.tt.kda.kda import (
+    _HistoryExchange,
+    convolution_tail_from_device_layout,
+    convolution_tail_to_device_layout,
+)
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -193,7 +197,11 @@ class _Exchange:
         )
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
         self.history_tt = ttnn.from_torch(
-            self.history, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, mesh_mapper=replicate
+            convolution_tail_to_device_layout(self.history),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=replicate,
         )
         self.taps_tt = tuple(
             ttnn.from_torch(
@@ -219,10 +227,13 @@ class _Exchange:
         )
 
     def to_host(self, outputs: tuple[ttnn.Tensor, ...]) -> list[list[torch.Tensor]]:
-        """Per device, in mesh order: the concatenated Q, K and V, and the carry."""
+        """Per device, in mesh order: the concatenated Q, K and V, and the carry as ``[1, K-1, W]`` rows."""
         q, k, v, carry = (ttnn.get_device_tensors(output) for output in outputs)
         return [
-            [torch.cat([ttnn.to_torch(part) for part in parts], dim=-1)[0], ttnn.to_torch(final)]
+            [
+                torch.cat([ttnn.to_torch(part) for part in parts], dim=-1)[0],
+                convolution_tail_from_device_layout(ttnn.to_torch(final)),
+            ]
             for *parts, final in zip(q, k, v, carry, strict=True)
         ]
 
