@@ -27,8 +27,7 @@ def test_vision_layernorm_vs_ref(mesh_device, device_params, grid_thw, vision_re
     """Layer 0 layer_norm1 matches the reference at PCC >= 0.9999, within its relL2 bound and with no NaN or Inf."""
     x = vision_activations(grid_thw)["layer0.in"]
     # Rows of zero mean would let a norm without the mean subtraction (RMSNorm) pass; with this offset RMSNorm gets PCC
-    # about 0.93. The offset is small because the device's LayerNorm keeps its statistics in bf16, whose error grows
-    # with it.
+    # about 0.93.
     offset = 0.5 * torch.randn(x.shape[0], 1, generator=torch.Generator().manual_seed(0))
     x_in = (x + offset).bfloat16().float()
     layer_norm = vision_reference().layers[0].layer_norm1
