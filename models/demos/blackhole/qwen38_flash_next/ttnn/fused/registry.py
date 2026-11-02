@@ -97,8 +97,14 @@ TP8_READY: frozenset[str] = frozenset(
         "sparse_sdpa_tiled",
         "row_reduce",
         "row_gather",
+        "gdn_rows_wrap",  # BITWISE with the chain at 5 rows on 1x8: tests/test_gdn_rows_wrap_tp8_device.py
     }
 )
+
+# QWEN38_MTP_ROWS_TP8=1 (default "0"): also serves gdn_rows_scan at TP=8 (COMPONENT class; its kernels take the
+# per-device head count and projection tile offsets as compile-time args).
+MTP_ROWS_TP8_ENV = "QWEN38_MTP_ROWS_TP8"
+MTP_ROWS_TP8: frozenset[str] = frozenset({"gdn_rows_scan"})
 
 
 @dataclass(frozen=True)
@@ -218,7 +224,14 @@ def enabled_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
     names = (defaults | _names(environ, ENV) | edge) - _names(environ, OFF_ENV)
     if environ.get("QWEN38_ROW_GATHER", "1") in ("1", "v1"):  # the row_gather program's own switch (default on)
         names = names | {"row_gather"}
-    return names if TP_SIZE == 4 else names & (TP8_READY | edge)
+    if TP_SIZE == 4:
+        return names
+    ready = TP8_READY | edge
+    if (
+        environ.get(MTP_ROWS_TP8_ENV, "0") == "1"
+    ):  # QWEN38_MTP_ROWS_TP8=1: the MTP verify-rows kernels at TP=8 (default off)
+        ready = ready | MTP_ROWS_TP8
+    return names & ready
 
 
 def enabled(name: str, environ: Mapping[str, str] = os.environ) -> bool:

@@ -17,7 +17,8 @@ namespace {
 constexpr uint32_t CB_COUNTS = 0, CB_TILES = 1;
 constexpr uint32_t ROWS = get_compile_time_arg_val(0);
 constexpr uint32_t LANES = get_compile_time_arg_val(1);
-constexpr uint32_t HEADS = 12, HT = 4, STATE_TILES = HT * HT, FP32_TILE = 4096;
+// SCAN_HEADS and the projection tile offsets come from gdn_rows_scan/__init__.py (48 // TP_SIZE value heads per device)
+constexpr uint32_t HEADS = SCAN_HEADS, HT = 4, STATE_TILES = HT * HT, FP32_TILE = 4096;
 static_assert(ROWS >= 1 && LANES >= 1 && LANES * ROWS <= 32, "B lanes x R rows in one tile");
 }  // namespace
 

@@ -30,8 +30,10 @@ constexpr uint32_t CB_MASK = 8, CB_SCALER = 9, CB_GALL = 13, CB_BETA = 18, CB_DE
 constexpr uint32_t ROWS = get_compile_time_arg_val(0);
 constexpr uint32_t VBT = get_compile_time_arg_val(1);
 constexpr uint32_t LANES = get_compile_time_arg_val(2);
-constexpr uint32_t HEADS = 12, HT = 4, QK_TILES = 2 * HT, NT = QK_TILES + VBT, ST = HT * VBT, HISTORY_ROWS = 3;
-constexpr uint32_t K_TILE0 = 16, V_TILE0 = 32, Z_TILE0 = 80, A_TILE = 128, B_TILE = 129;
+// SCAN_HEADS and the projection tile offsets come from gdn_rows_scan/__init__.py (48 // TP_SIZE value heads per device)
+constexpr uint32_t HEADS = SCAN_HEADS, HT = 4, QK_TILES = 2 * HT, NT = QK_TILES + VBT, ST = HT * VBT, HISTORY_ROWS = 3;
+constexpr uint32_t K_TILE0 = SCAN_K_TILE0, V_TILE0 = SCAN_V_TILE0, Z_TILE0 = SCAN_Z_TILE0, A_TILE = SCAN_A_TILE,
+                   B_TILE = SCAN_B_TILE;
 constexpr uint32_t QKV_TILES = 80;  // column tiles of one lane's history tile row
 constexpr uint32_t BF16_TILE = 2048, FP32_TILE = 4096;
 constexpr uint32_t FACE_BYTES = fused_rows::FACE_BYTES, HALF_ROW = fused_rows::HALF_ROW_BYTES, FACE_ROWS = 16;

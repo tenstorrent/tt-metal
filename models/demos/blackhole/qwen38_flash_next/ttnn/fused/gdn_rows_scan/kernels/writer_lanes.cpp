@@ -25,7 +25,8 @@ constexpr uint32_t CB_OUTS = 25, CB_OUTG = 26, CB_OROWS = 29, CB_OBF = 31;
 constexpr uint32_t ROWS = get_compile_time_arg_val(0);
 constexpr uint32_t VBT = get_compile_time_arg_val(1);
 constexpr uint32_t LANES = get_compile_time_arg_val(2);
-constexpr uint32_t HEADS = 12, HT = 4, ST = HT * VBT, STATE_TILES = HT * HT, TILE_ROWS = 32;
+// SCAN_HEADS and the projection tile offsets come from gdn_rows_scan/__init__.py (48 // TP_SIZE value heads per device)
+constexpr uint32_t HEADS = SCAN_HEADS, HT = 4, ST = HT * VBT, STATE_TILES = HT * HT, TILE_ROWS = 32;
 constexpr uint32_t BF16_TILE = 2048, FP32_TILE = 4096;
 constexpr uint32_t FACE_BYTES = fused_rows::FACE_BYTES, HALF_ROW = fused_rows::HALF_ROW_BYTES;
 static_assert(VBT == HT, "the lanes form runs the whole head on one core");

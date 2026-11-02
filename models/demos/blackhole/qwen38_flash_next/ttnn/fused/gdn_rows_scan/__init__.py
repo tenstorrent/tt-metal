@@ -111,6 +111,20 @@ ROW_TAPS = ("sdec0", "vread0", "deltab0", "snew0", "o0")  # per row, in the recu
 FP32_COPY_CBS = (5, 7, 18, 19, 21, 22, 30)
 
 
+def dims_defines() -> list[tuple[str, str]]:
+    """The kernels' per-device dimensions as compile-time defines, from the TP size (TP=4: 12 value heads, K / V / Z / A / B
+    tile offsets 16 / 32 / 80 / 128 / 129; TP=8: 6 heads, 8 / 16 / 40 / 64 / 65)."""
+
+    return [
+        ("SCAN_HEADS", str(HEADS)),
+        ("SCAN_K_TILE0", str(QK_WIDTH // TILE)),
+        ("SCAN_V_TILE0", str(2 * QK_WIDTH // TILE)),
+        ("SCAN_Z_TILE0", str(QKV_WIDTH // TILE)),
+        ("SCAN_A_TILE", str(A_COLUMN // TILE)),
+        ("SCAN_B_TILE", str(B_COLUMN // TILE)),
+    ]
+
+
 def cb_table(rows: int, vbt: int) -> tuple[tuple[int, object, int], ...]:
     """The plain CBs of the scan program for ``rows`` real rows and ``vbt`` state column tiles per item."""
 
@@ -233,7 +247,7 @@ def run(projected, history, taps, constants, norm, recurrent, prefix, out, *, sp
     ]
     writer_cta = [rows, vbt, *fp.accessor_args(prefix), *fp.accessor_args(out)]
     writer_addrs = [prefix.buffer_address(), out.buffer_address()]
-    defines = [("INP_FLOAT32", "1")]
+    defines = [("INP_FLOAT32", "1"), *dims_defines()]
     if debug is not None:
         writer_cta.extend(fp.accessor_args(debug))
         writer_addrs.append(debug.buffer_address())
@@ -319,7 +333,9 @@ def run_pick(accepted, prefix, recurrent):
         fp.cb_descriptor(0, FP32, fp.TILE_BYTES[FP32], 1, cores),
         fp.cb_descriptor(1, FP32, fp.TILE_BYTES[FP32], HT, cores),
     ]
-    kernel = fp.reader_kernel(PICK, cores, cta, [(w.core, [*addrs, w.count, *pairs(w)]) for w in work])
+    kernel = fp.reader_kernel(
+        PICK, cores, cta, [(w.core, [*addrs, w.count, *pairs(w)]) for w in work], defines=dims_defines()
+    )
     # the accept scalar once per core, one prefix slot read, the state written
     meta = fp.program_meta(
         NAME,
@@ -412,7 +428,7 @@ def run_lanes(projected, history, taps, constants, norm, recurrent, prefix, out,
     ]
     writer_cta = [rows, vbt, lanes, *fp.accessor_args(prefix), *fp.accessor_args(out)]
     writer_addrs = [prefix.buffer_address(), out.buffer_address()]
-    defines = [("INP_FLOAT32", "1")]
+    defines = [("INP_FLOAT32", "1"), *dims_defines()]
     cbs = [
         fp.cb_descriptor(index, dtype, fp.TILE_BYTES[dtype], pages, cores)
         for index, dtype, pages in cb_table(rows, vbt)
@@ -503,7 +519,9 @@ def run_pick_lanes(counts, prefix, recurrent, *, lanes: int, rows: int):
         fp.cb_descriptor(0, FP32, fp.TILE_BYTES[FP32], lanes, cores),
         fp.cb_descriptor(1, FP32, fp.TILE_BYTES[FP32], HT, cores),
     ]
-    kernel = fp.reader_kernel(PICK_LANES, cores, cta, [(w.core, [*addrs, w.count, *triples(w)]) for w in work])
+    kernel = fp.reader_kernel(
+        PICK_LANES, cores, cta, [(w.core, [*addrs, w.count, *triples(w)]) for w in work], defines=dims_defines()
+    )
     # the counts once per core, one prefix slot read per lane (at most), the lane states written
     meta = fp.program_meta(
         NAME,
