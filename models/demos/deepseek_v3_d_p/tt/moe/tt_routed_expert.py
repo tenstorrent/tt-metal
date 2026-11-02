@@ -85,6 +85,10 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 # loader on the old dtype. That file belongs to another PR in this split, so it is a follow-up.
 DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE = ttnn.bfloat4_b
 
+# hybrid_routed_expert_moe's floor on big_first_threshold: below three tiles of tokens the first walk could end in
+# a partial eighth wave.
+_BIG_FIRST_MIN_TOKENS = 3 * 32
+
 
 def routed_expert_weight_memory_config(mesh_device, n_dim: int, dram_nd_sharded: bool) -> ttnn.MemoryConfig:
     """DRAM placement of one routed-expert weight tensor whose N (the free dim) is ``n_dim``.
@@ -851,6 +855,7 @@ class TtRoutedExpert(LightweightModule):
         seq_len_per_chip: int,
         combine_semaphores,
         forwarding_buffer: Optional[ttnn.Tensor] = None,
+        unified_waves: bool = False,
     ) -> ttnn.Tensor:
         """The routed expert overlapped with combine_fabric2d in one program; returns combine's output.
 
@@ -861,6 +866,10 @@ class TtRoutedExpert(LightweightModule):
         Blackhole only, on the ROW_MAJOR bf16 dispatch buffer: the routed expert writes bf8 tiles, as it does
         for the separate combine, and combine's untilizers dequantise them to bf16 rows. The threshold splits the experts as in forward(), except that the
         fused-only sentinel is not available: the one-program op always runs the unified half.
+
+        `unified_waves` runs every expert on unified_routed_expert_moe's wave-planned program instead of the
+        threshold split: no fused pass, the experts above the threshold first (big_first_threshold, when it is at
+        least the op's 96-token floor), and combine taking each expert as it finishes.
         """
         if not self._is_blackhole:
             raise NotImplementedError("the routed expert / combine overlap is Blackhole-only")
@@ -870,6 +879,10 @@ class TtRoutedExpert(LightweightModule):
                 f"{dispatched_buffer.layout} {dispatched_buffer.dtype}"
             )
         threshold = 0 if self.hybrid_token_threshold is None else self.hybrid_token_threshold
+        # The wave-planned program has no fused pass; the threshold only orders the experts, big ones first.
+        big_first_threshold = threshold if unified_waves and threshold >= _BIG_FIRST_MIN_TOKENS else 0
+        if unified_waves:
+            threshold = 0
         if threshold >= self.max_tokens:
             raise ValueError(
                 f"hybrid_token_threshold {threshold} leaves no expert to the unified half (max_tokens "
@@ -903,4 +916,6 @@ class TtRoutedExpert(LightweightModule):
             expert_go_semaphore=combine_semaphores[2],
             forwarding_buffer=forwarding_buffer,
             channel_semaphores=list(combine_semaphores[3:]),
+            unified_waves=unified_waves,
+            big_first_threshold=big_first_threshold,
         )

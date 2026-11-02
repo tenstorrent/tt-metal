@@ -249,6 +249,7 @@ class TtMoe(LightweightModule):
         combine_fwd_reduction: Optional[int] = None,
         dispatch_fwd_vc_pages: Optional[int] = None,
         gate_bias_centered: bool = False,
+        overlap_routed_expert_unified_waves: bool = True,
     ):
         """
         Initialize TtMoe module.
@@ -368,6 +369,10 @@ class TtMoe(LightweightModule):
                 None takes the op's default.
             gate_bias_centered: cache and use the gate's correction bias mean-centred (the model config's
                 MOE_GATE_BIAS_CENTERED, see tt_moe_gate_prefill.centre_gate_bias).
+            overlap_routed_expert_unified_waves: when the routed expert overlaps combine, run every expert on
+                unified_routed_expert_moe's wave-planned program (hybrid_routed_expert_moe unified_waves) instead of the
+                threshold split: the experts above routed_expert_hybrid_token_threshold go first, and combine takes each
+                expert as it finishes. On by default; False keeps the hybrid split inside the overlap.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -675,6 +680,12 @@ class TtMoe(LightweightModule):
         # group's rows of the table -- one row per ring chip -- and no other group's. Combine runs on mesh axis
         # 0, so a group is a mesh column: shard the groups across columns and replicate down each one.
         self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
+        self.overlap_routed_expert_unified_waves = overlap_routed_expert_unified_waves
+        if overlap_routed_expert_with_combine:
+            logger.info(
+                f"TtMoe: the overlap runs the routed expert as "
+                f"{'unified waves' if overlap_routed_expert_unified_waves else 'the hybrid split'}"
+            )
         # Fetched here, not in forward: the first call creates them and synchronizes, which a trace cannot capture.
         self.combine_overlap_semaphores = (
             self.tt_ccl.get_combine_overlap_semaphores() if overlap_routed_expert_with_combine else None
@@ -902,6 +913,7 @@ class TtMoe(LightweightModule):
             seq_len_per_chip=self.seq_len_per_chip,
             combine_semaphores=self.combine_overlap_semaphores,
             forwarding_buffer=self.combine_forwarding_buffer,
+            unified_waves=self.overlap_routed_expert_unified_waves,
         )
 
     def forward(
