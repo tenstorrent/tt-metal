@@ -61,19 +61,24 @@ def test_transpose_wh_sharded_rm_l1_budget_counts_tiles(device):
     Ht = H // TILE_DIM
     cb_limit = ttnn._ttnn.reports.get_device_info(device).cb_limit
 
-    # Input shard (H / num_cores, W) is resident; the promoted WIDTH_SHARDED output shard is (W, H / num_cores).
+    # Input shard (H / num_cores, W) is resident; the promoted WIDTH_SHARDED output shard (W, H / num_cores) is the
+    # same size and is reserved by the budget too. Both bounds include it, so output reservation alone can never
+    # trigger the fallback: only the tile-based CB estimate separates the old and real routes.
     shard_slope = (H // num_cores) * ELEM_BYTES
     old_slope = (2 + H) * ELEM_BYTES  # (2W + 2H + H*W) elements
     old_const = 2 * H * ELEM_BYTES
     real_slope = (2 + Ht) * TILE_BYTES // TILE_DIM  # (2Wt + 2Ht + Ht*Wt) tiles
     real_const = 2 * Ht * TILE_BYTES
-    w_old_fits = (cb_limit - old_const) // (old_slope + shard_slope)
-    w_real_overflows = (cb_limit - real_const) // (real_slope + shard_slope)
+    w_old_fits = (cb_limit - old_const) // (old_slope + 2 * shard_slope)
+    w_real_overflows = (cb_limit - real_const) // (real_slope + 2 * shard_slope)
     W = (w_old_fits + w_real_overflows) // 2 // TILE_DIM * TILE_DIM
 
     Wt = W // TILE_DIM
     free_l1 = cb_limit - shard_slope * W
-    if not old_slope * W + old_const < free_l1 < (2 * Wt + 2 * Ht + Ht * Wt) * TILE_BYTES:
+    output_shard = shard_slope * W
+    old_estimate = old_slope * W + old_const
+    real_estimate = (2 * Wt + 2 * Ht + Ht * Wt) * TILE_BYTES
+    if not old_estimate + output_shard < free_l1 < real_estimate + output_shard:
         pytest.skip(f"No W separates the estimates on this device (cb_limit={cb_limit})")
 
     _run_height_sharded_rm_transpose(device, (1, 1, H, W), num_cores)
