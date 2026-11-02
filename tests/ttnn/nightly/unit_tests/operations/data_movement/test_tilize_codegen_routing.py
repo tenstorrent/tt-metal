@@ -2,13 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# --- BEGIN GENERATED (agentic_port phase 8) ---
-# Contracts: (1) every case the codegen gate rejects falls back to native; (2) an accepted case
-# dispatched twice on the codegen path stays a program-cache hit and rebinds its buffers; (3) a
-# perf-demoted case still lands on native. This block is emitted from the port's coverage ledger
-# and is regenerated on every port update; hand-add off-grid regressions after its END line.
-# Contract (4), for the cache-transition legs: earlier tensors stay alive across later calls, and
-# program-cache entries are counted around the op call alone.
+# --- BEGIN GENERATED ---
+# Checks that ttnn.tilize serves in-scope cases with the codegen program, and that a cached codegen
+# program rebinds its buffers: repeat dispatches on fresh allocations, and a return to a program
+# after another one, stay program-cache hits with exact output. Earlier tensors stay alive across
+# later calls, and program-cache entries are counted around the op call alone.
+# This block is generated from the port's coverage data; add hand-written cases below its END line.
 
 import pytest
 import torch
@@ -245,4 +244,116 @@ def test_tilize_codegen_cache_survives_a_program_switch(
 # --- END GENERATED ---
 
 
-# --- Off-grid regressions (hand-added; edit here, not the emitter) ---
+# --- Hand-written cases ---
+
+
+def _native_route(device, xt, **kwargs):
+    # The forced native call builds native's program, so a routed call that lands on native is a
+    # cache hit; one that lands on codegen adds an entry.
+    golden = ttnn.to_torch(_force_native(xt, **kwargs))
+    before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, **kwargs)
+    return golden, out, device.num_program_cache_entries() - before
+
+
+def _height_sharded_l1(shape, num_cores):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_spec = ttnn.ShardSpec(grid, [shape[-2] // num_cores, shape[-1]], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
+# (shape, input placement, tilize kwargs): each case is outside the codegen scope for one reason.
+_FALLBACK = {
+    "sharded_input": ([1, 1, 64, 64], _height_sharded_l1([1, 1, 64, 64], 2), {"memory_config": ttnn.L1_MEMORY_CONFIG}),
+    "block_float_output": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, {"dtype": ttnn.bfloat8_b}),
+    "use_multicore_false": ([1, 1, 64, 64], ttnn.DRAM_MEMORY_CONFIG, {"use_multicore": False}),
+}
+
+
+@pytest.mark.parametrize("case", list(_FALLBACK))
+def test_tilize_out_of_scope_case_falls_back_to_native(device, case):
+    shape, placement, kwargs = _FALLBACK[case]
+    torch.manual_seed(0)
+    host = torch.rand(shape, dtype=torch.bfloat16)
+    xt = ttnn.from_torch(
+        host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement
+    )
+    golden, out, added = _native_route(device, xt, **kwargs)
+    assert added == 0, "auto built a new program for an out-of-scope case; expected native's cached program"
+    assert out.layout == ttnn.TILE_LAYOUT
+    assert_equal(golden, ttnn.to_torch(out))
+    if "dtype" not in kwargs:
+        assert_equal(host, ttnn.to_torch(out))
+
+
+@pytest.mark.parametrize("case", ["sharded_input", "block_float_output"])
+def test_tilize_forced_codegen_refuses_out_of_scope_case(device, case, expect_error):
+    shape, placement, kwargs = _FALLBACK[case]
+    xt = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=placement,
+    )
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, **kwargs)
+
+
+# --- Live-L1 CB plan ---
+# The CB plan is sized from the L1 free at dispatch and is part of the program-cache key. A row-route
+# case (more tile rows than cores, so no column split and no write batching) double-buffers its whole
+# 32-tile row when L1 is clear; with the free L1 pinned below that footprint it must compile a
+# column-chunked plan instead of replaying the cached one.
+_PLAN_SHAPE = [1, 1, 160 * 32, 32 * 32]
+_BF16_TILE_BYTES = 32 * 32 * 2
+_FULL_ROW_DOUBLE_BUFFERED = 2 * 32 * 2 * _BF16_TILE_BYTES  # input + output CBs, two rows deep
+_PIN_HEADROOM = 96 * 1024
+
+
+def _pin_l1_headroom(device, headroom_bytes):
+    """Lowers the live L1 frontier to about `headroom_bytes` above the CB base on every bank."""
+    info = ttnn._ttnn.reports.get_device_info(device)
+    tiles_per_bank = (info.cb_limit - headroom_bytes) // _BF16_TILE_BYTES
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    return resident, resident.buffer_address() - info.address_at_first_l1_cb_buffer
+
+
+def test_tilize_codegen_cb_plan_follows_live_l1(device):
+    grid = device.compute_with_storage_grid_size()
+    assert _PLAN_SHAPE[-2] // 32 >= grid.x * grid.y, "the plan case must keep more tile rows than cores"
+    torch.manual_seed(0)
+    host = torch.rand(_PLAN_SHAPE, dtype=torch.bfloat16)
+    xt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    device.clear_program_cache()
+
+    out, added = _codegen_added(device, lambda: ttnn.tilize(xt, **kwargs))
+    assert_equal(host, ttnn.to_torch(out))
+    assert added > 0, "auto served the unpressured call on native; expected codegen"
+    entries_clear = device.num_program_cache_entries()
+
+    resident, headroom = _pin_l1_headroom(device, _PIN_HEADROOM)
+    try:
+        assert (
+            8 * _BF16_TILE_BYTES <= headroom < _FULL_ROW_DOUBLE_BUFFERED
+        ), f"pinned headroom {headroom} B does not force a smaller plan"
+        out = ttnn.tilize(xt, **kwargs)
+        assert_equal(host, ttnn.to_torch(out))
+        msg = "the pinned call replayed the program planned for clear L1"
+        assert device.num_program_cache_entries() == entries_clear + 1, msg
+    finally:
+        ttnn.deallocate(resident)
+
+    # Releasing the pin restores the original plan, which is still cached.
+    out = ttnn.tilize(xt, **kwargs)
+    assert_equal(host, ttnn.to_torch(out))
+    assert (
+        device.num_program_cache_entries() == entries_clear + 1
+    ), "releasing the pin did not return to the cached plan"
