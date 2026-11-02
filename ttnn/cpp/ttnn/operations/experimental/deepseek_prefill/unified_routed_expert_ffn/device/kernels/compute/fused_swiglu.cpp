@@ -63,6 +63,14 @@
 #include "api/debug/assert.h"
 #include "api/debug/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+
+// Weight (in1) tiles stored with their 32x32 contents transposed, so block-float exponents run along
+// K; every matmul init and call transposes them back in the unpacker.
+#ifdef IN1_TRANSPOSE_TILE
+constexpr uint32_t kIn1Transpose = 1;
+#else
+constexpr uint32_t kIn1Transpose = 0;
+#endif
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
 
@@ -255,7 +263,7 @@ FORCE_INLINE void matmul_phase(
                                     in0_index,
                                     in1_index,
                                     /*dst_index=*/0,
-                                    /*transpose=*/0,
+                                    /*transpose=*/kIn1Transpose,
                                     this_w,
                                     out_subblock_h,
                                     in0_block_w);
@@ -516,7 +524,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                 }
             }
             reconfig_data_format_srca(gate_cb_id);
-            matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+            matmul_block_init(x_cb_id, gate_cb_id, kIn1Transpose, out_subblock_w, out_subblock_h, in0_block_w);
             pack_reconfig_data_format(x_cb_id, partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
@@ -549,7 +557,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                                 in0_index,
                                 in1_index,
                                 /*dst_index=*/0,
-                                /*transpose=*/0,
+                                /*transpose=*/kIn1Transpose,
                                 out_subblock_w,
                                 out_subblock_h,
                                 in0_block_w);
@@ -576,7 +584,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                                 in0_index,
                                 in1_index,
                                 /*dst_index=*/0,
-                                /*transpose=*/0,
+                                /*transpose=*/kIn1Transpose,
                                 out_subblock_w,
                                 out_subblock_h,
                                 in0_block_w);
@@ -1075,7 +1083,7 @@ void kernel_main() {
             matmul_block_init(
                 cb_in0_x,
                 cb_in1_gate,
-                /*transpose=*/0,
+                /*transpose=*/kIn1Transpose,
                 gu_out_subblock_w,
                 gu_out_subblock_h,
                 g_in0_block_w);
@@ -1138,7 +1146,7 @@ void kernel_main() {
             matmul_block_init(
                 cb_in0_down_full,
                 cb_in1_down,
-                /*transpose=*/0,
+                /*transpose=*/kIn1Transpose,
                 d_out_subblock_w,
                 d_out_subblock_h,
                 d_in0_block_w);
