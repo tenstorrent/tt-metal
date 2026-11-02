@@ -435,7 +435,7 @@ def test_semaphores_start_at_zero_on_every_call(device):
             ),
         ],
         semaphores=[E.SemaphoreSpec(unique_id="sem", target_nodes=node)],
-        work_units=[E.WorkUnitSpec(kernels=["producer", "consumer"], target_nodes=node)],
+        work_units=[E.WorkUnitSpec(name="loopback", kernels=["producer", "consumer"], target_nodes=node)],
     )
     # The producer raises the semaphore by 1 and the consumer waits until it equals 1. If a call started from the value
     # the previous one left, the third call would start at 2 and never finish.
