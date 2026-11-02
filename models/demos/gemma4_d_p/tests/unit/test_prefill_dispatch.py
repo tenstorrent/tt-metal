@@ -10,12 +10,14 @@ import pytest
 
 import ttnn
 from models.demos.gemma4_d_p.tt.model import Gemma4Model
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4ServiceConfig
 
 
 @pytest.mark.parametrize("ack_mode", ["callback", "segmented_trace", "socket"])
 def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     events = []
-    hidden = SimpleNamespace(shape=(1, 1, 1024, 64), is_sharded=lambda: False)
+    chunk = Gemma4ServiceConfig.CHUNK_SIZE
+    hidden = SimpleNamespace(shape=(1, 1, chunk // 8, 64), is_sharded=lambda: False)
     model = object.__new__(Gemma4Model)
     model.mesh_device = object()
     model.dflash = None
@@ -34,7 +36,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     def layer(idx):
         def forward(x, **kwargs):
             assert kwargs["prefill_metadata"] is model.prefill_metadata
-            assert kwargs["chunk_start_idx"] == 8192
+            assert kwargs["chunk_start_idx"] == chunk
             layer_type = model.hf_config.layer_types[idx]
             packed_key = "packed_global_rope" if layer_type == "full_attention" else "packed_sliding_rope"
             assert kwargs[packed_key] == layer_type
@@ -56,7 +58,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     monkeypatch.setattr(ttnn.experimental.deepseek_prefill, "outbound_socket_service_sync", socket_ack)
     output = model(
         hidden,
-        chunk_start_idx=8192,
+        chunk_start_idx=chunk,
         on_layer_complete=lambda idx: events.append(("ack", idx)),
         d2h_service=service if ack_mode == "socket" else None,
         metadata_msg=metadata if ack_mode == "socket" else None,

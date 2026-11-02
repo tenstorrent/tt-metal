@@ -1155,10 +1155,10 @@
 # ===== Gemma4-31B D_P =================================================================================
 
 # Sanity gate for the standalone disaggregated-prefill implementation: the
-# canonical production shape (traced, 256k context, 8k chunk, 8x4 = CP8/TP4)
+# canonical production shape (traced, 256k context, service chunk size, 8x4 = CP8/TP4)
 # exercised end to end on real text. Golden GPU-trace comparisons are staged
 # separately on /mnt/models; this leg only checks the path runs.
-- name: "(Gemma4-31B-it) D_P prefill sanity 256k@8k"
+- name: "(Gemma4-31B-it) D_P prefill sanity 256k"
   fabric_profile: 1d
   cmd: |
     export HF_HUB_OFFLINE=1
@@ -1185,7 +1185,7 @@
   sp_config: sc1
 
 
-- name: "(Gemma4-31B-it) disaggregated prefill KV accuracy 256k@8k"
+- name: "(Gemma4-31B-it) disaggregated prefill KV accuracy 256k"
   fabric_profile: 1d
   artifact_subdir: gemma4_mock256k
   cmd: |
@@ -1216,7 +1216,7 @@
 
 # Prefill accuracy outside the migration path: one traced runtime prefills each GPU-trace dataset, then
 # checks every KV head and the next-token likelihoods (per context-depth bin) against the trace.
-- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy full@8k"
+- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy full"
   fabric_profile: 1d
   artifact_subdir: gemma4_d_p_prefill_accuracy
   cmd: |

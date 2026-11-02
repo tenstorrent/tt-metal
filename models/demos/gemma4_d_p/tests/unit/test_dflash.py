@@ -164,9 +164,9 @@ def test_model_taps_reset_each_chunk_and_ack_after_writes(monkeypatch, enabled, 
     for turn in range(2):
         events.clear()
         result = model(
-            SimpleNamespace(shape=(1, 1, 1024, 128), value=turn + 1),
+            SimpleNamespace(shape=(1, 1, gemma4.Gemma4ServiceConfig.CHUNK_SIZE // 8, 128), value=turn + 1),
             user_id=turn,
-            chunk_start_idx=turn * 8192,
+            chunk_start_idx=turn * gemma4.Gemma4ServiceConfig.CHUNK_SIZE,
             on_layer_complete=lambda idx: events.append(("ack", idx)),
             d2h_service=object() if ack_mode == "socket" else None,
             metadata_msg=object(),

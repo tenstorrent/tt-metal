@@ -45,6 +45,7 @@ from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM
 from models.demos.gemma4_d_p.tt.attention import ring_prefill
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_sdpa_chunk_sizes
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4ServiceConfig
 from models.demos.gpt_oss_d_p.tt.attention.kv_cache import bounded_blockcyclic_positions, sliding_capacity_tokens
 
 # ============================================================================
@@ -6248,7 +6249,7 @@ GEMMA4_CHUNKED_PRODUCTION_PERF_CONFIGS = [
 # one prefill. Options are environment variables, not pytest options: the perf table profiles its case in a pytest
 # subprocess, which must collect the same cases.
 #
-#   GEMMA4_PERF_SWEEP_CHUNK_SIZES  prefill chunk sizes c, comma-separated (default 8192, production's); each must be
+#   GEMMA4_PERF_SWEEP_CHUNK_SIZES  prefill chunk sizes c, comma-separated (default production's); each must be
 #                                  a chunk size production accepts (prefill_chunk_geometry_error)
 #   GEMMA4_PERF_SWEEP_ISL          input sequence length the prefill reaches, in tokens; a multiple of every c
 #                                  (default 262144)
@@ -6263,9 +6264,7 @@ GEMMA4_CHUNKED_PRODUCTION_PERF_CONFIGS = [
 GEMMA4_PERF_SWEEP_CHUNK_SIZES_ENV = "GEMMA4_PERF_SWEEP_CHUNK_SIZES"
 GEMMA4_PERF_SWEEP_ISL_ENV = "GEMMA4_PERF_SWEEP_ISL"
 GEMMA4_PERF_SWEEP_PREFIXES_ENV = "GEMMA4_PERF_SWEEP_PREFIXES"
-# Production prefills Gemma 4 in 8192-token chunks (Gemma4ServiceConfig.CHUNK_SIZE in
-# models/demos/gemma4_d_p/tt/runners/adapters/gemma4.py).
-GEMMA4_PERF_SWEEP_DEFAULT_CHUNK_SIZES = (8192,)
+GEMMA4_PERF_SWEEP_DEFAULT_CHUNK_SIZES = (Gemma4ServiceConfig.CHUNK_SIZE,)
 GEMMA4_PERF_SWEEP_DEFAULT_PREFIXES = "0,c,isl/2,isl-c"
 _PREFIX_OPERATORS = {
     ast.Add: operator.add,
@@ -8567,12 +8566,12 @@ def test_ring_joint_attention_gemma4_create_chunked_perf_table(perf_config, gemm
     variant, with the whole prefill's time and util estimated from them.
 
     Environment options (details next to GEMMA4_PERF_SWEEP_ISL_ENV):
-      GEMMA4_PERF_SWEEP_CHUNK_SIZES=8192               prefill chunk sizes c (production's)
+      GEMMA4_PERF_SWEEP_CHUNK_SIZES=<production's>     prefill chunk sizes c
       GEMMA4_PERF_SWEEP_ISL=262144                     tokens the prefill reaches
       GEMMA4_PERF_SWEEP_PREFIXES=0,c,isl/2,isl-c       where to profile, as prefix lengths in tokens
       GEMMA4_PERF_SWEEP_REPORT=generated/gemma4_perf_sweep/report.csv   one row per case, summarized at the end
     Every distinct program is swept; narrow a run with pytest -k, e.g.
-      GEMMA4_PERF_SWEEP_CHUNK_SIZES=4096 GEMMA4_PERF_SWEEP_ISL=131072 pytest <this test> -k "q96 or q128"
+      GEMMA4_PERF_SWEEP_CHUNK_SIZES=8192 GEMMA4_PERF_SWEEP_ISL=131072 pytest <this test> -k "q96 or q128"
     """
     check_gemma4_perf_sweep_options()
     result = _run_chunked_perf_table(
@@ -8996,8 +8995,8 @@ def test_ring_joint_attention_gemma4_global_ksplit_accuracy(tokens_per_device, q
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "tokens_per_device,q_chunk_size,k_splits",
-    [(256, 64, 3), (1024, 96, 1)],
-    ids=["chunk2048-q64-ksplit", "chunk8192-q96-unsplit"],
+    [(256, 64, 3), (512, 128, 3), (1024, 96, 1)],
+    ids=["chunk2048-q64-ksplit", "chunk4096-q128-ksplit", "chunk8192-q96-unsplit"],
 )
 def test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy(tokens_per_device, q_chunk_size, k_splits):
     """Gemma4's global attention with its matmuls at LoFi, on the packed K/V cache at the K-split and unsplit configs."""
