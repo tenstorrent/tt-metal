@@ -514,6 +514,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         // qc / kc are writer-produced then and qkm exists; the kernel guards both with #if GDN_QKSHARE
         compute.compiler_options.defines.emplace("GDN_QKSHARE", "1");
     }
+    if (FP32 && (a.kernel_opts & kGdnSpecOptRowsSfpu) != 0 && T % 2 == 0) {
+        compute.compiler_options.defines.emplace("GDN_ROWS_SFPU", "1");  // user-row SFPU tails (bit-identical)
+    }
     if (A3_HALF) {
         compute.compiler_options.defines.emplace("GDN_A3_HALF", "1");
     }

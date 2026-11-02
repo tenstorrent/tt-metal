@@ -129,6 +129,9 @@ SPEC_STEP_OPT_NARROW_GR = 1024
 # (rows < Lw) and from the raw qkv / z tiles (the user's T rows) into zero-filled slots. Bit-identical;
 # QWEN36_SPEC_STEP_NARROW_SRC=1 adds it wherever the fp32-state restructurings (QWEN36_SPEC_STEP_OPT) are on.
 SPEC_STEP_OPT_NARROW_SRC = 8192
+# gov gdn-v2 (kernel_opts bit 14, kGdnSpecOptRowsSfpu): the conv's SFPU tail (with A3_HALF) and silu(z) run only on the
+# SFPU row pairs holding the user's T rows (T even). Bit-identical; QWEN36_SPEC_STEP_ROWS_SFPU=1 adds it like NARROW_SRC.
+SPEC_STEP_OPT_ROWS_SFPU = 16384
 
 
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
@@ -3699,6 +3702,12 @@ class TPGatedDeltaNet:
             _log_spec_step_once(
                 ("narrow_src", T),
                 "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_SRC=1: row-narrow src / z reads (bit-identical)",
+            )
+        if os.environ.get("QWEN36_SPEC_STEP_ROWS_SFPU", "0").strip() == "1" and extra.get("kernel_opts", 0):
+            extra["kernel_opts"] |= SPEC_STEP_OPT_ROWS_SFPU
+            _log_spec_step_once(
+                ("rows_sfpu", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_ROWS_SFPU=1: user-row SFPU tails (bit-identical)",
             )
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,

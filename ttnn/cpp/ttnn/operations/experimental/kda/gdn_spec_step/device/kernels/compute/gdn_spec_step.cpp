@@ -75,6 +75,9 @@
 #if GDN_VS_TAIL && !GDN_VSPLIT
 #error "GDN_VS_TAIL needs GDN_VSPLIT"
 #endif
+#ifndef GDN_ROWS_SFPU
+#define GDN_ROWS_SFPU 0  // kernel_opts bit 14 (T even): SFPU tails on the user's row pairs only (see sfpu_rows)
+#endif
 #ifndef GDN_HOIST_INV
 #define GDN_HOIST_INV 0  // kernel_opts bit 3: the token-independent rsqrt(stats + eps) * scale of qn, once
 #endif
@@ -351,6 +354,65 @@ ALWI void sfpu_half(F f, uint32_t base_tile, bool bottom, Args... args) {
 #endif
 }
 #endif  // GDN_A3_HALF
+
+#if GDN_ROWS_SFPU
+// ROWS_SFPU: one SFPU face routine instantiated with N = T / 2 iterations (an iteration covers one dest row pair of a
+// face, as calculate_silu's dst_reg++ stride of 2 rows does), run on rows [lr, lr + T) of the two faces of the tile half
+// that holds the user's rows (lr = r0 % 16, even since T is even): `skip` = lr / 2 row-pair advances first. The face
+// advance (_llk_math_eltwise_sfpu_inc_dst_face_addr_) is relative to the face base, as in sfpu_half (whose routines
+// advance 8 row pairs per face). Operand dst indices of binary routines are relative to the same counter, so every
+// operand tile is offset alike. MATH thread only.
+template <typename F, typename... Args>
+ALWI void sfpu_rows(F f, uint32_t base_tile, bool bottom, uint32_t skip, Args... args) {
+#ifdef TRISC_MATH
+    _llk_math_eltwise_sfpu_start_(base_tile);
+    if (bottom) {
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    }
+#pragma GCC unroll 0
+    for (int face = 0; face < 2; face++) {
+#pragma GCC unroll 0
+        for (uint32_t i = 0; i < skip; ++i) {
+            sfpi::dst_reg++;
+        }
+        f(args...);
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    }
+    _llk_math_eltwise_sfpu_done_();
+#else
+    (void)f;
+    (void)base_tile;
+    (void)bottom;
+    (void)skip;
+    ((void)args, ...);
+#endif
+}
+
+// zs[i] = silu(z[i]) on the user's row pairs (sfpu_rows); the other rows keep the copied z values, which only ever
+// meet other users' rows of the per-row phase-D tail (the writer emits the user's T rows only)
+template <uint32_t T>
+__attribute__((noinline)) void silu_tiles_rows(
+    uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32_t n, bool bottom, uint32_t skip) {
+    out_dfb.reserve_back(n);
+    pack_reconfig_data_format(out);
+    reconfig_data_format_srca(a);
+    copy_init(a);
+    silu_tile_init();
+    for (uint32_t i = 0; i < n; ++i) {
+        tile_regs_acquire();
+        copy_tile(a, i, 0);
+#ifdef TRISC_MATH
+        sfpu_rows(ckernel::sfpu::calculate_silu<DST_ACCUM_MODE, T / 2>, 0, bottom, skip);
+#endif
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out, i);
+        tile_regs_release();
+    }
+    out_dfb.push_back(n);
+}
+#endif  // GDN_ROWS_SFPU
 
 #if GDN_VS_TAIL
 // VS_TAIL: scale_rows / gated_out on tiles [first, first + n) of their row operands only (per-tile ops unchanged)
@@ -723,6 +785,14 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     const bool a3_half = (a3_r0 / 16) == ((a3_r0 + T - 1) / 16);
     const bool a3_bottom = a3_r0 >= 16;
 #endif
+#if GDN_ROWS_SFPU
+    static_assert(T % 2 == 0, "ROWS_SFPU: T even (the factory defines it only then)");
+    // the user's rows within its tile half: lr = r0 % 16 (even), lr + T <= 16 when they do not cross row 16
+    const uint32_t rows_r0 = (u * T) % 32;
+    const bool rows_ok = (rows_r0 / 16) == ((rows_r0 + T - 1) / 16);
+    const bool rows_bottom = rows_r0 >= 16;
+    const uint32_t rows_skip = (rows_r0 % 16) / 2;
+#endif
 #if GDN_GSC_SPLIT
     // gsc word of beta[t] / dec[t]: one 16-word (64 B) slot per token, so each value block writes its tokens' slots
     // into every block with 64 B-aligned NoC writes
@@ -849,7 +919,15 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     {
         DeviceZoneScopedN("c_silu");
         z_in.wait_front(Vt);
+#if GDN_ROWS_SFPU
+        if (rows_ok) {
+            silu_tiles_rows<T>(dfb::z_in, dfb::zs, zs, Vt, rows_bottom, rows_skip);
+        } else {
+            silu_tiles(dfb::z_in, dfb::zs, zs, Vt);
+        }
+#else
         silu_tiles(dfb::z_in, dfb::zs, zs, Vt);
+#endif
         z_in.pop_front(Vt);
         zs.wait_front(Vt);
     }
@@ -957,8 +1035,60 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
             // rvtt_synth_renumber) in this body
             add_binary_tile_init();
 #if GDN_A3_HALF
+#if GDN_ROWS_SFPU
+            if (a3_half && rows_ok) {
+#else
             if (a3_half) {
+#endif
                 static_assert(K == 4, "A3_HALF: the K = 4 tap sum");
+#if GDN_ROWS_SFPU
+#ifdef TRISC_MATH
+                sfpu_rows(
+                    ckernel::sfpu::calculate_sfpu_binary<
+                        APPROX,
+                        ckernel::BinaryOp::ADD,
+                        T / 2,
+                        DST_ACCUM_MODE,
+                        ckernel::DstRoundingMode::Default>,
+                    0,
+                    a3_bottom,
+                    rows_skip,
+                    0u,
+                    1u,
+                    0u);
+                sfpu_rows(
+                    ckernel::sfpu::calculate_sfpu_binary<
+                        APPROX,
+                        ckernel::BinaryOp::ADD,
+                        T / 2,
+                        DST_ACCUM_MODE,
+                        ckernel::DstRoundingMode::Default>,
+                    0,
+                    a3_bottom,
+                    rows_skip,
+                    0u,
+                    2u,
+                    0u);
+                sfpu_rows(
+                    ckernel::sfpu::calculate_sfpu_binary<
+                        APPROX,
+                        ckernel::BinaryOp::ADD,
+                        T / 2,
+                        DST_ACCUM_MODE,
+                        ckernel::DstRoundingMode::Default>,
+                    0,
+                    a3_bottom,
+                    rows_skip,
+                    0u,
+                    3u,
+                    0u);
+#endif
+                silu_tile_init();
+#ifdef TRISC_MATH
+                sfpu_rows(ckernel::sfpu::calculate_silu<DST_ACCUM_MODE, T / 2>, 0, a3_bottom, rows_skip);
+#endif
+            } else if (a3_half) {
+#endif  // GDN_ROWS_SFPU
 #ifdef TRISC_MATH  // the face routines exist on the math thread only (both branches are no-ops elsewhere)
                 sfpu_half(
                     ckernel::sfpu::calculate_sfpu_binary<

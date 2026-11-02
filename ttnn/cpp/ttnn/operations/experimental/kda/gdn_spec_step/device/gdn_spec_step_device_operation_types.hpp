@@ -93,9 +93,13 @@ enum GdnSpecStepKernelOpt : uint32_t {
     // are zero-filled first, so the rows the one-hot gathers / row masks multiply by 0 hold finite zeros. Bit-identical.
     // (Bits 8 / 9 / 11 / 12 are taken on other branches.)
     kGdnSpecOptNarrowSrc = 1u << 13,
+    // gov gdn-v2: the SFPU tails whose rows outside the user's T rows never reach an output -- the conv's tap sum +
+    // silu (with A3_HALF: same tile half) and the silu(z) gate operand -- run only on the SFPU row pairs holding the
+    // user's rows (T even). Rows outside keep finite values that the one-hot placement / per-row tail ignore. Bit-identical.
+    kGdnSpecOptRowsSfpu = 1u << 14,
     kGdnSpecOptAll = kGdnSpecOptFusedDecay | kGdnSpecOptGateScalars | kGdnSpecOptEarlySrc | kGdnSpecOptHoistInv |
                      kGdnSpecOptQkShare | kGdnSpecOptA3Half | kGdnSpecOptGscSplit | kGdnSpecOptVsTail |
-                     kGdnSpecOptNarrowGateReads | kGdnSpecOptNarrowSrc,
+                     kGdnSpecOptNarrowGateReads | kGdnSpecOptNarrowSrc | kGdnSpecOptRowsSfpu,
 };
 
 struct GdnSpecStepInputs {
