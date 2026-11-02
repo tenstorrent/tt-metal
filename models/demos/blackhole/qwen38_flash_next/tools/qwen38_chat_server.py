@@ -94,6 +94,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
     mtp_capacity_admission,
     mtp_verify_forms,
     open_partition_b_mesh,
+    parse_accept_schedule,
     resolve_route,
     template_decoder,
 )
@@ -1929,6 +1930,7 @@ def record_agreement(
     producer: dict[str, Any],
     full_logits_dir: Path | None = None,
     item_ids: Sequence[str] = (),
+    verify_accept: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """A1's device column: every corpus item teacher-forced through the session (a prompt followed by the HF
     reference's argmax chain), the resolved argmax and the candidate row (every shard's top-32) per scored position as
@@ -1942,8 +1944,13 @@ def record_agreement(
     tool's ``--full-logits`` format (``<item>.pt``: ``positions`` and ``logits_fp16`` [n, V]): the LM head's bf16 row,
     gathered eagerly after each recorded TAIL; fp16 holds every bf16 logit exactly except values below 2^-17 in
     magnitude (rounded to 2^-24 steps; the record counts them).
+
+    ``verify_accept`` (the schedule of accepted drafts per pass) takes the rows from the MTP verify passes instead
+    (``Qwen38ChatSession.teacher_force_verify``: reference drafts, forced accepts, the same records and score).
     """
 
+    if verify_accept is not None and full_logits_dir is not None:
+        raise Qwen38ChatChainError("the verify gate keeps no full logits (the head readback holds the candidate rows)")
     manifest, items = reference_corpus.load_corpus(corpus_dir)
     _document, hf = reference_corpus.load_reference(reference, manifest=manifest)
     records_dir = out_dir / "agreement-records"
@@ -1972,9 +1979,14 @@ def record_agreement(
                 if item.continuation_tokens
                 else scored[-reference_corpus.LONG_WINDOW :]
             )
-        replay = session.teacher_force(
-            stream[: item.positions], positions=scored, full_logits=full_logits_dir is not None
-        )
+        if verify_accept is None:
+            replay = session.teacher_force(
+                stream[: item.positions], positions=scored, full_logits=full_logits_dir is not None
+            )
+        else:
+            replay = session.teacher_force_verify(
+                stream[: item.positions], positions=scored, accept_schedule=verify_accept
+            )
         document = {
             "schema": reference_corpus.AGREEMENT_RECORDS_SCHEMA,
             "item_id": item.item_id,
@@ -1982,6 +1994,7 @@ def record_agreement(
             "prefill_mode": replay.prefill_mode,
             "chunks": replay.chunks,
             "forced_tokens": replay.forced_tokens,
+            **({} if verify_accept is None else {"verify_passes": replay.verify_passes}),
             "seconds": round(replay.seconds, 3),
             "positions": [
                 {
@@ -2266,6 +2279,18 @@ def _parser() -> argparse.ArgumentParser:
         "directory (the corpus tool's --full-logits .pt format; one eager gather and readback per position)",
     )
     parser.add_argument(
+        "--agreement-verify",
+        action="store_true",
+        help="with --agreement-reference and --mtp: score the MTP verify rows instead of the 1-row TAIL (reference "
+        "tokens as the drafts, forced accepts, split verify form, chunked prefill; same records and score)",
+    )
+    parser.add_argument(
+        "--agreement-verify-accept",
+        default="4",
+        help="with --agreement-verify: accepted drafts per pass, a count or a comma list that cycles "
+        "(default 4; e.g. 4,2,0,3,1 exercises the partial-accept commit)",
+    )
+    parser.add_argument(
         "--agreement-corpus",
         type=Path,
         default=reference_corpus.REFERENCE_DIR,
@@ -2463,6 +2488,18 @@ def main() -> int:
         raise SystemExit("--agreement-reference needs --sampling (the records read the candidate row)")
     if args.agreement_reference is not None and not args.agreement_reference.is_file():
         raise SystemExit(f"--agreement-reference {args.agreement_reference}: not a file")
+    verify_accept = None
+    if args.agreement_verify:
+        if args.agreement_reference is None or args.mtp is None:
+            raise SystemExit("--agreement-verify needs --agreement-reference and --mtp")
+        if args.agreement_full_logits is not None:
+            raise SystemExit("--agreement-verify does not combine with --agreement-full-logits")
+        if args.prefill_mode != "chunked":
+            raise SystemExit("--agreement-verify needs --prefill-mode chunked")
+        try:
+            verify_accept = parse_accept_schedule(args.agreement_verify_accept, int(args.mtp))
+        except ValueError as error:
+            raise SystemExit(f"--agreement-verify-accept: {error}")
     if args.agreement_items and args.agreement_reference is None:
         raise SystemExit("--agreement-items needs --agreement-reference")
     if args.agreement_full_logits is not None and args.agreement_reference is None:
@@ -2490,6 +2527,8 @@ def main() -> int:
             raise SystemExit(f"{name} is {os.environ.get(name)!r}, expected {expected!r}")
     mtp_sampled = mtp_sampled_switch(os.environ, applicable=args.mtp is not None and bool(args.sampling))
     mtp_drafts_admitted = mtp_drafts_per_request_switch(os.environ, drafts=args.mtp)
+    if args.agreement_verify and not mtp_sampled:
+        raise SystemExit("--agreement-verify needs the split verify form (--mtp with --sampling, mtp_sampled on)")
     if mtp_sampled and (args.mtp is None or not args.sampling):
         raise SystemExit(
             f"{MTP_SAMPLED_VARIABLE}=1 needs --mtp and --sampling (the pass loop drafts for sampled requests)"
@@ -2608,6 +2647,7 @@ def main() -> int:
                 "corpus": str(args.agreement_corpus),
                 "parts": list(args.agreement_parts),
                 "item_ids": list(args.agreement_items),
+                "verify_accept": None if not args.agreement_verify else args.agreement_verify_accept,
                 "full_logits": None if args.agreement_full_logits is None else str(args.agreement_full_logits),
             }
         ),
@@ -2966,7 +3006,8 @@ def main() -> int:
                 out_dir=evidence,
                 producer={
                     "kind": "device",
-                    "label": f"served chain, {session.prefill_mode} prefill, {summary['system_fingerprint']}",
+                    "label": f"served chain, {session.prefill_mode} prefill, {summary['system_fingerprint']}"
+                    + ("" if verify_accept is None else f", verify k={args.mtp} accept {list(verify_accept)}"),
                     "prefill_mode": session.prefill_mode,
                     "sampling": summary["sampling"],
                     "mtp": args.mtp,
@@ -2976,6 +3017,7 @@ def main() -> int:
                     "normalisation": "log-softmax over the candidate row",
                 },
                 full_logits_dir=args.agreement_full_logits,
+                verify_accept=verify_accept,
             )
             marker("after-agreement-records")
         if args.sampling_discriminator:

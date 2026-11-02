@@ -2933,15 +2933,24 @@ class Qwen38TTNNMTPChain:
         self._timed(segments, "host_inputs", lambda: write_verify_inputs(self.model, self.verify, tokens))
         return self._finish_pass(tokens, segments)
 
-    def step(self) -> Qwen38TTNNMTPPassRecord:
+    def step_forced(self, tokens: Sequence[int]) -> Qwen38TTNNMTPPassRecord:
+        """:meth:`step` on host-chosen tokens ``[t_P, d_1 .. d_k]`` instead of the ones the draft landed: the commit
+        of the previous pass is enqueued first, then the token row, the draft lanes and the PLE rows are written from
+        the host (:func:`write_verify_inputs`; the commit trace reads none of them).  The teacher-forced verify gate's
+        pass; the split form's host decision supplies the accept count."""
+
+        return self.step(forced_tokens=tokens)
+
+    def step(self, forced_tokens: Sequence[int] | None = None) -> Qwen38TTNNMTPPassRecord:
         """One traced pass on the tokens the previous pass read: [commit], PLE rows, verify, draft, readback (with
-        the early rows reader: [commit], PLE rows 2..k + upload, verify, draft, the lanes, PLE rows 0-1, readback)."""
+        the early rows reader: [commit], PLE rows 2..k + upload, verify, draft, the lanes, PLE rows 0-1, readback).
+        ``forced_tokens`` (see :meth:`step_forced`) replace those tokens."""
 
         if not self.records:
             raise RuntimeError("bootstrap the chain first")
         self._require_room()
         segments: dict[str, int] = {}
-        tokens = self.next_tokens
+        tokens = self.next_tokens if forced_tokens is None else [int(token) for token in forced_tokens]
         early_rows, self._early_rows = self._early_rows, None
         if self.traces.commit is not None and self.commit_queue is not None and self.enqueue is not None:
             self._timed(segments, "commit_enqueue", lambda: self.commit_queue.enqueue_commit(self.traces.commit))
@@ -2951,7 +2960,11 @@ class Qwen38TTNNMTPChain:
             self._timed(segments, "commit_enqueue", lambda: self.enqueue(self.traces.commit))
         elif self.traces.commit is not None:
             self._timed(segments, "commit_replay", lambda: self.replay(self.traces.commit))
-        if early_rows is not None:
+        if forced_tokens is not None:
+            if early_rows is not None or self.early_reader is not None:
+                raise RuntimeError("forced tokens do not combine with the early rows reader")
+            self._timed(segments, "host_inputs", lambda: write_verify_inputs(self.model, self.verify, tokens))
+        elif early_rows is not None:
             self._timed(
                 segments,
                 "ple_rows_late",

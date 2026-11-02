@@ -128,6 +128,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import ZERO_EMBEDDI
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_rows_scan as gdn_rows_scan_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import mtp_accept as mtp_accept_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.model import GENERIC_HEAD_LAYERS, Qwen38TTNNGenericTraceKey
+from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import SAMPLING_CANDIDATE_ROW_SHAPE, Qwen38CandidateRow
 
 # The device position P must stay below allocated_context (RoPE table lookup, KV write); the consumed EOS step and a
 # little slack are the headroom.  CONTEXT_LIMIT is the default (32k) build's; a session derives its own from the
@@ -913,6 +914,123 @@ class Qwen38TeacherForcedRows:
     seconds: float
     full_logits: dict[int, Any] = field(default_factory=dict)
     full_logits_seconds: float = 0.0
+    verify_passes: int = 0  # :meth:`teacher_force_verify`: the verify passes the replay ran (0 on the 1-row replay)
+
+
+# -- the teacher-forced verify gate's bookkeeping (host only; the session wires the chain's calls in) -----------
+
+
+def parse_accept_schedule(text: str, drafts: int) -> tuple[int, ...]:
+    """``"4"`` or ``"4,2,0,3,1"``: the accept counts the forced verify passes cycle through, each in ``[0, drafts]``."""
+
+    try:
+        schedule = tuple(int(part) for part in text.split(","))
+    except ValueError:
+        raise ValueError(f"accept schedule {text!r} is not a comma list of integers") from None
+    if not schedule or any(not 0 <= value <= drafts for value in schedule):
+        raise ValueError(f"accept schedule {text!r}: every count must lie in [0, {drafts}]")
+    return schedule
+
+
+def forced_verify_tokens(token_ids: Sequence[int], position: int, rows: int) -> list[int]:
+    """The reference tokens at ``position .. position + rows - 1``; past the stream's end the last token pads (the
+    rows are causal, a pad row never touches an earlier one and is rolled back or not scored)."""
+
+    last = len(token_ids) - 1
+    return [int(token_ids[min(position + row, last)]) for row in range(rows)]
+
+
+def forced_verify_decision(
+    token_ids: Sequence[int], position: int, accept: int, rows: int
+) -> mtp_v2.Qwen38TTNNVerifyDecision:
+    """The forced verdict of the pass at ``position``: ``accept`` drafts taken, the next token the reference token
+    after the accepted rows, the alignment lanes the reference tokens ``position + 1 .. position + rows``."""
+
+    lanes = forced_verify_tokens(token_ids, position + 1, rows)
+    return mtp_v2.Qwen38TTNNVerifyDecision(accept, lanes[accept], tuple(lanes), {"forced": 1})
+
+
+def forced_verify_plan(position: int, end: int, accept: int) -> tuple[int, int, bool]:
+    """``(valid, scored, last)`` of the pass at ``position`` over the positions up to ``end``: the valid rows left,
+    the rows scored (``min(accept + 1, valid)``: each position exactly once), and whether this pass ends the run."""
+
+    valid = end + 1 - position
+    return valid, min(accept + 1, valid), accept + 1 >= valid
+
+
+@dataclass(frozen=True)
+class Qwen38ForcedVerifyHooks:
+    """What :func:`run_forced_verify` calls: ``enter(tokens, decide)`` the first pass (the eager switch and the
+    bootstrap on ``tokens``), ``step(tokens)`` a later pass, ``leave(position, rows, first)`` commits ``rows`` rows of
+    the last pass and hands off to the 1-row chain at ``position`` (``first`` the position the run entered at),
+    ``fits(position)`` whether a pass fits, ``one_row(position)`` a forced 1-row step that records its row."""
+
+    enter: Callable[[list[int], Callable[..., Any]], Any]
+    step: Callable[[list[int]], Any]
+    leave: Callable[[int, int, int], Any]
+    fits: Callable[[int], bool]
+    one_row: Callable[[int], None]
+
+
+def run_forced_verify(
+    token_ids: Sequence[int],
+    start: int,
+    end: int,
+    schedule: Sequence[int],
+    *,
+    drafts: int,
+    wanted: Sequence[int],
+    rows_out: dict[int, tuple[int, Any]],
+    hooks: Qwen38ForcedVerifyHooks,
+    parse_row: Callable[[Any], Any],
+    min_position: int = CHUNK_ROWS,
+) -> tuple[int, int]:
+    """Consume the positions ``start .. end`` of the reference stream in verify passes whose tokens and verdict are
+    the reference's, scoring row j of a pass at P (position P + j) for j <= accept: ``rows_out[p] = (argmax,
+    candidate row)``.  Positions below ``min_position`` and positions with no room for a pass go through ``one_row``.
+    A pass with fewer valid rows than ``accept + 1`` is the run's last and leaves with the valid rows committed.
+    Returns ``(passes, one_row_steps)``."""
+
+    rows = drafts + 1
+    wanted_set = set(wanted)
+    position, passes, one_row = start, 0, 0
+    entered, first, last_accept = False, start, 0
+    current: dict[str, int] = {}
+
+    def decide(_tokens, head):
+        accept, base = current["accept"], current["position"]
+        for row in range(min(accept + 1, current["valid"])):
+            if base + row in wanted_set:
+                rows_out[base + row] = (int(head.argmaxes[row]), parse_row(head.candidate_rows[row]))
+        return forced_verify_decision(token_ids, base, accept, rows)
+
+    while position <= end:
+        if position < min_position or not hooks.fits(position):
+            if entered:
+                hooks.leave(position, last_accept + 1, first)
+                entered = False
+            hooks.one_row(position)
+            one_row += 1
+            position += 1
+            continue
+        accept = schedule[passes % len(schedule)]
+        valid, scored, last = forced_verify_plan(position, end, accept)
+        current.update(position=position, accept=accept, valid=valid)
+        tokens = forced_verify_tokens(token_ids, position, rows)
+        if entered:
+            hooks.step(tokens)
+        else:
+            hooks.enter(tokens, decide)
+            entered, first = True, position
+        passes += 1
+        last_accept = accept
+        if last:
+            hooks.leave(position + scored, scored, first)
+            entered = False
+            position = end + 1
+        else:
+            position += accept + 1
+    return passes, one_row
 
 
 @dataclass
@@ -1995,6 +2113,124 @@ class Qwen38ChatSession:
             rows, mode, chunks, forced, (self.clock_ns() - started_ns) / 1e9, full, gather_ns / 1e9
         )
 
+    def teacher_force_verify(
+        self,
+        token_ids: Sequence[int],
+        *,
+        positions: Sequence[int],
+        accept_schedule: Sequence[int] = (4,),
+        prefill_mode: str | None = None,
+    ) -> Qwen38TeacherForcedRows:
+        """:meth:`teacher_force`'s rows from the MTP VERIFY rows instead of the 1-row TAIL: the same inputs and result.
+        The prompt part goes through the chunk driver as in :meth:`teacher_force` (chunked mode only); each stretch of
+        wanted positions then runs in verify passes on the split form whose 4 draft slots hold the next reference
+        tokens and whose host verdict is forced (:func:`forced_verify_decision`: ``accept_schedule[i % n]`` drafts
+        taken, the reference token after them next): all rows' argmax and candidate rows are read from the head
+        readback and rows 0..accept are scored, so each position is scored once, and the next pass starts at
+        P + accept + 1.  The run's last pass leaves with only its valid rows committed.  Positions below one chunk and
+        positions with no room for a pass go through the 1-row path."""
+
+        if self.sampling is None:
+            raise Qwen38ChatRequestError("teacher forcing with rows needs the candidate row: this chain captured none")
+        if self.mtp is None or self.mtp.split_traces is None or not self.mtp.sampled:
+            raise Qwen38ChatRequestError("the verify gate needs --mtp with the split verify (mtp_sampled)")
+        mode = self.resolve_prefill_mode(prefill_mode)
+        if mode != "chunked":
+            raise Qwen38ChatRequestError("the verify gate needs the chunked prefill (position 0 never verifies)")
+        schedule = tuple(accept_schedule)
+        drafts = self.mtp.drafts
+        if not schedule or any(type(value) is not int or not 0 <= value <= drafts for value in schedule):
+            raise Qwen38ChatRequestError(f"accept schedule {schedule} must hold counts in [0, {drafts}]")
+        wanted_set = set(positions)
+        wanted = sorted(wanted_set)
+        if not wanted or wanted[0] < 0 or wanted[-1] >= len(token_ids):
+            raise Qwen38ChatRequestError(
+                f"wanted positions must lie in [0, {len(token_ids)}), got {wanted[:1]}..{wanted[-1:]}"
+            )
+        token_ids = list(token_ids[: wanted[-1] + 1])
+        if any(type(value) is not int or not 0 <= value < VOCAB_SIZE for value in token_ids):
+            raise Qwen38ChatRequestError("token ids must be vocabulary ids")
+        if self.poisoned:
+            raise Qwen38ChatChainError("session is poisoned by an earlier device failure")
+        started_ns = self.clock_ns()
+        rows: dict[int, tuple[int, Any]] = {}
+        chunks = forced = passes = 0
+        if getattr(self.sampling, "sampler", None) is not None:
+            self.sampling.begin_request(None)
+
+        def one_row(position: int) -> None:
+            following = token_ids[position + 1] if position + 1 < len(token_ids) else None
+            with self.chain.loop_guard():
+                self._forced_step(token_ids[position], following)
+                if position in wanted_set:
+                    rows[position] = (self.chain.read_token_row(), self.sampling.read_candidate_row())
+
+        def leave(position: int, committed_rows: int, first: int) -> None:
+            self.ple_context = self.chain.mtp_leave(position=position, committed_rows=committed_rows)
+            self.committed.extend(token_ids[first:position])
+
+        def enter(tokens: list[int], decide: Callable[..., Any]) -> None:
+            self.chain.mtp_enter(tokens[0], self.ple_context, decide=decide, bootstrap_tokens=tokens)
+
+        hooks = Qwen38ForcedVerifyHooks(
+            enter=enter,
+            step=self.chain.mtp_step_forced,
+            leave=leave,
+            fits=self.chain.mtp_pass_fits,
+            one_row=one_row,
+        )
+        parse_row = lambda row: Qwen38CandidateRow.from_host_row(  # noqa: E731
+            row.reshape(SAMPLING_CANDIDATE_ROW_SHAPE).clone()
+        )
+        try:
+            self.reset()
+            next_wanted = 0
+            while len(self.committed) < len(token_ids):
+                index = len(self.committed)
+                gap = wanted[next_wanted] - index
+                if self.chunk_prefill_rows(gap) >= CHUNK_PREFILL_MIN_ROWS:
+                    result = self._prefill_chunked(
+                        token_ids[index : wanted[next_wanted]], token_ids[wanted[next_wanted]], None
+                    )
+                    chunks += result.timing.chunks
+                    forced += result.timing.alignment_steps
+                    continue
+                end = wanted[next_wanted]
+                next_wanted += 1
+                while next_wanted < len(wanted):
+                    gap = wanted[next_wanted] - (end + 1)
+                    if gap - alignment_steps(end + 1, gap) >= CHUNK_PREFILL_MIN_ROWS:
+                        break
+                    end = wanted[next_wanted]
+                    next_wanted += 1
+                run_passes, run_forced = run_forced_verify(
+                    token_ids,
+                    index,
+                    end,
+                    schedule,
+                    drafts=drafts,
+                    wanted=wanted,
+                    rows_out=rows,
+                    hooks=hooks,
+                    parse_row=parse_row,
+                )
+                passes += run_passes
+                forced += run_forced
+            position = self.chain.position()
+            if position != len(self.committed):
+                raise Qwen38ChatChainError(
+                    f"device position {position} vs committed input sequence length {len(self.committed)}"
+                )
+        except BaseException:
+            self.poisoned = True
+            raise
+        self.last_finish = "length"
+        self.row_unconsumed = False  # the last leave rebuilt the 1-row buffers; no token waits in the row
+        self.row_token = None
+        return Qwen38TeacherForcedRows(
+            rows, mode, chunks, forced, (self.clock_ns() - started_ns) / 1e9, verify_passes=passes
+        )
+
 
 class Qwen38TextStream:
     """Incremental detokenizer: decode the unemitted tail, hold it while it ends in U+FFFD (a split UTF-8 sequence)."""
@@ -2702,6 +2938,7 @@ class Qwen38TracedChain:
         decide: Callable[..., Any] | None = None,
         before_verify_sampled: Callable[[list[int]], Any] | None = None,
         record_candidate_rows: bool = False,
+        bootstrap_tokens: Sequence[int] | None = None,
     ) -> mtp_v2.Qwen38TTNNMTPPassRecord:
         """Eager switch into verify mode at the device position (the host's committed count), then the bootstrap
         pass whose row 0 is ``first_token`` (placeholder drafts).  Returns the pass record.  The pass loop's form:
@@ -2710,10 +2947,16 @@ class Qwen38TracedChain:
         split traces, the host deciding between the head and the tail (``mtp_sampled`` chains only);
         ``before_verify_sampled`` (a sampled request the device acceptance admits: the callable writes the pass's
         uniforms to the accept program's constants) runs the device-decided traces (``mtp_device_accept`` chains
-        only), ``record_candidate_rows`` putting the rows the device decided on into every pass record."""
+        only), ``record_candidate_rows`` putting the rows the device decided on into every pass record.
+        ``bootstrap_tokens`` (``[first_token, d_1 .. d_k]``) replace the placeholder drafts: the teacher-forced
+        verify gate's reference tokens."""
 
         mtp = self.mtp
         model = self.built_target.model
+        if bootstrap_tokens is not None and (
+            len(bootstrap_tokens) != mtp.drafts + 1 or int(bootstrap_tokens[0]) != first_token
+        ):
+            raise Qwen38ChatChainError(f"bootstrap tokens must be [first_token, {mtp.drafts} drafts]")
         if mtp.chain is not None:
             raise Qwen38ChatChainError("the MTP pass loop is already active")
         if decide is not None and before_verify_sampled is not None:
@@ -2758,7 +3001,9 @@ class Qwen38TracedChain:
             record_candidate_rows=record_candidate_rows,
             early_reader=early_reader,
         )
-        return mtp.record(mtp.chain.bootstrap([first_token] + [MTP_BOOTSTRAP_DRAFT_TOKEN] * mtp.drafts))
+        if bootstrap_tokens is None:
+            bootstrap_tokens = [first_token] + [MTP_BOOTSTRAP_DRAFT_TOKEN] * mtp.drafts
+        return mtp.record(mtp.chain.bootstrap(list(bootstrap_tokens)))
 
     def mtp_read_full_logits_rows(self) -> torch.Tensor:
         """The split verify's fallback: the eager gather of the head's retained verify logits, fp32 ``[rows, VOCAB]``
@@ -2772,6 +3017,11 @@ class Qwen38TracedChain:
         if self.mtp.chain is None:
             raise Qwen38ChatChainError("the MTP pass loop is not active")
         return self.mtp.record(self.mtp.chain.step())
+
+    def mtp_step_forced(self, tokens: Sequence[int]) -> mtp_v2.Qwen38TTNNMTPPassRecord:
+        if self.mtp.chain is None:
+            raise Qwen38ChatChainError("the MTP pass loop is not active")
+        return self.mtp.record(self.mtp.chain.step_forced(tokens))
 
     def mtp_leave(self, *, position: int, committed_rows: int) -> tuple[int, int] | None:
         """Commit ``committed_rows`` of the last pass (its commit trace) and rebuild the 1-row buffers at ``position``."""
