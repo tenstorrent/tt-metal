@@ -177,6 +177,17 @@ static ShardSpec generate_shard_spec_specless(
          .caller_tag = "Ternary"});
 }
 
+// An ND_SHARDED tensor is_sharded() with an empty shard_spec(); its grid is in nd_shard_spec().
+static uint32_t sharded_num_cores(const Tensor& tensor) {
+    if (tensor.shard_spec().has_value()) {
+        return tensor.shard_spec()->num_cores();
+    }
+    if (tensor.nd_shard_spec().has_value()) {
+        return tensor.nd_shard_spec()->grid.num_cores();
+    }
+    return 0;
+}
+
 static MemoryConfig resolve_mem_config_actual(
     const Tensor& input_a,
     const Tensor* input_b,
@@ -202,17 +213,17 @@ static MemoryConfig resolve_mem_config_actual(
         uint32_t best_num_cores = 0;
         if (input_a.is_sharded()) {
             best_input = &input_a;
-            best_num_cores = input_a.shard_spec()->num_cores();
+            best_num_cores = sharded_num_cores(input_a);
         }
         if (input_b && input_b->is_sharded()) {
-            const uint32_t num_cores = input_b->shard_spec()->num_cores();
+            const uint32_t num_cores = sharded_num_cores(*input_b);
             if (num_cores > best_num_cores) {
                 best_input = input_b;
                 best_num_cores = num_cores;
             }
         }
         if (input_c && input_c->is_sharded()) {
-            const uint32_t num_cores = input_c->shard_spec()->num_cores();
+            const uint32_t num_cores = sharded_num_cores(*input_c);
             if (num_cores > best_num_cores) {
                 best_input = input_c;
                 best_num_cores = num_cores;
@@ -227,20 +238,22 @@ static MemoryConfig resolve_mem_config_actual(
         }
     } else if (memory_config.has_value()) {
         mem_config_actual = *memory_config;
-        if (mem_config_actual.is_sharded() && !mem_config_actual.shard_spec().has_value()) {
+        // An ND_SHARDED config has no 2D shard spec either, but already carries its own geometry.
+        if (mem_config_actual.is_sharded() && !mem_config_actual.shard_spec().has_value() &&
+            !mem_config_actual.nd_shard_spec().has_value()) {
             const auto& memory_layout = mem_config_actual.memory_layout();
             const auto& buffer_type = mem_config_actual.buffer_type();
             const auto& padded_out_shape = input_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
             std::optional<ShardSpec> shard_spec_opt;
-            if (input_a.is_sharded()) {
+            if (input_a.shard_spec().has_value()) {
                 shard_spec_opt =
                     adjust_to_shape(*input_a.memory_config().shard_spec(), input_a.padded_shape(), padded_out_shape);
                 log_debug(tt::LogOp, "TernaryDeviceOperation: Inheriting shard spec from input tensor A");
-            } else if (input_b && input_b->is_sharded()) {
+            } else if (input_b && input_b->shard_spec().has_value()) {
                 shard_spec_opt =
                     adjust_to_shape(*input_b->memory_config().shard_spec(), input_b->padded_shape(), padded_out_shape);
                 log_debug(tt::LogOp, "TernaryDeviceOperation: Inheriting shard spec from input tensor B");
-            } else if (input_c && input_c->is_sharded()) {
+            } else if (input_c && input_c->shard_spec().has_value()) {
                 shard_spec_opt =
                     adjust_to_shape(*input_c->memory_config().shard_spec(), input_c->padded_shape(), padded_out_shape);
                 log_debug(tt::LogOp, "TernaryDeviceOperation: Inheriting shard spec from input tensor C");
@@ -492,6 +505,12 @@ tt::tt_metal::TensorSpec TernaryDeviceOperation::compute_output_specs(
             output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
     }
 
+    if (args.memory_config.is_sharded() && !args.memory_config.shard_spec().has_value() &&
+        args.memory_config.nd_shard_spec().has_value()) {
+        return tt::tt_metal::TensorSpec(
+            output_shape, TensorLayout(args.dtype.value(), PageConfig(output_layout), args.memory_config));
+    }
+
     if (args.memory_config.is_sharded()) {
         const auto& memory_layout = args.memory_config.memory_layout();
         const auto& buffer_type = args.memory_config.buffer_type();
@@ -501,19 +520,19 @@ tt::tt_metal::TensorSpec TernaryDeviceOperation::compute_output_specs(
         if (!shard_spec_opt.has_value()) {
             const auto& padded_out_shape =
                 tensor_args.input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-            if (tensor_args.input_tensor_a.is_sharded()) {
+            if (tensor_args.input_tensor_a.shard_spec().has_value()) {
                 // Adjust shard spec from input A to match output shape
                 shard_spec_opt = adjust_to_shape(
                     *tensor_args.input_tensor_a.memory_config().shard_spec(),
                     tensor_args.input_tensor_a.padded_shape(),
                     padded_out_shape);
-            } else if (tensor_args.input_tensor_b.has_value() && tensor_args.input_tensor_b->is_sharded()) {
+            } else if (tensor_args.input_tensor_b.has_value() && tensor_args.input_tensor_b->shard_spec().has_value()) {
                 // Adjust shard spec from input B to match output shape
                 shard_spec_opt = adjust_to_shape(
                     *tensor_args.input_tensor_b->memory_config().shard_spec(),
                     tensor_args.input_tensor_b->padded_shape(),
                     padded_out_shape);
-            } else if (tensor_args.input_tensor_c.has_value() && tensor_args.input_tensor_c->is_sharded()) {
+            } else if (tensor_args.input_tensor_c.has_value() && tensor_args.input_tensor_c->shard_spec().has_value()) {
                 // Adjust shard spec from input C to match output shape
                 shard_spec_opt = adjust_to_shape(
                     *tensor_args.input_tensor_c->memory_config().shard_spec(),
