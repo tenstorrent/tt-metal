@@ -137,3 +137,31 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
     assert (
         device.cache_entries_counter.total == num_ops
     ), f"Expected {num_ops} program cache entries, but found {device.cache_entries_counter.total}"
+
+
+@pytest.mark.parametrize("users_per_core", (2, 4))
+def test_rotary_embedding_llama_fused_qk_rejects_multiple_users_per_core(users_per_core, device, expect_error):
+    # Each core rotates its shard with the single cos/sin row on that core, so a shard holding several users
+    # would give every user after the first the wrong rotation.
+    batch, n_heads, head_dim = 4, 32, 64
+
+    def height_sharded(t, start_x, num_cores, shard_height, width):
+        grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(start_x, 0), ttnn.CoreCoord(start_x + num_cores - 1, 0))}
+        )
+        mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, (shard_height, width), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config)
+
+    qk_cores = batch // users_per_core
+    q = height_sharded(torch.randn(1, batch, n_heads, head_dim), 0, qk_cores, n_heads * users_per_core, head_dim)
+    k = height_sharded(torch.randn(1, batch, n_heads, head_dim), qk_cores, qk_cores, n_heads * users_per_core, head_dim)
+    cos = height_sharded(torch.randn(1, 2 * batch, 32, head_dim), 0, 2 * batch, 32, head_dim)
+    sin = height_sharded(torch.randn(1, 2 * batch, 32, head_dim), 0, 2 * batch, 32, head_dim)
+    trans_mat = height_sharded(torch.randn(1, 1, 2 * batch * 32, 32), 0, 2 * batch, 32, 32)
+
+    with expect_error(RuntimeError, "one user per core"):
+        ttnn.experimental.rotary_embedding_llama_fused_qk(q, k, cos, sin, trans_mat)
