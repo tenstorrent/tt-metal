@@ -304,3 +304,28 @@ def test_concurrent_publishers_cannot_remove_the_winners_cache(monkeypatch, tmp_
         two.result()
     assert original_check(destination, first, key)
     assert publications == [destination], "the completed winner must be adopted, never replaced"
+
+
+@pytest.mark.parametrize(
+    "invalid", [None, [], {"parameters": None}, {"parameters": []}, {"parameters": {"weight": None}}]
+)
+def test_malformed_manifest_is_a_cache_miss(invalid, tmp_path):
+    module, directory = _module(), tmp_path / "cache"
+    key = cache.content_key(module)
+    cache._publish_cache(module, directory, key)
+    if isinstance(invalid, dict):
+        invalid = {"format": cache.CACHE_FORMAT, "content_key": key, **invalid}
+    (directory / cache.CACHE_DICT_FILE).write_text(json.dumps(invalid))
+    assert not cache._cache_is_complete(directory, module, key)
+
+
+@pytest.mark.parametrize("byte_count", [None, "64", -1, True])
+def test_invalid_manifest_byte_count_is_a_cache_miss(byte_count, tmp_path):
+    module, directory = _module(), tmp_path / "cache"
+    key = cache.content_key(module)
+    cache._publish_cache(module, directory, key)
+    marker = directory / cache.CACHE_DICT_FILE
+    manifest = json.loads(marker.read_text())
+    manifest["parameters"]["weight"]["bytes"] = byte_count
+    marker.write_text(json.dumps(manifest))
+    assert not cache._cache_is_complete(directory, module, key)

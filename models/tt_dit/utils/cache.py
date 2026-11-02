@@ -339,18 +339,28 @@ def _cache_is_complete(cache_dir: str | Path, tt_model: Module, key: str | None)
         logger.warning(f"cache at '{cache_dir}' has an unreadable manifest ({err}); rebuilding.")
         return False
 
-    if manifest.get("format") != CACHE_FORMAT or manifest.get("content_key") != key:
+    if not isinstance(manifest, dict) or manifest.get("format") != CACHE_FORMAT or manifest.get("content_key") != key:
         logger.warning(f"cache at '{cache_dir}' was built for another key; rebuilding.")
         return False
 
-    recorded = manifest.get("parameters", {})
+    recorded = manifest.get("parameters")
+    if not isinstance(recorded, dict) or any(
+        not isinstance(spec, dict) or type(spec.get("bytes")) is not int or spec["bytes"] < 0
+        for spec in recorded.values()
+    ):
+        logger.warning(f"cache at '{cache_dir}' has invalid parameter metadata; rebuilding.")
+        return False
     if {name: dict(spec, bytes=None) for name, spec in recorded.items()} != _structure(tt_model):
         logger.warning(f"cache at '{cache_dir}' does not describe this module; rebuilding.")
         return False
 
     for name, spec in recorded.items():
         path = Path(cache_dir) / f"{name}.tensorbin"
-        if not path.is_file() or path.stat().st_size != spec["bytes"]:
+        try:
+            complete = path.is_file() and path.stat().st_size == spec["bytes"]
+        except OSError:
+            complete = False
+        if not complete:
             logger.warning(f"cache at '{cache_dir}' is missing or truncated at '{name}'; rebuilding.")
             return False
 
