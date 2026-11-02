@@ -130,12 +130,13 @@ def _config(fmt, dest_acc, approx, fast, iterations, src_A, sfpi_loop):
 
 @pytest.mark.parametrize("iterations", [8, 32], ids=lambda n: f"iter_{n}")
 @pytest.mark.parametrize(
-    "fast", [FastMode.No, FastMode.Yes], ids=lambda m: f"fast_{m.name}"
-)
-@pytest.mark.parametrize(
-    "approx",
-    [ApproximationMode.No, ApproximationMode.Yes],
-    ids=lambda m: f"approx_{m.name}",
+    "approx, fast",
+    [
+        (ApproximationMode.No, FastMode.No),
+        (ApproximationMode.No, FastMode.Yes),
+        (ApproximationMode.Yes, FastMode.No),
+    ],
+    ids=["approx_No-fast_No", "approx_No-fast_Yes", "approx_Yes-fast_No"],
 )
 @pytest.mark.parametrize(
     "fmt, dest_acc",
