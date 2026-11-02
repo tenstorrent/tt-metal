@@ -30,7 +30,7 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     if (t.attention_sink.has_value()) {
         const auto& sink = t.attention_sink.value();
         TT_FATAL(
-            sink.storage_type() == StorageType::DEVICE && sink.buffer() != nullptr,
+            sink.storage_type() == StorageType::DEVICE && sink.is_allocated(),
             "Attention sink tensor must be on device");
         TT_FATAL(sink.device() == q.device(), "Attention sink must be on the same device as Q");
         TT_FATAL(sink.dtype() == DataType::BFLOAT16, "Attention sink must be BF16");

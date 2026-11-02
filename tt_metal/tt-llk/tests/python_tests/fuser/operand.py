@@ -98,14 +98,9 @@ class Operand:
             else PartialFace.No
         )
 
-        TILE_SIZES = {
-            DataFormat.Bfp8_b: 68,
-            DataFormat.Float32: 256,
-        }
-
         self.tile_size = (
-            TILE_SIZES.get(self.data_format, 128) * self.tile_shape.total_num_faces()
-        ) // 4
+            self.data_format.num_bytes_per_tile(self.tile_shape.total_tile_size()) // 16
+        )
 
     def generate_data(self):
         height, width = self.dimensions[0], self.dimensions[1]
