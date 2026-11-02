@@ -18,8 +18,10 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
+# GLM-5.3 also runs sc2: two galaxies, the sc4 chain halved, for an SC2-vs-SC1 scaling rung.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
+  glm53)               MODEL_CONFIGS="sc4 sc1 sc2" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -202,6 +204,12 @@ if [ "${CONFIG}" = sc1 ]; then
   # Exported to BOTH runner and producer, and only when the model asked for it: the manifest's depth
   # is applied with setdefault, so an explicit export is what shrinks it.
   [ -n "${SC1_NUM_LAYERS}" ] && NUM_LAYERS_ENV="export PREFILL_NUM_LAYERS=${SC1_NUM_LAYERS};"
+fi
+if [ "${CONFIG}" = sc2 ]; then
+  # Each sc2 rank holds twice the layers of an sc4 rank, so the manifest's sc4 slot count does not fit
+  # at 1M; run the sc1 slot count, which is what the scaling ratio compares against anyway.
+  NUM_USERS=${SC1_NUM_USERS}
+  RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
 fi
 if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
