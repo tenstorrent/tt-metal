@@ -14,6 +14,8 @@ flatten, silu(z) and the multiply (three ops, ~0.6 ms/step on the ternary stack)
 
 One core per head, H cores as one rectangle (GDN_RECT's lesson). fp32 in DST throughout, so not bit-exact with the
 bf16-output LN/silu/mul chain; it must be at least as close to float64 (test_gate_hm.py).
+v2: the reader packs head h's Dt live rows (row 0 of Dt tiles) into rows 0..Dt-1 of ONE tile, so each SFPU op runs
+once per head, not Dt times, and rinv is computed once (v1, a measured null: 18.8 us vs ~13 us for the chain).
 """
 
 from __future__ import annotations
@@ -57,12 +59,15 @@ def gate_hm(o, z, w, out, eps=1e-6, grid_w=8, stage=3):
     rows = -(-H // grid_w)
     assert H == rows * grid_w, f"{H} heads must fill a {grid_w}-wide rectangle"
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_w - 1, rows - 1))])
+    assert Dt <= 16, "packed rows must stay in faces 0/1"
     cbs = [
-        _cb(0, Dt, ttnn.float32, cores),  # o
-        _cb(1, Dt, ttnn.bfloat16, cores),  # z
-        _cb(2, Dt, ttnn.bfloat16, cores),  # w
-        _cb(3, 1, ttnn.float32, cores),  # sum of squares
-        _cb(4, Dt, out.dtype, cores),  # gated, in the output's dtype (bf16 for the ternary prep, fp32 dense)
+        _cb(0, Dt, ttnn.float32, cores),  # o, row 0 of tile t replicated in rows 0..Dt-1 (sum-of-squares source)
+        _cb(1, 1, ttnn.bfloat16, cores),  # z, packed
+        _cb(2, 1, ttnn.bfloat16, cores),  # w, packed
+        _cb(4, 1, out.dtype, cores),  # gated, packed, in the output's dtype (bf16 for the ternary prep, fp32 dense)
+        _cb(5, 1, ttnn.float32, cores),  # o, packed
+        _cb(6, 1, ttnn.bfloat16, cores),  # reader staging (z/w 32 B runs at 64 B slots)
+        _cb(7, 1, ttnn.bfloat16, cores),  # writer staging
     ]
     heads = [((h % grid_w, h // grid_w), h) for h in range(H)]
     reader = ttnn.KernelDescriptor(
