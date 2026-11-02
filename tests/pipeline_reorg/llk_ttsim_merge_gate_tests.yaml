@@ -1,0 +1,95 @@
+# WH/BH LLK kernels on ttsim. Catches SFPU instruction modes silicon accepts but ttsim does not.
+# Run by ttnn-smoke-tests-impl.yaml from merge-gate.yaml, only on WH/BH/common/SFPI/LLK CI changes.
+# If ttsim lacks an instruction a change needs, skip the tests in ttsim-skip-list.yaml.
+# Not covered: max_pool_indices and direct topk (skip-listed, too slow on ttsim); topk is reached
+# via test_sampling.py. SFPLOADMACRO is disabled on ttsim. ~8-11 min per leg on ubuntu-latest.
+
+# Unary bf16 and int. 567 tests.
+- name: "llk sfpu unary bf16 int sim"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category4_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category5_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category6_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_int32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_uint32.py
+    -m "not disable_fast_runtime_mode"
+  skus:
+    sim_wh_n150:
+      timeout: 15
+    sim_bh_p150:
+      timeout: 15
+  team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
+
+# Unary and binary fp32. 745 tests.
+- name: "llk sfpu fp32 sim"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_float32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_float32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_float32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category4_float32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category5_float32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category6_float32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_fp32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category1_float32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category2_float32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category3_float32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_float32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_fp32.py
+    -m "not disable_fast_runtime_mode"
+  skus:
+    sim_wh_n150:
+      timeout: 15
+    sim_bh_p150:
+      timeout: 15
+  team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
+
+# Binary bf16 and int, div/remainder. 1885 tests.
+- name: "llk sfpu binary bf16 int sim"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category1_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category2_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category3_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category5_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py
+    tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py
+    -m "not disable_fast_runtime_mode"
+  skus:
+    sim_wh_n150:
+      timeout: 15
+    sim_bh_p150:
+      timeout: 15
+  team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
+
+# Reduce, moe, sampling (SFPU topk). 1483 tests.
+- name: "llk sfpu reduce sim"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/reduce/test_max.py
+    tests/ttnn/unit_tests/operations/reduce/test_sum.py
+    tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
+    tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py
+    tests/ttnn/unit_tests/operations/reduce/test_moe.py
+    tests/ttnn/unit_tests/operations/reduce/test_sampling.py
+    -m "not disable_fast_runtime_mode"
+  skus:
+    sim_wh_n150:
+      timeout: 15
+    sim_bh_p150:
+      timeout: 15
+  team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
