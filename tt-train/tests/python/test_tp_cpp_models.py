@@ -56,9 +56,12 @@ def test_mask_none_matches_dense_causal_mask(tp_mesh, make_model):
     device = ttml.autograd.AutoContext.get_instance().get_device()
     composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 3)
 
-    dense = model(x, build_causal_mask(SEQ, device=True)).to_numpy(composer=composer)
-    causal = model(x, None).to_numpy(composer=composer)
-    ttml.autograd.AutoContext.get_instance().reset_graph()
+    try:
+        dense = model(x, build_causal_mask(SEQ, device=True)).to_numpy(composer=composer)
+        causal = model(x, None).to_numpy(composer=composer)
+    finally:
+        # Also on failure, so the graph's device tensors don't outlive this test.
+        ttml.autograd.AutoContext.get_instance().reset_graph()
 
     assert dense.shape == causal.shape == (1, 1, SEQ, VOCAB)
     pcc = np.corrcoef(dense.ravel(), causal.ravel())[0, 1]
