@@ -311,6 +311,12 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Expected in the step: w2 forward 3.69 -> ~3.3 ms per 4 layers per chip (-0.4), norm forward -0.06; ~-4.5 ms per step.
 - Chain `O/iter19.sh` -> `O/iter19_chain.log`: harness 47 passed, TP gradient check PASS, cooled TP=4 MFU 495.4 ms / 32.75 % (best 487.9; `O/iter19_tp_mfu_tp4.log`), loss match PASS (max |diff| 0.0298), TP=4 real weights warm 509.1 ms; in the step w2 forward 3.693 -> 3.249 ms per 4 layers (-12 %), norm forward 1.123 -> 1.010 (126 us per call), `O/iter19_tp_ranked_ops.txt`.
 
+### Stage review round 11 (iterations 28-37)
+
+- Report: `review_round11.md` (independent subagent, read-only). Verdict more-work-needed, no P1, seven P2 items, all documentation / evidence hygiene; the kernels, autograd contract, tests and rejections re-derived clean.
+- Answers (round-11 commit): (1) iteration 37's attribution from the full chip-0 tables (`O/iter3{5,6b,7}_tp_ranked_ops_full.txt`, `tp_rank_ops.py --top 400`): the four w2 transposes gone (-0.207), the dB product +0.022, the norm backward +0.076: net -0.11 ms per 4 layers; iteration 36's net -0.36; (2) the Result cells and the MFU history carry the profile's critical-chip clock (35: 1.011, 36: 1.016, 36b: 1.060, 37: 1.102 GHz), the per-chip clocks of 28-37 are in the Ledger; (3) the ranked cost table regenerated from iteration 37; (4) iteration 28's 21 evidence files committed; (5) README rows 35-37, sections in order, verification cells with counts, commit SHA; (6) the memory probe with the copies (20.73 GiB, `O/iter38_mem_probe.log`) in the Iteration 36 cell, the README State and `plan.md` §4; (7) the loss-match caveat stated in the 35-37 cells and generalised in the Ledger.
+- Other concerns taken: the iteration-35 Ledger wording; the pre-existing transpose op attributed; the 29 allowance cited in the README constraints bullet. Open (recorded, not changed): the shape-inferred transposed-delta flag (unreachable at T = 1024, C = 5120); the transposed backward's `core_grid` path for `dcat_t` (measured equal to the swept config).
+
 ### Stage review round 10 (iterations 23-27)
 
 - `optimization/review_round10.md`: more-work-needed, no P1; P2: the bf16-DEST rejection measured a straw-man variant (the intended one measured after iteration 28), commit 26 bundled three changes, stale ranked table / state statements, document format of sections 23-27, checklists without expected times and two unresolved citations. All doc items answered in the round-10 commit; the device items (bf16 DEST as intended, a non-causal standalone case, the SwiGLU backward stride A/B) follow it.
@@ -410,11 +416,12 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 29 | `2352f1d3241` | `rmsnorm_bw_rows` pass 2 on the FPU (variant A kernel), factory arg -1/C, iteration-29 evidence |
 | 30 | `82f35c84e55` | SDPA forward diagonal chunk prefix (`n_cols` through the QK^T, mask, max, exp and PV stages), iteration-30 evidence |
 | 31 (rejected) | `85a06ef9dfe` | docs and evidence only: skinny_matmul read-ahead measured and reverted |
+| 28 evidence | (review-11 commit) | the 21 iteration-28 evidence files `a891b66ff30` left untracked (`O/iter28*`); iteration 28's doc sections are in the review-10 commit `85fc26239b7` (bisect gap) |
 | 32 | `b1b0e107c27` | `metal/ops/vp_ce_row_stats` (new op: device op, factory, kernels, wrapper, binding), `losses.cpp` forward statistics through it, iteration-32 evidence |
 | 33 (rejected) | `46944a1d62f` | docs and evidence only: the second-queue collective overlap (implemented, refused by the dispatcher) and the Ethernet dispatch (unavailable), both reverted |
 | 34 (rejected) | `cd55c4e3bfc` | docs and evidence only: the full-sync DEST matmul sweep, refused by ttnn's matmul validation |
 | 35 | `3c44ab8f2fc` | `frozen_linear.py` 1D config for the TP gate_up forward (K blocks of 9, 16x5), the K-divisibility guard; the ttnn matmul kernel attribution (variants, writer-kernel experiment reverted), iteration-35 evidence |
 | 36 | `d1ed2496368` | `write_tile_block` tile-column offset (op, factory, writer kernel, binding); `frozen_linear.py` `FORWARD_TRANSPOSED_CONFIG`; `fused_lora.py` / `lora.py` transposed-orientation w2 forward with the `W_cat^T` copy; harness guard; iteration-36 evidence |
-| 37 | (this commit) | `add_rmsnorm_fw_rows` transposed delta, `rmsnorm_bw_rows` transposed gradient output (ops, factories, kernels, dispatchers, bindings); `fused_residual_norm.py`, `fused_lora.py`, `lora.py` transposed w2 output through the norm; harness test; iteration-37 evidence |
+| 37 | `6c81785747f` | `add_rmsnorm_fw_rows` transposed delta, `rmsnorm_bw_rows` transposed gradient output (ops, factories, kernels, dispatchers, bindings); `fused_residual_norm.py`, `fused_lora.py`, `lora.py` transposed w2 output through the norm; harness test; iteration-37 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

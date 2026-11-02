@@ -142,6 +142,8 @@ Depth that fits on one chip (weights + retained activations without recompute + 
 | 2 | 9.5 | 8.9 | 8.5 |
 | 4 | 13.1 | 11.8 | 11.0 |
 | 8 | 20.3 | 17.8 | 16.2 |
+
+TP=4 (full model, 40 layers, after the loop's iteration 37; probed with `train.py --tp 4 --mem-probe`): 20.73 GiB allocated after the forward per chip, 14.84 after the backward (weights 11 GiB + the 40 `W_cat^T` forward copies of the fused w2, 3.15 GiB, + LoRA state; `optimization/evidence/iter38_mem_probe.log`; 17.58 / 11.69 before the copies, `iter36_scoping.log`).
 | 12 | 27.5 | 23.8 | 21.4 |
 | 16 | **34.7, does not fit** | 29.7 (no headroom) | 26.6 |
 | 40 | 78.1 | 65.6 | 57.6, and the weights alone do not |

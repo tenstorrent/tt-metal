@@ -41,6 +41,7 @@ def main():
     p.add_argument("--reps", type=int, default=10)
     p.add_argument("--no-tb", action="store_true", help="forward form: the second operand is [K, N]")
     p.add_argument("--grid", default=None, help="XxY grid instead of the full one")
+    p.add_argument("--out-block-h", default=None, help="comma list of out_block_h values (default: per_core_M)")
     args = p.parse_args()
     tb = not args.no_tb
     device = ttnn.open_device(device_id=0)
@@ -82,15 +83,18 @@ def main():
         if Kt % d:
             print(f"  depth {d}: Kt {Kt} not divisible")
             continue
-        for sub in args.subs.split(","):
+        obhs = [int(v) for v in args.out_block_h.split(",")] if args.out_block_h else [pcM]
+        for sub, obh in [(sub, obh) for sub in args.subs.split(",") for obh in obhs]:
             sh, sw = (int(v) for v in sub.split("x"))
-            if pcM % sh or pcN % sw or sh * sw > 4:
+            if pcM % sh or pcN % sw or sh * sw > 4 or pcM % obh or obh % sh:
                 continue
             pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(gx, gy),
                 in0_block_w=d,
                 out_subblock_h=sh,
                 out_subblock_w=sw,
+                out_block_h=obh,
+                out_block_w=pcN,
                 per_core_M=pcM,
                 per_core_N=pcN,
                 transpose_mcast=False,
@@ -106,7 +110,7 @@ def main():
                 err = float((ttnn.to_torch(out).float() - ref_h).abs().max())
                 ttnn.deallocate(out)
                 print(
-                    f"  2D {gx}x{gy} pcM {pcM} pcN {pcN} depth {d:2d} sub {sh}x{sw}: {t:.3f} ms {flops / t / 1e9:6.1f} TFLOP/s  max|diff| {err:.2e}",
+                    f"  2D {gx}x{gy} pcM {pcM} pcN {pcN} depth {d:2d} sub {sh}x{sw} out_block_h {obh:2d}: {t:.3f} ms {flops / t / 1e9:6.1f} TFLOP/s  max|diff| {err:.2e}",
                     flush=True,
                 )
             except Exception as e:  # noqa: BLE001

@@ -1,0 +1,8 @@
+=== TP=4 memory probe after iteration 37 (w2 forward copies) 2026-11-02T12:09:06Z
+step 1: DRAM allocated after forward 20.73 GiB
+step 1: DRAM allocated after backward 14.84 GiB
+step 1: DRAM allocated after the optimizer step 14.84 GiB (weights + state)
+step 2: DRAM allocated after forward 20.74 GiB
+step 2: DRAM allocated after backward 14.84 GiB
+step 2: DRAM allocated after the optimizer step 14.84 GiB (weights + state)
+=== done 2026-11-02T12:12:30Z
