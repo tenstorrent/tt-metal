@@ -42,6 +42,8 @@ namespace sfpu {
  * - vConstFloatPrgm0 = 1.4426950408889634f;
  * - vConstFloatPrgm1 = -127.0f;
  * - vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
+ * sfpu_unary_pow_init sets them. _sfpu_unary_power_fp32_ overwrites Prgm1 and Prgm2 on every
+ * call, so sfpu_unary_pow_init must run again between an fp32 call and a call of this function.
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
@@ -233,6 +235,21 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
     return result;
 }
 
+/**
+ * @brief fp32 base**pow for one row: improved log2(base), then 2**(pow*log2(base)) carried as a
+ * double-float through _sfpu_pow2_f32_accurate_hilo_.
+ *
+ * @param base The base value (sfpi::vFloat vector), can be any floating point number
+ * @param pow The exponent, the same scalar in every lane
+ * @tparam IS_POSITIVE_EXPONENT If true, assumes exponent >= 0 (zero base maps to 0 rather than NaN)
+ *
+ * @pre Unlike the bf16 body, this function does not read the init state of Prgm1/Prgm2. It needs:
+ * - vConstFloatPrgm0 = 1.4426950408889634f (set by sfpu_unary_pow_init);
+ * - vConstFloatPrgm1 = pow_hi and vConstFloatPrgm2 = pow_lo, the Veltkamp split of this same pow
+ *   (pow_hi + pow_lo == pow exactly), which _sfpu_unary_power_fp32_ writes before its row loop.
+ * With the init values -127 / NaN still in Prgm1/Prgm2 the result is wrong, so the only valid
+ * caller is _sfpu_unary_power_fp32_.
+ */
 template <bool IS_POSITIVE_EXPONENT>
 sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base, const sfpi::vFloat& pow) {
     sfpi::lreg_pressure _;  // Declare high register pressure
@@ -302,7 +319,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     // Splitting only pow (not the full Dekker two-product on log2(base)) keeps the
     // simultaneously-live vector count within the SFPU register budget.
     // pow is the same scalar on every row, so _sfpu_unary_power_fp32_ computes the split
-    // once per call and parks pow_hi / pow_lo in vConstFloatPrgm1 / vConstFloatPrgm2.
+    // once per call and passes pow_hi / pow_lo in vConstFloatPrgm1 / vConstFloatPrgm2 (see @pre).
     sfpi::vFloat z_hi = sfpi::vConstFloatPrgm1 * exp_f32;
     sfpi::vFloat z_lo = sfpi::vConstFloatPrgm2 * exp_f32 + pow * (ln_m * vConst1Ln2);
     sfpi::vFloat y = _sfpu_pow2_f32_accurate_hilo_(z_hi, z_lo);
@@ -367,6 +384,23 @@ inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
     }
 }
 
+/**
+ * @brief fp32 (dest_acc) unary power over ITERATIONS rows of DEST.
+ *
+ * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
+ * @tparam ITERATIONS Number of DEST rows to process
+ *
+ * @pre sfpu_unary_pow_init has run since the last other SFPU op that writes vConstFloatPrgm0
+ * (this function reads Prgm0 = 1/ln2). It does not need the init values of Prgm1/Prgm2.
+ *
+ * @post vConstFloatPrgm1 / vConstFloatPrgm2 hold this call's pow_hi / pow_lo, not the -127 / NaN
+ * that sfpu_unary_pow_init writes there, and nothing restores them. Programmable constants
+ * belong to the op whose init wrote them: every other op that reads Prgm1/Prgm2 sets them in its
+ * own init, and sfpu_unary_pow_init already overwrites all three. The two readers that want the
+ * pow init values, _sfpu_unary_power_bf16_ and the binary pow kernels, need sfpu_unary_pow_init or
+ * their own init again after this call; compute kernels issue an op's init before its call
+ * whenever a different SFPU op ran in between (the ttnn SFPU chain emits init + call per op per tile).
+ */
 template <int ITERATIONS>
 inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
     // Convert exponent to float
@@ -375,8 +409,8 @@ inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
 
     // Veltkamp split of the loop-invariant exponent, once per call instead of once per row.
     // Holding pow_hi and pow_lo in LRegs across the loop exceeds the register budget, so
-    // they go to the programmable constants; the fp32 body reads neither -127 nor the NaN
-    // that sfpu_unary_pow_init leaves there (those are for the bf16 body).
+    // they go to the programmable constants Prgm1/Prgm2 (see @post); the fp32 body reads
+    // neither the -127 nor the NaN that sfpu_unary_pow_init leaves there (those are for the bf16 body).
     constexpr float VELTKAMP_SPLIT = 4097.0f;  // 2**12 + 1
     sfpi::vFloat pc = pow * VELTKAMP_SPLIT;
     sfpi::vFloat pow_hi = pc - (pc - pow);
@@ -446,6 +480,12 @@ inline void calculate_unary_power_iterative(const uint32_t exponent) {
     }
 }
 
+/**
+ * @brief Loads the programmable constants for calculate_unary_power.
+ *
+ * Prgm0 = 1/ln2 is read by both bodies. Prgm1 = -127 and Prgm2 = NaN are read only by the bf16
+ * body; the fp32 body (_sfpu_unary_power_fp32_) replaces them with its exponent split on every call.
+ */
 inline void sfpu_unary_pow_init() {
     sfpi::vConstFloatPrgm0 = 1.4426950408889634f;
     sfpi::vConstFloatPrgm1 = -127.0f;
