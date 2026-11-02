@@ -538,6 +538,20 @@ def setup_kv_chunk_table(
     if not file_export:
         remove_stale_device_map_sidecars(device_map_json_path)
 
+    if os.environ.get("PREFILL_PP_LAYER_OFFSET") is not None:
+        # A capacity probe's stages start mid-model, but every table check (merged_num_layers,
+        # validate_stage_layout_contiguous) and the producer's PCC need stages that tile the model from layer 0.
+        # Publish the device map only. A probe's producer runs without PCC and reads no table.
+        if publish or file_export:
+            raise RuntimeError("PREFILL_PP_LAYER_OFFSET builds no KV chunk table; run without migration")
+        device_map_path = rank_scoped_device_map_path(device_map_json_path, rank, num_ranks)
+        serialize_device_map(mesh_device, device_map_path)
+        logger.info(
+            f"[migration] rank {rank}: PREFILL_PP_LAYER_OFFSET set, no KV chunk table; local device map -> "
+            f"{device_map_path}"
+        )
+        return None
+
     if not hasattr(runtime, "kv_migration_stages"):
         raise RuntimeError(
             f"runtime {type(runtime).__name__} does not implement kv_migration_stages, so its KV cache "
