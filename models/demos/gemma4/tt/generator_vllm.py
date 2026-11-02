@@ -6783,15 +6783,20 @@ def spec_extra_shapes(text, k_max):
 def spec_capture_shapes(table, k_max, max_rows, extra=()):
     """The ``(rows, drafts)`` records to capture, ascending rows then drafts.
 
-    ``(1, k_max)`` for a solo request plus one record per table entry, its
-    rows clamped to ``max_rows`` (the smaller of ``GEMMA4_SPEC_MAX_ROWS`` and
-    the engine's batch). Entries that clamp onto the same row count keep the
-    larger draft length, since one record per row count is enough for the
-    table (its record is a band's default and cap). ``extra`` records
+    A solo record at the first entry's draft length (its band's cap: the
+    plugin asks for at most that many drafts for one row, and a wider record
+    could never replay) plus one record per table entry, its rows clamped to
+    ``max_rows`` (the smaller of ``GEMMA4_SPEC_MAX_ROWS`` and the engine's
+    batch). Entries that clamp onto the same row count keep the larger draft
+    length, since one record per row count is enough for the table (its
+    record is a band's default and cap). ``extra`` records
     (``spec_extra_shapes``) join as they are, rows clamped the same way: a
-    band's second draft length the policy can rank against the table's.
+    band's second draft length the policy can rank against the table's. The
+    table and the extras are already clamped to ``k_max``.
     """
-    shapes = {1: int(k_max)}
+    if any(int(k) > int(k_max) for _, k in (*table, *extra)):
+        raise ValueError(f"spec records above the draft length {k_max}: table {table}, extra {extra}")
+    shapes = {1: int(table[0][1])}
     for rows, k in table:
         rows = min(int(rows), int(max_rows))
         if rows < 1:
@@ -7007,16 +7012,37 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
 
     # -- plugin speculative contract: the plan ---------------------------------
     @staticmethod
-    def _mtp_assistant_snapshot():
-        """The assistant checkpoint directory, or None when it is not on disk.
+    def _mtp_target_of(vllm_config):
+        """The target the assistant is matched to at admission: the model vLLM serves.
 
-        ``GEMMA4_ASSISTANT_MODEL`` wins; otherwise the target named by
-        ``HF_MODEL`` selects its assistant (``assistant_repo_for``), which
-        raises ``ValueError`` for a target without a known assistant.
+        ``model_config.model`` is the ``--model`` value (a repo id or a weights
+        directory), the same name construction reads back as the loaded
+        checkpoint's ``_name_or_path`` (``initialize_vllm_model``), so both
+        select the same assistant. Without a config (the host harness calls
+        ``spec_plan(None, ...)``) ``HF_MODEL`` stands in; None when that is
+        unset too, which only an explicit ``GEMMA4_ASSISTANT_MODEL`` serves.
         """
-        path = os.environ.get("GEMMA4_ASSISTANT_MODEL") or _assistant_default_snapshot(
-            os.environ.get("HF_MODEL", "google/gemma-4-31B-it")
-        )
+        if vllm_config is not None:
+            return str(vllm_config.model_config.model)
+        return os.environ.get("HF_MODEL") or None
+
+    @staticmethod
+    def _mtp_assistant_snapshot(target):
+        """The assistant checkpoint directory for the target ``target`` names, or None when it is not on disk.
+
+        ``GEMMA4_ASSISTANT_MODEL`` wins; otherwise ``target`` (a repo id or a
+        weights path) selects its assistant (``assistant_repo_for``), which
+        raises ``ValueError`` for a target without a known assistant, as a
+        missing target does.
+        """
+        path = os.environ.get("GEMMA4_ASSISTANT_MODEL")
+        if not path:
+            if not target:
+                raise ValueError(
+                    "no target checkpoint to match an assistant to (no vllm_config model and HF_MODEL unset); "
+                    "set GEMMA4_ASSISTANT_MODEL to the assistant snapshot"
+                )
+            path = _assistant_default_snapshot(target)
         if path and os.path.isdir(str(path)):
             return str(path)
         return None
@@ -7025,24 +7051,30 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
         """What this adapter serves at ``(max_num_seqs, requested_k)``, or why it cannot.
 
-        Pure: reads env and the assistant's ``config.json``, allocates nothing,
-        and never raises (the plugin quotes a ``SpecReject`` to the operator).
-        ``K = min(requested_k, GEMMA4_SPEC_DRAFT_LEN)``; the draft cap per
-        batch size comes from ``GEMMA4_SPEC_K_BY_ROWS`` clamped to ``K``, and
-        ``effective_k`` is the largest cap of that table.
+        Pure: reads the config's model name, env and the assistant's
+        ``config.json``, allocates nothing, and never raises (the plugin
+        quotes a ``SpecReject`` to the operator). The records are captured at
+        warmup at ``GEMMA4_SPEC_DRAFT_LEN`` drafts (``_mtp_resolve_shapes``),
+        so a ``requested_k`` below it is refused, ``supported_k`` naming it,
+        and one above it is served at it; the draft cap per batch size comes
+        from ``GEMMA4_SPEC_K_BY_ROWS`` clamped to that length, and
+        ``effective_k`` is the largest cap of that table. The assistant is the
+        served target's (``_mtp_target_of``), as at construction.
         """
-        del vllm_config  # ordinary fields only would be allowed (contract s.2); none is needed
         from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
-        k_max = cls._SPEC_DRAFT_LEN
-        k = min(int(requested_k), k_max)
-        if k < 1:
+        k = cls._SPEC_DRAFT_LEN
+        if int(requested_k) < k:
             return SpecReject(
-                reason=f"Gemma4MTP speculative contract: requested_k={requested_k} is below 1",
-                supported_k=(k_max,),
+                reason=(
+                    f"Gemma4MTP speculative contract: num_speculative_tokens={requested_k} is below the draft "
+                    f"length the records are captured at ({SPEC_DRAFT_LEN_ENV}={k}); request {k} drafts, or set "
+                    f"{SPEC_DRAFT_LEN_ENV}={requested_k}"
+                ),
+                supported_k=(k,),
             )
         try:
-            snapshot = cls._mtp_assistant_snapshot()
+            snapshot = cls._mtp_assistant_snapshot(cls._mtp_target_of(vllm_config))
         except ValueError as exc:
             return SpecReject(reason=f"Gemma4MTP speculative contract: {exc}", supported_k=())
         if snapshot is None:
@@ -7114,7 +7146,16 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             "every live row, output_tokens_per_step=1"
         )
 
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, *args, **kwargs):
+        instance = super().initialize_vllm_model(hf_config, *args, **kwargs)
+        # The checkpoint vLLM loaded names the assistant, as it did at admission (``spec_plan`` read the same
+        # name off ``model_config.model``); ``_mtp_prepare`` builds the drafter from it.
+        instance._mtp_target = str(hf_config._name_or_path)
+        return instance
+
     def _mtp_init_state(self):
+        self._mtp_target = None  # the served checkpoint's name (``initialize_vllm_model``); HF_MODEL stands in
         self._mtp_assistant = None
         self._mtp_decoder = None
         self._mtp_captured = False
@@ -7247,7 +7288,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         max_seq_len = int(getattr(self.model_args[0], "max_seq_len", 0) or 0)
         if not max_seq_len:
             raise ValueError("Gemma4MTP speculative contract: warmup needs max_seq_len")
-        snapshot = self._mtp_assistant_snapshot()
+        snapshot = self._mtp_assistant_snapshot(self._mtp_target or os.environ.get("HF_MODEL"))
         if snapshot is None:
             raise RuntimeError(
                 "Gemma4MTP speculative contract: assistant (drafter) snapshot not found. Set "
@@ -8060,8 +8101,12 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         decode the runner had in flight committed past it, s.4d), so it does
         not age a trial.
         """
+        # The default serves when nothing else is costed, unless it drafts more than the runner's ``k``: a replay
+        # it would truncate writes K/V past the ``k + 1`` rows the plugin reserved (contract s.4f), so such a step
+        # is the plain decode instead.
+        fallback = (default, None) if int(default[1]) <= int(k) else (None, None)
         if not self._spec_cost_table_ready("Gemma4MTP"):
-            return default, None
+            return fallback
         policy = self._spec_policy
         if overtaken:
             policy.note_overtaken()
@@ -8104,7 +8149,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                     )
                 )
         if not candidates:
-            return default, None
+            return fallback
         previous = policy.last_k
         stats = [session.stats for _r, session, *_ in drafting]
         fresh_rows = [

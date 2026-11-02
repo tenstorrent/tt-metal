@@ -296,7 +296,7 @@ def drafter_snapshot(tmp_path, monkeypatch):
 
 
 def test_spec_plan_admits_concurrency_and_declares_narrow_decode(adapter, drafter_snapshot, monkeypatch, assistant_dir):
-    from vllm_tt_plugin.spec_decode import SpecPlan
+    from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
     plan = adapter.Gemma4DFlashContractForCausalLM.spec_plan(None, 32, 5)
     assert isinstance(plan, SpecPlan)
@@ -315,12 +315,12 @@ def test_spec_plan_admits_concurrency_and_declares_narrow_decode(adapter, drafte
     assert plan.supports_narrow_decode is True
     assert plan.k_by_rows == ((5, 5), (32, 1))  # the default table plus the plan's admission tail
     assert plan.extra_bytes_per_seq == 5376 * 2 + 16 and plan.extra_bytes_per_token == 0
-    # -- the MTP rail: spec plan reads the table and clamps to the requested k
+    # -- the MTP rail: spec plan reads the table, clamped to the records' draft length; a request below that
+    # length is refused (the records could not serve it), one above it is served at it
     monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", assistant_dir)
     monkeypatch.setenv("GEMMA4_SPEC_K_BY_ROWS", "4:7,8:3")
-    plan = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 8, 3)
-    assert plan.effective_k == 3
-    assert plan.k_by_rows == ((4, 3), (8, 3))
+    refused = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 8, 3)
+    assert isinstance(refused, SpecReject) and refused.supported_k == (5,)
     plan = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 4, 9)
     assert plan.effective_k == 5 and plan.k_by_rows == ((4, 5), (8, 3))
 

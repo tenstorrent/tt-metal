@@ -931,7 +931,7 @@ def test_auto_draft_len_batched_env_auto_defers_to_policy(monkeypatch):
 try:
     from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
-    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashContractForCausalLM
+    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashContractForCausalLM, Gemma4MTPContractForCausalLM
 except ImportError:  # vLLM absent: this section's tests skip
     pass
 
@@ -956,6 +956,99 @@ def drafter_snapshot(tmp_path, monkeypatch):
     monkeypatch.delenv("GEMMA4_DFLASH_REPLICATED", raising=False)
     monkeypatch.delenv("GEMMA4_DFLASH_CTX_CAP", raising=False)
     return tmp_path, cfg
+
+
+@pytest.fixture
+def assistant_snapshot(tmp_path, monkeypatch):
+    """A minimal it-assistant checkpoint dir: only ``config.json`` (``backbone_hidden_size``) is read."""
+    (tmp_path / "config.json").write_text(json.dumps({"backbone_hidden_size": 3840}))
+    for name in ("GEMMA4_ASSISTANT_MODEL", "HF_MODEL", "GEMMA4_SPEC_DRAFT_LEN", "GEMMA4_SPEC_K_BY_ROWS"):
+        monkeypatch.delenv(name, raising=False)
+    return tmp_path
+
+
+def _served_model(model):
+    """The ordinary ``vllm_config`` fields ``spec_plan`` reads: the model vLLM serves."""
+    return SimpleNamespace(model_config=SimpleNamespace(model=model))
+
+
+@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
+def test_mtp_admission_matches_the_assistant_to_the_served_model(assistant_snapshot, monkeypatch):
+    """The assistant is the served model's, read off ``vllm_config.model_config.model``, not ``HF_MODEL``:
+    the server points ``HF_MODEL`` at a weights directory and the harness leaves it unset."""
+    asked = []
+
+    def resolve(target):
+        asked.append(target)
+        return str(assistant_snapshot)
+
+    monkeypatch.setattr(gv, "_assistant_default_snapshot", resolve)
+    monkeypatch.setenv("HF_MODEL", "google/gemma-4-31B-it")
+    out = Gemma4MTPContractForCausalLM.spec_plan(_served_model("google/gemma-4-12B-it"), max_num_seqs=8, requested_k=5)
+    assert isinstance(out, SpecPlan)
+    assert asked == ["google/gemma-4-12B-it"]
+    # No config (the host harness): HF_MODEL stands in.
+    assert isinstance(Gemma4MTPContractForCausalLM.spec_plan(None, max_num_seqs=8, requested_k=5), SpecPlan)
+    assert asked[-1] == "google/gemma-4-31B-it"
+
+
+@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
+def test_mtp_admission_refuses_a_target_without_a_known_assistant(assistant_snapshot):
+    """A served name carrying no known size is refused at admission, naming the override."""
+    out = Gemma4MTPContractForCausalLM.spec_plan(_served_model("my-gemma-finetune"), max_num_seqs=8, requested_k=5)
+    assert isinstance(out, SpecReject)
+    assert "GEMMA4_ASSISTANT_MODEL" in out.reason
+    out = Gemma4MTPContractForCausalLM.spec_plan(None, max_num_seqs=8, requested_k=5)
+    assert isinstance(out, SpecReject)
+    assert "HF_MODEL" in out.reason and "GEMMA4_ASSISTANT_MODEL" in out.reason
+
+
+@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
+def test_mtp_explicit_assistant_overrides_the_served_model(assistant_snapshot, monkeypatch):
+    monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", str(assistant_snapshot))
+
+    def never(target):
+        raise AssertionError(f"the served model {target!r} was resolved despite the override")
+
+    monkeypatch.setattr(gv, "_assistant_default_snapshot", never)
+    out = Gemma4MTPContractForCausalLM.spec_plan(_served_model("my-gemma-finetune"), max_num_seqs=8, requested_k=5)
+    assert isinstance(out, SpecPlan)
+
+
+@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
+def test_mtp_draft_length_below_the_records_is_refused(assistant_snapshot, monkeypatch):
+    """The records are captured at GEMMA4_SPEC_DRAFT_LEN drafts: a shorter request cannot be served by them
+    (a wider replay would write K/V past the plugin's reservation), so it is refused with the supported
+    length; a longer one is served at the records' length."""
+    monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", str(assistant_snapshot))
+    k = Gemma4MTPContractForCausalLM._SPEC_DRAFT_LEN
+    out = Gemma4MTPContractForCausalLM.spec_plan(None, max_num_seqs=8, requested_k=k - 2)
+    assert isinstance(out, SpecReject)
+    assert out.supported_k == (k,)
+    assert "GEMMA4_SPEC_DRAFT_LEN" in out.reason
+    out = Gemma4MTPContractForCausalLM.spec_plan(None, max_num_seqs=8, requested_k=k + 2)
+    assert isinstance(out, SpecPlan)
+    assert out.effective_k == k
+
+
+def test_the_solo_record_drafts_at_its_bands_cap(expect_error):
+    """A table that caps the first band below the env draft length gets a solo record at that cap, not at
+    the maximum: the plugin asks one row for at most the band's drafts, and a wider record never replays."""
+    from models.demos.gemma4.tt.generator_vllm import spec_capture_shapes
+
+    assert spec_capture_shapes(((5, 3), (8, 2)), 5, 8) == ((1, 3), (5, 3), (8, 2))
+    assert spec_capture_shapes(((5, 5), (8, 3)), 5, 8) == ((1, 5), (5, 5), (8, 3))
+    with expect_error(ValueError, "above the draft length"):
+        spec_capture_shapes(((5, 5),), 3, 8)
+
+
+def test_a_default_record_wider_than_the_runners_k_declines():
+    """Without a cost table the band's default serves, unless it drafts more than the runner's ``k``: then
+    the step is the plain decode rather than a replay truncated after the fact."""
+    stub = SimpleNamespace(_spec_cost_table_ready=lambda name: False)
+    choose = Gemma4MTPContractForCausalLM._mtp_choose_record
+    assert choose(stub, (1, 5), [], 5, None, 1) == ((1, 5), None)
+    assert choose(stub, (1, 5), [], 3, None, 1) == (None, None)
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")

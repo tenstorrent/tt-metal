@@ -384,6 +384,7 @@ def build_mtp_model(
     model.decode_kwargs = []
     model._spec_init_state()
     model._mtp_init_state()
+    model._mtp_target = "google/gemma-4-31B-it"  # what initialize_vllm_model records; the env is cleared above
     model._build_per_layer_page_tables = lambda per_layer, table: [table, table]
     model._pad_sliding_page_tables_for_bounded = lambda per_layer, kv_cache, authoritative=False: per_layer
 
