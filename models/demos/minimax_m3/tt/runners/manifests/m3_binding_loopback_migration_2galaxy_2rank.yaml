@@ -1,6 +1,6 @@
 # MiniMax-M3 — 2-galaxy 2-stage loopback migration rank binding (derived from
 # topology_configuration/pipeline_prefill_request_2rank.yaml + the intragalaxy loopback binding).
-# Each rank is a full 8x4 galaxy owning 30 layers; rank 0 publishes the merged 60-layer 9-config table.
+# Each rank is a full 8x4 galaxy owning 30 layers; rank 0 writes the merged 60-layer 9-config table.
 #
 # Launch (endpoint with workers on BOTH hosts must already be up):
 #   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \

@@ -10,7 +10,7 @@ every model:
 - fabric-link lease/reclaim per chunk, per-layer LayerAck, and graceful shutdown
   (the producer/scheduler closes the request stream with an all -1 PrefillMetadata
   sentinel; each rank forwards it downstream and exits — SIGKILL is the hard fallback),
-- KV-chunk-table publish + WORKER_READY handshake for cache migration.
+- KV-chunk-table + device-map file export for cache migration (migration_driver publishes them).
 
 The engine never imports a model class. It selects an adapter by name
 (`PREFILL_MODEL` env var) and drives the model entirely through it:
@@ -329,7 +329,7 @@ PREFILL_PRODUCER_CHUNKS=11 \
 **KV PCC** — validate prefill writes correct KV. The producer reads the KV back device-lessly and PCCs
 vs the golden trace, which reads the KV chunk table + device map the runner always writes: run the
 producer with `PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
-recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner PCCs nothing on any path — it publishes
+recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner PCCs nothing on any path — it writes
 the table and the device map, and every read-back runs in the reader's own process. The producer's reader
 knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
 layout needs a branch in `_read_slot_kv_and_check_pcc`, since that read-back is not adapter-dispatched.

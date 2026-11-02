@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 
+import glob
 import os
 import socket
 import sys
@@ -82,7 +83,7 @@ def _import_migration_client():
 def _attach_migration_client(timeout_s: float | None = None):
     cmd_q, table_q, resp_q = _resolve_queue_names()
     mod = _import_migration_client()
-    # Runs at table-publish time, so a ctor race here kills rank 0: wait the transient window out.
+    # The driver can start before migration_endpoint finishes queue init: wait the transient window out.
     client = _attach_with_retry(
         lambda: mod.MigrationLayerClient(cmd_q, table_q, resp_q),
         f"endpoint queues ({cmd_q})",
@@ -152,6 +153,98 @@ def _attach_with_retry(make_client, what: str, on_timeout: str, timeout_s: float
                 f"is the migration layer up on this host yet?"
             )
         time.sleep(0.25)
+
+
+def deliver_device_map_to_local_workers(device_map, timeout_s: float | None = None) -> None:
+    mod = _import_migration_client()
+
+    def _discover():
+        trios = []
+        skipped = []
+        for side in ("a", "b"):
+            candidates = glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")
+            candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            for c in candidates:
+                name = "/" + os.path.basename(c)
+                if not os.access(c, os.R_OK | os.W_OK):
+                    st = os.stat(c)
+                    import pwd
+
+                    owner = pwd.getpwuid(st.st_uid).pw_name
+                    skipped.append(
+                        f"{name} (owner={owner}, mtime={time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))})"
+                    )
+                    continue
+                trios.append(
+                    (
+                        name,
+                        name.replace(f"_{side}_cmd", f"_{side}_table"),
+                        name.replace(f"_{side}_cmd", f"_{side}_resp"),
+                    )
+                )
+        return trios, skipped
+
+    budget = _migration_attach_wait_s() if timeout_s is None else timeout_s
+    start = time.monotonic()
+    # None => no deadline: poll forever, but log so the wait is never mistaken for a hang.
+    deadline = start + budget if budget > 0 else None
+    last_log = start
+    trios, skipped = _discover()
+    # Queues that are not ours NEVER become usable, and with no deadline the raise below is dead code.
+    if skipped and not trios:
+        logger.warning(
+            f"[migration] {len(skipped)} local worker queue(s) present but NOT accessible by this user — "
+            f"likely stale shm from another user's run, which waiting will not clear:\n  " + "\n  ".join(skipped)
+        )
+    while not trios:
+        if deadline is not None and time.monotonic() >= deadline:
+            if skipped:
+                details = "\n  ".join(skipped)
+                raise RuntimeError(
+                    f"[migration] local worker queues (/dev/shm/ep_*_{{a,b}}_cmd*) are present "
+                    f"but none are accessible by this user. Skipped {len(skipped)}:\n  {details}\n"
+                    f"This is usually caused by stale shm files from another user's previous run."
+                )
+            raise RuntimeError(
+                "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
+                "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
+                "master-only control channel, NOT the device-map queues.)"
+            )
+        now = time.monotonic()
+        if now - last_log >= _MIGRATION_ATTACH_HEARTBEAT_S:
+            last_log = now
+            bound = "no timeout" if deadline is None else f"{budget:.0f}s budget"
+            inaccessible = f", {len(skipped)} present but not ours" if skipped else ""
+            logger.info(
+                f"[migration] still waiting for local worker queues (/dev/shm/ep_*_{{a,b}}_cmd*) after "
+                f"{now - start:.0f}s ({bound}{inaccessible}) — is the migration layer up on this host yet?"
+            )
+        time.sleep(0.25)
+        trios, skipped = _discover()
+
+    # _discover() only proves the cmd file is ours, not that the worker is past init: same wait applies.
+    for cmd, table, resp in trios:
+        try:
+            client = _attach_with_retry(
+                lambda cmd=cmd, table=table, resp=resp: mod.MigrationLayerClient(cmd, table, resp),
+                f"worker queue header init ({resp})",
+                f"[migration] worker queues found but never became attachable ({resp}) — is the "
+                f"migration_worker for this host healthy?",
+                timeout_s,
+            )
+            client.send_device_map(device_map)
+            logger.info(f"[migration] delivered {len(device_map)} local device-map entries -> {cmd}")
+        except RuntimeError as e:
+            if "Permission denied" in str(e):
+                logger.warning(f"[migration] skipping inaccessible worker queue {cmd}: {e}")
+                continue
+            raise RuntimeError(f"[migration] could not attach to local worker queue {cmd}: {e}") from e
+
+
+def publish_kv_chunk_table(client, table_path: str, wait_ready_ms: int) -> None:
+    client.send_kv_chunk_table(table_path)
+    client.wait_ready(wait_ready_ms)
+    logger.info(f"[migration] WORKER_READY: table={table_path}")
 
 
 def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:

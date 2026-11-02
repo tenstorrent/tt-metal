@@ -201,7 +201,7 @@ def test_prefill_migration(migration_environment, context_len):
     if failures:
         pytest.fail("Accuracy checks failed:\n" + "\n".join(failures), pytrace=False)
     if gate == "loopback":
-        assert "[migration] WORKER_READY:" in (output_dir / "runner.log").read_text()
+        assert "[migration] WORKER_READY:" in (output_dir / "producer.log").read_text()
         assert "verify bytes PASSED" in (output_dir / "producer.log").read_text()
 
 

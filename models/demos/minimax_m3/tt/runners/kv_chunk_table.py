@@ -4,7 +4,8 @@
 """KV chunk address table builder for the MiniMax-M3 GQA prefill cache.
 
 Describes the on-device KV layout as a ``KvChunkAddressTable`` so the migration worker can copy the right
-chunks. ``TtPrefillRuntime.build_kv_chunk_table`` calls this; the runner publishes the serialized table.
+chunks. ``TtPrefillRuntime.build_kv_chunk_table`` calls this; the runner writes the serialized table to a file
+and migration_driver publishes it.
 
 The worker treats a chunk's device group as REPLICAS (reads one member, writes the same bytes to all
 destinations). M3's ``k`` / ``v`` are TP-head-sharded — column ``c`` holds a different head, not a replica —

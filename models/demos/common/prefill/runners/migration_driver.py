@@ -11,6 +11,8 @@ from loguru import logger
 
 import ttnn
 
+_WORKER_READY_TIMEOUT_MS = 300_000
+
 
 def apply_manifest_env(manifest: dict) -> None:
     migration = manifest.get("migration") or {}
@@ -77,8 +79,11 @@ class MigrationDriver:
     def cross_endpoint(self) -> bool:
         return self.dest_endpoint_id != self.src_endpoint_id
 
-    def attach(self) -> None:
+    def attach(self, table_path: str) -> None:
+        from models.demos.common.prefill.runners.migration import publish_kv_chunk_table
+
         self.client = self._attach_client()
+        publish_kv_chunk_table(self.client, table_path, _WORKER_READY_TIMEOUT_MS)
         if self.cross_endpoint:
             self._pair_cross_endpoint()
 
@@ -689,6 +694,16 @@ def _mr_bcast_triples(rank: int, triples: list) -> list:
     return out
 
 
+def _deliver_device_map(timeout_s: int) -> None:
+    from models.demos.common.prefill.runners import prefill_producer as producer
+    from models.demos.common.prefill.runners.migration import deliver_device_map_to_local_workers
+
+    device_map = producer._read_device_map(timeout_s)
+    if not device_map:
+        raise RuntimeError("[migration_driver] no device map for this host; the migration workers need one")
+    deliver_device_map_to_local_workers([(mesh, chip, umd) for (mesh, chip), umd in device_map.items()])
+
+
 def _run_validator(rank: int, world_size: int, args) -> None:
     from models.demos.common.prefill.runners import prefill_producer as producer
 
@@ -705,6 +720,9 @@ def _run_validator(rank: int, world_size: int, args) -> None:
         f"[migration_driver] validator rank={rank}/{world_size}: read-back only (no H2D feed, no migrate); "
         f"src_pcc={cfg.verify} dst_verify={args.verify_migration}"
     )
+
+    _deliver_device_map(timeout_s)
+    ttnn.distributed_context_allgather_int(1)
 
     resident = producer._mr_bcast_resident(rank, {})
     logger.info(f"[migration_driver] validator rank={rank}: GO received, {len(resident)} resident slot(s)")
@@ -765,8 +783,8 @@ def main() -> None:
         prog="migration_driver",
         description="Prefill over H2D and migrate the resulting KV. Config comes from the same producer "
         "YAML manifest as prefill_producer (--manifest / PREFILL_PRODUCER_MANIFEST); this entry point "
-        "additionally applies the manifest's `migration:` block. Needs a live migration_endpoint that the "
-        "prefill runner has already driven to WORKER_READY.",
+        "additionally applies the manifest's `migration:` block. Needs a live migration_endpoint; this "
+        "process hands it the runner's KV chunk table and device map.",
     )
     parser.add_argument(
         "--manifest",
@@ -862,7 +880,14 @@ def main() -> None:
     kv_table = producer._read_kv_chunk_table(timeout_s)
     completion_channel = connect_layer_completion_channel(timeout_s)
 
-    driver.attach()
+    if kv_table is None:
+        raise RuntimeError("[migration_driver] no KV chunk table to publish to the migration endpoint")
+    _deliver_device_map(timeout_s)
+    if world_size > 1:
+        ttnn.distributed_context_allgather_int(1)
+    from models.demos.common.prefill.runners.migration import migration_table_path
+
+    driver.attach(migration_table_path())
 
     slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths

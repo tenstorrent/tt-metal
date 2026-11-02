@@ -107,7 +107,7 @@ global_env:
   PREFILL_MIGRATION_CLIENT_DIR: "<tt-llm-engine>/disaggregation/migration/build_RelWithDebInfo/python"
 ```
 
-Nothing about validation appears here: the runner publishes the KV-chunk table and the device map and
+Nothing about validation appears here: the runner exports the KV-chunk table and the device map to files and
 that is the whole of its involvement. Both read-backs — the source `check_pcc` and the destination
 `--verify-migration` — run out in the driver process against those two published artefacts.
 
@@ -470,7 +470,8 @@ fans out from there, always in rank order with rank 0 first: the endpoint gets `
 driver is launched with `run_migration_driver.sh <manifest> <same list>`, which places one process per host
 (*Covering every rank*, above). Host order must be identical in all three.
 
-Launch order is A → B (wait for `WORKER_READY`) → C. Between runs, clear stale state:
+Launch order is A → B (wait for `[migration] device map (…) exported to …`) → C, and C logs `WORKER_READY`.
+Between runs, clear stale state:
 
 ```bash
 pkill -f migration_endpoint ; pkill prte
@@ -485,7 +486,7 @@ cd <tt-llm-engine>/disaggregation/migration
 
 ls /dev/shm/mig_ep1_*      # all three queues must exist BEFORE starting B
 
-# ---- Terminal B — runner (wait for WORKER_READY before starting C) ----
+# ---- Terminal B — runner (wait for the device map export line before starting C) ----
 cd $TT_METAL_HOME && $RUN $BINDING $HOST:1            # multi-host: $RUN $BINDING $HOSTSP
                                                       # (with an N-rank $BINDING)
 
@@ -593,23 +594,23 @@ attempts to set any of them by hand.
 
 | Process | Role |
 |---|---|
-| `migration_endpoint` | Owns the outward queues `/mig_ep<id>_{cmd,table,resp}` the runner talks to; relays commands inward and `WORKER_READY` outward. Copies no KV itself. |
+| `migration_endpoint` | Owns the outward queues `/mig_ep<id>_{cmd,table,resp}` the driver talks to; relays commands inward and `WORKER_READY` outward. Copies no KV itself. |
 | `migration_worker` × 2 | The processes that touch DRAM: sender ("A") and loopback receiver ("B"), each with queues `/ep_<id>_{a,b}_{cmd,table,resp}`. Started by an MPI launcher — `prte` holds a pool of *slots* (one per process), `prun` requests them. |
 
 A worker reports `WORKER_READY` only once it holds the KV chunk table, the device map, and its A↔B link. The
-runner supplies the first two, then waits — it cannot distinguish a slow worker from an absent one.
+driver supplies the first two, then waits — it cannot distinguish a slow worker from an absent one.
 
 ---
 
-## Troubleshooting: the runner sits at startup with no error
+## Troubleshooting: the driver sits at startup with no error
 
 ```
 [migration] still waiting for endpoint queues (/mig_ep1_cmd) after 45s (no timeout) — ...
 ```
 
 The **attach** wait, repeating every 15s: the shm queues do not exist yet. This is not the `wait_ready`
-handshake below, so `PREFILL_MIGRATION_WAIT_READY_MS` has no effect on it. Unbounded by default because the
-runner often reaches table-publish before `migration_endpoint` has created its queues — bound it when a hang
+handshake below. Unbounded by default because the
+driver can start before `migration_endpoint` has created its queues — bound it when a hang
 costs more than a race:
 
 ```bash
@@ -620,15 +621,15 @@ Permission problems fail on the first attempt rather than looping, so a heartbea
 queues are genuinely absent: the worker for this host never came up, or the queue names do not match the
 endpoint's.
 
-## Troubleshooting: the runner times out in `wait_ready`
+## Troubleshooting: the driver times out in `wait_ready`
 
 ```
-RuntimeError: MigrationLayerClient::wait_ready: timeout after 120000ms
+RuntimeError: MigrationLayerClient::wait_ready: timeout after 300000ms
 ```
 
 This is the phase **after** attach: the queues were found and opened, and the workers are not answering on
 them. If instead there is no error at all and the log just repeats `still waiting for ...`, that is the
-attach wait above and `PREFILL_MIGRATION_WAIT_READY_MS` will not change it.
+attach wait above.
 
 Almost always: the two workers were never started, so nothing can answer. Confirm in the endpoint log
 (`/tmp/launch_mig_ep_<id>_*.log`; it holds binary bytes, so `grep` needs `-a`):

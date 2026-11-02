@@ -1,6 +1,6 @@
 # MiniMax-M3 — Gate 2 (loopback migration) rank binding: 1 rank / 1 BH galaxy, REQUEST mode.
 #
-# The runner publishes the KV chunk table to the migration worker, blocks on WORKER_READY, then serves the
+# The runner writes the KV chunk table + device map files (migration_driver publishes them), then serves the
 # producer's H2D pushes for as long as the stream stays open. It validates nothing: migration_driver owns
 # both read-backs, so run it with PREFILL_SEND_SHUTDOWN=1 or the runner never leaves its request loop.
 # Only THIS binding is single-rank; the runner writes a merged table at any rank count.
