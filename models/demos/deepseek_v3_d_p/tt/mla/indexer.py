@@ -1386,11 +1386,13 @@ class TtCsaIndexer(TtIndexerBase):
             assert (
                 0 <= cache_user_id < self._slot_num
             ), f"cache_user_id {cache_user_id} is outside [0, {self._slot_num})"
-            ttnn.deallocate(self._overlap_kv_state[cache_user_id])
-            ttnn.deallocate(self._overlap_score_state[cache_user_id])
+            # Allocated before the old pair is freed, so a failed allocation leaves the slot as it was.
             kv_state, score_state = self._compressor.alloc_overlap_state()
+            old = (self._overlap_kv_state[cache_user_id], self._overlap_score_state[cache_user_id])
             self._overlap_kv_state[cache_user_id] = kv_state
             self._overlap_score_state[cache_user_id] = score_state
+            for state in old:
+                ttnn.deallocate(state)
             return
         if hasattr(self, "_overlap_kv_state"):
             for state in (*self._overlap_kv_state, *self._overlap_score_state):

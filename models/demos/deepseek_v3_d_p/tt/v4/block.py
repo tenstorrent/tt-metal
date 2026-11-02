@@ -210,8 +210,10 @@ class TtV4Block(LightweightModule):
         position 0. The tables, and every other slot's state, stay as they are.
 
         The fresh state is built before the old one is freed, so a failed allocation leaves the old one
-        intact. The shared index key cache is not cleared: each chunk writes its rows before scoring and
-        scores only up to its own position, so nothing reads what the slot's previous request left."""
+        intact. That includes the CSA indexer's overlap state for the slot, which the indexer holds and
+        ``new_state`` replaces only after the rest has been allocated. The shared index key cache is not
+        cleared: each chunk writes its rows before scoring and scores only up to its own position, so
+        nothing reads what the slot's previous request left."""
         old = self.attn_states[slot]
         self.attn_states[slot] = self._new_state(slot)
         old.release()

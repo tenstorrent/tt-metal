@@ -257,13 +257,6 @@ class TtCSA(TtV4AttentionBase):
         made. Every user's state shares the one user-major index key cache; the slot picks its rows."""
         assert self._state_dims is not None, "call build_tables before new_state"
         max_seq_len, chunk = self._state_dims
-        # Two overlap states advance through a prefill, one per compressor: the block's, which lives in
-        # the returned TtCSAState and is advanced by forward, and the indexer's, which the indexer keeps
-        # privately per slot and advances inside write_k. They describe the same token positions, so they
-        # have to start from the same "no predecessor window" -- reset the slot's here, next to the
-        # block's allocation, rather than leave the pairing to the fact that _build_indexer happens to
-        # make a fresh indexer.
-        self._indexer.reset_overlap_state(cache_user_id)
         kv_state, score_state = self.compressor.alloc_overlap_state(batch)
         # ROW_MAJOR and unpadded because sparse_sdpa reads it by row; replicated because any query may
         # name any row. The carry region starts out zero and the first chunk's index list never points
@@ -271,6 +264,14 @@ class TtCSA(TtV4AttentionBase):
         joint_kv = self.ops.from_torch(
             torch.zeros(batch, 1, self._raw_row + chunk, self.head_dim), layout=ttnn.ROW_MAJOR_LAYOUT
         )
+        # Two overlap states advance through a prefill, one per compressor: the block's, which lives in
+        # the returned TtCSAState and is advanced by forward, and the indexer's, which the indexer keeps
+        # privately per slot and advances inside write_k. They describe the same token positions, so they
+        # have to start from the same "no predecessor window" -- reset the slot's here, next to the
+        # block's allocation, rather than leave the pairing to the fact that _build_indexer happens to
+        # make a fresh indexer. It goes last, so a failed allocation above leaves the slot's indexer state
+        # with the request it belongs to. This is what makes new_state(k) a reset of slot k, never a spare.
+        self._indexer.reset_overlap_state(cache_user_id)
         return TtCSAState(
             joint_kv=joint_kv,
             kv_state=kv_state,
