@@ -2,11 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 """Kimi-K3 AttnRes performance: a boundary layer and an ordinary layer, end to end, traced and untraced.
 
-Galaxy (SP8xTP4) runs K3's prefill chunk and is gated. LoudBox (SP2xTP4, 1280 tokens) and QuietBox (SP1xTP4, 640
-tokens) run the same walk at Galaxy's TP width and 640 rows per chip, so every per-chip shape matches Galaxy's and only
-the SP axis is shorter. QuietBox cannot split TP in two instead: at a 3584-wide shard the read needs more L1 per core
-than a core has. Its four chips ring only on 1D fabric, which wraps mesh axis 0, so QuietBox opens 4x1 and puts TP on
-axis 0, as KDA's QuietBox perf tests do. They report without gating until they have CI references.
+Galaxy (SP8xTP4) runs K3's prefill chunk and is gated. LoudBox (SP2xTP4, 1280 tokens) runs the same walk at Galaxy's
+TP width and 640 rows per chip, so every per-chip shape matches Galaxy's and only the SP axis is shorter; it reports
+without gating until it has CI references.
+
+There is no QuietBox arm: QuietBox 2 has no layout AttnRes can run at a Galaxy-like shape.
+  * TP2 (SP2xTP2) does not fit: at a 3584-wide shard `attn_res_gather_softmax` needs 1658880 B of L1 per core
+    against 1572864 B. K3 never runs AttnRes at TP2.
+  * TP4 on a 2D torus-X ring cannot be cabled: the box's four chips are wired 2x2, so a 1x4 TORUS_X request falls
+    back to an unwrapped mesh, which the wrap guard rejects.
+  * TP4 on a 1D ring forms (KDA's QuietBox perf tests run on it), but `attn_res_gather_softmax` requires a 2D fabric
+    and rejects FABRIC_1D_RING at program creation.
+LoudBox covers the per-chip shapes on a small box, Galaxy the shipped topology.
 
 The walk starts where the last pipeline rank starts (24/24/24/21 over 4 Galaxies), with the sealed snapshots the
 upstream ranks hand over. Two layer kinds cover what AttnRes costs across the model:
@@ -62,7 +69,6 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
 )
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
-    fabric_1d_device_params,
     torus_xy_device_params,
     tp_axis_is_wrapped,
 )
@@ -87,7 +93,6 @@ _WALL_SAMPLES = 30
 # Set to report without gating, e.g. while re-baselining.
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 _LOUDBOX_PERF_SKU = "bh_loudbox"
-_QUIETBOX_PERF_SKU = "bh_quietbox"
 _GALAXY = "SP8xTP4"
 # Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power): the median of runs
 # 41112791430, 41117934062 and 41130107396 (2026-10-30), on bh-glx-120-d08u08, -d06u02 and -d09u02. Traced held
@@ -101,14 +106,13 @@ _GALAXY_REFERENCE_E2E_US = {
     "traced": {"boundary": 1720.0, "ordinary": 141.0},
     "untraced": {"boundary": 4620.0, "ordinary": 323.0},
 }
-# LoudBox and QuietBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
+# LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
 _PERF_REFERENCE_E2E_US = {
     _LOUDBOX_PERF_SKU: {},
-    _QUIETBOX_PERF_SKU: {},
 }
-# LoudBox SP2xTP4 and QuietBox SP1xTP4 have no CI references yet: they report but are not gated.
-_REPORT_ONLY_LAYOUTS = ("SP2xTP4", "SP1xTP4")
+# LoudBox SP2xTP4 has no CI references yet: it reports but is not gated.
+_REPORT_ONLY_LAYOUTS = ("SP2xTP4",)
 _MARGIN = {"traced": 0.05, "untraced": 0.10}
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
 _MODULE_KERNEL = "normalization/softmax"
@@ -276,28 +280,15 @@ _TRACE_REGION_SIZE = 128 * 1024 * 1024
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="SP2xTP4-fabric-2d",
         ),
-        # QuietBox's four chips as one TP ring. Its 2x2 wiring cannot realize a 2D torus-X 1x4 ring, so it takes
-        # 1D ring fabric, which wraps axis 0, as KDA's QuietBox perf tests do; the SP axis is one chip.
-        pytest.param(
-            (4, 1),
-            fabric_1d_device_params(
-                fabric_config=ttnn.FabricConfig.FABRIC_1D_RING,
-                l1_small_size=L1_SMALL_SIZE,
-                trace_region_size=_TRACE_REGION_SIZE,
-                **EXACT_BOX,
-            ),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
-            id="SP1xTP4-ring",
-        ),
+        # No QuietBox arm: TP2 overflows L1, its 2x2 wiring cannot ring TP4 on 2D torus-X, and the 1D ring it can
+        # form is rejected by `attn_res_gather_softmax`, which needs a 2D fabric. See the module docstring.
     ],
     indirect=True,
 )
 def test_attn_res_layer_perf(mesh_device, device_params, mode):
-    """Gate the AttnRes end-to-end time of a boundary layer and an ordinary layer on LoudBox, QuietBox and Galaxy,
+    """Gate the AttnRes end-to-end time of a boundary layer and an ordinary layer on LoudBox and Galaxy,
     and report their device time."""
-    # A 4x1 mesh is QuietBox's 1D ring, which wraps axis 0, so TP goes there; every other mesh is SP x TP.
-    tp_axis = 0 if tuple(mesh_device.shape)[1] == 1 else 1
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=1 - tp_axis, tp_axis=tp_axis)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
     layout = f"SP{op.sp_factor}xTP{op.tp_factor}"
     report_only = layout in _REPORT_ONLY_LAYOUTS
     if layout == _GALAXY:
