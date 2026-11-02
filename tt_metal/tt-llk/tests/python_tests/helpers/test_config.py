@@ -744,13 +744,13 @@ class TestConfig:
 
         For a ``tt_llk_quasar`` tree, prepend the selected variant's header root
         and expose the tree root for qualified includes of the base headers.
+        Quasar has no ``common/inc/sfpu``: its SFPU kernels are all in ``llk_sfpu``.
         """
         root = Path(arch_root)
         roots = [
             root / "llk_lib",
             root / "llk_lib" / "hal",
             root / "common" / "inc",
-            root / "common" / "inc" / "sfpu",
         ]
         if root.name == "tt_llk_quasar":
             roots.append(root)
@@ -758,6 +758,8 @@ class TestConfig:
             if variant:
                 # First, so the variant's headers shadow the base Quasar ones.
                 roots.insert(0, root / "arch" / variant)
+        else:
+            roots.append(root / "common" / "inc" / "sfpu")
         return roots
 
     @staticmethod
