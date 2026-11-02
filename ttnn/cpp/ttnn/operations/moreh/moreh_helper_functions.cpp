@@ -6,6 +6,7 @@
 #include "moreh_helper_functions.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <algorithm>
 #include <numeric>
 #include <utility>
 
@@ -525,11 +526,9 @@ std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologie
         preallocated_outputs.size(),
         output_specs.size());
 
-    bool any_preallocated = false;
-    for (const auto& output : preallocated_outputs) {
-        any_preallocated |= output.get().has_value();
-    }
-    if (!any_preallocated) {
+    if (std::none_of(preallocated_outputs.begin(), preallocated_outputs.end(), [](const auto& output) {
+            return output.get().has_value();
+        })) {
         return {};
     }
 
