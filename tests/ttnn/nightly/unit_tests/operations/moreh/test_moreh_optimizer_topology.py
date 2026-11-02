@@ -4,29 +4,11 @@
 
 """Mesh-topology labels of the moreh optimizer, clip_grad_norm and dot_backward outputs.
 
-The device-operation framework relabels every tensor an op returns with the union of its inputs' placements. For
-these ops the returned tensors are frequently the caller's own: moreh_adamw / moreh_adam / moreh_sgd write into a
-preallocated ``*_out`` (tt-train's MorehAdamW hands in the parameter itself), moreh_clip_grad_norm scales its
-``inputs`` in place, moreh_dot_backward only ever writes caller-provided grads. The union is the right label for a
-fresh output, but for a caller-owned one it can drop the caller's distribution shape (a collapsed 1-D label against
-an N-D input) or replace the caller's shard dim with an input's.
-
-Contract pinned here (``ttnn::device_operation::detail::caller_owned_output_topology``, shared with the in-place softmax /
-layer_norm and KV-cache hooks of PRs #59329-#59332):
-  * a preallocated (caller-owned) output keeps the label it arrived with while that label still describes the data:
-    no input may be sharded along a mesh axis on which the output is replicated;
-  * otherwise -- a gradient sharded along an axis on which the parameter is replicated leaves every device with a
-    different parameter -- it takes the union, like an output the op allocates itself; a ``Replicate`` label kept on
-    per-device-different data would make the flatbuffer serialiser save one device's copy for all;
-  * an output the op allocates itself takes the union of all inputs (it is per-device distinct whenever any input is);
-  * absent optional outputs (``amsgrad=False``, ``momentum=0``, one grad of dot_backward) get no entry, so the
-    3-vs-4 / 1-vs-2 slot counts are exercised;
-  * the topology label does not take part in the program hash, so a cached program is reused across labels.
-
-The ``*_keeps_own_label`` tests pin the kept label where the union would differ (a collapsed ``{2},[Shard(2)]``
-parameter against an N-D ``{1,2},[Replicate, Shard(3)]`` gradient: the union is the N-D label). The
-``*_follow_the_data`` tests pin the fallback: a replicated parameter updated from a per-device-different gradient
-comes back ``['Shard(3)']`` on the caller's own handle, and the per-device results are checked to differ.
+These ops often hand back the caller's own tensors: a preallocated ``*_out`` (tt-train passes the parameter itself),
+gradients scaled in place, caller-provided grads. Such an output keeps its label unless an input is sharded along a
+mesh axis on which that label is replicated; every device then holds different data, and the output takes the union
+of the input labels, as an output the op allocates always does. Absent optional outputs get no label, and the label
+is not part of the program hash.
 """
 
 import pytest
@@ -114,17 +96,13 @@ def _assert_close(expected, actual, what):
 
 
 def _assert_devices_differ(slices, what):
-    """Precondition for a meaningful test: a per-device-distinct result must actually differ between devices,
-    otherwise a Replicate label would be harmless and prove nothing."""
+    """The devices must hold different results, or a Replicate label would prove nothing."""
     assert len(slices) >= 2 and not torch.equal(slices[0], slices[1]), f"{what}: identical on both devices"
 
 
 def _adam_reference(param, grad, exp_avg, exp_avg_sq, max_exp_avg_sq, *, optim_cls, amsgrad):
-    """One step of torch.optim.Adam / AdamW (`optim_cls`) seeded with the given moments at step STEP - 1, run in
-    bfloat16 as the nightly test_moreh_adam / test_moreh_adamw goldens do, so torch's weight-decay placement and bias
-    correction are the specification. The slices arrive as float32 copies of bf16 device data, so the conversion back
-    is lossless; the kernels compute in bf16 too (no fp32_dest_acc_en), hence the nightly tests' tolerances.
-    """
+    """One torch Adam / AdamW (`optim_cls`) step in bfloat16 from the given moments at step STEP - 1, computed as the
+    nightly test_moreh_adam / test_moreh_adamw goldens do."""
 
     def bf16(tensor):
         return None if tensor is None else tensor.to(torch.bfloat16)
@@ -345,11 +323,9 @@ def _check_adam_labels(inputs, outputs, expected):
 @pytest.mark.parametrize("run, optim_cls", ADAM_OPS)
 @pytest.mark.parametrize("amsgrad", [True, False], ids=["amsgrad", "no_amsgrad"])
 def test_adam_preallocated_outputs_follow_the_data(mesh_device, run, optim_cls, amsgrad):
-    """(a) Replicated param / moments, every *_out preallocated and replicated, and a Shard(3) grad that holds a
-    different slice on every device: after the step every device holds a different parameter, so each *_out takes
-    the union ['Shard(3)'] -- on the caller's own handle too, since the returned handles are the caller's tensors.
-    Keeping ['Replicate'] here (what a hook that returns the caller's label unconditionally does) would make the
-    flatbuffer serialiser save one device's parameter as everyone's."""
+    """Replicated param, moments and preallocated *_out with a Shard(3) grad that differs per device: every device ends
+    with a different parameter, so each *_out takes the union ['Shard(3)']. A kept ['Replicate'] would have the
+    serialiser save one device's parameter for all."""
     inputs = _AdamInputs(mesh_device, amsgrad)
     outputs = run(inputs)
     _check_adam_labels(inputs, outputs, ["Shard(3)"])
@@ -361,9 +337,7 @@ def test_adam_preallocated_outputs_follow_the_data(mesh_device, run, optim_cls, 
 @pytest.mark.parametrize("run, optim_cls", ADAM_OPS)
 @pytest.mark.parametrize("amsgrad", [True, False], ids=["amsgrad", "no_amsgrad"])
 def test_adam_fresh_outputs_take_union(mesh_device, run, optim_cls, amsgrad):
-    """(b) Same inputs, nothing preallocated: the op allocates the outputs, and they are per-device distinct
-    (each device saw its own grad shard), so the union label ['Shard(3)'] is the correct, dedup-safe one.
-    """
+    """The same inputs with nothing preallocated: the op-allocated outputs take the union ['Shard(3)']."""
     inputs = _AdamInputs(mesh_device, amsgrad, preallocate=False)
     outputs = run(inputs)
     _check_adam_labels(inputs, outputs, ["Shard(3)"])
@@ -375,11 +349,9 @@ def test_adam_fresh_outputs_take_union(mesh_device, run, optim_cls, amsgrad):
 @pytest.mark.parametrize("preallocate", [True, False], ids=["preallocated", "fresh"])
 @pytest.mark.parametrize("grad_label", ["collapsed", "nd"], ids=["collapsed_grad", "nd_grad"])
 def test_adam_sharded_param_keeps_own_label(mesh_device, run, optim_cls, preallocate, grad_label):
-    """(c) param / moments ``{2},[Shard(2)]``, grad sharded on dim 3 along the same mesh axis: the grad is sharded
-    only where the parameter already is, so a preallocated *_out keeps ['Shard(2)']. With a collapsed grad label the
-    union agrees (it keeps the earliest-seen shard dim). With the N-D grad label ``{1,2},[Replicate, Shard(3)]`` the
-    union is that N-D label (only the inputs of maximal distribution rank contribute), which is what a fresh output
-    gets and what a preallocated one used to get before the hook."""
+    """Param and moments ``{2},[Shard(2)]``, grad sharded on dim 3 along the same mesh axis: preallocated *_out keep
+    ['Shard(2)']. Fresh outputs take the union, which agrees for a collapsed grad label and is the grad's
+    ``[Replicate, Shard(3)]`` for an N-D one."""
     inputs = _AdamInputs(
         mesh_device,
         amsgrad=False,
@@ -398,12 +370,9 @@ def test_adam_sharded_param_keeps_own_label(mesh_device, run, optim_cls, preallo
 @pytest.mark.parametrize("run, optim_cls", ADAM_OPS)
 @pytest.mark.parametrize("param_shard_dim", [2, None], ids=["sharded_param", "replicated_param"])
 def test_adam_nd_caller_label(mesh_device, run, optim_cls, param_shard_dim):
-    """The caller's tensors carry one placement per mesh axis (an explicit N-D mapper) and the grad the N-D
-    ``{1,2},[Replicate, Shard(3)]`` label. ``sharded_param``: param / moments / outs ``[Replicate, Shard(2)]`` are
-    sharded along the same mesh axis as the grad, so the preallocated outputs keep that label (the union agrees, every
-    label having the mesh's rank). ``replicated_param``: ``[Replicate, Replicate]`` against a grad that differs per
-    device, so the outputs take the union ``['Replicate', 'Shard(3)']``. This is the per-axis branch of the rule for
-    the caller's own label, which the collapsed-label cases above never reach."""
+    """N-D labels on the caller's tensors (the per-axis branch of the rule) and an N-D Shard(3) grad. A
+    ``[Replicate, Shard(2)]`` param is sharded where the grad is, so the preallocated outputs keep it; a
+    ``[Replicate, Replicate]`` one takes the union ``['Replicate', 'Shard(3)']``."""
     inputs = _AdamInputs(
         mesh_device, amsgrad=False, param_shard_dim=param_shard_dim, grad_label="nd", caller_label="nd"
     )
@@ -416,11 +385,9 @@ def test_adam_nd_caller_label(mesh_device, run, optim_cls, param_shard_dim):
 @pytest.mark.parametrize("run, optim_cls", ADAM_OPS)
 @pytest.mark.parametrize("param_shard_dim", [None, 2], ids=["replicated_param", "sharded_param"])
 def test_adam_aliased_outputs(mesh_device, run, optim_cls, param_shard_dim):
-    """tt-train's call shape (``MorehAdamW::step``): the parameter and the moments are passed as both the inputs and
-    the preallocated outputs, so the op updates them in place and the hook's label lands on the caller's only
-    handle. ``replicated_param`` with a per-device-different Shard(3) grad: that handle reads ['Shard(3)'] after the
-    step. ``sharded_param`` (``{2},[Shard(2)]``, the tensor-parallel layout): it keeps ['Shard(2)']. Numerics are
-    checked per device against torch on snapshots taken before the step, since the inputs are overwritten."""
+    """tt-train's call shape (``MorehAdamW::step``): param and moments are both the inputs and the outputs, updated in
+    place. A replicated param reads ['Shard(3)'] after a per-device Shard(3) grad; a ``{2},[Shard(2)]`` param keeps
+    ['Shard(2)']. Numerics are checked against snapshots taken before the step."""
     inputs = _AdamInputs(mesh_device, amsgrad=False, param_shard_dim=param_shard_dim, preallocate=False)
     before = {
         name: _device_slices(t)
@@ -466,9 +433,8 @@ def test_adam_aliased_outputs(mesh_device, run, optim_cls, param_shard_dim):
 
 @pytest.mark.parametrize("run, optim_cls", ADAM_OPS)
 def test_adam_topology_does_not_touch_program_cache(mesh_device, run, optim_cls):
-    """Same per-device shapes and the same preallocation pattern under different labels reuse one cached program,
-    and each run still reports its own label: the label is applied when the outputs are created, not by the
-    program, and is not part of the program hash."""
+    """Runs that differ only in their labels reuse one cached program and still report their own labels: the label
+    is not part of the program hash."""
     # Build every input before the cache window opens: from_torch with TILE_LAYOUT onto a mesh runs a device tilize
     # program, which must not be counted among the optimizer's entries.
     runs = [
@@ -580,10 +546,8 @@ class _SgdInputs:
 
 @pytest.mark.parametrize("momentum", [0.9, 0.0], ids=["momentum", "no_momentum"])
 def test_sgd_preallocated_outputs_follow_the_data(mesh_device, momentum):
-    """Replicated param (and momentum buffer), preallocated outputs, and a Shard(3) grad that differs per device:
-    every device ends with a different parameter, so the preallocated outputs take the union ['Shard(3)'], on the
-    caller's handle too. momentum=0 leaves a single present output (1-vs-2 slot count).
-    """
+    """Replicated param and momentum buffer, preallocated outputs, a Shard(3) grad that differs per device: the outputs
+    take the union ['Shard(3)']. momentum=0 leaves a single present output."""
     inputs = _SgdInputs(mesh_device, momentum, preallocate=True)
     outputs = inputs.run()
     inputs.check(outputs, ["Shard(3)"])
@@ -593,9 +557,8 @@ def test_sgd_preallocated_outputs_follow_the_data(mesh_device, momentum):
 
 @pytest.mark.parametrize("preallocate", [True, False], ids=["preallocated", "fresh"])
 def test_sgd_sharded_param_keeps_own_label(mesh_device, preallocate):
-    """param / momentum buffer ``{2},[Shard(2)]``, grad ``{1,2},[Replicate, Shard(3)]`` along the same mesh axis:
-    preallocated outputs keep ['Shard(2)'] (one placement), fresh outputs take the N-D union, which is also what a
-    preallocated output used to get before the hook."""
+    """Param and momentum buffer ``{2},[Shard(2)]`` with an N-D Shard(3) grad along the same mesh axis: preallocated
+    outputs keep ['Shard(2)'], fresh outputs take the N-D union."""
     inputs = _SgdInputs(mesh_device, 0.9, preallocate=preallocate, param_shard_dim=2, grad_label="nd")
     outputs = inputs.run()
     inputs.check(outputs, ["Shard(2)"] if preallocate else ["Replicate", "Shard(3)"])
@@ -603,17 +566,15 @@ def test_sgd_sharded_param_keeps_own_label(mesh_device, preallocate):
 
 @pytest.mark.parametrize("momentum", [0.9, 0.0], ids=["momentum", "no_momentum"])
 def test_sgd_fresh_outputs_take_union(mesh_device, momentum):
-    """Nothing preallocated: the op-allocated param (and momentum buffer) are per-device distinct and carry the
-    union label ['Shard(3)']."""
+    """Nothing preallocated: the op-allocated outputs take the union ['Shard(3)']."""
     inputs = _SgdInputs(mesh_device, momentum, preallocate=False)
     outputs = inputs.run()
     inputs.check(outputs, ["Shard(3)"])
 
 
 def test_sgd_mixed_preallocation(mesh_device):
-    """Only param_out preallocated, momentum on, param ``{2},[Shard(2)]`` and an N-D grad: the preallocated param_out
-    keeps ['Shard(2)'] while the op-allocated momentum buffer takes the N-D union. Exercises both branches in one
-    call."""
+    """Only param_out preallocated (``{2},[Shard(2)]``, N-D grad, momentum on): param_out keeps ['Shard(2)'] while the
+    op-allocated momentum buffer takes the N-D union."""
     inputs = _SgdInputs(mesh_device, 0.9, preallocate=True, param_shard_dim=2, grad_label="nd")
     inputs.momentum_buffer_out = None
     param_out, momentum_buffer_out = inputs.run()
@@ -663,12 +624,9 @@ def _check_clip_numerics(mesh_device, grads, grad_slices, total_norm, *, max_nor
     ids=["fresh_total_norm", "preallocated_total_norm"],
 )
 def test_clip_grad_norm_labels_follow_the_data(mesh_device, preallocate_total_norm):
-    """Two gradients scaled in place, one replicated and one sharded on dim 3 with a different slice per device. The
-    norm is computed per device, so total_norm, the clip coefficient and every scaled gradient differ per device:
-    all of them take the union ['Shard(3)'], the replicated gradient and a preallocated (replicated) total_norm
-    included, on the caller's handles. Keeping ['Replicate'] on them would have the serialiser save one device's
-    values for all. (Step1 has no hook: its union over the grads relabels tmp_pow_sum Shard(3); a fresh total_norm
-    is left to the framework's union over tmp_pow_sum, Shard(3) as well.)"""
+    """Two gradients scaled in place, one replicated and one Shard(3) with a different slice per device: the norm is
+    computed per device, so total_norm and both scaled gradients differ per device and take ['Shard(3)'], on the
+    caller's handles too."""
     torch.manual_seed(2)
     num_devices = mesh_device.get_num_devices()
     g0 = torch.randn([1, 1, 32, 32], dtype=torch.bfloat16)
@@ -694,9 +652,7 @@ def test_clip_grad_norm_labels_follow_the_data(mesh_device, preallocate_total_no
     ids=["fresh_total_norm", "preallocated_total_norm"],
 )
 def test_clip_grad_norm_replicated_grads_keep_replicate(mesh_device, preallocate_total_norm):
-    """Every gradient replicated: the norm is the same on every device, nothing is sharded anywhere, and every
-    handle keeps ['Replicate'] (union and own agree; pinned so the compatible path of the rule is covered).
-    """
+    """Every gradient replicated: the norm is the same on every device, and every handle keeps ['Replicate']."""
     torch.manual_seed(2)
     grads = [_replicated(torch.randn([1, 1, 32, 32], dtype=torch.bfloat16), mesh_device) for _ in range(2)]
     grad_slices = [_device_slices(g) for g in grads]
@@ -718,9 +674,8 @@ def test_clip_grad_norm_replicated_grads_keep_replicate(mesh_device, preallocate
 
 
 def _dot_backward_inputs(mesh_device, *, want_other_grad, input_grad_label, other_label):
-    """output_grad and input replicated; other sharded on dim 3 (collapsed or N-D label), a different slice per
-    device; the caller's input_grad buffer replicated or collapsed-sharded on dim 3; other_grad (optional) sharded.
-    """
+    """output_grad and input replicated; other sharded on dim 3 (collapsed or N-D label); the caller's input_grad
+    replicated or Shard(3); other_grad optional."""
     torch.manual_seed(3)
     num_devices = mesh_device.get_num_devices()
     n = 64
@@ -766,12 +721,9 @@ def _check_dot_backward_numerics(mesh_device, output_grad, input_, tensors, inpu
 
 @pytest.mark.parametrize("want_other_grad", [True, False], ids=["both_grads", "input_grad_only"])
 def test_dot_backward_input_grad_follows_the_data(mesh_device, want_other_grad):
-    """moreh_dot_backward only writes caller-provided grads. input replicated, other sharded on dim 3 with a
-    different slice per device: input_grad = output_grad * other differs per device, so the caller's replicated
-    input_grad takes the union ['Shard(3)'] (a kept ['Replicate'] would have the serialiser save one device's
-    values). other_grad = output_grad * input is produced from two replicated tensors, so the caller's Shard(3)
-    other_grad keeps its label: the rule compares labels, and nothing here is sharded where other_grad is
-    replicated. Requesting one grad only exercises the 1-vs-2 slot count."""
+    """Replicated input and a per-device Shard(3) other: input_grad = output_grad * other differs per device, so the
+    caller's replicated input_grad takes ['Shard(3)']; other_grad = output_grad * input comes from replicated tensors,
+    so the caller's Shard(3) other_grad keeps its label. Requesting one grad covers the 1-vs-2 slot count."""
     output_grad, input_, t = _dot_backward_inputs(
         mesh_device,
         want_other_grad=want_other_grad,
@@ -797,10 +749,8 @@ def test_dot_backward_input_grad_follows_the_data(mesh_device, want_other_grad):
 
 
 def test_dot_backward_sharded_input_grad_keeps_own_label(mesh_device):
-    """The caller's input_grad is ``{2},[Shard(3)]`` and other carries the N-D ``{1,2},[Replicate, Shard(3)]``
-    label along the same mesh axis: other is sharded only where input_grad already is, so input_grad keeps its
-    collapsed label. The union -- what a fresh output gets, and what input_grad got before the hook -- is the N-D
-    label, since only the inputs of maximal distribution rank contribute."""
+    """The caller's input_grad ``{2},[Shard(3)]`` and an N-D ``{1,2},[Replicate, Shard(3)]`` other along the same mesh
+    axis: input_grad keeps its collapsed label, where the union would be the N-D one."""
     output_grad, input_, t = _dot_backward_inputs(
         mesh_device, want_other_grad=True, input_grad_label="shard", other_label="nd"
     )
