@@ -271,6 +271,9 @@ class TtBEVFormerEncoder:
         shift_ref_2d = ttnn.clone(ref_2d, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         shift = ttnn.reshape(shift, (shift.shape[0], 1, 1, shift.shape[1]))
         shift_ref_2d = shift_ref_2d + shift
+        # Upstream VAD aliases shift_ref_2d to ref_2d, so the current-frame queries are shifted too.
+        # The released weights were trained that way. The cached ref_2d itself stays unshifted.
+        ref_2d = shift_ref_2d
 
         bev_query = ttnn.permute(bev_query, (1, 0, 2))
         bev_pos = ttnn.permute(bev_pos, (1, 0, 2))

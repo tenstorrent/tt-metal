@@ -181,7 +181,9 @@ class BEVFormerEncoder(nn.Module):
 
         reference_points_cam, bev_mask = self.point_sampling(ref_3d, self.pc_range, kwargs["img_metas"])
 
-        shift_ref_2d = ref_2d.clone()
+        # Upstream VAD aliases shift_ref_2d to ref_2d, so the current-frame queries are shifted too.
+        # The released weights were trained that way.
+        shift_ref_2d = ref_2d  # .clone()
         shift_ref_2d += shift[:, None, None, :]
 
         bev_query = bev_query.permute(1, 0, 2)
