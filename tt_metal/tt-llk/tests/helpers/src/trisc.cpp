@@ -136,8 +136,16 @@ extern "C" __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_pr
     constexpr std::uint64_t SETTLE_CYCLES      = 4096;
 
     mailbox_t pack_mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start) + PACK_MAILBOX_INDEX;
+    // RC experiment (warmup-agent): the host sets a gap between mailbox polls in overlay stream 0 SCRATCH_1
+    // (LLK_TAIL_POLL cycles, 0 = tight poll as shipped). Same ELFs for every gap.
+    const std::uint32_t poll_gap =
+        *reinterpret_cast<volatile std::uint32_t*>(host_signal::NOC_OVERLAY_START_ADDR + (host_signal::STREAM_SCRATCH_REG_INDEX + 1) * 4);
     while (ckernel::load_blocking(pack_mailbox) != ckernel::KERNEL_COMPLETE)
     {
+        const std::uint64_t gap_start = ckernel::read_wall_clock();
+        while (ckernel::read_wall_clock() - gap_start < poll_gap)
+        {
+        }
     }
     const std::uint64_t settle_start = ckernel::read_wall_clock();
     while (ckernel::read_wall_clock() - settle_start < SETTLE_CYCLES)
