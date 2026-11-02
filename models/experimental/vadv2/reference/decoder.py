@@ -120,6 +120,13 @@ class MultiheadAttention(nn.Module):
         else:
             attn_output_weights = torch.bmm(q_scaled, key.transpose(-2, -1))
 
+        if key_padding_mask is not None:
+            attn_output_weights = (
+                attn_output_weights.view(bsz, self.num_heads, tgt_len, src_len)
+                .masked_fill(key_padding_mask.view(bsz, 1, 1, src_len).bool(), float("-inf"))
+                .view(bsz * self.num_heads, tgt_len, src_len)
+            )
+
         attn_output_weights = torch.nn.functional.softmax(attn_output_weights, dim=-1)
 
         attn_output = torch.bmm(attn_output_weights, value)
