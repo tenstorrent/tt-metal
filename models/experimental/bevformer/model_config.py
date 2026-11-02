@@ -282,11 +282,10 @@ DRAM_CONV_SLICES = 8
 # Layers run on a group of cameras at a time with every activation in L1, by layer (0 is layer1): the
 # whole batch does not fit L1, so its blocks would move each tensor through DRAM, several times
 # over; a group's do fit. One camera for layer1 and layer2; three for layer3, whose DCN runs slower
-# per camera on fewer. A strided first block runs on the whole batch (TTResLayer) when its group
-# input would not fit, as base's layer3's does, or when its stride is on conv2, as in tiny's
-# pytorch-style layer2 and layer3. layer4 runs whole: for base and small its DCN alone takes about
-# 1.1 MB of L1 per core, which leaves no room for a group's activations. A listed layer is also in
-# DRAM_ACTIVATION_STAGES, whose weights it takes.
+# per camera on fewer. A first block whose conv1 carries the stride runs on the whole batch
+# (TTResLayer) when its group input would not fit, as base's layer3's does. layer4 runs whole: for
+# base and small its DCN alone takes about 1.1 MB of L1 per core, which leaves no room for a group's
+# activations. A listed layer is also in DRAM_ACTIVATION_STAGES, whose weights it takes.
 CAMERA_GROUPS = {0: 1, 1: 1, 2: 3}
 
 # Layers whose non-DCN conv2s are block sharded (layer3, layer4): height sharded, each core of

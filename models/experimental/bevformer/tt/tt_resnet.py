@@ -10,6 +10,7 @@ Each BatchNorm is already folded into the conv before it.
 import ttnn
 from models.experimental.bevformer.tt.tt_common import (
     TTConv2D,
+    conv_output_size,
     dst_tiles,
     grid_height_sharded,
     grid_shard_tiles,
@@ -135,9 +136,9 @@ class TTResLayer:
     With ``cameras``, the layer runs its blocks on that many cameras at a time with every activation
     in L1 (TTCameraBottleneck): each group's rows of the DRAM input go into L1, pass through every
     block there, and only the layer's output returns to DRAM. A strided first block runs on the whole
-    batch first (``whole_first_block``) when its group input would take more than
-    CAMERA_INPUT_MAX_SHARD_BYTES per core, as the subsample holds a second copy of that input, or
-    when its stride is on the 3x3 conv2 (pytorch style), which TTCameraBottleneck does not take.
+    batch first (``whole_first_block``) when its group would take more than
+    CAMERA_INPUT_MAX_SHARD_BYTES per core of input and the copies made beside it
+    (``_group_input_too_large``).
     Only that whole first block takes the DRAM, slicing, sharding, act_block_h and dtype arguments;
     the per-camera blocks size their own (TTCameraBottleneck) and emit bfloat16. Such a layer takes
     the weights of a DRAM layer.
@@ -167,7 +168,7 @@ class TTResLayer:
         self.cameras = cameras
         self.whole_first_block = None
         if cameras is not None:
-            if self._group_input_too_large(conv_args[0].conv1, cameras, device) or self._strided_conv2(conv_args[0]):
+            if self._group_input_too_large(conv_args[0], cameras, device):
                 self.whole_first_block = TTBottleneck(
                     conv_args[0],
                     conv_pth[0],
@@ -242,19 +243,18 @@ class TTResLayer:
         return ttnn.ROW_MAJOR_LAYOUT
 
     @classmethod
-    def _group_input_too_large(cls, conv1, cameras, device):
-        """Whether a group's input to a strided first block with ``conv1`` exceeds
-        CAMERA_INPUT_MAX_SHARD_BYTES per core, in bfloat16."""
-        if tuple(conv1.stride) == (1, 1):
+    def _group_input_too_large(cls, block_args, cameras, device):
+        """Whether a group's input to the strided first block with ``block_args``, with what the block
+        holds beside it at the input's resolution, exceeds CAMERA_INPUT_MAX_SHARD_BYTES per core in
+        bfloat16: the subsample is a second copy of the input, and with the stride on conv2 conv1's
+        output is there too (TTCameraBottleneck)."""
+        stride_conv = TTCameraBottleneck.stride_conv(block_args)
+        if stride_conv is None:
             return False
+        conv1 = block_args.conv1
+        channels = conv1.in_channels + (conv1.out_channels if stride_conv == "conv2" else 0)
         shard_tiles = grid_shard_tiles(device, cameras * conv1.input_height * conv1.input_width)
-        return shard_tiles * ttnn.TILE_SIZE * conv1.in_channels * 2 > cls.CAMERA_INPUT_MAX_SHARD_BYTES
-
-    @staticmethod
-    def _strided_conv2(block_args):
-        """Whether a block's 3x3 conv2 carries its stride."""
-        conv2 = block_args.conv2.conv_offset if "conv_offset" in block_args.conv2 else block_args.conv2
-        return tuple(conv2.stride) != (1, 1)
+        return shard_tiles * ttnn.TILE_SIZE * channels * 2 > cls.CAMERA_INPUT_MAX_SHARD_BYTES
 
     def __call__(self, x, subsample=None):
         """``subsample``: see TTBottleneck; it goes to the first block."""
@@ -278,9 +278,9 @@ class TTResLayer:
         being concatenated afterwards, which would copy the whole batch once more. A group whose rows
         are whole tiles writes its TILE shards as they are. A tiled write must start on a tile row,
         so groups whose rows are not whole tiles write ROW_MAJOR instead, untilized in L1, and the
-        layer then emits ROW_MAJOR; that batch suits its
-        consumers too, as a strided first block subsamples ROW_MAJOR and an FPN lateral tilizes its
-        DRAM input itself.
+        layer then emits ROW_MAJOR; that batch suits a first block strided on conv1, which subsamples
+        ROW_MAJOR, and an FPN lateral, which tilizes its DRAM input itself, while a first block
+        strided on conv2 tilizes each group for conv1.
 
         ``first_subsample`` goes to a whole first block (TTBottleneck). With ``next_conv1``, the
         strided 1x1 conv1 of the next layer's first block, each group also takes that block's
@@ -422,10 +422,23 @@ class TTCameraBottleneck:
     activations fit in L1, so here they stay there: every tensor is height-sharded over the grid
     with the same rows per core, the 1x1 convs run as linears on those shards, conv2 as an L1
     conv2d or the DCN (TTModulatedDeformConv2dPack, built for the group), and the residual add
-    writes into conv3's output. A strided block (a layer's first, whose 1x1 conv1 and downsample
-    share the stride) takes that subsample of its input in L1 first. ``conv_pth`` holds a DRAM
-    layer's weights (``create_resnet_parameters``): Linear weights for the 1x1 convs.
+    writes into conv3's output. A strided block, a layer's first, shares its stride between the
+    downsample and one of two convs (``stride_conv``). On the 1x1 conv1 (caffe style), the block
+    subsamples its input in L1 first, and conv1 and the downsample both read that subsample. On the
+    3x3 conv2 (pytorch style), conv2d strides itself and only the downsample reads the subsample.
+    ``conv_pth`` holds a DRAM layer's weights (``create_resnet_parameters``): Linear
+    weights for the 1x1 convs.
     """
+
+    @staticmethod
+    def stride_conv(block_args):
+        """The conv of the block with the conv args ``block_args`` that carries its stride: "conv1",
+        "conv2" or None for an unstrided block."""
+        conv1 = block_args.conv1
+        conv2 = block_args.conv2.conv_offset if "conv_offset" in block_args.conv2 else block_args.conv2
+        strided = [name for name, conv in (("conv1", conv1), ("conv2", conv2)) if tuple(conv.stride) != (1, 1)]
+        assert len(strided) <= 1, "the stride is on conv1 or on conv2"
+        return strided[0] if strided else None
 
     def __init__(
         self,
@@ -440,19 +453,29 @@ class TTCameraBottleneck:
         conv1_args = conv_args.conv1
         self.with_dcn = "conv_offset" in conv_pth.conv2
         conv2_geometry = conv_args.conv2.conv_offset if self.with_dcn else conv_args.conv2
-        self.stride = tuple(conv1_args.stride)
-        assert tuple(conv2_geometry.stride) == (1, 1), f"conv2 runs at stride 1, got {conv2_geometry.stride}"
+        self.stride_on = self.stride_conv(conv_args)
+        self.conv2_stride = tuple(conv2_geometry.stride)
+        self.stride = tuple(conv1_args.stride) if self.stride_on == "conv1" else self.conv2_stride
         if "downsample" in conv_pth:
-            assert tuple(conv_args.downsample[0].stride) == self.stride, "conv1 and the downsample share a stride"
+            assert tuple(conv_args.downsample[0].stride) == self.stride, "the downsample takes the block's stride"
         else:
             assert self.stride == (1, 1), f"a block without a downsample runs at stride 1, got {self.stride}"
         self.device = device
         self.cameras = cameras
         self.in_channels = conv1_args.in_channels
         self.input_height, self.input_width = conv1_args.input_height, conv1_args.input_width
-        self.height, self.width = conv2_geometry.input_height, conv2_geometry.input_width
+        self.conv2_height, self.conv2_width = conv2_geometry.input_height, conv2_geometry.input_width
+        assert tuple(conv2_geometry.dilation) == (1, 1), f"conv2 runs at dilation 1, got {conv2_geometry.dilation}"
+        self.height, self.width = conv_output_size(
+            self.conv2_height,
+            self.conv2_width,
+            conv2_geometry.kernel_size,
+            conv2_geometry.stride,
+            conv2_geometry.padding,
+        )
         self.grid = device.compute_with_storage_grid_size()
         self.input_shard_tiles = grid_shard_tiles(device, cameras * self.input_height * self.input_width)
+        self.conv2_shard_tiles = grid_shard_tiles(device, cameras * self.conv2_height * self.conv2_width)
         self.shard_tiles = grid_shard_tiles(device, cameras * self.height * self.width)
         self.fp32_acc = fp32_acc
         math_fidelity = ttnn.MathFidelity.HiFi2 if ttnn.get_arch_name() == "blackhole" else ttnn.MathFidelity.LoFi
@@ -465,10 +488,13 @@ class TTCameraBottleneck:
         )
         relu = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
         self.input_memory_config = self._sharded(self.in_channels, self.input_shard_tiles)
-        self.conv1 = self._linear(conv_args.conv1, conv_pth.conv1, relu)
-        self.conv3 = self._linear(conv_args.conv3, conv_pth.conv3, None)
+        # conv1 emits conv2's input, which has more rows than the block output when conv2 is strided.
+        self.conv1 = self._linear(conv_args.conv1, conv_pth.conv1, relu, self.conv2_shard_tiles)
+        self.conv3 = self._linear(conv_args.conv3, conv_pth.conv3, None, self.shard_tiles)
         self.downsample = (
-            self._linear(conv_args.downsample[0], conv_pth.downsample, None) if "downsample" in conv_pth else None
+            self._linear(conv_args.downsample[0], conv_pth.downsample, None, self.shard_tiles)
+            if "downsample" in conv_pth
+            else None
         )
 
         if self.with_dcn:
@@ -496,7 +522,9 @@ class TTCameraBottleneck:
             deallocate_activation=True,
             reshard_if_not_optimal=False,
             activation=relu,
-            act_block_h_override=self.conv2_act_block_h(),
+            # conv2_act_block_h divides the block's output shard, which conv2d's own split of a
+            # strided conv2's output rows does not follow; conv2d picks the act block itself there.
+            act_block_h_override=self.conv2_act_block_h() if self.conv2_stride == (1, 1) else 0,
             enable_weights_double_buffer=True,
             force_split_reader=True,
         )
@@ -504,13 +532,13 @@ class TTCameraBottleneck:
         # that call here keeps the forward free of host work.
         warmup = ttnn.to_memory_config(
             ttnn.zeros(
-                (1, 1, cameras * self.height * self.width, self.conv2_channels[0]),
+                (1, 1, cameras * self.conv2_height * self.conv2_width, self.conv2_channels[0]),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
-            self._sharded(self.conv2_channels[0]),
+            self._sharded(self.conv2_channels[0], self.conv2_shard_tiles),
         )
         ttnn.deallocate(self._conv2(warmup))
 
@@ -538,11 +566,11 @@ class TTCameraBottleneck:
     # more than one block; layer3's conv3 runs beside the DCN's tensors.
     LINEAR_PARTIALS_BYTES = 256 * 1024
 
-    def _linear(self, conv, params, activation):
-        """A 1x1 conv as a linear on the block's shards: each core multiplies its rows in as few
-        output blocks as its partial sums allow, so each weight block it receives serves those rows;
-        one tile row at a time, it would take the weights again per row. The inner dimension goes in
-        the widest blocks, up to LINEAR_MAX_IN0_BLOCK_W, whose weights fit
+    def _linear(self, conv, params, activation, shard_tiles):
+        """A 1x1 conv as a linear on the group's rows, ``shard_tiles`` tile rows per core: each core
+        multiplies its rows in as few output blocks as its partial sums allow, so each weight block it
+        receives serves those rows; one tile row at a time, it would take the weights again per row.
+        The inner dimension goes in the widest blocks, up to LINEAR_MAX_IN0_BLOCK_W, whose weights fit
         LINEAR_WEIGHT_BLOCK_TILES, with the weights multicast."""
         in_t, out_t = conv.in_channels // ttnn.TILE_SIZE, conv.out_channels // ttnn.TILE_SIZE
         max_subblock = dst_tiles(self.fp32_acc)
@@ -554,8 +582,8 @@ class TTCameraBottleneck:
         partial_tile_bytes = ttnn.TILE_SIZE * ttnn.TILE_SIZE * (4 if self.fp32_acc else 2)
         out_block_h = max(
             h
-            for h in range(1, self.shard_tiles + 1)
-            if self.shard_tiles % h == 0
+            for h in range(1, shard_tiles + 1)
+            if shard_tiles % h == 0
             and (in0_block_w == in_t or h * out_t * partial_tile_bytes <= self.LINEAR_PARTIALS_BYTES)
         )
         # The widest subblock that tiles the output block, then as tall as the rest of the limit allows.
@@ -568,7 +596,7 @@ class TTCameraBottleneck:
             out_subblock_w=subblock_w,
             out_block_h=out_block_h,
             out_block_w=out_t,
-            per_core_M=self.shard_tiles,
+            per_core_M=shard_tiles,
             per_core_N=out_t,
             fuse_batch=True,
             fused_activation=activation,
@@ -576,7 +604,7 @@ class TTCameraBottleneck:
         )
         weight = ttnn.to_device(params.weight, self.device)
         bias = None if params.bias is None else ttnn.to_device(params.bias, self.device)
-        memory_config = self._sharded(conv.out_channels)
+        memory_config = self._sharded(conv.out_channels, shard_tiles)
         return lambda x: ttnn.linear(
             x,
             weight,
@@ -613,11 +641,11 @@ class TTCameraBottleneck:
             device=self.device,
             in_channels=self.conv2_channels[0],
             out_channels=self.conv2_channels[1],
-            input_height=self.height,
-            input_width=self.width,
+            input_height=self.conv2_height,
+            input_width=self.conv2_width,
             batch_size=self.cameras,
             kernel_size=self.conv2_kernel,
-            stride=(1, 1),
+            stride=self.conv2_stride,
             padding=self.conv2_padding,
             conv_config=self.conv2_config,
             compute_config=self.compute_config,
@@ -654,15 +682,27 @@ class TTCameraBottleneck:
         return ttnn.reallocate(sub)
 
     def __call__(self, x):
-        if self.stride != (1, 1):
-            x = self._subsample(x)
-        # The downsample first, while L1 holds only the block input: its output and conv3's are the
-        # block's two wide tensors, and freeing a narrow one between them would split the room
-        # the second needs.
-        identity = x if self.downsample is None else self.downsample(x)
-        y = self.conv1(x)
-        if self.downsample is not None:
-            ttnn.deallocate(x)
+        if self.stride_on == "conv2":
+            # conv1 runs before the downsample, as it reads the whole input and the subsample frees
+            # it. conv1 takes TILE; a group that starts inside a tile row arrives ROW_MAJOR
+            # (TTResLayer.run_per_camera), which the subsample takes as it is.
+            tiled = x if x.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            y = self.conv1(tiled)
+            if tiled is not x:
+                ttnn.deallocate(tiled)
+            sub = self._subsample(x)
+            identity = self.downsample(sub)
+            ttnn.deallocate(sub)
+        else:
+            if self.stride_on == "conv1":
+                x = self._subsample(x)
+            # The downsample first, while L1 holds only the block input: its output and conv3's are the
+            # block's two wide tensors, and freeing a narrow one between them would split the room
+            # the second needs.
+            identity = x if self.downsample is None else self.downsample(x)
+            y = self.conv1(x)
+            if self.downsample is not None:
+                ttnn.deallocate(x)
         y = self._conv2(y)
         out = self.conv3(y)
         ttnn.deallocate(y)
