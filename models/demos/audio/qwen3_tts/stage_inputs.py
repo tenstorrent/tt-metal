@@ -123,8 +123,9 @@ class ReferenceCache:
 
     The server sends a clip's audio until a request carrying it completes, then only its key,
     and expects the model to have kept what it encoded: vLLM-Omni's own talker keeps the same
-    cache. The voice and the codes are kept, per cloning mode; the transcript comes from each
-    request.
+    cache. Like it, there is one entry per clip, so the bound counts clips as the server's does:
+    the voice, and the codes once an in-context request has encoded them. A voice-only request
+    for the clip keeps codes encoded earlier. The transcript comes from each request.
     """
 
     def __init__(self, max_entries=1024):
@@ -134,21 +135,28 @@ class ReferenceCache:
     def reference(self, info, device=None, encoders=None):
         """The request's `CloneReference`, encoded from its clip or recalled by its key."""
         key = first(info, REF_AUDIO_CACHE_KEY)
-        slot = (key, clone_mode(info))
+        in_context = clone_mode(info)
         carries_clip = voice_clone_prompt(info) is not None or first(info, "ref_audio") is not None
         if not key or carries_clip:
             reference = clone_reference(info, device, encoders)
             if key:
-                self._entries[slot] = (reference.codes, reference.speaker_embedding)
-                self._entries.move_to_end(slot)
+                codes, _ = self._entries.pop(key, (None, None))
+                if reference.codes is not None:
+                    codes = reference.codes
+                self._entries[key] = (codes, reference.speaker_embedding)
                 while len(self._entries) > self.max_entries:
                     self._entries.popitem(last=False)
             return reference
-        if slot not in self._entries:
+        if key not in self._entries:
             raise ValueError(f"a Base request names clip {key!r} without its ref_audio, and no such clip was encoded")
-        self._entries.move_to_end(slot)
-        codes, voice = self._entries[slot]
-        return CloneReference(codes, voice, first(info, "ref_text"))
+        self._entries.move_to_end(key)
+        codes, voice = self._entries[key]
+        if in_context and codes is None:
+            raise ValueError(
+                f"an in-context Base request names clip {key!r} without its ref_audio, and the clip was "
+                "encoded for voice-only cloning, without codes"
+            )
+        return CloneReference(codes if in_context else None, voice, first(info, "ref_text"))
 
 
 def build_stage_prefill(info, reference, prompt_len, tables):
