@@ -83,8 +83,8 @@ The receiver channel accepts packets from the Ethernet link and can do one (or b
 
 Sender channels will merge traffic into the remote router's receiver channel.
 
-Below is an example diagram that shows how routerss can be connected over an ethernet link. In this case, the two
-a simple line topologiy is instantiated and kernels are run on separate, but connected ethernet link cores.
+Below is an example diagram that shows how routers can be connected over an ethernet link. In this case,
+a simple line topology is instantiated, and the kernels run on separate, but connected ethernet link cores.
 
  ┌───────────────────────┐           ┌───────────────────────┐
  │    Sender Channel 0   │           │    Receiver Channel   │
