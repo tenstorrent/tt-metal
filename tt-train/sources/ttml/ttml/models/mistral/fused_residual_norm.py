@@ -120,9 +120,10 @@ def use_fused_residual_norm(model) -> int:
     frozen = [m for m in norms if not m.gamma.tensor.get_requires_grad()]
     assert len(frozen) == len(norms), "the fused residual norm needs every RMSNorm gamma frozen (LoRA)"
     llama.fused_residual_norm = True
-    # Iteration 37: fused linears with a transposed-orientation forward copy hand their output transposed to the
-    # residual norm (no transpose op); only valid under this forward, whose norms read it transposed.
-    for _, m in llama.named_modules():
-        if getattr(m, "weight_cat_fwd", None) is not None:
+    # Iteration 37: a fused w2 with a transposed-orientation forward copy hands its output transposed to the
+    # residual norm (no transpose op); only valid under this forward, whose norms read it transposed. (A fused
+    # gate_up with such a copy hands its output transposed to the SwiGLU instead, iteration 39, set at fusion.)
+    for name, m in llama.named_modules():
+        if name.endswith("w2") and getattr(m, "weight_cat_fwd", None) is not None:
             m.transposed_output = True
     return len(norms) - 1  # the first norm stays the plain op

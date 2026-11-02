@@ -50,7 +50,9 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     const tt::DataFormat data_format = datatype_to_dataformat_converter(packed.dtype());
     const uint32_t tile_size_bytes = tt::tile_size(data_format);
 
-    const auto geometry = swiglu_packed::block_geometry(packed.padded_shape());
+    // Transposed input (iteration 39): the blocks run over the I-rows of packed^T [2I, T]; the same kernels with
+    // the transposed layout's strides, no transpose anywhere.
+    const auto geometry = swiglu_packed::block_geometry(packed.padded_shape(), args.transposed_input);
     const uint32_t Wt = geometry.Wt;
     const uint32_t block_size = geometry.block_size;
     const auto grid_size = device->compute_with_storage_grid_size();
@@ -68,6 +70,13 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     if (args.transposed_output) {
         defines["TRANSPOSED_OUTPUT"] = "1";
         create_circular_buffer(program, all_cores, kScratchCbIndex, data_format, tile_size_bytes, twice_block);
+    }
+    const bool transposed_out = args.transposed_output || args.transposed_input;
+    if (args.transposed_input) {
+        defines["COL_MAJOR"] = "1";  // blocks step down the I-rows: strided DRAM pages per core (faster)
+    }
+    if (transposed_out) {
+        defines["ZERO_TAIL"] = "1";  // the rows of h^T past I (the LoRA tail rows) are zeroed by the first core
         create_circular_buffer(program, all_cores, kZeroCbIndex, data_format, tile_size_bytes, 1U);
     }
 
@@ -76,21 +85,23 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
 
     SwigluPackedFwKernels kernels;
 
-    std::vector<uint32_t> reader_ct_args{block_size, Wt};
+    const uint32_t col_major_rows = geometry.total_rows;
+    std::vector<uint32_t> reader_ct_args{
+        block_size, geometry.blocks_per_row, geometry.row_stride, geometry.up_offset, col_major_rows};
     tt::tt_metal::TensorAccessorArgs(packed_buf).append_to(reader_ct_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, defines, kReaderKernelPath);
 
     // Row stride of the output in tiles: the (possibly wider) row for the plain layout, the token count for the
-    // transposed one (its tile (c, r) sits at page c * Ht + r).
-    const uint32_t Ht = geometry.total_rows;
-    const uint32_t Wt_out = args.transposed_output ? Ht : output.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    std::vector<uint32_t> writer_ct_args{block_size, geometry.blocks_per_row, Wt_out};
+    // transposed ones (h^T's tile (c, r) sits at page c * Ht + r).
+    const uint32_t Ht = geometry.Ht;
+    const uint32_t Wt_out = transposed_out ? Ht : output.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    std::vector<uint32_t> writer_ct_args{block_size, geometry.blocks_per_row, Wt_out, col_major_rows};
     tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_ct_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
-    // TRANSPOSED_OUTPUT: the rows past I (the LoRA tail rows of the wide buffer) are zeroed by the first core.
-    const uint32_t out_tile_rows = args.transposed_output ? output.padded_shape()[-2] / tt::constants::TILE_HEIGHT : 0U;
+    // ZERO_TAIL: the rows past I (the LoRA tail rows of the wide buffer) are zeroed by the first core.
+    const uint32_t out_tile_rows = transposed_out ? output.padded_shape()[-2] / tt::constants::TILE_HEIGHT : 0U;
     const uint32_t zero_start = Wt * Ht;
-    const uint32_t zero_tiles = args.transposed_output && out_tile_rows > Wt ? (out_tile_rows - Wt) * Ht : 0U;
+    const uint32_t zero_tiles = transposed_out && out_tile_rows > Wt ? (out_tile_rows - Wt) * Ht : 0U;
 
     std::vector<uint32_t> compute_g1_args = {num_blocks_g1, block_size};
     kernels.compute_group_1 =

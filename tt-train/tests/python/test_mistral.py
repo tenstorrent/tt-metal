@@ -696,12 +696,16 @@ def test_mlp_fused_lora_wide_w2():
     assert sorted(fused) == ["model.w2", "model.w_gate_up"], (converted, fused)
     assert getattr(mlp, "swiglu_op", None) is not None, "the wide SwiGLU hook was not installed on the MLP"
     # Iteration 36: the w2 shard shape has a transposed-orientation forward config, so the wrapper carries the
-    # [out, in + 64] forward copy (its tail columns rewritten every forward); gate_up has none.
+    # [out, in + 64] forward copy (its tail columns rewritten every forward).
     w2_fwd = getattr(mlp.w2, "weight_cat_fwd", None)
     assert w2_fwd is not None and tuple(w2_fwd.shape)[-2:] == (HIDDEN, inter + 64), "w2 forward copy missing"
-    assert getattr(mlp.w_gate_up, "weight_cat_fwd", None) is None
     # Iteration 38: that w2 takes its wide input transposed from the SwiGLU (h^T in a [in + 64, T] buffer).
     assert getattr(mlp.w2, "transposed_input", False)
+    # Iteration 39: the gate_up shard shape has one too and hands its output transposed ([2I, T]) to the SwiGLU,
+    # which runs elementwise on the transposed layout (no transpose anywhere in the MLP interior).
+    gu_fwd = getattr(mlp.w_gate_up, "weight_cat_fwd", None)
+    assert gu_fwd is not None and tuple(gu_fwd.shape)[-2:] == (2 * inter, HIDDEN + 64), "gate_up forward copy missing"
+    assert getattr(mlp.w_gate_up, "transposed_output", False) and not getattr(mlp.w_gate_up, "transposed_input", False)
     x = to_device(x_np, requires_grad=True)
     out = lora(x)
     out_val = to_host(out)

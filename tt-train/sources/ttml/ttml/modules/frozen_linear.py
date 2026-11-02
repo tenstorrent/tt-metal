@@ -31,6 +31,7 @@ __all__ = [
     "forward_transposed_matmul_kwargs",
     "PROGRAM_CONFIG_2D",
     "matmul_kwargs_2d",
+    "dx_plain_matmul_kwargs",
     "TRANSPOSED_SHAPES",
 ]
 
@@ -133,6 +134,11 @@ PROGRAM_CONFIG_2D: dict[tuple[int, int, int, bool], dict] = {
     (1024, 8256, 5120, False): dict(
         grid=(11, 8), in0_block_w=6, out_subblock_h=4, out_subblock_w=1, per_core_M=4, per_core_N=15
     ),
+    # gate_up dX^T [5184, 16384] x [16384, 1024] with the transposed SwiGLU gradient as a plain operand (iteration
+    # 39): 1.531 -> 1.499 ms standalone against ttnn's choice (K blocks of 4), `O/iter39_scoping.log`.
+    (5184, 16384, 1024, False): dict(
+        grid=(11, 10), in0_block_w=8, out_subblock_h=1, out_subblock_w=3, per_core_M=17, per_core_N=3
+    ),
 }
 
 
@@ -144,6 +150,12 @@ PROGRAM_CONFIG_2D: dict[tuple[int, int, int, bool], dict] = {
 # fixes per_core_N at call time. Shapes not listed keep the plain orientation.
 FORWARD_TRANSPOSED_CONFIG: dict[tuple[int, int], dict] = {
     (8256, 5120): dict(grid=(11, 10), in0_block_w=6, out_subblock_h=1, out_subblock_w=3, per_core_M=16),
+    # gate_up (iteration 39): [16384, 5184] x [1024, 5184]^T on all 110 cores, 1.497 ms standalone against the
+    # committed 1D config's 1.62 ms (`O/iter38_scoping.log`); M = 512 tiles over 10 rows needs per_core_M 52 with
+    # the output block cut to 13 rows (the full 52 x 3 block at K depth 9 overflows L1).
+    (5184, 16384): dict(
+        grid=(11, 10), in0_block_w=9, out_subblock_h=1, out_subblock_w=3, per_core_M=52, out_block_h=13
+    ),
 }
 
 
@@ -164,6 +176,8 @@ def forward_transposed_matmul_kwargs(k: int, out_features: int, rows: int) -> di
             in0_block_w=spec["in0_block_w"],
             out_subblock_h=spec["out_subblock_h"],
             out_subblock_w=spec["out_subblock_w"],
+            out_block_h=spec.get("out_block_h", spec["per_core_M"]),
+            out_block_w=per_core_n,
             per_core_M=spec["per_core_M"],
             per_core_N=per_core_n,
             transpose_mcast=False,
@@ -200,6 +214,12 @@ def matmul_kwargs_2d(m: int, k: int, n: int, transpose_b: bool) -> dict | None:
 def dx_matmul_kwargs(m: int, k: int, n: int) -> dict:
     """Keyword arguments for the transposed-gradient matmul ``[m, k] x [n, k]^T`` (``transpose_b=True``)."""
     return matmul_kwargs_2d(m, k, n, True) or {"core_grid": full_core_grid()}
+
+
+def dx_plain_matmul_kwargs(m: int, k: int, n: int) -> dict:
+    """Keyword arguments for the transposed-gradient matmul ``[m, k] x [k, n]`` whose second operand already is
+    the transposed upstream gradient (iteration 37/39: a consumer that hands the gradient over as ``[out, T]``)."""
+    return matmul_kwargs_2d(m, k, n, False) or {"core_grid": full_core_grid()}
 
 
 def forward_matmul_kwargs(in_features: int, out_features: int, rows: int, k: int | None = None) -> dict:

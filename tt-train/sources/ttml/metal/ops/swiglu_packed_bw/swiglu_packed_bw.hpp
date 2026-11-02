@@ -21,6 +21,9 @@ ttnn::Tensor swiglu_packed_bw(
     // rows [I, I + 32)); dh += lowrank_scale * s_dh @ lora_a is folded in while the tiles are transposed in DEST
     const std::optional<ttnn::Tensor>& lora_a = std::nullopt,
     bool transposed_grad = false,
-    float lowrank_scale = 1.0F);
+    float lowrank_scale = 1.0F,
+    // iteration 39: every operand transposed (packed^T [1, 1, 2I, T], dL_dh = dh^T wide [1, 1, >= I + 32, T] with
+    // the tail s_dh^T in rows [I, I + 32), dpacked^T out); dh^T += lowrank_scale * lora_a^T @ s_dh^T folded in
+    bool transposed_io = false);
 
 }  // namespace ttml::metal

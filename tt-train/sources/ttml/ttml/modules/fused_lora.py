@@ -31,6 +31,7 @@ from ttml.autograd import Function
 
 from .frozen_linear import (
     dx_matmul_kwargs,
+    dx_plain_matmul_kwargs,
     TRANSPOSED_SHAPES,
     _compute_config,
     forward_matmul_kwargs,
@@ -188,7 +189,12 @@ class FusedLoraLinearT(Function):
         # With the transposed output (iteration 37) the gradient arrives as [out, T]: the same product without the
         # free in1 transpose, and dB from it with transpose_b instead (both exact).
         if transposed_out:
-            dcat_t = ttnn.matmul(w_val, grad_output, compute_kernel_config=cfg, core_grid=full_core_grid())
+            dcat_t = ttnn.matmul(
+                w_val,
+                grad_output,
+                compute_kernel_config=cfg,
+                **dx_plain_matmul_kwargs(w_val.shape[-2], w_val.shape[-1], grad_output.shape[-1]),
+            )
         else:
             dcat_t = ttnn.matmul(
                 w_val,
@@ -258,13 +264,17 @@ class SwigluPackedWide(Function):
     of a fused LoRA ``w2`` (iteration 24). The backward takes the wide gradient and reads its first ``I`` columns."""
 
     @staticmethod
-    def forward(ctx, packed, out_cols, sink=None, transposed=False):
+    def forward(ctx, packed, out_cols, sink=None, transposed=False, transposed_input=False):
         p = packed.get_value()
         ctx.save_for_backward(p)
-        ctx.sink, ctx.transposed = sink, transposed
+        ctx.sink, ctx.transposed, ctx.transposed_input = sink, transposed, transposed_input
         # Iteration 38: ``transposed`` writes h^T into a [out_cols, R] buffer (tail rows zeroed) for a
         # transposed-orientation w2, whose backward leaves (A, scale) on ``sink`` for the low-rank term.
-        return ttml.ops.metal.swiglu_packed_fw(p, None, out_cols, transposed_output=transposed)
+        # Iteration 39: ``transposed_input``: the gate_up output arrives transposed too ([2I, R], from its own
+        # transposed-orientation forward), so the op is elementwise on the transposed layout, no transpose anywhere.
+        return ttml.ops.metal.swiglu_packed_fw(
+            p, None, out_cols, transposed_output=transposed and not transposed_input, transposed_input=transposed_input
+        )
 
     @staticmethod
     def backward(ctx, grad_h):
@@ -273,6 +283,10 @@ class SwigluPackedWide(Function):
         if ctx.transposed:
             a_val, scale = ctx.sink._lowrank_grad  # left by FusedLoraLinearT.backward (the same backward pass)
             del ctx.sink._lowrank_grad
+            if ctx.transposed_input:  # dpacked^T [2I, R] back to the transposed gate_up output
+                return ttml.ops.metal.swiglu_packed_bw(
+                    p, grad_h, None, lora_a=a_val, lowrank_scale=scale, transposed_io=True
+                )
             return ttml.ops.metal.swiglu_packed_bw(
                 p, grad_h, None, lora_a=a_val, transposed_grad=True, lowrank_scale=scale
             )
@@ -289,9 +303,15 @@ def _install_wide_swiglu(model, w2_names: set[str]) -> list[str]:
         if w2 is None or w2_name not in w2_names:
             continue
         out_cols = int(w2.frozen_shape[0]) + TAIL_ROWS
+        gate_up = getattr(module, "w_gate_up", None)
 
-        def swiglu_op(gu, out_cols=out_cols, w2=w2):
-            return SwigluPackedWide.apply(gu, out_cols, w2, getattr(w2, "transposed_input", False))
+        def swiglu_op(gu, out_cols=out_cols, w2=w2, gate_up=gate_up):
+            # Iteration 39: a gate_up with the transposed-orientation forward hands gu over as [2I, T]; only a
+            # transposed w2 input can take that (the plain w2 path has no transposed-input SwiGLU).
+            gu_transposed = getattr(gate_up, "transposed_output", False)
+            w2_transposed = getattr(w2, "transposed_input", False)
+            assert not gu_transposed or w2_transposed, "a transposed gate_up output needs the transposed w2 input"
+            return SwigluPackedWide.apply(gu, out_cols, w2, w2_transposed, gu_transposed)
 
         module.swiglu_op = swiglu_op
         installed.append(w2_name)
@@ -376,9 +396,15 @@ def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True, transpos
         # shard); its tail columns are rewritten with the scaled B every forward.
         if forward_transposed_matmul_kwargs(rows + TAIL_ROWS, cols, transposed_rows_hint) is not None:
             module.weight_cat_fwd = ttnn.transpose(extended, -2, -1)
-            # Iteration 38: the wide producer (SwiGLU) hands the input over transposed ([in + tail, T]) so the
-            # transposed-orientation matmul takes it as a plain operand and the backward needs no transpose_split.
-            module.transposed_input = True
+            if name.endswith("w2"):
+                # Iteration 38: the wide producer (SwiGLU) hands the input over transposed ([in + tail, T]) so the
+                # transposed-orientation matmul takes it as a plain operand and the backward needs no
+                # transpose_split.
+                module.transposed_input = True
+            elif name.endswith("w_gate_up"):
+                # Iteration 39: the gate_up output stays transposed ([2I, T]) for the SwiGLU, which then runs
+                # elementwise on the transposed layout into the transposed w2 input (no transpose anywhere).
+                module.transposed_output = True
         # The wide input path (iteration 24) needs h unreduced on the rank: every wrapper but a row-parallel one
         # without the batched gradients (that one all-reduces h before the tail).
         if (
@@ -392,6 +418,12 @@ def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True, transpos
         ):
             wide_w2.add(name)
     _install_wide_swiglu(model, wide_w2)
+    for _, module in model.named_modules():
+        gate_up = getattr(module, "w_gate_up", None)
+        if getattr(gate_up, "transposed_output", False) and not getattr(
+            getattr(module, "w2", None), "transposed_input", False
+        ):
+            del gate_up.transposed_output  # no transposed w2 input to feed: the plain gate_up output
     return converted
 
 

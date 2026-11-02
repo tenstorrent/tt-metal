@@ -1,0 +1,7 @@
+=== gate_up dX plain form [5184, 16384] x [16384, 1024] (dpacked^T as a plain in1) 2026-11-02T13:48:35Z
+M=5184 K=16384 N=1024: ttnn's choice on 11x10: 1.531 ms 113.6 TFLOP/s
+  2D 11x10 pcM 17 pcN 3 depth  4 sub 1x3 out_block_h 17: 1.580 ms  110.1 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 17 pcN 3 depth  4 sub 1x1 out_block_h 17: 1.654 ms  105.2 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 17 pcN 3 depth  8 sub 1x3 out_block_h 17: 1.499 ms  116.0 TFLOP/s  max|diff| 6.25e-02
+  2D 11x10 pcM 17 pcN 3 depth  8 sub 1x1 out_block_h 17: 1.568 ms  111.0 TFLOP/s  max|diff| 6.25e-02
+=== done 2026-11-02T13:48:40Z

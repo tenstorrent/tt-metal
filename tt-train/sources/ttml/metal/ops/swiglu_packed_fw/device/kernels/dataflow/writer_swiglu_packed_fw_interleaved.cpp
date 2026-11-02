@@ -9,9 +9,10 @@ constexpr uint32_t cb_out_idx = tt::CBIndex::c_2;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t blocks_per_row = get_compile_time_arg_val(1);
-constexpr uint32_t Wt_out = get_compile_time_arg_val(2);  // output row stride in tiles (>= the half width); the
-                                                          // token count Ht under TRANSPOSED_OUTPUT
-#ifdef TRANSPOSED_OUTPUT
+constexpr uint32_t Wt_out = get_compile_time_arg_val(2);          // output row stride in tiles (>= the half width); the
+                                                                  // token count Ht when the output is h^T
+constexpr uint32_t col_major_rows = get_compile_time_arg_val(3);  // COL_MAJOR: rows per column block
+#ifdef ZERO_TAIL
 constexpr uint32_t cb_zero_idx = tt::CBIndex::c_5;
 #endif
 
@@ -24,15 +25,21 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t zero_tiles = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t tile_bytes = get_tile_size(cb_out_idx);
-    constexpr auto out_args = TensorAccessorArgs<3>();
+    constexpr auto out_args = TensorAccessorArgs<4>();
     const auto out_gen = TensorAccessor(out_args, out_addr);
 
     // Block b is row b / blocks_per_row, tiles [(b % blocks_per_row) * block_size, +block_size) of it; the output
-    // row may be wider than the half width (Wt_out).
+    // row may be wider than the half width (Wt_out). With the transposed input (iteration 39) a row is an I-row of
+    // h^T and the plain row write lands it at pages row * Ht + col.
     const uint32_t end_block = start_block + num_blocks_to_process;
     for (uint32_t b = start_block; b < end_block; ++b) {
+#ifdef COL_MAJOR
+        const uint32_t row = b % col_major_rows;  // column-major blocks (iteration 39), as the reader
+        const uint32_t col = (b / col_major_rows) * block_size;
+#else
         const uint32_t row = b / blocks_per_row;
         const uint32_t col = (b - row * blocks_per_row) * block_size;
+#endif
 #ifdef TRANSPOSED_OUTPUT
         // h^T: the block's tiles (row, col + j) go to pages (col + j) * Ht + row (iteration 38)
         cb_wait_front(cb_out_idx, block_size);
@@ -47,7 +54,7 @@ void kernel_main() {
         write_tiles_by_row(cb_out_idx, out_gen, row * Wt_out + col, block_size, tile_bytes, block_size);
 #endif
     }
-#ifdef TRANSPOSED_OUTPUT
+#ifdef ZERO_TAIL
     if (zero_tiles > 0) {  // the tail rows of the transposed wide buffer (the LoRA h^T rows are written later)
         generate_tile_with_bfloat16_value(cb_zero_idx, 0);
         const uint32_t zero_l1 = get_read_ptr(cb_zero_idx);

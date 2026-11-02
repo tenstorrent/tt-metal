@@ -31,10 +31,10 @@ constexpr auto kDUpCbIndex = tt::CBIndex::c_4;    // output: grad wrt up branch
 constexpr auto kSigmoidCbIndex = tt::CBIndex::c_5;
 constexpr auto kScratchCbIndex = tt::CBIndex::c_6;
 constexpr auto kSiluGradCbIndex = tt::CBIndex::c_7;
-constexpr auto kDhTCbIndex = tt::CBIndex::c_8;    // TRANSPOSED_GRAD: dh^T tiles as read
-constexpr auto kACbIndex = tt::CBIndex::c_9;      // TRANSPOSED_GRAD: lora_a tiles of the block's columns
-constexpr auto kTailCbIndex = tt::CBIndex::c_10;  // TRANSPOSED_GRAD: the row's s_dh^T tile
-constexpr auto kSdhCbIndex = tt::CBIndex::c_11;   // TRANSPOSED_GRAD: s_dh (transposed, scaled)
+constexpr auto kDhTCbIndex = tt::CBIndex::c_8;    // TRANSPOSED_GRAD / TRANSPOSED_IO: dh^T tiles as read
+constexpr auto kACbIndex = tt::CBIndex::c_9;      // lora_a tiles: the block's columns (GRAD) / the row's one tile (IO)
+constexpr auto kTailCbIndex = tt::CBIndex::c_10;  // s_dh^T tiles: the row's one tile (GRAD) / the column block's (IO)
+constexpr auto kSdhCbIndex = tt::CBIndex::c_11;   // the transposed, scaled operand: s_dh (GRAD) / lora_a^T (IO)
 constexpr uint32_t kReaderABufferIdx = 2U;        // reader runtime arg: lora_a address
 
 }  // namespace
@@ -59,7 +59,9 @@ SwigluPackedBwProgramFactory::cached_program_t SwigluPackedBwProgramFactory::cre
     const tt::DataFormat data_format = datatype_to_dataformat_converter(packed.dtype());
     const uint32_t tile_size_bytes = tt::tile_size(data_format);
 
-    const auto geometry = swiglu_packed::block_geometry(packed.padded_shape());
+    // Transposed IO (iteration 39): the blocks run over the I-rows of packed^T [2I, T] (column-major, so a column
+    // block's s_dh^T tiles are read once); the same elementwise kernels with the transposed layout's strides.
+    const auto geometry = swiglu_packed::block_geometry(packed.padded_shape(), args.transposed_io);
     const uint32_t Wt = geometry.Wt;
     const uint32_t block_size = geometry.block_size;
     const auto grid_size = device->compute_with_storage_grid_size();
@@ -84,7 +86,14 @@ SwigluPackedBwProgramFactory::cached_program_t SwigluPackedBwProgramFactory::cre
         create_circular_buffer(program, all_cores, kACbIndex, data_format, tile_size_bytes, twice_block);
         create_circular_buffer(program, all_cores, kTailCbIndex, data_format, tile_size_bytes, 2U);
         create_circular_buffer(program, all_cores, kSdhCbIndex, data_format, tile_size_bytes, 1U);
+    } else if (args.transposed_io) {
+        defines["TRANSPOSED_IO"] = "1";
+        create_circular_buffer(program, all_cores, kDhTCbIndex, data_format, tile_size_bytes, twice_block);
+        create_circular_buffer(program, all_cores, kACbIndex, data_format, tile_size_bytes, 2U);
+        create_circular_buffer(program, all_cores, kTailCbIndex, data_format, tile_size_bytes, twice_block);
+        create_circular_buffer(program, all_cores, kSdhCbIndex, data_format, tile_size_bytes, 1U);
     }
+    const bool lowrank = args.transposed_grad || args.transposed_io;
 
     auto* const packed_buf = packed.buffer();
     auto* const dh_buf = dh.buffer();
@@ -92,28 +101,40 @@ SwigluPackedBwProgramFactory::cached_program_t SwigluPackedBwProgramFactory::cre
 
     SwigluPackedBwKernels kernels;
 
-    // dL_dh row stride in tiles; transposed, its tile (c, r) sits at page c * Ht + r (Ht = token tile rows).
-    const uint32_t Ht = geometry.total_rows;
-    const uint32_t Wt_dh = args.transposed_grad ? Ht : tensor_args.dL_dh.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    std::vector<uint32_t> reader_ct_args{block_size, Wt, geometry.blocks_per_row, Wt_dh};
+    // dL_dh row stride in tiles; transposed, its tile (c, r) sits at page c * Ht + r (Ht = token tile rows). The
+    // column-major block orders run the rows modulo col_major_rows (token rows under TRANSPOSED_GRAD, I-rows under
+    // TRANSPOSED_IO); the LoRA tail row block of dh^T starts at tile Wt * Ht under both.
+    const uint32_t Ht = geometry.Ht;
+    const uint32_t Wt_dh = lowrank ? Ht : tensor_args.dL_dh.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t col_major_rows = args.transposed_io ? Wt : Ht;
+    const uint32_t tail_start = Wt * Ht;
+    std::vector<uint32_t> reader_ct_args{
+        block_size,
+        geometry.blocks_per_row,
+        geometry.row_stride,
+        geometry.up_offset,
+        Wt_dh,
+        col_major_rows,
+        tail_start};
     tt::tt_metal::TensorAccessorArgs(packed_buf).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(dh_buf).append_to(reader_ct_args);
-    if (args.transposed_grad) {
+    if (lowrank) {
         tt::tt_metal::TensorAccessorArgs(tensor_args.lora_a->buffer()).append_to(reader_ct_args);
     }
     kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, defines, kReaderKernelPath);
     const uint32_t scale_bits = std::bit_cast<uint32_t>(args.lowrank_scale);
 
-    std::vector<uint32_t> writer_ct_args{block_size, Wt, Ht};
+    std::vector<uint32_t> writer_ct_args{
+        block_size, geometry.blocks_per_row, geometry.row_stride, geometry.up_offset, col_major_rows};
     tt::tt_metal::TensorAccessorArgs(dpacked_buf).append_to(writer_ct_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
 
-    std::vector<uint32_t> compute_g1_args = {num_blocks_g1, block_size, scale_bits, Ht};
+    std::vector<uint32_t> compute_g1_args = {num_blocks_g1, block_size, scale_bits, col_major_rows};
     kernels.compute_group_1 =
         create_compute_kernel(program, core_group_1, compute_g1_args, defines, kComputeKernelPath, true);
 
     if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_g2_args = {num_blocks_g2, block_size, scale_bits, Ht};
+        std::vector<uint32_t> compute_g2_args = {num_blocks_g2, block_size, scale_bits, col_major_rows};
         kernels.compute_group_2 =
             create_compute_kernel(program, core_group_2, compute_g2_args, defines, kComputeKernelPath, true);
     }
@@ -127,7 +148,7 @@ SwigluPackedBwProgramFactory::cached_program_t SwigluPackedBwProgramFactory::cre
                 core,
                 {packed_buf->address(),
                  dh_buf->address(),
-                 args.transposed_grad ? tensor_args.lora_a->buffer()->address() : 0U,
+                 lowrank ? tensor_args.lora_a->buffer()->address() : 0U,
                  num_blocks,
                  start_block});
             SetRuntimeArgs(program, kernels.writer, core, {dpacked_buf->address(), num_blocks, start_block});

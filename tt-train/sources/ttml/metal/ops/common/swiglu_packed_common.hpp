@@ -20,6 +20,11 @@ inline ttnn::Shape halve_last_dim(const ttnn::Shape& shape) {
     return ttnn::Shape({shape[0], shape[1], shape[2], shape[-1] / 2U});
 }
 
+// The transposed packed^T [1, 1, 2I, T] (iteration 39) with its two row halves collapsed: [1, 1, I, T].
+inline ttnn::Shape halve_rows(const ttnn::Shape& shape) {
+    return ttnn::Shape({shape[0], shape[1], shape[2] / 2U, shape[-1]});
+}
+
 // 4D, with both the padded and the logical last dim splitting into two tile-aligned halves.
 inline void validate_packed(const ttnn::Tensor& packed, std::string_view op) {
     const auto& padded = packed.padded_shape();
@@ -38,6 +43,22 @@ inline void validate_packed(const ttnn::Tensor& packed, std::string_view op) {
         op,
         packed.logical_shape()[-1],
         two_tiles_w);
+}
+
+// Transposed (iteration 39): [1, 1, 2I, T] with the gate rows [0, I) and the up rows [I, 2I), both tile-aligned,
+// and no padding anywhere (the kernels index DRAM pages from the padded shape).
+inline void validate_packed_transposed(const ttnn::Tensor& packed, std::string_view op) {
+    const auto& padded = packed.padded_shape();
+    const auto& logical = packed.logical_shape();
+    TT_FATAL(padded.rank() == 4U, "{}: packed^T must be 4D, got rank {}", op, padded.rank());
+    const uint32_t two_tiles_h = 2U * tt::constants::TILE_HEIGHT;
+    TT_FATAL(
+        padded[0] == 1U && padded[1] == 1U && padded == logical && padded[-2] % two_tiles_h == 0U &&
+            padded[-1] % tt::constants::TILE_WIDTH == 0U,
+        "{}: packed^T {} must be [1, 1, 2I, T] with 2I a multiple of {} and no padding",
+        op,
+        logical,
+        two_tiles_h);
 }
 
 // Padded and logical shape both equal to packed's with the last dim halved: the forward's output
@@ -79,22 +100,40 @@ inline void validate_same_as_packed(
         packed.logical_shape());
 }
 
-// How both program factories cut a packed tensor into blocks of tiles.
+// How both program factories cut a packed tensor into blocks of tiles. Token-major ([.., T, 2I]): a block is
+// block_size tiles of one token row of a half. Transposed (iteration 39, [1, 1, 2I, T]): a block is block_size
+// tiles of one I-row of a half (the row runs over the tokens); the same tile count and block count.
 struct BlockGeometry {
-    uint32_t Wt;          // width of one half (gate or up) in tiles; a packed row is 2*Wt tiles
-    uint32_t total_rows;  // tile-rows over all leading dims
-    uint32_t block_size;  // largest divisor of Wt up to 4; real MLP widths (I/32 a multiple of 8) get 4
+    uint32_t Wt;          // tiles of one half across the gate|up split: I / 32
+    uint32_t Ht;          // token tile rows over all leading dims
+    uint32_t total_rows;  // rows the blocks run over: Ht (token-major), Wt (transposed)
+    uint32_t row_width;   // tiles in such a row: Wt (token-major), Ht (transposed)
+    uint32_t block_size;  // largest divisor of row_width up to 4; real MLP widths (I/32 a multiple of 8) get 4
     uint32_t blocks_per_row;
     uint32_t total_blocks;
+    uint32_t row_stride;  // tiles between consecutive rows of a half in packed: 2 Wt (token-major), Ht (transposed)
+    uint32_t up_offset;   // tiles from a gate tile to its up tile: Wt (token-major), Wt * Ht (transposed)
 };
 
-inline BlockGeometry block_geometry(const ttnn::Shape& packed_padded_shape) {
+inline BlockGeometry block_geometry(const ttnn::Shape& packed_padded_shape, bool transposed = false) {
     BlockGeometry g{};
-    g.Wt = packed_padded_shape[-1] / tt::constants::TILE_WIDTH / 2U;
-    g.total_rows =
-        packed_padded_shape[0] * packed_padded_shape[1] * (packed_padded_shape[-2] / tt::constants::TILE_HEIGHT);
-    g.block_size = get_block_size(g.Wt, 4U);
-    g.blocks_per_row = g.Wt / g.block_size;
+    if (transposed) {
+        g.Wt = packed_padded_shape[-2] / tt::constants::TILE_HEIGHT / 2U;
+        g.Ht = packed_padded_shape[-1] / tt::constants::TILE_WIDTH;
+        g.total_rows = g.Wt;
+        g.row_width = g.Ht;
+        g.row_stride = g.Ht;
+        g.up_offset = g.Wt * g.Ht;
+    } else {
+        g.Wt = packed_padded_shape[-1] / tt::constants::TILE_WIDTH / 2U;
+        g.Ht = packed_padded_shape[0] * packed_padded_shape[1] * (packed_padded_shape[-2] / tt::constants::TILE_HEIGHT);
+        g.total_rows = g.Ht;
+        g.row_width = g.Wt;
+        g.row_stride = 2U * g.Wt;
+        g.up_offset = g.Wt;
+    }
+    g.block_size = get_block_size(g.row_width, 4U);
+    g.blocks_per_row = g.row_width / g.block_size;
     g.total_blocks = g.total_rows * g.blocks_per_row;
     return g;
 }

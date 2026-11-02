@@ -13,6 +13,9 @@ struct SwigluPackedFwParams {
     // iteration 38: the output transposed, [.., out_cols, R] with h^T in rows [0, I) and the rows past I zeroed
     // (the transposed wide LoRA input buffer of a transposed-orientation w2)
     bool transposed_output = false;
+    // iteration 39: the input is packed^T [1, 1, 2I, T] (gate rows [0, I), up rows [I, 2I)) and the output h^T
+    // [1, 1, out_cols, T] (rows past I zeroed): the transposed wide buffer without any transpose in the kernel
+    bool transposed_input = false;
 };
 
 // `packed` [.., R, 2*I] = [gate | up]; output h = silu(gate) * up, [.., R, I].

@@ -1,0 +1,54 @@
+2026-11-02 14:08:11.843 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+[tt-train] Inferred fabric config 7 from MGD dim_types
+2026-11-02 14:08:12.413 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-02 14:08:12.413 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-02 14:08:12.413 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-02 14:08:12.413 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-02 14:08:12.424 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-02 14:08:12.424 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-02 14:08:12.505 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-02 14:08:12.505 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-02 14:08:12.505 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-02 14:08:12.505 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-02 14:08:12.507 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-02 14:08:12.667 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-02 14:08:12.700 | info     |     Distributed | Using custom mesh graph descriptor: /home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto (metal_env.cpp:533)
+2026-11-02 14:08:12.700 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-02 14:08:12.701 | warning  |          Fabric | Physical groupings: Mesh graph descriptor 'M0': no PGD grouping could be placed on the PSD (4 topology match(es)); continuing without pinning hints for this mesh (physical_grouping_descriptor_matching.cpp:1848)
+2026-11-02 14:08:12.746 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-11-02 14:08:12.746 | info     |          Fabric | mesh 0 shape 1x4: axis topologies derived as Y=LINE X=RING (control_plane.cpp:2606)
+2026-11-02 14:08:12.782 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-11-02 14:08:12.782 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D_TORUS_XY (fabric_firmware_initializer.cpp:336)
+MGD validated: dims=[1, 4], file=/home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto
+RMSNorm layers on the all-core backward: 3
+residual adds fused into the norms: 2
+tp 4: transposed 3, fused 2
+partial LoRA gradients reduced over tp: 4
+saved 16 gradients, loss 12.8125
+tensor | shape | PCC | rel err
+  LoraModel/model/blocks/0/attention/out_linear/lora_A    (1, 1, 16, 4096)   0.999899 1.63e-02 ok
+  LoraModel/model/blocks/0/attention/out_linear/lora_B    (1, 1, 5120, 16)   0.999898 1.63e-02 ok
+  LoraModel/model/blocks/0/attention/qkv_linear/lora_A    (1, 1, 16, 5120)   0.999895 1.59e-02 ok
+  LoraModel/model/blocks/0/attention/qkv_linear/lora_B    (1, 1, 6144, 16)   0.999892 1.65e-02 ok
+  LoraModel/model/blocks/0/mlp/w2/lora_A                  (1, 1, 16, 32768)  0.999916 1.31e-02 ok
+  LoraModel/model/blocks/0/mlp/w2/lora_B                  (1, 1, 5120, 16)   0.999914 1.32e-02 ok
+  LoraModel/model/blocks/0/mlp/w_gate_up/lora_A           (1, 1, 16, 5120)   0.999913 1.32e-02 ok
+  LoraModel/model/blocks/0/mlp/w_gate_up/lora_B           (1, 1, 65536, 16)  0.999905 1.40e-02 ok
+  loss                                                    (1,)               1.000000 0.00e+00 ok
+  param:LoraModel/model/blocks/0/attention/out_linear/lora_A (1, 1, 16, 4096)   1.000000 0.00e+00 ok
+  param:LoraModel/model/blocks/0/attention/out_linear/lora_B (1, 1, 5120, 16)   1.000000 0.00e+00 ok
+  param:LoraModel/model/blocks/0/attention/qkv_linear/lora_A (1, 1, 16, 5120)   1.000000 0.00e+00 ok
+  param:LoraModel/model/blocks/0/attention/qkv_linear/lora_B (1, 1, 6144, 16)   1.000000 0.00e+00 ok
+  param:LoraModel/model/blocks/0/mlp/w2/lora_A            (1, 1, 16, 32768)  1.000000 0.00e+00 ok
+  param:LoraModel/model/blocks/0/mlp/w2/lora_B            (1, 1, 5120, 16)   1.000000 0.00e+00 ok
+  param:LoraModel/model/blocks/0/mlp/w_gate_up/lora_A     (1, 1, 16, 5120)   1.000000 0.00e+00 ok
+  param:LoraModel/model/blocks/0/mlp/w_gate_up/lora_B     (1, 1, 65536, 16)  1.000000 0.00e+00 ok
+PASS
+2026-11-02 14:08:53.810 | info     |    BuildKernels | JIT cache stats: 726/744 hits (97.6%) [726 cached, 398 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-02 14:08:53.810 | info     |    BuildKernels | JIT telemetry: 36 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-02 14:08:53.824 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-02 14:08:53.824 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-02 14:08:53.990 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-02 14:08:53.991 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-02 14:08:53.991 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

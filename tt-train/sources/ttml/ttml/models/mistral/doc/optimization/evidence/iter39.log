@@ -1,0 +1,36 @@
+=== iter39 harness 2026-11-02T14:04:18Z
+harness rc=0
+================== 49 passed, 2 warnings in 229.07s (0:03:49) ==================
+=== iter39 TP=4 gradient check 2026-11-02T14:08:11Z
+tp4 rc=0
+tp 4: transposed 3, fused 2
+PASS
+=== iter39_tp TP=4 MFU after 600s cool-down 2026-11-02T14:08:54Z
+rc=0
+40 of 40 layers, tp 4: 460.9 ms/step over 6 steps (best 456.6), 209.1 TFLOP/s, MFU 35.20%
+=== iter39_tp TP=4 Tracy 4 layers 2026-11-02T14:22:17Z
+rc=0
+4 of 40 layers, tp 4: 52.4 ms/step over 2 steps (best 52.0), 231.2 TFLOP/s, MFU 38.93%
+=== done 2026-11-02T14:23:46Z
+=== iter39 MFU chain finished 2026-11-02T14:23:47Z
+=== iter39 8 layers real weights, host loss 2026-11-02T14:23:47Z
+rc=0
+compare rc=0
+max |diff| 0.0301 (tol 0.1), mean +0.0052, signs +7/-3
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+PASS
+=== iter39 TP=4 40 layers real weights 2026-11-02T14:24:50Z
+rc=0
+step 2: DRAM allocated after backward 21.17 GiB
+step 2: DRAM allocated after the optimizer step 21.17 GiB (weights + state)
+step    2/10  loss 0.3242     464.8 ms
+step    3/10  loss 0.2471     468.5 ms
+step    4/10  loss 0.2041     477.1 ms
+step    5/10  loss 0.1406     486.5 ms
+step    6/10  loss 0.2715     473.1 ms
+step    7/10  loss 0.3398     472.2 ms
+step    8/10  loss 0.2637     470.8 ms
+step    9/10  loss 0.3066     470.7 ms
+step   10/10  loss 0.4492     474.8 ms
+40 of 40 layers, tp 4: 474.2 ms/step over 8 steps (best 468.5), 203.2 TFLOP/s, MFU 34.21%
+=== iter39 chain finished 2026-11-02T14:33:57Z

@@ -21,9 +21,17 @@ void SwigluPackedFwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& packed = tensor_args.packed;
     check_device_tensor(packed, kOp, "packed");
-    swiglu_packed::validate_packed(packed, kOp);
+    TT_FATAL(
+        !(args.transposed_input && args.transposed_output),
+        "{}: transposed_input (packed^T in, h^T out) and transposed_output (token-major in, h^T out) are exclusive",
+        kOp);
+    if (args.transposed_input) {
+        swiglu_packed::validate_packed_transposed(packed, kOp);
+    } else {
+        swiglu_packed::validate_packed(packed, kOp);
+    }
 
-    const uint32_t half = packed.logical_shape()[-1] / 2U;
+    const uint32_t half = args.transposed_input ? packed.logical_shape()[-2] / 2U : packed.logical_shape()[-1] / 2U;
     TT_FATAL(
         args.out_cols == 0 || (args.out_cols >= half && args.out_cols % tt::constants::TILE_WIDTH == 0),
         "{}: out_cols {} must be a multiple of 32 and at least the half width {}",
@@ -43,7 +51,17 @@ void SwigluPackedFwDeviceOperation::validate_on_program_cache_miss(
         const auto& out = *tensor_args.preallocated_output;
         check_device_tensor(out, kOp, "preallocated_output");
         check_same_device(out, packed, kOp, "preallocated_output", "packed");
-        if (args.transposed_output) {
+        if (args.transposed_input) {
+            const uint32_t rows = args.out_cols != 0 ? args.out_cols : half;
+            TT_FATAL(
+                out.logical_shape() == ttnn::Shape({1, 1, rows, packed.logical_shape()[-1]}) &&
+                    out.padded_shape() == out.logical_shape(),
+                "{}: preallocated_output {} must be [1, 1, {}, T] for packed^T {}",
+                kOp,
+                out.logical_shape(),
+                rows,
+                packed.logical_shape());
+        } else if (args.transposed_output) {
             TT_FATAL(
                 out.logical_shape()[-2] == args.out_cols && out.logical_shape()[-1] == packed.logical_shape()[-2],
                 "{}: preallocated_output {} must be [.., out_cols {}, R]",
@@ -69,6 +87,14 @@ spec_return_value_t SwigluPackedFwDeviceOperation::compute_output_specs(
         return tensor_args.preallocated_output->tensor_spec();
     }
     const auto& packed = tensor_args.packed;
+    if (args.transposed_input) {
+        auto shape = swiglu_packed::halve_rows(packed.logical_shape());
+        if (args.out_cols != 0) {
+            shape[-2] = args.out_cols;
+        }
+        return tt::tt_metal::TensorSpec(
+            shape, tt::tt_metal::TensorLayout(packed.dtype(), tt::tt_metal::Layout::TILE, packed.memory_config()));
+    }
     auto shape = swiglu_packed::halve_last_dim(packed.logical_shape());
     if (args.out_cols != 0) {
         shape[-1] = args.out_cols;
@@ -106,7 +132,8 @@ ttml::metal::ops::swiglu_packed_fw::device::SwigluPackedFwDeviceOperation::tenso
     const ttnn::Tensor& packed,
     const std::optional<ttnn::Tensor>& preallocated_output,
     uint32_t out_cols,
-    bool transposed_output) {
+    bool transposed_output,
+    bool transposed_input) {
     using Op = ttml::metal::ops::swiglu_packed_fw::device::SwigluPackedFwDeviceOperation;
 
     const auto tensor_args = Op::tensor_args_t{
@@ -115,7 +142,9 @@ ttml::metal::ops::swiglu_packed_fw::device::SwigluPackedFwDeviceOperation::tenso
     };
 
     return ttnn::device_operation::launch<Op>(
-        Op::operation_attributes_t{.out_cols = out_cols, .transposed_output = transposed_output}, tensor_args);
+        Op::operation_attributes_t{
+            .out_cols = out_cols, .transposed_output = transposed_output, .transposed_input = transposed_input},
+        tensor_args);
 }
 
 }  // namespace ttnn::prim

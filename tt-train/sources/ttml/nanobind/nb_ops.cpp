@@ -755,8 +755,11 @@ void py_module(nb::module_& m) {
             nb::arg("preallocated_output") = nb::none(),
             nb::arg("out_cols") = 0,
             nb::arg("transposed_output") = false,
+            nb::arg("transposed_input") = false,
             "Fused packed-SwiGLU forward: packed [.., R, 2*I] = [gate|up] -> h = silu(gate)*up "
-            "[.., R, I]; transposed_output: [.., out_cols, R] with h^T in the first I rows, the rest zeroed.");
+            "[.., R, I]; transposed_output: [.., out_cols, R] with h^T in the first I rows, the rest zeroed; "
+            "transposed_input: packed is packed^T [1, 1, 2I, R] and the output h^T [1, 1, out_cols, R] (rows past I "
+            "zeroed), elementwise on the transposed layout.");
         py_metal.def(
             "vp_ce_row_stats",
             &ttml::metal::vp_ce_row_stats,
@@ -775,9 +778,12 @@ void py_module(nb::module_& m) {
             nb::arg("lora_a") = nb::none(),
             nb::arg("transposed_grad") = false,
             nb::arg("lowrank_scale") = 1.0F,
+            nb::arg("transposed_io") = false,
             "Backward of swiglu_packed_fw: (packed [gate|up], dL_dh [.., R, I]) -> "
             "dL/dpacked [.., R, 2*I] = [dgate|dup]. transposed_grad: dL_dh is [.., >= I + 32, R] (dh^T, then the "
-            "scaled LoRA tail s_dh^T) and dh += lowrank_scale * s_dh @ lora_a is folded in.");
+            "scaled LoRA tail s_dh^T) and dh += lowrank_scale * s_dh @ lora_a is folded in. transposed_io: packed is "
+            "packed^T [1, 1, 2I, R], dL_dh the same dh^T wide buffer and the result dpacked^T [1, 1, 2I, R], with "
+            "dh^T += lowrank_scale * lora_a^T @ s_dh^T folded in.");
         py_metal.def(
             "rmsnorm_bw_allcore",
             &ttml::metal::rmsnorm_bw_allcore,

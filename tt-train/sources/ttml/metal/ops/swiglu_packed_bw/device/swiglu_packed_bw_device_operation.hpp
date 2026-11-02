@@ -37,6 +37,7 @@ ttml::metal::ops::swiglu_packed_bw::device::SwigluPackedBwDeviceOperation::tenso
     const std::optional<ttnn::Tensor>& preallocated_dL_dpacked = std::nullopt,
     const std::optional<ttnn::Tensor>& lora_a = std::nullopt,
     bool transposed_grad = false,
-    float lowrank_scale = 1.0F);
+    float lowrank_scale = 1.0F,
+    bool transposed_io = false);
 
 }  // namespace ttnn::prim

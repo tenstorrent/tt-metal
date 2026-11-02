@@ -27,6 +27,9 @@ MAX_ULP = 2.5
 # drives dgate's per-element error to ~164 on a correct kernel, while its p99 stays near 6.
 MAX_ULP_P99 = 2.5
 MAX_ULP_P99_DGATE = 10.0
+# The transposed-IO backward's dh carries the low-rank term: the FPU's fp32 sum lands within one bf16 rounding of
+# the numpy reference's, which the elementwise pass turns into up to one more ULP at the peak.
+MAX_ULP_LOWRANK = 3.5
 
 # (batch, S, I). I/32 of 1..4 covers every block size get_block_size(Wt, 4) can pick; I=512
 # adds a row spanning many blocks; (2, 2048, 128) is the only case with batch > 1; 131 tile-rows
@@ -63,10 +66,10 @@ def assert_forward(got, gate, up, label):
     assert_within_bf16_ulp(got, reference_forward(as_stored(gate), as_stored(up)), label, MAX_ULP, MAX_ULP_P99)
 
 
-def assert_backward(got, gate, up, dh, inner, label):
+def assert_backward(got, gate, up, dh, inner, label, max_ulp=MAX_ULP):
     dgate, dup = reference_backward(as_stored(gate), as_stored(up), as_stored(dh))
-    assert_within_bf16_ulp(got[..., :inner], dgate, f"{label} dgate", MAX_ULP, MAX_ULP_P99_DGATE)
-    assert_within_bf16_ulp(got[..., inner:], dup, f"{label} dup", MAX_ULP, MAX_ULP_P99)
+    assert_within_bf16_ulp(got[..., :inner], dgate, f"{label} dgate", max_ulp, MAX_ULP_P99_DGATE)
+    assert_within_bf16_ulp(got[..., inner:], dup, f"{label} dup", max_ulp, MAX_ULP_P99)
 
 
 class TestForward:
@@ -157,6 +160,80 @@ class TestAutogradWrapper:
         )
 
 
+class TestTransposedIO:
+    """Iteration 39: packed^T [1, 1, 2I, T] in (the gate_up output of a transposed-orientation forward), h^T
+    [1, 1, I + 64, T] out with the tail rows zeroed (the transposed wide w2 input), and the backward from the wide
+    gradient dh^T [1, 1, I + 64, T] (rows [I, I + 32) the LoRA tail s_dh^T) to dpacked^T [1, 1, 2I, T] with the
+    low-rank term dh^T += scale * A^T s_dh^T folded in. Checked against the token-major ops on the same data, which
+    read the same bf16 tiles and run the same math (the backward's low-rank term against numpy, bf16-rounded the
+    way the kernel rounds dh before the elementwise pass)."""
+
+    # (I, T): the TP shard width at the training token count, plus small shapes where the blocks per row and the
+    # cores with work vary (T = 96 gives block_size 3, I = 64 a single I-row per half).
+    SHAPES_T = [(64, 32), (96, 96), (512, 1024), (8192, 1024)]
+    RANK, SCALE = 16, 0.25
+
+    @staticmethod
+    def _transposed(array):
+        return np.ascontiguousarray(np.swapaxes(array, -1, -2))
+
+    @pytest.mark.parametrize("inner,seq", SHAPES_T)
+    def test_forward_matches_the_token_major_op(self, inner, seq):
+        gate, up, _ = inputs(1, seq, inner, seed=300 + inner)
+        out_cols = inner + 64
+        packed_t = to_device(self._transposed(pack(gate, up)))
+        h_t = ttml.ops.metal.swiglu_packed_fw(packed_t.get_value(), None, out_cols, transposed_input=True)
+        assert list(h_t.shape) == [1, 1, out_cols, seq]
+        got = to_host(h_t)
+        h = to_host(ttml.ops.metal.swiglu_packed_fw(to_device(pack(gate, up)).get_value()))
+        assert np.array_equal(self._transposed(got[:, :, :inner, :]), h), "h^T differs from the token-major h"
+        assert np.all(got[:, :, inner:, :] == 0.0), "the tail rows are not zeroed"
+        assert_forward(self._transposed(got[:, :, :inner, :]), gate, up, f"fw^T {inner}x{seq}")
+
+    @pytest.mark.parametrize("inner,seq", SHAPES_T)
+    def test_backward_matches_the_token_major_op_with_the_low_rank_term(self, inner, seq):
+        gate, up, dh = inputs(1, seq, inner, seed=400 + inner)
+        rng = np.random.default_rng(500 + inner)
+        a = rng.uniform(-0.5, 0.5, (1, 1, self.RANK, inner))
+        s_dh = rng.uniform(-1.0, 1.0, (1, 1, seq, self.RANK))
+        tail = np.zeros((1, 1, seq, 64))
+        tail[..., : self.RANK] = s_dh
+        dh_wide_t = to_device(self._transposed(np.concatenate([dh, tail], axis=-1)))  # [1, 1, I + 64, T]
+        dpacked_t = ttml.ops.metal.swiglu_packed_bw(
+            to_device(self._transposed(pack(gate, up))).get_value(),
+            dh_wide_t.get_value(),
+            lora_a=to_device(a).get_value(),
+            lowrank_scale=self.SCALE,
+            transposed_io=True,
+        )
+        assert list(dpacked_t.shape) == [1, 1, 2 * inner, seq]
+        got = self._transposed(to_host(dpacked_t))
+        # The kernel's dh: the bf16 tiles plus the fp32 low-rank product, rounded to bf16 once (the FPU's fp32
+        # accumulation lands within one bf16 rounding of numpy's float64 sum; with lora_a = 0 the ops agree bit
+        # for bit, `O/iter39_swiglu_diag.log`).
+        dh_full = as_stored(as_stored(dh) + self.SCALE * as_stored(s_dh) @ as_stored(a))
+        assert_backward(got, gate, up, dh_full, inner, f"bw^T {inner}x{seq}", MAX_ULP_LOWRANK)
+        ref = to_host(
+            ttml.ops.metal.swiglu_packed_bw(to_device(pack(gate, up)).get_value(), to_device(dh_full).get_value())
+        )
+        assert_within_bf16_ulp(got, ref, f"bw^T vs token-major {inner}x{seq}", MAX_ULP_LOWRANK, MAX_ULP_LOWRANK)
+
+    def test_rejects_padding_and_mixed_modes(self, expect_error):
+        packed_t = to_device(np.zeros((1, 1, 128, 32)))
+        with expect_error(RuntimeError, "exclusive"):
+            ttml.ops.metal.swiglu_packed_fw(
+                packed_t.get_value(), None, 128, transposed_output=True, transposed_input=True
+            )
+        with expect_error(RuntimeError, "needs lora_a"):
+            ttml.ops.metal.swiglu_packed_bw(
+                packed_t.get_value(), to_device(np.zeros((1, 1, 96, 32))).get_value(), transposed_io=True
+            )
+        with expect_error(RuntimeError, "no padding"):
+            ttml.ops.metal.swiglu_packed_fw(
+                to_device(np.zeros((1, 1, 128, 20))).get_value(), None, 128, transposed_input=True
+            )
+
+
 class TestValidation:
     def test_rejects_half_width_that_is_not_tile_aligned(self, expect_error):
         # 96 pads to 96, whose halves are 1.5 tiles each.
@@ -166,8 +243,8 @@ class TestValidation:
 
     def test_rejects_upstream_grad_that_is_not_half_the_packed_width(self, expect_error):
         packed = to_device(np.zeros((1, 1, 32, 128)))
-        wrong = to_device(np.zeros((1, 1, 32, 32)))  # should be 64
-        with expect_error(RuntimeError, "halved"):
+        wrong = to_device(np.zeros((1, 1, 32, 32)))  # should be at least 64 (wider is the wide LoRA buffer)
+        with expect_error(RuntimeError, ">= I"):
             ttml.ops.metal.swiglu_packed_bw(packed.get_value(), wrong.get_value())
 
     # 100 pads to 128, so the padded halves are tile-aligned and only the logical split is wrong:

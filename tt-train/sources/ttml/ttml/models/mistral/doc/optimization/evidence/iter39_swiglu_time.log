@@ -1,0 +1,29 @@
+=== iteration 39 standalone, TP shard shape, alternating rounds (median of 6 x 10 reps) 2026-11-02T14:00:45Z
+gate_up forward: 1D [T, K] x [K, 2I] 1943 us; transposed 2D [2I, K] x [T, K]^T 1866 us; max|diff| 3.125e-02
+swiglu_packed_fw -> h^T [I + 64, T]: from token-major gu (DEST transposes) 131 us; from gu^T (elementwise) 139 us; max|diff| 0.000e+00
+forward interior: iteration 38 2074 us; iteration 39 2005 us
+swiglu_packed_bw: transposed_grad (dpacked token-major) 275 us; transposed_io (dpacked^T) 263 us; max|diff| 9.766e-04
+gate_up dX^T [K, 2I] x dpacked: transpose_b (ttnn's choice) 1920 us; plain dpacked^T (2D depth 8) 1931 us; max|diff| 4.883e-04
+gate_up dX^T plain dpacked^T: ttnn's choice 2160 us; 2D depth 8 2123 us
+backward interior: iteration 38 2194 us; iteration 39 2194 us
+=== done 2026-11-02T14:00:50Z
+=== ABBA order check 2026-11-02T14:01:50Z
+fw38 token-major in, h^T out       median    129 us  min    129  max    131
+fw39 gu^T in, h^T out              median    137 us  min    136  max    137
+bw38 transposed_grad               median    273 us  min    271  max    275
+bw39 transposed_io                 median    261 us  min    260  max    262
+=== done 2026-11-02T14:01:53Z
+=== fw placement / layout check 2026-11-02T14:02:42Z
+fw38 gu                                  median    129 us  min    128
+fw38 gu (late alloc)                     median    129 us  min    128
+fw39 gu^T host                           median    138 us  min    137
+fw39 gu^T transpose                      median    137 us  min    137
+fw plain gu -> h [T, I+64]               median    140 us  min    140
+fw plain gu^T as [2I, T] rows (I'=512)   median    138 us  min    137
+=== done 2026-11-02T14:02:45Z
+=== ABBA order check, forward blocks column-major 2026-11-02T14:03:29Z
+fw38 token-major in, h^T out       median    129 us  min    129  max    133
+fw39 gu^T in, h^T out              median    135 us  min    135  max    137
+bw38 transposed_grad               median    273 us  min    273  max    275
+bw39 transposed_io                 median    261 us  min    260  max    262
+=== done 2026-11-02T14:03:33Z

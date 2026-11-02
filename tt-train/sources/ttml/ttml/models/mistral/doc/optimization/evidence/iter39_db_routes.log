@@ -1,0 +1,7 @@
+=== gate_up dB routes on g^T [16384, 1024], alternating rounds 2026-11-02T14:34:53Z
+op big_transposed (step)                   median    123 us  min    123  max|diff| vs op 0.00e+00
+ttnn plain [N, T] @ [T, 32]                median    278 us  min    277  max|diff| vs op 1.56e-02
+ttnn plain, 2D 11x10                       median    225 us  min    223  max|diff| vs op 1.56e-02
+skinny_matmul g^T [N, T] @ (h^T [32, T])^T (K-split op) median    156 us  min    156  max|diff| vs op 1.56e-02
+ttnn transpose_b [32, T] x [N, T]^T + T    median    225 us  min    223  max|diff| vs op 7.81e-03
+=== done 2026-11-02T14:34:57Z

@@ -19,6 +19,9 @@ ttnn::Tensor swiglu_packed_fw(
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
     uint32_t out_cols = 0,
     // iteration 38: the output transposed ([.., out_cols, R], h^T in its first I rows, the rows past I zeroed)
-    bool transposed_output = false);
+    bool transposed_output = false,
+    // iteration 39: packed is packed^T [1, 1, 2I, T] and the output h^T [1, 1, out_cols or I, T] (rows past I
+    // zeroed); elementwise on the transposed layout, no transpose anywhere
+    bool transposed_input = false);
 
 }  // namespace ttml::metal

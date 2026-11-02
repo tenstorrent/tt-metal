@@ -35,6 +35,7 @@ ttml::metal::ops::swiglu_packed_fw::device::SwigluPackedFwDeviceOperation::tenso
     const ttnn::Tensor& packed,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
     uint32_t out_cols = 0,
-    bool transposed_output = false);
+    bool transposed_output = false,
+    bool transposed_input = false);
 
 }  // namespace ttnn::prim
