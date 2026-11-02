@@ -200,10 +200,12 @@ device): do not improvise. Read the logs and say what happened; rerun only the f
 own command (`decide --rerun` then `resume`, `gate --unit`); call the tooling broken only with evidence from its code,
 and then fix it at the cause (selftest, BREADCRUMBS). Never move or edit the framework's records by hand, never run a
 perf pick's measurement yourself, and never start a device job while an orchestrator is running.
-Before starting the orchestrator or any device job, check that nobody else is running a device job: anyone, not a named
-user (owner, 2026-11-02). Without root, fuser / lsof cannot see other users' open files, so list their processes:
-`ps -eo user:16,pid,etime,args --no-headers | awk -v me=$USER '$1!=me' | grep -E 'pytest|python|tt-smi|tt_metal|ttnn'`
-(the node's permanent tt-fabric-manager-agent is a service, not a job); and your own: `fuser -v /dev/tenstorrent/*`.
+Before starting the orchestrator or any device job, check that nobody (anyone, not a named user; owner, 2026-11-02)
+holds a chip. UMD's per-chip in-use locks are world-readable and name the holder's pid (0 = free):
+`for f in /dev/shm/TT_UMD_LOCK.CHIP_IN_USE_*_PCIe; do python3 -c "import struct,sys,os; p=struct.unpack_from('<i',open(sys.argv[1],'rb').read(),52)[0]; p and os.path.exists(f'/proc/{p}') and print(sys.argv[1], 'held by pid', p)" "$f"; done`
+(prints nothing when all are free; fuser / lsof cannot see other users' files without root). A job in a container keeps
+its locks in its own /dev/shm, so also glance at other users' jobs: `ps -eo user:16,pid,etime,args --no-headers | awk -v
+me=$USER '$1!=me && $1!="root"' | grep -E 'pytest|python|tt-smi|tt_metal|ttnn'`.
 
 Watch the orchestrator log for gate results, attempts, stops and problems. After every gate, re-export and republish
 the dashboards.
