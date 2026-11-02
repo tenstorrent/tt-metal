@@ -213,7 +213,7 @@ class TtV4Block(LightweightModule):
         nothing reads what the slot's previous request left."""
         old = self.attn_states[slot]
         self.attn_states[slot] = self.attn.new_state(cache_user_id=slot)
-        old.release()
+        old.deallocate()
 
     def forward(
         self,

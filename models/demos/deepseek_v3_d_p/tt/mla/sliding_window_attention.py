@@ -31,7 +31,7 @@ class TtSWAState:
         self.max_seq_len = int(max_seq_len)
         self.kv_actual = 0
 
-    def release(self) -> None:
+    def deallocate(self) -> None:
         """Free this state's tensor."""
         ttnn.deallocate(self.carry)
 

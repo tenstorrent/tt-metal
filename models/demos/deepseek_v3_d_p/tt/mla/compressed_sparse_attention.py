@@ -115,7 +115,7 @@ class TtCSAState:
     begin at the same position.
 
     One tensor here is not this state's own: ``index_kv_cache`` is the layer's user-major key cache, shared by
-    every slot's state, and ``cache_user_id`` picks this state's rows in it. ``release`` leaves it alone."""
+    every slot's state, and ``cache_user_id`` picks this state's rows in it. ``deallocate`` leaves it alone."""
 
     def __init__(self, joint_kv, kv_state, score_state, index_kv_cache, max_seq_len, cache_user_id=0):
         # The single ROW_MAJOR table sparse_sdpa reads, laid out as the module docstring describes. The
@@ -132,7 +132,7 @@ class TtCSAState:
         self.entry_count = 0
         self.kv_actual = 0
 
-    def release(self) -> None:
+    def deallocate(self) -> None:
         """Free the tensors this state owns; the shared index key cache stays with the layer."""
         for tensor in (self.joint_kv, self.kv_state, self.score_state):
             ttnn.deallocate(tensor)

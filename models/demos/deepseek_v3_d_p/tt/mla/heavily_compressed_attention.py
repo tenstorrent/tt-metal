@@ -41,7 +41,7 @@ class TtHCAState:
         self.entry_count = 0
         self.kv_actual = 0
 
-    def release(self) -> None:
+    def deallocate(self) -> None:
         """Free this state's tensors."""
         for tensor in (self.compressed_kv, self.sliding_carry, self.tail):
             ttnn.deallocate(tensor)
