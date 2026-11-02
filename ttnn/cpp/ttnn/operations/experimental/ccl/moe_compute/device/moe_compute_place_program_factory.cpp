@@ -68,10 +68,11 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
             mesh_device, height_shards, width_shards, hidden_size, CoreRangeSet{}, args.bh_ring_size);
     } else {
         TT_FATAL(
-            args.combine_params.has_value() && args.combine_params->local_combine == !ccl &&
+            args.combine_params.has_value() &&
+                args.combine_params->local_combine == (args.path == MoEComputePath::SingleDevice) &&
                 tensor_return_value.size() == kOutputsWithCombine,
-            "moe_compute expert rows placement program: SingleDevice / FullCcl need their combine parameters and {} "
-            "outputs; got combine parameters {}, local_combine {}, {} outputs",
+            "moe_compute expert rows placement program: SingleDevice, SingleCluster and FullCcl need their combine "
+            "parameters and {} outputs; got combine parameters {}, local_combine {}, {} outputs",
             kOutputsWithCombine,
             args.combine_params.has_value(),
             args.combine_params.has_value() && args.combine_params->local_combine,

@@ -147,15 +147,15 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     // - ComputeOnly: no combine_params, no optional_output_tensor (5 outputs).
     // - SingleDevice: combine_params must be set with local_combine=true; only on a 1x1 mesh;
     //   optional_output_tensor is allowed as the combine output sink (6 outputs, no CCL).
-    // - SingleCluster: combine_params describes the final [k, T, H] output (6 outputs, no combine
-    //   kernels: dm1 writes the output). The cluster_axis has extent 1; on a multi-device mesh
+    // - SingleCluster: combine_params describes the final [k, T, H] output (6 outputs, written on
+    //   the device, no fabric). The cluster_axis has extent 1; on a multi-device mesh
     //   that leaves one partial per coordinate for the caller to reduce, so the token set and its
     //   routing metadata must be replicated (every coordinate sees the same tokens, indices,
     //   scores and mapping). Only the rows of the experts a coordinate holds are written, as the
     //   combine writes only the rows it receives. The output is written one token row (2 x H
     //   bytes) at a time through a TensorAccessor page, the same addressing as the combine writer,
     //   so it takes the combine's output memory config check. The optional_output_tensor, when
-    //   given, is the buffer dm1 addresses (create_output_tensors returns it as slot 5).
+    //   given, is the buffer the op writes (create_output_tensors returns it as slot 5).
     // - FullCcl: combine_params must be set with local_combine=false (6 outputs, CCL path).
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
     if (args.path == MoEComputePath::ComputeOnly) {

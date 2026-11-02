@@ -2109,7 +2109,7 @@ class _Case:
                 ttnn.from_torch(host, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype), device_tensor
             )
 
-    def call(self, compute_only=True, out=None, layer_id=0, **precision):
+    def call(self, compute_only=True, out=None, layer_id=0, cluster_axis=None, **precision):
         return ttnn.experimental.moe_compute(
             self.tt_sparse_buffer,
             self.tt_expert_indices,
@@ -2124,6 +2124,7 @@ class _Case:
             activation_type=self.act,
             activation_limit=self.limit,
             compute_only=compute_only,
+            cluster_axis=cluster_axis,
             optional_output_tensor=out,
             **precision,
         )
@@ -2307,16 +2308,19 @@ def _expert_rows_and_ring(case, **precision):
     return expert_rows, ring
 
 
-def _single_device(case, **precision):
-    """One SingleDevice call on each path with a fresh program cache: outputs 0-2 against the goldens and each other,
-    and the combine outputs bitwise equal. Returns the combine outputs."""
+def _single_device(case, cluster_axis=None, **precision):
+    """One SingleDevice call (SingleCluster with cluster_axis=0) on each path with a fresh program cache: outputs 0-2
+    against the goldens and each other, and the combine outputs bitwise equal. Returns the combine outputs."""
     res = {}
     for name, programs in (("expert_rows", 2), ("ring", 1)):
         with _kernel(name), _env(_ROW_TILES_ENV, 1):
             out = case.new_combine_output()
-            outs, added = _programs_added(case.mesh_device, lambda: case.call(compute_only=False, out=out, **precision))
-            assert len(outs) == 6, f"SingleDevice must return 6 tensors, got {len(outs)}"
-            assert added == programs, f"{name} SingleDevice call compiled {added} programs, expected {programs}"
+            outs, added = _programs_added(
+                case.mesh_device,
+                lambda: case.call(compute_only=False, out=out, cluster_axis=cluster_axis, **precision),
+            )
+            assert len(outs) == 6, f"a call with the combine must return 6 tensors, got {len(outs)}"
+            assert added == programs, f"{name} call compiled {added} programs, expected {programs}"
             res[name] = ttnn.to_torch(outs[5]).reshape(case.top_k, case.tokens, case.hidden_size)
             res[name + "_outs"] = case.read(outs[:5], check=True)
             ttnn.deallocate(outs[5])
@@ -2523,6 +2527,19 @@ def test_moe_compute_expert_rows_single_device(mesh_device, mesh_shape, shape):
     res = _single_device(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.combine_rel_l2(res["expert_rows"])
     logger.debug(f"{shape}: SingleDevice combine rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
+    assert rel <= 0.01, f"combine output rel L2 {rel}"
+
+
+@pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_expert_rows_single_cluster(mesh_device, mesh_shape):
+    """SingleCluster (cluster_axis=0, an axis of extent 1) at T 1: the combine output is bitwise equal to the ring's and
+    within 1 % rel L2 of the FP32 golden."""
+    _skip_unless_supported_arch(mesh_device)
+    local_experts, tokens, top_k, intermediate_size, hidden_size, act, limit = _EXPERT_ROWS_SHAPES["flash_next_e128_t1"]
+    case = _Case(mesh_device, local_experts, tokens, top_k, intermediate_size, hidden_size, act=act, limit=limit)
+    res = _single_device(case, cluster_axis=0, **_PRECISION_MODES["hifi4_fp32"])
+    rel = case.combine_rel_l2(res["expert_rows"])
     assert rel <= 0.01, f"combine output rel L2 {rel}"
 
 

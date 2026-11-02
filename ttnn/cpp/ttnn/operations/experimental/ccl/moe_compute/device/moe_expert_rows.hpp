@@ -146,7 +146,7 @@ struct MoEComputePlaceInputs {
 };
 
 // The placement program of an expert rows call: moe_compute's outputs from the row buffer and the routing table, and
-// with a combine (SingleDevice, FullCcl) every routed row sent to the combine output.
+// with a combine (SingleDevice, SingleCluster, FullCcl) every routed row sent to the combine output.
 struct MoEComputePlaceFactory {
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const MoEComputeParams& args,

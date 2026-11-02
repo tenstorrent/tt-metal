@@ -388,10 +388,6 @@ std::optional<MoEExpertRowsParams> choose_path(
     if (forced == ForcedKernel::Ring) {
         return ring_with_reason(forced, "TT_METAL_MOE_COMPUTE_KERNEL=ring");
     }
-    if (args.path == MoEComputePath::SingleCluster) {
-        return ring_with_reason(
-            forced, "an extent-1 cluster axis has no combine; the ring's dm1 writes the output itself");
-    }
     if (!expert_rows_arch(mesh_device->arch())) {
         return ring_with_reason(
             forced, fmt::format("the expert rows path runs on Blackhole and Wormhole, not {}", mesh_device->arch()));
