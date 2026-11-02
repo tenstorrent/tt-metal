@@ -42,8 +42,9 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 per 64-channel segment: shape ``[1, (Q+K+V)/64, 192]``, page ``c``
                 holding the three history rows of channels ``[64c, 64c+64)``, row
                 ``r`` at element ``64r``; ``Q+K+V`` must be a multiple of 64. SP
-                calls supply the predecessor's three-row history separately. The kernel derives when each history is needed
-                from actual_start and its mesh coordinate.
+                calls supply the predecessor's three-row history separately. The
+                kernel derives when each history is needed from actual_start and
+                its mesh coordinate.
             tap0, tap1, tap2, tap3 (ttnn.Tensor): Per-channel convolution taps.
                 Each must have logical volume ``Q+K+V`` and be an interleaved
                 TILE-layout BFLOAT16 device tensor.

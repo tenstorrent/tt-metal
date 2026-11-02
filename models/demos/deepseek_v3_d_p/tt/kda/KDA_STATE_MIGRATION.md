@@ -43,7 +43,7 @@ it by one base address):
 
 where `L` is the rank's KDA layer count and the leading index is `slot * L + layer_position`
 (user-major, as the kvpe cache). The convolution slab's 384-byte page `row0[64c:64c+64] |
-row1[...] | row2[...]` is byte-identical to the ND `[1, K-1, 64]` shard, and an interleaved page `p`
+row1[...] | row2[...]` is byte-identical to the ND `[1, 1, (K-1) * 64]` shard, and an interleaved page `p`
 sits at bank `p % N`, offset `(p // N) * 384`, where ND shard `s = p` would sit; the two forms are
 interchangeable for the table. The interleaved form keeps each batch's rows contiguous logical pages,
 so one whole-batch copy writes them. The native convolution tail uses the same `[SEG, (K-1) * 64]`
