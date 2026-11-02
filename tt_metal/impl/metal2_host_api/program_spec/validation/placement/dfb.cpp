@@ -23,7 +23,7 @@ void ValidateDFBSlotsPerNode(const ValidationContext& ctx, uint32_t max_slots_pe
 
     std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
     for (const auto& dfb : spec.dataflow_buffers) {
-        for (const NodeCoord& node : corerange_to_cores(collected.dfb_node_set.at(dfb.unique_id))) {
+        for (const NodeCoord& node : corerange_to_cores(collected.dfb_placements.at(dfb.unique_id).configuration)) {
             dfbs_per_node[node]++;
         }
     }

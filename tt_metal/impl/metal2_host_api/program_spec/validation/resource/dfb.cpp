@@ -506,7 +506,7 @@ void ValidateDFBEndpointCoverage(const DataflowBufferSpec& dfb, const CollectedS
     // same-role placements are caught regardless of how the WorkUnitSpec bookkeeping produced
     // them. (Self-loops fall out naturally: a self-looping kernel tallies as one producer AND
     // one consumer on each of its nodes.)
-    const auto& placement = collected.dfb_node_set.at(dfb.unique_id);
+    const auto& placement = collected.dfb_placements.at(dfb.unique_id).allocation;
     const auto producers_on_node = CollectDFBEndpointsByNode(endpoints.producers, collected, placement);
     const auto consumers_on_node = CollectDFBEndpointsByNode(endpoints.consumers, collected, placement);
 
@@ -737,7 +737,7 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
         }
         const size_t total_size_a = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
         const auto group_a = extended_group(dfb);
-        const auto& nodes_a = collected.dfb_node_set.at(dfb.unique_id);
+        const auto& nodes_a = collected.dfb_placements.at(dfb.unique_id).allocation;
 
         for (const auto& alias_name : dfb_alias_with(dfb)) {
             const DataflowBufferSpec* alias_spec = collected.dfb_by_name.at(alias_name);
@@ -765,7 +765,7 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
                 total_size_b);
 
             // Rule 3: same node coverage.
-            const auto& nodes_b = collected.dfb_node_set.at(alias_name);
+            const auto& nodes_b = collected.dfb_placements.at(alias_name).allocation;
             TT_FATAL(
                 nodes_a == nodes_b,
                 "Aliased DFBs '{}' and '{}' cover different sets of nodes. Aliased DFBs must "
