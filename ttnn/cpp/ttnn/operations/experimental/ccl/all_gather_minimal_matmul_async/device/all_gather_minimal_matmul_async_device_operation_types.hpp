@@ -8,6 +8,8 @@
 
 #include <optional>
 
+#include <tt-metalium/global_semaphore.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
@@ -22,9 +24,9 @@ struct AllGatherMinimalMatmulAsyncParams {
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
     ttnn::ccl::Topology topology;
-    std::vector<GlobalSemaphore> semaphore;
+    std::vector<tt::tt_metal::GlobalSemaphore> semaphore;
     std::optional<uint32_t> cluster_axis;
-    const std::optional<GlobalSemaphore>& barrier_semaphore;
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore;
     bool using_persistent_buffers = false;
     bool force_transpose = false;
     uint32_t num_workers_per_link = 0;
@@ -44,7 +46,7 @@ struct AllGatherMinimalMatmulAsyncParams {
     // into `persistent_weight_buffer` before/concurrently-with the matmul.
     std::optional<uint32_t> fsdp_cluster_axis;
     uint32_t fsdp_ring_size = 1;
-    std::vector<GlobalSemaphore> fsdp_semaphore;  // ping-pong pair, same shape as `semaphore`
+    std::vector<tt::tt_metal::GlobalSemaphore> fsdp_semaphore;  // ping-pong pair, same shape as `semaphore`
     bool using_persistent_weight_buffer = false;
     ttnn::ccl::Topology fsdp_topology;
 
@@ -62,9 +64,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         uint32_t num_links,
         uint32_t ring_size,
         ttnn::ccl::Topology topology,
-        std::vector<GlobalSemaphore> semaphore,
+        std::vector<tt::tt_metal::GlobalSemaphore> semaphore,
         std::optional<uint32_t> cluster_axis,
-        const std::optional<GlobalSemaphore>& barrier_semaphore,
+        const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
         bool using_persistent_buffers,
         bool force_transpose,
         uint32_t num_workers_per_link,
@@ -74,7 +76,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         int32_t dim,
         std::optional<uint32_t> fsdp_cluster_axis,
         uint32_t fsdp_ring_size,
-        std::vector<GlobalSemaphore> fsdp_semaphore,
+        std::vector<tt::tt_metal::GlobalSemaphore> fsdp_semaphore,
         bool using_persistent_weight_buffer,
         ttnn::ccl::Topology fsdp_topology,
         bool fuse_swiglu = false,
