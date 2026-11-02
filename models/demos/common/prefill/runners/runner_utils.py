@@ -2,8 +2,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 
+import functools
 import os
 import resource
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
@@ -229,6 +231,63 @@ def load_trace_token_ids(trace_dir, total_len=None) -> list:
     return tids[:total_len] if total_len is not None else tids
 
 
+@dataclass(frozen=True)
+class LayerSplitCostModel:
+    """Relative per-chunk cost of each layer, for choosing a pipeline split that balances cost, not counts.
+
+    layer_costs[i]: cost of layer i. kv_only_last_cost: cost of the final layer when the last rank runs it
+    KV-only (no MTP/DFlash tail). boundary_costs[i]: extra cost on the SENDING rank when the next rank starts
+    at layer i (e.g. a D2D side stream that only some boundaries need). tail_level_cost: cost of each tail
+    level (MTP head, drafter) the last rank hosts. Units are arbitrary but shared.
+    """
+
+    layer_costs: tuple
+    kv_only_last_cost: float
+    boundary_costs: tuple
+    tail_level_cost: float
+
+
+def _cost_balanced_counts(num_layers: int, num_ranks: int, model: LayerSplitCostModel, tail_levels: int) -> list:
+    """Contiguous split minimising the bottleneck stage cost; ties go to fewer costed boundaries, then to
+    the split nearest an even one."""
+    w = model.layer_costs
+    prefix = [0.0]
+    for c in w[:num_layers]:
+        prefix.append(prefix[-1] + c)
+    even = (num_layers + tail_levels) / num_ranks
+
+    def stage(a, b, last):
+        cost = prefix[b] - prefix[a]
+        if last:
+            if tail_levels:
+                cost += tail_levels * model.tail_level_cost
+            else:
+                cost += model.kv_only_last_cost - w[b - 1]
+        else:
+            cost += model.boundary_costs[b]
+        return cost
+
+    @functools.lru_cache(maxsize=None)
+    def best(a, r):
+        if r == 1:
+            n = num_layers - a
+            return (stage(a, num_layers, True), 0, (n + tail_levels - even) ** 2, (n,))
+        out = None
+        for b in range(a + 1, num_layers - r + 2):
+            worst, edges, dev, counts = best(b, r - 1)
+            cand = (
+                max(worst, stage(a, b, False)),
+                edges + (model.boundary_costs[b] > 0),
+                dev + (b - a - even) ** 2,
+                (b - a,) + counts,
+            )
+            if out is None or cand[:3] < out[:3]:
+                out = cand
+        return out
+
+    return list(best(0, num_ranks)[3])
+
+
 def _snap_counts_to_starts(counts, valid_starts, num_layers):
     valid = sorted(valid_starts)
     boundaries, s = [], 0
@@ -254,7 +313,7 @@ def _snap_counts_to_starts(counts, valid_starts, num_layers):
 
 
 def compute_layer_split(
-    num_layers: int, num_ranks: int, valid_starts=None, tail_levels: int = 0
+    num_layers: int, num_ranks: int, valid_starts=None, tail_levels: int = 0, cost_model=None
 ) -> list[tuple[int, int]]:
     override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
     if override:
@@ -264,6 +323,8 @@ def compute_layer_split(
                 f"PREFILL_PP_LAYER_COUNTS={override!r} must list {num_ranks} counts summing to "
                 f"{num_layers} (got {len(counts)} counts summing to {sum(counts)})"
             )
+    elif cost_model is not None and valid_starts is None and num_ranks > 1:
+        counts = _cost_balanced_counts(num_layers, num_ranks, cost_model, tail_levels)
     else:
         base, rem = divmod(num_layers + tail_levels, num_ranks)
         counts = [base + (1 if r >= num_ranks - rem else 0) for r in range(num_ranks)]

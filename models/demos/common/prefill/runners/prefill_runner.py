@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 
+import atexit
 import contextlib
 import json
 import os
@@ -724,17 +725,40 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
     if not TIMING_DIR:
         return
     try:
-        # O_CREAT makes the file, not the parent. Without this the open raises ENOENT, the except
-        # below swallows it, and the run silently records nothing -- which is how a 5-point sweep
-        # finished with five empty timing dirs and no Gantt input.
-        os.makedirs(TIMING_DIR, exist_ok=True)
-        fd = os.open(os.path.join(TIMING_DIR, f"rank{rank}.csv"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-        try:
-            os.write(fd, f"{rank},{c},{compute_start:.6f},{compute_ms:.3f}\n".encode())
-        finally:
-            os.close(fd)
+        fd = _timing_fd(f"rank{rank}.csv")
+        os.write(fd, f"{rank},{c},{compute_start:.6f},{compute_ms:.3f}\n".encode())
     except OSError:
         pass
+
+
+_TIMING_FDS = {}
+
+
+def _timing_fd(name: str) -> int:
+    """One fd per timing file, opened on first use and kept for the run. The write sits between a chunk's
+    compute and its D2D send, and TIMING_DIR is on a network share (CI's /ci, a dev box's /data): there a
+    per-chunk open + close (close-to-open flush) costs ~4 ms median and stalls up to ~300 ms, on the
+    pipeline's critical path; a write to a kept fd lands in the client cache. Closed at exit."""
+    fd = _TIMING_FDS.get(name)
+    if fd is None:
+        # O_CREAT makes the file, not the parent. Without this the open raises ENOENT, the except
+        # in the caller swallows it, and the run silently records nothing -- which is how a 5-point
+        # sweep finished with five empty timing dirs and no Gantt input.
+        os.makedirs(TIMING_DIR, exist_ok=True)
+        fd = os.open(os.path.join(TIMING_DIR, name), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        if not _TIMING_FDS:
+            atexit.register(_close_timing_fds)
+        _TIMING_FDS[name] = fd
+    return fd
+
+
+def _close_timing_fds() -> None:
+    for fd in _TIMING_FDS.values():
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    _TIMING_FDS.clear()
 
 
 @contextlib.contextmanager
@@ -916,6 +940,7 @@ def _compute_and_send(
 
 
 def _drain_and_log_e2e(runtime, rank: int, outbound: D2DBoundary, first_compute_start, n_done: int, t0: float) -> None:
+    _close_timing_fds()  # the request is over: make this rank's timing visible to the launcher's summary now
     for service in outbound.channels():
         service.wait_for_fabric_links()
     ttnn.synchronize_device(runtime.mesh_device)
@@ -1059,7 +1084,7 @@ def _print_config() -> None:
         ("PREFILL_SP", str(_sp)),
         ("PREFILL_TP", str(_tp)),
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
-        ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
+        ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<default split>")),
         (
             "DFLASH_ENABLED",
             f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
@@ -1162,7 +1187,11 @@ def main() -> None:
     )
 
     layer_split = compute_layer_split(
-        NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS + int(DFLASH_ENABLED)
+        NUM_LAYERS,
+        num_ranks,
+        ADAPTER.layer_split_boundaries(NUM_LAYERS),
+        MTP_LEVELS + int(DFLASH_ENABLED),
+        cost_model=ADAPTER.layer_split_cost_model(NUM_LAYERS),
     )
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
@@ -1333,7 +1362,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         _unlink_stale_shm(ack_shm_name)
     # Record layout (layer_completion_layout.py); the migration block below uses layer space.
     layer_split = compute_layer_split(
-        NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS + int(DFLASH_ENABLED)
+        NUM_LAYERS,
+        num_ranks,
+        ADAPTER.layer_split_boundaries(NUM_LAYERS),
+        MTP_LEVELS + int(DFLASH_ENABLED),
+        cost_model=ADAPTER.layer_split_cost_model(NUM_LAYERS),
     )
     first_layer_idx, num_my_layers = layer_split[rank]
     extra_layers = runtime.layer_ack_layers(0, 0)[0] if getattr(runtime, "layer_ack_layers", None) else 0

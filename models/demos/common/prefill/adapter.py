@@ -247,6 +247,12 @@ class PrefillModelAdapter(ABC):
         rank starts fall off them."""
         return None
 
+    def layer_split_cost_model(self, num_layers: int):
+        """A ``runner_utils.LayerSplitCostModel`` for models whose layers are not equally expensive, or
+        ``None`` (the default) for an even split by layer count. Only the default split uses it: an
+        explicit PREFILL_PP_LAYER_COUNTS and ``layer_split_boundaries`` both take precedence."""
+        return None
+
     @abstractmethod
     def build_runtime(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return a runtime handle. The runtime

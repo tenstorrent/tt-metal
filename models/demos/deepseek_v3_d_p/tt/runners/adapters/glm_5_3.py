@@ -62,6 +62,28 @@ class GLM53Adapter(MLAPrefillAdapter):
         max_seq = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 8192))
         return glm_5_3_hf_config(max_seq=max_seq)
 
+    def layer_split_cost_model(self, num_layers: int):
+        """Balance the pipeline split by cost, not layer count. Measured on SC2 and on SC4's first two
+        stages (GLM-5.3 1M@5k, traced, 8 kW): a ``full`` layer costs 1.10x a ``shared`` one at 5k and 2.03x
+        at 1M (the indexer scores the whole prefix), the last rank's KV-only final layer costs almost
+        nothing, and a boundary that lands on a ``shared`` layer adds the indexer top-k D2D stream to the
+        sending rank (~5 ms/chunk, about one shared layer at 5k). The even split ignores all three: on SC2
+        39/39 vs the 38/40 this picks is -5.3% throughput at 1M, on SC4 19/19/20/20 vs 18/20/20/20 is
+        ~-5% at 1M, both with no index stream at all on the chosen splits."""
+        from models.demos.common.prefill.runners.runner_utils import LayerSplitCostModel
+
+        types = getattr(glm_5_3_hf_config(max_seq=8192), "indexer_types", None)
+        if not types:
+            return None
+        types = list(types[:num_layers])
+        full, shared = 1.5, 1.0
+        return LayerSplitCostModel(
+            layer_costs=tuple(full if t == "full" else shared for t in types),
+            kv_only_last_cost=0.3,
+            boundary_costs=tuple(1.0 if t == "shared" else 0.0 for t in types) + (0.0,),
+            tail_level_cost=full,
+        )
+
     def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
         """GLM is sparse (DSA), so it owns TWO device caches, returned as a KvCaches tuple (the runner
         hands the whole tuple to every runtime call; the runtime pulls index 0 as the primary KV cache
