@@ -31,6 +31,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, is_blackhole
+from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.hf_config import v4_hf_config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
@@ -84,16 +85,6 @@ def _upload_streams(mesh_device, streams):
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=(2, 3)),
-    )
-
-
-def _log_dram(mesh_device, label):
-    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
-    gib = view.num_banks / 2**30
-    logger.info(
-        f"[{label}] DRAM per chip: {view.total_bytes_allocated_per_bank * gib:.2f} GiB allocated, "
-        f"{view.total_bytes_free_per_bank * gib:.2f} GiB free, "
-        f"{view.largest_contiguous_bytes_free_per_bank * gib:.2f} GiB largest contiguous"
     )
 
 
@@ -174,7 +165,7 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
     )
     del state_dict
     logger.info(f"built layers [{first}, {last}) with {_SLOTS} user slots in {(time.monotonic() - t0) / 60:.1f} min")
-    _log_dram(mesh_device, label)
+    dump_ttnn_meminfo(mesh_device, header=label)
 
     if write_handoff:
         _HANDOFF.mkdir(parents=True, exist_ok=True)
@@ -201,7 +192,7 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
             torch.save(streams_to_host(mesh_device, out, n), _handoff_file(last - 1, chunk))
         ttnn.deallocate(out)
         logger.info(f"  chunk {chunk} done (start={start}) in {time.monotonic() - t0:.0f} s")
-    _log_dram(mesh_device, label)
+    dump_ttnn_meminfo(mesh_device, header=label)
 
     failures = []
     for i in graded:
