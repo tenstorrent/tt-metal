@@ -17,10 +17,13 @@
 #include <tt_stl/small_vector.hpp>
 
 #include "ttnn/operations/experimental/fused_msda/fused_msda.hpp"
+#include "ttnn/operations/experimental/fused_msda/device/kernels/msda_value_layout.hpp"
 
 namespace ttnn::operations::experimental::fused_msda {
 
+using fused_msda_value_layout::ValueLayout;
 using ttnn::experimental::MSDAReferenceMode;
+using ttnn::experimental::MSDAValueLayout;
 
 // Problem geometry, derived once from the tensor shapes + spatial_shapes and
 // shared by validation, the output spec and the program factory. Keeping the
@@ -37,7 +40,7 @@ struct MSDAShapes {
     bool locations_packed = false;        // sampling_locations/offsets given as (B, Q, H, L*P*2) or (B, Q, H*L*P*2)
     bool locations_heads_packed = false;  // sampling_locations/offsets given as (B, Q, H*L*P*2)
     bool weights_packed = false;          // attention_weights given as (B, Q, H, L*P)
-    bool value_packed = false;            // value given as (B, S, H*D); heads recovered from attention_weights
+    ValueLayout value_layout = ValueLayout::Canonical;
 };
 
 struct MSDACircularBufferSpec {
@@ -59,6 +62,10 @@ struct FusedMSDAOperation {
         bool locations_in_grid_space = false;
         bool from_offsets = false;
         MSDAReferenceMode reference_mode = MSDAReferenceMode::Level;
+        // HeadMajor is caller-declared (see MSDAValueLayout); Auto resolves to
+        // canonical or packed by value's rank.
+        MSDAValueLayout value_layout = MSDAValueLayout::Auto;
+
         // Per-batch count of queries to compute; empty means all of them unless
         // device_valid_counts.
         ttsl::SmallVector<uint32_t> num_valid_queries;
@@ -79,7 +86,8 @@ struct FusedMSDAOperation {
             "locations_in_grid_space",
             "from_offsets",
             "reference_mode",
-            "device_valid_counts");
+            "device_valid_counts",
+            "value_layout");
         auto attribute_values() const {
             return std::forward_as_tuple(
                 output_memory_config,
@@ -88,7 +96,8 @@ struct FusedMSDAOperation {
                 locations_in_grid_space,
                 from_offsets,
                 reference_mode,
-                device_valid_counts);
+                device_valid_counts,
+                value_layout);
         }
     };
 
@@ -163,6 +172,7 @@ ttnn::Tensor fused_msda(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     bool align_corners,
     bool locations_in_grid_space,
+    ttnn::experimental::MSDAValueLayout value_layout,
     const std::optional<MemoryConfig>& memory_config);
 
 ttnn::Tensor fused_msda_from_offsets(
@@ -173,6 +183,7 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
+    ttnn::experimental::MSDAValueLayout value_layout,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::vector<uint32_t>>& num_valid_queries = std::nullopt,
     const std::optional<Tensor>& num_valid_queries_tensor = std::nullopt);
@@ -185,6 +196,7 @@ bool can_use_fused_msda_from_offsets_l1_value(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
-    bool device_valid_counts = false);
+    bool device_valid_counts = false,
+    ttnn::experimental::MSDAValueLayout value_layout = ttnn::experimental::MSDAValueLayout::Auto);
 
 }  // namespace ttnn::prim
