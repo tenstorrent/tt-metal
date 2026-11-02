@@ -204,16 +204,6 @@ inline uint32_t rdcycle_e2e() {
 #endif
 }
 
-// Pause between a producer's polls of its remapper pair's ClientL config register. A tight poll is
-// a back-to-back uncached read of the same remapper register block DM1 is writing, and four
-// producers doing that at once more than doubled DM1's remapper setup. Worst hart median over 24
-// cold iterations of a four-producer case:
-//   no pause 3513 | 64 cycles 2196 | 100 cycles 2132 | 256 cycles 2063
-// A longer pause costs a producer up to that many cycles of late wake-up once DM1 has written its
-// pair. uint32_t because rdcycle is a single 32-bit register on the RV32 TRISCs, which compile this
-// loop too.
-constexpr uint32_t kDfbRemapperPollPauseCycles = 100;
-
 // Per-phase timers inside the init functions (register writes, blob reads, ...). They sit inside the
 // e2e window, so they are live only with DFB_INIT_INNER_TIMING_ENABLED on top of
 // DFB_INIT_TIMING_ENABLED (TT_METAL_MEASURE_DFB_INIT_INNER_TIME=1). Otherwise rdcycle() is a constant 0
@@ -232,14 +222,6 @@ inline uint32_t rdcycle() {
         return c;
     }
     return 0;
-}
-
-FORCE_INLINE void dfb_remapper_poll_pause() {
-    uint32_t t0, t;
-    asm volatile("rdcycle %0" : "=r"(t0));
-    do {
-        asm volatile("rdcycle %0" : "=r"(t));
-    } while (t - t0 < kDfbRemapperPollPauseCycles);
 }
 
 // Poll until all producers for DFB `dfb_id` have published their signal byte and
@@ -469,6 +451,8 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     const dfb_dm1_remapper_slot_t* slots =
         reinterpret_cast<const dfb_dm1_remapper_slot_t*>(config_cached + (dm1_slots_word & 0xFFFFu));
     const uint16_t num_slots = static_cast<uint16_t>(dm1_slots_word >> 16);
+    volatile uint8_t* const ready_flags = dfb_l1_uncached_byte_ptr(
+        reinterpret_cast<uintptr_t>(slots) - (DFB_DM1_CACHED_PAYLOAD_OFFSET - DFB_DM1_READY_FLAGS_OFFSET));
 
     WAYPOINT("RS");
 
@@ -490,6 +474,8 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
         WRITE_REG32(REMAP_CLIENT_R_CONFIG_REG_ADDR32(pair_idx), clientR_val);
         const uint32_t t_clientL = rdcycle();
         WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx), clientL_val);
+        asm volatile("fence" ::: "memory");
+        ready_flags[pair_idx] = 1u;
         const uint32_t t_done = rdcycle();
         if constexpr (kDfbInitInnerTiming) {
             blob_l1_read_sw += t_clientR - t_read;
@@ -595,6 +581,10 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 #if defined(COMPILE_FOR_TRISC)
     uint8_t compact_dfb_count = 0;
     uint8_t trisc_tc_slot_count = 0;
+#endif
+#if !defined(COMPILE_FOR_TRISC) || defined(UCK_CHLKC_PACK)
+    // Uncached alias of DM1's ready-flag line, loaded on this hart's first remapper wait.
+    const volatile uint8_t* dm1_ready_flags = nullptr;
 #endif
 
     // Inner timers and counters (0 unless kDfbInitInnerTiming).
@@ -784,13 +774,18 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
                 packer_rmp.hi = static_cast<uint8_t>(remapper_pair_index + 1u);
             }
 #endif
-            // Remapped producers: spin until DM1 has written this pair's ClientL config with
-            // non-zero valid bits (bits [11:8]). No global remapper-enable wait is needed.
+            // Remapped producers: spin until DM1 has programmed this pair. No global remapper-enable
+            // wait is needed.
             if (flags & DFB_HART_FLAG_REMAPPER_WAIT_DM1) {
                 const uint32_t t_spin = rdcycle();
                 WAYPOINT("RMSW");
-                while (overlay::RemapperAPI::get_clientL_valid_hw(remapper_pair_index) == 0u) {
-                    dfb_remapper_poll_pause();
+                if (dm1_ready_flags == nullptr) {
+                    const uint32_t dm1_blob_off = *dfb_l1_uncached_u16_ptr(
+                        config_cached + offsetof(dfb_global_header_t, dm1_remapper_blob_offset));
+                    dm1_ready_flags =
+                        dfb_l1_uncached_byte_ptr(config_cached + dm1_blob_off + DFB_DM1_READY_FLAGS_OFFSET);
+                }
+                while (dm1_ready_flags[remapper_pair_index] == 0u) {
                 }
                 WAYPOINT("RMSD");
                 total_remapper_spin += rdcycle() - t_spin;

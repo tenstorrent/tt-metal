@@ -334,9 +334,18 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(sizeof(dfb_global_header_t), 120u);
     EXPECT_EQ(dfb_config_header_size(), 120u);
 
-    // Header is at offset 0; the DM1 blob starts on the next cache line, its slot array one line later.
+    // Header is at offset 0; the DM1 blob starts on the next cache line, its slot array two lines later
+    // (after the header line and DM1's ready-flag line, which the host writes as zeros).
     EXPECT_EQ(ghdr->dm1_remapper_blob_offset, 128u);
-    EXPECT_EQ(ghdr->dm1_slots & 0xFFFFu, 192u);
+    EXPECT_EQ(ghdr->dm1_slots & 0xFFFFu, 256u);
+    {
+        // The ready flags must be written as zeros, not left as whatever the buffer held.
+        std::vector<uint8_t> dirty(buf.size(), 0xA5u);
+        ASSERT_EQ(experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, dirty), nbytes);
+        for (uint32_t i = 0; i < DFB_DM1_READY_FLAGS_BYTES; i++) {
+            EXPECT_EQ(dirty[ghdr->dm1_remapper_blob_offset + DFB_DM1_READY_FLAGS_OFFSET + i], 0u) << "ready flag " << i;
+        }
+    }
     EXPECT_GE(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
     // No implicit sync → no DM0 ISR blob, and dm0_packed is 0.
     EXPECT_EQ(experimental::dfb::detail::dm0_isr_blob_region_size(dfbs), 0u);
