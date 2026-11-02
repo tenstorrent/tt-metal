@@ -10,7 +10,12 @@ the drafter context KV it leaves against the device's.
 logits and the next --ab-tokens served tokens with the prefill path's reset skipped against the full reset; they
 must be identical (exit 1 otherwise).
 
-usage: python -m qwen36_resident.tests.dfl_ttft [--T 128,1024,2048,4096,8192] [--reps 3] [--ab] [--no-host-fill]
+--sync-ab: the cost of the fill's synchronization (dflash.FILL_SYNC, RESIDENT_DFLASH_FILL_SYNC): per T, start()'s wall
+time (the served path, no stage marks: the stage timings above synchronize after every stage) without and with it,
+--reps each, interleaved.
+
+usage: python -m qwen36_resident.tests.dfl_ttft [--T 128,1024,2048,4096,8192] [--reps 3] [--ab] [--sync-ab]
+    [--no-host-fill]
 """
 import argparse
 import faulthandler
@@ -31,6 +36,7 @@ ap.add_argument("--reps", type=int, default=3)
 ap.add_argument("--corpus", default="/home/ttuser/experiments/qwen36_27b/profiles/resident/256k/corpus_ids.pt")
 ap.add_argument("--ab", action="store_true")
 ap.add_argument("--ab-tokens", type=int, default=64)
+ap.add_argument("--sync-ab", action="store_true")
 ap.add_argument("--no-host-fill", action="store_true")
 a = ap.parse_args()
 faulthandler.dump_traceback_later(900, repeat=True, file=sys.stderr)
@@ -99,6 +105,23 @@ try:
                 f"{'identical' if same else 'DIFFER: ' + str(res[False][1]) + ' vs ' + str(res[True][1])}"
             )
             dflash.FULL_RESET = False
+        if a.sync_ab:
+            walls = {False: [], True: []}
+            for _ in range(a.reps):
+                for sync in (False, True):
+                    dflash.FILL_SYNC = sync
+                    time.sleep(1)
+                    t0 = time.perf_counter()
+                    spec.start(ids)
+                    walls[sync].append(time.perf_counter() - t0)
+                    spec.stop()
+            dflash.FILL_SYNC = True
+            med = {k: 1e3 * sorted(v)[len(v) // 2] for k, v in walls.items()}
+            log(
+                f"T={T} fill sync A/B: start() median {med[False]:.2f} ms without, {med[True]:.2f} ms with "
+                f"({med[True] - med[False]:+.2f} ms); without {[round(1e3 * w, 2) for w in walls[False]]}, "
+                f"with {[round(1e3 * w, 2) for w in walls[True]]}"
+            )
         if a.no_host_fill:
             continue
         # the context KV the device fill left (positions s0 .. T - 2), then the host fill's
