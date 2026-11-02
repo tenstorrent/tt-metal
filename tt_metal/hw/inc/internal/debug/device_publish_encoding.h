@@ -442,6 +442,11 @@ inline constexpr uint32_t kFirstPacketWords =
                         : kLayout<Payload, detail::TimestampWidth::Bits32>.packet_words;
 template <typename Payload, detail::TimestampWidth kWidth>
 inline constexpr uint32_t kPayloadWords = kLayout<Payload, kWidth>.packet_words - 1 - time_words(kWidth);
+// A call site's longest write, which its room check reserves: its full packet, or its medium packet, a word shorter at
+// least, with the timer packet ahead of it.
+template <typename Payload>
+inline constexpr uint32_t kMaxWriteWords =
+    kLayout<Payload, detail::TimestampWidth::Bits64>.packet_words + ppfmt::STICKY_PACKET_WORDS - 1;
 
 // A slice's bits in one payload word: the slice, the bit its bits start at in the word, and whether the word holds
 // the high half of an 8-byte slice.
@@ -824,8 +829,7 @@ template <typename Payload, typename Source, bool kAlwaysBits64 = false>
 struct RecordWriter {
     using Width = detail::TimestampWidth;
 
-    // The longest packet: a full one, which is never shorter than a medium one with the timer packet ahead of it.
-    static constexpr uint32_t kMaxWords = kLayout<Payload, Width::Bits64>.packet_words;
+    static constexpr uint32_t kMaxWords = kMaxWriteWords<Payload>;
 
     // `inputs` are the record's register words, or the address of its source. Returns the write index past the record.
     template <typename... Inputs>
@@ -1156,8 +1160,8 @@ FORCE_INLINE void publish_record(uint32_t header, const Source& source, std::ind
 }
 
 static_assert(
-    kLayout<PublishTimePayload<&Interval::end>, detail::TimestampWidth::Bits64>.packet_words == MIN_RESERVE_WORDS,
-    "every room check reserves a zone record's longest packet");
+    kMaxWriteWords<PublishTimePayload<&Interval::end>> == MIN_RESERVE_WORDS,
+    "every room check reserves a zone record's longest write");
 
 // Whether ppfmt's stall record, which write_pending_stall writes and the host describes stalls from, is the medium
 // record DevicePublish lays out for a zone, whose Interval's Timestamps lie back to back.

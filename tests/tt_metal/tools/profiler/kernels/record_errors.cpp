@@ -61,7 +61,7 @@ void kernel_main() {
     enum class LocalEnum : uint8_t { kA };
     DevicePublish<Name{"error"_s}>(LocalEnum::kA);
 #elif RECORD_ERROR == 13
-    DevicePublish<Name{"error"_s}>(std::array<uint32_t, 502>{});  // one word over the limit
+    DevicePublish<Name{"error"_s}>(std::array<uint32_t, 499>{});  // one word over the limit
 #elif RECORD_ERROR == 14
     DevicePublish<Name{"error"_s}, 5>();
 #elif RECORD_ERROR == 15

@@ -815,7 +815,7 @@ constexpr std::string_view kUnsupportedType =
 constexpr std::string_view kNotSendable =
     "only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported; this type "
     "has a constructor, private field or virtual function";
-constexpr std::string_view kOverLimit = "this record is over the 2004-byte limit; split it into several records";
+constexpr std::string_view kOverLimit = "this record is over the 1992-byte limit; split it into several records";
 constexpr std::string_view kPayloadString =
     "strings are not supported in a payload; send the text as metadata, a DevicePublish call per string";
 constexpr ExpectedError kErrors[] = {

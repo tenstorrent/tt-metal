@@ -97,11 +97,10 @@ constexpr bool check_call() {
                 "string. A const char array counts as a string; send bytes in a std::array");
             return false;
         } else {
-            // A record's longest packet, its full one, must fit the ring's room for one. It is never shorter than a
-            // medium one with the timer packet ahead of it.
+            // A record's longest write must fit the ring's room for one.
             static_assert(
-                kLayout<Payload, detail::TimestampWidth::Bits64>.packet_words <= ppfmt::MAX_RECORD_WORDS,
-                "this record is over the 2004-byte limit; split it into several records");
+                kMaxWriteWords<Payload> <= ppfmt::MAX_RECORD_WORDS,
+                "this record is over the 1992-byte limit; split it into several records");
         }
     }
     return metadata && data;

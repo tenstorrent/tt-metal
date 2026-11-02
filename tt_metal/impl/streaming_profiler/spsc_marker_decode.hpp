@@ -56,19 +56,15 @@ struct SpscBlockResult {
     uint32_t count;
 };
 
-// The words of the packet that starts with `w0`, or 0 when no packet starts with it.
+// The words of the packet that starts with `w0`, or 0 when no packet a RISC writes starts with it.
 inline uint32_t spsc_packet_words(uint32_t w0) {
+    const uint32_t words = ppfmt::packet_words(w0);
     switch (ppfmt::type(w0)) {
-        case PacketType::Record: return ppfmt::packet_words(w0);
+        case PacketType::Record: return words;
         case PacketType::TimerHigh:
-        case PacketType::RuntimeId: return 1;
-        case PacketType::RuntimeIdWide: return 2;
+        case PacketType::RuntimeId: return words == ppfmt::STICKY_PACKET_WORDS ? words : 0;
         default: return 0;
     }
-}
-// The value of a timer or runtime-id packet.
-inline uint32_t spsc_sticky_value(const uint32_t* p) {
-    return ppfmt::type(p[0]) == PacketType::RuntimeIdWide ? p[1] : p[0] & ppfmt::VALUE_MASK;
 }
 
 // The values all of a lane's records share, where a lane is the record stream of one RISC on one core. `shared` is the

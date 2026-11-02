@@ -238,7 +238,7 @@ FORCE_INLINE void ring_write_words(Words... words) {
 FORCE_INLINE void ring_write_sticky_timer(uint32_t time_hi) {
     if (__builtin_expect(time_hi != g_prev_timer_hi, 0)) {
         g_timer_written_at = wIndex;
-        ring_write_words(ppfmt::w0(PacketType::TimerHigh, time_hi));
+        ring_write_words(ppfmt::w0(PacketType::TimerHigh, ppfmt::STICKY_PACKET_WORDS), time_hi);
         g_prev_timer_hi = time_hi;
         publish_state(halfword_slot(SPSC_STATE_TIMER_0), static_cast<uint16_t>(time_hi));
     }
@@ -251,16 +251,17 @@ FORCE_INLINE void ring_write_sticky_timer(uint32_t time_hi) {
 [[maybe_unused]] static uint32_t g_cursor_hi = kUnset;
 
 // A stall writes into a ring that is by definition full, so its words come from a reserve ordinary records may not fill
-// into: the timer's high word, word 0 and the stall's body.
-constexpr uint32_t STALL_RESERVE_WORDS = 1 + ppfmt::STALL_PACKET_WORDS;
+// into: the timer packet, then the stall's record.
+constexpr uint32_t STALL_RESERVE_WORDS = ppfmt::STICKY_PACKET_WORDS + ppfmt::STALL_PACKET_WORDS;
 constexpr uint32_t RING_USABLE = RING_CAPACITY - STALL_RESERVE_WORDS;
 static_assert(
     ppfmt::MAX_RECORD_WORDS == RING_USABLE - STALL_RESERVE_WORDS, "a record ppfmt allows fits the ring's room");
 static_assert(RING_USABLE > STALL_RESERVE_WORDS, "the ring is too small to carry a stall reserve");
 
-// Every check reserves at least a zone record's longest packet (word 0, the time's two words and the start's 64-bit
-// distance), so the commonest check compares wIndex itself.
-constexpr uint32_t MIN_RESERVE_WORDS = 5;
+// Every check reserves at least a zone record's longest write (RecordWriter::kMaxWords: its full packet, word 0, the
+// time's two words and the start's 64-bit distance, and a word more for a medium packet's timer packet), so the
+// commonest check compares wIndex itself.
+constexpr uint32_t MIN_RESERVE_WORDS = 6;
 
 #if defined(DEVICE_OBSERVABILITY_INLINE_ENABLED)
 #define WRITER_INLINE_ATTR [[gnu::always_inline]] inline
@@ -411,14 +412,8 @@ WRITER_INLINE_ATTR void publish_with(uint32_t header, Inputs... inputs) {
 // this lane's following markers. Every RISC emits one at its own launch point; a sweep-granular id
 // misassigns about twice as many zones on back-to-back launches.
 FORCE_INLINE void set_host_counter(uint32_t counter_value) {
-    // An id that reaches the type field takes the two-word sticky.
-    if (counter_value > ppfmt::VALUE_MASK) {
-        ring_ensure_room(2);
-        ring_write_words(ppfmt::w0(PacketType::RuntimeIdWide, 0), counter_value);
-    } else {
-        ring_ensure_room(1);
-        ring_write_words(ppfmt::w0(PacketType::RuntimeId, counter_value));
-    }
+    ring_ensure_room(ppfmt::STICKY_PACKET_WORDS);
+    ring_write_words(ppfmt::w0(PacketType::RuntimeId, ppfmt::STICKY_PACKET_WORDS), counter_value);
     if constexpr (VALIDATES_LAUNCH) {
         g_prog_pending = counter_value;
     }

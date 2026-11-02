@@ -465,7 +465,6 @@ void ExternalReceiver::repack(const uint32_t* entry, uint32_t dev) {
         .y = field_of(frame_.data(), frames_.core_coord_y_field())});
 
     const uint32_t ring_words = frames_.risc_ring_buffer_size_words();
-    const auto& non_record = packets_.non_record_packet_lengths_words();
     uint32_t off = frames_.prefix_length_words() + frames_.control_block_length_words();
     bool kept_any = false;
     for (uint32_t risc = 0; risc < kLanes; risc++) {
@@ -492,18 +491,12 @@ void ExternalReceiver::repack(const uint32_t* entry, uint32_t dev) {
                 };
                 for (uint32_t k = 0; k < sent;) {
                     const uint32_t w0 = word(k);
-                    const uint32_t type = field_of(&w0, packets_.packet_type_field());
-                    const bool record = type == packets_.record_packet_type();
-                    uint32_t n = 0;
-                    if (record) {
-                        n = field_of(&w0, packets_.record_length_field());
-                    } else if (const auto length = non_record.find(type); length != non_record.end()) {
-                        n = length->second;
-                    }
+                    const uint32_t n = field_of(&w0, packets_.packet_length_field());
                     if (n == 0 || k + n > sent) {
                         break;
                     }
-                    if (record && field_of(&w0, packets_.routed_field()) != 0) {
+                    if (field_of(&w0, packets_.packet_type_field()) == packets_.record_packet_type() &&
+                        field_of(&w0, packets_.routed_field()) != 0) {
                         const uint32_t id = field_of(&w0, packets_.device_publish_descriptor_id_field());
                         const uint32_t packet_words =
                             connection_->wait_for_call_site(id).packet_layouts.front().packet_words;

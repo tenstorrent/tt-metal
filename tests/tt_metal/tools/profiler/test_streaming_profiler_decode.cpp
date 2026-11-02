@@ -32,8 +32,9 @@ constexpr uint32_t kEventId = 5;
 
 using kernel_profiler::PacketType;
 using kernel_profiler::ppfmt;
-uint32_t word(PacketType type, uint32_t value) { return ppfmt::w0(type, value); }
-uint32_t sticky(uint32_t hi) { return word(PacketType::TimerHigh, hi); }
+// A timer or runtime-id packet's word 0, which its value follows.
+constexpr uint32_t kTimerHigh = ppfmt::w0(PacketType::TimerHigh, ppfmt::STICKY_PACKET_WORDS);
+constexpr uint32_t kRuntimeId = ppfmt::w0(PacketType::RuntimeId, ppfmt::STICKY_PACKET_WORDS);
 uint32_t record(uint32_t packet_words, uint32_t id) { return ppfmt::record_w0(packet_words) | id; }
 uint32_t event() { return record(2, kEventId); }
 // A short record's body: its time's distance from the lane's cursor, then its 16-bit payload.
@@ -94,7 +95,7 @@ struct Harness {
         types(std::move(record_types)), routes(types, call_sites), dec(dev, lanes, routes, clocks, 0) {
         routes.set_route(kEventId, {.types = 1});
         if (lane == Lane::Seeded) {
-            feed({word(PacketType::TimerHigh, 0)});
+            feed({kTimerHigh, 0});
             deliver_oldest();
         }
     }
@@ -169,7 +170,7 @@ int main() {
         Harness h({kRawRecordType, kRawRecordType});
         h.routes.set_route(kEventId, {.types = 0b11});
         h.routes.set_route(9, {.types = 0});
-        h.feed({sticky(1), record(3, kEventId), kNear, 7, record(2, 9), 4});
+        h.feed({kTimerHigh, 1, record(3, kEventId), kNear, 7, record(2, 9), 4});
         check(
             h.records(1).size() == 1 && h.records()[0].time.device_cycles() == kEpoch - 16 &&
                 h.records(1)[0].time.device_cycles() == kEpoch - 16,
@@ -192,7 +193,7 @@ int main() {
         h.routes.set_route(8, {.types = 1, .bits16_packet_words = 2, .bits64_packet_words = 5});
         h.routes.set_route(9, {.types = 0, .bits16_packet_words = 2, .bits64_packet_words = 5});
         // clang-format off
-        h.feed({sticky(2),
+        h.feed({kTimerHigh, 2,
                 record(2, 8), short_body(5, 3),
                 record(3, 8), 100, 7,
                 record(2, 8), short_body(5, 3),
@@ -268,7 +269,7 @@ int main() {
             route(h, 8, 1);
             const uint64_t whole_start = kEpoch + 150;
             // clang-format off
-            h.feed({sticky(2),
+            h.feed({kTimerHigh, 2,
                     record(3, 8), 100, 30,
                     record(2, 8), short_body(5, 3),
                     record(5, 8), 200, 2, uint32_t(whole_start), uint32_t(whole_start >> 32)});
@@ -294,7 +295,7 @@ int main() {
         {
             Harness h({record_type});
             route(h, 8, 1);
-            h.feed({sticky(1), record(3, 8), kNear, 8, record(3, 8), 4, 0});
+            h.feed({kTimerHigh, 1, record(3, 8), kNear, 8, record(3, 8), 4, 0});
             const Direct& torn = h.records<Direct>()[0];
             check(
                 torn.time.device_cycles() == kEpoch - 16 && torn.start.device_cycles() == kEpoch - 24 &&
@@ -315,7 +316,7 @@ int main() {
                 uint64_t time, start;
             };
             std::vector<Expected> expected[2];
-            std::vector<uint32_t> words = {sticky(2), record(3, 8), 1000, 5};
+            std::vector<uint32_t> words = {kTimerHigh, 2, record(3, 8), 1000, 5};
             std::vector<uint32_t> types = {0};
             uint64_t time = 2 * kEpoch + 1000;
             expected[0].push_back({8, time, time - 5});
@@ -343,9 +344,9 @@ int main() {
             Harness h({kRawRecordType, record_type});
             route(h, 8, 0b10);
             // clang-format off
-            h.feed({sticky(2), record(3, 8), 0xffffff00u, 5,
-                    sticky(3), event(), 0xffffff10u,
-                    sticky(2), record(2, 8), short_body(0x20, 3)});
+            h.feed({kTimerHigh, 2, record(3, 8), 0xffffff00u, 5,
+                    kTimerHigh, 3, event(), 0xffffff10u,
+                    kTimerHigh, 2, record(2, 8), short_body(0x20, 3)});
             // clang-format on
             check(
                 h.records()[0].time.device_cycles() == 2 * kEpoch + 0xffffff10 && h.order_regressions == 0,
@@ -411,14 +412,14 @@ int main() {
     {
         Harness h({kRawRecordType}, Lane::Fresh);
         h.slot_timer = 5;
-        h.feed({event(), 4, sticky(9), event(), 8});
+        h.feed({event(), 4, kTimerHigh, 9, event(), 8});
         check(
             h.records().size() == 1 && h.records()[0].time.device_cycles() == 9 * kEpoch + 8,
             "a reseeding run is taken up from its last sticky");
     }
     {
         Harness h;
-        h.feed({sticky(2), event(), 32});
+        h.feed({kTimerHigh, 2, event(), 32});
         h.head += 40;  // the wire moved on without us
         h.slot_timer = 3;
         h.slot_prog = 9;
@@ -432,7 +433,7 @@ int main() {
     // 2^32 ticks while its batch is undelivered.
     {
         Harness h;
-        h.feed({sticky(1), event(), kNear, event(), 4});
+        h.feed({kTimerHigh, 1, event(), kNear, event(), 4});
         check(
             h.records()[0].time.device_cycles() == kEpoch - 16 && h.records()[1].time.device_cycles() == kEpoch + 4,
             "a torn record moves down an epoch when the next record is earlier");
@@ -440,12 +441,12 @@ int main() {
     {
         Harness h;
         h.routes.set_route(9, {.types = 0});
-        h.feed({sticky(1), record(2, 9), kNear, event(), 4});
+        h.feed({kTimerHigh, 1, record(2, 9), kNear, event(), 4});
         check(h.order_regressions == 0, "a torn record no type takes is a tear, not an order regression");
     }
     {
         Harness h;
-        h.feed({sticky(1), record(6, kEventId), kNear, 0x11, 0x22, 0x33, 0x44, event(), 4});
+        h.feed({kTimerHigh, 1, record(6, kEventId), kNear, 0x11, 0x22, 0x33, 0x44, event(), 4});
         check(h.records()[0].time.device_cycles() == kEpoch - 16, "a torn record with a payload moves down an epoch");
         uint32_t payload[4];
         std::memcpy(payload, h.records()[0].data.data(), sizeof(payload));
@@ -458,14 +459,14 @@ int main() {
         uint64_t cycles;
         const char* why;
     } kFirstRecord[] = {
-        {{sticky(1), event(), 100, event(), 200}, kEpoch + 100, "records in order keep their times"},
-        {{sticky(1), event(), 0x10000000u, event(), 4},
+        {{kTimerHigh, 1, event(), 100, event(), 200}, kEpoch + 100, "records in order keep their times"},
+        {{kTimerHigh, 1, event(), 0x10000000u, event(), 4},
          0x10000000u,
          "a torn record far below the wrap is still repaired"},
-        {{sticky(1), event(), kNear, word(PacketType::RuntimeId, 2), sticky(1), event(), 4},
+        {{kTimerHigh, 1, event(), kNear, kRuntimeId, 2, kTimerHigh, 1, event(), 4},
          kEpoch - 16,
          "stickies between a torn record and the next record leave the repair intact"},
-        {{sticky(1), event(), kNear}, 2 * kEpoch - 16, "a torn record with no record after it keeps its time"},
+        {{kTimerHigh, 1, event(), kNear}, 2 * kEpoch - 16, "a torn record with no record after it keeps its time"},
     };
     for (const auto& c : kFirstRecord) {
         Harness h;
@@ -474,7 +475,7 @@ int main() {
     }
     {
         Harness h;
-        h.feed({sticky(1), event(), kNear});
+        h.feed({kTimerHigh, 1, event(), kNear});
         h.feed({event(), 4});
         check(
             h.records()[0].time.device_cycles() == kEpoch - 16,
@@ -484,7 +485,7 @@ int main() {
         // A full record of a site whose payload holds Timestamps carries its time whole.
         Harness h;
         h.routes.set_route(8, {.types = 0, .bits16_packet_words = 2, .bits64_packet_words = 5});
-        h.feed({sticky(3), event(), kNear});
+        h.feed({kTimerHigh, 3, event(), kNear});
         h.feed({record(5, 8), 4, 3, 0, 0});
         check(h.records()[0].time.device_cycles() == 3 * kEpoch - 16, "a full record witnesses a torn record");
     }
@@ -492,7 +493,7 @@ int main() {
         // The witness goes to a second type's region, so the delivered record stays readable.
         Harness h({kRawRecordType, kRawRecordType});
         h.routes.set_route(6, {.types = 0b10});
-        h.feed({sticky(1), event(), kNear});
+        h.feed({kTimerHigh, 1, event(), kNear});
         const Raw& delivered = h.records()[0];
         h.new_batch();
         h.feed({record(2, 6), 4});
@@ -503,7 +504,7 @@ int main() {
     }
     {
         Harness h;
-        h.feed({sticky(1), event(), kNear});
+        h.feed({kTimerHigh, 1, event(), kNear});
         h.new_batch();
         h.feed({event(), 4});
         h.feed({event(), 8});
@@ -514,7 +515,7 @@ int main() {
     {
         Harness h;
         h.feed({event(), 100});
-        h.feed({sticky(1), event(), kNear});
+        h.feed({kTimerHigh, 1, event(), kNear});
         h.deliver_oldest();
         h.feed({event(), 4});
         check(
@@ -524,17 +525,17 @@ int main() {
     }
     {
         Harness h;
-        h.feed({sticky(1), event(), 100});
+        h.feed({kTimerHigh, 1, event(), 100});
         check(h.newest_ticks == static_cast<int64_t>(kEpoch + 100), "a lane's first record counts toward the cover");
-        h.feed({sticky(2), event(), kNear});
+        h.feed({kTimerHigh, 2, event(), kNear});
         check(
             h.newest_ticks == static_cast<int64_t>(2 * kEpoch - 16),
             "a torn last record holds its batch to the time it would repair to");
     }
     {
         Harness h;
-        h.feed({sticky(1), event(), 100});
-        h.feed({sticky(2), event(), 200});
+        h.feed({kTimerHigh, 1, event(), 100});
+        h.feed({kTimerHigh, 2, event(), 200});
         check(
             h.newest_ticks == static_cast<int64_t>(2 * kEpoch + 200),
             "a lane back from an idle gap of 2^32 ticks holds its batch to its own last record");
@@ -548,8 +549,8 @@ int main() {
     }
     {
         Harness h;
-        h.feed({sticky(3), event(), kNear});
-        h.feed({sticky(2), event(), 32});
+        h.feed({kTimerHigh, 3, event(), kNear});
+        h.feed({kTimerHigh, 2, event(), 32});
         check(
             h.order_regressions == 1 && h.records()[0].time.device_cycles() == 4 * kEpoch - 16 &&
                 h.records()[1].time.device_cycles() == 2 * kEpoch + 32,

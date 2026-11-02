@@ -429,7 +429,7 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
   placed against one process-wide anchor).
 - Device producer: DevicePublish (`internal/debug/device_publish_impl.h`, `device_publish_encoding.h` and
   `device_publish_ring.h`), under `-DDEVICE_OBSERVABILITY`, and the markers on it (`kernel_profiler_streaming.hpp`),
-  under `-DPROFILE_STREAMING` too (ids: §4.2). Every RISC emits its own `STICKY_PROG` at launch so `runtime_id()` is
+  under `-DPROFILE_STREAMING` too (ids: §4.2). Every RISC emits its own runtime-id packet at launch so `runtime_id()` is
   exact on every lane (§N+60).
 
 ### 2.4 Sizing and where the numbers come from
@@ -1122,9 +1122,11 @@ start timestamp (8 B of member state), so the open touches nothing but the wall 
 A record's id is its call site's: how it is made, linked, rebased and resolved is its own document,
 [`EVENT_DESCRIPTOR_IDS.md`](EVENT_DESCRIPTOR_IDS.md).
 
-A record's packet is `PP_RECORD`, `word0 = type(5) << 27 | N << 20 | id`, N the body's words, so any packet is `1 + N`
-words and the decoder steps over one without knowing its call site. The id is the call site's 16-bit id, assigned as
-each image loads (`hostdev/observability_event_descriptor.h`); word 0 costs one `lui`/`addi` pair.
+Every packet a RISC writes starts with `word0 = type << 29 | (1 + N) << 20 | routed << 19 | id`, N the body's words,
+so a reader steps over any packet, a record or a timer or runtime-id packet, by its length, without knowing its call
+site. Only a record has an id, and only a record for the external process sets `routed`. The id is the call site's
+16-bit id, assigned as each image loads (`hostdev/observability_event_descriptor.h`); word 0 costs one `lui`/`addi`
+pair.
 
 Every record takes one of its call site's forms, which N tells apart. A Timestamp field travels as its distance back
 from the record's own time, so a zone's start travels as its distance back from the zone's end, which is the zone's
@@ -1154,17 +1156,18 @@ children's ends, so start deltas go negative; ends never do. The start is `end �
   short-form test fail arithmetically, so the first record after a launch is never short. The decoder has no cursor for
   a lane until its first medium record, and after a gap in a lossy FIFO it can't place the lane's short records until
   the next medium one.
-- There is deliberately **no sticky-lo**. `STICKY_TIMER` (the 27-bit high half, ~one per 3.2 s) applies to medium
-  records, which carry absolute low words; a short record shares its cursor's high word, so it never needs one.
+- There is deliberately **no sticky-lo**. The timer packet (word 0, then the clock's high half, ~one per 3.2 s)
+  applies to medium records, which carry absolute low words; a short record shares its cursor's high word, so it
+  never needs one.
 
 ##### The stall zone (PROFILER-STALL)
 
 A zone's **medium record with a saturating duration**, at the stall's own call site, which has no short form and so
 leaves the cursor alone, written straight into the ring's stall reserve with no room check: a room check from inside
 the full-ring path recurses into another stall, which is exactly what the reserve exists to prevent. The reserve covers
-**4 words**: the timer's high word, word 0, the stall's end and its duration. A full record would grow it to 5, and a
-≥2^32-cycle stall is a wedged relay rather than a measurement, so saturating the duration loses nothing real. The
-record that waited reads its time first and its stall starts at that time (an out-of-line writer's starts where its
+**5 words**: the timer packet's two, then word 0, the stall's end and its duration. A full record would grow it to 6,
+and a ≥2^32-cycle stall is a wedged relay rather than a measurement, so saturating the duration loses nothing real.
+The record that waited reads its time first and its stall starts at that time (an out-of-line writer's starts where its
 wait begins), and the next record's room check writes the stall ahead of that next record, so a stall never sits inside
 the zone it interrupted.
 

@@ -127,16 +127,17 @@ message FrameLayout {
   repeated BitField packet_range_end_fields = 12;   // one per RISC slot, in slot order: its range's end position
 }
 
-// How to read the packets in a packet range, which the RISCs write. A routed record's packet is its first word, its
-// 64-bit time as two words (low word first), then its payload; protocol_version fixes that.
+// How to read the packets in a packet range, which the RISCs write. Every packet's first word holds its type, length
+// and routed field, so a reader steps over a packet of any type, records included, by its length. A routed record's
+// packet is its first word, its 64-bit time as two words (low word first), then its payload; protocol_version fixes
+// that.
 message PacketFormat {
   BitField packet_type_field = 1;
   uint32 record_packet_type = 2;                    // the packet type of a record
-  BitField record_length_field = 3;                 // a record's words, its first word included
+  BitField packet_length_field = 3;                 // a packet's words, its first word included
   BitField routed_field = 4;                        // set in a record for the external process
   // A record's DevicePublish descriptor id: the id of a CallSite sent earlier.
   BitField device_publish_descriptor_id_field = 5;
-  map<uint32, uint32> non_record_packet_lengths_words = 6;  // every other packet type: its packet's length
 }
 
 // What a Metal process sends first: its chips, where the external process points the devices at its rings, how it

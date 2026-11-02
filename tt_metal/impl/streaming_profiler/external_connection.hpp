@@ -46,7 +46,7 @@ namespace tt::tt_metal::streaming_profiler::external {
 namespace proto = ::tt::streaming_profiler::proto;
 
 // The protocol version this build speaks: an external process refuses a Metal process with another.
-inline constexpr uint32_t kProtocolVersion = 3;
+inline constexpr uint32_t kProtocolVersion = 4;
 
 // This build's frame and packet formats, as a capture descriptor gives them.
 proto::FrameLayout this_build_frame_layout();

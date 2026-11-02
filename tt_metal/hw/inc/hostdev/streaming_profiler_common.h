@@ -164,34 +164,33 @@ constexpr std::uint32_t kEthRelayMaxDrained = 16;  // eth cores the eth relay dr
 // The type of a packet a RISC writes on its ring, and of a relay's frame, in word 0's top 3 bits. 0 is no packet: rings
 // and frames pad with zero words.
 enum class PacketType : std::uint32_t {
-    Record = 1,         // a DevicePublish record
-    TimerHigh = 2,      // the timer's high 32 bits, for the 32-bit records that follow it
-    RuntimeId = 3,      // the runtime id of the records that follow it
-    RuntimeIdWide = 4,  // the same, for a runtime id too wide for word 0, in word 1
-    Frame = 5,          // a relay's frame
+    Record = 1,     // a DevicePublish record
+    TimerHigh = 2,  // the timer's high 32 bits, for the 32-bit records that follow it
+    RuntimeId = 3,  // the runtime id of the records that follow it
+    Frame = 4,      // a relay's frame, which has its own word 0 (spsc_span_w0)
 };
 
-// Word 0 of a packet: bits 31-29 are its PacketType, and the rest
-//   of a record:         28-20 its packet words, word 0 included   19 send to the external process
-//                        18-16 unused, room for the id to grow   15-0 its DevicePublish descriptor id
-//   of any other packet: its value
+// Word 0 of every packet a RISC writes, so a reader can step over a packet of any type by its length:
+//   31-29 its PacketType   28-20 its packet words, word 0 included   19 send to the external process
+//   18-0  a record's DevicePublish descriptor id in 15-0, with 18-16 room for the id to grow; 0 in any other packet
+// A timer or runtime-id packet holds its value in word 1.
 struct ppfmt {
     static constexpr std::uint32_t TYPE_SHIFT = 29;
-    static constexpr std::uint32_t VALUE_MASK = (1u << TYPE_SHIFT) - 1;
     static constexpr std::uint32_t PACKET_WORDS_SHIFT = 20;
     static constexpr std::uint32_t PACKET_WORDS_MASK = 0x1FF;
     static constexpr std::uint32_t TO_EXTERNAL = 1u << 19;
     static constexpr std::uint32_t DEVICE_PUBLISH_DESCRIPTOR_ID_MASK = 0xFFFF;
+    static constexpr std::uint32_t STICKY_PACKET_WORDS = 2;  // a timer or runtime-id packet's
 
     static constexpr PacketType type(std::uint32_t w0) { return PacketType(w0 >> TYPE_SHIFT); }
-    static constexpr std::uint32_t w0(PacketType type, std::uint32_t value) {
-        return std::uint32_t(type) << TYPE_SHIFT | (value & VALUE_MASK);
+    static constexpr std::uint32_t w0(PacketType type, std::uint32_t packet_words) {
+        return std::uint32_t(type) << TYPE_SHIFT | packet_words << PACKET_WORDS_SHIFT;
     }
     static constexpr std::uint32_t record_w0(std::uint32_t packet_words) {
-        return w0(PacketType::Record, packet_words << PACKET_WORDS_SHIFT);
+        return w0(PacketType::Record, packet_words);
     }
-    static constexpr std::uint32_t packet_words(std::uint32_t record_w0) {
-        return (record_w0 >> PACKET_WORDS_SHIFT) & PACKET_WORDS_MASK;
+    static constexpr std::uint32_t packet_words(std::uint32_t w0) {
+        return (w0 >> PACKET_WORDS_SHIFT) & PACKET_WORDS_MASK;
     }
 
     // A stall's record, which the producer writes (internal/debug/device_publish_ring.h; device_publish_encoding.h
@@ -204,7 +203,8 @@ struct ppfmt {
     // The most words a record and the timer packet ahead of it can take: the ring, less a stall record and its timer
     // packet twice, one held in reserve and one kept free while the writer waits for room
     // (device_publish_ring.h).
-    static constexpr std::uint32_t MAX_RECORD_WORDS = PROFILER_L1_VECTOR_SIZE - 2 * (1 + STALL_PACKET_WORDS);
+    static constexpr std::uint32_t MAX_RECORD_WORDS =
+        PROFILER_L1_VECTOR_SIZE - 2 * (STICKY_PACKET_WORDS + STALL_PACKET_WORDS);
 };
 static_assert(ppfmt::MAX_RECORD_WORDS <= ppfmt::PACKET_WORDS_MASK, "word 0 holds the longest record's packet words");
 
@@ -252,7 +252,7 @@ constexpr bool spsc_span_wrap_image(std::uint32_t start, std::uint32_t extent, s
     return (start & (ring_cap - 1u)) + extent > ring_cap && ring_cap - extent <= SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS;
 }
 
-inline std::uint32_t spsc_span_w0() { return ppfmt::w0(PacketType::Frame, 0); }
+inline std::uint32_t spsc_span_w0() { return std::uint32_t(PacketType::Frame) << ppfmt::TYPE_SHIFT; }
 // A DRISC relay marks a frame whose lanes carry records for the external process in its word 0: SPSC_SPAN_TO_EXTERNAL,
 // and the pages [first, end) of the frame that hold those lanes' runs. Decoders read only the type.
 constexpr static std::uint32_t SPSC_SPAN_TO_EXTERNAL = 1u << 0;

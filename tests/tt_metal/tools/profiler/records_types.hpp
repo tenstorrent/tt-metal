@@ -275,9 +275,9 @@ struct Run {
     uint32_t words[40];
     SEMANTICS_EQ(Run)
 };
-// The longest payload a record holds, 2004 bytes.
+// The longest payload a record holds, 1992 bytes.
 struct Largest {
-    uint32_t words[501];
+    uint32_t words[498];
     SEMANTICS_EQ(Largest)
 };
 // Timestamps whose distances back from the record take each form's width, beside other fields.

@@ -331,14 +331,11 @@ proto::PacketFormat this_build_packet_format() {
     using kernel_profiler::ppfmt;
     set(*format.mutable_packet_type_field(), ppfmt::TYPE_SHIFT, 32 - ppfmt::TYPE_SHIFT);
     format.set_record_packet_type(uint32_t(PacketType::Record));
-    set(*format.mutable_record_length_field(), ppfmt::PACKET_WORDS_SHIFT, std::popcount(ppfmt::PACKET_WORDS_MASK));
+    set(*format.mutable_packet_length_field(), ppfmt::PACKET_WORDS_SHIFT, std::popcount(ppfmt::PACKET_WORDS_MASK));
     set(*format.mutable_routed_field(), std::countr_zero(ppfmt::TO_EXTERNAL), 1);
     set(*format.mutable_device_publish_descriptor_id_field(),
         0,
         std::popcount(ppfmt::DEVICE_PUBLISH_DESCRIPTOR_ID_MASK));
-    (*format.mutable_non_record_packet_lengths_words())[uint32_t(PacketType::RuntimeId)] = 1;
-    (*format.mutable_non_record_packet_lengths_words())[uint32_t(PacketType::TimerHigh)] = 1;
-    (*format.mutable_non_record_packet_lengths_words())[uint32_t(PacketType::RuntimeIdWide)] = 2;
     return format;
 }
 

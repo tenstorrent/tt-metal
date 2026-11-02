@@ -216,7 +216,7 @@ namespace {
             break;
         }
         if (ppfmt::type(words[k]) != PacketType::Record) {
-            (ppfmt::type(words[k]) == PacketType::TimerHigh ? timer_hi : runtime_id) = spsc_sticky_value(words + k);
+            (ppfmt::type(words[k]) == PacketType::TimerHigh ? timer_hi : runtime_id) = words[k + 1];
             pos = k + packet_words;
         }
         k += packet_words;
@@ -329,7 +329,7 @@ StreamDecoder::Produced StreamDecoder::decode(
             while (pos < run) {
                 const uint32_t* const src = words + pos;
                 // The producer publishes its tail only on packet boundaries, so a run holds whole packets. A record,
-                // the common packet, has its length in word 0, which spares it spsc_packet_words' switch.
+                // the common packet, skips spsc_packet_words' check of its type.
                 const bool is_record = ppfmt::type(src[0]) == PacketType::Record;
                 const uint32_t packet_words = is_record ? ppfmt::packet_words(src[0]) : spsc_packet_words(src[0]);
                 TT_FATAL(
@@ -417,9 +417,9 @@ StreamDecoder::Produced StreamDecoder::decode(
                         }
                     }
                 } else if (ppfmt::type(src[0]) == PacketType::TimerHigh) {
-                    spsc_lane_consts_th(consts, spsc_sticky_value(src));
+                    spsc_lane_consts_th(consts, src[1]);
                 } else {
-                    spsc_lane_consts_prog(consts, spsc_sticky_value(src));
+                    spsc_lane_consts_prog(consts, src[1]);
                 }
                 pos += consumed;
             }
