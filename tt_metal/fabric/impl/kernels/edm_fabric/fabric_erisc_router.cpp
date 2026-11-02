@@ -60,7 +60,7 @@ using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
 
 The fabric_erisc_router is a component that can be used to implement various fabric topologies - namely graphs of k-ary n-cubes.
 One of these EDMs can be instantiated on each ethernet link. It is built from 2 or more "channels", though the definition
-of channel here is a little loose since multiple sender channels can merge traffic into shared receiver channels. 
+of channel here is a little loose since multiple sender channels can merge traffic into shared receiver channels.
 This router implements packet based messages only - concepts like sockets are not supported.
 
 ## Router Structure
