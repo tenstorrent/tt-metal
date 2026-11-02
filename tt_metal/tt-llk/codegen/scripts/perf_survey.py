@@ -196,8 +196,14 @@ def run_survey(
     log: Callable[[str], None] = lambda _m: None,
 ) -> list[dict]:
     root.mkdir(parents=True, exist_ok=True)
-    done: list[dict] = []
-    for i, entry in enumerate(entries, 1):
+    # Every result already on disk is in the table from the start; the loop fills in the rest.
+    rows: dict[int, dict] = {
+        i: _row(e, _entry_dir(root, e), candidate_pct)
+        for i, e in enumerate(entries)
+        if (_entry_dir(root, e) / "diag.json").is_file()
+    }
+    _write_tables(root, _rank(list(rows.values())))
+    for i, entry in enumerate(entries):
         out = _entry_dir(root, entry)
         existing = out / "diag.json"
         status = (
@@ -206,11 +212,11 @@ def run_survey(
             else None
         )
         if status is None or (retry_failed and status in ("failed", "skipped")):
-            log(f"[survey {i}/{len(entries)}] {entry.module} {entry.op}")
+            log(f"[survey {i + 1}/{len(entries)}] {entry.module} {entry.op}")
             diagnose(entry, out)
-        done.append(_row(entry, out, candidate_pct))
-        _write_tables(root, _rank(done))
-    return _rank(done)
+            rows[i] = _row(entry, out, candidate_pct)
+            _write_tables(root, _rank(list(rows.values())))
+    return _rank(list(rows.values()))
 
 
 def _collect(llk: Path, module: str) -> list[str]:

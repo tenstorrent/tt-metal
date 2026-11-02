@@ -133,7 +133,7 @@ def test_the_table_is_rewritten_after_every_op(tmp_path):
         _fake_diagnose(RESULTS)[0](entry, out_dir)
 
     survey.run_survey(survey.plan(COLLECTED), tmp_path, run)
-    assert seen == [1, 2, 3]
+    assert seen == [0, 1, 2, 3], "written at the start (empty here) and after every op"
 
 
 def test_collected_ids_are_parsed_from_the_runner_log():
@@ -191,3 +191,22 @@ def test_ids_naming_no_op_fall_back_to_one_entry_per_test():
     plan = survey.plan({m: ids})
     assert [e.op for e in plan] == ["perf_sfpu_where_quasar"]
     assert "Float16_b" in plan[0].test_id
+
+
+def test_results_already_on_disk_are_in_the_table_from_the_start(tmp_path):
+    run, _ = _fake_diagnose(RESULTS)
+    plan = survey.plan(COLLECTED)
+    survey.run_survey(
+        [e for e in plan if e.op == "perf_pack_quasar"], tmp_path, run
+    )  # an earlier run
+    seen = []
+
+    def watch(entry, out_dir):
+        seen.append([r["op"] for r in csv.DictReader(open(tmp_path / "survey.csv"))])
+        run(entry, out_dir)
+
+    survey.run_survey(plan, tmp_path, watch)
+    # seen[1] is the table after the first new op was written: the old result must still be there.
+    assert (
+        "perf_pack_quasar" in seen[1]
+    ), "a finished op stays listed before the loop reaches it"
