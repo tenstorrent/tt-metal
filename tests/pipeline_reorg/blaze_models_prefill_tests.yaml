@@ -1273,6 +1273,30 @@
   team: models
   sp_config: sc1
 
+# Gemma4's sliding layers run ttnn.experimental.gemma4.sliding_ring_sdpa, a Gemma4-owned fork of ring joint
+# SDPA's sliding path: the shared Gemma4 chunked perf check's sliding cases (256k at chunk 2k/4k/8k, same configs
+# and bands), timed on the fork. The global cases stay on the shared op in the ring joint SDPA perf leg.
+- name: "(Gemma4-31B-it) sliding ring SDPA perf 256k@2k, 256k@4k, 256k@8k"
+  cmd: |
+    export MESH_DEVICE=TG
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/gemma4/test_sliding_ring_sdpa.py::test_gemma4_chunked_perf_check -svv
+    '
+  test_type: gemma4_sliding_sdpa_perf
+  test_tags: [gemma4_d_p, sdpa, swa]
+  test_group: module
+  budget_type: demo
+  skus:
+    bh_sc1_high_power:
+      timeout: 8
+      tier: 2
+      release_ready: false
+  owner_id: UT1JL93D5 # Kyle Mabee
+  team: models
+  sp_config: sc1
+
 # Gemma4 layer perf at 256k context: first, second, middle and last global chunk and the first two sliding
 # chunks, for 2k, 4k and 8k chunks.
 - name: "(Gemma4-31B-it) D_P layer perf 256k@2k, 256k@4k, 256k@8k"
@@ -2175,7 +2199,8 @@
       export OMP_NUM_THREADS=$(nproc)
       rc=0
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv || rc=1
-      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check -svv || rc=1
+      # Gemma4's sliding cases run in the Gemma4 sliding ring SDPA perf leg: its sliding layers use the Gemma4 fork.
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_gemma4_chunked_perf_check -k gemma4_global -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_accuracy -k "kimi_k3" -svv || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_determinism -k "kimi_k3" -svv || rc=1
@@ -2188,7 +2213,8 @@
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      timeout: 45
+      # The test step takes ~21 min; 8 of the old 45 fund the Gemma4 sliding ring SDPA perf leg.
+      timeout: 37
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
