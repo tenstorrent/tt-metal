@@ -468,6 +468,12 @@ class TPGatedDeltaNet:
         # QWEN36_1C_GDN_GB (with TRIM, one user): the recurrence op computes decay and beta from the raw a|b row
         # itself (fused_gating), so the a|b split, sigmoid, softplus-add, multiply, beta typecast, exp and the two
         # scalar reshapes go. The constants row is the same bf16 -exp(A_log) and dt_bias today's chain uses.
+        # QWEN36_1C_GDN_FCONV (with HMI, so CONV_HM/TRIM/HMO too): the fused head-major conv op (ops/conv_hm).
+        self._gdn_fconv = self._gdn_hmi and os.environ.get("QWEN36_1C_GDN_FCONV") == "1"
+        if self._gdn_fconv:
+            from models.demos.blackhole.bonsai2.tp1.ops.conv_hm.op import alloc_outputs
+
+            self._fconv_out = alloc_outputs(self.mesh, self.Nk, self.Nv)  # persistent, zeroed once
         self._gdn_gb = self._gdn_trim and self.B == 1 and os.environ.get("QWEN36_1C_GDN_GB") == "1"
         self._gb_consts = (
             ttnn.typecast(ttnn.concat([self.tw["neg_exp_A"], self.tw["dt_bias"]], dim=-1), ttnn.float32)
@@ -1651,38 +1657,48 @@ class TPGatedDeltaNet:
             qkv_p = ttnn.pad(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
             ttnn.deallocate(qkv)
             qkv = qkv_p
-        if self._conv_hm:
-            qkv_hm = ttnn.reshape(qkv, self._conv_state_shape)
-            if qkv_hm is not qkv:
-                ttnn.deallocate(qkv)
-            qkv = qkv_hm
-        taps = self._conv_taps_hm if self._conv_hm else tw["conv_taps"]
-        for j in range(self.K - 1):
-            ttnn.copy(st[j + 1], st[j])
-        ttnn.copy(qkv, st[self.K - 1])
-        self._conv_win_stale = True  # decode shifted the taps; the window mirror is now behind
-        ttnn.deallocate(qkv)
-        conv = ttnn.multiply(st[0], taps[0], memory_config=_L1)
-        for j in range(1, self.K):
-            conv = ttnn.mac(st[j], taps[j], conv)
-        conv = ttnn.silu(conv, memory_config=_L1)
+        if self._gdn_fconv:
+            # QWEN36_1C_GDN_FCONV: one op takes the qkv ROW, shifts the head-major state in place and writes fp32
+            # q/k/v as [heads, 1, D] into persistent buffers (ops/conv_hm) -- the reshape, copies, mul/mac/silu,
+            # typecast, permute and slices all go.
+            from models.demos.blackhole.bonsai2.tp1.ops.conv_hm.op import conv_hm
 
-        kd = self.key_dim_tp
-        if self._gdn_hmi:  # one fp32 typecast and one permute for all 80 heads, then [heads, 1, D] slices
-            conv_h = ttnn.permute(ttnn.typecast(conv, ttnn.float32), (1, 0, 2), memory_config=_L1)  # [80, 1, 128]
-            q = ttnn.slice(conv_h, (0, 0, 0), (Nk, 1, Dk), memory_config=_L1)
-            k = ttnn.slice(conv_h, (Nk, 0, 0), (2 * Nk, 1, Dk), memory_config=_L1)
-            v = ttnn.slice(conv_h, (2 * Nk, 0, 0), (2 * Nk + Nv, 1, Dv), memory_config=_L1)
-            ttnn.deallocate(conv_h)
-        elif self._conv_hm:  # rows are heads: q = [0, Nk), k = [Nk, 2Nk), v = [2Nk, 2Nk + Nv)
-            q = ttnn.slice(conv, (0, 0, 0), (1, Nk, Dk), memory_config=_L1)
-            k = ttnn.slice(conv, (0, Nk, 0), (1, 2 * Nk, Dk), memory_config=_L1)
-            v = ttnn.slice(conv, (0, 2 * Nk, 0), (1, 2 * Nk + Nv, Dv), memory_config=_L1)
+            q, k, v = conv_hm(qkv, st, self._conv_taps_hm, *self._fconv_out)
+            self._conv_win_stale = True
+            ttnn.deallocate(qkv)
         else:
-            q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
-            k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
-            v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
-        ttnn.deallocate(conv)
+            if self._conv_hm:
+                qkv_hm = ttnn.reshape(qkv, self._conv_state_shape)
+                if qkv_hm is not qkv:
+                    ttnn.deallocate(qkv)
+                qkv = qkv_hm
+            taps = self._conv_taps_hm if self._conv_hm else tw["conv_taps"]
+            for j in range(self.K - 1):
+                ttnn.copy(st[j + 1], st[j])
+            ttnn.copy(qkv, st[self.K - 1])
+            self._conv_win_stale = True  # decode shifted the taps; the window mirror is now behind
+            ttnn.deallocate(qkv)
+            conv = ttnn.multiply(st[0], taps[0], memory_config=_L1)
+            for j in range(1, self.K):
+                conv = ttnn.mac(st[j], taps[j], conv)
+            conv = ttnn.silu(conv, memory_config=_L1)
+
+            kd = self.key_dim_tp
+            if self._gdn_hmi:  # one fp32 typecast and one permute for all 80 heads, then [heads, 1, D] slices
+                conv_h = ttnn.permute(ttnn.typecast(conv, ttnn.float32), (1, 0, 2), memory_config=_L1)  # [80, 1, 128]
+                q = ttnn.slice(conv_h, (0, 0, 0), (Nk, 1, Dk), memory_config=_L1)
+                k = ttnn.slice(conv_h, (Nk, 0, 0), (2 * Nk, 1, Dk), memory_config=_L1)
+                v = ttnn.slice(conv_h, (2 * Nk, 0, 0), (2 * Nk + Nv, 1, Dv), memory_config=_L1)
+                ttnn.deallocate(conv_h)
+            elif self._conv_hm:  # rows are heads: q = [0, Nk), k = [Nk, 2Nk), v = [2Nk, 2Nk + Nv)
+                q = ttnn.slice(conv, (0, 0, 0), (1, Nk, Dk), memory_config=_L1)
+                k = ttnn.slice(conv, (0, Nk, 0), (1, 2 * Nk, Dk), memory_config=_L1)
+                v = ttnn.slice(conv, (0, 2 * Nk, 0), (1, 2 * Nk + Nv, Dv), memory_config=_L1)
+            else:
+                q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
+                k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
+                v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
+            ttnn.deallocate(conv)
 
         # GQA expand Q/K Nk->Nv; recurrence L2-norms + scales internally.
         # QWEN36_TP1_GDN: the fused recurrence's READER replicates query head hv/rf onto value head hv,
