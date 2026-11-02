@@ -49,8 +49,29 @@ class TernaryLinear:
         cache = os.path.join(cache_dir, name) if cache_dir else None
         self.w, self.s = a3.weights_for_device(shared.device, build, cache=cache, kn=(k, n_pad))
 
+    def norm(self, h, gamma, eps, emit=False):
+        """Decode RMSNorm fused into the prep (a3.rmsprep); the next forward on h (or the returned rows,
+        or any view of either) skips its prep. emit: also return the normalized rows, for consumers
+        besides this projection (the GDN a|b matmul)."""
+        sh = self.sh
+        assert not h.is_sharded(), "rmsprep reads an interleaved residual"
+        y = (ttnn.allocate_tensor_on_device(h.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, sh.device, ttnn.L1_MEMORY_CONFIG)
+             if emit else None)
+        x8 = a3.masked_input_buffer(sh.device, sh.workers, self.k)
+        a3.rmsprep(h, gamma, sh.m[self.k], x8, sh.workers, eps, y_out=y)
+        self._pending = ((y if emit else h).buffer_address(), x8)
+        return y
+
     def forward(self, x, out_mem=None):
         sh = self.sh
+        pending, self._pending = getattr(self, "_pending", None), None
+        if pending is not None and pending[0] == x.buffer_address():  # normed by norm(): x8 is ready
+            out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(x.shape)[:-1] + [self.n]), ttnn.bfloat16,
+                                                 ttnn.TILE_LAYOUT, sh.device, out_mem or self.out_mem)
+            a3.ternary_linear(pending[1], self.w, self.s, out, sh.workers, cache=False, n_real=self.n)
+            ttnn.deallocate(pending[1])
+            return out
+        assert pending is None, "norm() was called but forward got another tensor (a copy of the residual?)"
         x_in = x
         if x.dtype != ttnn.bfloat16:  # prep reads bf16 rows; the GDN out-proj input is fp32
             x = ttnn.typecast(x, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -69,7 +90,9 @@ class TernaryLinear:
 
 # Sites that passed their e2e gate; each joins in its own commit.
 VALIDATED = {"mlp", "gdn_out", "gdn_in", "attn_qkv", "attn_o", "lm_head"}
-WIRED = {"mlp", "gdn_out", "gdn_in", "attn_o", "attn_qkv", "lm_head", "ffnorm"}  # ffnorm: rmsprep for the MLP
+# ffnorm / attnnorm / lmnorm: the decode RMSNorm in front of the MLP / attention or GDN in-projection / LM head
+# fused into the prep (rmsprep)
+WIRED = {"mlp", "gdn_out", "gdn_in", "attn_o", "attn_qkv", "lm_head", "ffnorm", "attnnorm", "lmnorm"}
 
 
 def sites():

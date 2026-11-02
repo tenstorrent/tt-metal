@@ -45,6 +45,12 @@
 
 constexpr uint32_t cb_x = 0, cb_m = 1, cb_o = 2, cb_stage = 3, cb_g = 7, cb_p = 8, cb_r = 9, cb_y = 10, cb_scr = 11;
 constexpr uint32_t cb_y32 = 13;  // y as one bf16 32x32 tile (cb_x holds x the same way, cb_g holds g)
+constexpr uint32_t cb_yo = 14;   // emit: the normalized y = y' * rstd as one bf16 32x32 tile
+constexpr uint32_t cb_ystage = 15;  // emit: a zeroed 2 KB tile staging one row-0 output page
+// rp_emit: also write the normalized row (for consumers that need it besides the ternary site, e.g. the
+// GDN a|b matmul) into y_out [.., 32, K] 32x32 tiles, row 0 live, zeros elsewhere; unit r writes the
+// block's K-tiles 4r..4r+3.
+constexpr bool emit = get_named_compile_time_arg_val("rp_emit") == 1;
 // cb_sync (4 KB, same address on every core of the program): partial[b] at +16 b, rstd at +1024,
 // NoC staging words at +2048 / +2064 (16 B strides: NoC writes keep the 16 B phase)
 constexpr uint32_t cb_sync = 12;
@@ -65,6 +71,12 @@ inline void xg_and_sq() {  // slot 2 = slot 0 ^ 2 (for the partial), slot 0 = sl
         sfpi::vFloat v = sfpi::dst_reg[i];
         sfpi::dst_reg[2 * U + i] = v * v;
         sfpi::dst_reg[i] = v * sfpi::dst_reg[U + i];
+    }
+}
+inline void scale_slot5(sfpi::vFloat r) {  // slot 5 (y') *= rstd, whole tile
+#pragma GCC unroll 32
+    for (uint32_t i = 0; i < U; ++i) {
+        sfpi::dst_reg[5 * U + i] = sfpi::dst_reg[5 * U + i] * r;
     }
 }
 inline void scale_rows() {  // row 0 of slots 0-3 *= rstd (row 0 of slot 4)
@@ -193,7 +205,9 @@ void kernel_main() {
         noc_async_read_barrier();
     }
     cb_push_back(cb_y, KT);
-    cb_pop_front(cb_y32, 1);
+    if constexpr (!emit) {
+        cb_pop_front(cb_y32, 1);  // when emitting, TRISC copies it again and pops it
+    }
     constexpr uint32_t dbg = get_named_compile_time_arg_val("rp_debug");  // 1: no rstd exchange (rstd = 1/sqrt(partial*nb/K))
     if constexpr (dbg & 1) {
         sl[1024 / 4] = as_u(rsqrt_newton(part * inv_k * nblocks + eps));
@@ -258,6 +272,28 @@ void kernel_main() {
             st[64 + r * 8 + i] = 0;
         }
     }
+    if constexpr (emit) {
+        // y rows of this unit's K-tiles -> y_out pages as full 32x32 tiles: row 0 = y, zeros elsewhere
+        const InterleavedAddrGen<false> yg{.bank_base_address = get_arg_val<uint32_t>(11 + nw + (is_master ? ncores : 0)),
+                                           .page_size = 2048};
+        cb_reserve_back(cb_ystage, 1);
+        const uint32_t ys = get_write_ptr(cb_ystage);
+        volatile tt_l1_ptr uint32_t* yz = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ys);
+        for (uint32_t i = 0; i < 512; ++i) {
+            yz[i] = 0;
+        }
+        cb_wait_front(cb_yo, 1);
+        const uint32_t yt = get_read_ptr(cb_yo);
+        for (uint32_t t = 4 * r; t < 4 * r + 4; ++t) {
+            const uint32_t f0 = yt + (t / 16) * 1024 + (t % 16) * 32;  // row t of the 32x32 y tile
+            noc_async_read(get_noc_addr(f0), ys, 32);
+            noc_async_read(get_noc_addr(f0 + 512), ys + 512, 32);
+            noc_async_read_barrier();
+            noc_async_write(ys, get_noc_addr(b * KT + t, yg), 2048);
+            noc_async_write_barrier();
+        }
+        cb_pop_front(cb_yo, 1);
+    }
 #elif defined(COMPILE_FOR_TRISC)
     deepseek_compute_kernel_init();
     // 1. one acquire: x -> slot 0, g -> slot 1; slot 2 = x^2 column-reduced (the partial, -> cb_p),
@@ -313,6 +349,14 @@ void kernel_main() {
     copy_init(cb_r);
     copy_tile(cb_r, 0, 4);
     MATH((sfpu_section([] { scale_rows(); })));
+    if constexpr (emit) {
+        const uint32_t r_addr = get_arg_val<uint32_t>(0);  // rb shard: rstd as a scalar for a whole-tile scale
+        cb_wait_front(cb_y32, 1);
+        reconfig_data_format_srca(cb_r, cb_y32);
+        copy_init(cb_y32);
+        copy_tile(cb_y32, 0, 5);
+        MATH((sfpu_section([r_addr] { scale_slot5(sfpi::vFloat(*reinterpret_cast<volatile float*>(r_addr))); })));
+    }
     tile_regs_commit();
     tile_regs_wait();
     cb_reserve_back(cb_o, 4);
@@ -320,6 +364,14 @@ void kernel_main() {
     pack_block_contiguous_init(cb_o);
     pack_block_contiguous(0, cb_o, 4);
     cb_push_back(cb_o, 4);
+    if constexpr (emit) {
+        cb_reserve_back(cb_yo, 1);
+        pack_reconfig_data_format(cb_yo);
+        pack_block_contiguous_init(cb_yo);
+        pack_block_contiguous(5, cb_yo, 1);
+        cb_push_back(cb_yo, 1);
+        cb_pop_front(cb_y32, 1);
+    }
     tile_regs_release();
     cb_pop_front(cb_y, KT);
     cb_pop_front(cb_r, 1);
