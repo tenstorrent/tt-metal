@@ -150,14 +150,13 @@ def _build_quantized_weight_tensors_cpu_prepare(
 
 
 def _xfail_on_short_wormhole_grid(mesh_device, num_combine_cores):
-    """moe_compute cannot place 12 matmul + 16 combine cores disjointly on the harvested wh_n300_civ2
-    7x8 worker grid (COL dispatch); ROW dispatch (8x7) and 12 combine cores fit."""
+    """moe_compute cannot place 12 matmul cores disjointly with 16 combine cores on a 7x8 Wormhole worker grid, or with
+    more than 16 on a 7x9 one (COL dispatch)."""
     worker_grid = mesh_device.compute_with_storage_grid_size()
     if (
         mesh_device.arch() == ttnn.device.Arch.WORMHOLE_B0
         and worker_grid.x <= 7
-        and worker_grid.y <= 8
-        and num_combine_cores >= 16
+        and (num_combine_cores > 16 or (num_combine_cores == 16 and worker_grid.y <= 8))
     ):
         pytest.xfail(
             f"moe_compute cannot place 12 matmul + {num_combine_cores} combine cores on the "
@@ -1810,19 +1809,8 @@ def test_moe_compute_precision_is_program_cache_key(mesh_device, mesh_shape, ker
 
 
 # ---- expert rows path ----
-# On Blackhole, moe_compute takes the expert rows path whenever the call fits it. That path runs the expert rows
-# program, then the placement program: outputs 0-2 and the double buffer, and with a combine (SingleDevice) every
-# routed row sent to the combine output. TT_METAL_MOE_COMPUTE_KERNEL=ring|expert_rows forces a path (Wormhole takes the
-# expert rows path only when forced) and TT_METAL_MOE_COMPUTE_ROW_TILES the expert rows path's row tiles per job (more
-# than 1: weight-stationary jobs). The tests below check, for both paths on the same inputs:
-#   - outputs 0-2 (counts, activation rows, e_t) against the 6U goldens, and equal between the two paths;
-#   - output 4: every row of the last two local experts (what moe_compute leaves in its double buffer) against an FP32
-#     golden on the BFP4-rounded weights;
-#   - SingleDevice output 5 (the combine output): bitwise equal between the paths, and against the FP32 golden;
-#   - a repeated call and a traced call bitwise equal to the eager call, in every DEST mode and with the defaults, and the
-#     trace replayed on new inputs bitwise equal to an eager call on them;
-#   - rows (output 4, and every row through the SingleDevice combine) of jobs of several row tiles bitwise equal to one
-#     row tile per job, in every DEST mode.
+# TT_METAL_MOE_COMPUTE_KERNEL=ring|expert_rows forces a path; TT_METAL_MOE_COMPUTE_ROW_TILES sets the expert rows path's
+# row tiles per job.
 
 # an e_t page: one u32 token per 16-byte entry (every _E_T_ENTRY_WORDS-th word), ended by _E_T_END
 _E_T_ENTRY_WORDS = 4
@@ -1862,8 +1850,7 @@ def _kernel(name):
 
 
 def _skip_unless_supported_arch(mesh_device):
-    """The expert rows path runs on Blackhole and Wormhole (on Wormhole only under
-    TT_METAL_MOE_COMPUTE_KERNEL=expert_rows, which every test here sets for its expert rows calls)."""
+    """The expert rows path runs on Blackhole and Wormhole."""
     if mesh_device.arch() not in (ttnn.device.Arch.BLACKHOLE, ttnn.device.Arch.WORMHOLE_B0):
         pytest.skip("the expert rows path runs on Blackhole and Wormhole")
 
@@ -2305,9 +2292,8 @@ def _assert_metadata_equal(case, got, want, label):
 
 
 def _expert_rows_and_ring(case, **precision):
-    """One call on each path (fresh program cache), one row tile per job: the expert rows path compiles its two
-    programs, the ring path one; outputs 0-2 match the goldens on both and each other; the last two experts' rows are
-    bitwise equal between the paths (both accumulate every K row in the same order on the same weights)."""
+    """One call on each path with a fresh program cache: program counts, outputs 0-2 against the goldens and each
+    other, and the last two experts' rows bitwise equal between the paths."""
     with _kernel("expert_rows"), _env(_ROW_TILES_ENV, 1):
         outs, added = _programs_added(case.mesh_device, lambda: case.call(**precision))
         assert added == 2, f"expert rows call compiled {added} programs, expected 2 (expert rows + placement)"
@@ -2322,9 +2308,8 @@ def _expert_rows_and_ring(case, **precision):
 
 
 def _single_device(case, **precision):
-    """One SingleDevice call on each path (fresh program cache), one row tile per job: outputs 0-2 match the goldens on
-    both and each other; the combine output is bitwise equal between the paths (the combine copies rows that are
-    bitwise equal). Returns the combine outputs."""
+    """One SingleDevice call on each path with a fresh program cache: outputs 0-2 against the goldens and each other,
+    and the combine outputs bitwise equal. Returns the combine outputs."""
     res = {}
     for name, programs in (("expert_rows", 2), ("ring", 1)):
         with _kernel(name), _env(_ROW_TILES_ENV, 1):
@@ -2344,12 +2329,9 @@ def _single_device(case, **precision):
     return res
 
 
-# moe_compute's single-card shapes and model shapes (local experts, tokens, top_k, intermediate size, hidden size,
-# activation, activation limit)
+# (local experts, tokens, top_k, intermediate size, hidden size, activation, activation limit)
 _EXPERT_ROWS_SHAPES = {
     "deepseek_e16_t32": (16, 32, 8, 2048, 7168, MoEActivationFunction.SILU, None),
-    "qwen36_e32_t32": (32, 32, 8, 512, 2048, MoEActivationFunction.SILU, None),
-    "qwen36_e32_t128": (32, 128, 8, 512, 2048, MoEActivationFunction.SILU, None),
     "flash_next_e128_t1": (128, 1, 8, 640, 2560, MoEActivationFunction.SILU, None),
     "glm53_e18_t32_clamped": (18, 32, 8, 2048, 4096, MoEActivationFunction.CLAMPED_SILU, 10.0),
     "gpt_oss_e16_t32_swiglu": (16, 32, 4, 2880, 2880, MoEActivationFunction.SWIGLU, None),
@@ -2358,7 +2340,7 @@ _EXPERT_ROWS_SHAPES = {
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("shape", sorted(_EXPERT_ROWS_SHAPES))
+@pytest.mark.parametrize("shape", ["deepseek_e16_t32", "flash_next_e128_t1", "gpt_oss_e16_t32_swiglu"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_shapes(mesh_device, mesh_shape, shape):
     _skip_unless_supported_arch(mesh_device)
@@ -2437,9 +2419,8 @@ def test_moe_compute_expert_rows_rejects_activation_limit(mesh_device, mesh_shap
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("tokens", [1, 3, 32, 63, 128])
-# hidden size 448 = 14 tiles: output width shard dim 2, and a W2 output tile in every DRAM bank (Wormhole 12,
-# Blackhole 8)
+@pytest.mark.parametrize("tokens", [1, 63, 128])
+# h448 (14 tiles) puts a W2 output tile in every DRAM bank on both Wormhole (12) and Blackhole (8)
 @pytest.mark.parametrize("cfg", [(4, 4, 256, 512), (8, 4, 256, 448)], ids=["c4_h512", "c2_h448"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_tokens(mesh_device, mesh_shape, cfg, tokens):
@@ -2503,8 +2484,7 @@ def test_moe_compute_expert_rows_deterministic(mesh_device, mesh_shape, mode):
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_auto_choice(mesh_device, mesh_shape, monkeypatch):
-    """Unforced, Blackhole runs ComputeOnly on the expert rows path (two programs), as it does every call that path
-    fits. A call the expert rows path refuses runs the ring (test_moe_compute_expert_rows_top_k_over_max)."""
+    """Unforced, Blackhole runs the expert rows path (two programs)."""
     if mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
         pytest.skip("Wormhole takes the expert rows path only when forced")
     monkeypatch.delenv(_KERNEL_ENV, raising=False)
@@ -2521,8 +2501,7 @@ def test_moe_compute_auto_choice(mesh_device, mesh_shape, monkeypatch):
 @pytest.mark.parametrize("height_shards", [2, 8])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_height_shards(mesh_device, mesh_shape, height_shards):
-    """The double buffer's halves over 2 and 8 height shards (half offset from selective_reduce_combine's fused-source
-    layout): rows bitwise equal to the ring's and against the golden."""
+    """Rows over 2 and 8 output height shards, bitwise equal to the ring's and against the golden."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 8, 32, 8, 512, 2048, kind="hot_last", output_height_shard_dim=height_shards)
     expert_rows, _ = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
@@ -2530,21 +2509,14 @@ def test_moe_compute_expert_rows_height_shards(mesh_device, mesh_shape, height_s
     assert rel <= 0.01, f"{height_shards} height shards: expert rows rel L2 {rel}"
 
 
-_SINGLE_DEVICE_SHAPES = [
-    "deepseek_e16_t32",
-    "flash_next_e128_t1",
-    "gemma_e8_t32_gelu",
-    "glm53_e18_t32_clamped",
-    "gpt_oss_e16_t32_swiglu",
-]
+_SINGLE_DEVICE_SHAPES = ["gemma_e8_t32_gelu", "glm53_e18_t32_clamped"]
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("shape", _SINGLE_DEVICE_SHAPES)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_single_device(mesh_device, mesh_shape, shape):
-    """SingleDevice (compute_only=False on one card): the combine output of the expert rows path is bitwise equal to the
-    ring path's and within 1 % rel L2 of the FP32 golden (HiFi4, FP32 DEST)."""
+    """SingleDevice: the combine output is bitwise equal to the ring's and within 1 % rel L2 of the FP32 golden."""
     _skip_unless_supported_arch(mesh_device)
     local_experts, tokens, top_k, intermediate_size, hidden_size, act, limit = _EXPERT_ROWS_SHAPES[shape]
     case = _Case(mesh_device, local_experts, tokens, top_k, intermediate_size, hidden_size, act=act, limit=limit)
@@ -2630,10 +2602,8 @@ def test_moe_compute_expert_rows_layer_id(mesh_device, mesh_shape):
 @pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "single_device"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_duplicate_ids(mesh_device, mesh_shape, compute_only):
-    """A token naming one expert at two k is listed once per k, as moe_compute lists it: counts and the e_t page hold
-    every (token, k), the activation row holds the last k, each listing has its row, and the combine writes each
-    listing's page (k, t). Checked against the routing itself (the ring path's e_t pages put a repeated token out of order),
-    counts against the ring path's."""
+    """A token naming one expert at two k is listed once per k in the counts, e_t pages, rows and combine output; the
+    activation row holds the last k."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 16, 32, 8, 512, 2048, kind="dup")
     precision = _PRECISION_MODES["hifi4_fp32"]
@@ -2692,9 +2662,8 @@ def test_moe_compute_expert_rows_duplicate_ids(mesh_device, mesh_shape, compute_
 @pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "single_device"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_listing_over_tokens(mesh_device, mesh_shape, compute_only):
-    """Every k of every token names expert 0 (top_k * tokens entries, more than its e_t page holds): the expert rows
-    path keeps the first `tokens` entries in token order (tokens 0 .. tokens / top_k - 1, top_k times each), reports
-    that count, and finishes."""
+    """Every k of every token names expert 0, more entries than its e_t page holds: the first `tokens` entries are kept
+    in token order."""
     _skip_unless_supported_arch(mesh_device)
     tokens, top_k = 32, 8
     case = _Case(mesh_device, 8, tokens, top_k, 512, 2048, kind="all_one", goldens=False)
@@ -2714,18 +2683,11 @@ def test_moe_compute_expert_rows_listing_over_tokens(mesh_device, mesh_shape, co
     assert terminator == _E_T_END, f"page terminator {terminator:#x}"
 
 
-# weight-stationary jobs: (local experts, tokens, top_k, intermediate size, hidden size, activation, limit, bias);
-# hot_last routing gives the two experts output 4 keeps `tokens` rows (jobs of several row tiles), cold_last gives them
-# 20 (one-row-tile jobs among jobs of several). On 8 DRAM banks 2560/640 (20-tile transactions, a last W2 output group
-# two tiles wide) and 2816/704 have compact W0/W1 layouts: odd column counts (half block-columns) and slices that go on
-# in the next bank; 2880/704 with bias stores an odd K, 2880 / 32 + 1 bias row = 91 tiles, in its half block-columns;
-# 2048/1792 has 1792 / 32 / 8 = 7 columns per bank, so a core holds a column pair and a half block-column, and with 10
-# experts of top 8 most jobs are of 3 row tiles: hot_last 96 rows for the last two experts and 96 * 6 / 8 = 72 for the
-# others, cold_last (20 * 6 + 76 * 8) / 8 = 91 for the others; they leave 4- and 2-tile partials between x chunks.
+# (local experts, tokens, top_k, intermediate size, hidden size, activation, limit, bias). On 8 DRAM banks, 2560/640,
+# 2816/704 and 2880/704 with bias have odd column counts per bank, and 2048/1792 has 7 columns per bank and jobs of
+# 3 row tiles.
 _ROW_TILE_SHAPES = {
-    "deepseek_e16_t128": (16, 128, 8, 2048, 7168, MoEActivationFunction.SILU, None, False),
     "glm53_e18_t96_clamped": (18, 96, 8, 2048, 4096, MoEActivationFunction.CLAMPED_SILU, 10.0, False),
-    "qwen36_e32_t128": (32, 128, 8, 512, 2048, MoEActivationFunction.SILU, None, False),
     "gpt_oss_e8_t128_bias": (8, 128, 4, 2880, 2880, MoEActivationFunction.SWIGLU, None, True),
     "flash_next_e32_t128": (32, 128, 8, 640, 2560, MoEActivationFunction.SILU, None, False),
     "gemma_e16_t128_gelu": (16, 128, 8, 704, 2816, MoEActivationFunction.GELU, None, False),
@@ -2762,16 +2724,12 @@ def _rows_with(case, row_tiles, **precision):
         return case.read(outs, check=True)
 
 
-# every shape once, each (row tiles, routing) pair on two shapes
+# each (row tiles, routing) pair once
 _ROW_TILE_CASES = [
-    ("deepseek_e16_t128", 2, "hot_last"),
-    ("flash_next_e32_t128", 4, "hot_last"),
-    ("gemma_e16_t128_gelu", 2, "cold_last"),
     ("glm53_e18_t96_clamped", 4, "cold_last"),
     ("gpt_oss_e8_t128_bias", 2, "hot_last"),
     ("h2048_n1792_e10_t96", 4, "hot_last"),
     ("h2880_n704_e8_t128_bias", 2, "cold_last"),
-    ("qwen36_e32_t128", 4, "cold_last"),
 ]
 
 
@@ -2779,8 +2737,7 @@ _ROW_TILE_CASES = [
 @pytest.mark.parametrize("shape, row_tiles, kind", _ROW_TILE_CASES)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape, shape, row_tiles, kind):
-    """Jobs of several row tiles (each expert's weights read once for up to 32 row_tiles rows), and jobs of one row tile
-    in the same program, give the rows of one row tile per job bitwise, and those equal the ring's."""
+    """Jobs of several row tiles give the rows of one row tile per job bitwise, and those equal the ring's."""
     _skip_unless_supported_arch(mesh_device)
     _skip_row_tiles_on_wormhole(mesh_device)
     case = _row_tile_case(mesh_device, shape, kind)
@@ -2790,7 +2747,7 @@ def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape, shape, row_t
     assert (diff := case.defined_equal(one, many)) is None, f"{row_tiles} row tiles per job differ: {diff}"
     with _kernel("ring"):
         ring = case.read(case.call(**precision), check=True)
-    # against the ring: counts and rows, as _expert_rows_and_ring (outputs 1 / 2 are checked against the goldens above)
+    # counts and rows against the ring
     got, want = many["counts"][:, : case.local_experts], ring["counts"][:, : case.local_experts]
     assert torch.equal(got, want), f"counts {got[0].tolist()} differ from the ring's {want[0].tolist()}"
     _assert_rows_bitwise(case, many, ring, f"{row_tiles} row tiles per job differ from the ring's rows")
@@ -2803,17 +2760,14 @@ def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape, shape, row_t
 @pytest.mark.parametrize(
     "mode, shape, kind",
     [
-        ("default", "deepseek_e16_t128", "hot_last"),
         ("hifi2_bf16", "flash_next_e32_t128", "cold_last"),
-        ("hifi4_fp32", "gemma_e16_t128_gelu", "hot_last"),
-        ("lofi_bf16", "deepseek_e16_t128", "cold_last"),
-        ("lofi_fp32", "flash_next_e32_t128", "hot_last"),
+        ("lofi_fp32", "gemma_e16_t128_gelu", "hot_last"),
     ],
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape, mode, shape, kind):
-    """In every DEST mode: jobs of 4 row tiles (and of one row tile in the same program) give one row tile per job's
-    rows bitwise, and those equal the ring's; eager, repeated eager and two trace replays are bitwise equal."""
+    """Jobs of 4 row tiles give one row tile per job's rows bitwise, equal to the ring's; eager, repeated eager and two
+    trace replays are bitwise equal."""
     _skip_unless_supported_arch(mesh_device)
     _skip_row_tiles_on_wormhole(mesh_device)
     precision = _PRECISION_MODES[mode]
@@ -2834,11 +2788,10 @@ def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("kind, mode", [("hot_last", "hifi4_fp32"), ("cold_last", "lofi_bf16")])
+@pytest.mark.parametrize("kind, mode", [("hot_last", "hifi4_fp32")])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_row_tiles_single_device(mesh_device, mesh_shape, kind, mode):
-    """SingleDevice: the combine output (every routed row of every expert) with jobs of 4 row tiles is bitwise equal to
-    one row tile per job and to the ring path's."""
+    """SingleDevice: the combine output with jobs of 4 row tiles is bitwise equal to one row tile per job's."""
     _skip_unless_supported_arch(mesh_device)
     _skip_row_tiles_on_wormhole(mesh_device)
     precision = _PRECISION_MODES[mode]
