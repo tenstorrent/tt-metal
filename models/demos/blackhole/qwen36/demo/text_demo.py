@@ -276,6 +276,19 @@ def _warmup_prefill(model, device, token_ids):
 
 BLOCK_SIZE = 64
 ACCURACY_PREFILL_LEN = 512  # accuracy cases prefill this many reference tokens, then teacher-force the rest
+
+
+def _prefix_token_accuracy(token_accuracy_cls, model_name, prefill_len):
+    """The shared TokenAccuracy scorer re-split to prefill `prefill_len` reference tokens (it prefills half)."""
+    acc = token_accuracy_cls(model_name)
+    ref = torch.load(f"models/ttt_compat/tests/reference_outputs/{model_name}.refpt")
+    acc.input_prompt = ref["reference_tokens"][0, :prefill_len]
+    acc.reference_tokens = ref["reference_tokens"][0, prefill_len:]
+    acc.top5_tokens = ref["top5_tokens"][prefill_len - 1 :, :]
+    acc.maxindex = len(acc.reference_tokens) - 1
+    return acc
+
+
 PREFILL_CHUNK = 2048
 # 256k ceiling (4096×64 tokens); _blocks_for sizes the cache per seqlen so short tests stay cheap.
 MAX_BLOCK_BUDGET = 4096
@@ -647,7 +660,7 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     # .refpt is its own assert, so the gate cannot silently skip.
     # The prefill is fixed at 512 tokens so a reference longer than 1024 (e.g. 2048 for accuracy_1536)
     # scores more teacher-forced tokens instead of moving the split point.
-    token_acc = TokenAccuracy(model.args.model_name, split_point=ACCURACY_PREFILL_LEN)
+    token_acc = _prefix_token_accuracy(TokenAccuracy, model.args.model_name, ACCURACY_PREFILL_LEN)
     token_ids = token_acc.input_prompt.reshape(1, -1)
     prompt_len = token_ids.shape[1]
     max_generated_tokens = min(max_generated_tokens, len(token_acc.reference_tokens))

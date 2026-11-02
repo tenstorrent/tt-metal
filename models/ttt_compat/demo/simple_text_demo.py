@@ -28,7 +28,7 @@ from models.ttt_compat.tt.prefetcher import is_prefetcher_supported
 
 
 class TokenAccuracy:
-    def __init__(self, model_name, split_point=None):
+    def __init__(self, model_name):
         self.gt_pos = -1
         self.store_predicted_tokens = []
         reference_data_file = os.path.join("models/ttt_compat/tests/reference_outputs/", model_name) + ".refpt"
@@ -36,8 +36,7 @@ class TokenAccuracy:
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
         reference_tokens = reference_data["reference_tokens"]
-        if split_point is None:
-            split_point = reference_tokens.shape[-1] // 2
+        split_point = reference_tokens.shape[-1] // 2
         self.input_prompt = reference_tokens[0, :split_point]
         self.reference_tokens = reference_tokens[0, split_point:]
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
