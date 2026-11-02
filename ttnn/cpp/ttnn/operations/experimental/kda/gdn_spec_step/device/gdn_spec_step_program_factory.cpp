@@ -322,6 +322,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     if (EARLY_SRC) {
         reader.compiler_options.defines.emplace("GDN_EARLY_SRC", "1");
     }
+    if (FP32 && (a.kernel_opts & kGdnSpecOptNarrowSrc) != 0) {
+        reader.compiler_options.defines.emplace("GDN_NARROW_SRC", "1");  // row-narrow src / z reads (bit-identical)
+    }
     if (QKS) {
         reader.compiler_options.defines.emplace("GDN_QKSHARE", "1");
     }

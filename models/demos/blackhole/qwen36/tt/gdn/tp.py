@@ -125,6 +125,10 @@ def gdn_spec_step_kernel_opts():
 # the face rows it uses (the a|b rows of the user, dt_bias / -exp(A)'s face row) instead of whole DRAM pages that every
 # core reads from one bank. Bit-identical; QWEN36_SPEC_STEP_NARROW_GR=1 adds it wherever gate scalars (bit 1) are on.
 SPEC_STEP_OPT_NARROW_GR = 1024
+# gov gdn-v2 (kernel_opts bit 13, kGdnSpecOptNarrowSrc): the reader fetches only the rows the op uses from the window
+# (rows < Lw) and from the raw qkv / z tiles (the user's T rows) into zero-filled slots. Bit-identical;
+# QWEN36_SPEC_STEP_NARROW_SRC=1 adds it wherever the fp32-state restructurings (QWEN36_SPEC_STEP_OPT) are on.
+SPEC_STEP_OPT_NARROW_SRC = 8192
 
 
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
@@ -3689,6 +3693,12 @@ class TPGatedDeltaNet:
             _log_spec_step_once(
                 ("narrow_gr", T),
                 "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_GR=1: face-row gate reads (bit-identical)",
+            )
+        if os.environ.get("QWEN36_SPEC_STEP_NARROW_SRC", "0").strip() == "1" and extra.get("kernel_opts", 0):
+            extra["kernel_opts"] |= SPEC_STEP_OPT_NARROW_SRC
+            _log_spec_step_once(
+                ("narrow_src", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_SRC=1: row-narrow src / z reads (bit-identical)",
             )
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,

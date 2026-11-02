@@ -39,6 +39,9 @@
 #ifndef GDN_QKSHARE
 #define GDN_QKSHARE 0  // kernel_opts bit 4 (VB > 1): this block reads only its q/k share + its v chunks
 #endif
+#ifndef GDN_NARROW_SRC
+#define GDN_NARROW_SRC 0  // kernel_opts bit 13: row-narrow src / z reads into zero-filled slots (bit-identical)
+#endif
 #if GDN_FAST && !GDN_GATE_SCALARS
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_spec_step/device/kernels/dataflow/gdn_step_gate_math.hpp"
 #endif
@@ -50,6 +53,27 @@ template <typename P>
 FORCE_INLINE void set_one(P& p, uint32_t tile, uint32_t row, uint32_t col) {
     p[tile * 1024 + tile_elem_index(row, col)] = 0x3F80;  // bf16 1.0 (p: the lock's CoreLocalMem<volatile uint16_t>)
 }
+#if GDN_NARROW_SRC
+// NARROW_SRC: rows [r0, r0 + n) of bf16 tile `page` into the same rows of slot `dst_tile` (already zero-filled): per
+// face-row group (rows 0..15 = faces 0 / 1, rows 16..31 = faces 2 / 3) one contiguous read per face of the rows that
+// fall in it (a face stores its 16 rows of 16 elements row-major, 32 B per row). Source / destination offsets are equal.
+template <typename Accessor>
+inline void read_rows_bf16(
+    const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t page, uint32_t dst_tile, uint32_t r0, uint32_t n) {
+    const uint32_t base = dst_tile * dfb.get_entry_size();
+    for (uint32_t fr = 0; fr < 2; ++fr) {
+        const uint32_t lo = r0 > fr * 16 ? r0 : fr * 16;
+        const uint32_t hi = (r0 + n) < (fr * 16 + 16) ? (r0 + n) : (fr * 16 + 16);
+        if (lo >= hi) {
+            continue;
+        }
+        for (uint32_t half = 0; half < 2; ++half) {
+            const uint32_t off = ((2 * fr + half) * 256u + (lo - fr * 16) * 16u) * 2u;
+            noc.async_read(acc, dfb, (hi - lo) * 32u, {.page_id = page, .offset_bytes = off}, {.offset_bytes = base + off});
+        }
+    }
+}
+#endif
 }  // namespace
 
 template <
@@ -203,7 +227,16 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 
     // ---- phase 1 (small): z, the a|b tile(s), the gates -> compute starts silu(z) (and, plain mode, the T gate pairs)
     z_in.reserve_back(Vt);
+#if GDN_NARROW_SRC
+    // only the user's T rows of the head's z tiles (rows outside them are zero: silu(0) = 0, and they never reach the
+    // user's output rows -- every phase-D op is per row)
+    zero_reserved(z_in, noc, Vt);
+    for (uint32_t t = 0; t < Vt; ++t) {
+        read_rows_bf16(qkv_acc, z_in, noc, pg + z_tile0 + h * Vt + t, t, r0, T);
+    }
+#else
     read_tiles_at(qkv_acc, z_in, noc, pg + z_tile0 + h * Vt, Vt, 0);
+#endif
 #if GDN_GATE_SCALARS
     noc.async_read_barrier();
     z_in.push_back(Vt);
@@ -290,6 +323,29 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         DeviceZoneScopedN("rd_bulk");
         // src_in[c] = whole window tile of user u, chunk c (win[par]); src_in[Ch + c] = whole raw projection tile
         src_in.reserve_back(2 * ChA);
+#if GDN_NARROW_SRC
+        // window rows [0, Lw) (the only rows WO_W selects: mi + 1 + i <= Lw - 1) and the user's rows [r0, r0 + T) of
+        // the raw qkv tile (the only rows WO_N selects); every other row is a finite zero, so the one-hot matmuls
+        // (0 * x = 0 for finite x) give the same W_c. Lw > 16 falls back to whole window tiles.
+        zero_reserved(src_in, noc, 2 * ChA);
+        for (uint32_t c = 0; c < ChA; ++c) {
+            const uint32_t col = chunk_col(blk_chunk(c));
+            if constexpr (Lw <= 16) {
+                if (par) {
+                    read_rows_bf16(wb_acc, src_in, noc, u * Ct + col, c, 0, Lw);
+                } else {
+                    read_rows_bf16(wa_acc, src_in, noc, u * Ct + col, c, 0, Lw);
+                }
+            } else {
+                if (par) {
+                    read_tiles_at(wb_acc, src_in, noc, u * Ct + col, 1, c);
+                } else {
+                    read_tiles_at(wa_acc, src_in, noc, u * Ct + col, 1, c);
+                }
+            }
+            read_rows_bf16(qkv_acc, src_in, noc, pg + col, ChA + c, r0, T);
+        }
+#else
         for (uint32_t c = 0; c < ChA; ++c) {
             const uint32_t col = chunk_col(blk_chunk(c));
             if (par) {
@@ -299,6 +355,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             }
             read_tiles_at(qkv_acc, src_in, noc, pg + col, 1, ChA + c);
         }
+#endif
 #if GDN_EARLY_SRC
         // phase A1 / A2 need only src_in and the selectors: hand them over before the taps / weight row / masks
         build_sel();

@@ -88,9 +88,14 @@ enum GdnSpecStepKernelOpt : uint32_t {
     // tile(s), tile 0's face row of dt_bias / -exp(A) holding the head -- instead of whole 2-4 KB pages that every core
     // reads from the same DRAM bank. Bit-identical. (Bits 8 / 9 are K4 / SFPU gates on the x7 branch; not here.)
     kGdnSpecOptNarrowGateReads = 1u << 10,
+    // gov gdn-v2: the reader's src / z reads fetch only the rows the op uses -- window rows [0, Lw) and the user's T
+    // rows [r0, r0 + T) of the raw qkv / z tiles (every user's core reads the same qkv / z pages) -- into slots that
+    // are zero-filled first, so the rows the one-hot gathers / row masks multiply by 0 hold finite zeros. Bit-identical.
+    // (Bits 8 / 9 / 11 / 12 are taken on other branches.)
+    kGdnSpecOptNarrowSrc = 1u << 13,
     kGdnSpecOptAll = kGdnSpecOptFusedDecay | kGdnSpecOptGateScalars | kGdnSpecOptEarlySrc | kGdnSpecOptHoistInv |
                      kGdnSpecOptQkShare | kGdnSpecOptA3Half | kGdnSpecOptGscSplit | kGdnSpecOptVsTail |
-                     kGdnSpecOptNarrowGateReads,
+                     kGdnSpecOptNarrowGateReads | kGdnSpecOptNarrowSrc,
 };
 
 struct GdnSpecStepInputs {
