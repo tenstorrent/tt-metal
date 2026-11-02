@@ -21,13 +21,15 @@ HEAD_DIM = HIDDEN // NUM_HEADS
 NUM_THIRDS = 3
 TILES_PER_HEAD = HEAD_DIM // TILE
 HIDDEN_TILES = HIDDEN // TILE
-# The bias rides as one extra K tile (in0: ones-column tile, in1: bias tile row).
-K_TILES = HIDDEN_TILES + 1
+# The bias is not a K tile: compute seeds the Float32 partials with its row broadcast and K-block 0
+# accumulates onto the seed (Perf 1: the 25th K tile was 1/25 of the FPU-bound matmul).
+K_TILES = HIDDEN_TILES
 TOTAL_HEADS = NUM_THIRDS * NUM_HEADS
 TABLE_TILES_PER_ROW = 2 * TILES_PER_HEAD
 
 # Blocking-model host constants (op_design.md, Blocking Model).
-K_BLOCK = 5
+# Perf 1, 8x512 with the bias seed: k_block 3 / 4 / 5 (ragged) within ~1%; 4 divides K' and saves 76 KiB.
+K_BLOCK = 4
 ACT_DEPTH = 2
 WEIGHT_DEPTH = 2
 # R2 sender pipelining: one more cb_weight_block slot lets the N-group's sender issue the DRAM reads of
@@ -53,6 +55,7 @@ CB_MATMUL_PARTIALS = 2
 CB_ROTARY_TABLE = 3
 CB_OUT_TILES = 4
 CB_OUT_TILES_NOC0 = 5
+CB_BIAS = 6
 
 # Rectangles one multicast group may lower to (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
 MAX_MCAST_RECTANGLES = 3
@@ -120,6 +123,7 @@ def _cb_pages(block_m, n_tiles, k_block, seq_tiles, weight_depth=WEIGHT_DEPTH):
         CB_MATMUL_PARTIALS: block_m * n_tiles,
         CB_ROTARY_TABLE: _table_rows(block_m, seq_tiles) * TABLE_TILES_PER_ROW,
         CB_OUT_TILES: OUT_DEPTH * n_tiles,
+        CB_BIAS: n_tiles,
     }
     if OUT_WRITE_NOCS == 2:
         pages[CB_OUT_TILES_NOC0] = OUT_DEPTH * n_tiles
@@ -133,6 +137,7 @@ CB_FORMATS = {
     CB_ROTARY_TABLE: (BF16_TILE_BYTES, ttnn.bfloat16),
     CB_OUT_TILES: (BF16_TILE_BYTES, ttnn.bfloat16),
     CB_OUT_TILES_NOC0: (BF16_TILE_BYTES, ttnn.bfloat16),
+    CB_BIAS: (BF16_TILE_BYTES, ttnn.bfloat16),
 }
 
 
@@ -431,12 +436,14 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         n_tiles,
         NUM_HEADS,
         last_valid_rows,
+        CB_BIAS,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(cos).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(sin).get_compile_time_args())
     for output in outputs:
         reader_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(bias).get_compile_time_args())
 
     writer_ct_args = [
         CB_WEIGHT_BLOCK,
@@ -456,7 +463,6 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         blocking.weight_depth,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
-    writer_ct_args.extend(ttnn.TensorAccessorArgs(bias).get_compile_time_args())
     for output in outputs:
         writer_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
 
@@ -476,6 +482,8 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         OUT_WRITE_NOCS,
         CB_OUT_TILES_NOC0,
         blocking.seq_tiles,
+        _dest_tiles(compute_kernel_config),
+        CB_BIAS,
     ]
 
     reader_rt = {}
@@ -500,10 +508,11 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
             *out_addrs,
             third,
             first_head,
+            b_addr,
+            first_col_tile,
         ]
         writer_rt[(core.x, core.y)] = [
             w_addr,
-            b_addr,
             *out_addrs,
             third,
             first_col_tile,
