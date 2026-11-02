@@ -274,7 +274,7 @@ def test_the_other_bodies_keep_their_text():
         ),
         "_gate_and_project_rows": (
             "normalized = ttnn.experimental.view(normalized_heads, (1, 1, CHUNK_SIZE, VALUE_WIDTH_PER_DEVICE))",
-            "output = self._out_proj_tile(gated, full_hidden)",
+            "output = self._out_proj_tile(gated, full_hidden, live_rows=rows)",
             "for start in range(0, tile_rows, CHUNK_SIZE):",
         ),
         "forward_decode": (

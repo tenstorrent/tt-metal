@@ -1233,6 +1233,7 @@ def _forward_layer_verify(
             block_start_sin=rope_rows.block_start_sin,
             verify=qsa_verify,
             constants=qsa_chunk_constants,
+            live_rows=rows,
         )
         attention_owner = attention_hidden
     _deallocate(attention_input)

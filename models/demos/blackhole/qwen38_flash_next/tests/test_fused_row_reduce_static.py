@@ -293,3 +293,110 @@ def test_rr_write_switch_and_handoff():
     assert rr.take_written(block, object()) is None  # another state: not handed over
     rr.WRITTEN[id(block)] = (block, state, "new")
     assert rr.take_written(block, state) == "new" and rr.take_written(block, state) is None
+
+
+# ------------------------------------------------------------------------ unicast slice mode (rows above the packed limits)
+
+
+def _partial_mem(shape, dtype, l1=False):
+    p = _partial(shape, dtype)
+    p.memory_config = lambda: SimpleNamespace(buffer_type=ttnn.BufferType.L1 if l1 else ttnn.BufferType.DRAM)
+    return p
+
+
+@pytest.fixture
+def on2(monkeypatch):
+    monkeypatch.setenv(rr.ENV, "2")
+    monkeypatch.setattr(rr.gr_fold, "line", lambda mesh: None)
+    monkeypatch.setattr(rr.ttnn, "get_tt_fabric_max_payload_size_bytes", lambda: 4352, raising=False)
+    monkeypatch.setattr(rr, "TP_SIZE", 8)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("l1", [False, True])
+def test_unicast_rows_admitted_within_todays_landing_buffer(on2, monkeypatch, dtype, l1):
+    if l1 and dtype == ttnn.float32:
+        pytest.skip("fp32 partials come from DRAM")
+    tile_bytes = fp.TILE_BYTES[dtype]
+    todays_landing = 16 + 2 * 8 * 80 * 2 * rr.READ_ALIGN
+    assert todays_landing == 163856 and rr.LAND_SLOT == 10240
+    for rows in range(1, 9):
+        p = _partial_mem((1, 1, rows, 2560), dtype, l1)
+        assert rr.admits(p), rows
+        _r, tiles, out_tiles, chunk, _packed, _slot, _scratch = rr._geometry(p)
+        pitch = rr._pitch(chunk, p)
+        assert pitch % 16 == 0 and pitch >= chunk and (l1 or pitch % rr.READ_ALIGN == 0)
+        block = 2 * out_tiles * pitch
+        assert 16 + 2 * 8 * rr.LAND_SLOT <= todays_landing and block <= rr.LAND_SLOT
+        dense = rr._dense_tiles(out_tiles, pitch, tile_bytes)
+        assert dense * (tile_bytes // pitch) >= 2 * out_tiles > (dense - 1) * (tile_bytes // pitch)
+        if rows <= rr.ROWS_PACKED[dtype]:  # today's rows: pitch and one dense tile as before
+            assert dense == 1 and pitch == (chunk if (chunk % 64 == 0 or l1) else 64)
+    assert not rr.admits(_partial_mem((1, 1, 9, 2560), dtype, l1))
+
+
+def test_unicast_pitch_and_dense_pins(on2):
+    bf, f32 = ttnn.bfloat16, ttnn.float32
+    for dtype, rows, l1, pitch, dense in (
+        (bf, 1, False, 64, 1),
+        (bf, 2, False, 64, 1),
+        (f32, 1, False, 64, 1),
+        (bf, 3, False, 128, 2),
+        (bf, 5, False, 192, 2),
+        (bf, 5, True, 160, 2),
+        (bf, 8, False, 256, 3),
+        (bf, 8, True, 256, 3),
+        (f32, 2, False, 128, 1),
+        (f32, 5, False, 320, 2),
+        (f32, 8, False, 512, 3),
+    ):
+        p = _partial_mem((1, 1, rows, 2560), dtype, l1)
+        _r, _t, out_tiles, chunk, *_ = rr._geometry(p)
+        assert rr._pitch(chunk, p) == pitch, (dtype, rows, l1)
+        assert rr._dense_tiles(out_tiles, pitch, fp.TILE_BYTES[dtype]) == dense, (dtype, rows, l1)
+
+
+def test_v1_and_the_fold_stay_at_the_packed_rows(on):
+    bf16, fp32 = ttnn.bfloat16, ttnn.float32  # ``on`` = QWEN38_ROW_REDUCE=1 (v1)
+    assert not rr.admits(_partial((1, 1, 3, 2560), bf16)) and not rr.admits(_partial((1, 1, 2, 2560), fp32))
+    assert "rows <= ROWS_PACKED[partial.dtype]" in inspect.getsource(rr._write_admits)
+
+
+def test_unicast_transport_layout_and_pins():
+    t4 = (fp.REPO_ROOT / rr.TRANSPORT4_KERNEL).read_text()
+    t4l = (fp.REPO_ROOT / rr.TRANSPORT4L_KERNEL).read_text()
+    builder = MODULE.split("def _row_reduce_unicast", 1)[1].split("extra_args=(", 1)[1].split("\n        ),", 1)[0]
+    for text, links in ((t4, 1), (t4l, 2)):
+        ids = sorted({int(i) for i in re.findall(r"get_compile_time_arg_val\((\d+)\)", text)})
+        base = int(re.search(r"ACCESSOR_BASE = (\d+);", text).group(1))
+        assert base == max(ids) + 1
+        # extras from arg 11: rows .. slot (15 words), the two-link words (3), then D
+        assert base == 11 + 15 + (3 if links == 2 else 0) + 1
+        assert (
+            "fabric_multicast_noc_fused_unicast_with_atomic_inc(" in text
+            and "                        h,\n                        1);" in text
+        )
+        assert "for (uint32_t d = 0; d < DENSE; ++d)" in text
+        names = re.findall(r'FUSED_ZONE\("([^"]+)"\)', text)
+        assert len(names) == len(set(names)) and all(n.startswith("fz_rr_v4_") for n in names)
+        assert "static_assert(BLOCK_BYTES <= SLOT_BYTES" in text
+    assert "[CB_IN, CB_FS, CB_BS, CB_F, CB_B, CB_G, CB_OUT, dense, TP_SIZE]" in MODULE
+    assert "SEM_LINK, total, 0" in builder and builder.rstrip().endswith("dense,")
+
+
+def test_rows_cap_env_and_live_row_admission(on2, monkeypatch):
+    bf16, fp32 = ttnn.bfloat16, ttnn.float32
+    assert rr.ROWS_ENV == "QWEN38_ROW_REDUCE_ROWS_MAX"
+    assert rr.rows_limit(bf16, {}) == 8 and rr.rows_limit(fp32, {}) == 8  # default 8
+    assert rr.rows_limit(bf16, {rr.ROWS_ENV: "5"}) == 5 and rr.rows_limit(fp32, {rr.ROWS_ENV: "5"}) == 5
+    # 2 (or less) restores today's limits
+    assert rr.rows_limit(bf16, {rr.ROWS_ENV: "2"}) == 2 and rr.rows_limit(fp32, {rr.ROWS_ENV: "2"}) == 1
+    assert rr.rows_limit(bf16, {rr.ROWS_ENV: "1"}) == 1 and rr.rows_limit(bf16, {rr.ROWS_ENV: "x"}) == 8
+    tile32 = _partial_mem((1, 1, 32, 2560), bf16)  # a call site's 32-row partial: its first rows are the live ones
+    assert not rr.admits(tile32)
+    assert rr.admits_rows(tile32, 5) and rr.admits_rows(tile32, 5, dtype=fp32) and not rr.admits_rows(tile32, 9)
+    monkeypatch.setenv(rr.ROWS_ENV, "2")
+    assert not rr.admits_rows(tile32, 5) and rr.admits_rows(tile32, 2) and not rr.admits_rows(tile32, 2, dtype=fp32)
+    assert rr.admits_rows(tile32, 1, dtype=fp32)
+    monkeypatch.setenv(rr.ROWS_ENV, "8")
+    assert rr.admits_rows(tile32, 8)

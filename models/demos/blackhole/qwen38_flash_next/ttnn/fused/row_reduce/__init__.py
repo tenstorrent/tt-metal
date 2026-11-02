@@ -5,7 +5,8 @@
 
 Stands in for ``ttnn.reduce_scatter(x, dim=3, cluster_axis=<line>, memory_config=DRAM, topology=Linear)`` (GDN, QSA) and
 for the line ``reduce_scatter_minimal_async`` of ``tt_all_reduce`` (MoE) of a local partial ``[1, 1, rows, W]`` TILE
-tensor (``rows`` 1..2 valid rows of one padded tile row, bf16; ``rows`` = 1 for fp32) -> ``[1, 1, rows, W / TP_SIZE]``,
+tensor (``rows`` 1..8 valid rows (QWEN38_ROW_REDUCE_ROWS_MAX caps it) of one padded tile row, bf16 or fp32; v2 only: rows above 2 (bf16) / 1 (fp32) run the
+unicast slice mode of ``kernels/transport4*.cpp``, each sender sending a receiver only that receiver's slice) -> ``[1, 1, rows, W / TP_SIZE]``,
 device d holding the columns ``[W / TP_SIZE * d, W / TP_SIZE * (d + 1))`` of the sum, in a DRAM interleaved TILE tensor.
 Every device sends the valid rows of its whole partial as ONE packet per direction on the line (the packed row mode of
 ``row_gather``, ``gr_fold/kernels/transport_phase.h``'s transport) into the peers' L1; each device then sums its own
@@ -41,7 +42,9 @@ LINKS = 1
 # (kernels/transport2l.cpp, transport3l.cpp); the landing slots, the sum order and the rounding are unchanged
 LINKS_ENV = "QWEN38_ROW_REDUCE_LINKS"
 SPLIT_ENV = "QWEN38_ROW_REDUCE_SPLIT"  # two links: "1" (default) each link carries half of the packed bytes; "0" packet p over link p % 2
-ROWS_MAX = {ttnn.bfloat16: 2, ttnn.float32: 1}
+ROWS_MAX = {ttnn.bfloat16: 8, ttnn.float32: 8}  # the v2 program: rows above ROWS_PACKED use the unicast slice mode
+ROWS_ENV = "QWEN38_ROW_REDUCE_ROWS_MAX"  # default 8: admits caps the live rows at this value; 2 (or less) = the packed program's rows
+ROWS_PACKED = {ttnn.bfloat16: 2, ttnn.float32: 1}  # the limits of v1, the packed multicast of v2 and the RR_WRITE fold
 READ_ALIGN = 64  # the DRAM read alignment of Blackhole: transport.cpp reads each chunk into a 64 B aligned scratch
 # MIRROR flips which neighbour direction is the "forward" chain of the tree (the stock op's order, established by
 # tests/test_fused_row_reduce_device.py); QWEN38_ROW_REDUCE_MIRROR=1 selects the flipped tree for that test.
@@ -68,6 +71,18 @@ def _report_calls() -> None:
 atexit.register(_report_calls)
 
 
+def rows_limit(dtype, environ=None) -> int:
+    """The most live rows ``admits`` takes for ``dtype``: ROWS_MAX capped by QWEN38_ROW_REDUCE_ROWS_MAX (default 8); a cap of 2
+    or less restores the packed program's limits (bf16 2, fp32 1)."""
+
+    try:
+        cap = int((os.environ if environ is None else environ).get(ROWS_ENV, "8"))
+    except ValueError:
+        cap = 8
+    limit = min(ROWS_MAX[dtype], cap)
+    return min(limit, ROWS_PACKED[dtype]) if cap <= 2 else limit
+
+
 def _payload() -> int:
     """The fabric packet payload (bytes, a multiple of 16): the default 4352 B takes 2 packets per direction for one bf16
     row (5,120 B), 3 for two rows or one fp32 row (10,240 B); one packet with a payload >= that (fabric_router_config).
@@ -92,6 +107,9 @@ TRANSPORT2_KERNEL = fp.kernel_source(NAME, "transport2.cpp")
 TRANSPORT3_KERNEL = fp.kernel_source(NAME, "transport3.cpp")
 TRANSPORT2L_KERNEL = fp.kernel_source(NAME, "transport2l.cpp")
 TRANSPORT3L_KERNEL = fp.kernel_source(NAME, "transport3l.cpp")
+TRANSPORT4_KERNEL = fp.kernel_source(NAME, "transport4.cpp")  # unicast slice mode (rows above ROWS_PACKED), one link
+TRANSPORT4L_KERNEL = fp.kernel_source(NAME, "transport4l.cpp")  # the same over two links
+LAND_SLOT = 80 * 2 * READ_ALIGN  # the persistent landing buffer's slot stride (prepare2 with 80 tiles); never grown
 SEM_LINK = 3  # v2 two-link: the second transport core tells the reduce core it is done (the fold program: SEM_LINK_W)
 SEM_LINK_W = 4
 COUNTER_SCRATCH = 64  # bytes after the staging slot: the second link core's reads of the call counter, 16 B per RISC
@@ -266,6 +284,137 @@ def _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh):
     return fp.stamp_topology(out, partial, 3)
 
 
+def _pitch(chunk: int, partial) -> int:
+    """Bytes between two staged chunks: the chunk for an L1 partial or a chunk of whole 64 B, else the chunk rounded up
+    to the 64 B DRAM read alignment (64 for a 32 B chunk)."""
+
+    return chunk if (chunk % READ_ALIGN == 0 or fp.in_l1(partial)) else -(-chunk // READ_ALIGN) * READ_ALIGN
+
+
+def _unicast_fits(tiles: int, out_tiles: int, pitch: int, tile_bytes: int) -> bool:
+    """The unicast slice mode keeps today's landing buffer: one block (2 * out_tiles chunks) per sender slot."""
+
+    return (
+        tiles == 80
+        and tiles == TP_SIZE * out_tiles
+        and pitch <= tile_bytes
+        and 2 * out_tiles * pitch <= LAND_SLOT
+        and _payload() >= pitch
+    )
+
+
+def _dense_tiles(out_tiles: int, pitch: int, tile_bytes: int) -> int:
+    """Dense tiles of one source's slice (a dense tile holds ``tile_bytes // pitch`` whole chunks, the last may be shorter)."""
+
+    return -(-2 * out_tiles // (tile_bytes // pitch))
+
+
+def _links_unicast(mesh) -> int:
+    try:
+        want = int(os.environ.get(LINKS_ENV, "2"))
+    except ValueError:
+        want = 1
+    if want < 2:
+        return 1
+    return max(1, min(2, want, len(gr_fold.TRANSPORT["partials"]), gr_fold.line(mesh).links))
+
+
+def _row_reduce_unicast(partial, out, rows, tiles, out_tiles, chunk, mesh):
+    """v2 for rows above ROWS_PACKED: every sender sends each receiver only the receiver's slice block
+    (kernels/transport4.cpp, transport4l.cpp), the slice of a source goes through D dense tiles."""
+
+    state = prepare2(mesh, tiles)
+    tile_bytes = fp.TILE_BYTES[partial.dtype]
+    pitch = _pitch(chunk, partial)
+    if not _unicast_fits(tiles, out_tiles, pitch, tile_bytes) or state["slot"] != LAND_SLOT:
+        raise ValueError("row_reduce unicast slice: the block does not fit the landing slot")
+    dense = _dense_tiles(out_tiles, pitch, tile_bytes)
+    total = tiles * 2 * pitch
+    payload = _payload()
+    links = _links_unicast(mesh)
+    transports = gr_fold.TRANSPORT["partials"][:links]
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in transports])
+    first_core = ttnn.CoreRangeSet([ttnn.CoreRange(transports[0], transports[0])])
+    spec = gr_fold.Transport(
+        out,
+        partial,
+        CB_IN,
+        tiles,
+        gr_fold.SOURCE_TENSOR,
+        PHASE2,
+        transports,
+        page_strides=(1, tiles),
+        rows=rows,
+        pack_cb=PACK_CB,
+        kernel=TRANSPORT4L_KERNEL if links > 1 else TRANSPORT4_KERNEL,
+        consumers=(_reduce_core_xy(mesh),) if links > 1 else (),
+        extra_args=(
+            rows,
+            PACK_CB,
+            pitch,
+            CB_FS,
+            CB_BS,
+            CB_F,
+            CB_B,
+            CB_G,
+            CB_OUT,
+            out_tiles,
+            MIRROR,
+            state["land_addr"],
+            state["data1"],
+            payload,
+            state["slot"],
+            *((SEM_LINK, total, 0) if links > 1 else ()),
+            dense,
+        ),
+    )
+    dtype = partial.dtype
+    cbs = [
+        fp.cb_descriptor(CB_IN, dtype, tile_bytes, TP_SIZE, cores),
+        fp.cb_descriptor(PACK_CB, dtype, total + (COUNTER_SCRATCH if links > 1 else 0), 1, cores),
+        fp.cb_descriptor(CB_FS, dtype, tile_bytes, 2, cores),
+        fp.cb_descriptor(CB_BS, dtype, tile_bytes, 2, cores),
+        fp.cb_descriptor(CB_F, dtype, tile_bytes, 2, cores),
+        fp.cb_descriptor(CB_B, dtype, tile_bytes, 2, cores),
+        fp.cb_descriptor(CB_G, dtype, tile_bytes, 2, cores),
+        fp.cb_descriptor(CB_OUT, dtype, tile_bytes, 1, cores),
+    ]
+    semaphores = [
+        fp.semaphore_descriptor(sem, cores)
+        for sem in (gr_fold.SEM_GO, gr_fold.SEM_SCRATCH, gr_fold.SEM_DONE, *((SEM_LINK,) if links > 1 else ()))
+    ]
+
+    def compute(rank):
+        logical = TP_SIZE - 1 - rank if MIRROR else rank
+        return [
+            fp.compute_kernel(
+                COMPUTE_KERNEL,
+                first_core,
+                [CB_IN, CB_FS, CB_BS, CB_F, CB_B, CB_G, CB_OUT, dense, TP_SIZE],
+                [(transports[0], [logical])],
+                fp32_dest=dtype == ttnn.float32,
+            )
+        ]
+
+    meta = fp.program_meta(
+        NAME,
+        "row_reduce_unicast",
+        rows,
+        reads=(partial,),
+        writes=(out,),
+        l1_bytes=total + (TP_SIZE - 1) * 2 * out_tiles * pitch,
+        flops=(TP_SIZE - 1) * out_tiles * fp.TILE * fp.TILE,
+        cores=links,
+        outputs=((out, 3),),
+    )
+    fp.run_program(
+        [partial, out],
+        gr_fold.transport_mesh_program(mesh, [spec], semaphores=semaphores, cbs=cbs, kernels=compute, links=links),
+        meta=meta,
+    )
+    return fp.stamp_topology(out, partial, 3)
+
+
 def _geometry(partial):
     """(rows, tiles, out tiles per device, chunk bytes, packed bytes per tile, landing slot bytes, read scratch bytes)."""
 
@@ -295,7 +444,7 @@ def admits(partial, *, cluster_axis=1, memory_config=None) -> bool:
             or len(shape) != 4
             or shape[:2] != (1, 1)
             or partial.dtype not in ROWS_MAX
-            or not 1 <= shape[2] <= ROWS_MAX[partial.dtype]
+            or not 1 <= shape[2] <= rows_limit(partial.dtype)
             or padded[2] != fp.TILE
             or padded[3] % (fp.TILE * TP_SIZE)
             or partial.layout != ttnn.TILE_LAYOUT
@@ -307,14 +456,40 @@ def admits(partial, *, cluster_axis=1, memory_config=None) -> bool:
         # DRAM partial on v2's 64 B read pitch, does not fit) -> the stock op
         _rows, _tiles, out_tiles, chunk, packed, _slot, _scratch = _geometry(partial)
         tile_bytes = fp.TILE_BYTES[partial.dtype]
-        if version() == 2:
-            pitch = chunk if (chunk % READ_ALIGN == 0 or fp.in_l1(partial)) else READ_ALIGN
-            if out_tiles * 2 * pitch > tile_bytes:
+        if (
+            _rows > ROWS_PACKED[partial.dtype]
+        ):  # v2's unicast slice mode only (v1 and the packed program stay at today's rows)
+            if version() != 2 or not _unicast_fits(_tiles, out_tiles, _pitch(chunk, partial), tile_bytes):
+                return False
+        elif version() == 2:
+            if out_tiles * 2 * _pitch(chunk, partial) > tile_bytes:
                 return False
         elif out_tiles * packed > tile_bytes:
             return False
         gr_fold.line(partial.device())
         return _payload() >= 16
+    except Exception:
+        return False
+
+
+class _LiveRows:
+    """``partial`` seen as ``[1, 1, rows, W]``: what ``admits`` reads of a tensor, for a call site that would hand
+    ``row_reduce`` a metadata view of its 32-row partial's first ``rows`` rows."""
+
+    def __init__(self, partial, rows: int, dtype=None):
+        shape = tuple(int(v) for v in partial.shape)
+        self.shape = (*shape[:2], int(rows), shape[3])
+        self.padded_shape = partial.padded_shape
+        self.dtype, self.layout = partial.dtype if dtype is None else dtype, partial.layout
+        self.device, self.memory_config = partial.device, partial.memory_config
+
+
+def admits_rows(partial, rows: int, *, cluster_axis=1, memory_config=None, dtype=None) -> bool:
+    """Whether ``row_reduce`` admits the first ``rows`` rows of ``partial`` (a ``[1, 1, 32, W]`` tensor), as ``dtype``
+    (the dtype of the copy the caller will reduce; default the tensor's own)."""
+
+    try:
+        return admits(_LiveRows(partial, rows, dtype), cluster_axis=cluster_axis, memory_config=memory_config)
     except Exception:
         return False
 
@@ -374,6 +549,8 @@ def row_reduce(partial, *, cluster_axis=1, memory_config=None):
             new_residual = _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state)
             WRITTEN[id(out)] = (out, state, new_residual)
             return out
+        if rows > ROWS_PACKED[partial.dtype]:
+            return _row_reduce_unicast(partial, out, rows, tiles, out_tiles, chunk, mesh)
         return _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh)
     _semaphores(mesh)
     transports = gr_fold.TRANSPORT["partials"][:LINKS]
@@ -505,6 +682,7 @@ def _write_admits(partial, state) -> bool:
         rows = int(partial.shape[2])
         return (
             write_enabled()
+            and rows <= ROWS_PACKED[partial.dtype]  # the fold kernels keep the packed multicast's rows
             and tuple(int(v) for v in residual.shape) == (1, BRANCHES, rows, int(partial.shape[3]) // TP_SIZE)
             and tuple(int(v) for v in injection.shape) == (1, 1, rows, BRANCHES)
             and partial.dtype

@@ -269,7 +269,7 @@ def rows_body_wrap(gdn, full_hidden, rows_state, state, *, full_tile: bool = Fal
         interleaved, gated = gated, ttnn.to_memory_config(gated, gdn.out_proj_act_memory_config)
         _release(interleaved)
     fp.stamp_topology(gated, rows_state.v, shard_dim=3)
-    output = gdn._out_proj_tile(gated, full_hidden)  # consumes the gated tile
+    output = gdn._out_proj_tile(gated, full_hidden, rows)  # consumes the gated tile; rows = the live rows
     _release(full_hidden)
     return gdn._rows_output_tile(output, rows_state, full_tile=full_tile), final_state
 

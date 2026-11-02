@@ -6472,7 +6472,14 @@ class Qwen38TTNNQSA:
         _require_shape(local_flat, (1, 1, rows, LOCAL_QUERY_WIDTH), "flat QSA attention rows")
         return local_flat
 
-    def _project_output_rows(self, local_attention, full_hidden, constants: Qwen38TTNNQSAChunkConstants):
+    def _project_output_rows(
+        self, local_attention, full_hidden, constants: Qwen38TTNNQSAChunkConstants, live_rows: int | None = None
+    ):
+        """The out-projection and its fp32 reduce-scatter on the 32-row tile.  ``live_rows`` (the verify pass: R real rows):
+        when the fused ``row_reduce`` admits the first R rows of the fp32 partial, they are the only rows that cross the
+        fabric (the bf16 partial is sliced to R rows before the typecast) and the bf16 output is padded back to
+        the ``[1,1,32,320]`` tile with rows R..31 zeroed in place; otherwise the whole-tile reduce-scatter."""
+
         rows = constants.rows
         slab = is_slab_rows(rows)
         # The out-proj is a DRAM-sharded decode linear: one row tile per call, the partials concatenated; the
@@ -6518,10 +6525,28 @@ class Qwen38TTNNQSA:
         self.mesh_contract.mark_local_partial(
             local_partial, replicated_reference=full_hidden, expected_shape=(1, 1, rows, HIDDEN_SIZE)
         )
-        local_partial_fp32 = ttnn.typecast(local_partial, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import row_reduce as row_reduce_module
+
+        live = (
+            live_rows
+            if live_rows is not None
+            and live_rows < rows
+            and not slab
+            and row_reduce_module.admits_rows(local_partial, live_rows, dtype=ttnn.float32)  # the fp32 copy's contract
+            else None
+        )
+        reduce_rows = rows if live is None else live
+        source = local_partial
+        if live is not None:  # a metadata view cannot drop rows (reshape keeps the volume): the R rows are a slice
+            source = ttnn.slice(
+                local_partial, (0, 0, 0, 0), (1, 1, live, HIDDEN_SIZE), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        local_partial_fp32 = ttnn.typecast(source, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if source is not local_partial and not same_buffer(source, local_partial):  # a first-tile slice may alias
+            _deallocate(source)
         _deallocate(local_partial)
         self.mesh_contract.mark_local_partial(
-            local_partial_fp32, replicated_reference=full_hidden, expected_shape=(1, 1, rows, HIDDEN_SIZE)
+            local_partial_fp32, replicated_reference=full_hidden, expected_shape=(1, 1, reduce_rows, HIDDEN_SIZE)
         )
         output_fp32 = _row_reduce_call(
             local_partial_fp32,
@@ -6533,13 +6558,22 @@ class Qwen38TTNNQSA:
             output_fp32,
             replicated_reference=full_hidden,
             shard_dim=3,
-            expected_local_shape=(1, 1, rows, HIDDEN_SIZE // TP_SIZE),
+            expected_local_shape=(1, 1, reduce_rows, HIDDEN_SIZE // TP_SIZE),
         )
         if output_fp32.dtype != ttnn.float32:
             raise RuntimeError(f"QSA output reduce_scatter must sum FP32 partials, got {tensor_metadata(output_fp32)}")
         output = ttnn.typecast(output_fp32, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         _retag_tensor(output, reference=output_fp32, shard_dim=3)
         _deallocate(output_fp32)
+        if live is not None:
+            reduced = output
+            output = ttnn.pad(
+                reduced,
+                [(0, 0), (0, 0), (0, rows - live), (0, 0)],
+                0.0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # a view of ``reduced``: rows live..31 zeroed in place, never deallocate ``reduced``
+            output.update_tensor_topology(reduced.tensor_topology())
         _require_shape(output, (1, 1, rows, HIDDEN_SIZE // TP_SIZE), "QSA output projection rows")
         if output.dtype != ttnn.bfloat16:
             raise RuntimeError(f"QSA output projection rows must be BF16, got {tensor_metadata(output)}")
@@ -7216,6 +7250,7 @@ class Qwen38TTNNQSA:
         block_start_sin,
         verify: Qwen38TTNNQSAVerifyInputs,
         constants: Qwen38TTNNQSAChunkConstants,
+        live_rows: int | None = None,
     ):
         """The R rows P .. P + R - 1 of one verify pass on the 32-row tile at any P; same op sequence for every P.
 
@@ -7263,7 +7298,7 @@ class Qwen38TTNNQSA:
             self._write_packed_kv_verify(state, key, value, verify)
             local_attention = self._sparse_value_attention_rows(query, gate, sparse_indices, state, constants)
         _deallocate(sparse_indices)
-        output = self._project_output_rows(local_attention, full_hidden, constants)
+        output = self._project_output_rows(local_attention, full_hidden, constants, live_rows=live_rows)
         _deallocate(full_hidden)
         return output
 

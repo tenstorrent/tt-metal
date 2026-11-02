@@ -43,6 +43,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     is_slab_rows,
     replicate_tensor_2d_mesh_mapper,
     require_lane_count,
+    same_buffer,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
     DENSE_DTYPE_TAGS,
@@ -3284,7 +3285,7 @@ class Qwen38TTNNGDN:
             _deallocate(normalized, sigmoid_bf16)
             self.mesh_contract.validate_tensor(gated, placement=TensorPlacement.HEAD_SHARDED, shard_dim=3)
             _require_shape(gated, (1, 1, tile_rows, VALUE_WIDTH_PER_DEVICE), label="GDN rows sigmoid-gated output")
-            output = self._out_proj_tile(gated, full_hidden)
+            output = self._out_proj_tile(gated, full_hidden, live_rows=rows)
         elif is_slab_rows(tile_rows):
             # The slab: the head-major output folded to token-major rows as twelve whole-tile head slices
             # concatenated on the width (no padded token-major intermediate), gated interleaved, one 2D-multicast
@@ -3402,8 +3403,14 @@ class Qwen38TTNNGDN:
         _deallocate(output)
         return rows_state.output
 
-    def _out_proj_tile(self, gated_tile, full_hidden):
-        """The 1-row out-proj on one gated 32-row tile in the out-proj activation shard, reduce-scattered."""
+    def _out_proj_tile(self, gated_tile, full_hidden, live_rows: int | None = None):
+        """The out-proj on one gated 32-row tile in the out-proj activation shard, reduce-scattered.
+
+        ``live_rows`` (the verify rows body: R = k + 1 real rows of the tile): when the fused ``row_reduce`` admits the
+        first R rows of the partial, it reduces a slice ``[1,1,R,2560]`` of the sixteen-core partial (only the live
+        rows cross the fabric) and the output comes back as the ``[1,1,32,320]`` tile with rows R..31 zeroed in place (an
+        in-place pad whose result is a view of the reduce output: never deallocate the reduce output, only the result).
+        Otherwise the 32-row reduce-scatter (rows past R: exact zeros of the zero q rows)."""
 
         partial_ws = ttnn.linear(
             gated_tile,
@@ -3418,14 +3425,38 @@ class Qwen38TTNNGDN:
             replicated_reference=full_hidden,
             expected_shape=(1, 1, CHUNK_SIZE, HIDDEN_SIZE),
         )
-        output = ttnn.reduce_scatter(
-            partial_ws,
-            dim=3,
-            cluster_axis=TP_AXIS,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.collective_topology,
-        )
-        _deallocate(partial_ws)
+        if live_rows is not None and live_rows < CHUNK_SIZE and fused.row_reduce.admits_rows(partial_ws, live_rows):
+            # a metadata view cannot drop rows (reshape keeps the volume): the first R rows are one slice copy
+            live = ttnn.slice(
+                partial_ws, (0, 0, 0, 0), (1, 1, live_rows, HIDDEN_SIZE), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            reduced = fused.row_reduce.row_reduce(live, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            aliased = same_buffer(live, partial_ws)
+            _deallocate(partial_ws)
+            if not aliased:
+                _deallocate(live)
+            self.mesh_contract.mark_collective_shard(
+                reduced,
+                replicated_reference=full_hidden,
+                shard_dim=3,
+                expected_local_shape=(1, 1, live_rows, HIDDEN_SIZE_PER_DEVICE),
+            )
+            output = ttnn.pad(
+                reduced,
+                [(0, 0), (0, 0), (0, CHUNK_SIZE - live_rows), (0, 0)],
+                0.0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            output.update_tensor_topology(reduced.tensor_topology())
+        else:
+            output = ttnn.reduce_scatter(
+                partial_ws,
+                dim=3,
+                cluster_axis=TP_AXIS,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.collective_topology,
+            )
+            _deallocate(partial_ws)
         self.mesh_contract.mark_collective_shard(
             output,
             replicated_reference=full_hidden,

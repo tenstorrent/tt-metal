@@ -18,7 +18,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
 FUSED = Path(fp.__file__).parent
 MODULES = sorted(FUSED.glob("*/__init__.py"))
 KERNELS = 35  # sub-packages under ttnn/fused
-LAUNCHES = 77  # run_program call sites over them (every one passes its meta, but the exempt ones below)
+LAUNCHES = 78  # run_program call sites over them (every one passes its meta, but the exempt ones below)
 # The streamed-matmul programs (QWEN38_MM_STREAM default off / QWEN38_MM_STREAM2 default on) and the routed-experts program (moe_experts): their
 # launches pass no meta yet.  Listed so the contract stays strict for every other program; their launches are counted apart.
 META_EXEMPT = {"mm_stream": 2, "mm_stream2": 2, "moe_experts": 1}
