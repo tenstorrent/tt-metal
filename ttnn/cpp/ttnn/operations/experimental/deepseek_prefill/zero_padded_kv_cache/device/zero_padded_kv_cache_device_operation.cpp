@@ -279,9 +279,10 @@ ttsl::hash::hash_t ZeroPaddedKvCacheDeviceOperation::compute_program_hash(
     const auto& cache = tensor_args.cache;
     // The tensor-vs-scalar choice changes the reader/writer programs (compile args + which kernel
     // branch compiles); keying each metadata tensor's presence keeps the two variants
-    // distinct. On the metadata path the reader and writer bake a TensorAccessorArgs built from slot_idx
-    // into their compile-time args, so the bank table it selects cannot be refreshed on a cache hit.
-    // Only the metadata tensors' layouts and shapes are keyed, never their values, on either path.
+    // distinct. On the metadata path the reader and writer each bake separate TensorAccessorArgs for
+    // slot_idx and valid_global into their compile-time args, so the bank tables they select cannot be
+    // refreshed on a cache hit. Only the metadata tensors' layouts and shapes are keyed, never their
+    // values, on either path.
     return tt::tt_metal::operation::hash_operation<ZeroPaddedKvCacheDeviceOperation>(
         args.layer_idx,
         args.num_layers,
