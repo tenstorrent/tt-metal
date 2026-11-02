@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+// (Line kept: at this checkout path the profiler's 16-bit zone hash of tx_wait_credit collided with SDPA's QKT@V zone.)
 //
 // Fused-program (chunk_gdn_fused) PRODUCER writer: replaces the prep writer's DRAM drain with a
 // direct NoC hand-off into the NV RECEIVER cores of each item's head. The items of this producer
