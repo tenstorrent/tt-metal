@@ -10,6 +10,16 @@ from models.demos.vision.detection.rtdetr.tt.decoder import TtRTDetrDecoder
 from models.demos.vision.detection.rtdetr.tt.encoder import TtRTDetrHybridEncoder
 
 
+def move_to_dram(tensor: ttnn.Tensor) -> ttnn.Tensor:
+    # to_memory_config returns the same tensor when it is already in DRAM, so only an L1
+    # tensor may be freed after the copy.
+    if tensor.memory_config().buffer_type == ttnn.BufferType.DRAM:
+        return tensor
+    dram_tensor = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(tensor)
+    return dram_tensor
+
+
 class TtRTDetrModel:
     def __init__(
         self,
@@ -263,30 +273,19 @@ class TtRTDetrModel:
                 input_height=height,
                 input_width=width,
             )
-            # move projections to DRAM
-            dram_feature = ttnn.to_memory_config(feature, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(feature)
-
-            projected_features.append((dram_feature, height, width))
+            projected_features.append((move_to_dram(feature), height, width))
 
         # Encoder
         encoder_outputs = self.encoder(inputs_embeds=projected_features, batch_size=batch_size)
 
         # Move encoder outputs to DRAM
-        dram_encoder_outputs = []
-        for source, height, width in encoder_outputs:
-            dram_source = ttnn.to_memory_config(source, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(source)
-            dram_encoder_outputs.append((dram_source, height, width))
-        encoder_outputs = dram_encoder_outputs
+        encoder_outputs = [(move_to_dram(source), height, width) for source, height, width in encoder_outputs]
 
         # Project encoder outputs for decoder, move each projection to DRAM
         sources = []
         for (source, height, width), projection in zip(encoder_outputs, self.decoder_input_proj):
             source, height, width = projection(x=source, batch_size=batch_size, input_height=height, input_width=width)
-            dram_source = ttnn.to_memory_config(source, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(source)
-            sources.append((dram_source, height, width))
+            sources.append((move_to_dram(source), height, width))
 
         source_flatten = []
         for source, height, width in sources:
