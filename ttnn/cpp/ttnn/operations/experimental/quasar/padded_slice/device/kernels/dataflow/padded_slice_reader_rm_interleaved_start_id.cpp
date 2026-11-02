@@ -9,6 +9,7 @@
 //                  becomes an offset_bytes on each read, mirroring the quasar i2s stick reader).
 //   * non-aligned staging -> node-local Scratchpad `scratch::pad` (not a DFB: the reader both
 //                  fills and drains it, which would be an unsupported DM self-loop on Gen2).
+//   * scratch offsets that violate the architecture's L1-read alignment use a synchronous CPU copy.
 //   * pad-row tails -> node-local Scratchpad `scratch::zero`, zeroed once and copied into the tail of
 //                  each output row when the shard row is wider than the slice row (the shared op's
 //                  pad-row writer did this in place; here the reader does it before pushing the rows).
@@ -26,6 +27,7 @@
 #include "api/scratchpad.h"  // Scratchpad<> (non-aligned TRID staging)
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     const uint32_t src_byte_offset = get_arg(args::src_byte_offset);  // per-core src offset (begins+width-misalign)
@@ -86,7 +88,7 @@ void kernel_main() {
         enum SlotState : uint8_t { IDLE = 0, SRC_PENDING = 1, SCRATCH_READY = 2, SCRATCH_PENDING = 3 };
         constexpr uint32_t trid_base = 1;
 
-        Scratchpad<uint32_t> scratch_buf(
+        Scratchpad<uint8_t> scratch_buf(
             scratch::pad);  // NB: local must not be named `scratch` (shadows the scratch:: ns)
         const uint32_t scratch_page_size = scratch_buf.size_in_bytes() / num_trids;
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
@@ -139,15 +141,26 @@ void kernel_main() {
                             slot_states[slot] = SlotState::SCRATCH_READY;
                         }
                     } else if (slot_states[slot] == SlotState::SCRATCH_READY) {
-                        // local L1 loopback: scratch(+misalignment) -> output DFB
-                        noc.async_read<NocOptions::TXN_ID>(
-                            scratch_buf,
-                            cb_in0,
-                            unpadded_stick_size,
-                            {.offset_bytes = scratch_off + misalignment},
-                            {.offset_bytes = dest_offsets[slot]},
-                            NocOptVals{.trid = active_trid});
-                        slot_states[slot] = SlotState::SCRATCH_PENDING;
+                        if (misalignment % NOC_L1_READ_ALIGNMENT_BYTES == 0) {
+                            // local L1 loopback: scratch(+misalignment) -> output DFB
+                            noc.async_read<NocOptions::TXN_ID>(
+                                scratch_buf,
+                                cb_in0,
+                                unpadded_stick_size,
+                                {.offset_bytes = scratch_off + misalignment},
+                                {.offset_bytes = dest_offsets[slot]},
+                                NocOptVals{.trid = active_trid});
+                            slot_states[slot] = SlotState::SCRATCH_PENDING;
+                        } else {
+                            // Mismatched L1-read offsets require a synchronous CPU copy.
+                            tt::data_movement::common::copy_via_memmove<false>(
+                                CoreLocalMem<uint8_t>(cb_in0.get_write_ptr() + dest_offsets[slot]),
+                                scratch_buf.local_mem() + scratch_off + misalignment,
+                                unpadded_stick_size);
+                            slot_states[slot] = SlotState::IDLE;
+                            sticks_read++;
+                            sticks_completed++;
+                        }
                     } else if (slot_states[slot] == SlotState::SCRATCH_PENDING) {
                         if (noc.is_read_trid_flushed(active_trid)) {
                             slot_states[slot] = SlotState::IDLE;
