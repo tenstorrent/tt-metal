@@ -20,7 +20,7 @@ REPS = 10
 @pytest.mark.parametrize("kc", [128])
 def test_cores_pf_sdpa(device, mode, kc):
     dev = device
-    S, TOPK, W = 512, 512, 128
+    S, TOPK, W = int(os.environ.get("CSD_S", "512")), 512, 128
     g = torch.Generator().manual_seed(0)
     pool = ttnn.from_torch(
         torch.randn(1, 1, R, 512, generator=g).float(),

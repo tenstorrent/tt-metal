@@ -11,7 +11,10 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <array>
+#include <algorithm>
 #include <bit>
+#include <cstdlib>
+#include <vector>
 #include <string>
 
 namespace ttnn::prim {
@@ -351,10 +354,66 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.common_runtime_args.insert(reader_desc.common_runtime_args.end(), reader_crt.begin(), reader_crt.end());
     writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());
 
+    // cores-for-prefill: DSV41_SDPA_BALANCE=1 (default OFF). The per-chunk time of a core depends strongly on its
+    // position (single-chip profile of the 12x10 grid at 512 rows: 14.5 us per 128-key chunk in the last logical row,
+    // 29 us in the first), so the uniform split (the first 32 cores get 5 rows, the others 4) leaves the op waiting for
+    // the slowest cores (746 us, the fast cores idle after 290 us). Rows are handed out one at a time to the core that
+    // would finish its next row first, using the measured table below.
+    std::vector<uint32_t> counts(num_cores);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        counts[i] = base + (i < extra ? 1u : 0u);
+    }
+    {
+        const char* bal_env = std::getenv("DSV41_SDPA_BALANCE");
+        if (bal_env != nullptr && bal_env[0] == '1' && grid.x == 12 && grid.y == 10) {
+            static constexpr float kChunkUs[10][12] = {
+                {41.9f, 41.1f, 41.9f, 42.0f, 42.2f, 42.3f, 42.6f, 42.0f, 42.2f, 42.6f, 42.8f, 42.1f},
+                {42.0f, 42.4f, 42.1f, 42.3f, 42.6f, 42.3f, 42.8f, 41.9f, 42.3f, 42.1f, 42.4f, 42.4f},
+                {40.0f, 33.6f, 33.6f, 40.5f, 40.3f, 40.4f, 33.7f, 33.7f, 40.5f, 40.7f, 40.5f, 40.8f},
+                {36.2f, 35.9f, 30.4f, 36.0f, 30.6f, 35.9f, 36.5f, 36.1f, 36.2f, 36.3f, 36.0f, 36.5f},
+                {27.9f, 28.5f, 27.8f, 28.7f, 28.1f, 28.3f, 28.0f, 28.1f, 28.3f, 28.6f, 32.0f, 31.0f},
+                {25.0f, 25.2f, 24.2f, 25.3f, 25.4f, 25.4f, 25.5f, 25.7f, 25.7f, 25.9f, 26.0f, 26.0f},
+                {18.9f, 19.6f, 19.5f, 19.6f, 20.3f, 20.0f, 19.8f, 19.5f, 19.5f, 20.0f, 21.0f, 20.1f},
+                {17.4f, 17.5f, 17.5f, 17.9f, 17.9f, 18.3f, 18.6f, 18.3f, 19.3f, 19.2f, 18.9f, 18.3f},
+                {16.3f, 16.3f, 16.4f, 16.7f, 16.9f, 17.1f, 17.2f, 16.9f, 17.4f, 18.4f, 18.2f, 18.2f},
+                {15.7f, 15.7f, 15.8f, 15.9f, 16.4f, 16.5f, 17.1f, 16.2f, 16.6f, 16.7f, 17.0f, 17.1f},
+            };
+            // DSV41_SDPA_BALANCE_MAP="t0,t1,..." (120 per-chunk times, logical row-major) replaces the table
+            // (profile-guided iteration without a rebuild)
+            std::vector<float> tab(120);
+            for (uint32_t i = 0; i < 120; ++i) {
+                tab[i] = kChunkUs[i / 12][i % 12];
+            }
+            if (const char* m = std::getenv("DSV41_SDPA_BALANCE_MAP")) {
+                char* p = const_cast<char*>(m);
+                for (uint32_t i = 0; i < 120; ++i) {
+                    tab[i] = std::strtof(p, &p);
+                    if (*p == ',') {
+                        ++p;
+                    }
+                }
+            }
+            std::fill(counts.begin(), counts.end(), 0u);
+            for (uint32_t r = 0; r < S; ++r) {
+                uint32_t best = 0;
+                float best_t = 1e30f;
+                for (uint32_t i = 0; i < num_cores; ++i) {
+                    const float t = (counts[i] + 1) * tab[i];
+                    if (t < best_t) {
+                        best_t = t;
+                        best = i;
+                    }
+                }
+                ++counts[best];
+            }
+        }
+    }
+    uint32_t next_tok = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        uint32_t tok_start = i * base + std::min(i, extra);
-        uint32_t tok_count = base + (i < extra ? 1u : 0u);
+        uint32_t tok_start = next_tok;
+        uint32_t tok_count = counts[i];
+        next_tok += tok_count;
         reader_desc.emplace_runtime_args(core, {tok_start, tok_count});
         writer_desc.emplace_runtime_args(core, {tok_start, tok_count});
         compute_desc.emplace_runtime_args(core, {tok_start, tok_count});
