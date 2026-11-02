@@ -582,6 +582,9 @@ void merge_partial(
             cb_prev_sum_exp, cb_alpha_own, r, cb_partial_in, cb_alpha_p, kPartialSumTile, cb_cur_sum_exp, 0U, 1U);
         cb_push_back(cb_cur_sum_exp, 1);
         pack_reconfig_data_format(cb_cur_mm_out);  // the unpacker keeps the config above: all four CBs are fp32
+        // The sum update above ends on an SFPU add; the broadcast multiply below gets its own init rather than
+        // relying on the FPU program the sum update left behind.
+        mul_bcast_cols_init(cb_partial_in, cb_alpha_p);
         for (uint32_t t0 = 0; t0 < Wt; t0 += block_size) {
             tile_regs_acquire();
             for (uint32_t i = 0; i < block_size; ++i) {
