@@ -67,14 +67,14 @@ export GEMMA_PATH="google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 # Audio-Video Fast (distilled 2-stage) — Blackhole Loud Box 2x4 (sp1/tp0)
 RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
-  -k "bh_2x4sp1tp0" -s --timeout 3600
+  -k "2x4sp1tp0nl2_line" -s --timeout 3600
 
 # Audio-Video Fast (distilled 2-stage) — Blackhole Galaxy 4x8 (ring)
 RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
-  -k "bh_4x8sp1tp0_ring" -s --timeout 3600
+  -k "4x8sp1tp0nl2_ring" -s --timeout 3600
 
-# Interactive prompt (omit NO_PROMPT)
-pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py -k "bh_2x4sp1tp0" -s --timeout 3600
+# Interactive prompt (NO_PROMPT=0)
+NO_PROMPT=0 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py -k "2x4sp1tp0nl2_line" -s --timeout 3600
 ```
 
 Override generation settings with environment variables: `PROMPT`, `NUM_FRAMES`, `HEIGHT`, `WIDTH`, `NUM_STEPS`, `SEED`, `OUTPUT_PATH`.
