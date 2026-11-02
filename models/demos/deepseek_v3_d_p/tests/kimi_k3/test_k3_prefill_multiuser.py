@@ -454,6 +454,8 @@ def test_k3_packed_traced_matches_eager(variant, config_only, mesh_device, devic
         kv_only_last_layer=True,
         use_trace=True,
         tp_shard_kv=True,
+        # Kimi-K3's MLA cache is dense (the K3 adapter resolves this to None); the config default is GLM's.
+        sparse_kv_cache_format=None,
     )
     mesh_device.enable_program_cache()
     runtime = TtKimiK3Runtime(mesh_device, config, {}, rt_config)
