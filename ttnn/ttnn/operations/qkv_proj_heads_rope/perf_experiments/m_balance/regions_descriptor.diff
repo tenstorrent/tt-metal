@@ -1,0 +1,483 @@
+--- qkv_proj_heads_rope_program_descriptor.py	2026-11-02 17:58:56.023296228 +0000
++++ perf_experiments/m_balance/fork/qkv_proj_heads_rope_program_descriptor.py	2026-11-02 18:09:56.195653183 +0000
+@@ -404,180 +404,322 @@
+     return kernels, next_id
+
+
++# ---------------------------------------------------------------------------------------------------------
++# m_balance: the core assignment as a list of regions. A region is a grid_m x grid_n sub-grid with one h_c
++# (one W slice width, one N-group set), its own M-groups (row ranges) and its own CT args; regions are
++# disjoint core sets, so every multicast group stays inside one region. One region = today's assignment.
++# MB_PLAN (env) forces a hand-placed mixed plan for Mt = 64 on the 11x10 grid; anything else = baseline.
++# ---------------------------------------------------------------------------------------------------------
++import os
++from dataclasses import replace
++
++MB_PLAN = os.environ.get("MB_PLAN", "base")
++# Split each M-group's x multicast into one group per rectangle (own sender each): x is re-read from its
++# tier once per rectangle, but no sender issues more than one multicast write per round.
++MB_XSPLIT = os.environ.get("MB_XSPLIT", "0") == "1"
++
++
++@dataclass
++class Region:
++    blocking: Blocking
++    row_ranges: list  # (row_start, rows) per M-group
++    layout: dict  # (m_group, n_group) -> (x, y)
++    w_multicast: bool
++
++
++def _region_blocking(base, heads_per_core, rows, compute_kernel_config):
++    n_tiles = TILES_PER_HEAD * heads_per_core
++    cap = block_m_cap(n_tiles, base.seq_tiles)
++    block_m = _block_m(max(rows), min(rows), cap)
++    sb_h, sb_w = _subblock(block_m, n_tiles, _dest_tiles(compute_kernel_config))
++    return replace(
++        base,
++        heads_per_core=heads_per_core,
++        grid_m=len(rows),
++        grid_n=TOTAL_HEADS // heads_per_core,
++        block_m=block_m,
++        sb_h=sb_h,
++        sb_w=sb_w,
++        weight_depth=WEIGHT_DEPTH,
++    )
++
++
++def _ranges(rows, start):
++    out = []
++    for r in rows:
++        out.append((start, r))
++        start += r
++    return out, start
++
++
++def _plan_a(base, cfg, w_mc_small):
++    """h_c = 3: 6 M-groups x 7 rows (12 cores each) + h_c = 2: 2 M-groups x 11 rows (18 cores each)."""
++    h3 = {}
++    for m in range(6):
++        for n in range(12):
++            h3[(m, n)] = (n, m) if n < 11 else (m, 6)
++    h2_cells = {0: [(x, 7) for x in range(11)] + [(x, 9) for x in range(7)],
++                1: [(x, 8) for x in range(11)] + [(x, 6) for x in range(6, 11)] + [(x, 9) for x in (7, 8)]}
++    h2 = {(m, n): h2_cells[m][n] for m in range(2) for n in range(18)}
++    r3, start = _ranges([7] * 6, 0)
++    r2, end = _ranges([11, 11], start)
++    assert end == base.tensor_row_tiles
++    return [
++        Region(_region_blocking(base, 3, [7] * 6, cfg), r3, h3, True),
++        Region(_region_blocking(base, 2, [11, 11], cfg), r2, h2, w_mc_small),
++    ]
++
++
++def _plan_a2(base, cfg):
++    """As _plan_a, h_c = 2 M-groups as rectangles: x 0..5 y 7..9 (1 rect); x 6..10 y 6..8 + x 6..8 y 9 (2)."""
++    regions = _plan_a(base, cfg, True)
++    cells = {0: [(x, y) for y in (7, 8, 9) for x in range(6)],
++             1: [(x, y) for y in (6, 7, 8) for x in range(6, 11)] + [(x, 9) for x in (6, 7, 8)]}
++    regions[1].layout = {(m, n): cells[m][n] for m in range(2) for n in range(18)}
++    return regions
++
++
++def _plan_b2(base, cfg):
++    """h_c = 2: M-group m = rows y = m and m + 4, x 0..8 (N-groups are 4-core columns); h_c = 4: rows y = 8, 9
++    x 0..8 and columns x = 9, 10 y 0..8 (N-group n = pair (n, 8..9) + pair (9..10, n))."""
++    h2 = {(m, n): (n % 9, m + 4 * (n // 9)) for m in range(4) for n in range(18)}
++    h4 = {}
++    for n in range(9):
++        h4[(0, n)], h4[(1, n)], h4[(2, n)], h4[(3, n)] = (n, 8), (n, 9), (9, n), (10, n)
++    r4, start = _ranges([5] * 4, 0)
++    r2, end = _ranges([11] * 4, start)
++    assert end == base.tensor_row_tiles
++    return [
++        Region(_region_blocking(base, 4, [5] * 4, cfg), r4, h4, True),
++        Region(_region_blocking(base, 2, [11] * 4, cfg), r2, h2, True),
++    ]
++
++
++def _plan_b(base, cfg):
++    """h_c = 4: 4 M-groups x 5 rows (9 cores each) + h_c = 2: 4 M-groups x 11 rows (18 cores each)."""
++    h4 = {(m, n): (n, m) for m in range(4) for n in range(9)}
++    h2 = {}
++    for m in range(4):
++        for n in range(18):
++            if n < 11:
++                h2[(m, n)] = (n, 4 + m)
++            elif n < 16:
++                j = n - 11
++                h2[(m, n)] = (j + 5 * (m // 2), 8 + m % 2)
++            else:
++                h2[(m, n)] = (9 + n - 16, m)
++    r4, start = _ranges([5] * 4, 0)
++    r2, end = _ranges([11] * 4, start)
++    assert end == base.tensor_row_tiles
++    return [
++        Region(_region_blocking(base, 4, [5] * 4, cfg), r4, h4, True),
++        Region(_region_blocking(base, 2, [11] * 4, cfg), r2, h2, True),
++    ]
++
++
++def plan_regions(device, blocking, compute_kernel_config):
++    if MB_PLAN != "base" and blocking.tensor_row_tiles == 64:
++        grid = device.compute_with_storage_grid_size()
++        assert (grid.x, grid.y) == (11, 10), "forced plans are hand-placed for the 11x10 p100a grid"
++        plans = {
++            "A_mc": lambda: _plan_a(blocking, compute_kernel_config, True),
++            "A_uc": lambda: _plan_a(blocking, compute_kernel_config, False),
++            "B": lambda: _plan_b(blocking, compute_kernel_config),
++            "A2": lambda: _plan_a2(blocking, compute_kernel_config),
++            "B2": lambda: _plan_b2(blocking, compute_kernel_config),
++        }
++        regions = plans[MB_PLAN]()
++    else:
++        grid = device.compute_with_storage_grid_size()
++        layout, _ = _choose_layout(grid.x, grid.y, blocking.grid_n, blocking.grid_m)
++        w_multicast = _w_multicast(grid, blocking.grid_m, blocking.grid_n, blocking.tensor_row_tiles, blocking.block_m)
++        regions = [Region(blocking, _row_ranges(blocking.tensor_row_tiles, blocking.grid_m), layout, w_multicast)]
++    cells = [c for r in regions for c in r.layout.values()]
++    assert len(cells) == len(set(cells)), "regions overlap"
++    for r in regions:
++        groups = [[r.layout[(m, n)] for n in range(r.blocking.grid_n)] for m in range(r.blocking.grid_m)]
++        if r.w_multicast:
++            groups += [[r.layout[(m, n)] for m in range(r.blocking.grid_m)] for n in range(r.blocking.grid_n)]
++        for g in groups:
++            assert len(_rectangles(g)) <= MAX_MCAST_RECTANGLES, (g, _rectangles(g))
++    return regions
++
++
+ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blocking, compute_kernel_config):
+     device = input_tensor.device()
+-    n_tiles = blocking.n_tiles
+-    block_m = blocking.block_m
++    regions = plan_regions(device, blocking, compute_kernel_config)
+     k_block = blocking.k_block
+     num_k_blocks = K_TILES // k_block
+     weight_width_tiles = weight.padded_shape[-1] // TILE
+-    groups_per_third = NUM_HEADS // blocking.heads_per_core
+-
+-    assignment, w_multicast = _core_assignment(device, blocking)
+-    cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, *_ in assignment])
+-    cbs = [
+-        _cb(index, pages, cores)
+-        for index, pages in _cb_pages(block_m, n_tiles, k_block, blocking.seq_tiles, blocking.weight_depth).items()
+-    ]
+-
+     last_valid_rows = input_tensor.shape[-2] % TILE
+-    reader_ct_args = [
+-        CB_ACTIVATION_BLOCK,
+-        CB_ROTARY_TABLE,
+-        block_m,
+-        k_block,
+-        num_k_blocks,
+-        HIDDEN_TILES,
+-        blocking.seq_tiles,
+-        BF16_TILE_BYTES,
+-        TILES_PER_HEAD,
+-        OUT_WRITE_NOCS,
+-        CB_OUT_TILES_NOC0,
+-        n_tiles,
+-        NUM_HEADS,
+-        last_valid_rows,
+-        CB_BIAS,
+-    ]
+-    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+-    reader_ct_args.extend(ttnn.TensorAccessorArgs(cos).get_compile_time_args())
+-    reader_ct_args.extend(ttnn.TensorAccessorArgs(sin).get_compile_time_args())
+-    for output in outputs:
+-        reader_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
+-    reader_ct_args.extend(ttnn.TensorAccessorArgs(bias).get_compile_time_args())
+-
+-    writer_ct_args = [
+-        CB_WEIGHT_BLOCK,
+-        CB_OUT_TILES,
+-        block_m,
+-        n_tiles,
+-        k_block,
+-        num_k_blocks,
+-        HIDDEN_TILES,
+-        weight_width_tiles,
+-        blocking.seq_tiles,
+-        NUM_HEADS,
+-        TILES_PER_HEAD,
+-        BF16_TILE_BYTES,
+-        last_valid_rows,
+-        OUT_WRITE_NOCS,
+-        blocking.weight_depth,
+-    ]
+-    writer_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
+-    for output in outputs:
+-        writer_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
+-
+-    compute_ct_args = [
+-        CB_ACTIVATION_BLOCK,
+-        CB_WEIGHT_BLOCK,
+-        CB_MATMUL_PARTIALS,
+-        CB_ROTARY_TABLE,
+-        CB_OUT_TILES,
+-        block_m,
+-        blocking.heads_per_core,
+-        TILES_PER_HEAD,
+-        k_block,
+-        num_k_blocks,
+-        blocking.sb_h,
+-        blocking.sb_w,
+-        OUT_WRITE_NOCS,
+-        CB_OUT_TILES_NOC0,
+-        blocking.seq_tiles,
+-        _dest_tiles(compute_kernel_config),
+-        CB_BIAS,
+-    ]
+
+-    reader_rt = {}
+-    writer_rt = {}
+-    compute_rt = ttnn.RuntimeArgs()
+     x_addr = input_tensor.buffer_address()
+     cos_addr, sin_addr = cos.buffer_address(), sin.buffer_address()
+     w_addr, b_addr = weight.buffer_address(), bias.buffer_address()
+     out_addrs = [o.buffer_address() for o in outputs]
+-    for core, n_group, m_group, row_start, core_rows in assignment:
+-        third = n_group // groups_per_third
+-        first_head = (n_group % groups_per_third) * blocking.heads_per_core
+-        first_col_tile = third * HIDDEN_TILES + TILES_PER_HEAD * first_head
+-        is_rotary = int(third < 2)
+-        reader_rt[(core.x, core.y)] = [
+-            x_addr,
+-            cos_addr,
+-            sin_addr,
+-            row_start,
+-            core_rows,
+-            is_rotary,
+-            *out_addrs,
+-            third,
+-            first_head,
+-            b_addr,
+-            first_col_tile,
++
++    cbs = []
++    readers, writers, computes = [], [], []
++    region_parts = []
++    x_next_id = 0
++    for region in regions:
++        rb = region.blocking
++        n_tiles, block_m = rb.n_tiles, rb.block_m
++        groups_per_third = NUM_HEADS // rb.heads_per_core
++        assignment = []
++        for m_group in range(rb.grid_m):
++            for n_group in range(rb.grid_n):
++                core = ttnn.CoreCoord(*region.layout[(m_group, n_group)])
++                assignment.append((core, n_group, m_group, *region.row_ranges[m_group]))
++        cores = ttnn.CoreRangeSet(_rectangles([(c.x, c.y) for c, *_ in assignment]))
++        cbs += [
++            _cb(index, pages, cores)
++            for index, pages in _cb_pages(block_m, n_tiles, k_block, rb.seq_tiles, rb.weight_depth).items()
+         ]
+-        writer_rt[(core.x, core.y)] = [
+-            w_addr,
+-            *out_addrs,
+-            third,
+-            first_col_tile,
+-            first_head,
+-            row_start,
+-            core_rows,
+-            m_group,
+-            blocking.grid_m,
++        reader_ct_args = [
++            CB_ACTIVATION_BLOCK,
++            CB_ROTARY_TABLE,
++            block_m,
++            k_block,
++            num_k_blocks,
++            HIDDEN_TILES,
++            rb.seq_tiles,
++            BF16_TILE_BYTES,
++            TILES_PER_HEAD,
++            OUT_WRITE_NOCS,
++            CB_OUT_TILES_NOC0,
++            n_tiles,
++            NUM_HEADS,
++            last_valid_rows,
++            CB_BIAS,
+         ]
+-        compute_rt[core.x][core.y] = [core_rows, is_rotary]
++        reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
++        reader_ct_args.extend(ttnn.TensorAccessorArgs(cos).get_compile_time_args())
++        reader_ct_args.extend(ttnn.TensorAccessorArgs(sin).get_compile_time_args())
++        for output in outputs:
++            reader_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
++        reader_ct_args.extend(ttnn.TensorAccessorArgs(bias).get_compile_time_args())
++
++        writer_ct_args = [
++            CB_WEIGHT_BLOCK,
++            CB_OUT_TILES,
++            block_m,
++            n_tiles,
++            k_block,
++            num_k_blocks,
++            HIDDEN_TILES,
++            weight_width_tiles,
++            rb.seq_tiles,
++            NUM_HEADS,
++            TILES_PER_HEAD,
++            BF16_TILE_BYTES,
++            last_valid_rows,
++            OUT_WRITE_NOCS,
++            rb.weight_depth,
++        ]
++        writer_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
++        for output in outputs:
++            writer_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
++
++        compute_ct_args = [
++            CB_ACTIVATION_BLOCK,
++            CB_WEIGHT_BLOCK,
++            CB_MATMUL_PARTIALS,
++            CB_ROTARY_TABLE,
++            CB_OUT_TILES,
++            block_m,
++            rb.heads_per_core,
++            TILES_PER_HEAD,
++            k_block,
++            num_k_blocks,
++            rb.sb_h,
++            rb.sb_w,
++            OUT_WRITE_NOCS,
++            CB_OUT_TILES_NOC0,
++            rb.seq_tiles,
++            _dest_tiles(compute_kernel_config),
++            CB_BIAS,
++        ]
++
++        reader_rt, writer_rt = {}, {}
++        compute_rt = ttnn.RuntimeArgs()
++        for core, n_group, m_group, row_start, core_rows in assignment:
++            third = n_group // groups_per_third
++            first_head = (n_group % groups_per_third) * rb.heads_per_core
++            first_col_tile = third * HIDDEN_TILES + TILES_PER_HEAD * first_head
++            is_rotary = int(third < 2)
++            reader_rt[(core.x, core.y)] = [
++                x_addr, cos_addr, sin_addr, row_start, core_rows, is_rotary, *out_addrs,
++                third, first_head, b_addr, first_col_tile,
++            ]
++            writer_rt[(core.x, core.y)] = [
++                w_addr, *out_addrs, third, first_col_tile, first_head, row_start, core_rows, m_group, rb.grid_m,
++            ]
++            compute_rt[core.x][core.y] = [core_rows, is_rotary]
++        region_parts.append((region, assignment, cores, reader_ct_args, writer_ct_args, writer_rt, reader_rt))
++        computes.append(
++            ttnn.KernelDescriptor(
++                kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_compute.cpp"),
++                core_ranges=cores,
++                compile_time_args=compute_ct_args,
++                runtime_args=compute_rt,
++                config=compute_kernel_config,
++            )
++        )
+
+     descriptor = ttnn.ProgramDescriptor(cbs=cbs)
+-    m_groups = [[core for core, _, m, *_ in assignment if m == m_group] for m_group in range(blocking.grid_m)]
+-    n_groups = [[core for core, n, *_ in assignment if n == n_group] for n_group in range(blocking.grid_n)]
+-    # R3: x does not vary along head_cols, so each M-group's grid_n cores share every x K-block: one core
+-    # reads it and multicasts it. Handshake on: the landing slot is a double-buffered CB slot a receiver
+-    # may still be consuming.
+-    readers, next_semaphore_id = _group_kernels(
+-        descriptor,
+-        dict(
+-            kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_reader.cpp"),
+-            compile_time_args=reader_ct_args,
+-            config=ttnn.ReaderConfigDescriptor(),
+-        ),
+-        reader_rt,
+-        m_groups,
+-        ["xmc"],
+-        ttnn.NOC.NOC_0,
+-        0,
+-        device,
+-    )
+-    # R2: W does not vary along token_rows, so each N-group's grid_m cores share every W K-block. Rides the
+-    # writer (NOC_1), so the two channels use different NoCs.
+-    writer_args = dict(
+-        kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_writer.cpp"),
+-        compile_time_args=writer_ct_args,
+-        config=ttnn.WriterConfigDescriptor(),
+-    )
+-    w_senders = min(W_SENDERS, blocking.grid_m)
+-    if w_multicast:
+-        writers, _ = _group_kernels(
++    # R3 per region: groups of all regions are disjoint, so they share semaphore IDs.
++    for region, assignment, cores, reader_ct_args, _, _, reader_rt in region_parts:
++        m_groups = [[c for c, _, m, *_ in assignment if m == mg] for mg in range(region.blocking.grid_m)]
++        if MB_XSPLIT:
++            m_groups = [
++                [c for c in group if rect.contains(c)]
++                for group in m_groups
++                for rect in _rectangles([(c.x, c.y) for c in group])
++            ]
++        kernels, next_id = _group_kernels(
+             descriptor,
+-            writer_args,
+-            writer_rt,
+-            n_groups,
+-            W_CHANNEL_PREFIXES[:w_senders],
+-            ttnn.NOC.NOC_1,
+-            next_semaphore_id,
++            dict(
++                kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_reader.cpp"),
++                compile_time_args=reader_ct_args,
++                config=ttnn.ReaderConfigDescriptor(),
++            ),
++            reader_rt,
++            m_groups,
++            ["xmc"],
++            ttnn.NOC.NOC_0,
++            0,
+             device,
+         )
+-    else:
+-        rt = ttnn.RuntimeArgs()
+-        for (x, y), args in writer_rt.items():
+-            rt[x][y] = args
+-        writers = [ttnn.KernelDescriptor(core_ranges=cores, runtime_args=rt, **writer_args)]
+-        w_senders = 0
+-    for writer in writers:
+-        for prefix in W_CHANNEL_PREFIXES[w_senders:]:
+-            ttnn.attach_absent_mcast(writer, prefix)
+-    compute = ttnn.KernelDescriptor(
+-        kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_compute.cpp"),
+-        core_ranges=cores,
+-        compile_time_args=compute_ct_args,
+-        runtime_args=compute_rt,
+-        config=compute_kernel_config,
+-    )
+-    descriptor.kernels = [*readers, *writers, compute]
++        readers += kernels
++        x_next_id = max(x_next_id, next_id)
++    for region, assignment, cores, _, writer_ct_args, writer_rt, _ in region_parts:
++        writer_args = dict(
++            kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_writer.cpp"),
++            compile_time_args=writer_ct_args,
++            config=ttnn.WriterConfigDescriptor(),
++        )
++        w_senders = min(W_SENDERS, region.blocking.grid_m)
++        if region.w_multicast:
++            n_groups = [[c for c, n, *_ in assignment if n == ng] for ng in range(region.blocking.grid_n)]
++            kernels, _ = _group_kernels(
++                descriptor, writer_args, writer_rt, n_groups, W_CHANNEL_PREFIXES[:w_senders],
++                ttnn.NOC.NOC_1, x_next_id, device,
++            )
++        else:
++            rt = ttnn.RuntimeArgs()
++            for (x, y), args in writer_rt.items():
++                rt[x][y] = args
++            kernels = [ttnn.KernelDescriptor(core_ranges=cores, runtime_args=rt, **writer_args)]
++            w_senders = 0
++        for writer in kernels:
++            for prefix in W_CHANNEL_PREFIXES[w_senders:]:
++                ttnn.attach_absent_mcast(writer, prefix)
++        writers += kernels
++    descriptor.kernels = [*readers, *writers, *computes]
++    if os.environ.get("QKV_ABLATE"):  # ablation hooks (perf_experiments/_breakdown/ablation_hooks_perf3.patch)
++        kernels = list(descriptor.kernels)
++        for kernel in kernels:
++            kernel.defines = list(kernel.defines) + [(d, "1") for d in os.environ["QKV_ABLATE"].split(",")]
++        descriptor.kernels = kernels
+     return descriptor

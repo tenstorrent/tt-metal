@@ -202,3 +202,84 @@ Whole op, focus 8x512: 94.9 -> 90.0 us (-5.2%; target 90.0). 16x256 and 32x128 u
 |---|---|---|---|---|---|
 | matmul_block (via ckernel::matmul_block / llk_math_matmul) | capability | The math half issues a DEST target offset write plus one MOP run per tile product (~4.4 cycles per product regardless of fidelity). No helper or API mode runs a call's ct_dim x rt_dim products as one MOP with the DEST stride in an address mod. A raw K-loop with the stock LLK is flat vs the helper (95,271 vs 94,919), so the helper itself costs nothing. The fix belongs in the LLK matmul MOP, and the helper would inherit it. | 94,919 | 92,045 | kernels/mm_fused_mop.hpp:99, qkv_proj_heads_rope_compute.cpp (`block_k_loop`, `last_k_row`) |
 | eltwise_chain BinaryFpu / mul_tiles (extends the Perf 1 `tile_src_mul` bypass) | capability | Every product unpacks both operands, so there is no way to keep srcA resident across two products with different srcB. The rotary epilogue is unpack-bound (one fidelity phase measured the same), so each fp32 partial tile was unpacked twice. | 94,880 (Perf 1 raw tile_src_mul; mul_tiles not re-measured) | 94,109 | kernels/tile_src_mul.hpp (`tile_src_mul_pair`), qkv_proj_heads_rope_compute.cpp (`epilogue_row`) |
+
+## Perf 3
+- Date: 2026-11-02. Device: Blackhole p100a (108 of 110 cores on the 12x9 rows), AICLK 1350 MHz. Metric: DEVICE KERNEL DURATION [ns], one fresh-cache run per point. Third perf round on this op (tournament round 1 of this run; `## Perf 1` / `## Perf 2` are earlier rounds).
+- Focus: the flagged LOOSE_CASES 4x512, 8x256 (target 46 us), 2x512, 4x256 (target 28 us), exact config (x / cos / sin / q / k / v in L1, W / bias in DRAM, bf16 TILE interleaved, tables cut to S, default compute config HiFi3 + fp32_dest_acc_en + half-sync DEST + approx off). All in SUPPORTED. Guard rows 8x512 / 16x256 / 32x128 / 8x384 must not regress. Precision knobs untouched.
+- Instrumentation: the Perf 1/2 zones cover every stage and were reused, with none added (the graduated tail keeps `*_store_wait_first` / `*_store` on the unit loops). Tools added in `perf_experiments/_breakdown/`: `ablation_hooks_perf3.patch` (`ABL_NO_{STORE,XREAD,WREAD,TABLE,BIAS,MCAST,EPI,SEED,MATMUL}` via `QKV_ABLATE`), `ablate_rows.sh`, `percore.py` (per-core zone sums / ends), `test_placement_rows.py` (`QKV_ROWS="BxS:x:tables:outputs,..."`).
+
+### Measured breakdown (before)
+| point (cumulative peel) | 4x512 | 8x256 | 2x512 | 4x256 |
+|---|---|---|---|---|
+| full | 51,661 | 51,594 | 36,441 | 36,165 |
+| stores stubbed | 50,519 | 50,407 | 35,384 | 34,991 |
+| + input DM stubbed (x / W / table / bias reads, both multicasts) | 46,439 | 46,449 | 23,793 | 23,743 |
+| + epilogue math stubbed | 45,645 | 45,619 | 23,489 | 23,452 |
+| + bias seed stubbed | 45,447 | 45,444 | 23,375 | 23,307 |
+| + matmul math stubbed (pack / sync floor) | 14,501 | 14,502 | 7,898 | 8,050 |
+| compute stubbed (DM alone) | 44,502 | 43,418 | 34,365 | 34,005 |
+| multicasts stubbed alone | 51,387 | 51,486 | 28,258 | 28,313 |
+| W reads stubbed alone | 51,695 | 51,107 | 28,818 | 28,513 |
+Table, bias, x reads, epilogue and seed each stubbed alone: flat (within 0.5 us) on all four rows.
+
+Ranked:
+1. 2x512 / 4x256: the R2 W stream binds (DM alone 34.4 vs compute alone 23.4 us). N-group 8's sender took 3.5 us per round against 2.3 elsewhere, and its 12 cores ended last (36.7 vs 33-35 us).
+2. 4x512 / 8x256: the K-loop runs at the HiFi3 roofline on the 6-row cores, and Mt=64 over 12 M-groups puts 6 rows on them against a mean of 5.33. Structural, ~4.7 us.
+3. The fill before K-block 0's first pack, 3.5-4.9 us, bound by bias, W round 0 and x round 0 together.
+4. The tail: epilogue ~0.8 us exposed and the store ~1.1 us.
+
+The matmul payload was not targeted: it is at the HiFi3 FPU roofline (~49.6 cycles per product).
+
+### Portfolio and verdicts (each subagent's fork vs same-session baseline)
+| idea | verdict | before -> after | domain |
+|---|---|---|---|
+| w_stream: R2 W stream. Menu: layout rule "fewest N-group rectangles as Mcast lowers them" 2x512 36.7k -> 34.1-34.4k, 4x256 36.0-36.2k -> 33.8-34.0k; + W split over 2 senders (median 32.7k, noisy, flat elsewhere); + sender's reader reads half of each round on NoC0 (33.1k, but 8x512 / 4x512 / 8x384 / 7x511 +3-4% and inexpressible at 1x32); 4 senders 45.8k; leftover core as sender 49.8k; relay 62.3k; read-ahead during multicast 37.3k | WIN (layout rule), bit-identical | 2x512 36,705 -> 34,436; 4x256 36,217 -> 33,824 | everywhere, host-only. On 11x10 it changes only the 12x9 grid |
+| fill_v3: shorter fill. Menu: LATESEED (K0 L1-acc off, bias after K0) 53.1k at 4x512 / 36.7k at 2x512; ragged 2:2:4.. 52.8k / 39.8k; BSEND bias channel 52.8-59.8k (stall in one run); BSEND + ragged 51.8k / 41.9k; DEST seed 53.0-53.7k; weight depth 3 + ramps 52.4-57.2k | NULL | 4x512 52,093 -> best 51,840 (inside noise), 2x512 +8-14% for the ragged variants | not graduated: the fill is bound by the W stream (3.1 us DRAM read + 2.2 us multicast per round). Separate bias delivery is worth ~0.9 us only once W is faster |
+| m_balance: mixed-h_c core assignment at Mt=64 (best busiest core 44 tiles vs 48). Plans A_mc 74.7k, A2 99.7k, B2 78.1k, B2 + per-rectangle x senders 70.2k (4x512) / 59.9k (8x256) | REGRESSION | 4x512 52,433 -> 70,198 at best | not graduated. Compute alone does drop 46.5 -> 43.2 us, but DM binds: the reader's sin sign flip (`negate_bf16_tile`) costs ~3.2 us per table row on NCRISC (39.8 us on 11-row h_c=2 cores), and the h_c=2 x (88 KB rounds) and 4-core W streams are slow. Mt=32 / 96 / 128 have no better grid |
+| tail_v3: the block's last row as two head-aligned units for the last-K matmul, every unit stored half on the writer (NoC1) and half on the reader (NoC0). Menu: halves only 51.3-51.8k; units only flat; + lastlead0 flat; LAST_K_LEAD 2 52.6k; lean inits 51.1-51.6k (flat, raw LLK, not taken); batched epilogues 52.4-54.2k; one NoC 57.7k | WIN, bit-identical | 4x512 52,113 -> 51,406 (medians of 3); 8x384 67,681 -> 66,744 | everywhere it ran correct (13 cases incl. HiFi4 / LoFi / full sync / 1 and 3 heads per core). Coordinator found two exceptions at graduation (below) |
+
+### Graduated
+| step | 8x512 / 16x256 / 32x128 / 8x384 / 4x512 / 8x256 / 2x512 / 4x256 (ns) | golden |
+|---|---|---|
+| before | 89,864 / 90,232 / 89,959 / 67,626 / 52,364 / 51,905 / 37,008 / 35,833 | 210/210 |
+| + layout rule | 89,934 / 90,216 / 90,111 / 68,474 / 52,006 / 51,854 / 34,361 / 33,766 | - |
+| + tail units (final, with both carve-outs) | 90,007 / 90,263 / 89,552 / 67,319 / 51,398 / 51,307 / 33,653 / 33,570 | 210/210 |
+
+- Layout rule: `_lowered_rectangles` counts a group's rectangles the way `Mcast` lowers it. `_choose_layout` now takes the qualifying layout whose largest N-group lowers to the fewest rectangles, instead of the first that qualifies, so 12x9 on 11x10 now uses the transposed fold. The old first-qualifies rule is deleted, with no carve-out.
+- Tail units (`kernels/tail_units.hpp`; `store_row` became `store_tiles`; `last_k_tiles` / `epilogue_tiles` / `epilogue_unit_routed` in compute): the whole-row-alternation code is deleted, and `split_units` = false selects whole rows alternating inside the same unit loops. Two carve-outs:
+  - **Outputs in DRAM** (`split_units` = false, host): a measured regression with the split. Before -> layout -> layout + split, two runs each:
+    - 8x512: 133.0 -> 134.5 -> 136.3 us
+    - 4x512: 71.5 -> 71.4 -> 74.0 us
+    - 2x512: 42.6 -> 41.5 -> 44.9 us
+    - 4096x1 all DRAM: 4.24 -> 4.18 -> 4.37 ms
+
+    Tables in DRAM are not affected (8x512 / 2x512 tables DRAM: flat / -1.6 us), so the gate is on the output buffer only.
+  - **3 or 6 heads per core** (no last-row split): incorrect. A CB ring wraps only on an exact `fifo_limit`, and odd half-head counts mix push sizes so a push straddles the end. Example: 6 heads, 4 rows, 6 + 6 + 6 + 4 + 4 on a 24-tile ring. The forced runs passed only because the overrun landed on consumed or free L1. 1, 2, 4 and 12 heads keep the split. A forced h_c 1/2/3/6/12 sweep on 9x256 / 4x256 / 2x37 passes.
+
+Whole op, focus rows: 4x512 52.4 -> 51.4 us (-1.8%), 8x256 51.9 -> 51.3 (-1.2%), 2x512 37.0 -> 33.7 (-9.1%), 4x256 35.8 -> 33.6 (-6.3%). All four are still above target_ns (46 / 46 / 28 / 28). 8x512 / 16x256 / 32x128 / 8x384 are flat. Unit suite 25/25, golden 210/210.
+
+### Guard set (`test_qkv_proj_heads_rope_perf_guard.py`, same session, before -> after ns, all correct)
+| row | before | after |
+|---|---|---|
+| 8x512 all L1 | 89,727 | 89,864 |
+| 2x512 | 36,743 | 33,608 |
+| 7x511 h_non_aligned | 82,216 | 81,890 |
+| 13x300 h_non_aligned | 90,296 | 90,160 |
+| 8x512 x in DRAM | 94,465 | 93,866 |
+| 8x512 tables + outputs in DRAM | 132,630 (132,199 / 132,496 in reruns) | 134,108 |
+| 1x32 (R1) | 23,328 | 22,470 |
+| 1x128 | 28,003 | 27,644 |
+| 2x37 | 28,224 | 27,850 |
+| 16x8 | 34,410 | 31,929 |
+| 4096x1 multi-block, all DRAM | 4,237,167 | 4,203,573 |
+
+Placement rows (`test_placement_rows.py`, two runs each, before -> after): 8x512 out DRAM 132,821 / 133,303 -> 134,078 / 134,353; 8x512 tables DRAM 89,999 / 89,961 -> 89,996 / 89,795; 4x512 out DRAM 71,288 / 71,671 -> 70,609 / 71,833; 2x512 out DRAM 42,781 / 42,475 -> 41,657 / 41,439; 2x512 tables DRAM 36,127 / 36,207 -> 34,320 / 34,808.
+
+The layout rule's cost is +1.1% (~1.4 us, consistent across 4 runs) on 8x512 with outputs in DRAM, against -7% on the production 2x512. It is under the ~2% band treated as noise in earlier rounds, so the rule stays one path. That cell is the place to look if it grows. SUPPORTED unchanged.
+
+### Bottleneck now
+- 2x512 / 4x256: the W stream. The sender's 2-rectangle send (~2.3 us) plus its NoC1 read issue (~1.3 us) is ~3.6 us per round, against ~2.5-3.5 us of compute per K-block. A w_stream micro-benchmark puts NoC1 W reads from 9 senders at ~3.1 us per round, NoC0 at 2.3, half on each at 1.75. Moving W reads onto NoC0 collides with the x / bias reads (measured +3-4% on the larger rows).
+- 4x512 / 8x256: M imbalance (6 vs 5.33 rows on the FPU roofline). Any rebalancing needs cheaper DM per row first. The reader's per-row sin sign flip (~3.2 us of NCRISC per row) is the first blocker; candidates are table multicast per M-group or a sign-free rotary product.
+
+### Helper bypasses — none
+No raw-LLK path was added. The layout rule is host-only. The tail units reuse the Perf 1/2 raw paths (`mm_fused_mop.hpp` last-K, `tile_src_mul_pair`), whose rows above still apply. The lean-init variant that bypassed `mul_init` / `matmul_block_init` measured flat and was not taken.

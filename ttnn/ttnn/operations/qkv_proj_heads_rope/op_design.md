@@ -110,10 +110,10 @@ Resulting grid on p100a (110 cores), Refinement 5:
 | 2x512, 4x256 | 32 | 4 | 12 x 9 (R2) | 108 | 3 / 2 | 24 (20.9) |
 | Mt = 4 .. 16 (e.g. 2x64, 4x128) | 4-16 | 4 | Mt x 9 or 12 x 9 (R2 when grid_m >= 4) | 36-108 | 1-2 | 8-16 |
 
-Core layout (Refinement 3, `_choose_layout`): every multicast group must lower to at most `MAX_MCAST_RECTANGLES` = 3 rectangles. Each channel is built as one `ttnn.Mcast` + one kernel descriptor per group (`_group_kernels`): `Mcast` only partitions consecutive runs of a sorted core list, so per-group objects let an M-group and an N-group be any small set of rectangles. Groups are disjoint, so all groups of a channel share semaphore IDs (x: 0-1 on the reader, W: 2-3 on the writer). Layout candidates, first that qualifies wins:
+Core layout (Refinement 3, `_choose_layout`): every multicast group must lower to at most `MAX_MCAST_RECTANGLES` = 3 rectangles. Each channel is built as one `ttnn.Mcast` + one kernel descriptor per group (`_group_kernels`): `Mcast` only partitions consecutive runs of a sorted core list, so per-group objects let an M-group and an N-group be any small set of rectangles. Groups are disjoint, so all groups of a channel share semaphore IDs (x: 0-1 on the reader, W: 2-3 on the writer). Rectangle counts are taken as `Mcast` lowers the group (`_lowered_rectangles`: it merges the receiver set first, so a column touching a row run can become 3). Among the qualifying candidates, the one whose largest N-group lowers to the fewest rectangles wins, earlier on ties (Perf 3: each W round is one multicast per rectangle):
 1. Row-major `l = m_group*grid_n + n_group` (the R3 placement). M-groups are consecutive runs (<= 3 rectangles); N-groups qualify only for small `grid_m` (3x36: 3 one-core rectangles).
-2. Folded: `n` along x, `m` along y for `m < grid.y`; overflow M-groups fold into the leftover columns with `n` running along y. 12x9 on the 11x10 p100a grid: M-groups are 1 line each; N-groups are a column plus a 2-core row (2 rectangles).
-3. The transpose of 2.
+2. Folded: `n` along x, `m` along y for `m < grid.y`; overflow M-groups fold into the leftover columns with `n` running along y. 12x9 on the 11x10 p100a grid: M-groups are 1 line each; N-groups are a column plus a 2-core row, but N-group 8's column touches its row and lowers to 3.
+3. The transpose of 2. 12x9 on 11x10: every N-group lowers to 2, so it wins (2x512 36.7 -> 34.1 us).
 
 R2 (W multicast) is on when a layout qualifies, `grid_m >= W_MCAST_MIN_GROUP` (4; measured: at grid_m = 3 the multicast is slower than 3 W reads) and every M-group walks the same number of blocks (the W rounds and `cb_weight_block` slots must line up across an N-group). Otherwise the layout is row-major and W is unicast (R1), with the channel attached as absent. 6x18 (4x512, 8x256) has no qualifying layout and stays R1. Senders are fixed per group, staggered (`sender_index = group % size`); rotating senders need rectangular groups (`mcast.cpp:89`) and the kernels serialize rounds anyway.
 
@@ -126,7 +126,7 @@ R2 (W multicast) is on when a layout qualifies, `grid_m >= W_MCAST_MIN_GROUP` (4
 | cb_matmul_partials | (none: accumulator) | 1 block | in-place L1 accumulation across K-blocks requires exactly one resident block |
 | cb_rotary_table | `min(block_m, St)` (rows) | one slot per distinct sequence position of a block | Refinement 4: the reader reads a block's slots in chunks after each x K-block push, so table reads and the sign flip sit in the K-loop slack; block row r uses slot r % St |
 | cb_out_tiles | `out_depth` (rows) | 2 | writer drains row i while compute packs row i+1 |
-| cb_out_tiles_noc0 | `out_depth` (rows) | 2 | Refinement 4 (`OUT_WRITE_NOCS = 2`): odd rows go here and the reader stores them on NoC0; even rows via cb_out_tiles / writer / NoC1 |
+| cb_out_tiles_noc0 | `out_depth` (rows) | 2 | Refinement 4 (`OUT_WRITE_NOCS = 2`): the reader stores this CB on NoC0, the writer cb_out_tiles on NoC1. Perf 3 (`kernels/tail_units.hpp`): every output unit is split by heads, first half to the writer, second to the reader, and the block's last row is two units; with outputs in DRAM (split measured slower) whole rows alternate, odd rows here |
 
 All five are host constants passed to the program descriptor; every CB page count and every loop bound is derived from them plus `block_m`, `heads_per_core`, `k_block`.
 
@@ -293,7 +293,7 @@ Single built regime: no runtime regime selection in Phase 0. Tests must still pi
 | cb_matmul_partials | 2 | 4096 | `block_m * N_c` (88) | spans token_rows x head_cols; accumulator over K' | Float32 | compute | compute | K-loop through epilogue |
 | cb_rotary_table | 3 | 2048 | `min(block_m, St) * 4` (44) | 4 tiles per row, streams over token_rows | Float16_b | reader | compute | epilogue (q/k cores; allocated on all) |
 | cb_out_tiles | 4 | 2048 | `out_depth * N_c` (16) | spans head_cols, streams over token_rows | Float16_b | compute | writer | epilogue |
-| cb_out_tiles_noc0 | 5 | 2048 | `out_depth * N_c` (16) | as cb_out_tiles (odd rows) | Float16_b | compute | reader | epilogue (`OUT_WRITE_NOCS = 2`) |
+| cb_out_tiles_noc0 | 5 | 2048 | `out_depth * N_c` (16) | as cb_out_tiles (second half of each unit; odd rows with outputs in DRAM) | Float16_b | compute | reader | epilogue (`OUT_WRITE_NOCS = 2`) |
 
 Values in parentheses: 8x512 Phase 0 (`block_m=11, N_c=8, k_block=5`). Full ledger, sharing decisions and footprint: `l1_ledger.md`.
 
@@ -306,7 +306,7 @@ Values in parentheses: 8x512 Phase 0 (`block_m=11, N_c=8, k_block=5`). Full ledg
 | 2 | project_block | `block_m x N_c`, 5 K-blocks of 5 | yes: `matmul_block` | cb_activation_block (`block_m*k_block`, waited+popped per K-block), cb_weight_block (`k_block*N_c`, waited+popped per K-block) | cb_matmul_partials (`block_m*N_c`, caller reserves before / pushes after) | partials pushed (nominal), L1 acc must be switched off by the caller |
 | 3a | rotate_block (q/k) | per valid row, per head: grid(2 out tiles, 2 terms) | yes: `eltwise_chain` | cb_matmul_partials (waited once for the nominal block, read with Offset base `row*N_c + 2*head`, popped at block end), cb_rotary_table (waited/popped 4 per row, Offset base 0) | cb_out_tiles (1 tile per walk row, `N_c` per row) | partials popped (nominal) |
 | 3b | convert_block (v) | per valid row: `N_c` tiles | yes: `eltwise_chain` (CopyTile -> PackTile) | cb_matmul_partials (as 3a) | cb_out_tiles (`N_c` per row) | partials popped (nominal) |
-| 4 | store_block | per valid row: `N_c` tiles | dataflow (`qkv_store::store_row`, shared by writer and reader) | cb_out_tiles (even rows, writer/NoC1), cb_out_tiles_noc0 (odd rows, reader/NoC0) | q / k / v DRAM or L1 pages | popped |
+| 4 | store_block | per valid row: `N_c` tiles | dataflow (`qkv_store::store_tiles`, shared by writer and reader) | cb_out_tiles (first half of each unit, writer/NoC1), cb_out_tiles_noc0 (second half, reader/NoC0); whole rows alternating with outputs in DRAM | q / k / v DRAM or L1 pages | popped |
 
 Rotary chain contract (per row r, head h; partials tiles `P0 = r*N_c + 2h`, `P1 = P0 + 1`; table row `[C0, -S0, S1, C1]`):
 
