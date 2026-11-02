@@ -23,7 +23,7 @@ each call it logs [HALO] with the PCC, the number of output pixels that differ f
 (32-row block, channel half) pairs: a pixel is bad in channel half k when its max error over channels
 32k..32k+31 is above 0.1.
 
-RESNET_REPEAT_N sets the number of calls (default 3).
+RESNET_REPEAT_N sets the number of calls (default 3). RESNET_NO_PROGRAM_CACHE=1 turns the program cache off.
 
 Run (Horizon emulator, slow dispatch):
   pytest -q -s models/demos/vision/classification/resnet50/quasar/tests/ops/test_halo_tile_repeat.py -k conv-40-one
@@ -80,6 +80,8 @@ def test_halo_tile_repeat(mesh_device, op, spatial, cores, monkeypatch):
     torch.manual_seed(0)
     monkeypatch.setenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "1")  # the model's split path for HS conv2
     n_iter = int(os.environ.get("RESNET_REPEAT_N", "3"))
+    if os.environ.get("RESNET_NO_PROGRAM_CACHE"):
+        device.disable_and_clear_program_cache()  # every call builds new programs
 
     torch_input = torch.relu(torch.randn((1, CH, spatial, spatial))).bfloat16().float()
     if op == "conv":
