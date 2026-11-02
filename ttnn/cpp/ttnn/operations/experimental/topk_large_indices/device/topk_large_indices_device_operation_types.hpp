@@ -15,6 +15,9 @@
 
 namespace ttnn::operations::experimental::topk_large_indices {
 
+// A per-row valid_length_tensor holds at most this many rows (its page must fit the reader's metadata scratch CB).
+inline constexpr uint32_t topk_per_row_length_max = 256;
+
 inline uint32_t flattened_rows_excluding_last_dim(const ttnn::Shape& shape) {
     uint64_t rows = 1;
     for (uint32_t i = 0; i + 1 < shape.rank(); ++i) {
@@ -48,7 +51,7 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     Tensor input_tensor;
-    // Optional 1-element UINT32 row-major DRAM tensor used for trace-safe valid lengths.
+    // Optional UINT32 row-major DRAM tensor used for trace-safe valid lengths: 1 element (all rows) or one per row.
     std::optional<Tensor> valid_length_tensor{std::nullopt};
     bool has_valid_length_metadata() const { return valid_length_tensor.has_value(); }
     // Optional 1-element UINT32 row-major DRAM tensor holding the REAL token end. Without it the derived

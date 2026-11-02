@@ -56,6 +56,14 @@ RuntimeShapeArgs get_runtime_shape_args(const Tensor& input, std::optional<uint3
         .input_row_bytes = n * input.element_size()};
 }
 
+// 0 for a scalar length; else the byte size of the per-row length page the reader fetches.
+uint32_t meta_row_page_bytes(const tensor_args_t& tensor_args) {
+    if (!tensor_args.has_valid_length_metadata() || tensor_args.valid_length_tensor->logical_volume() == 1) {
+        return 0;
+    }
+    return static_cast<uint32_t>(tensor_args.valid_length_tensor->logical_volume() * sizeof(uint32_t));
+}
+
 tt::tt_metal::TensorAccessorArgs interleaved_accessor_args(const Tensor& tensor) {
     return tensor.buffer()->is_dram() ? tt::tt_metal::TensorAccessorArgs::create_dram_interleaved()
                                       : tt::tt_metal::TensorAccessorArgs::create_l1_interleaved();
@@ -327,8 +335,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
 
     const bool has_meta = tensor_args.has_valid_length_metadata();
     if (has_meta) {
-        auto meta_cb_config =
-            tt::tt_metal::CircularBufferConfig(64, {{cb_meta, tt::DataFormat::UInt32}}).set_page_size(cb_meta, 64);
+        auto meta_cb_config = tt::tt_metal::CircularBufferConfig(
+                                  topk_per_row_length_max * sizeof(uint32_t), {{cb_meta, tt::DataFormat::UInt32}})
+                                  .set_page_size(cb_meta, 64);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, meta_cb_config);
     }
 
@@ -469,7 +478,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t valid_end_addr =
         tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
     tt::tt_metal::SetCommonRuntimeArgs(
-        program, reader_kernel, {input.buffer()->address(), meta_addr, 0, 0, valid_end_addr});
+        program,
+        reader_kernel,
+        {input.buffer()->address(), meta_addr, 0, 0, valid_end_addr, meta_row_page_bytes(tensor_args)});
     tt::tt_metal::SetCommonRuntimeArgs(program, compute_kernel, {0});
     tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel, {indices.buffer()->address()});
     set_runtime_args(program, shared, input, operation_attributes.valid_length);
@@ -498,6 +509,7 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
     // between dispatches, and a stale address here would silently clamp the search to garbage.
     reader_args[topk_common_args::valid_end_address] =
         tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
+    reader_args[topk_common_args::metadata_row_page_bytes] = meta_row_page_bytes(tensor_args);
     writer_args[topk_common_args::output_address] = tensor_return_value.buffer()->address();
 
     // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length

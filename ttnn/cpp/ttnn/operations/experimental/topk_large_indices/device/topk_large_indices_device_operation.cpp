@@ -99,10 +99,30 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
             "topk_large_indices valid_length_tensor must be on the same device as the input");
         TT_FATAL(m.dtype() == DataType::UINT32, "topk_large_indices valid_length_tensor must be UINT32");
         TT_FATAL(m.layout() == Layout::ROW_MAJOR, "topk_large_indices valid_length_tensor must be ROW_MAJOR");
-        TT_FATAL(
-            m.logical_volume() == 1,
-            "topk_large_indices valid_length_tensor must hold exactly 1 element (got {})",
-            m.logical_volume());
+        // One element: every row shares one length. One element per row: row r reads element r (a single
+        // page, so the leading dims are 1). Each core must then own at most one row, as its mailbox holds one
+        // pair of bounds.
+        if (m.logical_volume() != 1) {
+            const uint32_t num_rows = flattened_rows_excluding_last_dim(tensor_args.input_tensor.logical_shape());
+            TT_FATAL(
+                m.logical_volume() == num_rows,
+                "topk_large_indices valid_length_tensor must hold 1 element or one per row ({} rows), got {}",
+                num_rows,
+                m.logical_volume());
+            TT_FATAL(
+                m.logical_shape()[-1] == m.logical_volume(),
+                "topk_large_indices per-row valid_length_tensor must be one page (leading dims 1)");
+            TT_FATAL(
+                m.logical_volume() <= topk_per_row_length_max,
+                "topk_large_indices per-row valid_length_tensor holds at most {} rows (got {})",
+                topk_per_row_length_max,
+                m.logical_volume());
+            TT_FATAL(
+                num_rows <= attrs.resolved_worker_core_grid.num_cores(),
+                "topk_large_indices per-row valid lengths need at most one row per core ({} rows, {} cores)",
+                num_rows,
+                attrs.resolved_worker_core_grid.num_cores());
+        }
         TT_FATAL(
             m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "topk_large_indices valid_length_tensor must be interleaved (the kernel reads page 0 at a single "

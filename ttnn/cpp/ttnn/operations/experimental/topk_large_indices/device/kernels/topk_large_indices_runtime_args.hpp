@@ -13,7 +13,9 @@ enum Reader {
     metadata_address = 1,
     search_length = 2,
     input_row_bytes = 3,
-    valid_end_address = 4
+    valid_end_address = 4,
+    // 0: the length tensor holds one element for every row. Else its page size in bytes: it holds one element per row.
+    metadata_row_page_bytes = 5
 };
 enum Compute { compute_search_length = 0 };
 enum Writer { output_address = 0 };

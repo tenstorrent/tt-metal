@@ -54,8 +54,22 @@ void kernel_main() {
         CircularBuffer meta_cb_obj(meta_cb);
         meta_cb_obj.reserve_back(1);
         const uint32_t scratch = meta_cb_obj.get_write_ptr();
-        const uint32_t metadata_length = trace_metadata::read_metadata_scalar_u32(
-            noc, meta_args, get_common_arg_val<uint32_t>(topk_common_args::metadata_address), scratch);
+        const uint32_t row_page_bytes = get_common_arg_val<uint32_t>(topk_common_args::metadata_row_page_bytes);
+        uint32_t metadata_length;
+        if (row_page_bytes == 0) {
+            metadata_length = trace_metadata::read_metadata_scalar_u32(
+                noc, meta_args, get_common_arg_val<uint32_t>(topk_common_args::metadata_address), scratch);
+        } else {
+            // One length per row. A core owns at most one row (the host checks), so its length is the one at
+            // its row's index: the split row of a halved pair, else its first whole row; idle cores read 0.
+            const uint32_t length_row = num_rows == 0 ? 0 : (has_split ? split_row : start_row);
+            const auto meta_accessor =
+                TensorAccessor(meta_args, get_common_arg_val<uint32_t>(topk_common_args::metadata_address));
+            noc.async_read(meta_accessor, CoreLocalMem<uint8_t>(scratch), row_page_bytes, {.page_id = 0}, {});
+            noc.async_read_barrier();
+            invalidate_l1_cache();
+            metadata_length = CoreLocalMem<volatile uint32_t>(scratch)[length_row];
+        }
         // Validate before addition so the offset cannot wrap and no malformed metadata can produce a NoC read
         // outside the input row. ASSERT is watcher-gated, so it compiles to nothing in a normal build; pair it
         // with a clamp, as bounded_kv_actual_isl / bounded_cache_batch_idx do, or the bound would hold only

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import functools
 import math
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -5121,7 +5122,25 @@ class Qwen38TTNNQSA:
         ids take (the module's one row by default; the lanes pass their per-lane rows, row u = offsets + u * C).
         ``page_table`` / ``page_size``: the PAGED selection row (the lanes' page pool, lane-local ids)."""
 
-        block_ids = ttnn.experimental.topk_large_indices(masked_scores, k=BLOCK_TOPK)
+        if os.environ.get("QWEN38_QSA_LIVE", "1") == "1" and rows == 1 and page_table is None:
+            # QWEN38_QSA_LIVE: search (P & ~31) + 32 columns, read on device from kv_block_start each replay; that is at
+            # least the live block count (P + 1) >> 2, and the columns past it hold masked finite scores
+            block_ids = ttnn.experimental.topk_large_indices(
+                masked_scores, k=BLOCK_TOPK, valid_length_tensor=position.kv_block_start, valid_length_offset=32
+            )
+        elif os.environ.get("QWEN38_QSA_LIVE", "1") == "1" and rows > 1 and page_table is not None:
+            # The lanes' call: row u searches (P_u & ~31) + 32 columns, its length read from element u of the lanes'
+            # kv_block_start [1,1,1,32] (one P_u & ~31 per lane), as the 1-row call above does for its one row
+            lengths = position.kv_block_start
+            if rows != CHUNK_ROWS:
+                lengths = ttnn.slice(lengths, (0, 0, 0, 0), (1, 1, 1, rows), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            block_ids = ttnn.experimental.topk_large_indices(
+                masked_scores, k=BLOCK_TOPK, valid_length_tensor=lengths, valid_length_offset=32
+            )
+            if rows != CHUNK_ROWS:
+                _deallocate(lengths)
+        else:
+            block_ids = ttnn.experimental.topk_large_indices(masked_scores, k=BLOCK_TOPK)
         _deallocate(masked_scores)
         _require_shape(block_ids, (1, 1, rows, BLOCK_TOPK), "top-k QSA block IDs")
         sparse_indices = self._selection_row_fused(
