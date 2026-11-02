@@ -7,7 +7,11 @@
 //                              (masked W tail folded first) -> cb_sumsq_tiles
 //   collapse_sumsq_block       reduce<SUM, ROW, ReduceTile> (FPU, 1.0 scaler cb_ones) -> cb_inv_rms (k==1, + finalize)
 //                                                                                  -> cb_partial_sumsq (k>1)
-//   combine_partials_block     reduce<SUM, ROW, AccumulateViaAdd, Skip>(rows x k) + finalize -> cb_inv_rms
+//   combine_partials_block     symmetric (k <= 8 interleaved): reduce<SUM, ROW, AccumulateViaAdd, Skip>(rows x k)
+//                              + finalize -> cb_inv_rms
+//   collapse_rows_to_row0      owner topology: matmul ones-row x sumsq^T (unpacker transpose) -> row-form partial
+//   combine_rows_block         owner topology: reduce_tile COL over ceil(k/32) gather tiles + transpose_dest + finalize
+//                              -> cb_inv_owned
 //   normalize_block            eltwise_chain BinaryFpu(x * inv_rms, bcast Col) [-> DestReuse * gamma bcast Row]
 //                              -> cb_out
 //   untilize_out_block  (RM)   compute_kernel_lib::untilize<C>      cb_out -> cb_out_rm
@@ -71,6 +75,11 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#ifdef RMS_ROW_PARTIAL
+#include "api/compute/reduce.h"
+#include "api/compute/transpose_dest.h"
+#include "api/compute/matmul.h"
+#endif
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -85,6 +94,9 @@ constexpr uint32_t rm_chunk_w_tiles = get_compile_time_arg_val(2);
 constexpr uint32_t x_block_depth = get_compile_time_arg_val(3);
 constexpr bool combine_lookahead = get_compile_time_arg_val(4) != 0;
 constexpr bool combine_owner = get_compile_time_arg_val(5) != 0;
+#ifndef RMS_ROW_PARTIAL
+static_assert(!combine_owner, "owner topology: partials always travel in row form (RMS_ROW_PARTIAL)");
+#endif
 constexpr bool combine_pipeline = get_compile_time_arg_val(6) != 0;
 #if defined(RMS_GAMMA_CHUNK) || defined(RMS_RM)
 static_assert(!combine_pipeline, "combine pipeline: shard-backed TILE with resident gamma only");
@@ -195,6 +207,80 @@ ALWI void collapse_sumsq_block(uint32_t rows, PostOp post_op) {
         ReduceAlgorithm::ReduceTile>(
         ReduceInputBlockShape::of(rows, 1), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, post_op);
 }
+
+#ifdef RMS_ROW_PARTIAL
+// ---- Row partial (owner topology, Perf 2 row_partial_mcast): partials travel as ONE ROW ----
+// Raw compute API (documented helper bypass): compute_kernel_lib::reduce has no row-form output — its REDUCE_ROW
+// leaves the sums in column 0 and its post_reduce_op cannot transpose (transpose_dest reprograms the FPU MOP / address
+// mods the next reduce_tile depends on) — and no "REDUCE_COL, then DEST transpose, then finalize" owner combine. The
+// member collapse is a matmul with an unpacker transpose (no helper covers it). Capability gap, not ergonomics.
+constexpr uint32_t row_gather = RMS_ROW_GATHER;  // gather tiles per owned row: ceil(k / 32), member m -> row m % 32
+
+// collapse_rows_to_row0: the within-tile row collapse of the owner topology, emitted in ROW form. One FPU matmul per
+// tile-row: in0 = cb_ones (row 0 = 1.0 x 32) -> srcB, in1 = the sumsq tile -> srcA, transposed by the unpacker
+// (matmul_init transpose flag), so DST row 0 = ones x sumsq^T = the 32 row sums (face 0 row 0 + face 1 row 0: two
+// contiguous 16-datum face rows the writer ships as is). No DEST transpose: BH p150b, measured against REDUCE_ROW +
+// transpose_dest (exact, but ~140 ns per tile-row on the math thread): WIDTH (2048,256) k = 8 35.5 -> 30.0 us,
+// (128,256) k = 8 5.38 -> 4.99 us, (128,4096) k = 128 8.0 -> 7.6 us. Precision vs torch equal or better on every
+// measured cell incl. LoFi (perf_experiments/row_partial_mcast).
+ALWI void collapse_rows_to_row0(uint32_t rows) {
+    MaybeDeviceZoneScope("cmp_collapse");
+    constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
+    cb_wait_front(cb_ones, 1);
+    for (uint32_t r0 = 0; r0 < rows; r0 += batch) {
+        const uint32_t n = (rows - r0) < batch ? (rows - r0) : batch;
+        cb_wait_front(cb_sumsq_tiles, n);
+        cb_reserve_back(cb_partial_sumsq, n);
+        reconfig_data_format(cb_sumsq_tiles, cb_ones);  // srcA = in1 (sumsq), srcB = in0 (ones)
+        pack_reconfig_data_format(cb_partial_sumsq);
+        matmul_init(cb_ones, cb_sumsq_tiles, 1 /*transpose in1*/);
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; ++i) {
+            matmul_tiles(cb_ones, cb_sumsq_tiles, 0, i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, cb_partial_sumsq);
+        }
+        tile_regs_release();
+        cb_push_back(cb_partial_sumsq, n);
+        cb_pop_front(cb_sumsq_tiles, n);
+    }
+}
+
+// combine_rows_block: per owned row, column-reduce its ceil(k/32) gather tiles (reduce_tile COL, 1.0 scaler: row 0 =
+// sum over the members), transpose row 0 -> column 0 in DEST, finalize column 0 (rsqrt(sum/W + eps)) -> out_cb.
+template <uint32_t out_cb>
+ALWI void combine_rows_block(uint32_t owned, FinalizeInvRms finalize) {
+    {
+        MaybeDeviceZoneScope("cmp_wait_gathered");  // starved on the partial exchange (writer / peers)
+        cb_wait_front(cb_gathered_sumsq, owned * row_gather);
+    }
+    MaybeDeviceZoneScope("cmp_combine");
+    cb_wait_front(cb_ones, 1);
+    for (uint32_t j = 0; j < owned; ++j) {
+        cb_reserve_back(out_cb, 1);
+        reconfig_data_format(cb_gathered_sumsq, cb_ones);  // REDUCE_COL: data -> srcA, scaler -> srcB
+        pack_reconfig_data_format(out_cb);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_gathered_sumsq, cb_ones, out_cb);
+        tile_regs_acquire();
+        for (uint32_t g = 0; g < row_gather; ++g) {
+            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_gathered_sumsq, cb_ones, j * row_gather + g, 0, 0);
+        }
+        reduce_uninit();
+        transpose_dest_init<DST_ACCUM_MODE>();
+        transpose_dest<DST_ACCUM_MODE>(0);
+        finalize(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out_cb);
+        tile_regs_release();
+        cb_push_back(out_cb, 1);
+    }
+    cb_pop_front(cb_gathered_sumsq, owned * row_gather);
+}
+#endif
 
 // ---- combine_partials_block: sum the k gathered column-0 partials per tile-row + finalize ----
 template <uint32_t out_cb = cb_inv_rms>
@@ -374,7 +460,12 @@ ALWI void reduce_front(
     if constexpr (w_split_cores == 1) {
         sum_and_collapse<cb_x_blk, cb_inv_rms>(rows, core_w_tiles, finalize, owns_tail, row_base);
     } else {
+#ifdef RMS_ROW_PARTIAL
+        sum_squares_block<cb_x_blk>(rows, owns_tail ? core_w_tiles - 1 : core_w_tiles, owns_tail, row_base);
+        collapse_rows_to_row0(rows);
+#else
         sum_and_collapse<cb_x_blk, cb_partial_sumsq>(rows, core_w_tiles, NoOp{}, owns_tail, row_base);
+#endif
     }
 }
 
@@ -385,11 +476,20 @@ ALWI void combine_block(uint32_t rows, uint32_t member_idx, FinalizeInvRms final
     if constexpr (combine_owner) {
         const uint32_t r0 = (member_idx + w_split_cores - ofs) % w_split_cores;
         const uint32_t owned = r0 < rows ? (rows - r0 + w_split_cores - 1) / w_split_cores : 0;
-        const uint32_t slots = ((rows + w_split_cores - 1) / w_split_cores) * w_split_cores;
+#ifdef RMS_ROW_PARTIAL
+        constexpr uint32_t per_row = row_gather;
+#else
+        constexpr uint32_t per_row = w_split_cores;
+#endif
+        const uint32_t slots = ((rows + w_split_cores - 1) / w_split_cores) * per_row;
         if (owned > 0) {
+#ifdef RMS_ROW_PARTIAL
+            combine_rows_block<cb_inv_owned>(owned, finalize);
+#else
             combine_partials_block<cb_inv_owned>(owned, finalize);
+#endif
         }
-        const uint32_t unread = slots - owned * w_split_cores;
+        const uint32_t unread = slots - owned * per_row;
         if (unread > 0) {
             cb_wait_front(cb_gathered_sumsq, unread);
             cb_pop_front(cb_gathered_sumsq, unread);

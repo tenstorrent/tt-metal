@@ -39,10 +39,12 @@
 //   The semaphore is monotonic: block b is complete at k*(b+1) arrivals; it is never reset.
 // exchange_partials_block — owner topology (combine_owner, k > K_SYM_MAX_*; interleaved k > 8, WIDTH / BLOCK_SHARDED;
 //   interleaved groups with k > grid_x span grid rows — every peer is addressed by its own RT (x, y) pair):
-//   tile-row r of the block is owned by member r % k. Every member writes its partial of row r into slot
-//   ((r / k) * k + m) of the owner's cb_gathered_sumsq and bumps the owner's arrival semaphore once per row;
-//   every member reserves/pushes the same ceil(rows / k) * k gathered pages per block (lockstep slot base).
-//   An owner then returns its combined inv_rms tiles into slot r of EVERY member's cb_inv_rms (inv semaphore).
+//   tile-row r of the block is owned by member r % k (member = the host's exchange index: owners of a block's rows are
+//   spread ~k/rows apart over the group, member 0 fixed). Every member writes its partial of row r IN ROW FORM (2 face
+//   rows) into row m % 32 of gather tile (r / k) * G + m / 32 of the owner's cb_gathered_sumsq (G = ceil(k / 32)) and
+//   bumps the owner's arrival semaphore once per row; every member reserves/pushes the same ceil(rows / k) * G gathered
+//   pages per block (lockstep slot base). The owner's inv_rms tiles reach every member through member 0's multicast
+//   (RMS_INV_ROOT) or, where the group is not multicast-expressible, by unicast into slot r of every member.
 //   No slot is reused before it is consumed: a member's partial(b+1) exists only after its compute applied
 //   inv_rms(b), i.e. after every owner of block b finished combine(b) and every member popped inv_rms(b-1).
 // Combine pipeline (combine_pipeline: sharded TILE owner combine, shard cut into sub-blocks — compute runs
@@ -54,9 +56,10 @@
 //   send(i+2), so inv counts of i and i+2 never mix either. The single-owner inv_rms multicast is off on this path
 //   (a rotated one-tile-row sub-block's owner need not be member 0). cb_out (the output shard) is waited once at
 //   the end.
-// Payload (PARTIAL_FACES_ONLY): a partial / inv_rms tile is meaningful in column 0 only, which lives in faces
-//   0 and 2 — ship those two faces, not the whole tile (the combine's Skip reduce and the Col-broadcast
-//   normalize never read faces 1/3).
+// Payload (PARTIAL_FACES_ONLY): a symmetric-all-gather partial / an inv_rms tile is meaningful in column 0 only,
+//   which lives in faces 0 and 2 — ship those two faces (or faces 0..2 in one write), not the whole tile (the
+//   combine's Skip reduce and the Col-broadcast normalize never read faces 1/3). Owner-topology partials travel in
+//   row form instead (see "Row partial").
 // store_block
 //   TILE sharded: cb_out IS the output shard (zero-copy) — compute packs straight into it; the writer only
 //         waits for the block's pages so the program cannot retire before the shard is written.
@@ -377,6 +380,71 @@ FORCE_INLINE void fence_before_signal() {
     }
 }
 
+#ifdef RMS_ROW_PARTIAL
+// ---- Row partial (owner topology, Perf 2 row_partial_mcast) ----
+// BH p150b, WIDTH (128,4096) k = 128, b = 4: faces 0/2 + unicast return 26.7 us -> row partial + root multicast 7.0 us.
+// A member's partial of tile-row r arrives from compute TRANSPOSED: its 32 row sums are row 0 of the tile (face 0
+// row 0 + face 1 row 0). It ships as two face-row writes (16 datums each: 64 B fp32 / 32 B bf16) into ROW m % 32 of
+// gather tile m / 32 of the owner's slot group for r (ceil(k / 32) gather tiles per owned row), instead of faces 0/2
+// of a whole tile into one of k slots: k x 2 face-row bytes into each owner instead of k x 2 faces.
+// Rows k % 32 .. 31 of an owned row's LAST gather tile are written by no member, ever. Every block reserves a multiple
+// of ceil(k/32) gather pages and the ring holds a multiple of it, so a "last gather tile" always lands on a ring page
+// p with p % ceil(k/32) == ceil(k/32) - 1: those pages' unused rows are zero-filled ONCE at kernel start (local NoC
+// reads of the hardware zeros region + a read barrier issued before the gamma DRAM reads, so the barrier never waits
+// on them). No race: the members only ever write rows < k % 32 of those pages.
+constexpr uint32_t row_gather = RMS_ROW_GATHER;
+constexpr uint32_t row_unused0 = w_split_cores % TILE_DIM;  // first unwritten row of the last gather tile (0: none)
+
+FORCE_INLINE uint32_t gather_row_offset(uint32_t member, uint32_t tile_bytes) {
+    const uint32_t face_bytes = tile_bytes / 4;
+    const uint32_t frow = tile_bytes / 64;  // one 16-datum face row
+    const uint32_t i = member % TILE_DIM;
+    return (member / TILE_DIM) * tile_bytes + (i < FACE_DIM ? i * frow : 2 * face_bytes + (i - FACE_DIM) * frow);
+}
+
+FORCE_INLINE void zero_fill_range(uint64_t zeros, uint32_t a, uint32_t end) {
+    for (; a < end; a += MEM_ZEROS_SIZE) {
+        noc_async_read(zeros, a, (end - a) < MEM_ZEROS_SIZE ? (end - a) : MEM_ZEROS_SIZE);
+    }
+}
+
+FORCE_INLINE void zero_unused_gather_rows(uint32_t tile, uint32_t tile_bytes) {
+    if constexpr (row_unused0 != 0) {
+        const uint32_t fb = tile_bytes / 4;
+        const uint32_t frow = tile_bytes / 64;
+        const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+        if constexpr (row_unused0 < FACE_DIM) {
+            zero_fill_range(zeros, tile + row_unused0 * frow, tile + fb);
+            zero_fill_range(zeros, tile + fb + row_unused0 * frow, tile + 2 * fb);
+            zero_fill_range(zeros, tile + 2 * fb, tile + 4 * fb);
+        } else {
+            zero_fill_range(zeros, tile + 2 * fb + (row_unused0 - FACE_DIM) * frow, tile + 3 * fb);
+            zero_fill_range(zeros, tile + 3 * fb + (row_unused0 - FACE_DIM) * frow, tile + 4 * fb);
+        }
+    }
+}
+constexpr bool row_mode = true;
+#else
+constexpr uint32_t row_gather = 1;  // symmetric all-gather (no owner topology): unused
+constexpr bool row_mode = false;
+#endif
+static_assert(row_mode || !combine_owner, "owner topology: partials always travel in row form (RMS_ROW_PARTIAL)");
+
+// Root return (RMS_INV_ROOT, Perf 2, sharded): owners write their combined inv_rms tiles into slot r of MEMBER 0's
+// cb_inv_rms and bump member 0's inv semaphore; member 0 then multicasts the whole block's inv_rms (rows tiles) to the
+// group once (kernel_lib Mcast, fixed sender = member 0). One multicast per group per block - concurrent owner
+// multicasts into the same members serialized in Perf 1, a single root sender cannot collide with itself. A
+// one-tile-row block owned by member 0 skips the hop (member 0 multicasts straight from cb_inv_owned). Without
+// RMS_INV_ROOT (interleaved, or a group not expressible as <= 3 multicast rectangles with member 0 first) the Perf 1
+// return runs: one-tile-row blocks by member 0's multicast (RMS_INV_MCAST), others by every owner's unicast to the k
+// members. Combine pipeline: member 0 may multicast sub-block i + 1 before a member consumed i, so the channel's
+// data-ready signal is a monotonic Counter there (receive(round)); one-block-at-a-time paths use the Flag.
+#ifdef RMS_INV_ROOT
+constexpr bool inv_root = true;
+#else
+constexpr bool inv_root = false;
+#endif
+
 // Exchange state carried across blocks (k > 1). The semaphores are monotonic: never reset.
 struct ExchangeState {
     uint32_t member_idx;
@@ -388,6 +456,7 @@ struct ExchangeState {
     uint32_t inv_expected;
     uint32_t ofs = 0;       // owner rotation of the receive block (row r owned by member (r + ofs) % k)
     uint32_t send_ofs = 0;  // owner rotation of the block being sent
+    uint32_t inv_round = 0;  // inv_rms multicast rounds received (Counter data-ready)
 };
 
 // First owned row of member m under rotation ofs: (m - ofs) mod k.
@@ -415,14 +484,23 @@ FORCE_INLINE void exchange_send(uint32_t rows, ExchangeState& st) {
     MaybeDeviceZoneScope("wr_xchg_send");
     const uint32_t src = get_read_ptr(cb_partial_sumsq);
     if constexpr (combine_owner) {
-        cb_reserve_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
+        cb_reserve_back(cb_gathered_sumsq, ((rows + k - 1) / k) * row_gather);
         st.slot_base = get_write_ptr(cb_gathered_sumsq);
         const uint32_t ofs = st.send_ofs;
-        for (uint32_t r = 0; r < rows; ++r) {
-            const uint32_t owner = (r + ofs) % k;
-            const uint32_t j = (r + ofs) / k - (owner < ofs ? 1 : 0);  // index among the owner's rows (ofs 0: r / k)
-            send_acc_tile(src + r * tb, peer_addr(owner, st.slot_base + (j * k + st.member_idx) * tb), tb);
+#ifdef RMS_ROW_PARTIAL  // always defined with combine_owner (static_assert above)
+        {
+            const uint32_t face_bytes = tb / 4;
+            const uint32_t frow = tb / 64;
+            const uint32_t row_off = gather_row_offset(st.member_idx, tb);
+            for (uint32_t r = 0; r < rows; ++r) {
+                const uint32_t owner = (r + ofs) % k;
+                const uint32_t j = (r + ofs) / k - (owner < ofs ? 1 : 0);
+                const uint64_t dst = peer_addr(owner, st.slot_base + j * row_gather * tb + row_off);
+                noc_async_write(src + r * tb, dst, frow);                            // face 0 row 0
+                noc_async_write(src + r * tb + face_bytes, dst + face_bytes, frow);  // face 1 row 0
+            }
         }
+#endif
         fence_before_signal();
         // Row r < min(rows, k) is the first row of its owner (r + ofs) % k, which owns (rows - r + k - 1) / k rows.
         const uint32_t n_owners = rows < k ? rows : k;
@@ -459,7 +537,9 @@ constexpr bool inv_mcast_on = true;
 #else
 constexpr bool inv_mcast_on = false;
 #endif
-static_assert(!(combine_pipeline && inv_mcast_on), "combine pipeline: rotated owners - inv_rms multicast must be off");
+static_assert(
+    !(combine_pipeline && inv_mcast_on && !inv_root),
+    "combine pipeline: rotated owners - the inv_rms multicast needs the root return (RMS_INV_ROOT)");
 
 // W1 (owner topology): wait for this member's owned partials of the block, publish them to compute.
 FORCE_INLINE void owner_wait_partials(uint32_t rows, ExchangeState& st) {
@@ -469,7 +549,7 @@ FORCE_INLINE void owner_wait_partials(uint32_t rows, ExchangeState& st) {
         MaybeDeviceZoneScope("wr_wait_peers");  // rendezvous: the slowest member's partial
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_addr), st.partials_expected);
     }
-    cb_push_back(cb_gathered_sumsq, ((rows + k - 1) / k) * k);
+    cb_push_back(cb_gathered_sumsq, ((rows + k - 1) / k) * row_gather);
 }
 
 // W3 (owner topology): return the combined inv_rms of each owned row r into slot r of every member's cb_inv_rms.
@@ -482,7 +562,7 @@ FORCE_INLINE void owner_return_inv(uint32_t rows, ExchangeState& st) {
     cb_reserve_back(cb_inv_rms, rows);
     const uint32_t inv_base = get_write_ptr(cb_inv_rms);
 #ifdef RMS_INV_MCAST
-    if (rows == 1) {      // never rotated (static_assert above): member 0 owns the block's only row
+    if (rows == 1 && st.ofs == 0) {  // member 0 owns the block's only row: multicast straight from cb_inv_owned
         if (owned > 0) {  // member 0: the block's only owner
             cb_wait_front(cb_inv_owned, 1);
             Noc noc;
@@ -497,6 +577,24 @@ FORCE_INLINE void owner_return_inv(uint32_t rows, ExchangeState& st) {
         return;
     }
 #endif
+    if constexpr (inv_root) {
+        // owners -> member 0's slot r (faces 0..2: column 0 + don't-care face 1, one write), then member 0's semaphore
+        if (owned > 0) {
+            for (uint32_t j = 0; j < owned; ++j) {
+                const uint32_t r = r0 + j * k;
+                cb_wait_front(cb_inv_owned, 1);
+                noc_async_write(
+                    get_read_ptr(cb_inv_owned),
+                    peer_addr(0, inv_base + r * tb),
+                    partial_faces_only ? 3 * (tb / 4) : tb);
+                noc_async_writes_flushed();
+                cb_pop_front(cb_inv_owned, 1);
+            }
+            fence_before_signal();
+            noc_semaphore_inc(peer_addr(0, st.sem_inv_addr), owned);
+        }
+        return;
+    }
     if (owned > 0) {
         // One owned tile at a time from the CB front: members own different row counts per block, so the
         // read pointer is not block-aligned and a multi-tile linear walk could cross the ring end.
@@ -538,14 +636,33 @@ FORCE_INLINE void exchange_recv_partials(uint32_t rows, ExchangeState& st) {
 FORCE_INLINE void exchange_recv_inv(uint32_t rows, ExchangeState& st) {
     if constexpr (combine_owner) {
         MaybeDeviceZoneScope("wr_wait_inv");  // rendezvous: every owner's inv_rms return
-        if (inv_mcast_on && rows == 1) {
+        if (inv_mcast_on && rows == 1 && st.ofs == 0) {
 #ifdef RMS_INV_MCAST
             // member 0's multicast of the block's only row (Flag). The sender itself does not wait: its loopback
             // copy is fenced (write barrier) inside send().
             Noc noc;
             if (auto receiver = inv_mcast.optional_receiver(noc); receiver && !inv_mcast.can_send()) {
-                receiver->receive();
+                receiver->receive(st.inv_round);
             }
+            st.inv_round++;
+#endif
+        } else if constexpr (inv_root) {
+#ifdef RMS_INV_MCAST
+            // member 0: wait for every owner's rows, then one multicast of the block; others: wait for it.
+            Noc noc;
+            if (inv_mcast.can_send()) {
+                st.inv_expected += rows;
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st.sem_inv_addr), st.inv_expected);
+                const uint32_t inv_base = get_write_ptr(cb_inv_rms);
+                const uint32_t tb = st.tile_bytes;
+                if (auto sender = inv_mcast.optional_sender(noc)) {
+                    sender->send(inv_base, inv_base, (rows - 1) * tb + (partial_faces_only ? 3 * (tb / 4) : tb));
+                }
+            } else if (auto receiver = inv_mcast.optional_receiver(noc)) {
+                receiver->receive(st.inv_round);
+            }
+            st.inv_round++;
 #endif
         } else {
             st.inv_expected += rows;  // the unicast return's semaphore counts only unicast-returned rows
@@ -581,6 +698,18 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t valid_sticks = get_arg_val<uint32_t>(10);  // RM sharded: valid shard sticks
     [[maybe_unused]] const uint32_t gamma_addr = get_arg_val<uint32_t>(11);
     [[maybe_unused]] const uint32_t col0 = get_arg_val<uint32_t>(12);  // first global column of the slice
+
+    // row partial: zero the never-written gather rows once (see zero_unused_gather_rows), before any DRAM read.
+#ifdef RMS_ROW_PARTIAL
+    if constexpr (row_unused0 != 0) {
+        const uint32_t tb0 = get_tile_size(cb_gathered_sumsq);
+        const uint32_t base0 = get_write_ptr(cb_gathered_sumsq);
+        for (uint32_t p = row_gather - 1; p < RMS_ROW_GATHER_PAGES; p += row_gather) {
+            zero_unused_gather_rows(base0 + p * tb0, tb0);
+        }
+        noc_async_read_barrier();
+    }
+#endif
 
 #if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
     const auto g_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);

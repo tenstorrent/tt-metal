@@ -81,10 +81,10 @@ GAMMA_MCAST = True
 # multicast applies (one DRAM read of gamma per launch instead of one per Tensix core). WIDTH / BLOCK k > 1 keep the
 # per-core slice load (a shard grid column need not hold a single W slice).
 GAMMA_MCAST_SHARDED_K1 = True
-# Owner combine, single-owner blocks (one tile-row: member 0 owns it): return inv_rms to the k members with ONE
-# multicast (kernel_lib Mcast, fixed sender = member 0, no handshake) instead of k unicasts + k semaphore increments.
-# BH p150b perf cfg: WIDTH [32,256] 7x4 k = 28 8.9 -> 7.6 us, [32,160] 8x4 k = 32 8.2 -> 6.6 us, (32,32768) k = 49
-# 1.05x. Blocks with >= 2 owners keep the unicast return (multicast measured 1.7-2.1x slower there: owners collide).
+# Owner combine: return inv_rms to the k members with ONE multicast per block (kernel_lib Mcast, fixed sender = member
+# 0, no handshake) instead of k unicasts + k semaphore increments per owner. Perf 1: single-owner blocks (one tile-row)
+# WIDTH [32,256] 7x4 k = 28 8.9 -> 7.6 us. Perf 2: every block — the owners hand their rows to member 0 (the root),
+# which multicasts once (owners multicasting concurrently measured 1.7-2.1x slower in Perf 1: they collide).
 INV_MCAST = True
 MAX_MCAST_RECTANGLES = 3  # kernel_lib mcast_protocol.hpp: receiver rectangles per multicast group
 # k > 1, per-core gamma load (no multicast): the writer issues the gamma DRAM reads at kernel start but finishes the
@@ -100,6 +100,33 @@ GAMMA_AFTER_SEND_MAX_ROWS = 8
 # increment of the partial exchange / inv_rms return (catalog tensix_all_reduce, design perf lamp "Signal fence").
 SIGNAL_AFTER_FLUSH = True
 PARTIAL_FACES_ONLY = True  # ship faces 0/2 of a partial / inv_rms tile (column 0 lives there), not the whole tile
+# Owner topology (Perf 2, row_partial_mcast) — one path, every owner-combine block (interleaved k > 8, sharded k > 1):
+#   * Row partial: a member's per-row partial is collapsed in ROW form (compute: matmul ones-row x sumsq^T) and ships as
+#     two 16-datum face rows into row m % 32 of gather tile m // 32 of the row's owner; the owner column-reduces
+#     ceil(k / ROW_GATHER) gather tiles instead of adding k partial tiles. Bytes into an owner: k x 2 face rows
+#     (k x 128 B fp32) instead of k x 2 faces (k x 2 KB fp32); cb_gathered: ceil(k/32) pages per owned row, not k.
+#   * Root return (sharded): owners write inv_rms into member 0's cb_inv_rms; member 0 multicasts the block once
+#     (kernel_lib Mcast, fixed sender). Concurrent multi-owner multicasts serialized in Perf 1; one root sender per
+#     group does not. Interleaved keeps Perf 1's return (one-tile-row blocks: owner multicast; else unicast) and so does
+#     any group that is not multicast-expressible (_inv_mcast_order -> None).
+#   * Owner spread: the exchange index of member m is relabeled so the owners of a block's rows sit ~k/rows apart
+#     (distinct grid rows / columns) instead of on adjacent Tensix cores (incast on shared NoC links).
+#   BH p150b (row_partial_mcast bench, base -> this): WIDTH (128,4096) k = 128 b = 4 26.7 -> 7.0 us, (224,3072) k = 96
+#   21.0 -> 7.8, (160,11008) k = 115 23.1 -> 9.5, (512,4096) k = 128 b = 16 61.8 -> 12.9, (13,777,1023) k = 32 386.9 ->
+#   229.7, RM WIDTH (1024,1024) k = 128 117.4 -> 61.8; BLOCK perf / interleaved owner / k = 8 cells flat to 1.06x.
+ROW_GATHER = 32  # members per gather tile (one 32-datum row each)
+
+
+def _spread_step(k: int, rows: int) -> int:
+    """Owner spread: exchange index v -> member (v * step) % k; owners of rows 0..rows-1 sit step apart (gcd = 1)."""
+    if rows >= k or rows <= 1:
+        return 1
+    step = _div_up(k, rows)
+    while math.gcd(step, k) != 1:
+        step += 1
+    return step
+
+
 # Combine pipeline (sharded TILE, owner combine, resident gamma): cut the resident shard's crt tile-rows into
 # n sub-blocks of s = ceil(crt / n) tile-rows and run compute as front(t+1), combine(t), apply(t-1) against a
 # two-round exchange window in the writer (parity semaphores), so the cross-core exchange / owner combine / inv_rms
@@ -325,7 +352,8 @@ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = P
         plan[CB_PARTIAL] = (pipe * b, sz.T_acc)
         if opts.owner_combine:
             owned = _div_up(b, k)  # tile-rows a member owns per block (row r -> member (r + ofs) % k)
-            plan[CB_GATHERED] = (pipe * owned * k, sz.T_acc)  # k partials per owned row (uniform -> lockstep slots)
+            per_row = _div_up(k, ROW_GATHER)  # row-form gather tiles per owned row (k member rows, 32 per tile)
+            plan[CB_GATHERED] = (pipe * owned * per_row, sz.T_acc)  # uniform per block -> lockstep slots
             plan[CB_INV_OWNED] = (owned, sz.T_acc)
         else:
             plan[CB_GATHERED] = (opts.gather_depth * k * b, sz.T_acc)  # lockstep slot-reuse mechanism cap
@@ -758,21 +786,28 @@ def _gamma_mcast_groups(blk: Blocking, grid_x: int):
     return None
 
 
-def _inv_mcast_order(blk: Blocking, all_cores, row_major: bool):
-    """McastCoreOrder for the single-owner inv_rms multicast, or None (unicast return everywhere).
+def _inv_mcast_order(blk: Blocking, all_cores, row_major: bool, root: bool):
+    """McastCoreOrder of the inv_rms multicast, or None (unicast return everywhere).
 
-    Only the owner topology has single-owner blocks, and only blocks of one tile-row use them. ttnn.Mcast cuts the
+    root (sharded): every owner-topology block returns through member 0's multicast. Interleaved (root False): only
+    one-tile-row blocks multicast (their single owner is member 0); multi-row blocks keep the unicast return — the
+    root hop measured 2.2-3.7 % slower on DRAM-bound interleaved k = 16, b = 2..8 blocks (BH p150b: (1024,16384) bf16
+    167.5 -> 171.2 us, fp32 167.3 -> 173.6 us, (512,32768) 172.0 -> 175.8 us), where the exchange is not the
+    bottleneck.
+
+    ttnn.Mcast cuts the
     ordered active Tensix cores into equal consecutive groups with the fixed sender first: that must reproduce every
     W-split group with member 0 (the owner of tile-row 0) first, and each group must decompose into at most
     MAX_MCAST_RECTANGLES member-only rectangles. Otherwise (custom multi-range shard grids) keep the unicast return.
     """
     if not (INV_MCAST and blk.k > 1 and blk.opts.owner_combine):
         return None
-    if blk.opts.pipe_nb:
-        return None  # combine pipeline: rotated owners — a one-tile-row sub-block's owner need not be member 0
-    b = blk.block_row_tiles
-    if not any(b == 1 or (m.core_rows - 1) % b == 0 for grp in blk.groups for m in grp):
-        return None  # no block of exactly one tile-row on any Tensix core
+    if not root:  # interleaved: only single-owner (one-tile-row) blocks multicast, straight from the owner
+        if blk.opts.pipe_nb:
+            return None
+        b = blk.block_row_tiles
+        if not any(b == 1 or (m.core_rows - 1) % b == 0 for grp in blk.groups for m in grp):
+            return None  # no block of exactly one tile-row on any Tensix core
     order = ttnn.McastCoreOrder.RowMajor if row_major else ttnn.McastCoreOrder.ColumnMajor
     key = (lambda c: (c[1], c[0])) if row_major else (lambda c: (c[0], c[1]))
     ordered = sorted(((c.x, c.y) for c in all_cores), key=key)
@@ -951,9 +986,16 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         blk,
         [mem.core for grp in blk.groups for mem in grp],
         not sharded or input_tensor.memory_config().shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR,
+        root=sharded,
     )
     if inv_order is not None:
         defines.append(("RMS_INV_MCAST", "1"))
+    if opts.owner_combine and k > 1:
+        defines.append(("RMS_ROW_PARTIAL", "1"))
+        defines.append(("RMS_ROW_GATHER", str(_div_up(k, ROW_GATHER))))
+        defines.append(("RMS_ROW_GATHER_PAGES", str(plan[CB_GATHERED][0])))
+        if inv_order is not None and sharded:
+            defines.append(("RMS_INV_ROOT", "1"))
 
     x_page = input_tensor.buffer_aligned_page_size()
     out_page = output_tensor.buffer_aligned_page_size()
@@ -1011,7 +1053,11 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
     tw = geo.tensor_w_tiles
     for members in blk.groups:
         noc_xy = []
-        for mem in members:
+        vid = {}  # member index -> virtual (exchange) index
+        step = _spread_step(k, b) if (opts.owner_combine and k > 1) else 1
+        for v_i in range(len(members)):
+            mem = members[(v_i * step) % len(members)]
+            vid[mem.m] = v_i
             v = device.worker_core_from_logical_core(mem.core)
             noc_xy.extend([v.x, v.y])
         for mem in members:
@@ -1044,7 +1090,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
                 chunks_this,
                 inv_w_bits,
                 eps_bits,
-                mem.m,
+                vid[mem.m],
                 norm_w,
                 owns_tail,
             ]
@@ -1057,7 +1103,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
                 mem.w_tile_start,
                 mem.core_w,
                 chunks_this,
-                mem.m,
+                vid[mem.m],
                 mem.valid_cols,
                 mem.valid_sticks,
                 g_addr,
@@ -1128,11 +1174,13 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
             semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_INV_ARRIVED, core_ranges=core_ranges, initial_value=0))
         if opts.pipe_nb:
             # ids 2 / 3 are the first ttnn.Mcast ids: neither multicast may be attached on the pipelined path.
-            assert not gamma_mcast and inv_order is None
+            assert not gamma_mcast
             for sem in (SEM_PARTIALS_PAR, SEM_INV_PAR):
                 semaphores.append(ttnn.SemaphoreDescriptor(id=sem, core_ranges=core_ranges, initial_value=0))
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
     next_sem = SEM_GAMMA_MCAST_FIRST
+    if opts.pipe_nb:
+        next_sem = SEM_INV_PAR + 1  # pipelined: ids 2 / 3 are the parity semaphores (inv_rms root multicast from 4)
     if gamma_mcast:
         # Sender = each group's first Tensix core (reads the slice); one-shot, no handshake. k = 1 (one group of every
         # Tensix core) with swapped cores: the first Tensix core on the usual pairing (all swapped: core 0 on NoC0).
@@ -1156,7 +1204,12 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         # multicasts inv_rms to its group.
         inv_mc = ttnn.Mcast(
             device,
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),  # member 0's writer NoC
+            ttnn.McastConfig(
+                noc=ttnn.NOC.NOC_1,  # member 0's writer NoC
+                handshake=False,
+                # pipelined: member 0 may multicast sub-block i+1 before a member consumed i's flag -> monotonic counter
+                data_ready=ttnn.McastDataReady.Counter if opts.pipe_nb else ttnn.McastDataReady.Flag,
+            ),
             core_ranges,
             k,
             ttnn.McastFixedSenderConfig(),
