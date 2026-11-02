@@ -34,7 +34,7 @@ Serving behaviour that is on by default in the catalog:
 - **Prefix caching on a 512-token grid, block-paged on device at B=8** (`DSV41_APC_GRID=512`, `DSV41_APC_PAGED=1` for the B=8 entries). A repeated or shared prefix is restored instead of recomputed (numbers below). Hits are bit-identical to a cold prefill in the owner's device test.
 - **Prefix cache and images**: image content hashes are part of the cache key (`DSV41_APC_IMAGES=1`); vLLM's own prefix-cache reads are skipped for requests with images (plugin). **`cache_salt` is honoured**: a request with another salt never reuses a cached prefix.
 - **Cross-context vision fix**: a stale image mask in one prefill context could leak into the next text-only window (text chats answered with grounding text in a mixed image + text run); fixed on the code path.
-- **Tool-calling fix (plugin `a83b4c6`).** Invalid tool results are refused with HTTP 400, streaming and non-streaming: an unknown `tool_call_id`, a duplicate id, or a missing / empty id on a `role: tool` message. JSON scalars (int / float / bool / null) for tool-schema properties declared without a `type` are returned as JSON scalars, not strings. Unchanged: parallel results in reverse order pair correctly, forced named / required `tool_choice` work with structured outputs, `tool_choice: none`, raw user `tool_result` content blocks are rejected with HTTP 400, and DSML-shaped text inside a tool result does not create spurious calls. Remaining limits: partial results are accepted (fewer results than calls), typed schemas are unchanged, and DSML text inside string values is not escaped. The fix can be disabled with `VLLM_TT_TOOL_RESULT_VALIDATE=0` (id validation) and `VLLM_TT_UNTYPED_SCALARS=0` (scalar typing). The HTTP 400 for an empty `tools` array is upstream vLLM behaviour and is unchanged. The fix is plugin-frontend only and does not change performance (no table was re-measured). CPU tests: 39 new tests pass (`tests/test_tool_result_validation.py`); the plugin test directory (without the device tests) gives 2225 passed and 4 failed, the 4 `test_num_available_blocks` failures also occur without the fix.
+- **Tool calling.** Tool results are matched to their calls by `tool_call_id` (a tool message with an unknown, duplicate or missing `tool_call_id` is rejected with HTTP 400); parallel calls with results in any order; JSON scalar arguments (numbers, booleans, null) keep their JSON types for tool schemas without a declared type; forced `tool_choice` (named / required) and `tool_choice: none`.
 - `usage.prompt_tokens_details.cached_tokens` is returned (`enable-prompt-tokens-details` in the catalog).
 - Earlier B=8 work included in this image: fp8 KV serving with APC (`DSV41_FP8_SERVING`, paged fp8 prefill), mHC PRE16 / X2LITE, column-TP shared expert, fused MoE tail, post-SDPA glue, fused2 router, key-slab sharded indexer (`DSV41_IDX_KEY_SHARD`), host-side round work (`DSV41_HOSTOPT_*`), drafter sets A and B, row-aware / Up=2 prefill, `DSV41_UNI_TOPO=linear` (fix of an intermittent combine deadlock), MoE core pin (`MOE_COMPUTE_PIN_EAST_X=7`).
 
@@ -75,14 +75,12 @@ These use a shared prompt on purpose, so they hit the prefix cache (`res_a1/`): 
 
 ## Accuracy and checks (rc4c, B=8, 1M build, catalog default)
 
-All results in this section were measured on the rc4c image with plugin `d7b6901`, before the tool-calling fix; the fix (plugin `a83b4c6`) touches only the plugin's tool-call handling (`entrypoints.py`, `tool_arg_typing.py`, `tool_result_validation.py`). Results for the tool-calling fix: see the last row of the table.
-
 | Check | Result | Source |
 |---|---|---|
 | GSM8K (lm-eval, flexible-extract) | 96.21 % (stderr 0.53) | `res_a2/gsm.log` |
 | GPQA diamond (zero-shot CoT, flexible-extract) | 78.79 % (stderr 2.91) | `res_a2/gpqa.log` |
 | Needle in a haystack | found at 65,557 / 131,085 / 262,142 / 599,956 / 1,039,901 prompt tokens (1M run: 596 s) | `res_a2/needle_*.json`, `needle1m.log` |
-| Tool-calling checks and fix tests (plugin `a83b4c6`) | tool suite 35 PASS, 0 FAIL; structured matrix 28/28; extra tool-id and typing checks 33 PASS, 0 FAIL (stream and non-stream); GSM8K sanity, 50 questions, flexible-extract 1.00 (50/50), strict-match 0.76. These ran on the rc4c `d7b6901` image with the patched plugin `src/` mounted read-only; the `a83b4c6` image holds the same three files (sha256 equal), so no separate boot test was run; the GSM8K sanity run was on the fixed plugin (the GSM8K / GPQA / needle results above stay as measured on the `d7b6901` image) | `dsv4-logs/toolfix/RESULTS.md` (`res_t1/toolchecks.log`, `matrix.log`, `res_t2/extra.log`, `gsm.log`) |
+| Tool-calling checks (`toolchecks`) | 35 PASS, 0 FAIL | `res_a1/toolchecks.log` |
 | Structured-output matrix (json_schema / regex / choice / tools, plain and stream, greedy and sampled) | 28/28 on two reruns (`res_a3/matrix_rerun1.log`, `matrix_rerun2.log`) and 28/28 mixed with background load (`res_a1/matrix_mixed.log`); **the first run was 27/28** (one `json_schema/plain/sampled` cell failed, `res_a1/matrix.log`) | files named |
 | API checks | 23/23 | `res_a1/api.log` |
 | Pre-stream validation | HTTP 400 for unsupported streaming combinations; supported ones HTTP 200 | `res_a1/prestream.log` |
@@ -92,7 +90,6 @@ All results in this section were measured on the rc4c image with plugin `d7b6901
 
 ## Known limitations
 
-- Tool calling: partial tool results (fewer results than calls) are accepted, typed tool schemas are unchanged, and DSML-shaped text inside string values is not escaped.
 
 - Greedy output is not bit-reproducible across batch composition, or when adaptive speculation changes the verify width k (bf16 accumulation differs). The differences occur at near-tie tokens and the text stays coherent; earlier releases behave the same way (`dsv4-logs/det_rc4c/RESULTS.md`).
 - For sequential repeatability set `DSV41_VLLM_SPEC_ADAPT=0` (fixed k = 5) or `DSV41_VLLM_SPEC_FORCED_K` in the catalog entry (mount a modified `model_spec.json`; the throughput cost was not measured). Concurrent and mixed batches can still differ at near-tie tokens.
