@@ -83,6 +83,8 @@ All numbers are rc4c, from `dsv4-logs/rc4c_val/`. Method: tt-inference-server `-
 | 65536 | 128 | 38.74/46 | 39.78/41 | 45.69/30 | 52.27/31 |
 | 131072 | 128 | 76.28/40 | 90.88/10 | 99.12/16 | - |
 
+The ISL 131,072 / OSL 128 row has no c8 cell: the workflow ran that point at concurrency 7 (TTFT 108.62 s, 20 tok/s per user, `table_b8_rc4c.txt`).
+
 
 **Beyond 262,144 tokens.** The workflow grid was not run beyond ISL 262,144 for rc4c (the 524,288 / 786,432 cells are not reported). The 1M context is covered by the needle test only: 1,039,901 prompt tokens found, 596 s (`res_a2/needle1m.log`).
 
