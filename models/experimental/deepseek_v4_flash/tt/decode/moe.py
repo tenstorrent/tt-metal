@@ -61,6 +61,21 @@ class SparseRouting(NamedTuple):
     ranking: Optional[ttnn.Tensor] = None
 
 
+class RouterWeights(NamedTuple):
+    """The learned router itself, for ``fused_experts`` to run inside the op (one token row).
+
+    ``gate``: the ``[D, E]`` gate weight resident in the router cores' L1, ND-sharded one ``[D, 32]``
+    tile column per shard round-robin over them (:attr:`DeepSeekV4SparseMoeBlock.fused_gate_l1`).
+    ``bias``: ``e_score_correction_bias``
+    ``[1,1,1,E]`` bf16 ROW_MAJOR in DRAM. The op computes ``sqrtsoftplus(x @ gate)`` on the 8 cores
+    below its expert grid, ranks ``scores + bias`` there in fp32, and merges the cores' top-k on its
+    leader, so no score row, ranking row or id tensor exists outside it.
+    """
+
+    gate: ttnn.Tensor
+    bias: ttnn.Tensor
+
+
 class DeepSeekV4MLP(DeepSeekV4Module):
     """Dense SwiGLU MLP (matches ``DeepseekV4MLP`` / ``LlamaMLP``).
 
@@ -409,6 +424,17 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
             cache_file_name=cache.file("gate.e_score_correction_bias"),
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+        # ``fused_experts`` can run this router itself when the gate's weight already sits in DRAM one
+        # ``[D, 32]`` tile column per ND shard: a full-width LinearDecode gate that reads its weight in
+        # place, on one B core per 32 experts. The MoE block copies that tensor into the router cores' L1.
+        gate = self.gate
+        fusable = (
+            isinstance(gate, LinearDecode)
+            and gate.dram_sharded_weight
+            and not gate.partial_width_sharded
+            and self.num_experts == _FUSED_TILE * gate.num_inputB_cores
+        )
+        self.fused_gate_weight = gate.weight if fusable else None
 
     def prefetch_weights(self):
         """Stage the ``[D, E]`` gate weight ahead of the decode that reads it.
@@ -605,6 +631,13 @@ _FUSED_DOWN_CORES_PER_EXPERT = 2 * _FUSED_GRID_Y
 # Run the shared expert inside ``fused_experts`` wherever the op takes its 6-expert path (the only
 # path that fuses it). ``DEEPSEEK_V4_FUSE_SHARED_EXPERT=0`` keeps it as its own projections.
 FUSE_SHARED_EXPERT = os.environ.get("DEEPSEEK_V4_FUSE_SHARED_EXPERT", "1") not in ("0", "", "false", "False")
+# Run the learned router inside ``fused_experts`` on its 6-expert path, on the grid row below the
+# expert grid, wherever the gate's weight can be read in place (see :class:`RouterWeights`).
+# ``DEEPSEEK_V4_FUSE_ROUTER=0`` keeps the router as its own ops.
+FUSE_ROUTER = os.environ.get("DEEPSEEK_V4_FUSE_ROUTER", "1") not in ("0", "", "false", "False")
+# How many cores of that row run the router (the op's kRouterCores): its gate's tile columns are dealt
+# round-robin over them.
+_FUSED_ROUTER_CORES = 12
 
 
 def _fused_parallel_grid_y(intermediate: int) -> int:
@@ -947,6 +980,24 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         self._core_grid = _fused_compute_core_range_set(self.top_k, device, num_cores, self.intermediate)
         # The 6-expert path is the only one that can fuse the shared expert into the op.
         self.parallel = _fused_parallel(self.top_k, device, self.intermediate)
+        # It can also run the router (see :class:`RouterWeights`) on the grid row below its expert grid,
+        # when the device has one; the replica then has to reach that row too.
+        grid_y = _fused_parallel_grid_y(self.intermediate)
+        self.fuses_router = FUSE_ROUTER and self.parallel and device.compute_with_storage_grid_size().y > grid_y
+        self._router_core_grid = (
+            ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_FUSED_PARALLEL_GRID_X - 1, grid_y))}
+            )
+            if self.fuses_router
+            else None
+        )
+        # The cores of that row the op runs the router on, which hold the gate weight in L1.
+        num_router_cores = min(_FUSED_ROUTER_CORES, self.num_experts // _FUSED_TILE)
+        self.router_cores = (
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, grid_y), ttnn.CoreCoord(num_router_cores - 1, grid_y))})
+            if self.fuses_router
+            else None
+        )
         self.hidden = config.hidden_size
         # Under TP on the 6-expert path the op leaves its partial L1 width-sharded on group 0's down cores,
         # (0..1, 0..7) column-major, the order the writer assigns their D/16 output slices. That is the input
@@ -1049,14 +1100,18 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
                 )
             )
 
-    def core_grid(self) -> ttnn.CoreRangeSet:
+    def core_grid(self, router: bool = False) -> ttnn.CoreRangeSet:
         """Compute cores the fused_experts op occupies for this layer's ``top_k``, as the
         ``[(0,0) .. (11,7)]`` rectangle at ``top_k == 6`` (``(11,8)`` when the per-rank ``I`` needs
-        18 gate_up cores per expert; else ``[(0,0) .. (7,7)]``).
+        18 gate_up cores per expert; else ``[(0,0) .. (7,7)]``). ``router`` (only with
+        :attr:`fuses_router`) adds the grid row below, where the op runs the router.
 
         ``all_gather_for_matmul`` has to multicast onto (at least) this set so every
         compute core already holds the activation replica.
         """
+        if router:
+            assert self.fuses_router, "this layer's fused_experts cannot run the router"
+            return self._router_core_grid
         return self._core_grid
 
     @property
@@ -1070,7 +1125,11 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         return self._down_fused
 
     def _run_fused(
-        self, x_tok: ttnn.Tensor, routing: SparseRouting, t: int, shared: Optional[FusedSharedExpert] = None
+        self,
+        x_tok: ttnn.Tensor,
+        routing: SparseRouting | RouterWeights,
+        t: int,
+        shared: Optional[FusedSharedExpert] = None,
     ) -> ttnn.Tensor:
         """Run ``fused_experts`` for ``t`` token rows; returns ``[1,1,t,D]``.
 
@@ -1099,20 +1158,32 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         activations are resident at once. It sizes the op's dominant per-core CB, so it is the knob
         to turn when the op's static CBs collide with the L1 buffers live at the call; the cost is
         one extra chip-wide gather/broadcast barrier per block.
+
+        ``routing`` may instead be the router itself (:class:`RouterWeights`, ``t == 1`` with
+        :attr:`fuses_router`), which the op runs on the grid row below its experts; ``x_tok`` is then
+        the replica over :meth:`core_grid` with ``router=True``.
         """
-        scores = ttnn.to_memory_config(routing.scores, ttnn.DRAM_MEMORY_CONFIG)
+        scores = None
         indices = None
         ranking = None
-        if routing.ranking is not None:
-            ranking = ttnn.to_memory_config(routing.ranking, ttnn.DRAM_MEMORY_CONFIG)
+        router_weight = None
+        router_bias = None
+        if isinstance(routing, RouterWeights):
+            router_weight, router_bias = routing.gate, routing.bias
         else:
-            indices = ttnn.to_memory_config(routing.indices, ttnn.DRAM_MEMORY_CONFIG)
+            scores = ttnn.to_memory_config(routing.scores, ttnn.DRAM_MEMORY_CONFIG)
+            if routing.ranking is not None:
+                ranking = ttnn.to_memory_config(routing.ranking, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                indices = ttnn.to_memory_config(routing.indices, ttnn.DRAM_MEMORY_CONFIG)
         try:
             out = ttnn.experimental.deepseek.moe.fused_experts(
                 x_tok,
                 routing_scores=scores,
                 routing_indices=indices,
                 ranking_scores=ranking,
+                router_weight=router_weight,
+                router_bias=router_bias,
                 gate_up_weights=self._gate_up_fused,
                 down_weights=self._down_fused,
                 num_experts=min(t * self.top_k, self.num_experts),
@@ -1134,12 +1205,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
                 blocks = sorted(
                     (int(b["address"]), int(b["size"])) for b in view.block_table if b["allocated"] == "yes"
                 )
-                named = {
-                    "x_tok": x_tok,
-                    "routing.scores": routing.scores,
-                    "routing.ranking": routing.ranking,
-                    "routing.indices": routing.indices,
-                }
+                named = {"x_tok": x_tok, **{f"routing.{k}": v for k, v in routing._asdict().items()}}
                 live = {
                     k: (v.buffer_address(), list(v.shape), str(v.memory_config().memory_layout))
                     for k, v in named.items()
@@ -1153,7 +1219,10 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         return ttnn.reshape(out, [1, 1, t, self.hidden])
 
     def forward(
-        self, x_flat: ttnn.Tensor, routing: SparseRouting, shared: Optional[FusedSharedExpert] = None
+        self,
+        x_flat: ttnn.Tensor,
+        routing: SparseRouting | RouterWeights,
+        shared: Optional[FusedSharedExpert] = None,
     ) -> ttnn.Tensor:
         """``x_flat`` ``[1,1,T,D]`` plus the rows' routing decision -> ``[1,1,T,D]``, plus the
         ``shared`` expert when given (``T == 1`` only, see :meth:`_run_fused`).
@@ -1243,6 +1312,27 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         )
         self.is_hash = isinstance(self.gate, DeepSeekV4HashRouter)
         self.experts = experts
+        # One-row text steps hand ``fused_experts`` the learned router itself (see :class:`RouterWeights`);
+        # multi-row and image steps still run it as its own ops.
+        self.fused_router = experts.fuses_router and not self.is_hash and self.gate.fused_gate_weight is not None
+        # The op reads the gate from the router cores' L1, where it stays resident: one [D, 32] tile column
+        # per ND shard, dealt round-robin over those cores (one column, ~175 KB at bf8, each at E == 384).
+        self.fused_gate_l1 = (
+            ttnn.to_memory_config(
+                self.gate.fused_gate_weight,
+                ttnn.MemoryConfig(
+                    ttnn.BufferType.L1,
+                    ttnn.NdShardSpec(
+                        ttnn.Shape([config.hidden_size, _FUSED_TILE]),
+                        experts.router_cores,
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                    ),
+                ),
+            )
+            if self.fused_router
+            else None
+        )
         # On the 6-expert path ``fused_experts`` also runs the shared expert (unless
         # DEEPSEEK_V4_FUSE_SHARED_EXPERT=0), so there is no separate shared MLP to build.
         self.fused_shared = None
@@ -1329,7 +1419,8 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         t = b * s
         x_flat = ttnn.reshape(hidden, [1, 1, t, h])
         rows = x_flat
-        dest = self.experts.core_grid()
+        fuse_router = self.fused_router and t == 1 and image_mask is None
+        dest = self.experts.core_grid(router=fuse_router)
 
         def _l1(tag):  # TEMP probe
             if t > 1:
@@ -1363,6 +1454,8 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         # it uses, so :meth:`DeepSeekV4TopKRouter.forward` is already capture-safe.
         if self.is_hash:
             routing = self.gate.forward_static(x_flat, hash_token)
+        elif fuse_router:
+            routing = RouterWeights(gate=self.fused_gate_l1, bias=self.gate.e_score_correction_bias)
         else:
             routing = self.gate(x_flat, image_mask)
         _l1("router")

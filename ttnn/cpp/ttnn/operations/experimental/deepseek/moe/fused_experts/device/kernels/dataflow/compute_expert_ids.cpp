@@ -38,6 +38,13 @@
 //    same `sel_ids`/bitmap the ids form fills, so the compaction, dedup and weight passes below are
 //    shared verbatim; a top-k over a row cannot repeat an id, and cross-token duplicates are
 //    collapsed by the bitmap as usual.
+//
+//    In the router form (`rank_from_router`) the op runs the router itself: each router core
+//    (router_topk.cpp) leaves its top_k candidates -- an order key of the fp32 ranking value, the
+//    expert id and the fp32 score -- in its slot of this core's cb_routing and bumps sem_router. Each
+//    slot is sorted best first (equal keys lower id first), so a k-way merge of the slots' heads,
+//    ties going to the lower expert id, is the global top-k with the same lower-id tie-break as
+//    the ranking scan. The winners' scores become the weights directly.
 // 2. Multicasts the ids buffer to all other compute cores' L1 (cb_bcast).
 // 3. Sets + multicasts a semaphore (sem_id) to signal the other cores.
 // 4. Publishes the activation to this core's compute: either after the {1,0} broadcast, or
@@ -97,6 +104,9 @@
 //        TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //   then: the shared-expert block (SharedExpert in fetch_gate_up.h) and its two accessors
+//   then: gate_up_k_shards, gate_up_col_shards
+//   then: rank_from_router (1 = merge the router cores' candidates), num_router_cores,
+//         router_cand_offset (their slots in cb_routing), router_cand_slot_bytes, sem_router
 //
 // Runtime args:
 //   0: routing base address (the selected-id tensor)
@@ -237,6 +247,12 @@ void kernel_main() {
     constexpr uint32_t gate_up_k_shards = get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset());
     constexpr uint32_t gate_up_col_shards =
         get_compile_time_arg_val(shared_down_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t kRouterCtBase = shared_down_args.next_compile_time_args_offset() + 2;
+    constexpr bool rank_from_router = get_compile_time_arg_val(kRouterCtBase) == 1;
+    constexpr uint32_t num_router_cores = get_compile_time_arg_val(kRouterCtBase + 1);
+    constexpr uint32_t router_cand_offset = get_compile_time_arg_val(kRouterCtBase + 2);
+    constexpr uint32_t router_cand_slot_bytes = get_compile_time_arg_val(kRouterCtBase + 3);
+    constexpr uint32_t sem_router_id = get_compile_time_arg_val(kRouterCtBase + 4);
     const SharedExpert shared = shared_expert_args<kSharedCtBase>(get_arg_val<uint32_t>(19), get_arg_val<uint32_t>(20));
 
     const uint32_t routing_addr = get_arg_val<uint32_t>(0);
@@ -279,8 +295,9 @@ void kernel_main() {
         DeviceZoneScopedN("FE_ROUTE_READ");
         // One TILE page of ids (B <= 32 rows and top_k <= 16 columns both fit a single 32x32 tile) when
         // the router's ids are the selection source, then the score row (TILE pages or a ROW_MAJOR
-        // stick) after it, then, when ranking is a separate tensor, the ranking row.
-        if constexpr (!rank_from_scores) {
+        // stick) after it, then, when ranking is a separate tensor, the ranking row. The in-op router
+        // reads nothing here: it has no score row (score_pages == 0) and its candidates arrive below.
+        if constexpr (!rank_from_scores && !rank_from_router) {
             noc.async_read(routing, cb_routing, routing_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
         }
         const auto scores = TensorAccessor(score_args, score_addr);
@@ -338,13 +355,46 @@ void kernel_main() {
     // re-converting -- them out of the tile.
     CoreLocalMem<volatile uint16_t> sel_ids(routing_l1 + scratch_l1_offset + bitmap_bytes + rank_bytes);
     constexpr uint16_t kDropped = 0xFFFFu;
+    // The in-op router's winners carry their scores as fp32 bits (batch is 1 there), used as the weights.
+    uint32_t router_score_bits[top_k > 0u ? top_k : 1u];
 
     {
         DeviceZoneScopedN("FE_ROUTE_SELECT");
         for (uint32_t w = 0; w < bitmap_words; ++w) {
             bitmap[w] = 0;
         }
-        if constexpr (rank_from_scores) {
+        if constexpr (rank_from_router) {
+            constexpr uint32_t slot_words = router_cand_slot_bytes / 4u;
+            Semaphore<>(sem_router_id).wait_min(num_router_cores);
+            CoreLocalMem<volatile uint32_t> cand(routing_l1 + router_cand_offset);
+            uint32_t head[num_router_cores > 0u ? num_router_cores : 1u];
+            for (uint32_t c = 0; c < num_router_cores; ++c) {
+                head[c] = 0;
+            }
+            // Every slot holds a full top_k (each router core owns at least 32 >= top_k experts), so
+            // a head never runs off its slot within the top_k picks.
+            for (uint32_t j = 0; j < top_k; ++j) {
+                uint32_t best_c = 0;
+                uint32_t best_key = cand[head[0] * 3u];
+                uint32_t best_id = cand[head[0] * 3u + 1u];
+                for (uint32_t c = 1; c < num_router_cores; ++c) {
+                    const uint32_t at = c * slot_words + head[c] * 3u;
+                    const uint32_t key = cand[at];
+                    const uint32_t id = cand[at + 1u];
+                    if (key > best_key || (key == best_key && id < best_id)) {
+                        best_key = key;
+                        best_id = id;
+                        best_c = c;
+                    }
+                }
+                const uint32_t at = best_c * slot_words + head[best_c] * 3u;
+                ++head[best_c];
+                const uint16_t e = static_cast<uint16_t>(cand[at + 1u]);
+                router_score_bits[j] = cand[at + 2u];
+                sel_ids[j] = e;
+                bitmap[e >> 5] |= 1u << (e & 31u);
+            }
+        } else if constexpr (rank_from_scores) {
             // On-device top-k over the ranking row: one ascending scan per token keeping a sorted
             // k-entry running list of (score, id). The row is already resident in cb_routing -- the
             // weighting gathers read it anyway -- so this adds no DRAM traffic, no extra program and no
@@ -475,15 +525,19 @@ void kernel_main() {
                     sel[j] = 0.0f;
                     continue;
                 }
-                // TILE: expert e sits in tile e/32 of the score row, column e%32 of token row b
-                // (16x16 faces). ROW_MAJOR decode is a linear [1, E] stick, so score[e] is at e*2.
-                uint32_t off;
-                if constexpr (scores_is_rm) {
-                    off = score_l1_offset + (b * score_page_stride) + (e * 2u);
+                if constexpr (rank_from_router) {
+                    sel[j] = __builtin_bit_cast(float, router_score_bits[j]);
                 } else {
-                    off = score_l1_offset + ((e >> 5) * score_page_stride) + tile_elem_offset(b, e & 31u);
+                    // TILE: expert e sits in tile e/32 of the score row, column e%32 of token row b
+                    // (16x16 faces). ROW_MAJOR decode is a linear [1, E] stick, so score[e] is at e*2.
+                    uint32_t off;
+                    if constexpr (scores_is_rm) {
+                        off = score_l1_offset + (b * score_page_stride) + (e * 2u);
+                    } else {
+                        off = score_l1_offset + ((e >> 5) * score_page_stride) + tile_elem_offset(b, e & 31u);
+                    }
+                    sel[j] = bf16_to_f32(rw[off >> 1]);
                 }
-                sel[j] = bf16_to_f32(rw[off >> 1]);
                 sum += sel[j];
             }
             const float inv = scaling / (sum + eps);
