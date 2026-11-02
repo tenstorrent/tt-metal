@@ -2485,7 +2485,7 @@ Program build_exit_relay_program(
         credit_conn[k] = it->second;
     }
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh);
     create_relay_cbs(program, core, common.tensor_page_size, backing.dtype());
     const auto accessor_ct = TensorAccessorArgs(*backing.mesh_buffer().get_device_buffer(e)).get_compile_time_args();
     const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
@@ -2650,7 +2650,7 @@ Program build_entry_relay_program(
         "semaphores for",
         e);
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh);
     create_relay_cbs(program, core, common.tensor_page_size, backing.dtype());
     const auto accessor_ct = TensorAccessorArgs(*backing.mesh_buffer().get_device_buffer(e)).get_compile_time_args();
     const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
@@ -2910,6 +2910,7 @@ void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const 
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_sender_program(
+                *mesh,
                 *impl.backing_tensor.mesh_buffer().get_device_buffer(c),
                 core,
                 config_addr,
@@ -3000,6 +3001,7 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_receiver_program(
+                *mesh,
                 *impl.backing_tensor.mesh_buffer().get_device_buffer(c),
                 core,
                 config_addr,
