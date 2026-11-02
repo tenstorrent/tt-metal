@@ -323,6 +323,9 @@ class RunTimeOptions {
     // This option will disable the relaxed ordering
     bool disable_relaxed_memory_ordering = false;
 
+    // Blackhole silicon: BRISC halts on an L1 ECC error and the host reports it.
+    bool disable_l1_ecc_halt = false;
+
     // Enable instruction gathering in Tensix core.
     bool enable_gathering = false;
 
@@ -346,6 +349,9 @@ class RunTimeOptions {
 
     // presence-based override to force-disable fabric 2-ERISC regardless of defaults
     bool disable_fabric_2_erisc_mode = false;
+
+    // Carry inter-mesh fabric traffic on VC0, with no VC1 (TT_METAL_FABRIC_DISABLE_INTERMESH_VC)
+    bool disable_fabric_intermesh_vc = false;
 
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
@@ -821,6 +827,8 @@ public:
     bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
+    // Callers also check for Blackhole; the option is arch-agnostic.
+    bool get_l1_ecc_halt_enabled() const { return !this->disable_l1_ecc_halt; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
 
     std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
@@ -879,6 +887,9 @@ public:
 
     // Presence-based override to force-disable fabric 2-ERISC
     bool get_disable_fabric_2_erisc_mode() const { return disable_fabric_2_erisc_mode; }
+
+    // Inter-mesh fabric traffic on VC0, with no VC1
+    bool get_disable_fabric_intermesh_vc() const { return disable_fabric_intermesh_vc; }
 
     // Feature flag to enable 2-erisc mode on Blackhole
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }

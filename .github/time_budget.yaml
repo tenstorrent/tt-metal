@@ -248,6 +248,7 @@ runtime:
   pr_gate:
     wh_n150_civ2: 30
     github_hosted_cpu: 15
+    bh_loudbox: 5  # Required host AVX-512 BFP parity coverage.
   merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 15
@@ -327,6 +328,9 @@ llk:
   perf:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
+  # Stage 2 of the LLK perf gate (llk-perf-gate.yaml): runs only when stage 1 finds a regression.
+  perf_placement:
+    bh_p150b_civ2: 60
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
@@ -339,7 +343,7 @@ llk:
     bh_p150b_civ2: 21600
   merge_gate:
     wh_n150_civ2: 300
-    bh_p150b_civ2_viommu: 85
+    bh_p150b_civ2_viommu: 100
   weekly:
     sim_wh_n150_xl: 75
     sim_bh_p150_xl: 240
@@ -363,7 +367,7 @@ models:
     bh_loudbox: 215
     bh_quietbox_2: 90
     bh_sc1: 20
-    bh_galaxy: 40
+    bh_galaxy: 43
   e2e_tier1:
     wh_n150: 28
     wh_galaxy_perf: 215
