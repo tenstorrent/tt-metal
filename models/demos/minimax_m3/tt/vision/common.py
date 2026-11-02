@@ -59,8 +59,8 @@ def as_linear_bias(mesh_device, torch_b: torch.Tensor, dtype) -> ttnn.Tensor:
 
 
 def hifi4_compute_config(fp32_dest_acc: bool = True, packer_l1_acc: bool = False):
-    """Standard HiFi4 compute-kernel config. Matmul-bearing ops use fp32_dest_acc=True;
-    LayerNorm uses False."""
+    """HiFi4 compute-kernel config with exact math and fp32 accumulation (bf16 with fp32_dest_acc=False): the config
+    of LayerNorm, RoPE and SDPA. linear_compute_config adds packer_l1_acc for the weight matmuls."""
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
