@@ -4,7 +4,10 @@
 
 #include "generic_spec_op_device_operation.hpp"
 
+#include <algorithm>
 #include <filesystem>
+#include <optional>
+#include <string>
 #include <variant>
 
 #include <tt_stl/assert.hpp>
@@ -29,12 +32,20 @@ ProgramRunArgs make_program_run_args(
     return run_args;
 }
 
-// Hashes everything in a ProgramSpec that shapes the compiled program. Advanced options are not
-// settable from Python and are left out. Arg values go through std::hash, which covers both ArgValue
-// and the plain uint32_t of older tt-metal.
+// Hashes everything in a ProgramSpec that shapes the compiled program. Of the advanced options, only
+// DFBAdvancedOptions.alias_with and .borrowed_offset are settable from Python; both are hashed, and the
+// rest keep their defaults. Arg values go through std::hash, which covers both ArgValue and the plain
+// uint32_t of older tt-metal.
 std::size_t hash_program_spec(const ProgramSpec& spec) {
     std::size_t hash = 0;
     auto combine = [&hash](const auto&... values) { (ttsl::hash::hash_combine(hash, values), ...); };
+    // An unset format must not hash like DataFormat::Float32 (value 0).
+    auto combine_format = [&combine](const std::optional<tt::DataFormat>& format) {
+        combine(format.has_value());
+        if (format.has_value()) {
+            combine(*format);
+        }
+    };
     combine(spec.name);
     for (const auto& kernel : spec.kernels) {
         combine(*kernel.unique_id, kernel.source.index(), kernel.num_threads, kernel.compiler_options.opt_level);
@@ -107,7 +118,8 @@ std::size_t hash_program_spec(const ProgramSpec& spec) {
         }
     }
     for (const auto& dfb : spec.dataflow_buffers) {
-        combine(*dfb.unique_id, dfb.entry_size, dfb.num_entries, dfb.data_format_metadata);
+        combine(*dfb.unique_id, dfb.entry_size, dfb.num_entries);
+        combine_format(dfb.data_format_metadata);
         combine(dfb.tile_format_metadata.has_value());
         if (dfb.tile_format_metadata.has_value()) {
             combine(dfb.tile_format_metadata->get_height(), dfb.tile_format_metadata->get_width());
@@ -117,12 +129,23 @@ std::size_t hash_program_spec(const ProgramSpec& spec) {
             combine(**dfb.borrowed_from);
         }
         combine(dfb.advanced_options.borrowed_offset);
+        // Aliasing changes the DFB layout; the order of the names does not.
+        std::vector<std::string> alias_with;
+        for (const auto& name : dfb.advanced_options.alias_with) {
+            alias_with.push_back(*name);
+        }
+        std::sort(alias_with.begin(), alias_with.end());
+        combine(alias_with.size());
+        for (const auto& name : alias_with) {
+            combine(name);
+        }
     }
     for (const auto& semaphore : spec.semaphores) {
         combine(*semaphore.unique_id, ttsl::hash::hash_objects_with_default_seed(semaphore.target_nodes));
     }
     for (const auto& scratchpad : spec.scratchpads) {
-        combine(*scratchpad.unique_id, scratchpad.size_per_node, scratchpad.data_format_metadata);
+        combine(*scratchpad.unique_id, scratchpad.size_per_node);
+        combine_format(scratchpad.data_format_metadata);
         combine(scratchpad.tile_format_metadata.has_value());
         if (scratchpad.tile_format_metadata.has_value()) {
             combine(scratchpad.tile_format_metadata->get_height(), scratchpad.tile_format_metadata->get_width());

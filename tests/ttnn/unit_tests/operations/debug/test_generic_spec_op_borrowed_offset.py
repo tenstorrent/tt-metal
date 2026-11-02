@@ -309,6 +309,38 @@ def test_generic_spec_op_rejects_aliases_with_different_borrowed_offsets(device,
         run(device, tensors, spec)
 
 
+def float32_dfb(unique_id, offset):
+    return E.DataflowBufferSpec(
+        unique_id=unique_id,
+        entry_size=ENTRY_BYTES,
+        num_entries=2,
+        data_format_metadata=ttnn.float32,
+        borrowed_from="arena",
+        advanced_options=E.DFBAdvancedOptions(borrowed_offset=offset),
+    )
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        # a and b overlap at offset 0 in sequential phases, a valid spec with or without declaring them aliases.
+        {"dfb_a": borrowed_dfb("a", 0, alias_with=["b"]), "dfb_b": borrowed_dfb("b", 0, alias_with=["a"])},
+        # An unset data format must not hash like Float32 (DataFormat value 0).
+        {"dfb_a": float32_dfb("a", 0)},
+    ],
+    ids=["alias_with", "format_unset_vs_float32"],
+)
+def test_generic_spec_op_program_hash_tells_specs_apart(device, variant):
+    # Two specs that differ only in variant's DFBs must get their own cached programs.
+    entries = device.num_program_cache_entries()
+    for dfbs in ({}, variant):
+        torch_a, torch_b, tensors = make_io(device, 0)
+        run(device, tensors, make_program(tensors, offset_a=0, offset_b=0, phases=True, **dfbs))
+        assert torch.equal(ttnn.to_torch(tensors["out_a"]).to(torch.int32), torch_a)
+        assert torch.equal(ttnn.to_torch(tensors["out_b"]).to(torch.int32), torch_b)
+    assert device.num_program_cache_entries() == entries + 2
+
+
 def test_dfb_advanced_options_round_trip():
     dfb = E.DataflowBufferSpec(
         unique_id="d", entry_size=64, num_entries=1, advanced_options=E.DFBAdvancedOptions(borrowed_offset=128)
