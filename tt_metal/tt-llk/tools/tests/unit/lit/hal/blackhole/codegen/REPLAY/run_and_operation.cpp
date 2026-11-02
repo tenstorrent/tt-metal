@@ -9,8 +9,7 @@
 // Compare each HAL function with its adjacent reference_ function. Disable
 // identical-code folding so both bodies are emitted independently.
 // Execution uses TTI_*/TT_* references; replay encoding uses TT_OP_* references.
-// REPLAY operands are (start, count, execute while recording, record); a count
-// of 64 is encoded as zero by the low six bits.
+// REPLAY operands are (start, count, execute while recording, record).
 
 #include <cstdint>
 
@@ -30,15 +29,14 @@ extern "C" __attribute__((noinline, used)) void reference_run_full_buffer()
     TTI_REPLAY(0 /*start_idx*/, 32 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 }
 
-// The range wraps past slot 31.
-extern "C" __attribute__((noinline, used)) void run_wrapping()
+extern "C" __attribute__((noinline, used)) void run_last_slot()
 {
-    replay::run<replay::BufferRange {31, 2}>();
+    replay::run<replay::BufferRange {31, 1}>();
 }
 
-extern "C" __attribute__((noinline, used)) void reference_run_wrapping()
+extern "C" __attribute__((noinline, used)) void reference_run_last_slot()
 {
-    TTI_REPLAY(31 /*start_idx*/, 2 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+    TTI_REPLAY(31 /*start_idx*/, 1 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 }
 
 // A constant range passed to the runtime overload still lowers to an immediate REPLAY.
@@ -61,27 +59,27 @@ extern "C" __attribute__((noinline, used)) void run_runtime_count(const std::uin
 // in the same operation order as the HAL.
 extern "C" __attribute__((noinline, used)) void reference_run_runtime_count(const std::uint32_t count)
 {
-    lltt::replay(5 /*start*/, count & 63);
+    lltt::replay(5 /*start*/, count);
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t get_operation_max_count()
 {
-    return replay::get_operation<replay::BufferRange {4, 64}>();
+    return replay::get_operation<replay::BufferRange {4, 28}>();
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_get_operation_max_count()
 {
-    return TT_OP_REPLAY(4 /*start_idx*/, 0 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+    return TT_OP_REPLAY(4 /*start_idx*/, 28 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t get_operation_last_slot()
 {
-    return replay::get_operation<replay::BufferRange {31, 32}>();
+    return replay::get_operation<replay::BufferRange {31, 1}>();
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_get_operation_last_slot()
 {
-    return TT_OP_REPLAY(31 /*start_idx*/, 32 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+    return TT_OP_REPLAY(31 /*start_idx*/, 1 /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t get_operation_runtime(const std::uint32_t start, const std::uint32_t count)
@@ -91,7 +89,7 @@ extern "C" __attribute__((noinline, used)) std::uint32_t get_operation_runtime(c
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_get_operation_runtime(const std::uint32_t start, const std::uint32_t count)
 {
-    return TT_OP_REPLAY(start, count & 63, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+    return TT_OP_REPLAY(start, count, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 }
 
 // An encoded replay is a MOP body op; both last-iteration ops repeat it.
