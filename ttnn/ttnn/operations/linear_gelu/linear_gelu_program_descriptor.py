@@ -148,7 +148,8 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
     ]
     for tensor in (input_tensor, weight, bias):
         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
-    writer_ct = [CB_OUTPUT_TILES, block_h, BLOCK_W, N_TILES, tile_bytes]
+    seq = list(input_tensor.shape)[-2]
+    writer_ct = [CB_OUTPUT_TILES, block_h, BLOCK_W, N_TILES, tile_bytes, _div_up(seq, TILE), seq % TILE]
     writer_ct.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
     compute_ct = [CB_ACTIVATION_BLOCK, CB_WEIGHT_RESIDENT, CB_OUTPUT_TILES, block_h, BLOCK_W, K_EXT_TILES, GELU_FAST]
 

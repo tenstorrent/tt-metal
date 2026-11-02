@@ -42,7 +42,7 @@
 - **Golden baseline**: 23 / 23 supported cells pass (15 grid + 8 flagged loose), 73 xfail_expected, 0 loud. Regression file: 2 pass, 4 refused (`h_non_aligned`).
 - **Perf baseline (device us, production placement)**: 8x512 195.6, 16x256 195.7, 32x128 195.7, 8x384 155.0, 4x512 114.1, 8x256 114.2, 2x512 73.1, 4x256 73.0. Beats stock on every row; 2.2x to 3.2x above target.
 
-### [ ] Refinement 1 - Non-aligned S + DRAM placement for x and output
+### [x] Refinement 1 - Non-aligned S + DRAM placement for x and output
 
 **Goal**: add `"h_non_aligned"` to `SUPPORTED["alignment"]`, `ttnn.BufferType.DRAM` to `SUPPORTED["buffer_type"]` and `ttnn.BufferType.DRAM` to `SUPPORTED["out_buffer_type"]`. All three are native kernel paths:
 - `h_non_aligned`: design stage W3. The writer zeroes rows `valid_rows(m)..31` of every tile of a tail tile row (`st == seq_tiles - 1` with `S % 32 != 0`) in the `cb_output_tiles` page after `wait_front` and before the NoC write. Use `noc.async_write_zeros` on the partial faces, the same primitive the reader uses for the bias padding. Gate it with a CT arg (`last_valid_rows = S % 32`) so aligned S compiles it out. Do not mask x instead: a padded x row gives z = b, so GELU(b) != 0 would still land in the padding, and NaN/Inf in x's padding must stay confined to padded rows (matmul rows are independent).
@@ -52,6 +52,8 @@
 **Verifier notes**: these are knob-turns, not scheme changes, and they share one writer edit plus three gate flips, so they ship as one refinement. The perf-1 contract (8x512, L1/L1, default config) is already fully in SUPPORTED at Phase 0, so this is the only generality refinement left (TARGET - SUPPORTED is exactly these three values). Every refinement after it is perf. Ship it performant: the zero fill is only on tail-row tiles and must not add a per-tile barrier on aligned rows. Measure DRAM output at 8x512 against the L1 number: 25.2 MB of output at 448 GB/s is about 56 us, streamed over the whole op, so it should not bind at today's 195 us, but record it as a guard row for the perf refinements.
 
 **Done when**: every golden cell with `alignment = h_non_aligned`, `buffer_type = DRAM` or `out_buffer_type = DRAM` passes (73 cells move from xfail_expected to supported_pass), the 4 `h_non_aligned` regression tests in `eval/golden_tests/linear_gelu/test_regression.py` pass (incl. `test_padded_rows_zero` with Inf padding), the acceptance tests' skipped non-aligned / DRAM cases run and pass, verifier CLI loud categories stay 0, and 8x512 L1/L1 device time does not regress.
+
+**Outcome**: shipped. Golden target cells 73/73 pass, regression file 6/6. Device us at 8x512: L1/L1 195.4 (baseline 195.6), DRAM x 199.4, DRAM out 196.2; 8x500 non-aligned L1/L1 195.5. Guard rows pinned in `test_linear_gelu_perf.py::test_linear_gelu_perf_guard`.
 
 ### [ ] Refinement 2 - Speed up the flagged 8x512 profile: per-tile compute cost
 
