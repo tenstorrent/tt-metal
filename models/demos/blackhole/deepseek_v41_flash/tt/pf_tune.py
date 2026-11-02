@@ -105,14 +105,22 @@ def p64(md):
     return _P64[id(md)]
 
 
-def rope_pe(x, c, s, P, ckc):
-    """x [..., 512] -> x with its last 64 dims rotated: x_pe * c_pe + (x_pe @ P) * s_pe (c, s [1,1,n,512] tables, only their last 64 columns are read)."""
+def rope_pe(x, c, s, P, ckc, inplace=False):
+    """x [..., 512] -> x with its last 64 dims rotated: x_pe * c_pe + (x_pe @ P) * s_pe (c, s [1,1,n,512] tables, only their last 64 columns are read).
+    inplace=True (and DSV41_PFA_ROPE_WRITE=1, default OFF): the rotated 64 columns are written back into ``x`` (slice_write) instead of slicing the other 448 columns and
+    concatenating (2 full-tensor copies on 120 cores, ~120 us for 8 heads x 1024 rows); returns ``x`` itself, the caller must not need the unrotated values.
+    """
     sh = list(x.shape)
     D = sh[3]
     lo = D - ROPE_DIM
     xp = ttnn.slice(x, [0, 0, 0, lo], sh)
     cs = [ttnn.slice(t, [0, 0, 0, lo], list(t.shape)) for t in (c, s)]
     y = ttnn.add(ttnn.multiply(xp, cs[0]), ttnn.multiply(ttnn.matmul(xp, P, compute_kernel_config=ckc), cs[1]))
+    if inplace and _env("DSV41_PFA_ROPE_WRITE", "0") == "1":
+        ttnn.experimental.slice_write(y, x, [0, 0, 0, lo], sh, [1, 1, 1, 1])
+        for t in (xp, y, *cs):
+            ttnn.deallocate(t)
+        return x
     out = ttnn.concat([ttnn.slice(x, [0, 0, 0, 0], sh[:3] + [lo]), y], dim=3)
     for t in (xp, y, *cs):
         ttnn.deallocate(t)
@@ -208,9 +216,67 @@ def _mm_cfg(md):
     return _CACHE[key]
 
 
+# DSV41_PFA_MM_TABLE=1 (default OFF): per-shape minimal_matmul blocks on the 12x10 worker grid for the M = 1024 prefill projections (cores-for-prefill study, dsv4-logs/cores/CORES_PF.md).
+# (K, N) per chip -> (M_block, K_block, N_block, subblock_h, subblock_w); swept single chip, tests/test_cores_pf_mm.py (shipped: 8x10 grid, 8x8x8 blocks = 80 cores). Pattern: tt_dit/utils/matmul.py
+# (per-grid blocking tables, grid 11x10 / 12x10 on Blackhole Galaxy, M_block = ceil(M_tiles / grid_x)). wo_a (4608 -> 1024) stays on the shipped config (8x10 was the best of the sweep).
+_MM_TABLE = {
+    (5120, 1792): (8, 8, 8, 4, 1),  # wqkv   154 -> 125 us
+    (1280, 4096): (3, 8, 16, 1, 4),  # wq_b   124 ->  93 us
+    (1024, 5120): (2, 8, 16, 2, 2),  # wo_b   135 ->  99 us
+}
+
+
+def shared_1d_cfgs(h):
+    """DSV41_PFA_SH_1D=1 (default OFF): 1D-multicast program configs of the two shared-expert linears of ``prefill_layer.shared_big`` for M = 128 tokens per chip (4 tile rows):
+    w01 (5120 -> 4608) on 72 cores (10x8 grid, per_core_N 2), w2 (2304 -> 5120) on 80 cores (12x7 grid, per_core_N 2); the auto config of core_grid 8x8 used 48 / 56 cores.
+    Swept single chip (tests/test_cores_pf_micro.py): w01 132 -> 101 us, w2 76 -> 62 us, outputs bit-identical. Pattern: models/demos/blackhole/deepseek_v41_flash/tt/attention.py:_cfg_1d.
+    """
+    if _env("DSV41_PFA_SH_1D", "0") != "1" or int(h.shape[-2]) != 128:
+        return None, None
+    if "sh1d" not in _CACHE:
+
+        def mk(gx, gy, sbw):
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=sbw,
+                per_core_M=4,
+                per_core_N=2,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+
+        _CACHE["sh1d"] = (mk(10, 8, 2), mk(12, 7, 2))
+    return _CACHE["sh1d"]
+
+
+def _mm_table_cfg(x, w):
+    if _env("DSV41_PFA_MM_TABLE", "0") != "1" or int(x.shape[-2]) != 1024:
+        return None
+    e = _MM_TABLE.get((int(w.shape[-2]), int(w.shape[-1])))
+    if e is None:
+        return None
+    key = ("mmt",) + e
+    if key not in _CACHE:
+        _CACHE[key] = ttnn.MinimalMatmulConfig(
+            M_block_size=e[0],
+            K_block_size=e[1],
+            N_block_size=e[2],
+            subblock_h=e[3],
+            subblock_w=e[4],
+            compute_with_storage_grid_size=ttnn.CoreCoord(12, 10),
+        )
+    return _CACHE[key]
+
+
 def linear(x, w, ckc, md):
     """ttnn.linear of the prefill projections (auto program config) or, with DSV41_PFA_MM=minimal, the swept-block minimal_matmul."""
     if __getattr__("MM") == "minimal":
+        tcfg = _mm_table_cfg(x, w)
+        if tcfg is not None:
+            return ttnn.experimental.minimal_matmul(x, w, compute_kernel_config=ckc, config=tcfg)
         cfg = _mm_cfg(md)
         M, K, N = x.shape[-2] // 32, x.shape[-1] // 32, w.shape[-1] // 32
         if (

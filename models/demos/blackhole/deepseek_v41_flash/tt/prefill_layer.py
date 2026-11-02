@@ -254,12 +254,13 @@ def shared_big(sh, h):
     35 MB of weights per call): same maths / dtypes (bfp8 weights, HiFi4 fp32 accumulate, bf16 gate/up, fp32 out), automatic matmul configs.
     h [1,1,M,D] bf16 -> [1,1,M,D] fp32."""
     ckc = pf_tune.shared_ckc(sh, h.device())
+    pc1, pc2 = pf_tune.shared_1d_cfgs(h)
     gu = ttnn.linear(
         h,
         sh.w01,
         dtype=sh.mid_dtype,
         compute_kernel_config=ckc,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        **({"program_config": pc1} if pc1 is not None else {"core_grid": ttnn.CoreGrid(y=8, x=8)}),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     g, u = gu[:, :, :, : sh.inter], gu[:, :, :, sh.inter :]
@@ -277,7 +278,7 @@ def shared_big(sh, h):
         sh.w2,
         dtype=ttnn.float32,
         compute_kernel_config=ckc,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        **({"program_config": pc2} if pc2 is not None else {"core_grid": ttnn.CoreGrid(y=8, x=8)}),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn.deallocate(act)

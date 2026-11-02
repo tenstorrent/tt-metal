@@ -219,18 +219,18 @@ class DSV41PrefillAttention:
         return o
 
     # ---- helpers ------------------------------------------------------------------------------------------
-    def _rope(self, x, tabs):
+    def _rope(self, x, tabs, inplace=False):
         c, s, _ = tabs
         if pf_tune.ROPE_PE:
-            return pf_tune.rope_pe(x, c, s, pf_tune.p64(self.md), self.rckc)
+            return pf_tune.rope_pe(x, c, s, pf_tune.p64(self.md), self.rckc, inplace)
         return ttnn.add(
             ttnn.multiply(x, c), ttnn.multiply(ttnn.matmul(x, self.a.Pf, compute_kernel_config=self.rckc), s)
         )
 
-    def _rope_inv(self, x, tabs):
+    def _rope_inv(self, x, tabs, inplace=False):
         c, _, ns = tabs
         if pf_tune.ROPE_PE:
-            return pf_tune.rope_pe(x, c, ns, pf_tune.p64(self.md), self.rckc)
+            return pf_tune.rope_pe(x, c, ns, pf_tune.p64(self.md), self.rckc, inplace)
         return ttnn.add(
             ttnn.multiply(x, c), ttnn.multiply(ttnn.matmul(x, self.a.Pf, compute_kernel_config=self.rckc), ns)
         )
@@ -463,7 +463,7 @@ class DSV41PrefillAttention:
                 q, num_heads=LOCAL_HEADS, num_kv_heads=0, transpose_k_heads=False
             )
             ttnn.deallocate(q)
-            qh = self._rope(qh, tabs)
+            qh = self._rope(qh, tabs, inplace=True)
         if FA.on("DSV41_FA_KV"):
             kv = FA.kv_rope(kvn, tabs, pf_tune.p64(self.md), U, C)
         else:
@@ -527,7 +527,7 @@ class DSV41PrefillAttention:
             for t in o:
                 ttnn.deallocate(t)
         else:
-            o = self._rope_inv(o, tabs)
+            o = self._rope_inv(o, tabs, inplace=True)
             c = ttnn.experimental.nlp_concat_heads(o)
             ttnn.deallocate(o)
             zero = zeros(self.md, [U, 1, C, HEAD_DIM])
