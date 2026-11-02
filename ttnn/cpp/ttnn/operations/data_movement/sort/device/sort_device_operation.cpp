@@ -75,6 +75,22 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
 void SortDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
+    auto validate_tile_shape = [](const Tensor& tensor) {
+        if (tensor.layout() == Layout::TILE) {
+            const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+            TT_FATAL(
+                tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+                "Sort supports only 32x32 tiles, got {}x{}",
+                tile_shape[0],
+                tile_shape[1]);
+        }
+    };
+    validate_tile_shape(input);
+    for (const auto& output : tensor_args.output_tensors) {
+        if (output.has_value()) {
+            validate_tile_shape(*output);
+        }
+    }
     const auto input_lshape = input.logical_shape();
     const auto input_pshape = input.padded_shape();
 
