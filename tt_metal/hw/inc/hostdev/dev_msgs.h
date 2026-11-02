@@ -385,9 +385,13 @@ struct watcher_msg_t {
     struct debug_ring_buf_msg_t debug_ring_buf;
 };
 
-// Written by the Blackhole BRISC L1 ECC interrupt handler before it halts the core; reason values are in
-// hostdev/l1_ecc_halt_constants.h.
+// Written by the Blackhole BRISC L1 ECC interrupt handler before it halts the core. The fields up to reason are ARC's
+// tile event header: ARC forwards the event (type, cause = reason) to the host and clears the magic. The host reads
+// the other fields from L1. Values are in hostdev/l1_ecc_halt_constants.h.
 struct l1_ecc_halt_msg_t {
+    volatile uint32_t magic;
+    volatile uint16_t type;
+    volatile uint16_t reserved;
     volatile uint32_t reason;
     volatile uint32_t ecc_ctrl;
     volatile uint32_t l1_counts;                  // ECC_STATUS view 2
@@ -399,6 +403,8 @@ struct l1_ecc_halt_msg_t {
 // Blackhole Tensix only, at MEM_L1_ECC_HALT_BASE.
 struct l1_ecc_halt_slot_t {
     struct l1_ecc_halt_msg_t record;
+    // The PMM message announcing the record to ARC: the source of BRISC's NoC write to ARC.
+    volatile uint32_t pmm_message;
     // Written by the host at init: code that returns from an interrupt handler without using the stack
     // (brisc_int_release_code in hostdev/l1_ecc_halt_constants.h).
     volatile uint32_t brisc_int_release[2];

@@ -221,9 +221,37 @@ inline __attribute__((always_inline)) uint32_t read_ecc_view(EccView view) {
     return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_STATUS);
 }
 
-// Records the ECC state for the host and halts the core until the next device open releases it.
+// Announces the halt record to ARC with one PMM message, sent from the slot over BRISC's NOC, where NCRISC does not
+// use BRISC_WR_CMD_BUF unless the kernels share one dedicated NOC. ncrisc_noc_fast_write leaves the MID registers as
+// they are, and the interrupted code may have left a PCIe address in them; the core halts next, so nothing else
+// programs the buffer afterwards.
+inline __attribute__((always_inline)) void send_pmm_message(tt_l1_ptr l1_ecc_halt_slot_t* slot) {
+    const uint32_t noc = noc_index;
+    constexpr uint32_t cmd_buf = BRISC_WR_CMD_BUF;
+    // The PMM picks the mailbox word from the NOC0 x/y in the message, whichever NOC carries it.
+    slot->pmm_message = arc_pmm_message(my_x[0], my_y[0], arc_pmm_flag0, MEM_L1_ECC_HALT_BASE);
+    // The record and the message must be in L1 before the NoC reads them.
+    asm volatile("fence" ::: "memory");
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, 0);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, 0);
+    ncrisc_noc_fast_write<DM_DEDICATED_NOC, /*use_trid=*/true, /*update_counter=*/false>(
+        noc,
+        cmd_buf,
+        reinterpret_cast<uint32_t>(&slot->pmm_message),
+        NOC_XY_ADDR(arc_noc_x, arc_noc_y, arc_pmm_message_addr),
+        sizeof(slot->pmm_message),
+        NOC_UNICAST_WRITE_VC,
+        /*mcast=*/false,
+        /*linked=*/false,
+        /*num_dests=*/1,
+        /*multicast_path_reserve=*/false);
+}
+
+// Records the ECC state for the host and ARC, and halts the core until the next device open releases it.
 inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t last_l1_error_banks_0_15) {
     tt_l1_ptr l1_ecc_halt_slot_t* const slot = reinterpret_cast<tt_l1_ptr l1_ecc_halt_slot_t*>(MEM_L1_ECC_HALT_BASE);
+    slot->record.type = l1_ecc_halt_event_type;
     slot->record.ecc_ctrl = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
     slot->record.l1_counts = read_ecc_view(EccView::L1_COUNTS);
     slot->record.last_l1_error_banks_0_15 = last_l1_error_banks_0_15;
@@ -232,7 +260,10 @@ inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t 
     asm volatile("fence" ::: "memory");
     // A valid last error here is in a populated row; without one, IRQ 3 came from another source (the watchdog).
     bool l1_dbe = last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK;
+    // The host takes a known reason, and ARC a set magic, as a complete record.
     slot->record.reason = l1_dbe ? L1_ECC_HALT_REASON_DBE : L1_ECC_HALT_REASON_UNEXPECTED;
+    slot->record.magic = l1_ecc_halt_record_magic;
+    send_pmm_message(slot);
     WAYPOINT("ECCH");
     while (true) {
     }

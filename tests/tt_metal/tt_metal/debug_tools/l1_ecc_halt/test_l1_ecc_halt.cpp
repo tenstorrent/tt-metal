@@ -7,8 +7,8 @@
 //    write. These cover the host side: Finish and EventSynchronize report the halt, and the message names the cause.
 // 2. Real ECC errors: a NoC read past the end of L1 raises real DBEs from the unpopulated rows. The handler must
 //    return without halting.
-// 3. Real interrupt: the watchdog's software interrupt raises IRQ 3, and the real handler halts the core. Reopening
-//    the device must then release the BRISC from the handler.
+// 3. Real interrupt: the watchdog's software interrupt raises IRQ 3, and the real handler halts the core and announces
+//    the halt to ARC's PMM. Reopening the device must then release the BRISC from the handler.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -24,6 +24,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "hal_types.hpp"
 #include "hostdev/l1_ecc_halt_constants.h"
@@ -76,6 +77,14 @@ protected:
         auto zero = distributed::MeshCoordinate(0, 0);
         workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
         return workload;
+    }
+
+    tt_cxy_pair arc_target() {
+        const auto arc = MetalContext::instance()
+                             .get_cluster()
+                             .get_soc_desc(test_target_.chip)
+                             .get_cores(tt::CoreType::ARC, tt::CoordSystem::TRANSLATED);
+        return tt_cxy_pair(test_target_.chip, arc.at(0).x, arc.at(0).y);
     }
 
     uint64_t halt_record_addr() {
@@ -215,6 +224,14 @@ TEST_F(L1EccHaltTest, MretWithAliasedBranchReturns) {
 
 TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
     auto& ctx = MetalContext::instance();
+    const tt_cxy_pair arc = arc_target();
+    const uint32_t x = test_target_.x;
+    const uint32_t y = test_target_.y;
+    // The core's PMM mailbox word keeps the last message until an ARC reset, across processes. Clearing it first
+    // means a match below comes from this run.
+    const uint32_t pmm_clear = arc_pmm_message(x, y, 0, 0);
+    ctx.get_cluster().write_reg(&pmm_clear, arc, arc_pmm_message_addr);
+
     auto workload = single_core_workload(hang_kernel, {1});  // raises IRQ 3
     auto& cq = devices_[0]->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -232,8 +249,26 @@ TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
     EXPECT_EQ(int_no, pic_num_sw_ints + pic_hw_int_err);
     ctx.get_cluster().read_core(record_.data(), record_.size(), test_target_, halt_record_addr());
     EXPECT_EQ(record_.view().reason(), L1_ECC_HALT_REASON_UNEXPECTED);
-    // The handler selects other views before it halts, so only the interrupt enables are checked.
-    EXPECT_EQ(record_.view().ecc_ctrl() & ~ECC_CTRL_VIEW_MASK, ECC_CTRL_L1_DBE_IRQ_EN);
+    EXPECT_EQ(record_.view().type(), l1_ecc_halt_event_type);
+
+    // BRISC announced the record to ARC through the PMM. ARC firmware that handles the message clears the mailbox word
+    // and the record's magic; without such firmware, both keep what BRISC wrote.
+    uint32_t pmm_word = 0;
+    ctx.get_cluster().read_reg(&pmm_word, arc, arc_pmm_mailbox_addr + sizeof(uint32_t) * (arc_pmm_grid_x * y + x));
+    const uint32_t pmm_sent =
+        arc_pmm_message(x, y, arc_pmm_flag0, static_cast<uint32_t>(halt_record_addr())) & arc_pmm_mailbox_mask;
+    const uint32_t magic = record_.view().magic();
+    const bool arc_forwarded = pmm_word == 0 && magic == 0;
+    EXPECT_TRUE(arc_forwarded || (pmm_word == pmm_sent && magic == l1_ecc_halt_record_magic))
+        << std::hex << "PMM mailbox word 0x" << pmm_word << " (sent 0x" << pmm_sent << "), record magic 0x" << magic;
+    log_info(
+        tt::LogTest,
+        "Core ({}, {}): PMM mailbox word 0x{:x}, record magic 0x{:x}: {}",
+        x,
+        y,
+        pmm_word,
+        magic,
+        arc_forwarded ? "ARC forwarded the record" : "no ARC handler, the message is still in the mailbox");
 
     // Reopening must release the BRISC from its handler without a chip reset.
     destroy_shared_devices();

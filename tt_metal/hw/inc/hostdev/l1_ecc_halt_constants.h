@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-// Values of l1_ecc_halt_msg_t::reason and the Blackhole Tensix ECC register fields. Shared by host and
+// Values of l1_ecc_halt_msg_t::reason and the Blackhole Tensix ECC and ARC PMM register fields. Shared by host and
 // firmware.
 constexpr uint32_t L1_ECC_HALT_REASON_DBE = 0xECC00001;
 constexpr uint32_t L1_ECC_HALT_REASON_UNEXPECTED = 0xECC00003;
@@ -61,3 +61,25 @@ constexpr uint32_t brisc_int_release_code[2] = {riscv_mret_insn, riscv_j_back_in
 // L1 has 32 banks of 16 B SECDED words. Rows are 32 words apart in the default bank interleave.
 constexpr uint32_t l1_ecc_banks = 32;
 constexpr uint32_t l1_ecc_word_bytes = 16;
+
+// l1_ecc_halt_msg_t is an ARC tile event record. ARC forwards one with this magic to the host event ring.
+constexpr uint32_t l1_ecc_halt_record_magic = 0x54455654;  // "TEVT"
+constexpr uint16_t l1_ecc_halt_event_type = 0x0002;        // provisional: not yet reserved in ARC firmware
+// The PMM message carries the record address shifted right by 9.
+constexpr uint32_t l1_ecc_halt_record_alignment = 512;
+
+// ARC's PMM (power management messaging) block. With NOC translation on, ARC has these coordinates on both NOCs. A
+// message selects its sender's mailbox word by the NOC0 x/y it carries; the word keeps the message's low 16 bits.
+constexpr uint32_t arc_noc_x = 8;
+constexpr uint32_t arc_noc_y = 0;
+constexpr uint32_t arc_pmm_message_addr = 0x80400000;
+constexpr uint32_t arc_pmm_mailbox_addr = 0x80400800;  // word for (x, y) at + 4 * (arc_pmm_grid_x * y + x)
+constexpr uint32_t arc_pmm_grid_x = 17;
+constexpr uint32_t arc_pmm_mailbox_mask = 0xFFFF;
+constexpr uint32_t arc_pmm_flag0 = 1u << 12;
+
+// The message announcing a halt record at record_addr (flags = arc_pmm_flag0), or, with flags = 0 and record_addr =
+// 0, the one clearing (x, y)'s mailbox word.
+constexpr uint32_t arc_pmm_message(uint32_t x, uint32_t y, uint32_t flags, uint32_t record_addr) {
+    return x << 26 | y << 20 | flags | record_addr / l1_ecc_halt_record_alignment;
+}

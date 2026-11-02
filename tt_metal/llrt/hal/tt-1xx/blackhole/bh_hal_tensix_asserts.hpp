@@ -9,6 +9,7 @@
 
 #include "dev_mem_map.h"
 #include "hostdev/dev_msgs.h"
+#include "hostdev/l1_ecc_halt_constants.h"
 #include "noc/noc_parameters.h"
 #include "hostdevcommon/fabric_common.h"
 
@@ -25,6 +26,9 @@ static_assert(sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, go_message_index)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(offsetof(subordinate_map_t, dm1) == 0);
 static_assert(sizeof(l1_ecc_halt_slot_t) <= MEM_L1_ECC_HALT_SIZE);
+static_assert(MEM_L1_ECC_HALT_BASE % l1_ecc_halt_record_alignment == 0);
+// A NoC write's source must have its destination's offset within 16 B.
+static_assert((MEM_L1_ECC_HALT_BASE + offsetof(l1_ecc_halt_slot_t, pmm_message)) % 16 == arc_pmm_message_addr % 16);
 
 static_assert(sizeof(tt::tt_fabric::routing_l1_info_t) == MEM_ROUTING_TABLE_SIZE, "Struct size mismatch!");
 static_assert(
