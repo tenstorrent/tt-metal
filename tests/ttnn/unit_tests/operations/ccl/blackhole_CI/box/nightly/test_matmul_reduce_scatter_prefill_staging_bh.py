@@ -60,6 +60,12 @@ def operands(mesh_device, name, cluster_axis, seed):
     return ta, tw, reference(a, w, cluster_axis, -1), weight_dtype
 
 
+def make_staging(ta, tw, kwargs):
+    """The staging helper takes the arguments that shape the plan; the compute config does not."""
+    plan_kwargs = {k: v for k, v in kwargs.items() if k != "compute_kernel_config"}
+    return ttnn.experimental.matmul_reduce_scatter_prefill_staging(ta, tw, **plan_kwargs)
+
+
 def staging_rows(staging):
     return staging.memory_config().shard_spec.shape[0]
 
@@ -74,7 +80,7 @@ def test_staging_tensor(mesh_device, cluster_axis, name):
     skip_unless_group(mesh_device, cluster_axis)
     kwargs = op_kwargs(cluster_axis)
     ta, tw, expected, weight_dtype = operands(mesh_device, name, cluster_axis, seed=0)
-    staging = ttnn.experimental.matmul_reduce_scatter_prefill_staging(ta, tw, **kwargs)
+    staging = make_staging(ta, tw, kwargs)
     entries = None
     for _ in range(3):
         out = ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, staging_tensor=staging, **kwargs)
@@ -97,8 +103,8 @@ def test_staging_shared_across_shapes(mesh_device, cluster_axis):
     kwargs = op_kwargs(cluster_axis)
     small = operands(mesh_device, "kimi_k27_o_proj", cluster_axis, seed=0)
     large = operands(mesh_device, "chunked_n", cluster_axis, seed=10)
-    staging = ttnn.experimental.matmul_reduce_scatter_prefill_staging(large[0], large[1], **kwargs)
-    small_staging = ttnn.experimental.matmul_reduce_scatter_prefill_staging(small[0], small[1], **kwargs)
+    staging = make_staging(large[0], large[1], kwargs)
+    small_staging = make_staging(small[0], small[1], kwargs)
     assert staging_rows(staging) > staging_rows(small_staging), "the chunked plan should need the larger staging"
     ttnn.deallocate(small_staging)
     for ta, tw, expected, weight_dtype in (small, large, small):
@@ -122,7 +128,7 @@ def test_staging_traced(mesh_device):
     cluster_axis = 1
     kwargs = op_kwargs(cluster_axis)
     cases = [operands(mesh_device, name, cluster_axis, seed=10 * i) for i, name in enumerate(SHAPES)]
-    staging = ttnn.experimental.matmul_reduce_scatter_prefill_staging(cases[1][0], cases[1][1], **kwargs)
+    staging = make_staging(cases[1][0], cases[1][1], kwargs)
     for ta, tw, _, _ in cases:  # compile both
         ttnn.deallocate(ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, staging_tensor=staging, **kwargs))
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -161,7 +167,7 @@ def test_staging_refusals(mesh_device, expect_error, kind):
     kwargs = op_kwargs(1)
     small = operands(mesh_device, "kimi_k27_o_proj", 1, seed=0)
     large = operands(mesh_device, "chunked_n", 1, seed=10)
-    staging = ttnn.experimental.matmul_reduce_scatter_prefill_staging(small[0], small[1], **kwargs)
+    staging = make_staging(small[0], small[1], kwargs)
     ta, tw = small[0], small[1]
     if kind == "too_small":
         ta, tw = large[0], large[1]
