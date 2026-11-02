@@ -81,7 +81,7 @@ def _linear_program_config(grid, rows, in_features, out_features, activation):
     grid = ttnn.CoreCoord(*grid)
     tile = ttnn.TILE_SIZE
     rows_t = -(-rows // tile)
-    in_t, out_t = in_features // tile, -(-out_features // tile)
+    in_t, out_t = -(-in_features // tile), -(-out_features // tile)
     in0_block_w = max(w for w in range(1, 9) if in_t % w == 0)
     fused_activation = None if activation is None else ttnn.UnaryWithParam(activation)
     # A subblock of out_subblock_w tiles, one tile high, sits in DST, which holds 4 tiles with
