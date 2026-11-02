@@ -67,6 +67,7 @@ enum class BinaryOp : std::uint8_t
     SUB,
     MUL,
     DIV,
+    RSUB,
     GT,
     LT,
     LE,
