@@ -38,7 +38,7 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
         return false;
     }
 
-    if (args.input_dtype != DataType::BFLOAT8_B && args.input_dtype != DataType::BFLOAT4_B) {
+    if (!is_block_float(args.input_dtype)) {
         if ((shard_spec.shape[1] * tt::datum_size(act_df)) % hal::get_l1_alignment() != 0) {
             return false;
         }
