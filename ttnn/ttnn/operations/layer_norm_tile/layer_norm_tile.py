@@ -184,6 +184,7 @@ def layer_norm(
         compute_kernel_config=compute_kernel_config,
     )
     if blocking is None:
+        ttnn.deallocate(output_tensor)
         raise NotImplementedError("layer_norm: row-resident footprint exceeds L1; regime R2 w_split_combine not built")
 
     program_descriptor = create_program_descriptor(

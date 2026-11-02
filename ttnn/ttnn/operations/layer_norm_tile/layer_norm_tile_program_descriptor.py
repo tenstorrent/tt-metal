@@ -298,6 +298,14 @@ def _residual_on_writer(residual, num_active_cores, num_grid_cores):
     return 2 * num_active_cores >= num_grid_cores
 
 
+def _cb_space_per_bank(device):
+    """Bytes below the lowest live L1 buffer: circular buffers grow up from the allocator base and must end
+    under it. The largest free hole can sit above a live buffer and over-promise."""
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    live = [int(block["address"]) for block in view.block_table if block["allocated"] == "yes"]
+    return min(live, default=view.total_bytes_per_bank)
+
+
 def select_blocking(input_tensor, *, residual, compute_kernel_config):
     """Single source of every block knob (R, C, G, in_depth, stream knobs). None when R1's predicate fails."""
     has_residual = residual is not None
@@ -323,7 +331,7 @@ def select_blocking(input_tensor, *, residual, compute_kernel_config):
     whole_row_passes = not stream_normalize or any(rows < stream_min_rows for *_, rows in assignment)
 
     formats = _cb_page_formats(fp32_dest_acc_en)
-    budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank - L1_HEADROOM_BYTES
+    budget = _cb_space_per_bank(device) - L1_HEADROOM_BYTES
 
     def in_depth_for(R):
         return 2 if _div_up(core_row_tiles_max, R) >= 2 else 1
