@@ -1972,7 +1972,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm53_power_pair]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -2104,6 +2104,26 @@
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
+      timeout: 80
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc1
+
+- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1 8 kW (temporary: same-power SC4 vs SC1)"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm53_power_pair]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
       timeout: 80
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
