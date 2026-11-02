@@ -96,7 +96,7 @@ case "${MODEL}" in
   glm53)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm53.json"
-    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    RUNNER_ENV="export LOGURU_LEVEL=ERROR;"
     # The rank 2 KV cache PCC changes from run to run. On SC4 with the D2D relay (the GLM default) it ranged
     # 0.8277-0.8337 over 17 runs; without the relay 0.8318-0.8331 over 13 runs. 0.82 keeps CI from failing on that.
     # Tracked in https://github.com/tenstorrent/tt-metal/issues/62682.
