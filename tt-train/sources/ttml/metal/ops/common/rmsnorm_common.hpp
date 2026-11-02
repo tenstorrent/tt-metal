@@ -44,16 +44,10 @@ constexpr uint32_t kMaxRowSlices = 16U;
 // Per-row latency of the partial exchange, in tiles of per-tile work. Each core also sums num_slices partials.
 constexpr uint32_t kRowSliceExchangeCostTiles = 4U;
 
-/**
- * How rmsnorm_fw and rmsnorm_bw split tile-rows over the cores. When whole rows leave cores idle (e.g. fewer rows than
- * cores), each row is cut into num_slices column slices of slice_tiles tiles, handled by the num_slices cores of one
- * row-group, which exchange their partial row sums. num_slices = 1 is one whole row per work item, the
- * split_work_to_cores split.
- *
- * Core i of the walk {i / num_cores_y, i % num_cores_y} handles slice i % num_slices of the rows of row-group
- * i / num_slices. Row-groups [0, num_groups_1) take rows_per_group_1 rows each, the rest rows_per_group_2;
- * core_group_1 and core_group_2 hold their cores, so each group can keep its own compute kernel.
- */
+// How rmsnorm_fw and rmsnorm_bw split tile-rows over the cores: each row is cut into num_slices column slices of
+// slice_tiles tiles, and num_slices = 1 keeps whole rows. Core i of the walk {i / num_cores_y, i % num_cores_y} handles
+// slice i % num_slices of row-group i / num_slices. Row-groups [0, num_groups_1) take rows_per_group_1 rows, the rest
+// rows_per_group_2.
 struct RowSlicePlan {
     uint32_t num_slices = 1U;
     uint32_t slice_tiles = 0U;
@@ -67,11 +61,9 @@ struct RowSlicePlan {
     tt::tt_metal::CoreRangeSet core_group_2;
 };
 
-/**
- * Picks num_slices by the work of the busiest core: rounds of rows times the tiles per row, plus the exchange.
- * Only slice counts up to max_slices that divide Wt and whose slice `slice_fits_in_l1(slice_tiles, num_slices)`
- * are considered; ties keep the smaller count.
- */
+// Picks num_slices by the work of the busiest core: rounds of rows times the tiles per row, plus the exchange.
+// Only slice counts up to max_slices that divide Wt and whose slice `slice_fits_in_l1(slice_tiles, num_slices)`
+// are considered; ties keep the smaller count.
 template <typename SliceFitsInL1>
 RowSlicePlan plan_row_slices(
     const tt::tt_metal::CoreCoord grid,
