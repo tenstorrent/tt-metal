@@ -225,8 +225,8 @@ PREFILL_SP=2 python -m models.demos.common.prefill.runners.prefill_producer \
   --manifest models/demos/minimax_m3/tt/runners/manifests/m3_producer_mock_migration_2rank.yaml
 ```
 
-**Expect:** rank 0 logs the merged 60-layer 9-config table; each rank writes a rank-scoped device map
-(`/tmp/m3_kv_device_map_r<rank>.json`, merged by the producer); per-layer K/V/index_k over
+**Expect:** rank 0 logs the merged 60-layer 9-config table; the ranks write one device map for the host
+(`/tmp/m3_kv_device_map.txt`, 32 chips); per-layer K/V/index_k over
 `60/60 local layers`, then `KV cache PCC PASSED`.
 
 ### Loopback migration (real endpoint + worker)

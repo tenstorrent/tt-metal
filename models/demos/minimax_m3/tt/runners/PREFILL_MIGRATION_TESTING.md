@@ -226,8 +226,8 @@ TT_VISIBLE_DEVICES splits come from `topology_configuration/pipeline_prefill_req
 Migration-wise everything is the same flow at 2 ranks: both ranks join the per-cache stage-layout
 all-gathers (`kv_migration_stages` reports one `KvCacheStage` per cache — k, v, index_k), rank 0
 builds ONE merged 60-layer 9-config table (each stage's chunks at ITS cache's base address, global layer
-indices) and publishes it. Both ranks are on this host, so the producer/driver read-backs cover all 60
-layers once they merge the two rank-scoped device maps.
+indices) and publishes it. Both ranks are on this host, so they write one device map for it, and the
+producer/driver read-backs cover all 60 layers.
 
 Because num_ranks>1, the table path must be on shared storage — the bindings use
 `/data/philei/tmp/m3_kv_chunk_table_pp.pb` (`mkdir -p /data/philei/tmp` once). The weight cache for the
@@ -251,8 +251,8 @@ python -m models.demos.common.prefill.runners.prefill_producer \
 ```
 
 **Expect:** rank 0 `[migration] merged KV chunk table -> /data/philei/tmp/m3_kv_chunk_table_pp.pb`
-(configs=9, layers=60); each rank `local device map -> /tmp/m3_kv_device_map_r<rank>.json`; producer
-merges both maps (`merged 2 device maps: 32 chips total`), then per-layer `K=… V=… index_k=…` across
+(configs=9, layers=60); `device map (32 chips, ranks [0, 1]) exported to /tmp/m3_kv_device_map.txt`;
+producer `read device map /tmp/m3_kv_device_map.txt: 32 chips`, then per-layer `K=… V=… index_k=…` across
 `60/60 local layers` and `KV cache PCC PASSED`.
 
 ### P2 — pipeline loopback migration (endpoint + 2-rank runner + driver)

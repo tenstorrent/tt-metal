@@ -204,7 +204,7 @@ publishes a table at startup, so a second runner against a live endpoint kills b
 pkill -f migration_endpoint; pkill prun; pkill prted; pkill prte
 rm -f /dev/shm/mig_ep[01]_* /dev/shm/ep_[01]_[ab]_* /dev/shm/ttmig.* \
       /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* \
-      /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map*.json /tmp/m3_migration_done.sentinel* \
+      /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map.txt* /tmp/m3_migration_done.sentinel* \
       /data/philei/tmp/m3_kv_chunk_table_pp.pb \
       /data/philei/tmp/m3_pd/migration_done.sentinel* /data/philei/tmp/m3_pd/prefill_migration_handoff.json
 ```
@@ -283,7 +283,7 @@ PREFILL_SEND_SHUTDOWN=1 python -m models.demos.common.prefill.runners.migration_
   --manifest $M3/m3_producer_loopback_migration_2rank.yaml
 ```
 
-Expect both ranks to log their device maps (`/tmp/m3_kv_device_map_r{0,1}.json`), rank 0 to
+Expect one device map for the host (`/tmp/m3_kv_device_map.txt`, 32 chips), rank 0 to
 publish `/data/philei/tmp/m3_kv_chunk_table_pp.pb` (roughly twice the Gate 2 build time), and the
 same three verdict lines in C, with source PCC over `60/60 local layers`.
 
