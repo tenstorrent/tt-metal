@@ -788,6 +788,13 @@ def _expand_run_types(text):
     return names
 
 
+_ISOLATE_RUN_TYPES = (
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.MATH_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+)
+
+
 def _selected_run_types(run_types):
     """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
     wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
@@ -837,6 +844,18 @@ class PerfConfig(TestConfig):
             )
             for run_type in _selected_run_types(run_types)
         ]
+        # Trial: the WH stack's warm-up (a40b624e1a9 + c337253852f) in stage 2 only: run every kernel once
+        # unrecorded, and in a run without isolate kernels also the first isolate kernel of the test.
+        self.warmup_configs = list(self.run_configs) if CODE_SHIFTS else []
+        if CODE_SHIFTS and not any(
+            rt in _ISOLATE_RUN_TYPES for _, _, rt in self.run_configs
+        ):
+            extra = next((rt for rt in _ISOLATE_RUN_TYPES if rt in run_types), None)
+            if extra is not None and self.run_configs:
+                self.warmup_configs.insert(
+                    0,
+                    (templates.copy() + [PERF_RUN_TYPE(extra)], runtimes.copy(), extra),
+                )
 
         super().__init__(
             test_name,
@@ -1008,7 +1027,9 @@ class PerfConfig(TestConfig):
         window_rows = []
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-            for templates, runtimes, run_type in self.run_configs:
+            for templates, runtimes, run_type in (
+                self.warmup_configs or self.run_configs
+            ):
                 self.current_run_type = run_type
                 # We need to manually assign different modified templates here if the speed of light is set,
                 # because we run TestConfig constructor only once
@@ -1028,6 +1049,16 @@ class PerfConfig(TestConfig):
             return
 
         PerfConfig.TEST_COUNTER += 1
+
+        if not TestConfig.TEST_TARGET.run_simulator:
+            for templates, runtimes, run_type in self.warmup_configs:
+                self.current_run_type = run_type
+                self.templates = templates
+                self.runtimes = runtimes
+                self.generate_variant_hash()
+                self.write_runtimes_to_L1()
+                self.run_elf_files()
+                self.wait_for_tensix_operations_finished()
 
         for templates, runtimes, run_type in self.run_configs:
             self.current_run_type = run_type
