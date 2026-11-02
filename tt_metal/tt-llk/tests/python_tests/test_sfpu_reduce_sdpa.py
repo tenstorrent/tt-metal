@@ -9,17 +9,20 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     MathOperation,
+    PerfRunType,
     ReducePool,
     format_dict,
 )
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block, parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    REDUCE_POOL_TYPE,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -45,67 +48,141 @@ STIMULI = {
 # mathop stays a parameter so `--op ReduceColumn` still selects these cases.
 @parametrize(stimuli=list(STIMULI), mathop=[MATHOP])
 def test_sfpu_reduce_sdpa(stimuli, mathop):
+    _run_sfpu_reduce_sdpa(
+        FORMATS,
+        DEST_ACC,
+        mathop,
+        REDUCE_POOL,
+        INPUT_DIMENSIONS,
+        stimuli=stimuli,
+    )
+
+
+def _run_sfpu_reduce_sdpa(
+    formats,
+    dest_acc,
+    mathop,
+    reduce_pool,
+    input_dimensions,
+    *,
+    stimuli=None,
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+):
+    if run_types is None:
+        run_types = [PerfRunType.PACK_ISOLATE] if is_perf else [PerfRunType.L1_TO_L1]
+
+    block_ct_dim = 2
+    block_rt_dim = 4
+    tile_count = input_dimensions[1] // 32 * input_dimensions[0] // 32
+
+    if is_perf:
+        templates = [
+            MATH_OP(mathop=mathop),
+            REDUCE_POOL_TYPE(reduce_pool),
+            generate_input_dim(input_dimensions, input_dimensions),
+        ]
+        configuration = create_test_or_perf_config(
+            is_perf=True,
+            run_types=run_types,
+            test_config_kwargs={
+                "test_name": "sources/sfpu_reduce_sdpa_test.cpp",
+                "formats": formats,
+                "templates": templates,
+                "runtimes": [
+                    TILE_COUNT(tile_count),
+                    LOOP_FACTOR(loop_factor),
+                ],
+                "variant_stimuli": StimuliConfig(
+                    None,
+                    formats.input_format,
+                    None,
+                    formats.input_format,
+                    formats.output_format,
+                    tile_count_A=tile_count,
+                    tile_count_B=tile_count,
+                    tile_count_res=tile_count,
+                ),
+                "unpack_to_dest": False,
+                "dest_acc": dest_acc,
+            },
+        )
+        configuration.run(perf_report)
+        return
+
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=FORMATS.input_format,
-        input_dimensions_A=INPUT_DIMENSIONS,
-        stimuli_format_B=FORMATS.input_format,
-        input_dimensions_B=INPUT_DIMENSIONS,
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
         spec_A=STIMULI[stimuli],
     )
 
-    src_A = tilize_block(src_A, INPUT_DIMENSIONS).flatten()
+    src_A = tilize_block(src_A, input_dimensions).flatten()
 
     # GOLDEN GENERATION
     # *******************************************************
 
     # Undo tilization so src_A is standard [32, 32]
-    src_A_untilized = untilize_block(src_A, FORMATS.input_format, INPUT_DIMENSIONS)
+    src_A_untilized = untilize_block(src_A, formats.input_format, input_dimensions)
 
     # Each destination block is an independent 4x2 SDPA reduction subblock.
     golden_tensor = torch.zeros_like(src_A_untilized)
-    subblock_rows = 4 * 32
-    for row in range(0, INPUT_DIMENSIONS[0], subblock_rows):
+    subblock_rows = block_rt_dim * 32
+    for row in range(0, input_dimensions[0], subblock_rows):
         golden_tensor[row, :] = torch.max(
             src_A_untilized[row : row + subblock_rows, :], dim=0
         ).values
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half, DEST_ACC, FORMATS, INPUT_DIMENSIONS, TILE_DIMENSIONS
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )
 
     # *******************************************************
 
-    configuration = TestConfig(
-        "sources/sfpu_reduce_sdpa_test.cpp",
-        FORMATS,
-        templates=[
-            generate_input_dim(
-                INPUT_DIMENSIONS, INPUT_DIMENSIONS, block_ct_dim=2, block_rt_dim=4
-            ),
-            MATH_OP(mathop=mathop, pool_type=REDUCE_POOL),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            FORMATS.input_format,
-            src_B,
-            FORMATS.input_format,
-            FORMATS.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
+    functional_compile_params = [
+        generate_input_dim(
+            input_dimensions,
+            input_dimensions,
+            block_ct_dim=block_ct_dim,
+            block_rt_dim=block_rt_dim,
         ),
-        unpack_to_dest=False,  # Must be False since math kernel does A2D copy
-        dest_acc=DEST_ACC,
+        MATH_OP(mathop=mathop, pool_type=reduce_pool),
+    ]
+    functional_runtime_params = [
+        TILE_COUNT(tile_cnt_A),
+        LOOP_FACTOR(loop_factor),
+        NUM_BLOCKS(num_blocks),
+        NUM_TILES_IN_BLOCK(num_tiles_in_block),
+    ]
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=run_types,
+        test_config_kwargs={
+            "test_name": "sources/sfpu_reduce_sdpa_test.cpp",
+            "formats": formats,
+            "templates": functional_compile_params,
+            "runtimes": functional_runtime_params,
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+            ),
+            "unpack_to_dest": False,
+            "dest_acc": dest_acc,
+        },
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[FORMATS.output_format])
-    res_tensor = untilize_block(res_tensor, FORMATS.output_format, INPUT_DIMENSIONS)
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
-    for row in range(0, INPUT_DIMENSIONS[0], subblock_rows):
-        assert passed_test(golden_tensor[row], res_tensor[row], FORMATS.output_format)
+    for row in range(0, input_dimensions[0], subblock_rows):
+        assert passed_test(golden_tensor[row], res_tensor[row], formats.output_format)
