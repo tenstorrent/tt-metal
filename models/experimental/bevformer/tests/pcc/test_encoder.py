@@ -130,6 +130,9 @@ def reference_forward(ref_model, inputs, bev_size, spatial_shapes, img_metas):
         ("nuscenes_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),  # NuScenes base model
         ("nuscenes_base", (100, 100), 1, 1, 0.997, 0.05, 0.8, 0.5),  # NuScenes base, single layer
         ("nuscenes_tiny", (100, 100), 3, 2, 0.996, 0.05, 0.8, 0.5),  # NuScenes tiny model, bs>1 grid widening
+        # bs>1 near the base grid: the layer's intermediates outgrow L1 and must go to DRAM. Below
+        # torch.quantile's 16M-element limit, which the PCC check hits at 200x200.
+        ("nuscenes_base", (180, 180), 1, 2, 0.997, 0.05, 0.8, 0.5),
         ("carla_tiny", (100, 100), 3, 1, 0.995, 0.05, 0.8, 0.5),  # CARLA tiny model
         # Off: (arch, camera rig) corners the three above already cover.
         # ("carla_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),  # CARLA base model

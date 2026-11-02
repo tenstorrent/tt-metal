@@ -21,7 +21,7 @@ import ttnn
 
 import torch
 from ..model_config import DeformableAttentionConfig
-from .tt_common import signpost
+from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
 
 from loguru import logger
 
@@ -42,16 +42,74 @@ def _spatial_shapes_list(spatial_shapes):
     return [(int(h), int(w)) for h, w in spatial_shapes.tolist()]
 
 
+# Starts the warning a DRAM fallback logs, once per shape and process (_warned_dram_fallbacks).
+DRAM_FALLBACK_PREFIX = "fused_msda: "
+
+
 def _warn_dram_fallback(value, attention_weights, spatial_shapes, reason):
     warning_key = (tuple(value.shape), tuple(attention_weights.shape), tuple(spatial_shapes.flatten().tolist()))
     if warning_key not in _warned_dram_fallbacks:
         _warned_dram_fallbacks.add(warning_key)
-        logger.warning(f"fused_msda: {reason}; using interleaved DRAM for value shape {list(value.shape)}")
+        logger.warning(f"{DRAM_FALLBACK_PREFIX}{reason}; using interleaved DRAM for value shape {list(value.shape)}")
 
 
 def _is_allocation_oom(error):
     """Keep the auto retry narrow: kernel and validation failures must remain visible."""
     return "Out of Memory" in str(error)
+
+
+def group_sum_matrix(num_groups, group_size, device):
+    """Block-diagonal ones: ``x @ G`` puts each group's sum on every column of the group."""
+    groups = torch.block_diag(*([torch.ones(group_size, group_size)] * num_groups))
+    return ttnn.from_torch(groups, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+def group_sum_compute_config(device):
+    """The group sum is a softmax denominator: full-precision products, fp32 accumulation."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+
+
+# Floor on (logit - row max) before exp. exp(-80) is still a normal bf16, so a
+# group whose logits all sit far below another group's max cannot sum to 0.
+_SOFTMAX_EXP_FLOOR = -80.0
+
+
+def grouped_softmax(logits, group_sum, compute_kernel_config):
+    """Softmax over each group of columns of TILE ``logits`` (..., num_groups * group_size), with
+    ``group_sum`` from :func:`group_sum_matrix`.
+
+    Splitting off the group dim in TILE layout would pad every group to a whole tile. Here the
+    tensor keeps its shape and the group sums come from one matmul. Subtracting the row max over
+    all groups leaves each group's softmax unchanged as long as its logits stay within 80 of it;
+    past that the floor makes them equal instead of 0 / 0.
+    """
+    exp = ttnn.subtract(
+        logits,
+        ttnn.max(logits, dim=-1, keepdim=True),
+        activations=[
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU_MIN, _SOFTMAX_EXP_FLOOR),
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP),
+        ],
+    )
+    group_sums = ttnn.matmul(
+        exp, group_sum, compute_kernel_config=compute_kernel_config, memory_config=logits.memory_config()
+    )
+    return ttnn.divide(exp, group_sums)
+
+
+def heads_packed_offsets(rows, num_heads):
+    """Row-major sampling offsets ``rows`` (bs, Q, num_heads * L*P*2), a Linear's channels, as the
+    fused op reads them: as they are when each head's L*P*2 values fill whole alignment units of
+    their buffer (the op's rule for heads-packed offsets), else split into a page per head."""
+    per_head = rows.shape[-1] // num_heads
+    in_l1 = rows.memory_config().buffer_type == ttnn.BufferType.L1
+    alignment = ttnn.get_l1_alignment() if in_l1 else ttnn.get_dram_alignment()
+    if (per_head * rows.element_size()) % alignment == 0:
+        return rows
+    bs, num_queries = rows.shape[0], rows.shape[1]
+    return ttnn.reshape(rows, (bs, num_queries, num_heads, per_head))
 
 
 def multi_scale_deformable_attn_fused(
@@ -64,11 +122,12 @@ def multi_scale_deformable_attn_fused(
     *,
     num_valid_queries_tensor=None,
     value_memory: ValueMemory = "auto",
+    reference_mode="pillar",
 ):
     """Core multi-scale deformable attention, as one device op.
 
     Computes, for each (b, q, h), with ``r(l, p) = p % R`` (BEVFormer's z-anchor
-    grouping, ``reference_mode="pillar"``)::
+    grouping, ``reference_mode="pillar"``), or ``r(l, p) = l`` (``reference_mode="level"``)::
 
         out[b, q, h] = sum_l sum_p attention_weights[b, q, h, l, p]
             * bilinear(value[b, level l, h],
@@ -76,9 +135,12 @@ def multi_scale_deformable_attn_fused(
 
     Args:
         value: (bs, num_keys, num_heads, head_dim) or packed (bs, num_keys, num_heads*head_dim)
-        reference_points: (bs, num_queries, num_points_in_pillar, 2), normalized [0, 1]
+        reference_points: (bs, num_queries, R, 2), normalized [0, 1]: R points in the pillar, or
+            one per level with ``reference_mode="level"``
         sampling_offsets: (bs, num_queries, num_heads, num_levels*num_points*2) ROW_MAJOR,
-            raw, in feature-map pixel units. The SFPU applies the per-level scale.
+            raw, in feature-map pixel units. The SFPU applies the per-level scale. Heads-packed
+            (bs, num_queries, num_heads*num_levels*num_points*2) when each head's
+            num_levels*num_points*2 values fill whole alignment units of their buffer.
         attention_weights: (bs, num_queries, num_heads, num_levels*num_points) ROW_MAJOR
         spatial_shapes: torch (num_levels, 2) of (H, W)
         num_valid_queries: optional per-batch count of rows to compute, as host ints. Rows past a
@@ -118,7 +180,7 @@ def multi_scale_deformable_attn_fused(
             sampling_offsets,
             attention_weights,
             _spatial_shapes_list(spatial_shapes),
-            reference_mode="pillar",
+            reference_mode=reference_mode,
             device_valid_counts=num_valid_queries_tensor is not None,
         )
         if value_memory == "l1" and not l1_is_safe:
@@ -146,7 +208,7 @@ def multi_scale_deformable_attn_fused(
                 sampling_offsets,
                 attention_weights,
                 _spatial_shapes_list(spatial_shapes),
-                reference_mode="pillar",
+                reference_mode=reference_mode,
                 memory_config=memory_config,
                 num_valid_queries=valid_queries,
                 num_valid_queries_tensor=num_valid_queries_tensor,
@@ -197,7 +259,8 @@ class TTMSDeformableAttention:
                 fused op as a static attribute. Features at a different resolution
                 require a new instance.
             residual: Add the identity to the output. BEVFormer's MSDeformableAttention3D, inside
-                the spatial cross-attention, has no shortcut.
+                the spatial cross-attention, has no shortcut. Without it and without
+                ``output_proj``, the output is the fused op's ROW_MAJOR rows.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
@@ -234,6 +297,7 @@ class TTMSDeformableAttention:
 
         self.head_dim = self.embed_dims // self.num_heads
         self.residual = residual
+        self.linear_kwargs = grid_linear_kwargs(device)
 
     def forward(
         self,
@@ -246,6 +310,7 @@ class TTMSDeformableAttention:
         reference_points=None,
         num_valid_queries=None,
         num_valid_queries_tensor=None,
+        consume_query=False,
         **kwargs,
     ):
         """
@@ -262,12 +327,17 @@ class TTMSDeformableAttention:
                 it are left unwritten and may hold NaN or Inf; drop them with ``ttnn.where``.
             num_valid_queries_tensor: The same counts as a (bs,) uint32 device tensor, read on
                 device so a captured trace follows them.
+            consume_query: Free the query once the offsets and weights are computed, so an L1
+                query does not hold the L1 the fused op stages its value in. Requires no residual.
+                It is the caller's ``query`` only when no copy was made: batch-first, TILE, and
+                no ``query_pos``, as the spatial cross-attention calls it.
 
         Returns:
             output: [bs, num_queries, embed_dims]
         """
 
         # Handle input defaults
+        assert not (consume_query and self.residual), "consume_query frees query, which the residual may read"
         if value is None:
             value = query
         if identity is None:
@@ -315,37 +385,7 @@ class TTMSDeformableAttention:
             value = ttnn.where(mask, zeros_like_value, value)
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-
-        if ENABLE_LOGGING:
-            logger.info("MSDA Attention Weight Generation")
-
-        # Generate attention weights. The softmax is over (levels, points) jointly, so
-        # (bs, Q, heads, levels*points) is both the natural shape here and exactly the
-        # packed layout the op consumes -- it is never split into (levels, points).
-        attention_weights = ttnn.linear(
-            query, self.params.attention_weights.weight, bias=self.params.attention_weights.bias
-        )
-        attention_weights = ttnn.reshape(
-            attention_weights, (bs, num_queries, self.num_heads, self.num_levels * self.num_points)
-        )
-        # TODO(#62506): drop once softmax zeroes tile padding itself. The reshape leaves stale L1 in the
-        # padding, and softmax's additive -inf pad mask turns NaN or +inf there into NaN rows.
-        attention_weights = ttnn.fill_implicit_tile_padding(attention_weights, 0.0)
-        attention_weights = ttnn.softmax(attention_weights, dim=-1)
-
-        if ENABLE_LOGGING:
-            logger.info("MSDA Sampling Offset Generation")
-
-        # Offsets stay in feature-map pixel units; the op forms the sampling location.
-        # The Linear's channels are already (head, level, point, xy), the op's
-        # packed layout, so the reshape below splits dimensions.
-        sampling_offsets = ttnn.linear(
-            query, self.params.sampling_offsets.weight, bias=getattr(self.params.sampling_offsets, "bias", None)
-        )
-        sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.ROW_MAJOR_LAYOUT)
-        sampling_offsets = ttnn.reshape(
-            sampling_offsets, (bs, num_queries, self.num_heads, self.num_levels * self.num_points * 2)
-        )
+        sampling_offsets, attention_weights = self.sampling_operands(query, consume_query=consume_query)
 
         output = multi_scale_deformable_attn_fused(
             value=value,
@@ -371,9 +411,6 @@ class TTMSDeformableAttention:
         # Add residual connection
         if self.residual:
             output = ttnn.add(output, identity)
-        else:
-            # The fused op's output is ROW_MAJOR; without output_proj or the residual nothing tiles it.
-            output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
 
         # Handle batch_first format for output
         if not self.batch_first:
@@ -382,6 +419,75 @@ class TTMSDeformableAttention:
         signpost(header=f"{deformable_attn_region} End")
 
         return output
+
+    def sampling_operands(self, query, consume_query=False):
+        """The fused op's sampling offsets and attention weights from TILE ``query``
+        [bs, num_queries, embed_dims], as ``forward`` hands them to it; ``consume_query`` as there."""
+        bs, num_queries, _ = query.shape
+
+        # Placement:
+        # - the Linears and the weights' reshapes run in L1 when they fit, the weights' first, then
+        #   the offsets': at most the query and two weight-sized tensors (as many values as one
+        #   offset-sized tensor) live at once, the budget below;
+        # - both results land in DRAM, since the fused op stages its value and output in L1;
+        # - they are row-major but for the softmax of a head's samples that do not fill a tile
+        #   row, which the fused wrapper untilizes.
+        samples = self.num_levels * self.num_points
+        memory = l1_if_fits(
+            self.device, bs * num_queries * (self.embed_dims + 2 * self.num_heads * samples) * query.element_size()
+        )
+        DRAM = ttnn.DRAM_MEMORY_CONFIG
+
+        if ENABLE_LOGGING:
+            logger.info("MSDA Attention Weight Generation")
+
+        # Generate attention weights. The softmax is over (levels, points) jointly, so
+        # (bs, Q, heads, levels*points) is both the natural shape here and exactly the
+        # packed layout the op consumes -- it is never split into (levels, points).
+        attention_weights = ttnn.linear(
+            query,
+            self.params.attention_weights.weight,
+            bias=self.params.attention_weights.bias,
+            memory_config=memory,
+            **self.linear_kwargs,
+        )
+        heads_shape = (bs, num_queries, self.num_heads, samples)
+        if samples == ttnn.TILE_SIZE:
+            # One head's samples per tile row: the softmax runs on unpadded tiles, and after the
+            # untilize the head split keeps the row width, a view.
+            attention_weights = ttnn.reshape(attention_weights, (bs, num_queries * self.num_heads, samples))
+            attention_weights = ttnn.softmax(attention_weights, dim=-1)
+            attention_weights = ttnn.reshape(
+                ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM), heads_shape
+            )
+        else:
+            attention_weights = ttnn.reshape(attention_weights, heads_shape)
+            # TODO(#62506): drop once softmax zeroes tile padding itself. The reshape leaves stale L1 in the
+            # padding, and softmax's additive -inf pad mask turns NaN or +inf there into NaN rows.
+            attention_weights = ttnn.fill_implicit_tile_padding(attention_weights, 0.0)
+            attention_weights = ttnn.softmax(attention_weights, dim=-1, memory_config=DRAM)
+
+        if ENABLE_LOGGING:
+            logger.info("MSDA Sampling Offset Generation")
+
+        # Offsets stay in feature-map pixel units; the op forms the sampling location.
+        # The Linear's channels are already (head, level, point, xy): the op reads each head's
+        # offsets from the query's page when they fill whole alignment units of the buffer, else
+        # the reshape below gives each head a page.
+        sampling_offsets = ttnn.linear(
+            query,
+            self.params.sampling_offsets.weight,
+            bias=getattr(self.params.sampling_offsets, "bias", None),
+            memory_config=memory,
+            **self.linear_kwargs,
+        )
+        if consume_query:
+            ttnn.deallocate(query)
+        rows = ttnn.to_layout(sampling_offsets, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        ttnn.deallocate(sampling_offsets)
+        sampling_offsets = heads_packed_offsets(rows, self.num_heads)
+
+        return sampling_offsets, attention_weights
 
     def __call__(self, *args, **kwargs):
         """Make the class callable"""
