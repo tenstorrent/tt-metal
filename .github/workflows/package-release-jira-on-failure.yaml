@@ -31,6 +31,7 @@ on:
 permissions:
   contents: read
   actions: read
+  checks: read  # the failed jobs are found through the run's check runs
 
 env:
   JIRA_ISSUE_TYPE: "Bug"
@@ -44,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
 
       # One ticket per failed job. The script resolves the branch from the run
@@ -83,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
 
       - name: Close open Jira issues for this release ref

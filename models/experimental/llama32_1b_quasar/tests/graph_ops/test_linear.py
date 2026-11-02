@@ -459,3 +459,9 @@ CASES = [
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
 def test_linear(ttnn_mesh_device, reset_seeds, case):
     G.run_case(_OP, case, ttnn_mesh_device)
+
+
+@G.with_default_mesh()
+@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+def test_linear_no_program_config(ttnn_mesh_device, reset_seeds, case):
+    G.run_case_without_program_config(case, ttnn_mesh_device)

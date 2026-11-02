@@ -7,7 +7,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>  // GetCommonRuntimeArgs (cache-hit in-place patch)
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -290,7 +289,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // dst_full_sync). packer_l1_acc has no ComputeConfigDescriptor field for this op (no L1 packer accum), so
     // it is unused here.
     auto [math_fidelity, math_approx, fp32_acc, packer_l1_acc, dst_full_sync] =
-        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attrs.compute_kernel_config);
+        get_compute_kernel_config_args(device->arch(), attrs.compute_kernel_config);
     (void)packer_l1_acc;
 
     // Query sub-blocking: the DST-bound primitives (matmuls, reduce, sub_exp, salad) hold `qsb` query

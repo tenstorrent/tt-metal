@@ -354,7 +354,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
             continue;
         }
         const NodeCoord node = cores[i];
-        const std::initializer_list<std::pair<std::string, uint32_t>> range_args = {
+        const std::initializer_list<std::pair<std::string, ArgValue>> range_args = {
             {"batch_start", a.start_batch},
             {"batch_end", a.end_batch},
             {"seq_t_start", a.start_seq},

@@ -37,7 +37,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -348,9 +348,6 @@ static void matmul_tile_block(
         {"WITH_DT", cfg.with_dt ? "1" : "0"},
         {"TEST_INIT_SHORT", cfg.test_init_short ? "1" : "0"},
     };
-    if (cfg.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     experimental::ComputeHardwareConfig compute_hw_config;
     compute_hw_config = experimental::ComputeHardwareConfig{
@@ -461,7 +458,7 @@ static void matmul_tile(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     CoreCoord core = {0, 0};
@@ -578,9 +575,6 @@ static void matmul_tile(
     std::map<std::string, std::string> compute_defines;
     compute_defines["WITH_DT"] = cfg.with_dt ? "1" : "0";
     compute_defines["TEST_INIT_SHORT"] = cfg.test_init_short ? "1" : "0";
-    if (cfg.fp32_dest_acc_en) {
-        compute_defines["DST_ACCUM_MODE"] = "1";
-    }
 
     auto mm_reader_kernel = tt_metal::CreateKernel(
         program_,

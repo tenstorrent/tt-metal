@@ -239,9 +239,9 @@ void CollectSemaphoreBinders(const ProgramSpec& spec, CollectedSpecData& collect
     for (auto& [sem_name, sem_info] : census) {
         for (const auto& rec : sem_info.binders) {
             const NodeRangeSet& binder_nodes = collected.kernel_node_set.at(rec.kernel->unique_id);
-            // Not a hart count for Gen1 compute: num_threads is forced to 1 there, but one compute
-            // kernel is three TRISC binaries with two semaphore writers (UNPACK and PACK). Gen1
-            // compute binders are routed to COMPUTE_ATOMIC without consulting this count.
+            // Not a hart count for compute: one compute kernel is several TRISC binaries with two
+            // semaphore writers (UNPACK and PACK). Compute binders are routed to COMPUTE_ATOMIC
+            // without consulting this count.
             sem_info.binder_instance_count += binder_nodes.num_cores() * rec.kernel->num_threads;
             sem_info.binder_node_set = sem_info.binder_node_set.merge(binder_nodes);
         }

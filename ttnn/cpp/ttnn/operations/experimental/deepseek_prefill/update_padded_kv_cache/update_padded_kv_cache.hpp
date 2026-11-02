@@ -76,7 +76,9 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& valid_global = std::nullopt,
     std::optional<uint32_t> tp_axis = std::nullopt,
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
-    const std::optional<ttnn::Tensor>& scales = std::nullopt);
+    const std::optional<ttnn::Tensor>& scales = std::nullopt,
+    uint32_t input_row_offset = 0,
+    std::optional<uint32_t> input_rows = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
 

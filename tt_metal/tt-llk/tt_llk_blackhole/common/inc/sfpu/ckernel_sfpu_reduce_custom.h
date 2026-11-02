@@ -38,15 +38,15 @@ inline void sfpu_reduce_max_col_subblock_4x2_configure_addrmod()
 
 inline void sfpu_reduce_max_col_subblock_4x2_load_initial_values()
 {
-    constexpr std::uint16_t neg_inf_fp16b = 0xFF80;
+    constexpr std::uint16_t neg_inf_fp16b = 0xFF80; // bf16 -inf; SFPLOADI FLOATB widens it to fp32 0xFF800000
 
     // F0 - Initialize with negative infinity
-    TTI_SFPLOADI(p_sfpu::LREG4, InstrModLoadStore::FP16B, neg_inf_fp16b);
-    TTI_SFPLOADI(p_sfpu::LREG5, InstrModLoadStore::FP16B, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
 
     // F1 - Initialize with negative infinity
-    TTI_SFPLOADI(p_sfpu::LREG6, InstrModLoadStore::FP16B, neg_inf_fp16b);
-    TTI_SFPLOADI(p_sfpu::LREG7, InstrModLoadStore::FP16B, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
 }
 
 template <DataFormat format>
@@ -163,11 +163,11 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
 
 inline void _reduce_max_col_subblock_4x2_prologue_()
 {
-    constexpr std::uint16_t neg_inf_fp16b = 0xFF80;
+    constexpr std::uint16_t neg_inf_fp16b = 0xFF80; // bf16 -inf; SFPLOADI FLOATB widens it to fp32 0xFF800000
 
     // F0 - Initialize with negative infinity
-    TTI_SFPLOADI(p_sfpu::LREG0, InstrModLoadStore::FP16B, neg_inf_fp16b);
-    TTI_SFPLOADI(p_sfpu::LREG1, InstrModLoadStore::FP16B, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
 }
 
 inline void _reduce_max_col_subblock_4x2_epilogue_()

@@ -130,13 +130,14 @@ void sleep_until_unix_ns(uint64_t t_zero_ns) {
 }
 
 Program create_compute_program(
+    distributed::MeshDevice& mesh_device,
     CoreRange core_range,
     uint32_t single_tile_size,
     const std::string& kernel_path,
     uint32_t grid_x,
     uint32_t grid_y,
     ttsl::Span<const std::array<uint32_t, 2>> compile_args_slice) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     CircularBufferConfig cb_src =
         CircularBufferConfig(8 * single_tile_size, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
@@ -297,7 +298,7 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     // Warmup initialises JIT infrastructure and the remote-server connection.
     // UINT32_MAX as the id keeps this kernel's hash out of the production set.
     {
-        Program warmup = CreateProgram();
+        Program warmup = CreateProgram(*device);
         CircularBufferConfig cb0 =
             CircularBufferConfig(8 * single_tile_size, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
                 .set_page_size(tt::CBIndex::c_0, single_tile_size);
@@ -318,7 +319,8 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
         uint32_t id_end = std::min(id_begin + cores_per_program, target_num_kernels);
         auto slice =
             ttsl::Span<const std::array<uint32_t, 2>>(compile_args_per_kernel.data() + id_begin, id_end - id_begin);
-        programs.push_back(create_compute_program(all_cores, single_tile_size, kernel_path, grid_x, grid_y, slice));
+        programs.push_back(
+            create_compute_program(*device, all_cores, single_tile_size, kernel_path, grid_x, grid_y, slice));
     }
 
     // T_ZERO rendezvous: harness sets a wall-clock target so all clients enter

@@ -116,12 +116,16 @@ inline void _llk_stall_cfg_on_()
 /**
  * @brief Advance the calling thread's dest bank section in SyncHalf mode.
  *
- * Each thread (math, pack, unpack) keeps its own view of which dest bank it is
- * currently operating on. After a thread has finished with one bank and handed
+ * The math thread's bank flip: after it has finished with one bank and handed
  * off via a semaphore, it must (1) flip its local dest-register offset to the
  * other bank, (2) wait for any in-flight instructions that still address the
  * old base to drain, and (3) reprogram its per-TRISC dest section base before
  * the next op issues. This helper performs those three steps in order.
+ *
+ * Only math-issued instructions consult the per-TRISC section base registers
+ * (DEST_TARGET_REG_CFG_MATH_SEC0..3), while other threads carry their bank
+ * where their engine reads it: the packer in THCON SRC_ADDR_OFFSET
+ * The unpacker in UNP_DEST tile index.
  *
  * @tparam TRISC_ID       The calling thread's id (ckernel::TRISC_ID = COMPILE_FOR_TRISC:
  *                        0=unpack, 1=math, 2=pack, 3=isolate-SFPU).
@@ -147,4 +151,25 @@ inline void _llk_sync_advance_dest_section_()
     const std::uint32_t base_addr = _get_dest_buffer_base_();
     _llk_stall_cfg_on_<DrainRes0, DrainRes1, DrainRes2>();
     _set_dest_section_base_<TRISC_ID>(base_addr);
+}
+
+/**
+ * @brief Spin on the RISC until semaphore `sem_index` is nonzero. No Tensix wait is armed while it spins.
+ *
+ * Call it right before this thread's first wait on a semaphore that another thread seeds and posts: that thread's first
+ * post follows its SEMINIT, so a nonzero read proves the SEMINIT has landed, and no wait was pending when it did. Not
+ * at startup: a program with no sections never posts, and the spin would never end.
+ *
+ * @param sem_index Semaphore id in range [0, 7].
+ * @note Does not consume the post: the caller's own wait and get on the semaphore still see it, so do not add a get
+ *       after the spin.
+ * @note The semaphore must be 0 when the program starts, i.e. the previous program matched every post with a get. In
+ *       tt-metal both halves of UNPACK_MATH run in tile_regs_commit (unpacker post, math get). Do not zero it from the
+ *       spinning thread instead: that SEMINIT can land after the poster's first post and wipe it (#60392).
+ */
+inline void _llk_sync_spin_until_posted_(std::uint8_t sem_index)
+{
+    while (semaphore_read(sem_index) == 0)
+    {
+    }
 }

@@ -16,6 +16,7 @@ import struct
 
 import pytest
 import torch
+from conftest import blackhole_only
 from fast_untilize_common import (
     FAST_UNTILIZE_DEST_SYNC_MODES,
     FAST_UNTILIZE_DIMS,
@@ -28,7 +29,6 @@ from fast_untilize_common import (
     fast_untilize_dest_acc_modes,
     fast_untilize_formats,
 )
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device_io import read_from_device
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
@@ -45,7 +45,9 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
+
+pytestmark = blackhole_only
 
 
 def generate_tile_face_row_ids(tile_count, dtype=torch.bfloat16):
@@ -110,9 +112,6 @@ def make_fast_untilize_test_config(
 def _run_fast_untilize_correctness(
     formats, dest_acc, dimensions, dest_sync, stimulus_kind, allocate_src_b=True
 ):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     assert (
         input_width_tiles >= 2
@@ -161,11 +160,7 @@ def _run_fast_untilize_correctness(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Result length {len(res_from_L1)} != golden length {len(golden_tensor)}"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # Float32 uses the current SrcA/SrcB route, which narrows L1 Float32 input
     # to Tf32 before math. Validate tolerance here; bit-exact Float32->Float32
@@ -277,9 +272,6 @@ def test_fast_untilize_wide_full_ct_dim_137_fp32():
 def test_fast_untilize_overflow_guard(
     formats, dest_acc, dimensions, dest_sync, perf_run_type
 ):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     input_dimensions = [
         input_height_tiles * FAST_UNTILIZE_TILE_R,

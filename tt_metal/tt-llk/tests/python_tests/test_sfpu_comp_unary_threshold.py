@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Threshold decoding of the tt-llk scalar compares (tt-llk#1701 item 16).
+"""Threshold decoding of the scalar compares (tt-llk#1701 item 16).
 
 ``_calculate_comp_unary_<APPROX, unary_*>(std::uint32_t value)`` in
-``tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_comp.h`` takes the threshold as fp32 bits, like the metal
+``ckernel_sfpu_comp.h`` (Blackhole and Wormhole) takes the threshold as fp32 bits, like the metal
 ``calculate_unary_*`` kernels and the other tt-llk ops with a uint32 scalar (relu, threshold, fill). It
 used to build the vFloat with ``vFloat s = value``, a numeric uint32 -> float conversion: 0x3F000000
 (0.5f) became 1056964608.0f, and no negative, infinite or NaN threshold could be expressed at all.
@@ -13,23 +13,24 @@ Inputs and thresholds stay away from NaN and from a zero threshold, whose IEEE h
 defect (item 3), so this test checks only how the threshold is decoded. The golden is torch's compare
 and the check is exact: every lane is 0.0 or 1.0.
 
-Blackhole only: the Wormhole copy of this header is not changed by the fix.
+On Wormhole, gt/lt/ge/le(+inf, +inf) are wrong: the compare subtracts, and inf - inf is a NaN with the
+product's sign (tt-metal#53908). The check skips those four lanes there.
 """
 
 import struct
 
 import torch
-from conftest import blackhole_only
-from helpers.format_config import DataFormat
+from conftest import skip_for_quasar
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
-    DestSync,
     MathOperation,
     VectorMode,
-    format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -38,13 +39,15 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
+    fp32_bits,
     generate_input_dim,
 )
+from helpers.utils import result_tensor
 
-# https://github.com/tenstorrent/tt-llk/issues/1701 item 16: only the Blackhole _calculate_comp_unary_ is fixed.
-pytestmark = blackhole_only
+# Quasar has no _calculate_comp_unary_.
+pytestmark = skip_for_quasar
 
-ELEMENTS_PER_TILE = 1024
+ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
 
 
 def _from_bits(bits: int) -> float:
@@ -83,6 +86,13 @@ INPUTS = (
 
 THRESHOLDS = [0.5, 1.0, -2.5, _from_bits(0x3DCCCCCD), float("inf"), float("-inf")]
 
+_ORDERED_COMPARES = {
+    MathOperation.UnaryGt,
+    MathOperation.UnaryLt,
+    MathOperation.UnaryGe,
+    MathOperation.UnaryLe,
+}
+
 _TORCH_COMPARE = {
     MathOperation.UnaryGt: torch.gt,
     MathOperation.UnaryLt: torch.lt,
@@ -93,17 +103,12 @@ _TORCH_COMPARE = {
 }
 
 
-def _bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
-
 @parametrize(
-    formats=input_output_formats([DataFormat.Float32], same=True),
     mathop=list(_TORCH_COMPARE),
     threshold=THRESHOLDS,
-    dest_sync=[DestSync.Half],
 )
-def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
+def test_sfpu_comp_unary_threshold(mathop, threshold):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     reps = ELEMENTS_PER_TILE // len(INPUTS) + 1
     src_A = torch.tensor((list(INPUTS) * reps)[:ELEMENTS_PER_TILE], dtype=torch.float32)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
@@ -112,12 +117,12 @@ def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
         "sources/sfpu_comp_unary_threshold_test.cpp",
         formats,
         templates=[
-            generate_input_dim([32, 32], [32, 32]),
+            generate_input_dim([TILE_DIM, TILE_DIM], [TILE_DIM, TILE_DIM]),
             APPROX_MODE(ApproximationMode.No),
             MATH_OP(mathop=mathop),
-            SFPU_UNARY_SCALAR(_bits(threshold)),
+            SFPU_UNARY_SCALAR(fp32_bits(threshold)),
             VECTOR_MODE(VectorMode.RC),
-            DEST_SYNC(dest_sync),
+            DEST_SYNC(),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -135,24 +140,31 @@ def test_sfpu_comp_unary_threshold(formats, mathop, threshold, dest_sync):
         compile_time_formats=True,
     )
 
-    res = torch.tensor(
-        configuration.run().result[:ELEMENTS_PER_TILE],
-        dtype=format_dict[formats.output_format],
+    res = result_tensor(
+        configuration.run().result[:ELEMENTS_PER_TILE], formats.output_format
     ).to(torch.float32)
 
     golden = _TORCH_COMPARE[mathop](
         src_A, torch.tensor(threshold, dtype=torch.float32)
     ).to(torch.float32)
 
+    checked = torch.ones(ELEMENTS_PER_TILE, dtype=torch.bool)
+    if (
+        get_chip_architecture() == ChipArchitecture.WORMHOLE
+        and mathop in _ORDERED_COMPARES
+    ):
+        # tt-metal#53908: inf - inf is a NaN with the product's sign, so only (+inf, +inf) misorders.
+        checked = ~(torch.isposinf(src_A) & (src_A == threshold))
+
     wrong = sorted(
         {
             (src_A[i].item(), res[i].item(), golden[i].item())
             for i in range(ELEMENTS_PER_TILE)
-            if res[i].item() != golden[i].item()
+            if checked[i] and res[i].item() != golden[i].item()
         }
     )
     assert not wrong, (
-        f"{mathop.name}(x, {threshold:g}) with value=0x{_bits(threshold):08X} disagrees with torch on "
+        f"{mathop.name}(x, {threshold:g}) with value=0x{fp32_bits(threshold):08X} disagrees with torch on "
         f"{len(wrong)} inputs:\n"
         + "\n".join(
             f"  x = {x:.9g}: got {got}, expected {want}" for x, got, want in wrong

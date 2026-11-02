@@ -72,7 +72,12 @@ FORCE_INLINE void _custom_mm_compressed_unroll_(
  * Tiles packed row-major: (k=0,n=0), (k=0,n=1), ..., (k=1,n=0), ...
  * Total tiles = KT_DIM * CT_DIM, must be even.
  */
-template <uint32_t KT_DIM, uint32_t CT_DIM, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+template <
+    uint32_t KT_DIM,
+    uint32_t CT_DIM,
+    size_t NUM_PACKED,
+    const std::array<uint32_t, NUM_PACKED>& FMT_PACKED,
+    ckernel::CustomMmDestLayout DEST_LAYOUT = ckernel::CustomMmDestLayout::DefaultSplitAcc>
 FORCE_INLINE void custom_mm_compressed_block_constexpr(
     uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
     static_assert(CT_DIM > 0, "CT_DIM must be > 0");
@@ -94,7 +99,7 @@ FORCE_INLINE void custom_mm_compressed_block_constexpr(
         uint32_t address_a = addr_in1;
         _custom_mm_compressed_unroll_<KT_DIM, CT_DIM, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
     }));
-    MATH((_llk_math_custom_mm_<true>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+    MATH((_llk_math_custom_mm_<DEST_LAYOUT>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
 }  // namespace compressed

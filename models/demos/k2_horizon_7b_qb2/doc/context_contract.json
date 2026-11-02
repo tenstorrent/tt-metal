@@ -1,0 +1,1549 @@
+{
+  "model": "IFM/K2-Horizon-7B",
+  "revision": "036114ce8d46c32b24c15423211069abb9c5d25e",
+  "hf_advertised_context": 524288,
+  "supported_context": 524288,
+  "largest_tested_prefill": 524288,
+  "largest_tested_decode": 524288,
+  "capability_reduction": null,
+  "status": "validated",
+  "layer_types": [
+    "dense"
+  ],
+  "evidence": [
+    "functional_decoder/long_context_accurate.json",
+    "functional_decoder/debug_long/layer_probe_accurate.json",
+    "functional_decoder/accurate_smoke.json",
+    "functional_decoder/boundaries_final.json",
+    "functional_decoder/batch32_final.json",
+    "functional_decoder/long_tails_final.json",
+    "functional_decoder/positions_final.json",
+    "fused_decoder/long_context.json",
+    "fused_decoder/long_tails.json",
+    "fused_decoder/boundaries_final.json",
+    "fused_decoder/positions_vector.json",
+    "fused_decoder/positions_accurate_vector.json",
+    "fused_decoder/final_streamed_runtime_provenance.json",
+    "optimized_decoder/long_context.json",
+    "optimized_decoder/long_tails.json",
+    "optimized_decoder/boundaries_final.json",
+    "optimized_decoder/public_prefill_boundaries.json",
+    "optimized_decoder/positions_accurate.json",
+    "optimized_decoder/batch32.json"
+  ],
+  "notes": [
+    "Functional/fused stages computed all524288 TT tokens and compared127 sampled query rows over four checkpoints with complete HF K/V. The optimized stage below compares159 rows over five checkpoints and repeats the full stream after final block selection.",
+    "The final 31 tokens extend an unaligned prefix through the documented decode-assisted prefill path. Traced decode at absolute position 524287 passes and repeats bitwise.",
+    "Maximum context is validated at batch 1. Batch 32 passes at prefill length 33 and decode context 35. The contract is conditional on the caller allocating disjoint cache pages within physical memory.",
+    "Additional real-weight prefix-initialized controls cover lengths 1,31,32 at start_pos 524256; these exercise the Q32/K32 path at contexts 524257,524287,524288. No advertised context reduction."
+  ],
+  "fused_decoder": {
+    "supported_context": 524288,
+    "kv_dtype": "BF16",
+    "page_size": 32,
+    "additional_packed_weight_bytes": 201326592,
+    "capacity_change": false,
+    "largest_tested_prefill": 524288,
+    "largest_tested_decode": 524288,
+    "notes": "Fused affine/projection runtime streams all tokens; checkpoint output comparisons sample127 rows with complete HF K/V. Max traced decode and unaligned continuation pass. Joint batch/context capacity remains conditional on physical cache allocation."
+  },
+  "optimized_decoder": {
+    "supported_context": 524288,
+    "kv_dtype": "BFP8_B",
+    "page_size": 32,
+    "status": "validated",
+    "capacity_change": "more DRAM headroom; advertised capacity unchanged",
+    "weight_storage_bytes": 273678336,
+    "kv_bytes_at_max_context_batch1": 1140850688,
+    "notes": [
+      "Decode uses DRAM width-sharded BFP4 weights, separate gate/up and L1 activations. Prefill retains interleaved weights and an additional tile-interleaved SwiGLU packing.",
+      "Internal prefill chunks up to4096 with tile-padded tails and decode-assisted unaligned prefixes. No logical divisibility requirement.",
+      "Stock prefill attention uses at most256 K blocks (K32/K128/K256); higher contexts use inherited accurate device attention. Decode retains the fused stage conservative capacity dispatch threshold.",
+      "Batch/context combinations remain conditional on caller-owned disjoint page allocation fitting physical memory; no advertised capability reduction.",
+      "The optimized public path computed all 524288 tokens. Complete HF K/V controls sample 159 query outputs over five checkpoints; a final aligned 256-token chunk is independently checked. Maximum traced decode repeats bitwise. Layer output PCC >=.995 throughout.",
+      "Final prefill M8/K8/N16 plus native SwiGLU validated through the entire524288-token stream; B32 length257 with mutable page maps also passes. Stock decode pads incomplete K128 page-table chunks on device using valid owned pages."
+    ],
+    "largest_tested_prefill": 524288,
+    "largest_tested_decode": 524288,
+    "evidence": [
+      "optimized_decoder/long_context.json",
+      "optimized_decoder/long_tails.json",
+      "optimized_decoder/boundaries_final.json",
+      "optimized_decoder/public_prefill_boundaries.json",
+      "optimized_decoder/positions_accurate.json",
+      "optimized_decoder/batch32.json",
+      "optimized_decoder/selected_final_validation.json",
+      "optimized_decoder/acceptance_watcher.json",
+      "optimized_decoder/final/profile_accuracy.json"
+    ],
+    "runtime_sha256": "4445d5d83dc9dcbe646ffe93393fc0ad43a4406cbef589b6112dab361eb32ff2"
+  },
+  "multichip_decoder": {
+    "status": "validated",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "tp": 4,
+    "supported_context": 524288,
+    "kv_dtype": "BFP8_B",
+    "page_size": 32,
+    "local_kv_heads": 2,
+    "kv_bytes_per_layer_per_device_at_max_context_batch1": 285212672,
+    "full_stack_kv_bytes_per_device_at_max_context_batch1": 10267656192,
+    "logical_weight_bytes_per_layer_per_device": 27131904,
+    "reserved_trace_activation_ccl_bytes_per_device": 6442450944,
+    "notes": [
+      "No capability reduction. All524288 tokens computed by the TP4 decoder from position zero, with159 sampled query rows compared against complete HF K/V over five checkpoints. Maximum traced decode and unaligned final31 tokens pass.",
+      "Selected11 packed allocations total68,419,584 bytes/rank/layer, including separate prefill/decode and SwiGLU weights. Full36-layer allocation was validated concurrently on all4 devices with max-context BFP8 KV,6GiB workspace, two separate replicated BF16 embedding/head matrices, final norm and page table.",
+      "The allocation probe held23,279,763,456 bytes/rank; it is a capacity envelope, not full-model execution or measured runtime peak. The planned TP4 embedding/head allowance is smaller; physical DRAM exposes34,225,520,640 bytes/rank before runtime reservations.",
+      "6GiB workspace reserve includes at most641,728,512 bytes of persistent BFP8 gather storage across36 layers plus public maximum-prefill input/output/concat/RoPE, current chunk and trace/CCL allocations.",
+      "Batch/context combinations require caller-owned disjoint physical cache pages that fit memory. B32 validated at4097 prefill with heterogeneous decode positions; maximum524288 context tested at B1.",
+      "Context correctness and full-stack allocation passed. Authorized Blackhole router cleanup passes retained-check watcher target, varied packet histories, stack and batch controls. Independent resumed stage review returns clean-pass."
+    ],
+    "evidence": [
+      "multichip_decoder/mesh_plan.md",
+      "multichip_decoder/final_long_context.json",
+      "multichip_decoder/final_initialized_context.json",
+      "multichip_decoder/final_allocation.json",
+      "multichip_decoder/final_batch32_accurate.json",
+      "multichip_decoder/final_batch2.json",
+      "multichip_decoder/final_stack2.json",
+      "multichip_decoder/final_profile/accuracy.json",
+      "multichip_decoder/final_profile/performance.json",
+      "multichip_decoder/watcher_fixed/acceptance.json",
+      "multichip_decoder/STAGE_REVIEW_RESUME.md"
+    ],
+    "weight_storage_bytes_per_layer_per_device": 68419584,
+    "full_stack_weight_storage_bytes_per_device": 2463105024,
+    "stack_weights_kv_reserved_bytes_per_device": 19173212160,
+    "embeddings_and_untied_head_bf16_bytes_per_device": 1026555904,
+    "exposed_dram_bytes_per_device": 34225520640,
+    "prefill_gather_buffer_max_bytes_per_layer_per_device": 17825792,
+    "prefill_gather_buffer_policy": "one shape at a time per layer, at most4096x4096 BFP8; no unbounded per-shape dictionary",
+    "largest_tested_prefill": 524288,
+    "largest_tested_decode": 524288,
+    "runtime_sha256": "536c29e1e53e966c5d70661f09eb8957d2d1aea78ee3d5eb18a1b119be37acdb",
+    "allocation_probe_total_bytes_per_device": 23279763456,
+    "allocation_probe_concurrently_held_buffers": 484,
+    "planned_final_norm_logical_bytes_per_device": 8192,
+    "planned_stack_plus_vocab_sharded_embedding_head_norm_bytes_per_device": 20199776256
+  },
+  "optimized_multichip_decoder": {
+    "status": "validated",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "tp": 4,
+    "supported_context": 524288,
+    "largest_tested_prefill": 524288,
+    "largest_tested_decode": 524288,
+    "capacity_change": false,
+    "kv_dtype": "BFP8_B",
+    "page_size": 32,
+    "local_kv_heads": 2,
+    "residual_contract": {
+      "mesh": "hidden-width sharded; 1024 channels per rank",
+      "decode": "BF16 L1 WIDTH_SHARDED; cores (0,0)..(1,0); per-core [32,512]",
+      "prefill": "BF16 DRAM interleaved per rank",
+      "inter_layer_collective": null
+    },
+    "weight_storage_bytes_per_layer_per_device": 68419584,
+    "kv_bytes_per_layer_per_device_at_max_context_batch1": 285212672,
+    "decode_collective_pool": {
+      "owner": "one pool shared across sequential layers on one CQ; separate pools for overlapping CQs",
+      "logical_batch_buckets": "Each retained logical batch shape owns separate buffers, even when tile-padded shapes match",
+      "l1_bytes_per_device_per_bucket": 327680,
+      "dram_bytes_per_device_per_bucket": 327680,
+      "allocation_contract": "Warm all intended buckets before capture. No new pool keys during capture. Obey trace allocator lifetime rules; release traces before pool. Do not duplicate a pool per layer in a stack."
+    },
+    "memory_basis": "Weights/KV and 6GiB reserved workspace unchanged from validated stage04 allocation envelope. New shared decode pool is 327680 DRAM bytes/rank per bucket inside that reserve, plus 327680 L1 bytes/rank. Final two-layer trace proves shared ownership; this is not full-model execution.",
+    "prefill_gather_buffer_max_bytes_per_layer_per_device": 17825792,
+    "notes": [
+      "No public alignment requirement. Internal tile/chunk padding, decode-assisted unaligned prefix, cache positions and output slicing remain decoder-owned.",
+      "Full TP4 stream computes all524288 tokens; independent HF samples159 query rows over five checkpoints. Max traced decode repeats bitwise.",
+      "Batch32 tested at257 with remapping/heterogeneous continuation and4097 accurate prefill; joint batch/context remains limited by caller-owned disjoint cache pages and physical allocation.",
+      "LoFi stock SDPA retains FP32 accumulation/exact exponent; accurate long-context branch and HiFi4 norms preserved."
+    ],
+    "runtime_sha256": "7f41d5cfb810d1f5dd01075654a5499f5410b82d8621e27910baae7d98532e68",
+    "evidence": [
+      "optimized_multichip_decoder/final_long_context.json",
+      "optimized_multichip_decoder/final_initialized_context.json",
+      "optimized_multichip_decoder/final_stack2.json",
+      "optimized_multichip_decoder/final_batch32.json",
+      "optimized_multichip_decoder/final_batch32_accurate.json",
+      "optimized_multichip_decoder/final/accuracy.json",
+      "multichip_decoder/final_allocation.json",
+      "optimized_multichip_decoder/watcher/matrix.json",
+      "optimized_multichip_decoder/final_prefill_trace.json",
+      "optimized_multichip_decoder/final_stock_k32.json",
+      "optimized_multichip_decoder/final_stock_k128.json",
+      "optimized_multichip_decoder/STAGE_REVIEW.md"
+    ]
+  },
+  "full_model": {
+    "supported_context": 524288,
+    "hf_advertised_context": 524288,
+    "target_mesh": [
+      1,
+      4
+    ],
+    "num_layers": 36,
+    "kv_dtype": "BFP8_B",
+    "page_size": 32,
+    "local_kv_heads": 2,
+    "head_policy": "BFP8/HiFi2/FP32 accumulator, TP4 vocabulary, 4x16384 local splits, K2/N16, 1 reader/bank",
+    "storage_bytes_per_device": {
+      "decoder_weights": 3633315840,
+      "hidden_sharded_bf16_embedding": 513277952,
+      "vocab_sharded_bfp8_head_prefill": 285212672,
+      "vocab_sharded_bfp8_head_decode": 285212672,
+      "final_norm_tile_padded_bf16": 65536,
+      "absolute_rope_cos_sin_bf16": 268435456,
+      "kv_bfp8_batch1_max_context": 10267656192,
+      "page_table_int32_batch1": 65536,
+      "max_prefill_gather_storage": 657457152,
+      "trace_region": 200000000,
+      "shared_decode_pool_one_bucket_dram": 327680,
+      "additional_workspace_reserve": 6442450944
+    },
+    "total_reserved_bytes_per_device": 22553477632,
+    "exposed_dram_bytes_per_device": 33978715136,
+    "headroom_bytes_per_device": 11425237504,
+    "capacity_reduction": false,
+    "joint_batch_context_contract": "1..32 fixed slots, disjoint owned physical pages; joint cache allocation must fit physical DRAM",
+    "status": "full-stack allocation and late-context execution validated",
+    "policy_artifact": "models/demos/k2_horizon_7b_qb2/doc/full_model/selected_policy.json",
+    "policy_artifact_sha256": "9e0811c77a39427bd330b48a3cf4c0dc5256f9a876e579df897d2a1038b54e1b",
+    "per_layer_storage_bytes_per_device": [
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 33554432,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat16",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      }
+    ],
+    "prefill_gather_buffer_policy": "One shape/dtype at a time per layer; sum of each layer's larger QKV/MLP 4096x4096 packed gather.",
+    "dram_accounting_note": "Observed allocator arena from this exact mesh/trace configuration. Explicit trace-region bytes remain in the reserve even where already carved from this arena, making headroom conservative.",
+    "capacity_probe": {
+      "context": 524288,
+      "layers": 36,
+      "cache_pairs": 36,
+      "local_cache_shape": [
+        16384,
+        2,
+        32,
+        128
+      ],
+      "allocation_seconds": 27.30541082599666,
+      "dram": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 4247339392,
+        "total_bytes_allocated_per_bank": 1907614784,
+        "largest_contiguous_bytes_free_per_bank": 2339370112
+      }
+    },
+    "capacity_probe_policy_note": "Explicit capacity evidence for this ledger; changed decoder policies require matching runtime exports or exact policy artifact SHA256. The 6GiB workspace reserve is retained.",
+    "late_context_probe": {
+      "prefix": "initialized zero KV, structural test only",
+      "start_pos": 524252,
+      "logical_prompt_len": 35,
+      "decode_position": 524287,
+      "token": 6126,
+      "finite_logits": true
+    },
+    "evidence": [
+      "models/demos/k2_horizon_7b_qb2/doc/full_model/context_selected.json"
+    ],
+    "execution_scope": "36 layers with all weights and max-context KV; initialized-zero prefix for late-context structural test. This does not claim an all-layer 524288-token HF quality comparison."
+  },
+  "optimized_full_model": {
+    "supported_context": 524288,
+    "hf_advertised_context": 524288,
+    "target_mesh": [
+      1,
+      4
+    ],
+    "num_layers": 36,
+    "kv_dtype": "BFP8_B",
+    "page_size": 32,
+    "local_kv_heads": 2,
+    "head_policy": "BFP8/HiFi2/FP32 accumulator, TP4 vocabulary, 8x8192 local splits, K4/N8, 1 reader/bank",
+    "storage_bytes_per_device": {
+      "decoder_weights": 3633315840,
+      "hidden_sharded_bf16_embedding": 513277952,
+      "vocab_sharded_bfp8_head_prefill": 285212672,
+      "vocab_sharded_bfp8_head_decode": 285212672,
+      "final_norm_tile_padded_bf16": 65536,
+      "absolute_rope_cos_sin_bf16": 268435456,
+      "kv_bfp8_batch1_max_context": 10267656192,
+      "page_table_int32_batch1": 65536,
+      "max_prefill_gather_storage": 657457152,
+      "trace_region": 200000000,
+      "shared_decode_pool_one_bucket_dram": 327680,
+      "additional_workspace_reserve": 6442450944,
+      "uint32_token_history_max_context": 67108864,
+      "uint32_history_cursor": 128,
+      "prepared_prefill_tokens_and_positions": 32768,
+      "prepared_prefill_page_table": 65536,
+      "prepared_prefill_logits_bf16": 4194304
+    },
+    "total_reserved_bytes_per_device": 22624879232,
+    "exposed_dram_bytes_per_device": 33978715136,
+    "headroom_bytes_per_device": 11353835904,
+    "capacity_reduction": false,
+    "joint_batch_context_contract": "1..32 fixed slots, disjoint owned physical pages; joint cache allocation must fit physical DRAM",
+    "status": "full-stack allocation and late-context execution validated",
+    "policy_artifact": "models/demos/k2_horizon_7b_qb2/doc/optimized_full_model/selected_policy.json",
+    "policy_artifact_sha256": "ab4f173043a6fda56be95f886a5db8ff3c4740c0bcf4c6bdc706044e084e3ac5",
+    "per_layer_storage_bytes_per_device": [
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 33554432,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat16",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      }
+    ],
+    "prefill_gather_buffer_policy": "One shape/dtype at a time per layer; sum of each layer's larger QKV/MLP 4096x4096 packed gather.",
+    "dram_accounting_note": "Observed allocator arena from this exact mesh/trace configuration. Explicit trace-region bytes remain in the reserve even where already carved from this arena, making headroom conservative.",
+    "capacity_probe": {
+      "context": 524288,
+      "layers": 36,
+      "cache_pairs": 36,
+      "local_cache_shape": [
+        16384,
+        2,
+        32,
+        128
+      ],
+      "allocation_seconds": 27.24630645394791,
+      "dram": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 4247339392,
+        "total_bytes_allocated_per_bank": 1915876288,
+        "largest_contiguous_bytes_free_per_bank": 2331404672
+      }
+    },
+    "capacity_probe_policy_note": "Explicit capacity evidence for this ledger; changed decoder policies require matching runtime exports or exact policy artifact SHA256. The 6GiB workspace reserve is retained.",
+    "late_context_probe": {
+      "prefix": "initialized zero KV, structural test only",
+      "start_pos": 524252,
+      "logical_prompt_len": 35,
+      "decode_position": 524287,
+      "token": 6647,
+      "finite_logits": true
+    },
+    "evidence": [
+      "models/demos/k2_horizon_7b_qb2/doc/optimized_full_model/context_final.json"
+    ],
+    "execution_scope": "36 layers with all weights and max-context KV; initialized-zero prefix for late-context structural test. This does not claim an all-layer 524288-token HF quality comparison.",
+    "optimized_buffers_probe": {
+      "history_shape": [
+        1,
+        1,
+        524288,
+        32
+      ],
+      "history_dtype": "DataType.UINT32",
+      "prepared_prefill_length": 4096,
+      "prefill_logits_shape": [
+        1,
+        1,
+        1,
+        65536
+      ],
+      "max_history_and_full_cache_coexist": true
+    }
+  },
+  "datatype_sweep": {
+    "supported_context": 524288,
+    "hf_advertised_context": 524288,
+    "target_mesh": [
+      1,
+      4
+    ],
+    "num_layers": 36,
+    "kv_dtype": "BFP8_B",
+    "page_size": 32,
+    "local_kv_heads": 2,
+    "head_policy": {
+      "weight_dtype": "bfloat8_b",
+      "compute_fidelity": "LoFi"
+    },
+    "storage_bytes_per_device": {
+      "decoder_weights": 3494903808,
+      "hidden_sharded_bf16_embedding": 513277952,
+      "final_norm_tile_padded_bf16": 65536,
+      "absolute_rope_cos_sin_bf16": 268435456,
+      "kv_bfp8_batch1_max_context": 10267656192,
+      "page_table_int32_batch1": 65536,
+      "max_prefill_gather_storage": 657457152,
+      "trace_region": 200000000,
+      "shared_decode_pool_one_bucket_dram": 327680,
+      "additional_workspace_reserve": 6442450944,
+      "uint32_token_history_max_context": 67108864,
+      "uint32_history_cursor": 128,
+      "prepared_prefill_tokens_and_positions": 32768,
+      "prepared_prefill_page_table": 65536,
+      "prepared_prefill_logits_bf16": 4194304,
+      "vocab_sharded_head_prefill": 285212672,
+      "vocab_sharded_head_decode": 285212672
+    },
+    "total_reserved_bytes_per_device": 22486467200,
+    "exposed_dram_bytes_per_device": 33978715136,
+    "headroom_bytes_per_device": 11492247936,
+    "capacity_reduction": false,
+    "joint_batch_context_contract": "1..32 fixed slots, disjoint owned physical pages; joint cache allocation must fit physical DRAM",
+    "status": "full-stack allocation and late-context execution validated",
+    "policy_artifact": "models/demos/k2_horizon_7b_qb2/doc/datatype_sweep/final_selected.json",
+    "policy_artifact_sha256": "8d8ec615aaca1d45da8c4652d1be620e7e16e63aafc40db2580478e72e844f16",
+    "per_layer_storage_bytes_per_device": [
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 33554432,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat16",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 129236992,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 78905344,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      },
+      {
+        "decoder_weights": 91488256,
+        "kv_batch1_max_context": 285212672,
+        "max_prefill_gather_storage": 17825792,
+        "kv_dtype": "bfloat8_b",
+        "prefill_gather_dtypes": [
+          "bfloat8_b",
+          "bfloat8_b"
+        ]
+      }
+    ],
+    "prefill_gather_buffer_policy": "One shape/dtype at a time per layer; sum of each layer's larger QKV/MLP 4096x4096 packed gather.",
+    "config_id": "down4_l24to34_head8_lofi",
+    "capacity_probe": {
+      "context": 524288,
+      "layers": 36,
+      "cache_pairs": 36,
+      "local_cache_shape": [
+        16384,
+        2,
+        32,
+        128
+      ],
+      "allocation_seconds": 26.724085946101695,
+      "dram": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 4247339392,
+        "total_bytes_allocated_per_bank": 1899392192,
+        "largest_contiguous_bytes_free_per_bank": 2347689088
+      }
+    },
+    "late_context_probe": {
+      "prefix": "initialized zero KV, structural test only",
+      "start_pos": 524252,
+      "logical_prompt_len": 35,
+      "decode_position": 524287,
+      "token": 4111,
+      "finite_logits": true
+    },
+    "optimized_buffers_probe": {
+      "history_shape": [
+        1,
+        1,
+        524288,
+        32
+      ],
+      "history_dtype": "DataType.UINT32",
+      "prepared_prefill_length": 4096,
+      "prefill_logits_shape": [
+        1,
+        1,
+        1,
+        65536
+      ],
+      "max_history_and_full_cache_coexist": true
+    },
+    "evidence": [
+      "models/demos/k2_horizon_7b_qb2/doc/datatype_sweep/context_selected.json"
+    ],
+    "selected_precision_artifact": "models/demos/k2_horizon_7b_qb2/doc/datatype_sweep/selected_precision_config.json",
+    "selected_precision_sha256": "bd5bb1c69679a4862d5e701104b7b298f0767b423b021a4816cbdaf5fe9eff9f",
+    "execution_scope": "36 layers; max-context cache plus token history/prepared prefill. Initialized-zero prefix for structural late-context execution; not full-context HF quality."
+  },
+  "optimized_vllm": {
+    "supported_context": 524288,
+    "max_num_seqs": 32,
+    "cache_owner": "vLLM attention allocator; no standalone allocation in serving",
+    "precision_config": "doc/datatype_sweep/selected_precision_config.json",
+    "trace_region_bytes_per_chip": 200000000,
+    "prefill_trace_policy": "one last-used exact-length single-request start-zero device-sampled prefill, logical lengths 1..4096; all other valid lengths/modes retain eager/chunked implementation",
+    "persistent_prefill_buffers_per_chip": {
+      "tokens_uint32_max_bytes": 16384,
+      "rope_indices_uint32_max_bytes": 16384,
+      "serving_page_table_int32_max_bytes": 512,
+      "terminal_logits_bf16_tile32_local_vocab65536_bytes": 4194304,
+      "total_payload_upper_bytes": 4227584,
+      "scope": "Additional bounded prepared inputs/logits, excluding allocator alignment; no extra KV cache. Trace command storage uses the unchanged reserved trace region."
+    },
+    "capability_reduction": false,
+    "evidence": [
+      "doc/optimized_vllm/AUTODEBUG.md",
+      "doc/optimized_vllm/reduced_prefill_trace.json",
+      "doc/optimized_vllm/work_log.md",
+      "doc/optimized_vllm/full_prefill_trace.json",
+      "doc/optimized_vllm/final_manifest.json",
+      "doc/optimized_vllm/after/server.log"
+    ],
+    "validation_status": "Full36 exact trace/boundary checks and final serving allocation passed at unchanged supported context."
+  }
+}

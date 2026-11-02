@@ -4,17 +4,20 @@
 """sparse_sdpa_msa (MSA block-sparse prefill) basic post-commit smoke.
 
 This file keeps fast Blackhole coverage for the core contract: CPU reference sanity, registration, native
-n_kv=1 execution, native GQA execution, sentinel masking, q dtype, and GQA runtime-T cache hits. Broader
-shape/cache/determinism coverage lives in:
+n_kv=1 execution, native GQA execution, sentinel masking, q dtype, GQA runtime-T cache hits, and the per-core
+L1 K/V block cache (cache-on == cache-off bit for bit, program-cache keys). Broader shape/cache/determinism
+coverage lives in:
 tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py
 """
+
+from contextlib import contextmanager
 
 import pytest
 import torch
 
 import ttnn
 
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import (
     BLK_KV,
     SENTINEL,
@@ -126,6 +129,142 @@ def test_msa_native_q_dtype(device, q_dtype):
     out = run_op_msa_native(q, k, v, indices, device, kv_dtype=ttnn.bfloat8_b, q_dtype=q_dtype)
     thresh = DEVICE_PCC if q_dtype == ttnn.bfloat16 else FP8_Q_DEVICE_PCC
     assert pcc(out, gold) > thresh
+
+
+# Per-core L1 K/V block cache (enable_kv_block_cache). It only changes where a re-selected block's bytes come from, so
+# every cache configuration must reproduce the cache-off output bit for bit.
+
+
+def _work_split(total_work, num_cores):
+    """The op's contiguous per-core token ranges (compute_dispatch_args): core i gets [start, start + count)."""
+    base, extra = divmod(total_work, num_cores)
+    return [(i * base + min(i, extra), base + (1 if i < extra else 0)) for i in range(num_cores)]
+
+
+def _assert_kv_cache_parity(device, q, k, v, indices, **kw):
+    gold = sparse_attention_ref_msa(q, k, v, indices, _D**-0.5, causal=kw.get("chunk_start_idx") is not None)
+    # Cleared so the count below sees only this pair: K/V length is not hashed, so an earlier case can own the program.
+    device.clear_program_cache()
+    off = run_op_msa_native(q, k, v, indices, device, **kw)
+    entries = device.num_program_cache_entries()
+    on = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True, **kw)
+    # Fewer than topk slots fitting would rerun the cache-off program and pass parity without testing the cache.
+    assert device.num_program_cache_entries() == entries + 1, "the cache did not engage"
+    assert pcc(off, gold) > (FP8_Q_DEVICE_PCC if kw.get("q_dtype") == ttnn.fp8_e4m3 else DEVICE_PCC)
+    assert torch.equal(off, on), "cache-on is not byte-identical to cache-off"
+    return off, on
+
+
+# Per bank, for H=16, d=128, bf16 K/V: room for the base CBs (~68 KiB) plus exactly topk=16 bf16 slots (64 KiB each),
+# with less than one slot to spare. Holds for a base footprint anywhere in (36, 100] KiB.
+_BF16_SLOT = 2 * BLK_KV * _D * 2  # one block of K and of V
+_TOPK_SLOTS_HEADROOM = 16 * _BF16_SLOT + 100 * 1024
+
+
+@contextmanager
+def _pin_l1(device, headroom):
+    """Fill each L1 bank from the top so only `headroom` bytes stay free below the lowest live buffer."""
+    info = ttnn._ttnn.reports.get_device_info(device)
+    tiles_per_bank = (info.l1_bank_size - headroom) // 2048
+    pinned = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        yield
+    finally:
+        ttnn.deallocate(pinned)
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("kv_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["kv_bf16", "kv_bfp8"])
+@pytest.mark.parametrize("nblk", [20, 400], ids=["resident", "evicting"])
+def test_msa_native_kv_cache_byte_identical(device, kv_dtype, nblk):
+    # Random 16-of-nblk selections over several tokens per core (sorted rows). 20 blocks: the whole set resident
+    # after warm-up. 400 blocks: far more than the slots, so queries miss most of their blocks and evict, and the
+    # protected previous slot is hit by the round-robin cursor every few dozen evictions. Q is never cached, so
+    # fp8 Q only shrinks the Q CBs in the L1 budget: one run covers it.
+    d, H, S, topk = _D, 16, 1024, 16
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=13)
+    _assert_kv_cache_parity(device, q, k, v, indices, kv_dtype=kv_dtype)
+    if nblk == 20:
+        _assert_kv_cache_parity(device, q, k, v, indices, q_dtype=ttnn.fp8_e4m3, kv_dtype=kv_dtype)
+
+
+@run_for_blackhole()
+def test_msa_native_kv_cache_causal_byte_identical(device):
+    # The production form of the call (causal): the reader also builds the per-token control and mask tiles while
+    # running a block ahead, and the causal selection (blocks 0..diagonal) recurs across neighbouring queries.
+    d, H, n_kv, S, nblk = _D, 64, 4, 320, 16
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=nblk, d=d, causal=True, seed=31)
+    _assert_kv_cache_parity(device, q, k, v, indices, chunk_start_idx=0)
+
+
+@run_for_blackhole()
+def test_msa_native_kv_cache_gqa_group_boundary(device):
+    # A block id names different tiles in every KV group. S puts a group boundary strictly inside some core's
+    # token range (asserted with the op's own split; base_work == n_kv == 4 here, so an S divisible by 4 would
+    # start every range on a boundary). With more slots than the 16 distinct blocks, every block of group g is resident
+    # when the range crosses into g+1, so a stale hit is served unless residency resets at the boundary.
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    S = num_cores + 1 if (num_cores + 1) % 4 else num_cores + 2
+    d, H, n_kv, topk, nblk = _D, 64, 4, 16, 16
+    ranges = _work_split(S * n_kv, num_cores)
+    assert any(s < g * S < s + c for s, c in ranges for g in range(1, n_kv)), "no core straddles a group boundary"
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, d, causal=False, seed=3)
+    _assert_kv_cache_parity(device, q, k, v, indices, kv_dtype=ttnn.bfloat8_b)
+
+
+@run_for_blackhole()
+def test_msa_native_kv_cache_program_cache(device):
+    # Off and on differ in CB layout and kernel constants, so they are distinct programs, and a repeated on call
+    # must hit the cached one. The resolved slot count is part of the key:
+    # pinning L1 after a roomy warm-up must select a new, smaller program instead of hitting one whose CBs
+    # would clash with the pinned buffer at launch.
+    d, H, S, topk, nblk = _D, 16, 64, 16, 20
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=17)
+    device.clear_program_cache()
+    off = run_op_msa_native(q, k, v, indices, device)
+    assert device.num_program_cache_entries() == 1
+    roomy = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True)
+    assert device.num_program_cache_entries() == 2
+    again = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True)
+    assert device.num_program_cache_entries() == 2, "a repeated on call must hit its cached program"
+    with _pin_l1(device, _TOPK_SLOTS_HEADROOM):  # topk slots, fewer than roomy got
+        tight = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True)
+        assert device.num_program_cache_entries() == 3, "less free L1 must select a new program, not hit"
+    for out in (roomy, again, tight):
+        assert torch.equal(off, out)
+
+
+@run_for_blackhole()
+def test_msa_native_kv_cache_topk_slot_floor(device):
+    # The tightest cache that can run: exactly topk slots, so one query's selection fills it and the protected-slot
+    # skip has the fewest victims to choose from. Evicting selection over several tokens per core.
+    # One slot less resolves to zero slots, which hashes like the cache-off program and reuses it; that a cache
+    # program is built at the headroom but not one slot below proves exactly topk slots resolved there.
+    d, H, S, topk, nblk = _D, 16, 1024, 16, 400
+    T = nblk * BLK_KV
+    q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=19)
+    device.clear_program_cache()
+    off = run_op_msa_native(q, k, v, indices, device)
+    assert device.num_program_cache_entries() == 1
+    with _pin_l1(device, _TOPK_SLOTS_HEADROOM - _BF16_SLOT):
+        below = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True)
+        assert device.num_program_cache_entries() == 1, "below topk slots must reuse the streamed program"
+    with _pin_l1(device, _TOPK_SLOTS_HEADROOM):
+        at_floor = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True)
+        assert device.num_program_cache_entries() == 2, "topk slots must build the cache program"
+    assert torch.equal(off, below)
+    assert torch.equal(off, at_floor)
 
 
 def _rm(t, device, dtype):
@@ -281,14 +420,25 @@ def test_msa_native_block_cyclic_sp1_identity(device):
 
 
 @run_for_blackhole()
-def test_msa_native_block_cyclic_sp1_bit_exact(device):
+@pytest.mark.parametrize("enable_kv_block_cache", [False, True], ids=["stream", "kv_cache"])
+def test_msa_native_block_cyclic_sp1_bit_exact(device, enable_kv_block_cache):
     """The remap is pure addressing, not arithmetic: at sp=1 invP is the identity, so the block-cyclic path reads
     the exact same tiles in the same order as the plain path and must produce a BIT-IDENTICAL result (stronger
-    than PCC — proves the BC_ENABLE branch and the extra phys_block computation perturb nothing)."""
+    than PCC — proves the BC_ENABLE branch and the extra phys_block computation perturb nothing). With the block
+    cache on, residency is keyed by the logical id while the fetch uses the remapped one."""
     H, n_kv, S, d, topk, T = 32, 1, 128, _D, 16, 2048
     q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, d, causal=False, seed=7)
     plain = run_op_msa_native(q, k, v, indices, device)
-    bc = run_op_msa_native(q, k, v, indices, device, block_cyclic_sp_axis=0, block_cyclic_chunk_local=S)
+    bc = run_op_msa_native(
+        q,
+        k,
+        v,
+        indices,
+        device,
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=S,
+        enable_kv_block_cache=enable_kv_block_cache,
+    )
     assert torch.equal(
         plain, bc
     ), f"block-cyclic sp=1 must be bit-identical to non-BC; max|delta|={(plain - bc).abs().max().item()}"
