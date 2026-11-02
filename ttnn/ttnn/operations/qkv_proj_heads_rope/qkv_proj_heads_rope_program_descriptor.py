@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """qkv_proj_heads_rope ProgramDescriptor: 2D token_rows x head_cols output-stationary grid; x K-blocks multicast
-within each M-group (regime R3), W unicast per core (R1)."""
+within each M-group (regime R3), W K-blocks multicast within each N-group (R2) where the layout allows it,
+else W unicast per core (R1)."""
 
 from __future__ import annotations
 
@@ -43,6 +44,12 @@ CB_WEIGHT_BLOCK = 1
 CB_MATMUL_PARTIALS = 2
 CB_ROTARY_TABLE = 3
 CB_OUT_TILES = 4
+
+# Rectangles one multicast group may lower to (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
+MAX_MCAST_RECTANGLES = 3
+# Smallest N-group (= W DRAM crossings under R1) for which W is multicast (R2). Measured on p100a: at
+# grid_m = 3 (3x36 grid) the per-round handshake over 3 one-core rectangles costs more than 3 W reads.
+W_MCAST_MIN_GROUP = 4
 
 assert K_TILES % K_BLOCK == 0, "k_block must divide K' (ragged last K-block not built)"
 
@@ -170,14 +177,86 @@ def _cb(index, num_pages, cores):
     )
 
 
-def _core_assignment(device, blocking):
-    """Logical core l = m_group*grid_n + n_group, row-major over the compute grid.
+def _run_cover(cells):
+    """Row runs merged down identical x-extents, as (x0, y0, x1, y1)."""
+    runs = []
+    for y in sorted({y for _, y in cells}):
+        xs = sorted(x for x, cy in cells if cy == y)
+        start = xs[0]
+        for prev, x in zip(xs, xs[1:] + [None]):
+            if x != prev + 1:
+                runs.append([start, y, prev, y])
+                start = x
+    rects = []
+    for run in runs:
+        above = next((r for r in rects if r[0] == run[0] and r[2] == run[2] and r[3] == run[1] - 1), None)
+        if above:
+            above[3] = run[1]
+        else:
+            rects.append(run)
+    return rects
 
-    An M-group (the grid_n cores sharing x rows) is consecutive, which is the receiver-group shape
-    ttnn.Mcast partitions for the R3 x multicast.
+
+def _rectangles(cells):
+    """Cover a core set with few rectangles (the units Mcast lowers a receiver set to): the smaller of the
+    row-first and column-first run covers."""
+    by_rows = _run_cover(cells)
+    by_cols = [[y0, x0, y1, x1] for x0, y0, x1, y1 in _run_cover([(y, x) for x, y in cells])]
+    rects = min(by_rows, by_cols, key=len)
+    return [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, y0, x1, y1 in rects]
+
+
+def _row_major_layout(grid_x, grid_y, grid_n, grid_m):
+    """Logical l = m*grid_n + n row-major: each M-group is a consecutive run (<= 3 rectangles)."""
+    return {(m, n): divmod(m * grid_n + n, grid_x)[::-1] for m in range(grid_m) for n in range(grid_n)}
+
+
+def _folded_layout(grid_x, grid_y, grid_n, grid_m, transpose):
+    """n along the primary axis, m along the secondary; M-groups past the secondary extent fold into the
+    leftover primary band, n running along the secondary there. Each group is one line plus folds."""
+    primary, secondary = (grid_y, grid_x) if transpose else (grid_x, grid_y)
+    per_band = secondary // grid_n
+    if grid_n > primary or per_band == 0:
+        return None
+    layout = {}
+    for m in range(grid_m):
+        for n in range(grid_n):
+            if m < secondary:
+                p, q = n, m
+            else:
+                band, slot = divmod(m - secondary, per_band)
+                p, q = grid_n + band, slot * grid_n + n
+            if p >= primary:
+                return None
+            layout[(m, n)] = (q, p) if transpose else (p, q)
+    return layout
+
+
+def _choose_layout(grid_x, grid_y, grid_n, grid_m):
+    """Physical placement of the grid_m x grid_n logical grid, and whether W is multicast (R2).
+
+    Each multicast group must lower to <= MAX_MCAST_RECTANGLES rectangles. Prefer the row-major layout
+    (the R3 placement) when its N-groups already qualify; otherwise fold the logical grid so both channels
+    are lines. No qualifying layout, or N-groups below W_MCAST_MIN_GROUP: row-major with W unicast (R1).
     """
-    grid_x = device.compute_with_storage_grid_size().x
-    mt, grid_m = blocking.tensor_row_tiles, blocking.grid_m
+    row_major = _row_major_layout(grid_x, grid_y, grid_n, grid_m)
+    if grid_m < W_MCAST_MIN_GROUP:
+        return row_major, False
+    for layout in (row_major, *(_folded_layout(grid_x, grid_y, grid_n, grid_m, t) for t in (False, True))):
+        if layout is None:
+            continue
+        n_groups = [[layout[(m, n)] for m in range(grid_m)] for n in range(grid_n)]
+        m_groups = [[layout[(m, n)] for n in range(grid_n)] for m in range(grid_m)]
+        if all(len(_rectangles(g)) <= MAX_MCAST_RECTANGLES for g in n_groups + m_groups):
+            return layout, True
+    return row_major, False
+
+
+def _core_assignment(device, blocking):
+    """(core, n_group, m_group, row_start, rows) per core, and whether W is multicast (R2)."""
+    grid = device.compute_with_storage_grid_size()
+    mt, grid_m, grid_n = blocking.tensor_row_tiles, blocking.grid_m, blocking.grid_n
+    layout, w_multicast = _choose_layout(grid.x, grid.y, grid_n, grid_m)
     base, extra = divmod(mt, grid_m)
     row_ranges = []
     start = 0
@@ -185,13 +264,41 @@ def _core_assignment(device, blocking):
         rows = base + (1 if m_group < extra else 0)
         row_ranges.append((start, rows))
         start += rows
+    # W rounds line up across an N-group only if its M-groups walk the same number of blocks.
+    block_counts = {_div_up(rows, blocking.block_m) for _, rows in row_ranges}
+    w_multicast = w_multicast and len(block_counts) == 1
     assignment = []
     for m_group in range(grid_m):
-        for n_group in range(blocking.grid_n):
-            logical = m_group * blocking.grid_n + n_group
-            core = ttnn.CoreCoord(logical % grid_x, logical // grid_x)
+        for n_group in range(grid_n):
+            core = ttnn.CoreCoord(*layout[(m_group, n_group)])
             assignment.append((core, n_group, m_group, *row_ranges[m_group]))
-    return assignment
+    return assignment, w_multicast
+
+
+def _group_kernels(descriptor, kernel_args, runtime_args, groups, prefix, noc, first_semaphore_id, device):
+    """One KernelDescriptor + one Mcast per group, so groups may be any <= 3-rectangle core sets (Mcast
+    itself only partitions consecutive runs). Groups are disjoint, so they share semaphore IDs. The sender
+    is staggered across groups. Returns the kernels and the next free semaphore ID."""
+    kernels = []
+    next_id = first_semaphore_id
+    for index, group in enumerate(groups):
+        group_cores = ttnn.CoreRangeSet(_rectangles([(c.x, c.y) for c in group]))
+        rt = ttnn.RuntimeArgs()
+        for core in group:
+            rt[core.x][core.y] = runtime_args[(core.x, core.y)]
+        kernel = ttnn.KernelDescriptor(core_ranges=group_cores, runtime_args=rt, **kernel_args)
+        mcast = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(handshake=True, noc=noc),
+            group_cores,
+            len(group),
+            ttnn.McastFixedSenderConfig(sender_index=index % len(group)),
+            ttnn.McastCoreOrder.RowMajor,
+        )
+        mcast.attach(descriptor, prefix, [kernel], first_semaphore_id)
+        next_id = mcast.next_semaphore_id()
+        kernels.append(kernel)
+    return kernels, next_id
 
 
 def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blocking, compute_kernel_config):
@@ -203,7 +310,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
     weight_width_tiles = weight.padded_shape[-1] // TILE
     groups_per_third = NUM_HEADS // blocking.heads_per_core
 
-    assignment = _core_assignment(device, blocking)
+    assignment, w_multicast = _core_assignment(device, blocking)
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, *_ in assignment])
     cbs = [_cb(index, pages, cores) for index, pages in _cb_pages(block_m, n_tiles, k_block).items()]
 
@@ -257,8 +364,8 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         blocking.sb_w,
     ]
 
-    reader_rt = ttnn.RuntimeArgs()
-    writer_rt = ttnn.RuntimeArgs()
+    reader_rt = {}
+    writer_rt = {}
     compute_rt = ttnn.RuntimeArgs()
     x_addr = input_tensor.buffer_address()
     cos_addr, sin_addr = cos.buffer_address(), sin.buffer_address()
@@ -269,7 +376,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         first_head = (n_group % groups_per_third) * blocking.heads_per_core
         first_col_tile = third * HIDDEN_TILES + TILES_PER_HEAD * first_head
         is_rotary = int(third < 2)
-        reader_rt[core.x][core.y] = [
+        reader_rt[(core.x, core.y)] = [
             x_addr,
             cos_addr,
             sin_addr,
@@ -277,7 +384,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
             core_rows,
             is_rotary,
         ]
-        writer_rt[core.x][core.y] = [
+        writer_rt[(core.x, core.y)] = [
             w_addr,
             b_addr,
             *out_addrs,
@@ -291,44 +398,50 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         ]
         compute_rt[core.x][core.y] = [core_rows, is_rotary]
 
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_reader.cpp"),
-        core_ranges=cores,
-        compile_time_args=reader_ct_args,
-        runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    kernels = [
-        reader,
-        ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_writer.cpp"),
-            core_ranges=cores,
-            compile_time_args=writer_ct_args,
-            runtime_args=writer_rt,
-            config=ttnn.WriterConfigDescriptor(),
-        ),
-        ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_compute.cpp"),
-            core_ranges=cores,
-            compile_time_args=compute_ct_args,
-            runtime_args=compute_rt,
-            config=compute_kernel_config,
-        ),
-    ]
     descriptor = ttnn.ProgramDescriptor(cbs=cbs)
+    m_groups = [[core for core, _, m, *_ in assignment if m == m_group] for m_group in range(blocking.grid_m)]
+    n_groups = [[core for core, n, *_ in assignment if n == n_group] for n_group in range(blocking.grid_n)]
     # R3: x does not vary along head_cols, so each M-group's grid_n cores share every x K-block: one core
-    # reads it and multicasts it. Fixed sender, staggered across groups so the injectors land on different
-    # grid columns; a rotating sender needs rectangular groups, which consecutive runs of grid_n cores on
-    # the compute grid generally are not. Handshake: the landing slot is a double-buffered CB slot a
-    # receiver may still be consuming.
-    x_mcast = ttnn.Mcast(
+    # reads it and multicasts it. Handshake on: the landing slot is a double-buffered CB slot a receiver
+    # may still be consuming.
+    readers, next_semaphore_id = _group_kernels(
+        descriptor,
+        dict(
+            kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_reader.cpp"),
+            compile_time_args=reader_ct_args,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        reader_rt,
+        m_groups,
+        "xmc",
+        ttnn.NOC.NOC_0,
+        0,
         device,
-        ttnn.McastConfig(handshake=True, noc=ttnn.NOC.NOC_0),
-        cores,
-        blocking.grid_n,
-        ttnn.McastFixedSenderConfig(sender_index=0, placement=ttnn.McastSenderPlacement.Staggered),
-        ttnn.McastCoreOrder.RowMajor,
     )
-    x_mcast.attach(descriptor, "xmc", [reader], 0)
-    descriptor.kernels = kernels
+    # R2: W does not vary along token_rows, so each N-group's grid_m cores share every W K-block. Rides the
+    # writer (NOC_1), so the two channels use different NoCs.
+    writer_args = dict(
+        kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_writer.cpp"),
+        compile_time_args=writer_ct_args,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    if w_multicast:
+        writers, _ = _group_kernels(
+            descriptor, writer_args, writer_rt, n_groups, "wmc", ttnn.NOC.NOC_1, next_semaphore_id, device
+        )
+    else:
+        rt = ttnn.RuntimeArgs()
+        for (x, y), args in writer_rt.items():
+            rt[x][y] = args
+        writer = ttnn.KernelDescriptor(core_ranges=cores, runtime_args=rt, **writer_args)
+        ttnn.attach_absent_mcast(writer, "wmc")
+        writers = [writer]
+    compute = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "qkv_proj_heads_rope_compute.cpp"),
+        core_ranges=cores,
+        compile_time_args=compute_ct_args,
+        runtime_args=compute_rt,
+        config=compute_kernel_config,
+    )
+    descriptor.kernels = [*readers, *writers, compute]
     return descriptor

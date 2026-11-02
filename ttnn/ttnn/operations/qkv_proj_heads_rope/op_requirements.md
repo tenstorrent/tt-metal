@@ -98,7 +98,7 @@ tile-aligned all-L1.
 
 **Outcome**: writer zeroes rows `[S % 32, 32)` of each output tile on `st == St - 1` (NoC zero writes, compiled out when S is aligned). Golden `test_golden.py` + `test_regression.py`: 210/210 pass. 8x512 aligned all-L1: 268 us vs 265 us post-R1 (noise band; aligned path unchanged).
 
-### [ ] Refinement 3 - W multicast within each N-group (regime R2) on the flagged 8x512 profile
+### [x] Refinement 3 - W multicast within each N-group (regime R2) on the flagged 8x512 profile
 
 **Type**: perf
 
@@ -115,6 +115,8 @@ the other 4096-token flagged rows (16x256, 32x128; target 90 us) and 8x384 (targ
 toward 90 us; the soft precision gate (PCC >= 0.9999, rel RMS <= 4e-3 per output) holds; golden
 green; no regression across the guard set (one representative per grid class h_c = 1 / 2 / 4 x
 x in L1 / DRAM x non-aligned S).
+
+**Outcome**: R2 built on the writer (NOC_1), one `Mcast` + writer descriptor per N-group, folded core layout so both channels' groups are <= 2 rectangles on the 12x9 grid. Device us (x in L1): 8x512 268.7 -> 123.7, 16x256 269.8 -> 123.9, 32x128 269.9 -> 124.1, 8x384 253.0 -> 92.4; 8x512 x in DRAM 125.3. 6x18 (4x512 145, 8x256 145) has no <= 3-rectangle layout and stays R1; 3x36 (2x512 95, 4x256 97) measured slower with W multicast (105-129 us) and is gated off (`W_MCAST_MIN_GROUP = 4`). Bottleneck now at 8x512: stubbing the matmul drops 123.7 -> 66.8 us, so the matmul (HiFi3, 1x4 subblocks, 2200 tile-products/core) is the larger share and the rest (DM, epilogue, writes) ~67 us; that is Refinement 4's knobs (subblock shape, rotary init hoist, L1 overlap). Next for 6x18: a layout with 18-core M-groups in <= 3 rectangles and 6-core N-groups (not attempted: the folded scheme needs grid_n <= grid extent).
 
 ### [ ] Refinement 4 - Block / compute knob co-tune on the flagged 4096-token rows
 
