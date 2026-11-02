@@ -92,6 +92,11 @@ inline void publish_input(uint32_t cb_input_id, uint32_t k_tiles) {
 //
 // A `reserve_tiles` below `slice_tiles` splits the slice: it goes in slice_tiles / reserve_tiles
 // consecutive pieces of reserve_tiles each (the serial path's K-halves of a gate_up slice).
+//
+// `k_shards > 1` says the slice is stored as that many K-row shards rather than one: K-shard s of
+// column shard `shard_id` is shard s * col_shards + shard_id, so a weight with few column shards
+// still covers every DRAM bank. They are read back to back into the slot, which is the same
+// row-major [K, cols] slice a single shard holds.
 template <typename WeightArgs>
 inline void fetch_weight_one(
     const Noc& noc,
@@ -103,9 +108,12 @@ inline void fetch_weight_one(
     uint32_t tile_bytes,
     uint32_t shard_id,
     const WeightArgs& weight_args,
-    uint32_t ct_w_addr_base) {
+    uint32_t ct_w_addr_base,
+    uint32_t k_shards = 1,
+    uint32_t col_shards = 0) {
     const uint32_t pieces = reserve_tiles < slice_tiles ? slice_tiles / reserve_tiles : 1u;
     const uint32_t piece_bytes = slice_tiles / pieces * tile_bytes;
+    const uint32_t k_shard_bytes = slice_tiles / k_shards * tile_bytes;
 
     CircularBuffer cb_bcast(cb_bcast_id);
     CoreLocalMem<volatile uint32_t> ids(cb_bcast.get_write_ptr());
@@ -117,17 +125,47 @@ inline void fetch_weight_one(
 
     CircularBuffer cb_weights(cb_weights_id);
     ShardView w_shard(w);
+    // Read piece p into L1 at `dst`, tagged with `trid`.
+    auto issue_piece = [&](uint32_t p, uint32_t dst, uint32_t trid) {
+        const uint32_t piece_end = (p + 1u) * piece_bytes;
+        for (uint32_t b = p * piece_bytes; b < piece_end;) {
+            const uint32_t k_shard = b / k_shard_bytes;
+            const uint32_t offset = b % k_shard_bytes;
+            const uint32_t len = k_shard_bytes - offset < piece_end - b ? k_shard_bytes - offset : piece_end - b;
+            noc.async_read<NocOptions::TXN_ID>(
+                w_shard,
+                CoreLocalMem<uint32_t>(dst),
+                len,
+                {.shard_id = k_shard * col_shards + shard_id, .offset_bytes = offset},
+                {.offset_bytes = b - p * piece_bytes},
+                {.trid = trid});
+            b += len;
+        }
+    };
+
+    // Two pieces stay in flight: piece p + 1 is issued before piece p is waited on, so the core
+    // keeps reading while each landed piece goes to compute. A piece is waited on by its own
+    // transaction id (the reader's other reads use id 0 and a plain barrier).
+    constexpr uint32_t kPieceTrid[2] = {1u, 2u};
+    const uint32_t reserve_bytes = reserve_tiles * tile_bytes;
+    const auto& cb_iface = get_local_cb_interface(cb_weights_id);
+    cb_weights.reserve_back(reserve_tiles);
+    issue_piece(0, cb_weights.get_write_ptr(), kPieceTrid[0]);
     for (uint32_t p = 0; p < pieces; ++p) {
-        cb_weights.reserve_back(reserve_tiles);
-        noc.async_read(
-            w_shard,
-            cb_weights,
-            piece_bytes,
-            {.shard_id = shard_id, .offset_bytes = p * piece_bytes},
-            {.offset_bytes = 0});
-        noc.async_read_barrier();
+        if (p + 1u < pieces) {
+            // Room for the unpushed piece p plus piece p + 1, which lands one reserve past the write
+            // pointer -- wrapped, since the CB is a whole number of reserves.
+            cb_weights.reserve_back(2u * reserve_tiles);
+            uint32_t next = cb_weights.get_write_ptr() + reserve_bytes;
+            if (next >= cb_iface.fifo_limit) {
+                next -= cb_iface.fifo_size;
+            }
+            issue_piece(p + 1u, next, kPieceTrid[(p + 1u) % 2u]);
+        }
+        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = kPieceTrid[p % 2u]});
         cb_weights.push_back(reserve_tiles);
     }
+    noc_async_read_set_trid(0, noc.get_noc_id());
 }
 
 // Which role a core plays in one block's activation gather + broadcast.
@@ -233,7 +271,11 @@ inline void hub_gather_broadcast_block(
 
     // This block's synchronization point: wait for each of its experts' chunks from every SwiGLU
     // core (and one ack per block from every core that has no chunk).
-    Semaphore<>(sem_gather_id).wait_min(gather_target);
+    {
+        DeviceZoneScopedN("FE_HUB_GATHER_WAIT");
+        Semaphore<>(sem_gather_id).wait_min(gather_target);
+    }
+    DeviceZoneScopedN("FE_HUB_MCAST");
 
     // Claim space for the current block (written, not yet published) plus the next one before
     // announcing this block (see above).
@@ -301,7 +343,10 @@ inline void hub_gather_broadcast_block(
 
     // The slot is complete only once BOTH hubs have multicast it: the peer hub's half has to have
     // landed in this core's L1 (and in every other core's) before the local compute may read it.
-    sem.wait_min(blocks_done);
+    {
+        DeviceZoneScopedN("FE_HUB_PEER_WAIT");
+        sem.wait_min(blocks_done);
+    }
     cb_act.push_back(block_act_tiles);
 }
 
@@ -432,8 +477,9 @@ inline void build_routing_scalars(
 //            the block's experts against the now-resident activations and accumulates.
 //
 // When `num_expert_groups > 1` (the 6-expert path), the 12x8 or 12x9 grid is partitioned into
-// 2-column groups of `cores_per_expert` cores, one group per hit expert. Each core covers
-// `i_shards_per_core` gate_up/I shards (I/32 / cores_per_expert). Down runs on the group's bottom
+// 2-column groups of `cores_per_expert` cores, one group per hit expert. The group's first
+// `num_producers` cores each cover `i_shards_per_core` gate_up/I shards (I/32 / num_producers); the
+// others skip gate_up (6 of 16 cores produce at TP12's I/32 == 6). Down runs on the group's bottom
 // 2x8 only: `down_local` is the core's slot there, picking its `shards_per_core` down/H shards, or
 // kNoDownShard for a 9th-row core, which does gate_up and the gather but no down or reduce. The
 // gather/broadcast is per-group (two hubs per group, the group rectangle's two corners), and the 6
@@ -442,8 +488,10 @@ constexpr uint32_t kNoDownShard = 0xFFFFFFFFu;
 
 // The always-active shared expert on the 6-expert path. Its I-tiles are dealt round-robin over the
 // groups (tile t to group t % num_groups), and a group's j-th tile runs on local core
-// j + kSharedFirstLocal, which keeps it off hub0 (local core 0) and hub1 (the last one). That core
-// streams the tile's [H, 64] gate_up shard in [chunk_k, 2] chunks, and its SwiGLU tile is gathered
+// j + first_local, which keeps it off hub0 (local core 0) and hub1 (the last one): first_local is the
+// first core past the routed producers when the tiles fit before hub1, so no core streams both a
+// routed and a shared shard, and core 1 otherwise. That core streams the tile's [H, 64] gate_up
+// shard in [chunk_k, 2] chunks, and its SwiGLU tile is gathered
 // behind the group's routed activation in cb_act (at i_tiles + j). Each down core then multiplies
 // those tiles by the matching rows of the shared down for its H-slices; down is ND-sharded [32, 64],
 // so I-tile t of H-slice h is shard t * num_h_shards + h.
@@ -451,8 +499,7 @@ constexpr uint32_t kNoDownShard = 0xFFFFFFFFu;
 // The compile-time block a reader kernel appends after its routed weight addresses is the first
 // kSharedExpertCtArgs fields below in order, then the gate_up and down TensorAccessorArgs. i_tiles
 // is 0 when there is no shared expert.
-constexpr uint32_t kSharedExpertCtArgs = 8;
-constexpr uint32_t kSharedFirstLocal = 1;
+constexpr uint32_t kSharedExpertCtArgs = 9;
 
 struct SharedExpert {
     uint32_t i_tiles;       // shared I-tiles over all groups (0: no shared expert)
@@ -462,7 +509,8 @@ struct SharedExpert {
     uint32_t cb_down;
     uint32_t gate_up_tile_bytes;
     uint32_t down_tile_bytes;
-    uint32_t chunk_k;  // K tile-rows per streamed gate_up chunk
+    uint32_t chunk_k;      // K tile-rows per streamed gate_up chunk
+    uint32_t first_local;  // local core of a group's first shared tile
     uint32_t gate_up_addr;
     uint32_t down_addr;
 };
@@ -478,6 +526,7 @@ inline SharedExpert shared_expert_args(uint32_t gate_up_addr, uint32_t down_addr
         get_compile_time_arg_val(base + 5),
         get_compile_time_arg_val(base + 6),
         get_compile_time_arg_val(base + 7),
+        get_compile_time_arg_val(base + 8),
         gate_up_addr,
         down_addr,
     };
@@ -587,15 +636,25 @@ inline void run_reader_loop(
     uint32_t down_local,
     const SharedExpert& shared,
     const SharedGateUpArgs& shared_gate_up_args,
-    const SharedDownArgs& shared_down_args) {
+    const SharedDownArgs& shared_down_args,
+    uint32_t gate_up_k_shards,
+    uint32_t gate_up_col_shards,
+    uint32_t sem_ids_id) {
     constexpr uint32_t kOutTilesPerCore = 2;
     const bool is_hub = gather.role != 0;
+    // Everything but the shared expert's gate_up depends on the expert ids broadcast by {0,0}
+    // (whose own copy is already set when it gets here).
+    auto wait_for_ids = [&]() {
+        DeviceZoneScopedN("FE_WAIT_IDS");
+        Semaphore<>(sem_ids_id).wait(1);
+    };
 
     // ---- 6-expert path: 16 or 18 gate_up cores per expert, 16 down cores. ----
     if (num_expert_groups > 1) {
         const uint32_t local_idx = core_index % cores_per_expert;
         const uint32_t expert_group = core_index / cores_per_expert;
-        const uint32_t swiglu_tiles = i_tiles / (cores_per_expert * i_shards_per_core);
+        const bool swiglu_core = local_idx < num_producers;
+        const uint32_t swiglu_tiles = i_tiles / (num_producers * i_shards_per_core);
         const uint32_t gate_up_slice_tiles = k_tiles * (2u * swiglu_tiles);
         const bool down_core = down_local != kNoDownShard;
         const bool is_root = expert_group == 0 && down_core;
@@ -605,7 +664,7 @@ inline void run_reader_loop(
         // every group sizes for the largest share so the pages stay in step chip-wide.
         const uint32_t shared_tiles = shared_tiles_of_group(shared.i_tiles, expert_group, num_expert_groups);
         const uint32_t act_tiles = i_tiles + shared.slots;
-        const bool shared_core = local_idx >= kSharedFirstLocal && local_idx < kSharedFirstLocal + shared_tiles;
+        const bool shared_core = local_idx >= shared.first_local && local_idx < shared.first_local + shared_tiles;
 
         auto fetch_shared_down_slice = [&](uint32_t j) {
             if (shared_tiles > 0) {
@@ -629,9 +688,27 @@ inline void run_reader_loop(
             cb_reduce.reserve_back(reduce_tiles);
         }
 
+        auto fetch_shared_gate_up_tile = [&]() {
+            DeviceZoneScopedN("FE_SHARED_GATE_UP");
+            fetch_shared_gate_up(
+                noc,
+                shared,
+                shared_gate_up_args,
+                expert_group + (local_idx - shared.first_local) * num_expert_groups,
+                k_tiles);
+        };
+
+        // The shared expert runs for every token, so a core that streams only its gate_up does so
+        // while the routing is still being computed. A core that is also a SwiGLU producer keeps it
+        // after the routed slices: its compute consumes those first.
+        if (shared_core && !swiglu_core) {
+            fetch_shared_gate_up_tile();
+        }
+        wait_for_ids();
+
         {
             DeviceZoneScopedN("FE_PHASE1_GATE_UP");
-            for (uint32_t s = 0; s < i_shards_per_core; ++s) {
+            for (uint32_t s = 0; swiglu_core && s < i_shards_per_core; ++s) {
                 fetch_weight_one(
                     noc,
                     cb_bcast_id,
@@ -642,15 +719,12 @@ inline void run_reader_loop(
                     gate_up_tile_bytes,
                     local_idx * i_shards_per_core + s,
                     gate_up_args,
-                    ct_gu_addr_base);
+                    ct_gu_addr_base,
+                    gate_up_k_shards,
+                    gate_up_col_shards);
             }
-            if (shared_core) {
-                fetch_shared_gate_up(
-                    noc,
-                    shared,
-                    shared_gate_up_args,
-                    expert_group + (local_idx - kSharedFirstLocal) * num_expert_groups,
-                    k_tiles);
+            if (shared_core && swiglu_core) {
+                fetch_shared_gate_up_tile();
             }
         }
 
@@ -695,7 +769,7 @@ inline void run_reader_loop(
             if (is_hub) {
                 // Single expert per group, so each hub multicasts its own column range of that one
                 // expert; `num_producers` chunks plus one per shared tile is the whole gather target
-                // (every core of the group owns a chunk, so there are no slot-free acks). The shared
+                // (a single block never reuses a slot, so no core owes a slot-free ack). The shared
                 // tiles sit right after the routed ones and belong to the last hub, whose range
                 // therefore stays contiguous.
                 const bool is_hub0 = gather.role == 1;
@@ -769,6 +843,7 @@ inline void run_reader_loop(
     // first `num_producers` cores also own a slice of the SwiGLU I dim.
     (void)i_shards_per_core;
     (void)down_local;
+    wait_for_ids();
     const bool swiglu_core = core_index < num_producers;
     const uint32_t shard_id = core_index;
     const uint32_t swiglu_tiles = i_tiles / num_producers;
@@ -827,7 +902,9 @@ inline void run_reader_loop(
                         gate_up_tile_bytes,
                         shard_id,
                         gate_up_args,
-                        ct_gu_addr_base);
+                        ct_gu_addr_base,
+                        gate_up_k_shards,
+                        gate_up_col_shards);
                 }
             }
         }

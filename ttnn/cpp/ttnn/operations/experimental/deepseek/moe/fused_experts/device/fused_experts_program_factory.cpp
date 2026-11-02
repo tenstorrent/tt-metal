@@ -30,11 +30,22 @@ constexpr uint32_t kGridY = 8;
 // down shard is [I, 64] and there are H / 64 shards.
 constexpr uint32_t kOutTilesPerCore = 2;
 
-// 6-expert path: one 2-column group per expert on a 12-wide grid. gate_up splits I over the whole
-// group, 2x8 = 16 cores when I/32 divides by 16 and otherwise 2x9 = 18 (12x9 grid); down always runs
-// on the group's bottom 2x8 = 16 cores, which keeps the H split at H/64/16 shards per core.
+// 6-expert path: one 2-column group per expert on a 12-wide grid. gate_up splits I over the group's
+// first `num_producers` cores -- the largest divisor of I/32 that fits the group, so all 2x8 = 16 at
+// I/32 == 16 or 64, and 6 of them at TP12's I/32 == 6 -- on 2x9 = 18 cores (12x9 grid) when I/32
+// divides by 18 but not 16. Down always runs on the group's bottom 2x8 = 16 cores, which keeps the H
+// split at H/64/16 shards per core.
 constexpr uint32_t kParallelExperts = 6;
 constexpr uint32_t kDownCoresPerExpert = 2 * kGridY;
+constexpr uint32_t kTallGateUpCoresPerExpert = 2 * (kGridY + 1);
+
+uint32_t largest_divisor_at_most(uint32_t n, uint32_t cap) {
+    uint32_t d = std::min(n, cap);
+    while (n % d != 0u) {
+        --d;
+    }
+    return d;
+}
 // Runtime-arg marker for a core that runs gate_up only (row kGridY of a 2x9 group).
 constexpr uint32_t kNoDownShard = 0xFFFFFFFFu;
 
@@ -129,8 +140,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t serial_grid_x = num_weight_shards / kGridY;
     const uint32_t expert_i_tiles = static_cast<uint32_t>(tensor_args.gate_up_weights.front().logical_shape()[-1]) /
                                     (2u * tt::constants::TILE_WIDTH);
-    // gate_up rows per expert group: 8 when the group's 16 cores split I/32 evenly, else 9 (18 cores).
-    const uint32_t parallel_grid_y = expert_i_tiles % kDownCoresPerExpert == 0 ? kGridY : kGridY + 1u;
+    // gate_up rows per expert group: 9 (18 cores) only when they split I/32 evenly and 16 cores do not.
+    const uint32_t parallel_grid_y =
+        expert_i_tiles % kDownCoresPerExpert != 0 && expert_i_tiles % kTallGateUpCoresPerExpert == 0 ? kGridY + 1u
+                                                                                                     : kGridY;
     const bool want_parallel = num_active == kParallelExperts;
     const bool have_parallel_grid = grid.x >= kParallelGridX && grid.y >= parallel_grid_y;
     if (want_parallel && !have_parallel_grid) {
@@ -212,6 +225,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t k_tiles = static_cast<uint32_t>(gate_up0.logical_shape()[-2]) / TILE_DIM;
     const uint32_t n_tiles = static_cast<uint32_t>(gate_up0.logical_shape()[-1]) / TILE_DIM;  // 2I / 32
     const uint32_t i_tiles = n_tiles / 2u;  // SwiGLU output tile cols (I / 32)
+    // A gate_up weight may be stored as several K-row shards per column shard (so few column shards
+    // still cover every DRAM bank); the readers fetch a column's K-shards back to back.
+    const uint32_t gate_up_k_shards = static_cast<uint32_t>(gate_up0.logical_shape()[-2]) /
+                                      static_cast<uint32_t>(gate_up0.memory_config().nd_shard_spec()->shard_shape[-2]);
 
     // Token-row tile shape. Every CB whose tiles hold "one tile row of B tokens" -- cb_input,
     // cb_out, cb_mm, cb_act, cb_rscalar, cb_down_out, cb_acc, cb_wtmp -- and the DRAM output
@@ -235,20 +252,18 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t weight_tile_bytes = static_cast<uint32_t>(gate_up0_buffer->page_size());
     // Number of SwiGLU cores and each one's share of the I dim (see swiglu_tiles_per_shard_for).
     const uint32_t swiglu_tiles_per_core = swiglu_tiles_per_shard_for(i_tiles, num_weight_shards);
-    const uint32_t num_producers = parallel_experts ? cores_per_expert : (i_tiles / swiglu_tiles_per_core);
-    // Gate_up/I shards per core: I is 64-way only at the full 2048 width. TP slices it (e.g. I=512
-    // -> 16 tiles), so 16 cores cover one I-tile each rather than four.
-    const uint32_t i_shards_per_core = parallel_experts ? (i_tiles / cores_per_expert) : 1u;
+    // On the 6-expert path the producers are local cores [0, num_producers) of each group; the rest
+    // of the group skips gate_up and only receives the activation (and runs down on the bottom 2x8).
+    const uint32_t num_producers =
+        parallel_experts ? largest_divisor_at_most(i_tiles, cores_per_expert) : (i_tiles / swiglu_tiles_per_core);
+    // Gate_up/I shards per producer: 4 at I == 2048, 1 when TP slices I to the group's core count
+    // or below (I=512 -> 16 tiles on 16 cores, TP12's 6 tiles on 6 of them).
+    const uint32_t i_shards_per_core = parallel_experts ? (i_tiles / num_producers) : 1u;
     TT_FATAL(
-        !parallel_experts || (i_tiles % cores_per_expert == 0 && i_shards_per_core >= 1u),
-        "fused_experts: 6-expert path needs I/32 ({}) divisible by cores_per_expert ({})",
-        i_tiles,
-        cores_per_expert);
-    TT_FATAL(
-        i_tiles == (parallel_experts ? cores_per_expert * i_shards_per_core : num_producers) * swiglu_tiles_per_core,
+        i_tiles == (parallel_experts ? num_producers * i_shards_per_core : num_producers) * swiglu_tiles_per_core,
         "fused_experts: I/32 ({}) must equal the product of SwiGLU cores/shards ({}) and tiles_per_shard ({})",
         i_tiles,
-        parallel_experts ? cores_per_expert * i_shards_per_core : num_producers,
+        parallel_experts ? num_producers * i_shards_per_core : num_producers,
         swiglu_tiles_per_core);
 
     // Shared expert (6-expert path only). Its I-tiles are dealt round-robin over the groups (tile t
@@ -284,6 +299,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         num_expert_groups,
         shared_slots,
         cores_per_expert - 2u);
+    // A group's shared tiles run on local cores [shared_first_local, +shared_slots): right after the
+    // routed producers when they fit before hub1 (the last core), so no core streams both a routed
+    // and a shared gate_up shard; otherwise from core 1, just past hub0.
+    const uint32_t shared_first_local = num_producers + shared_slots < cores_per_expert ? num_producers : 1u;
     const uint32_t shared_gate_up_tile_bytes =
         has_shared ? static_cast<uint32_t>(shared_gate_up_buffer->page_size()) : 0u;
     const uint32_t shared_down_tile_bytes = has_shared ? static_cast<uint32_t>(shared_down_buffer->page_size()) : 0u;
@@ -305,7 +324,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // boundary -- no producer ever straddles the two hubs, and the hub choice is a fixed per-core
     // property. Fewer than two producers cannot be split, so that (and a caller asking for a single
     // hub) falls back to one hub owning the whole I dim.
-    const uint32_t producer_cols = parallel_experts ? (i_tiles / cores_per_expert) : swiglu_tiles_per_core;
+    const uint32_t producer_cols = parallel_experts ? i_shards_per_core : swiglu_tiles_per_core;
     const bool split_hubs = operation_attributes.two_hub_gather && num_producers >= 2u;
     const uint32_t hub0_producers = split_hubs ? num_producers / 2u : num_producers;
     const uint32_t num_hubs = split_hubs ? 2u : 1u;
@@ -626,8 +645,16 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t weights_cb_bytes =
         split_gate_up ? kSplitWeightSlots * half_slice_tiles * weight_tile_bytes
                       : (lcm_fits ? lcm_weights_cb_bytes : 2u * weight_slot_tiles * weight_tile_bytes);
-    const uint32_t gate_up_reserve_tiles =
-        split_gate_up ? half_slice_tiles : (uniform_stride ? weight_slot_tiles : weight_slice_tiles);
+    // 6-expert path: a producer's one slice per I-shard is also pushed in K-pieces, so its matmul
+    // runs behind the read instead of after the last byte (the whole-slice wait left ~13 us of
+    // compute after the read at TP12). The pieces tile the slice, so the down phase still starts
+    // slice-aligned.
+    constexpr uint32_t kParallelGateUpPieces = 4;
+    const bool parallel_pieces = parallel_experts && !uniform_stride && k_tiles % kParallelGateUpPieces == 0u;
+    const uint32_t gate_up_reserve_tiles = split_gate_up ? half_slice_tiles
+                                           : parallel_pieces
+                                               ? weight_slice_tiles / kParallelGateUpPieces
+                                               : (uniform_stride ? weight_slot_tiles : weight_slice_tiles);
     const uint32_t down_reserve_tiles =
         split_gate_up ? half_slice_tiles : (uniform_stride ? weight_slot_tiles : down_stride_tiles);
 
@@ -984,11 +1011,17 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
               static_cast<uint32_t>(cb_shared_down),
               shared_gate_up_tile_bytes,
               shared_down_tile_bytes,
-              shared_chunk_k}) {
+              shared_chunk_k,
+              shared_first_local}) {
             ct_args.push_back(a);
         }
         TensorAccessorArgs(has_shared ? *shared_gate_up_buffer : *gate_up0_buffer).append_to(ct_args);
         TensorAccessorArgs(has_shared ? *shared_down_buffer : *down0_buffer).append_to(ct_args);
+    };
+    // After it, the routed gate_up layout: K-shards per column shard, and the column shard count.
+    auto append_gate_up_layout_ct = [&](std::vector<uint32_t>& ct_args) {
+        ct_args.push_back(gate_up_k_shards);
+        ct_args.push_back(i_tiles / swiglu_tiles_per_core);
     };
     // The matching runtime args, bound so a program-cache hit patches the addresses.
     Buffer* shared_gate_up_binding = has_shared ? shared_gate_up_buffer : gate_up0_buffer;
@@ -1170,6 +1203,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     TensorAccessorArgs(*down0_buffer).append_to(sender_ct_args);
     append_addrs_ct(sender_ct_args);
     append_shared_ct(sender_ct_args);
+    append_gate_up_layout_ct(sender_ct_args);
 
     // The framework resolves every bound Buffer to an address, so the routing / ranking slots each
     // need a real buffer even when their accessor is compiled out. The score buffer is always
@@ -1268,6 +1302,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     TensorAccessorArgs(*down0_buffer).append_to(input_ct_args);
     append_addrs_ct(input_ct_args);
     append_shared_ct(input_ct_args);
+    append_gate_up_layout_ct(input_ct_args);
 
     KernelDescriptor input_sender_desc;
     input_sender_desc.kernel_source = std::string(kKernelDir) + "/dataflow/broadcast_input.cpp";
@@ -1345,6 +1380,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     TensorAccessorArgs(*down0_buffer).append_to(receiver_ct_args);
     append_addrs_ct(receiver_ct_args);
     append_shared_ct(receiver_ct_args);
+    append_gate_up_layout_ct(receiver_ct_args);
 
     // The receiver reader comes in two NOC flavours. Hub1 runs on NOC 1 -- that is what keeps the
     // two hubs' activation multicasts on separate NoCs -- and every other core stays on NOC 0. On a
@@ -1425,6 +1461,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         cb_shared_down,
         shared_chunk_k,
         shared_limit_bits,
+        shared_first_local,
     };
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = std::string(kKernelDir) + "/compute/matmul_gate_up.cpp";
@@ -1469,6 +1506,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     };
     TensorAccessorArgs(*out_buffer).append_to(writer_ct_args);
     writer_ct_args.push_back(shared_i_tiles);
+    writer_ct_args.push_back(shared_first_local);
     // ROW_MAJOR rows restriped into cb_input on the way in and scattered back to rows on the way out.
     for (uint32_t a :
          {batch,
