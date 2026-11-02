@@ -33,6 +33,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace conv_gather {
 
@@ -827,12 +828,16 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
             fetch_sticks(win_lo, win_lo + n_before, window_base);
             fetch_sticks(after_lo, after_lo + n_after, window_base + static_cast<uint32_t>(n_before) * src_bytes);
         }
-        noc_async_read_barrier();
+        {
+            MaybeDeviceZoneScope("reader_window_barrier");
+            noc_async_read_barrier();
+        }
         set_local_read_state();
 
         // ---- gather_im2col_kblock, per n-block (activation is reused across n) ----
         for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
             for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
+                MaybeDeviceZoneScope("reader_gather_kblock");
                 // Depthwise: one K-block per n-block; `k0` carries the n-block index.
                 const uint32_t k0 = depthwise ? n_block : k_block * kblock_elems;
                 KBlockSegments seg;
@@ -846,7 +851,10 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
                 }
                 for (uint32_t t = 0; t < block_m_tiles; ++t) {
                     const uint32_t tile = t0 + t;
-                    cb_reserve_back(cb_act_rm, block_k_tiles);
+                    {
+                        MaybeDeviceZoneScope("reader_rm_reserve");
+                        cb_reserve_back(cb_act_rm, block_k_tiles);
+                    }
                     const uint32_t dst_base = get_write_ptr(cb_act_rm);
                     if (tile >= t1) {
                         // Ragged block tail: tile-row past the core's range.

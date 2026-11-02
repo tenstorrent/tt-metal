@@ -453,12 +453,16 @@ void kernel_main() {
                 // ---- act_exchange: K-block k_block's in0, from its slice owner ----
                 if constexpr (act_mcast) {
                     const uint32_t owner = kblock_owner(k_block);
-                    cb_reserve_back(cb_act_tiles, act_block_tiles);
+                    {
+                        MaybeDeviceZoneScope("writer_act_reserve");
+                        cb_reserve_back(cb_act_tiles, act_block_tiles);
+                    }
                     const uint32_t landing = get_write_ptr(cb_act_tiles);  // identical on every group core
                     // R9: the own K-block is the resident shard's tiles (published by the reader).
                     constexpr uint32_t cb_src = conv_gather::direct_in0 ? conv_gather::cb_in_shard : cb_act_send;
                     if (owner == my_slice) {
                         if (!act_sent_ahead) {
+                            MaybeDeviceZoneScope("writer_act_send");
                             cb_wait_front(cb_src, act_block_tiles);
                             act_send(act_round, get_read_ptr(cb_src), landing, act_block_bytes);
                             cb_pop_front(cb_src, act_block_tiles);
@@ -479,6 +483,7 @@ void kernel_main() {
                             cb_pop_front(cb_src, act_block_tiles);
                             act_sent_ahead = true;
                         }
+                        MaybeDeviceZoneScope("writer_act_wait");
                         act_wait(act_round);  // acked ahead
                     }
                     cb_push_back(cb_act_tiles, act_block_tiles);

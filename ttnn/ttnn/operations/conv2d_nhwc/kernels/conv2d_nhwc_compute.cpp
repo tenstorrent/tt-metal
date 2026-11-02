@@ -34,6 +34,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 constexpr uint32_t cb_act_rm = get_compile_time_arg_val(0);
 constexpr uint32_t cb_weight_tiles = get_compile_time_arg_val(1);
@@ -122,6 +123,7 @@ struct TilizeKBlock {
     uint32_t my_slice;
     uint32_t m_block = 0;
     ALWI void tilize_own() const {
+        MaybeDeviceZoneScope("compute_tilize_own");
         PACK((llk_pack_reconfig_l1_acc(0)));
         tilize<tilize_w, cb_act_rm, cb_act_send>(block_m_tiles * tilize_blocks_per_row);
     }
@@ -137,6 +139,7 @@ struct TilizeKBlock {
         if constexpr (direct_in0) {
             return;
         } else if constexpr (!act_mcast) {
+            MaybeDeviceZoneScope("compute_tilize");
             PACK((llk_pack_reconfig_l1_acc(0)));
             if (num_gather_roles > 1 && (m_block & 1)) {
                 tilize<tilize_w, cb_act_rm2, cb_act_tiles>(block_m_tiles * tilize_blocks_per_row);
@@ -334,6 +337,7 @@ void kernel_main() {
                     act_tiles.pop_front(row_tiles);
                 }
                 weight_tiles.pop_front(row_tiles);
+                MaybeDeviceZoneScope("compute_bias_untilize");
                 bias_and_untilize<has_bias>(partials, bias, biased, n_block, m_block + 1 == num_m_blocks);
             }
         }
@@ -353,38 +357,42 @@ void kernel_main() {
             for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
                 // conv_matmul_block: caller owns the accumulator's single reserve / push.
                 partials.reserve_back(block_out_tiles);
-                matmul_block<
-                    false,
-                    true,
-                    LastBlockTarget::Interm,
-                    OutputCBLayout::TileRowMajor,
-                    matmul_config::InitMode::ShortAfterPreKBlock,
-                    InputPolicy::WaitAndPopPerKBlock,
-                    in1_policy,
-                    NoPostCompute,
-                    TilizeKBlock,
-                    NoPostKBlock,
-                    0,
-                    NoKBlockInnerDimFn,
-                    NoIn0Source,
-                    In1Offset,
-                    true>(
-                    act_tiles,
-                    weight_tiles,
-                    partials,
-                    partials,
-                    shape,
-                    {},
-                    TilizeKBlock{my_slice, m_block},
-                    block_n_tiles,
-                    block_n_tiles,
-                    {},
-                    {},
-                    {},
-                    In1Offset{});
+                {
+                    MaybeDeviceZoneScope("compute_matmul");
+                    matmul_block<
+                        false,
+                        true,
+                        LastBlockTarget::Interm,
+                        OutputCBLayout::TileRowMajor,
+                        matmul_config::InitMode::ShortAfterPreKBlock,
+                        InputPolicy::WaitAndPopPerKBlock,
+                        in1_policy,
+                        NoPostCompute,
+                        TilizeKBlock,
+                        NoPostKBlock,
+                        0,
+                        NoKBlockInnerDimFn,
+                        NoIn0Source,
+                        In1Offset,
+                        true>(
+                        act_tiles,
+                        weight_tiles,
+                        partials,
+                        partials,
+                        shape,
+                        {},
+                        TilizeKBlock{my_slice, m_block},
+                        block_n_tiles,
+                        block_n_tiles,
+                        {},
+                        {},
+                        {},
+                        In1Offset{});
+                }
                 partials.push_back(block_out_tiles);
                 PACK((llk_pack_reconfig_l1_acc(0)));
 
+                MaybeDeviceZoneScope("compute_bias_untilize");
                 bias_and_untilize<has_bias>(partials, bias, biased, n_block, m_block + 1 == num_m_blocks);
             }
         }
