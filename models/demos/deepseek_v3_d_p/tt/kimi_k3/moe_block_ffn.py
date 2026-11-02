@@ -209,6 +209,27 @@ def device_sources(mesh, layer_idx: int, epc: int, cache):
     return srcs
 
 
+def log_words_layout(res, l1s_before=None, l1s_after=None):
+    """The block's persistent words in L1_SMALL: each set's cores (the union over the chips), bytes a core and address,
+    the per-tensor footprint (each set reserves its bytes on every core) vs the packed slab's."""
+    rows = res.words_layout()
+    slab = res.words_slab()
+    per_core = {}
+    for w in rows:
+        for c in w["cores"]:
+            per_core[c] = per_core.get(c, 0) + w["bytes"]
+        logger.info(
+            f"MOE_WORDS {w['name']}: {len(w['cores'])} cores, {w['bytes']} B a core, at {w['address']}"
+            f"{' (slab +' + str(w['address'] - slab['address']) + ')' if w['packed'] else ' (own tensor)'}"
+        )
+    own = sum(w["bytes"] for w in rows if not w["packed"])
+    logger.info(
+        f"MOE_WORDS total: {len(rows)} sets, sum {sum(w['bytes'] for w in rows)} B (a tensor a set: every core), "
+        f"max a core {max(per_core.values(), default=0)} B; slab {slab}; own tensors {own} B; footprint "
+        f"{(slab['capacity'] if slab else 0) + own} B; mesh L1_SMALL before the block {l1s_before} B, after {l1s_after} B"
+    )
+
+
 class TtK3MoEBlockFfn:
     """One MoE layer on the shared MoE block: __call__(ffn_norm's x [1, 1, S/SP, H/TP]) -> [1, 1, S/SP, H/TP]."""
 
@@ -236,8 +257,13 @@ class TtK3MoEBlockFfn:
                 combine_snap=snap,
                 persist_l1_small=True,  # (the ops' words and semaphores in L1_SMALL: MoEBlock)
             )
+            if os.environ.get("MOE_WORDS_SLAB"):  # (the persistent words' packed slab, B a core; 0: a tensor a set)
+                cfg.words_slab_bytes = int(os.environ["MOE_WORDS_SLAB"])
             dtypes = mb.MoEDtypes()
             t0 = time.time()
+            from models.demos.moe_block.tt.moe_block import l1_small_bytes
+
+            l1s_before = l1_small_bytes(self.mesh)  # (the model's own L1_SMALL users so far)
             res = mb.MoEBlockResources(self.mesh, self.dims, cfg, dtypes)
             # (the reference's sizing - models/demos/moe_block RoutedExperts.cap_of / layout_of and plan_combine's
             # accumulators at 8x4, chunk 5120: GLM-5.3 11, Kimi-K3 15; MOE_ACCUMULATORS overrides)
@@ -265,6 +291,7 @@ class TtK3MoEBlockFfn:
                     f"MoE block: head engine {lay.GX}x{lay.GY}, MT {lay.MT}, {lay.NCH} chunk(s), KB {lay.KB}, router on "
                     f"the engine {lay.on_engine}, x in DRAM {lay.xdram}, predicted {p.t:.0f} us {fit.note}"
                 )
+            block._l1s_before = l1s_before
             hit = _BLOCKS[key] = (self.mesh, res, block)
         return hit[2]
 
@@ -579,6 +606,7 @@ class TtK3MoEBlockFfn:
                 )
             )
             block._logged_l1_small = True
+            log_words_layout(block.resources, getattr(block, "_l1s_before", None), l1_small_bytes(self.mesh))
         if getattr(block, "_logged_arena", None) != block.arena_address:  # (where each call's arena lands)
             logger.info(
                 f"MoE block layer {self.layer_idx}: arena at {block.arena_address} (was "

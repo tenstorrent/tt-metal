@@ -194,6 +194,7 @@ void bind_config(nb::module_& mod) {
         .def_rw("chunk_tokens", &MoEBlockConfig::chunk_tokens)
         .def_rw("zigzag", &MoEBlockConfig::zigzag)
         .def_rw("persist_l1_small", &MoEBlockConfig::persist_l1_small)
+        .def_rw("words_slab_bytes", &MoEBlockConfig::words_slab_bytes)
         .def_rw("combine_tuning", &MoEBlockConfig::combine_tuning)
         .def_prop_ro("handoff_bytes", &MoEBlockConfig::handoff_bytes)
         .def_prop_ro("snap_bits", &MoEBlockConfig::snap_bits)
@@ -430,6 +431,40 @@ void bind_resources(nb::module_& mod) {
         .def("semaphore_address", &MoEBlockResources::semaphore_address, nb::arg("name"))
         .def("has", &MoEBlockResources::has, nb::arg("name"))
         .def("names", &MoEBlockResources::names)
+        .def(
+            "words_layout",
+            [](const MoEBlockResources& r) {
+                nb::list out;
+                for (const auto& w : r.words_layout()) {
+                    nb::list cores;
+                    for (const auto& c : corerange_to_cores(w.cores)) {
+                        cores.append(nb::make_tuple(c.x, c.y));
+                    }
+                    nb::dict d;
+                    d["name"] = w.name;
+                    d["cores"] = cores;
+                    d["bytes"] = w.bytes;
+                    d["address"] = w.address;
+                    d["packed"] = w.packed;
+                    out.append(d);
+                }
+                return out;
+            },
+            "[{name, cores [(x, y)], bytes (a core), address, packed}] a persistent_words name.")
+        .def(
+            "words_slab",
+            [](const MoEBlockResources& r) -> nb::object {
+                const auto s = r.words_slab();
+                if (!s) {
+                    return nb::none();
+                }
+                nb::dict d;
+                d["address"] = s->address;
+                d["capacity"] = s->capacity;
+                d["used"] = s->used;
+                return d;
+            },
+            "{address, capacity, used} of the packed persistent words' L1_SMALL slab (None before its first slot).")
         .def("freeze", &MoEBlockResources::freeze)
         .def_prop_ro("frozen", &MoEBlockResources::frozen)
         .def("release", &MoEBlockResources::release);

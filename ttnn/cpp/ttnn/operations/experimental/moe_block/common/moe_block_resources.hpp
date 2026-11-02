@@ -112,7 +112,29 @@ public:
     const Tensor& persistent_tensor(const std::string& name, const tt::tt_metal::TensorSpec& spec);
     // uint32 words per core (the standard for sync words, see above): [len(cores), words] HEIGHT_SHARDED over `cores`
     // (row-major), one shard of `words` (rounded up to 16 B) per core, in persistent_buffer_type().
+    // Packed (persist_l1_small and config.words_slab_bytes > 0): the tensor is a non-owning view at a slot of one
+    // L1_SMALL slab (all worker cores, words_slab_bytes a core) - its buffer's address IS the slot's address, so it binds
+    // and patches like any tensor. A slot is placed first-fit at the lowest offset free on every core of `cores` (word
+    // sets on disjoint core sets share bytes; the L1_SMALL allocator would reserve each set's bytes on every core),
+    // zeroed on its own cores at creation, and never moves or is reused until release(). `cores` must be every core
+    // that touches the words on any chip (the union over the chips). A set the slab cannot hold gets its own tensor.
     const Tensor& persistent_words(const std::string& name, const CoreRangeSet& cores, uint32_t words);
+    // Where the persistent words sit (for the L1_SMALL footprint): one entry a persistent_words name.
+    struct WordsSlot {
+        std::string name;
+        CoreRangeSet cores;
+        uint32_t bytes = 0;    // a core
+        uint32_t address = 0;  // the slot's (= the tensor's buffer) address
+        bool packed = false;   // in the slab (else its own tensor)
+    };
+    std::vector<WordsSlot> words_layout() const;
+    // The slab: address, capacity a core, bytes used (the highest slot end); nullopt before the first packed slot.
+    struct WordsSlab {
+        uint32_t address = 0;
+        uint32_t capacity = 0;
+        uint32_t used = 0;
+    };
+    std::optional<WordsSlab> words_slab() const;
     // A global semaphore on `cores` (persistent_buffer_type()), created at initial_value. Pass its address as a
     // hash-excluded attribute and patch it in override_runtime_arguments.
     const GlobalSemaphore& global_semaphore(
@@ -159,6 +181,9 @@ private:
         const MoEDtypes& dtypes);
     void check_not_frozen(const std::string& name) const;
     void check_alive() const;
+    bool packs_words() const;
+    // A free offset in the slab for `bytes` on every core of `cores` (creating the slab at first use), nullopt if none.
+    std::optional<uint32_t> place_words(const std::vector<tt::tt_metal::CoreCoord>& cores, uint32_t bytes);
 
     tt::tt_metal::distributed::MeshDevice* mesh_device_;
     MoEModelDims dims_;
@@ -179,6 +204,12 @@ private:
     std::optional<Tensor> packed_pool_;
     std::map<std::string, uint32_t> packed_slots_;
     std::map<std::string, std::any> plans_;
+    // persistent_words: every name's placement; the slab and each core's occupied [offset, end) ranges in it
+    std::map<std::string, WordsSlot> words_;
+    std::optional<Tensor> words_slab_;
+    uint32_t words_slab_capacity_ = 0;
+    uint32_t words_slab_used_ = 0;
+    std::map<tt::tt_metal::CoreCoord, std::vector<std::pair<uint32_t, uint32_t>>> words_slab_taken_;
     std::map<std::string, std::shared_ptr<void>> attachments_;
 };
 

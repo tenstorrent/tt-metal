@@ -127,6 +127,10 @@ struct MoEBlockConfig {
 
     // Machine-side switches (env reads in the reference)
     bool persist_l1_small = false;  // PERSIST_L1=small: persistent words + packed semaphores in L1_SMALL
+    // With persist_l1_small: the persistent words (MoEBlockResources::persistent_words) packed into one L1_SMALL slab of
+    // at most this many bytes a core, word sets on disjoint cores sharing bytes (0: one L1_SMALL tensor a word set,
+    // each reserving its bytes on every core). A set that no longer fits gets its own tensor (logged).
+    uint32_t words_slab_bytes = 2048;
     CombineTuning combine_tuning;
 
     // PERSIST_L1 hand-off stride (persist_l1.handoff_bytes): 4 B in L1_SMALL, else 16 B.
