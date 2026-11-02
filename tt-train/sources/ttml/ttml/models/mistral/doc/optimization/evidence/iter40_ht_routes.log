@@ -1,0 +1,6 @@
+=== w2 LoRA h^T routes (operands swapped, whole slice per row) 2026-11-02T14:53:02Z
+ttnn a_wide [32, I+64] @ x^T (step)          median     87 us  min     87  max|diff| vs fp64 2.22e-02 (rel 3.1e-03)
+skinny_matmul x_transposed, transpose_out    median     83 us  min     82  max|diff| vs fp64 2.55e-02 (rel 3.6e-03)
+  + tail rows written in place               median     83 us  min     82  max|diff| vs fp64 2.55e-02 (rel 3.6e-03)
+tail rows of the buffer after the in-place write: max|diff| vs fp64 2.55e-02, rows 16..31 max|.| 0.00e+00
+=== done 2026-11-02T14:53:06Z

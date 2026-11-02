@@ -11,7 +11,8 @@ namespace ttml::metal::ops::skinny_contract::device {
 
 struct SkinnyContractProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle reader_kernel_id{};  // the multicast sender core's reader
+        tt::tt_metal::KernelHandle reader_receiver_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
         std::vector<tt::tt_metal::CoreCoord> cores;
     };

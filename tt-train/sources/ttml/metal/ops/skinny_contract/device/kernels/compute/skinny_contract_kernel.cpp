@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// skinny_contract compute: per item the `cols` output tiles (0, n0 + j) = sum_t small_t[0, t] @ big[t, n0 + j]
-// accumulate in DEST regs 0..cols-1 (fp32, HiFi4), then * scale, transposed in DEST when TRANSPOSE_OUT, packed bf16.
+// skinny_contract compute: per chunk of up to `cols` adjacent columns of the core's range the output tiles
+// (0, c + j) = sum_t small_t[0, t] @ big[t, c + j] accumulate in DEST regs 0..cols-1 (fp32, HiFi4), then * scale,
+// transposed in DEST when TRANSPOSE_OUT, packed bf16.
 
 #include "api/compute/cb_api.h"
 #include "api/compute/common.h"
@@ -18,21 +19,20 @@
 constexpr uint32_t cb_small = 0;
 constexpr uint32_t cb_big = 1;
 constexpr uint32_t cb_out = 2;
-constexpr uint32_t work_count = get_compile_time_arg_val(0);
-constexpr uint32_t Kt = get_compile_time_arg_val(1);
-constexpr uint32_t Nt = get_compile_time_arg_val(2);
-constexpr uint32_t cols = get_compile_time_arg_val(3);
-constexpr uint32_t prefetch = get_compile_time_arg_val(5);  // K rows per reader batch
-constexpr uint32_t scale_bits = get_compile_time_arg_val(4);
+constexpr uint32_t Kt = get_compile_time_arg_val(0);
+constexpr uint32_t Nt = get_compile_time_arg_val(1);
+constexpr uint32_t cols = get_compile_time_arg_val(2);
+constexpr uint32_t scale_bits = get_compile_time_arg_val(3);
+constexpr uint32_t prefetch = get_compile_time_arg_val(4);  // K rows per reader batch
 constexpr uint32_t one_bits = 0x3F800000U;
 
 void kernel_main() {
     compute_kernel_hw_startup(cb_small, cb_big, cb_out);
+    const uint32_t n_begin = get_arg_val<uint32_t>(0);
+    const uint32_t n_count = get_arg_val<uint32_t>(1);
     cb_wait_front(cb_small, Kt);
-    const uint32_t work_start = get_arg_val<uint32_t>(0);
-    for (uint32_t item = 0; item < work_count; ++item) {
-        const uint32_t n0 = (work_start + item) * cols;
-        const uint32_t ncols = (n0 + cols <= Nt) ? cols : (Nt - n0);
+    for (uint32_t c = n_begin; c < n_begin + n_count; c += cols) {
+        const uint32_t ncols = (c + cols <= n_begin + n_count) ? cols : (n_begin + n_count - c);
         tile_regs_acquire();
 #ifdef BIG_TRANSPOSED
         constexpr uint32_t big_tr = 1;  // the big tiles arrive as (n, t): the unpacker transposes in1 for free
@@ -66,7 +66,7 @@ void kernel_main() {
         cb_reserve_back(cb_out, cols);
         tile_regs_wait();
         pack_reconfig_data_format(cb_out);
-        for (uint32_t j = 0; j < cols; ++j) {  // a shorter last item pads to a full block
+        for (uint32_t j = 0; j < cols; ++j) {  // a shorter chunk pads to a full block
             pack_tile(j < ncols ? j : 0, cb_out);
         }
         tile_regs_release();

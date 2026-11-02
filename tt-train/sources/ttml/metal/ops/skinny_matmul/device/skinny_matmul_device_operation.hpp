@@ -44,7 +44,8 @@ struct SkinnyGeometry {
     uint32_t Nt = 0;
     uint32_t n_logical = 0;
 };
-SkinnyGeometry skinny_geometry(const ttnn::Tensor& x, const ttnn::Tensor& w, bool transpose_b);
+SkinnyGeometry skinny_geometry(
+    const ttnn::Tensor& x, const ttnn::Tensor& w, bool transpose_b, bool x_transposed = false);
 
 }  // namespace ttml::metal::ops::skinny_matmul::device
 
@@ -54,7 +55,8 @@ ttnn::Tensor ttml_skinny_matmul_partial(
     const ttnn::Tensor& x,
     const ttnn::Tensor& w,
     const ttml::metal::ops::skinny_matmul::device::SkinnySplit& split,
-    bool transpose_b);
+    bool transpose_b,
+    bool x_transposed = false);
 
 ttnn::Tensor ttml_skinny_matmul_reduce(
     const ttnn::Tensor& x,
@@ -64,6 +66,8 @@ ttnn::Tensor ttml_skinny_matmul_reduce(
     bool transpose_b,
     const std::optional<ttnn::Tensor>& tail_out = std::nullopt,
     uint32_t tail_col = 0,
-    uint32_t tail_tiles = 0);
+    uint32_t tail_tiles = 0,
+    bool x_transposed = false,
+    bool transpose_out = false);
 
 }  // namespace ttnn::prim

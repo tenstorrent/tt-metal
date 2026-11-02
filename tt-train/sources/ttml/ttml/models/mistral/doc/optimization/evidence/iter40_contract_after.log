@@ -1,0 +1,9 @@
+=== skinny_contract after the multicast + column ranges (iteration 40), prefetch 8 2026-11-02T14:48:19Z
+as is              gate_up dB  op(h, g^T[16384,T], tr_out, big_tr)            median    101 us  min    101
+as is              w2 dA       op(s_dh^T, x^T[8256,T], big_tr, small_tr)      median     53 us  min     53
+as is              w2 dB       op(h^T, g^T[5120,T], tr_out, big_tr, small_tr) median     35 us  min     35
+=== prefetch 32 2026-11-02T14:48:20Z
+as is              gate_up dB  op(h, g^T[16384,T], tr_out, big_tr)            median    106 us  min    105
+as is              w2 dA       op(s_dh^T, x^T[8256,T], big_tr, small_tr)      median     57 us  min     56
+as is              w2 dB       op(h^T, g^T[5120,T], tr_out, big_tr, small_tr) median     38 us  min     38
+=== done 2026-11-02T14:48:23Z

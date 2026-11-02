@@ -108,12 +108,13 @@ SkinnyMatmulPartialProgramFactory::cached_program_t SkinnyMatmulPartialProgramFa
     auto* device = x.device();
     tt::tt_metal::Program program{};
 
-    const auto geo = skinny_geometry(x, tensor_args.w, args.transpose_b);
+    const auto geo = skinny_geometry(x, tensor_args.w, args.transpose_b, args.x_transposed);
     const uint32_t R = args.rows_per_item;
     const uint32_t S = args.num_slices;
     const uint32_t St = args.slice_tiles;
     const uint32_t groups = (geo.rows + R - 1U) / R;
-    const uint32_t block = std::min(kBlockTiles, St);
+    // x^T's tiles of one row sit a row stride apart (one DRAM page each): the whole slice in one batch per row
+    const uint32_t block = args.x_transposed ? St : std::min(kBlockTiles, St);
     const CoreSplit split = split_items(device, groups * S);
 
     const auto bf16 = tt::DataFormat::Float16_b;
@@ -128,6 +129,9 @@ SkinnyMatmulPartialProgramFactory::cached_program_t SkinnyMatmulPartialProgramFa
     std::map<std::string, std::string> defines;
     if (args.transpose_b) {
         defines["TRANSPOSE_B"] = "1";
+    }
+    if (args.x_transposed) {
+        defines["X_TRANSPOSED"] = "1";  // x tile (r, k) at page k * Kx + r (Kx = rows)
     }
 
     std::vector<uint32_t> reader_ct_args{geo.rows, geo.Kt, geo.Nt, R, S, St, block, geo.Kx};
@@ -185,7 +189,7 @@ SkinnyMatmulReduceProgramFactory::cached_program_t SkinnyMatmulReduceProgramFact
     auto* device = x.device();
     tt::tt_metal::Program program{};
 
-    const auto geo = skinny_geometry(x, tensor_args.w, args.transpose_b);
+    const auto geo = skinny_geometry(x, tensor_args.w, args.transpose_b, args.x_transposed);
     const uint32_t S = args.num_slices;
     const CoreSplit split = split_items(device, geo.rows * geo.Nt);
 
@@ -196,6 +200,12 @@ SkinnyMatmulReduceProgramFactory::cached_program_t SkinnyMatmulReduceProgramFact
     create_circular_buffer(program, split.all_cores, cb::zero, bf16, tt::tile_size(bf16), 1U);
 
     std::map<std::string, std::string> defines{{"REDUCE", "1"}};
+    if (args.transpose_out) {
+        defines["TRANSPOSE_OUT"] = "1";  // the summed tile transposed in DEST, written as tile (n, r)
+    }
+    if (args.x_transposed) {
+        defines["X_TRANSPOSED"] = "1";  // the partials are the transposed tiles already
+    }
 
     std::vector<uint32_t> reader_ct_args{geo.rows, geo.Kt, geo.Nt, args.rows_per_item, S, args.slice_tiles, 1U, geo.Kx};
     tt::tt_metal::TensorAccessorArgs(tensor_args.partials.buffer()).append_to(reader_ct_args);
@@ -203,6 +213,7 @@ SkinnyMatmulReduceProgramFactory::cached_program_t SkinnyMatmulReduceProgramFact
 
     const bool tail = tensor_args.tail_out.has_value();
     const uint32_t tail_stride = tail ? tensor_args.tail_out->padded_shape()[3] / tt::constants::TILE_WIDTH : 0U;
+    // (transposed output: the target's row stride in tiles, the tiles land in its rows tail_col ..)
     std::vector<uint32_t> writer_ct_args{
         geo.rows,
         geo.Kt,

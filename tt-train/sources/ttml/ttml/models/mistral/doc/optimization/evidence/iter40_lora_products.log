@@ -1,0 +1,13 @@
+=== the LoRA products of the transposed MLP interior, before / after (iteration 40) 2026-11-02T14:56:37Z
+product                              route                                              median us   max|diff| vs fp64 (rel)
+h^T  [32, I+64] @ x^T                ttnn + write_tile_block (39)                           88      2.22e-02 (3.1e-03)
+h^T  [32, I+64] @ x^T                skinny_matmul x^T, tail rows in place                  83      2.55e-02 (3.6e-03)
+dA   s_dh^T [32, T] x x^T^T          ttnn transpose_b (39)                                 106      4.99e-01 (3.2e-03)
+dA   s_dh^T [32, T] x x^T^T          op big^T small^T                                       53      4.99e-01 (3.2e-03)
+dB w2  h^T x g^T [5120, T]           ttnn transpose_b + multiply + transpose (39)           73      1.07e-02 (3.7e-03)
+dB w2  h^T x g^T [5120, T]           op big^T small^T tr_out                                35      1.07e-02 (3.7e-03)
+dB gate_up  h x g^T [16384, T]       op big^T (39: items of 4 columns, every core reads the small operand) 123 (O/iter40_contract_attrib.log)
+dB gate_up  h x g^T [16384, T]       op big^T (40: multicast, column ranges)               101      1.11e-02 (3.7e-03)
+token-major out dB  N=5120: ttnn transposed-a + transpose 47 us; op (multicast) 36 us
+token-major qkv dB  N=1536: ttnn transposed-a + transpose 36 us; op (multicast) 17 us
+=== done 2026-11-02T14:56:41Z

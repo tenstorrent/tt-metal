@@ -876,11 +876,14 @@ void py_module(nb::module_& m) {
             nb::arg("tail_out") = nb::none(),
             nb::arg("tail_col") = 0,
             nb::arg("tail_tiles") = 0,
+            nb::arg("x_transposed") = false,
+            nb::arg("transpose_out") = false,
             "x [.., M, K'] @ W for a skinny W (N <= 64; w is [N, K] with transpose_b, else [K, N], K <= K': only x's "
             "first K columns enter) -> [.., M, N] bf16, K split over the cores (fp32 partials per K slice, then "
             "summed) instead of one core per output tile. HiFi4, fp32 accumulation. With tail_out (same rows as x) "
             "the output is also written in place at tile column tail_col of it, then zero tiles up to tail_tiles "
-            "columns (the fused LoRA h into the wide input buffer's tail).");
+            "columns (the fused LoRA h into the wide input buffer's tail). x_transposed: x is stored [1, 1, K', M]; "
+            "transpose_out: the output is [1, 1, N, M] and the tail target takes it in its tile rows tail_col ..");
         py_metal.def(
             "sdpa_kv_bw_reduce",
             [](const ttnn::Tensor& gk,

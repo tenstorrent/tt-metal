@@ -1,0 +1,14 @@
+=== skinny_contract attribution on the transposed operands (one process per variant) 2026-11-02T14:41:32Z
+as is              gate_up dB  op(h, g^T[16384,T], tr_out, big_tr)            median    123 us  min    122
+as is              w2 dA       op(s_dh^T, x^T[8256,T], big_tr, small_tr)      median     68 us  min     67
+as is              w2 dB       op(h^T, g^T[5120,T], tr_out, big_tr, small_tr) median     49 us  min     49
+ATTRIB_SKIP_SMALL  gate_up dB  op(h, g^T[16384,T], tr_out, big_tr)            median    105 us  min    105
+ATTRIB_SKIP_SMALL  w2 dA       op(s_dh^T, x^T[8256,T], big_tr, small_tr)      median     53 us  min     53
+ATTRIB_SKIP_SMALL  w2 dB       op(h^T, g^T[5120,T], tr_out, big_tr, small_tr) median     34 us  min     34
+ATTRIB_SKIP_BIG    gate_up dB  op(h, g^T[16384,T], tr_out, big_tr)            median     38 us  min     38
+ATTRIB_SKIP_BIG    w2 dA       op(s_dh^T, x^T[8256,T], big_tr, small_tr)      median     24 us  min     24
+ATTRIB_SKIP_BIG    w2 dB       op(h^T, g^T[5120,T], tr_out, big_tr, small_tr) median     22 us  min     22
+ATTRIB_SKIP_MATH   gate_up dB  op(h, g^T[16384,T], tr_out, big_tr)            median    120 us  min    120
+ATTRIB_SKIP_MATH   w2 dA       op(s_dh^T, x^T[8256,T], big_tr, small_tr)      median     66 us  min     66
+ATTRIB_SKIP_MATH   w2 dB       op(h^T, g^T[5120,T], tr_out, big_tr, small_tr) median     48 us  min     48
+=== done 2026-11-02T14:41:36Z

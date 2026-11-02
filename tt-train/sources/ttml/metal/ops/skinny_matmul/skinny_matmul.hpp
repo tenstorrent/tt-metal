@@ -26,6 +26,10 @@ ttnn::Tensor skinny_matmul(
     bool transpose_b = false,
     const std::optional<ttnn::Tensor>& tail_out = std::nullopt,
     uint32_t tail_col = 0,
-    uint32_t tail_tiles = 0);
+    uint32_t tail_tiles = 0,
+    // iteration 40: x stored transposed ([1, 1, K', M]: the transposed wide LoRA buffer) and / or the output
+    // transposed ([1, 1, N, M]; the tail target then takes the tiles in its rows tail_col .. tail_col + tail_tiles)
+    bool x_transposed = false,
+    bool transpose_out = false);
 
 }  // namespace ttml::metal

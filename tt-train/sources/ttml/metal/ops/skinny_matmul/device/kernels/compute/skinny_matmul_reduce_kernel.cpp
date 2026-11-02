@@ -11,6 +11,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/skinny_matmul/device/kernels/skinny_matmul_cbs.hpp"
 
@@ -32,6 +33,10 @@ void kernel_main() {
             copy_tile(cb::partials, s, 1);
             add_binary_tile(0, 1, 0);
         }
+#if defined(TRANSPOSE_OUT) && !defined(X_TRANSPOSED)
+        transpose_dest_init</*is_32bit*/ true>(cb::partials);  // out tile (n, r) = (sum)^T, exact in fp32 DEST
+        transpose_dest</*is_32bit*/ true>(0);  // (a transposed x's partials are the transposed tiles already)
+#endif
         tile_regs_commit();
         pack_and_push(0, cb::out);
         cb_pop_front(cb::partials, S);

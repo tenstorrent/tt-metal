@@ -54,7 +54,11 @@ tensor_return_value_t SkinnyContractDeviceOperation::create_output_tensors(
 ttsl::hash::hash_t SkinnyContractDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<SkinnyContractDeviceOperation>(
-        args.scale, args.transpose_out, tensor_args.small_t.logical_shape(), tensor_args.big.logical_shape());
+        args.scale,
+        args.transpose_out,
+        args.big_transposed,
+        tensor_args.small_t.logical_shape(),
+        tensor_args.big.logical_shape());
 }
 
 }  // namespace ttml::metal::ops::skinny_contract::device

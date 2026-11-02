@@ -86,7 +86,11 @@ void kernel_main() {
                 cb_reserve_back(cb::x, block);
                 uint32_t l1 = get_write_ptr(cb::x);
                 for (uint32_t j = 0; j < n; ++j) {
+#ifdef X_TRANSPOSED
+                    noc_async_read_page((k0 + k + j) * Kx + r, in0_acc, l1);  // x^T [K', M]: tile (r, k) at k * Mt + r
+#else
                     noc_async_read_page(r * Kx + k0 + k + j, in0_acc, l1);
+#endif
                     l1 += tile_bytes;
                 }
                 noc_async_read_barrier();

@@ -1,0 +1,24 @@
+chip-0 kernel ms per profiled 4-layer step, iteration 39 -> 40 (O/iter39_tp_ranked_ops_full.txt vs O/iter40_tp_ranked_ops_full.txt)
+total 42.995 -> 42.895 (-0.100); collectives 5.744 -> 6.100 (+0.356); kernels without collectives 37.251 -> 36.795 (-0.456)
+    2.284 ->   2.857 (+0.573)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    0.360 ->   0.000 (-0.360)  Matmul | 1x1x32x1024 | 1x1x8256x1024 | 88
+    0.339 ->   0.000 (-0.339)  Matmul | 1x1x32x8256 | 1x1x8256x1024 | 33
+    1.062 ->   0.749 (-0.313)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    0.000 ->   0.286 (+0.286)  SkinnyMatmulPartial | 1x1x8256x1024 | 1x1x32[16]x8192 | 104
+    0.230 ->   0.000 (-0.230)  Matmul | 1x1x32x1024 | 1x1x5120x1024 | 88
+    0.000 ->   0.204 (+0.204)  SkinnyContract | 1x1x32x1024 | 1x1x8256x1024 | 110
+    0.000 ->   0.138 (+0.138)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x5120 | 110
+    0.000 ->   0.133 (+0.133)  SkinnyContract | 1x1x32[16]x1024 | 1x1x5120x1024 | 110
+    0.355 ->   0.236 (-0.119)  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+    0.111 ->   0.205 (+0.094)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.474 ->   0.383 (-0.091)  SkinnyContract | 1x1x32[16]x1024 | 1x1x16384x1024 | 110
+    0.089 ->   0.000 (-0.089)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x1536 | 48
+    0.000 ->   0.065 (+0.065)  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x1536 | 110
+    0.000 ->   0.035 (+0.035)  SkinnyMatmulReduce | 1x1x8256x1024 | 1x1x32[16]x8192 | 32
+    0.102 ->   0.070 (-0.032)  BinaryNg | 1x1x32[16]x16384 |  | 110
+    0.487 ->   0.461 (-0.026)  AllGatherAsync | 1x1x5120x256 |  | 20
+    1.544 ->   1.569 (+0.025)  AllGatherAsync | 1x1x1024x1280 |  | 20
+    0.023 ->   0.000 (-0.023)  FillPad | 1x1x32[16]x8192 |  | 110
+    0.046 ->   0.059 (+0.013)  ReduceScatterMinimalAsync | 1x1x5120x128 |  | 12
+    0.011 ->   0.000 (-0.011)  PadCodegen | 1x1x32[16]x8192 |  | 110
+    0.010 ->   0.000 (-0.010)  Transpose | 1x1x32[16]x5120 |  | 110

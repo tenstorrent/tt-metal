@@ -31,8 +31,16 @@ constexpr uint32_t transpose_w = 0;
 #endif
 
 void kernel_main() {
+#ifdef X_TRANSPOSED
+    // x^T's tiles are the transposes of x's: they can only be the matmul's in1, so the roles swap (iteration 40):
+    // DEST[col] += w(col, k) @ x^T(k, r) with w's raw [N, K] tiles (transpose_b) as in0 gives the partial of the
+    // TRANSPOSED output tile (col, r) directly; no unpacker transpose anywhere.
+    compute_kernel_hw_startup(cb::w, cb::x, cb::partial_out);
+    matmul_init(cb::w, cb::x, 0);
+#else
     compute_kernel_hw_startup(cb::x, cb::w, cb::partial_out);
     matmul_init(cb::x, cb::w, transpose_w);  // the transpose flag is how ttnn's matmul reads a transposed B
+#endif
 
     for (uint32_t item = 0; item < work_count; ++item) {
         const uint32_t work_start = get_arg_val<uint32_t>(0);
@@ -54,7 +62,11 @@ void kernel_main() {
                 cb_wait_front(cb::x, block);
                 for (uint32_t j = 0; j < n; ++j) {
                     for (uint32_t col = 0; col < Nt; ++col) {
+#ifdef X_TRANSPOSED
+                        matmul_tiles(cb::w, cb::x, (k + j) * Nt + col, j, col);
+#else
                         matmul_tiles(cb::x, cb::w, j, (k + j) * Nt + col, col);
+#endif
                     }
                 }
                 cb_pop_front(cb::x, block);

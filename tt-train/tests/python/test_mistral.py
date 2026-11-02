@@ -366,6 +366,33 @@ def test_skinny_matmul_matches_torch(k, batches, n_cols, transpose_b):
     rep.done()
 
 
+@pytest.mark.parametrize("n_cols", [16, 32], ids=["rank 16", "rank 32"])
+def test_skinny_matmul_on_the_transposed_wide_buffer(n_cols):
+    """Iteration 40: ``skinny_matmul(x_transposed, transpose_out)``: x stored ``[K + 64, T]`` (the transposed wide
+    LoRA buffer, the tail rows zero), w ``[N, K]``; the K-split op streams x^T's tiles as the matmul's second operand
+    and gives h^T ``[N, T]`` directly, written in place into the buffer's tail rows (``tail_out``). Against torch
+    fp64; the tail rows of the buffer and the padded rows past N checked."""
+    rng = seeded(40)
+    k = 8192
+    x_t_np = bf16(rng.normal(0.0, 1.0, (1, 1, k + 64, SEQ)))
+    x_t_np[:, :, k:, :] = 0.0
+    w_np = bf16(rng.normal(0.0, 0.05, (1, 1, n_cols, k)))
+    x_t = to_device(x_t_np)
+    out = ttml.ops.metal.skinny_matmul(
+        x_t.get_value(), to_device(w_np).get_value(), True, x_t.get_value(), k // 32, 1, True, True
+    )
+    out_np = to_host(out)
+    assert out_np.shape == (1, 1, n_cols, SEQ)
+    ref = (t(w_np[0, 0]) @ t(x_t_np[0, 0, :k, :])).numpy()
+    rep = Report(f"skinny_matmul on x^T [K + 64, T], N={n_cols}, tail rows written")
+    rep.check("out", out_np[0, 0], ref, 0.9999, 1e-2)
+    buf = to_host(x_t)
+    rep.check("tail rows of the buffer", buf[0, 0, k : k + n_cols, :], ref, 0.9999, 1e-2)
+    rep.done()
+    assert np.all(buf[0, 0, k + n_cols : k + 32, :] == 0.0), "the padded rows past N are not zero"
+    assert np.array_equal(buf[0, 0, :k, :], x_t_np[0, 0, :k, :]), "the product's rows were touched"
+
+
 @pytest.mark.parametrize(
     "n_cols, scale, transpose_b, images",
     [(5120, 1.0, False, 1), (1536, 2.0, True, 1), (1024, 0.5, True, 2)],
@@ -436,25 +463,49 @@ def test_vp_cross_entropy_bw_matches_numpy(vocab, g, scale):
 
 
 @pytest.mark.parametrize(
-    "n_cols, scale, transpose_out",
-    # 1536: the routed qkv dB shape (48 cores); 7072: Nt = 221 = 73 x 3 + 2, a short last column group (the padding path)
-    [(16384, 2.0, True), (5120, 1.0, False), (1024, 0.5, True), (1536, 0.5, True), (7072, 1.0, True)],
-    ids=["dB-gate_up", "dA-in5120", "dB-out-scaled", "dB-qkv-routed", "dB-short-last-group"],
+    "big_transposed, small_transposed",
+    [(False, False), (True, False), (True, True)],
+    ids=["token-major", "big^T", "big^T, small^T"],
 )
-def test_skinny_contract_matches_torch(n_cols, scale, transpose_out):
-    """`scale * small^T @ big` over the token dimension (rank 16) in one op against torch fp64 on bf16 inputs."""
+@pytest.mark.parametrize(
+    "n_cols, scale, transpose_out",
+    # 1536: the routed qkv dB shape; 7072: Nt = 221, the short last chunk of a core's column range (the padding
+    # path); 16384: 512 column tiles over 110 cores (4 or 5 per core, iteration 40); 8256: the w2 dA shape
+    [
+        (16384, 2.0, True),
+        (5120, 1.0, False),
+        (1024, 0.5, True),
+        (1536, 0.5, True),
+        (7072, 1.0, True),
+        (8256, 1.0, False),
+    ],
+    ids=["dB-gate_up", "dA-in5120", "dB-out-scaled", "dB-qkv-routed", "dB-short-last-group", "dA-w2-wide"],
+)
+def test_skinny_contract_matches_torch(n_cols, scale, transpose_out, big_transposed, small_transposed):
+    """`scale * small^T @ big` over the token dimension (rank 16) in one op against torch fp64 on bf16 inputs; the
+    small operand multicast from one core (iteration 40) and every core on a contiguous column range; the
+    transposed operands of iterations 38-40 (big stored [N, T], small stored [r, T])."""
     rng = seeded(18)
     small_np = bf16(rng.normal(0, 1, (1, 1, SEQ, 16)))
     big_np = bf16(rng.normal(0, 1, (1, 1, SEQ, n_cols)))
+    small_in = np.ascontiguousarray(np.swapaxes(small_np, -1, -2)) if small_transposed else small_np
+    big_in = np.ascontiguousarray(np.swapaxes(big_np, -1, -2)) if big_transposed else big_np
     got = to_host(
         ttml.ops.metal.skinny_contract(
-            to_device(small_np).get_value(), to_device(big_np).get_value(), scale, transpose_out
+            to_device(small_in).get_value(),
+            to_device(big_in).get_value(),
+            scale,
+            transpose_out,
+            big_transposed=big_transposed,
+            small_transposed=small_transposed,
         )
     )
     ref = scale * (t(small_np).transpose(-1, -2) @ t(big_np))
     if transpose_out:
         ref = ref.transpose(-1, -2)
-    rep = Report(f"skinny_contract N={n_cols} scale={scale} transpose_out={transpose_out}")
+    rep = Report(
+        f"skinny_contract N={n_cols} scale={scale} transpose_out={transpose_out} big^T={big_transposed} small^T={small_transposed}"
+    )
     rep.check("out", got, ref.numpy(), 0.9999, 1e-2)
     rep.done()
 

@@ -60,6 +60,11 @@ struct Params {
     // buffer's tail (iteration 24).
     uint32_t tail_col = 0;
     uint32_t tail_tiles = 0;
+    // iteration 40: x stored transposed ([1, 1, K', M], its tile (m, k) at page k * Mt + m: the transposed wide
+    // LoRA buffer), and the output transposed ([1, 1, N, M]; with a tail target the tiles go to the tile ROWS
+    // tail_col .. of it, the zero tiles to the rows up to tail_col + tail_tiles)
+    bool x_transposed = false;
+    bool transpose_out = false;
 };
 
 struct PartialInputs {

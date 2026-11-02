@@ -138,12 +138,19 @@ class FusedLoraLinearT(Function):
             and skinny_matmul_fits(in_features, rank, a_val)
         )
         if wide_t:
-            # h^T [32, T] = A_wide @ x_cat^T: A zero-padded to 32 rows and to the buffer's K (the tail rows are zero,
-            # so the extra columns contribute nothing), written into the tail rows of the buffer.
-            a_wide = ttnn.pad(a_val, padding=[(0, 0), (0, 0), (0, 32 - rank), (0, TAIL_ROWS)], value=0.0)
-            h = ttnn.matmul(a_wide, x_val, compute_kernel_config=cfg, core_grid=full_core_grid())  # [1, 1, 32, T]
-            ttnn.deallocate(a_wide)
-            ttml.ops.metal.write_tile_block(x_val, h, in_features // 32, 0)
+            # h^T [rank, T] = A @ x^T (iteration 40: the K-split op streams the transposed buffer's tiles as the
+            # matmul's second operand and writes h^T straight into the buffer's tail rows; was a zero-padded A on
+            # ttnn's 33-core matmul plus a tile-block write).
+            h = skinny_matmul(
+                x_val,
+                a_val,
+                transpose_b=True,
+                tail_out=x_val,
+                tail_col=in_features // 32,
+                tail_tiles=1,
+                x_transposed=True,
+                transpose_out=True,
+            )
             x_cat = x_val
         elif wide:
             h = skinny_matmul(
@@ -214,26 +221,15 @@ class FusedLoraLinearT(Function):
                 s_dh_t = ttnn.multiply(s_dh_t, dh_scale)
             if reduce_axis is not None:
                 s_dh_t = ttml.core.distributed.all_reduce(s_dh_t, reduce_axis)
-            # dA = (s dh)^T x -> [32, in + TAIL] (the padded rows / tail columns dropped) and dB^T = h^T g -> [32, out]
-            # through ttnn's free in1 transpose (the all-core op's transposed-big mode is no faster at these shapes,
-            # `O/iter38_contract_check.log`).
-            da_wide = ttnn.matmul(
-                s_dh_t, x_val, transpose_b=True, compute_kernel_config=cfg, core_grid=full_core_grid()
-            )
+            # dA = (s dh)^T x -> [32, in + TAIL] (the padded rows / tail columns dropped) and dB = s g^T h -> [out, rank]
+            # on the all-core op's transposed modes (iteration 40: the small operand multicast, every core on a
+            # contiguous column range: faster than ttnn's transpose_b routes, `O/iter40_lora_products.log`).
+            da_wide = skinny_contract(s_dh_t, x_val, big_transposed=True, small_transposed=True)
             grad_a = ttnn.slice(da_wide, [0, 0, 0, 0], [1, 1, rank, in_features], [1, 1, 1, 1])
             ttnn.deallocate(da_wide)
-            if transposed_out:
-                db_t = ttnn.matmul(
-                    h, grad_output, transpose_b=True, compute_kernel_config=cfg, core_grid=full_core_grid()
-                )
-            else:
-                db_t = ttnn.matmul(h, grad_output, compute_kernel_config=cfg, core_grid=full_core_grid())
-            if scaling != 1.0:
-                db_t = ttnn.multiply(db_t, scaling)
-            db_full = ttnn.transpose(db_t, -2, -1)  # [out, 32]
-            ttnn.deallocate(db_t)
-            grad_b = ttnn.slice(db_full, [0, 0, 0, 0], [1, 1, out_features, rank], [1, 1, 1, 1])
-            ttnn.deallocate(db_full)
+            grad_b = skinny_contract(
+                h, grad_output, scaling, transpose_out=True, big_transposed=transposed_out, small_transposed=True
+            )
             ttnn.deallocate(s_dh_t)
             ctx.lowrank_sink._lowrank_grad = (a_val, dh_scale)
             return dcat_t, None, grad_a, grad_b

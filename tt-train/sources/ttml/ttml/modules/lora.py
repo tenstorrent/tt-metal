@@ -31,7 +31,9 @@ def lora_matmul_config():
 # the cores instead (iteration 10); below this K the two are equal within dispatch noise.
 SKINNY_MIN_K = 2048
 SKINNY_CONTRACT_MAX_N = (
-    4096  # skinny_contract beats ttnn's [r, N] product + transpose only for narrow dB (iteration 18)
+    8192  # skinny_contract (its small operand multicast, iteration 40) beats ttnn's [r, N] product + transpose up to
+    # the out-projection's N = 5120 (36 vs 47 us; qkv 17 vs 36, `O/iter40_lora_products.log`); iteration 18's limit
+    # was 4096 (the gate_up dB, N = 16384, now runs on the op's transposed mode anyway)
 )
 
 
@@ -65,11 +67,10 @@ def skinny_contract(small, big, scale=1.0, transpose_out=False, big_transposed=F
     r, T = (small.shape[-2], small.shape[-1]) if small_transposed else (small.shape[-1], small.shape[-2])
     N = big.shape[-2] if big_transposed else big.shape[-1]
     cfg = lora_matmul_config()
-    if big_transposed:
+    if big_transposed or small_transposed:  # the op's native operands (iteration 40: faster than ttnn's routes)
         return ttml.ops.metal.skinny_contract(
-            small, big, scale, transpose_out, big_transposed=True, small_transposed=small_transposed
+            small, big, scale, transpose_out, big_transposed=big_transposed, small_transposed=small_transposed
         )
-    assert not small_transposed, "a transposed small operand is only routed with a transposed big one"
     if (
         transpose_out
         and N < SKINNY_CONTRACT_MAX_N
@@ -93,17 +94,24 @@ def skinny_matmul_fits(k, n, b):
     return n <= 64 and k >= SKINNY_MIN_K and k % 32 == 0 and b.shape[0] == 1 and b.shape[1] == 1
 
 
-def skinny_matmul(a, b, transpose_b=False, tail_out=None, tail_col=0, tail_tiles=0):
+def skinny_matmul(
+    a, b, transpose_b=False, tail_out=None, tail_col=0, tail_tiles=0, x_transposed=False, transpose_out=False
+):
     """``a @ (b^T if transpose_b else b)`` (HiFi4, fp32 accumulation) for a rank-wide ``b``: the K-split op when it
     pays, ttnn's matmul otherwise. ``a`` may be wider than ``b``'s K (only its first K columns enter). With
     ``tail_out`` the op also writes the product into tile column ``tail_col`` of that tensor in place, followed by
     zero tiles up to ``tail_tiles`` columns (iteration 24: the LoRA ``h`` into the wide input buffer's tail); the
-    caller checks :func:`skinny_matmul_fits` first."""
+    caller checks :func:`skinny_matmul_fits` first. ``x_transposed`` (iteration 40): ``a`` is stored ``[K', M]``
+    (the transposed wide buffer) and the result comes out transposed (``[N, M]``, the tail rows of ``tail_out``)."""
     k = b.shape[-1] if transpose_b else b.shape[-2]
     n = b.shape[-2] if transpose_b else b.shape[-1]
     if skinny_matmul_fits(k, n, b):
-        return ttml.ops.metal.skinny_matmul(a, b, transpose_b, tail_out, tail_col, tail_tiles)
-    assert tail_out is None, "skinny_matmul: the tail write needs the K-split op (skinny_matmul_fits)"
+        return ttml.ops.metal.skinny_matmul(
+            a, b, transpose_b, tail_out, tail_col, tail_tiles, x_transposed, transpose_out or x_transposed
+        )
+    assert (
+        tail_out is None and not x_transposed
+    ), "skinny_matmul: the tail write / transposed buffer need the K-split op"
     return ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=lora_matmul_config())
 
 
