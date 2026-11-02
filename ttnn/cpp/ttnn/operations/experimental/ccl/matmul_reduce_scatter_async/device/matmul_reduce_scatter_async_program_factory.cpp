@@ -165,9 +165,10 @@ void MatmulReduceScatterAsyncMeshWorkloadFactory::override_runtime_arguments(
 
     // The caller-owned GlobalSemaphores.
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        apply_ring_reduce_scatter_semaphore_args(
+        apply_reduce_scatter_semaphore_args(
             program,
             kReduceScatterKernels,
+            ttnn::ccl::Topology::Ring,
             args.reduce_scatter_params.barrier_semaphore,
             args.reduce_scatter_params.semaphore);
     }

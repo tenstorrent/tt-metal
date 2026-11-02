@@ -4,8 +4,12 @@
 
 #pragma once
 
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "reduce_scatter_minimal_async_op_device_operation_types.hpp"
+#include "reduce_scatter_minimal_async_descriptor_adapter.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 #include <tt-metalium/core_coord.hpp>
@@ -14,22 +18,28 @@
 
 namespace ttnn::experimental::prim {
 
-// Use ReduceScatterProgramArtifacts as the shared variables type for consistency
-using LineReduceScatterSharedVariables = ReduceScatterProgramArtifacts;
+// One ProgramDescriptor per mesh coordinate (line index, neighbours and fabric connections are per device).
+struct LineReduceScatterProgramFactory {
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        const ReduceScatterMinimalAsyncParams& operation_attributes,
+        const ReduceScatterMinimalAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+};
 
+// The caller-owned GlobalSemaphores are not part of the program hash (see ReduceScatterMinimalAsyncParams), so
+// override_runtime_arguments re-applies them on every cache hit. It re-writes the whole common-args block by role,
+// tensors included: the input or the output may alias the persistent intermediate on the call that built the
+// program, and the bindings resolved on that call cannot tell them apart.
 struct LineReduceScatterMeshWorkloadFactory {
-    using shared_variables_t = LineReduceScatterSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+    using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
+        detail::ReduceScatterMinimalAsyncDescriptorAdapterOperation>::
+        DescriptorMeshWorkloadAdapter<LineReduceScatterProgramFactory>;
+    using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
 
     static cached_mesh_workload_t create_mesh_workload(
         const ReduceScatterMinimalAsyncParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const ReduceScatterMinimalAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const ReduceScatterMinimalAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
         const ReduceScatterMinimalAsyncInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
 
@@ -40,39 +50,15 @@ struct LineReduceScatterMeshWorkloadFactory {
         std::vector<Tensor>& tensor_return_value);
 };
 
-// Builder function for line topology - creates program artifacts
-ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
-    tt::tt_metal::Program& program,
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<LineReduceScatterMeshWorkloadFactory>);
+
+ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
     // Unused by Line (the contiguous penult intermediate path is Ring-only); present only so this builder shares
-    // a call signature with build_ring_reduce_scatter_minimal_async_program_artifacts, which lets
+    // a call signature with build_ring_reduce_scatter_minimal_async_program_descriptor, which lets
     // callers pick between them via a single function-pointer/ternary.
-    const std::optional<Tensor>& penult_intermediate_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_direction_opt,
-    std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
-
-void build_line_reduce_scatter_minimal_async_program_artifacts(
-    tt::tt_metal::ProgramDescriptor& program,
-    const Tensor& input_tensor,
-    const Tensor& intermediate_tensor,
     const std::optional<Tensor>& penult_intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
