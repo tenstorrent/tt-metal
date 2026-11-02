@@ -241,6 +241,7 @@ def kv_cache_pcc_check(
 
     cfg = pipeline.config
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+    from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import is_tp_deduped_kv_cache, striped_cache_to_host
 
     assert not resolve_has_indexer(pipeline.hf_config), (
@@ -299,12 +300,8 @@ def kv_cache_pcc_check(
         if kv_dedup:
             # [slots, 1, seq_len_cache, row] in linear chip order
             return striped_cache_to_host(tensor, mesh_device, cfg.sp_axis).unsqueeze(1)
-        # Sequence (SP axis) onto dim 2, TP onto dim 1, whichever mesh axis SP is on.
-        composer = ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=(2, 1) if cfg.sp_axis == 0 else (1, 2), mesh_shape=mesh_device.shape
-        )
-        # TP-replicated: any one column is a full replica.
-        return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
+        # TP-replicated: the SP shards concatenate on the sequence dim and only one TP replica is read back.
+        return ttnn.to_torch(tensor, mesh_composer=get_sp_mesh_composer(mesh_device, cfg.sp_axis, concat_dim=2))
 
     cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 
