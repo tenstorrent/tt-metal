@@ -732,16 +732,20 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         });
     }
 
-    // Legacy set UnpackToDestFp32 on the input and temporary buffers under preserve_fp32_precision and
-    // left them at Default otherwise. Metal 2.0 additionally requires an explicit entry for a consumed
-    // Float32 buffer under a 32-bit Dest, where legacy silently defaulted; Default is UnpackToSrc.
+    // Preserve Float32 input precision and every buffer a bitcast interprets as Float32. Bitcast formats
+    // its input buffer as the output dtype, so for the supported pairs UINT32 -> FLOAT32 and INT32 -> FLOAT32
+    // that buffer must carry all 32 bits of each word. ttnn::bitcast does not check widths, so unsupported
+    // pairs such as BFLOAT16 -> FLOAT32 also reach this branch; they remain unsupported.
+    // Any other Float32 buffer under a 32-bit Dest keeps the explicit UnpackToSrc mode Metal 2.0 requires.
     //
     // UnpackToDest also requires fp32_dest_acc_en since the validator rejects UnpackToDest into a
     // 16-bit Dest. ttnn::unary already implies one from the other. A caller that breaks that gets
     // legacy's silent UnpackToSrc instead of a TT_FATAL.
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     auto set_unpack_mode = [&](const DFBSpecName& dfb, DataFormat df) {
-        if (operation_attributes.preserve_fp32_precision && operation_attributes.fp32_dest_acc_en) {
+        const bool bitcast_to_float32 = ops_chain[0].type() == unary::UnaryOpType::BITCAST && df == DataFormat::Float32;
+        if (operation_attributes.fp32_dest_acc_en &&
+            (operation_attributes.preserve_fp32_precision || bitcast_to_float32)) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToDest);
         } else if (operation_attributes.fp32_dest_acc_en && df == DataFormat::Float32) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToSrc);
