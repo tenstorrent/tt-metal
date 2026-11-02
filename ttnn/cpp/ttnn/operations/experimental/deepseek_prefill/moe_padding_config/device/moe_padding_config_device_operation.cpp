@@ -53,7 +53,7 @@ void validate_runtime_args(
     // Output: what the consumers (moe_grouped_topk / dispatch) require of padding_config, asserted
     // here so a malformed buffer fails with a clear message instead of a bad on-device read.
     TT_FATAL(config.storage_type() == StorageType::DEVICE, "config must be on device");
-    TT_FATAL(config.buffer() != nullptr, "config must be allocated");
+    TT_FATAL(config.is_allocated(), "config must be allocated");
     TT_FATAL(config.dtype() == DataType::UINT32, "config must be UINT32");
     TT_FATAL(config.layout() == Layout::ROW_MAJOR, "config must be ROW_MAJOR");
     TT_FATAL(
@@ -65,7 +65,7 @@ void validate_runtime_args(
     // Structural properties the kernel assumes of each metadata tensor.
     auto validate_meta = [&config](const Tensor& meta, const char* name) {
         TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
-        TT_FATAL(meta.buffer() != nullptr, "metadata tensor {} must be allocated", name);
+        TT_FATAL(meta.is_allocated(), "metadata tensor {} must be allocated", name);
         TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
         TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
         TT_FATAL(
@@ -80,6 +80,15 @@ void validate_runtime_args(
     };
     validate_meta(tensor_args.actual_start, "actual_start");
     validate_meta(tensor_args.actual_end, "actual_end");
+    // create_descriptor emits a single TensorAccessorArgs built from actual_start and the kernel uses it
+    // for both metadata reads, so a differing memory config on actual_end would resolve its address
+    // through the wrong bank table.
+    TT_FATAL(
+        tensor_args.actual_start.memory_config() == tensor_args.actual_end.memory_config(),
+        "moe_padding_config does not currently support actual_start and actual_end having different memory "
+        "configs, because one TensorAccessor serves both reads (got buffer types {} and {})",
+        tensor_args.actual_start.memory_config().buffer_type(),
+        tensor_args.actual_end.memory_config().buffer_type());
 }
 
 }  // namespace
@@ -124,7 +133,10 @@ ttsl::hash::hash_t MoePaddingConfigDeviceOperation::compute_program_hash(
         config.dtype(),
         config.layout(),
         config.memory_config(),
-        config.padded_shape());
+        config.padded_shape(),
+        // The metadata accessor is baked into the writer's compile-time args, so the bank table it
+        // selects cannot be refreshed on a cache hit; validate_runtime_args pins actual_end to match.
+        tensor_args.actual_start.memory_config());
 }
 
 tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory::create_descriptor(

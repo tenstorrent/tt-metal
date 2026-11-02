@@ -14,7 +14,7 @@
 
 namespace iscore = ttnn::operations::experimental::indexer_score;
 
-// Common dim args 0..8 (same in every kernel). chunk_start is NOT here -- it's a per-device RUNTIME arg,
+// Common dim args 0..9 (same in every kernel). chunk_start is NOT here -- it's a per-device RUNTIME arg,
 // so distinct values reuse one program.
 constexpr uint32_t num_heads = get_compile_time_arg_val(0);         // indexer heads
 constexpr uint32_t q_len_tiles = get_compile_time_arg_val(1);       // q chunk rows, in tiles
@@ -25,7 +25,8 @@ constexpr uint32_t k_tiles_per_unit = get_compile_time_arg_val(5);  // k tiles p
 constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);   // heads resident at once (head_group knob)
 constexpr uint32_t num_out_groups = get_compile_time_arg_val(7);    // output groups; score [B, num_out_groups, Sq, T]
 constexpr uint32_t block_tiles = get_compile_time_arg_val(8);       // block-max-pool width in k-tiles; 0 = no pooling
-constexpr uint32_t num_dim_args = 9;
+constexpr uint32_t key_compression_ratio = get_compile_time_arg_val(9);  // query tokens represented by one K row
+constexpr uint32_t num_dim_args = 10;
 
 // Heads summed per output plane. num_out_groups==1 sums all heads into one plane; >1 partitions into
 // num_out_groups groups of reduce_heads each, summed within a group (per-group planes).
@@ -50,8 +51,8 @@ constexpr uint32_t cb_pool_scratch = get_compile_time_arg_val(num_dim_args + isc
 // Dim args + CB indices are common to all kernels; per-kernel compile-time args start here.
 constexpr uint32_t num_common_ct_args = num_dim_args + iscore::num_cb_args;
 
-// Mask tile count, as a bare name for the kernels (defined in indexer_score_cb.hpp).
-constexpr uint32_t num_mask_tiles = iscore::num_mask_tiles;
+// One partial causal tile per compressed-key residue, followed by one all--inf tile.
+constexpr uint32_t num_mask_tiles = key_compression_ratio + 1;
 
 // True when heads don't all fit L1 resident, so they stream in groups.
 constexpr bool stream_heads = heads_per_group < num_heads;
@@ -80,7 +81,13 @@ inline uint32_t row_valid_prefix(
     uint32_t straddle_q_tile,
     uint32_t straddle_jump_tiles) {
     return iscore::valid_prefix_tiles(
-        q_row_abs, k_tile_start, k_tiles_in_unit, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+        q_row_abs,
+        k_tile_start,
+        k_tiles_in_unit,
+        chunk_start_tiles,
+        straddle_q_tile,
+        straddle_jump_tiles,
+        key_compression_ratio);
 }
 
 /** (group, band) cell cursor. group = absolute q-row-group index; band = absolute k-band index; the
@@ -106,5 +113,96 @@ struct WorkUnitSpan {
         const uint32_t start = k_tile_start();
         const uint32_t left = valid_k_len_tiles > start ? valid_k_len_tiles - start : 0;
         return left < k_tiles_per_unit ? left : k_tiles_per_unit;
+    }
+};
+
+/** One fused Ring Indexer work unit in shard-major physical order. Consecutive physical tiles stay within
+ *  one SP shard, so the local shard can run without a Fabric dependency and every remote unit has exactly
+ *  one readiness source. The block-cyclic inverse maps packed compute columns back to logical K positions.
+ *
+ *  KeyStripes may be finer than the physical SP sharding after a TP-inner gather. PhysicalSp remains the
+ *  ring size while KeyStripes == PhysicalSp * TP and KeyStripeChunk == ChunkLocal / TP. Keep both geometries:
+ *  using KeyStripes as the physical shard count shrinks tiles_per_shard, while using PhysicalSp for the
+ *  logical inverse loses the TP stripe ordering. */
+template <bool BlockCyclic, uint32_t KeyStripeChunk, uint32_t KeyStripes, uint32_t PhysicalSp>
+struct ShardMajorWorkUnitSpan {
+    uint32_t group = 0;
+    uint32_t physical_tile_start = 0;
+    uint32_t tiles_per_shard = 0;
+    uint32_t key_stripe_capacity = 0;
+    uint32_t valid_k_len_tiles = k_len_tiles;
+
+    void set(uint32_t g, uint32_t physical_start, uint32_t shard_tiles) {
+        group = g;
+        physical_tile_start = physical_start;
+        tiles_per_shard = shard_tiles;
+        if constexpr (BlockCyclic && KeyStripes != PhysicalSp) {
+            constexpr uint32_t key_stripe_split = KeyStripes / PhysicalSp;
+            key_stripe_capacity = tiles_per_shard / key_stripe_split;
+        }
+    }
+    void set_valid_k_len_tiles(uint32_t tiles) { valid_k_len_tiles = tiles; }
+
+    uint32_t q_tile_start() const { return group * q_tiles_per_unit; }
+    uint32_t shard() const { return physical_tile_start / tiles_per_shard; }
+    uint32_t shard_offset() const { return physical_tile_start - shard() * tiles_per_shard; }
+
+    uint32_t logical_tile(uint32_t col) const {
+        if constexpr (!BlockCyclic) {
+            return physical_tile_start + col;
+        } else if constexpr (KeyStripes == PhysicalSp) {
+            const uint32_t local = shard_offset() + col;
+            const uint32_t slab = local / KeyStripeChunk;
+            const uint32_t slab_offset = local - slab * KeyStripeChunk;
+            return (slab * PhysicalSp + shard()) * KeyStripeChunk + slab_offset;
+        } else {
+            constexpr uint32_t key_stripe_split = KeyStripes / PhysicalSp;
+            const uint32_t local = shard_offset() + col;
+            const uint32_t tp_stripe = local / key_stripe_capacity;
+            const uint32_t within_stripe = local - tp_stripe * key_stripe_capacity;
+            const uint32_t slab = within_stripe / KeyStripeChunk;
+            const uint32_t within_chunk = within_stripe - slab * KeyStripeChunk;
+            const uint32_t chunk_local = KeyStripeChunk * key_stripe_split;
+            return (slab * PhysicalSp + shard()) * chunk_local + tp_stripe * KeyStripeChunk + within_chunk;
+        }
+    }
+
+    uint32_t capacity_tiles() const {
+        const uint32_t shard_left = tiles_per_shard - shard_offset();
+        return shard_left < k_tiles_per_unit ? shard_left : k_tiles_per_unit;
+    }
+
+    bool valid(uint32_t col) const { return col < capacity_tiles() && logical_tile(col) < valid_k_len_tiles; }
+
+    // Preserve the packed-prefix fast path when logical positions are monotonic (contiguous or SP-only).
+    // TP-striped positions can reset at a stripe-capacity boundary; there, if any column is valid, read and
+    // compute the whole in-capacity physical unit. Compute masks and writer suppresses each invalid column.
+    // Entirely invalid units still return zero so all three kernels skip them together.
+    uint32_t k_tiles() const {
+        const uint32_t capacity = capacity_tiles();
+        if constexpr (!BlockCyclic) {
+            const uint32_t left = valid_k_len_tiles > physical_tile_start ? valid_k_len_tiles - physical_tile_start : 0;
+            return left < capacity ? left : capacity;
+        }
+        if constexpr (KeyStripes == PhysicalSp) {
+            uint32_t valid_prefix = 0;
+            while (valid_prefix < capacity && valid(valid_prefix)) {
+                ++valid_prefix;
+            }
+            return valid_prefix;
+        }
+        // Within one TP stripe logical positions increase monotonically. Only the first column of each
+        // stripe segment can make an otherwise-empty unit active, so avoid scanning every KC column in
+        // capacity-sized schedules whose runtime prefix is short (the common Galaxy prefill case).
+        uint32_t col = 0;
+        while (col < capacity) {
+            if (valid(col)) {
+                return capacity;
+            }
+            const uint32_t local = shard_offset() + col;
+            const uint32_t within_stripe = local % key_stripe_capacity;
+            col += key_stripe_capacity - within_stripe;
+        }
+        return 0;
     }
 };

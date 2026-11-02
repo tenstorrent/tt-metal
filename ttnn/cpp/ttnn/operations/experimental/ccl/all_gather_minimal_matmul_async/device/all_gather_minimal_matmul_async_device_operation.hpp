@@ -36,6 +36,8 @@ struct AllGatherMinimalMatmulAsyncOp {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -46,13 +48,13 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
-    const std::optional<float> scalar,
+    std::optional<float> scalar,
     const std::optional<ttnn::Tensor>& addcmul_input_tensor1,
     const std::optional<ttnn::Tensor>& addcmul_input_tensor2,
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const ttnn::ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
@@ -60,7 +62,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     uint32_t num_links,
     std::optional<uint32_t> cluster_axis,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const bool force_transpose,
+    bool force_transpose,
     uint32_t num_workers_per_link,
     uint32_t num_buffers_per_channel,
     int32_t chunks = 1,

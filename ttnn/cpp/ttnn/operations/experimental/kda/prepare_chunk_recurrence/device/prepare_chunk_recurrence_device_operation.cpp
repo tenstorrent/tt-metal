@@ -3,10 +3,17 @@
 
 #include "prepare_chunk_recurrence_device_operation.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
 
@@ -21,9 +28,9 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "prepare_chunk_recurrence";
-    const auto arch = tt::tt_metal::hal::get_arch();
-    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "{} is only supported on Blackhole, got {}", operation_name, arch);
     check_allocated_device_tensor(in.q, operation_name, "q");
+    const auto arch = in.q.device()->arch();
+    TT_FATAL(arch == tt::ARCH::BLACKHOLE, "{} is only supported on Blackhole, got {}", operation_name, arch);
     check_layout(in.q, Layout::TILE, operation_name, "q");
     check_dtype(in.q, DataType::BFLOAT16, operation_name, "q");
     check_interleaved(in.q, operation_name, "q");
@@ -41,7 +48,7 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     check_interleaved(in.g, operation_name, "g");
     check_allocated_device_tensor(in.beta, operation_name, "beta");
     check_layout(in.beta, Layout::TILE, operation_name, "beta");
-    check_dtype(in.beta, DataType::FLOAT32, operation_name, "beta");
+    check_dtype(in.beta, DataType::BFLOAT16, operation_name, "beta");
     check_interleaved(in.beta, operation_name, "beta");
     check_same_device(in.q, in.k, operation_name, "k");
     check_same_device(in.q, in.v, operation_name, "v");
@@ -49,6 +56,12 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     check_same_device(in.q, in.beta, operation_name, "beta");
     check_output_interleaved(attrs.output_mem_config, operation_name);
     check_compute_config(attrs.compute_kernel_config, operation_name);
+    // The FPU forms the q/k norm squares and the gate scale as exact BF16 products, which only HiFi4 guarantees.
+    TT_FATAL(
+        attrs.compute_kernel_config.math_fidelity == MathFidelity::HiFi4,
+        "{}: math_fidelity must be HiFi4, got {}",
+        operation_name,
+        attrs.compute_kernel_config.math_fidelity);
 
     const auto& q_shape = in.q.logical_shape();
     const auto& k_shape = in.k.logical_shape();
@@ -80,15 +93,43 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
             q_shape[1] == attrs.num_chunks * tt::constants::TILE_HEIGHT,
         "prepare_chunk_recurrence: flat input shapes must match operation attributes");
 
+    // Beta logits are num_heads columns, from a tile-aligned offset, of a token-major [1, num_chunks * 32, columns]
+    // tensor such as the fused input projection.
     TT_FATAL(
-        beta_shape.rank() == 4 && beta_shape[0] == attrs.num_heads && beta_shape[1] == attrs.num_chunks &&
-            beta_shape[2] == tt::constants::TILE_HEIGHT && beta_shape[3] == 1,
-        "prepare_chunk_recurrence: beta shape must be [num_heads, num_chunks, 32, 1]");
+        beta_shape.rank() == 3 && beta_shape[0] == 1 &&
+            beta_shape[1] == attrs.num_chunks * tt::constants::TILE_HEIGHT &&
+            beta_shape[2] >= uint64_t{attrs.beta_logits_column_offset} + attrs.num_heads &&
+            attrs.beta_logits_column_offset % tt::constants::TILE_WIDTH == 0,
+        "prepare_chunk_recurrence: beta logits must be token-major [1, num_chunks * 32, columns] with a "
+        "tile-aligned column offset and num_heads columns after it");
     constexpr uint32_t allowed_bf16_mask = 0x37;
     TT_FATAL(
         (attrs.output_bf16_mask & ~allowed_bf16_mask) == 0,
         "unsupported KDA prep BF16 mask 0x{:x}",
         attrs.output_bf16_mask);
+
+    // The batched inverse holds all of a core's work items at once, so the heads' chunks must spread over the cores
+    // thinly enough for the program's buffers to fit the L1 free per core.
+    const auto* mesh = in.q.device();
+    const auto distribution = kda_factory_detail::distribute_prep(
+        mesh->compute_with_storage_grid_size(),
+        attrs.num_heads * attrs.num_chunks,
+        std::numeric_limits<uint32_t>::max());
+    const uint32_t max_items = *std::max_element(distribution.wi_count.begin(), distribution.wi_count.end());
+    const uint64_t dfb_bytes = prepare_chunk_recurrence_l1_bytes(attrs, max_items);
+    const uint64_t l1_bytes =
+        mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    TT_FATAL(
+        dfb_bytes <= l1_bytes,
+        "{}: {} work items per core ({} heads x {} chunks) need {} bytes of L1, {} of them per item for the batched "
+        "inverse, only {} are available",
+        operation_name,
+        max_items,
+        attrs.num_heads,
+        attrs.num_chunks,
+        dfb_bytes,
+        prepare_chunk_recurrence_inverse_tiles_per_item * tt::tile_size(tt::DataFormat::Float32),
+        l1_bytes);
 }
 
 PrepareChunkRecurrenceOperation::spec_return_value_t PrepareChunkRecurrenceOperation::compute_output_specs(
@@ -121,6 +162,26 @@ PrepareChunkRecurrenceOperation::tensor_return_value_t PrepareChunkRecurrenceOpe
     return outputs;
 }
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<PrepareChunkRecurrenceOperation::tensor_return_value_t>
+PrepareChunkRecurrenceOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    constexpr double chunk = tt::constants::TILE_HEIGHT;
+    constexpr double inverse_flops = chunk * (chunk - 1.0) * (chunk + 1.0) / 3.0;
+    const double instances = static_cast<double>(attrs.num_heads) * attrs.num_chunks;
+    const double key_dim = attrs.key_dim;
+    const double value_dim = attrs.value_dim;
+    const KdaFpuWork work{
+        .fpu_matrix_flops = instances * (4.0 * chunk * chunk * key_dim + inverse_flops),
+        .fpu_multiply_ops = instances * (10.0 * chunk * key_dim + chunk * value_dim),
+        .fpu_add_ops = instances * (2.0 * chunk + (chunk - 1.0) * key_dim + chunk * key_dim + chunk * chunk),
+        .fpu_reduction_ops = instances * 2.0 * chunk * (key_dim - 1.0),
+    };
+    const std::array<const Tensor*, 5> inputs = {&in.q, &in.k, &in.v, &in.g, &in.beta};
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
+}
+
 std::vector<Tensor> prepare_chunk_recurrence(
     const Tensor& q,
     const Tensor& k,
@@ -130,7 +191,20 @@ std::vector<Tensor> prepare_chunk_recurrence(
     uint32_t num_heads,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    uint32_t output_bf16_mask) {
+    uint32_t output_bf16_mask,
+    const std::optional<Tensor>& actual_start,
+    const std::optional<Tensor>& actual_end,
+    uint32_t sequence_parallel_axis,
+    float gate_scale,
+    uint32_t beta_logits_column_offset) {
+    TT_FATAL(std::isfinite(gate_scale), "prepare_chunk_recurrence: gate_scale must be finite");
+    TT_FATAL(!actual_end || actual_start, "prepare_chunk_recurrence: actual_end requires actual_start");
+    if (actual_start) {
+        kda_factory_detail::check_actual_start(q, *actual_start, "prepare_chunk_recurrence");
+    }
+    if (actual_end) {
+        kda_factory_detail::check_actual_start(q, *actual_end, "prepare_chunk_recurrence");
+    }
     const auto& q_shape = q.logical_shape();
     const auto& v_shape = v.logical_shape();
     TT_FATAL(
@@ -148,14 +222,18 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const uint32_t value_dim = v_shape[2] / num_heads;
     return ttnn::device_operation::launch<PrepareChunkRecurrenceOperation>(
         PrepareChunkRecurrenceParams{
+            .sequence_parallel_axis = sequence_parallel_axis,
             .num_heads = num_heads,
             .num_chunks = num_chunks,
             .key_dim = key_dim,
             .value_dim = value_dim,
             .output_bf16_mask = output_bf16_mask,
+            .gate_scale = gate_scale,
+            .beta_logits_column_offset = beta_logits_column_offset,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
-        PrepareChunkRecurrenceInputs{.q = q, .k = k, .v = v, .g = g, .beta = beta});
+        PrepareChunkRecurrenceInputs{
+            .q = q, .k = k, .v = v, .g = g, .beta = beta, .actual_start = actual_start, .actual_end = actual_end});
 }
 
 }  // namespace ttnn::experimental::prim

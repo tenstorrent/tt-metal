@@ -28,7 +28,7 @@ void ReshapeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to reshape need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to reshape need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32,
         "Input tensor dtype must be BFLOAT16 or FLOAT32 but got {}",
@@ -46,6 +46,15 @@ void ReshapeDeviceOperation::validate_on_program_cache_miss(
         "Reshape does not currently support sharding. Use ttnn::reshape for reshaping sharded inputs");
 
     if (input_tensor_a.layout() == Layout::TILE) {
+        // ReshapeTileProgramFactory sizes its CBs and tile counts from the architectural 32x32
+        // constants, and the tile is absent from compute_program_hash, so a non-standard tile would
+        // both compile a mis-sized program and alias onto a cached 32x32 one.
+        const auto tile = input_tensor_a.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "reshape_on_device does not currently support tiles other than 32x32, got {}x{}",
+            tile.get_height(),
+            tile.get_width());
         TT_FATAL(
             input_tensor_a.physical_volume() % TILE_HW == 0,
             "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",

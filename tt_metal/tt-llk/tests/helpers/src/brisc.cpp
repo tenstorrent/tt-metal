@@ -5,6 +5,9 @@
 #include <cstdint>
 #include <type_traits>
 
+// Ick! We have to tell ckernel_ops.h that we're using TTI_ macros.
+// This is just wrong and should be fixed. See #58141
+#define LLK_BOOT_BRISC 1
 #include "boot.h"
 #include "counters.h"
 

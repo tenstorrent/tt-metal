@@ -342,7 +342,6 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
         blk_w = re.search(r"(?<![a-z_])block_w=(\d+)", value_str)
         inplace = re.search(r"inplace=(\d+)", value_str)
         legacy_reduction = re.search(r"legacy_reduction=(\d+)", value_str)
-        legacy_rsqrt = re.search(r"legacy_rsqrt=(\d+)", value_str)
         use_welford = re.search(r"use_welford=(\d+)", value_str)
         if not grid_m or not sub_w or not blk_h or not blk_w:
             return None
@@ -353,7 +352,6 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
             block_w=int(blk_w.group(1)),
             inplace=bool(int(inplace.group(1))) if inplace else False,
             legacy_reduction=bool(int(legacy_reduction.group(1))) if legacy_reduction else False,
-            legacy_rsqrt=bool(int(legacy_rsqrt.group(1))) if legacy_rsqrt else False,
             use_welford=bool(int(use_welford.group(1))) if use_welford else False,
         )
 

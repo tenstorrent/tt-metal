@@ -101,6 +101,7 @@ class WarmupForwardMixin:
         max_batch_size,
         num_blocks,
         can_sample_on_device,
+        can_sample_device_grammar: bool = False,
         read_from_device=True,
         greedy_only: bool = False,
         skip_trace_precompile: bool = False,
@@ -117,6 +118,13 @@ class WarmupForwardMixin:
         logger.info(f"Start pos shape: {start_pos.shape}")
         logger.info(f"Page table shape: {page_table.shape}")
 
+        # Record every trace variant this sweep needs before any of them is live (see
+        # Generator.precapture_decode_trace_variants); the per-param passes below then only replay.
+        precapture = getattr(self, "precapture_decode_trace_variants", None)
+        if enable_trace and not skip_trace_precompile and precapture is not None:
+            if precapture(sampling_params, tokens, start_pos, page_table, kv_cache):
+                logger.info("Pre-captured decode trace variants before the sampling sweep")
+
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")
             decode_kwargs = dict(
@@ -127,9 +135,32 @@ class WarmupForwardMixin:
                 enable_trace=enable_trace,
                 read_from_device=read_from_device,
                 sampling_params=param,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=param is not None,
+                # Warmup has no request-owned prompt/output history. The old
+                # reset_batch=False path compiled each sampling configuration
+                # without rebuilding penalty state; preserve that behavior.
+                reset_sampling_state=False,
             )
             if skip_trace_precompile:
                 decode_kwargs["skip_trace_precompile"] = True
+            if not enable_trace and hasattr(self, "_prepare_decode_trace_variant"):
+                # Run through decode_forward so model-specific page-table routing
+                # is active while staging.
+                decode_kwargs["prepare_trace"] = True
             self.decode_forward(**decode_kwargs)
+            enable_log_probs = getattr(param, "enable_log_probs", False) if param is not None else False
+            has_logprobs = (
+                bool(enable_log_probs.any())
+                if isinstance(enable_log_probs, torch.Tensor)
+                else (any(enable_log_probs) if isinstance(enable_log_probs, (list, tuple)) else bool(enable_log_probs))
+            )
+            if param is not None and can_sample_device_grammar and not has_logprobs:
+                grammar_kwargs = dict(
+                    decode_kwargs,
+                    grammar_bitmask=self._create_warmup_grammar_bitmask(max_batch_size),
+                )
+                self.decode_forward(**grammar_kwargs)
 
         logger.info("Decode warmup completed")

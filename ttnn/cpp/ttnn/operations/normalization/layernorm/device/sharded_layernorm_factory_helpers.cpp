@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 #include <algorithm>
@@ -46,6 +47,7 @@ const m2::DFBSpecName EX{"ex"};
 const m2::DFBSpecName EX_EXTERNAL{"ex_external"};
 const m2::DFBSpecName EX_PARTIAL2{"ex_partial2"};
 const m2::DFBSpecName EX2{"ex2"};
+const m2::DFBSpecName EX2_LOCAL{"ex2_local"};
 const m2::DFBSpecName EX_EXTERNAL2{"ex_external2"};
 const m2::DFBSpecName MASK_SCRATCH{"mask_scratch"};
 const m2::DFBSpecName EX_GLOBAL{"ex_global"};
@@ -512,7 +514,8 @@ DFBSizeParams::Sizes DFBSizeParams::compute() const {
     uint32_t in0_block_tiles = block_wt * block_ht;
 
     sizes.in0_dfb_size = in0_block_tiles * in_single_tile_size;
-    sizes.in1_dfb_size = sizes.in0_dfb_size;
+    sizes.in1_dfb_size =
+        in0_block_tiles * (residual_single_tile_size != 0 ? residual_single_tile_size : in_single_tile_size);
     sizes.in2_dfb_size = bfloat16_tile_size;
     sizes.in3_dfb_size = bfloat16_tile_size;
     sizes.in5_dfb_size = in0_block_tiles * gamma_single_tile_size / block_ht;
@@ -632,13 +635,15 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
     // Residual shard for the fused pre-add. The post-all-gather compute kernel has no pre-add, so it
     // never reads a residual even when one is supplied.
     if (c.has_b && !c.is_post_all_gather) {
-        add_dfb(spec, IN1, sizes.in1_dfb_size, c.in_single_tile_size, c.in_data_format, RESIDUAL);
+        // The residual may have its own dtype (validation and the docs allow it); declare the view with the
+        // residual's format and tile size, not the input's, or the unpacker misreads its shard.
+        add_dfb(spec, IN1, sizes.in1_dfb_size, c.residual_single_tile_size, c.residual_data_format, RESIDUAL);
     }
 
     // Pre-all-gather pre-add destination. It borrows the *input* tensor, so a + b is written back
     // over a's own shard.
     if (c.is_pre_all_gather && c.has_b) {
-        add_dfb(spec, IN_PRE_ADD, sizes.in1_dfb_size, c.in_single_tile_size, c.in_data_format, INPUT);
+        add_dfb(spec, IN_PRE_ADD, sizes.in0_dfb_size, c.in_single_tile_size, c.in_data_format, INPUT);
     }
 
     if (!c.use_welford) {
@@ -674,9 +679,14 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
             add_dfb(spec, EX_PARTIAL2, sizes.ex_partial_dfb_size, c.single_tile_size, c.dfb_data_format);
             add_dfb(spec, EX_EXTERNAL2, sizes.ex_external_dfb_size, c.single_tile_size, c.dfb_data_format);
         }
-        add_dfb(spec, EX2, sizes.ex_dfb_size, c.single_tile_size, c.dfb_data_format);
+        // The non-distributed stage keeps Var[x] in ex2_local wherever compute reads it back; ex2 only carries
+        // a first-stage result to the reader, so it exists only with a two-stage reduce.
+        if (!nd || c.use_two_stage_reduce) {
+            add_dfb(spec, EX2, sizes.ex_dfb_size, c.single_tile_size, c.dfb_data_format);
+        }
         if (nd) {
             add_dfb(spec, EX2PE, sizes.ex2pe_dfb_size, c.single_tile_size, c.dfb_data_format);
+            add_dfb(spec, EX2_LOCAL, sizes.ex_dfb_size, c.single_tile_size, c.dfb_data_format);
         }
     }
 
@@ -923,7 +933,9 @@ void bind_reader_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is_
         bind_dfb(kernel, EX_PARTIAL2, "ex_partial2", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, EX_EXTERNAL2, "ex_external2", m2::DFBEndpointType::PRODUCER);
         bind_dfb(kernel, EX2PE, "ex2pe", m2::DFBEndpointType::CONSUMER);
-        bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::CONSUMER);
+        if (c.use_two_stage_reduce) {
+            bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::CONSUMER);
+        }
     }
     bind_dfb(kernel, EX_GLOBAL, "ex_global", m2::DFBEndpointType::PRODUCER);
 }
@@ -937,6 +949,10 @@ void add_reader_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
     }
     if (c.use_welford) {
         kernel.compiler_options.defines.emplace("USE_WELFORD", "1");
+    }
+    // Gates the ex2 binding token, which exists only with a two-stage reduce.
+    if (c.use_two_stage_reduce) {
+        kernel.compiler_options.defines.emplace("TWO_STAGE_REDUCE", "1");
     }
 }
 
@@ -1027,6 +1043,10 @@ void add_writer_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
     if (!c.writes_back) {
         kernel.compiler_options.defines.emplace("SKIP_WRITE_BACK", "1");
     }
+    // Matches bind_writer_resources: after the all-gather the writer holds both ends of the scaler DFB.
+    if (c.is_post_all_gather && !c.use_welford) {
+        kernel.compiler_options.defines.emplace("SCALER_SELF_LOOP", "1");
+    }
     if (c.do_col_mask) {
         kernel.compiler_options.defines.emplace("DO_COL_MASK", "1");
     }
@@ -1046,7 +1066,6 @@ m2::KernelSpec::CompileTimeArgs compute_compile_time_args(
         {"num_subblocks_w", c.block_wt / c.subblock_wt},
         {"num_tiles_per_block", c.block_ht * c.block_wt},
         {"float32_dtype", static_cast<uint32_t>(c.fp32_dest_acc_en)},
-        {"legacy_rsqrt", static_cast<uint32_t>(c.legacy_rsqrt)},
         {"num_blocks_second_stage", workers.num_blocks_second_stage},
     };
 
@@ -1162,9 +1181,14 @@ void bind_compute_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is
         bind_dfb(kernel, EPS, "eps", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, SCALER_GLOBAL, "scaler_global", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, EX_PARTIAL2, "ex_partial2", m2::DFBEndpointType::PRODUCER);
-        bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::PRODUCER);
+        if (c.use_two_stage_reduce) {
+            bind_dfb(kernel, EX2, "ex2", m2::DFBEndpointType::PRODUCER);
+        }
         bind_dfb(kernel, EX_EXTERNAL2, "ex_external2", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, EX2PE, "ex2pe", m2::DFBEndpointType::PRODUCER);
+        // On the cores that turn Var[x] into 1/sqrt(Var[x] + eps), the combined Var[x] never leaves
+        // compute, so it goes into this buffer rather than ex2, whose consumer is the reader.
+        bind_self_loop(kernel, EX2_LOCAL, "ex2_local");
         if (c.do_legacy_layernorm_col_mask) {
             bind_self_loop(kernel, MASK_SCRATCH, "mask_scratch");
         }
@@ -1185,31 +1209,41 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
     if (c.welford_fp32_alias) {
         kernel.compiler_options.defines.emplace("WELFORD_FP32_ALIAS", "1");
     }
+    // Only the two-stage reduce has cores that hand Var[x] to the reader through ex2 instead of keeping it,
+    // so only then does ex2 exist and the kernel pick its Var[x] buffer per core at run time.
+    if (c.use_two_stage_reduce) {
+        kernel.compiler_options.defines.emplace("TWO_STAGE_REDUCE", "1");
+    }
     // The all-to-all workers read three extra runtime arguments and touch three extra buffers, so the
     // distinction has to be visible to the preprocessor rather than to `if constexpr` alone.
     if (is_all_to_all_worker) {
         kernel.compiler_options.defines.emplace("IS_ALLGATHER_WORKER", "1");
+    }
+    // Without a write-back, compute holds both ends of the output buffer (bind_self_loop) and must pop it.
+    if (!c.writes_back && !c.is_pre_all_gather) {
+        kernel.compiler_options.defines.emplace("OUT_SELF_LOOP", "1");
     }
     for (const auto& [key, value] : c.activation_defines) {
         kernel.compiler_options.defines.emplace(key, value);
     }
 }
 
-// Legacy carried a vector indexed by buffer index, defaulted everywhere except the Welford alias.
-// That one becomes UnpackToDest; the remaining Float32 buffers the kernel consumes get an explicit
-// UnpackToSrc, which is required once the 32-bit Dest register is enabled and which legacy supplied
-// silently.
-//
-// The choice of which buffers get which mode assumes a Gen1 target (Wormhole, Blackhole), where
-// unpacking straight to Dest costs performance unless it is the only way to keep 32 bits of
-// precision. That is why UnpackToDest appears only at the Welford alias and every other Float32
-// buffer is pinned to UnpackToSrc. Gen2 reverses the tradeoff: unpacking to Dest is free there and
-// is the preferred mode for anything the SFPU consumes, so these assignments stay legal but become
-// slower than they need to be. They want revisiting before this op targets Gen2.
+// Keep FP32 residuals and statistics out of TF32 SrcA: rounding a large mean
+// before either the cross-core merge or normalisation destroys its low bits.
+// Other Float32 consumers retain the FPU-compatible UnpackToSrc mode.
 void set_compute_unpack_modes(m2::KernelSpec& kernel, const m2::ProgramSpec& spec, const SpecConfig& c) {
-    auto& modes = m2::unpack_modes(std::get<m2::ComputeHardwareConfig>(kernel.hw_config));
+    auto& modes = std::get<m2::ComputeHardwareConfig>(kernel.hw_config).unpack_modes;
     if (c.welford_fp32_alias) {
         modes.emplace(X_WELFORD, UnpackMode::UnpackToDest);
+    }
+    if (c.welford_fp32_alias && !c.is_pre_all_gather && !c.is_post_all_gather) {
+        modes.emplace(EX_EXTERNAL, UnpackMode::UnpackToDest);
+        modes.emplace(EX_GLOBAL, UnpackMode::UnpackToDest);
+        modes.emplace(TRANSPOSE, UnpackMode::UnpackToDest);
+        if (c.has_b) {
+            modes.emplace(IN0, UnpackMode::UnpackToDest);
+            modes.emplace(IN1, UnpackMode::UnpackToDest);
+        }
     }
     if (!c.fp32_dest_acc_en) {
         return;
@@ -1238,10 +1272,27 @@ void add_kernel_and_work_unit_specs(
     const bool has_not_all_to_all_workers = workers.num_none_all_to_all_workers > 0;
     const bool has_inactive_cores = !core_ranges.inactive_cores.empty();
 
-    const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_0, .noc = c.reader_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-    const m2::DataMovementHardwareConfig writer_hw = m2::DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_1, .noc = c.writer_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+    // Only config_1xx is set: it carries the WH/BH placement (explicit RISC-V core + the mcast-specific
+    // reader/writer NOCs) and is ignored on Quasar (Gen2), where the framework places the kernel and
+    // picks the NOC; config_2xx stays unset so every bound DFB keeps implicit sync ON. That is what the
+    // mcast reduction needs: the reader_sender's remote mcast write posts the receivers' input DFB via
+    // implicit-sync txn tracking (a receiver cannot explicitly push data it did not produce).
+    const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementHardwareConfig{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = c.reader_noc,
+                .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+            },
+    };
+    const m2::DataMovementHardwareConfig writer_hw = m2::DataMovementHardwareConfig{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = c.writer_noc,
+                .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+            },
+    };
 
     // The reader's trailing coordinate block is one X coordinate per multicast column followed by one
     // Y coordinate per multicast row. Its length is a compile-time property of the kernel, but the
@@ -1546,28 +1597,28 @@ namespace {
 
 // The multicast range this sender covers, plus its own position within the grid.
 std::vector<uint32_t> reader_sender_named_values(
-    const CoreCoord& core, const RuntimeArgsContext& ctx, IDevice* device) {
+    const CoreCoord& core, const RuntimeArgsContext& ctx, const MeshDevice& device) {
     CoreCoord mcast_start, mcast_end;
     if (ctx.grid.mcast_1d) {
         CoreCoord top_left = {(std::size_t)ctx.core_ranges.start_core.x, (std::size_t)ctx.core_ranges.start_core.y};
         CoreCoord bottom_right = {
             (std::size_t)ctx.core_ranges.start_core.x + ctx.grid.grid_size.x - 1,
             (std::size_t)ctx.core_ranges.start_core.y + ctx.grid.grid_size.y - 1};
-        mcast_start = device->worker_core_from_logical_core(top_left);
-        mcast_end = device->worker_core_from_logical_core(bottom_right);
+        mcast_start = device.worker_core_from_logical_core(top_left);
+        mcast_end = device.worker_core_from_logical_core(bottom_right);
     } else {
         if (ctx.grid.row_wise) {
             CoreCoord left_plus_one = {(std::size_t)ctx.core_ranges.start_core.x + 1, (std::size_t)core.y};
             CoreCoord right = {
                 (std::size_t)ctx.core_ranges.start_core.x + ctx.grid.grid_size.x - 1, (std::size_t)core.y};
-            mcast_start = device->worker_core_from_logical_core(left_plus_one);
-            mcast_end = device->worker_core_from_logical_core(right);
+            mcast_start = device.worker_core_from_logical_core(left_plus_one);
+            mcast_end = device.worker_core_from_logical_core(right);
         } else {
             CoreCoord top_plus_one = {(std::size_t)core.x, (std::size_t)ctx.core_ranges.start_core.y + 1};
             CoreCoord bottom = {
                 (std::size_t)core.x, (std::size_t)ctx.core_ranges.start_core.y + ctx.grid.grid_size.y - 1};
-            mcast_start = device->worker_core_from_logical_core(top_plus_one);
-            mcast_end = device->worker_core_from_logical_core(bottom);
+            mcast_start = device.worker_core_from_logical_core(top_plus_one);
+            mcast_end = device.worker_core_from_logical_core(bottom);
         }
     }
     if (ctx.reader_noc == NOC::NOC_1) {
@@ -1671,7 +1722,7 @@ RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
     const SpecConfig& config,
-    IDevice* device,
+    const MeshDevice& device,
     const Tensor& input,
     const std::optional<Tensor>& residual,
     const std::optional<Tensor>& gamma,

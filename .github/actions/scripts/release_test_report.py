@@ -2,8 +2,8 @@
 """Build the release test-evidence report and file it as a Jira issue.
 
 Two parts, kept separate: AIIPSW requirement evidence from the Quasar RTL sim
-gate, and a summary of the model e2e suites from their JUnit XML (not Quasar, so
-they map to no requirement).
+gate and the tt-umd-simulators emulator checks, and a summary of the model e2e
+suites from their JUnit XML (not Quasar, so they map to no requirement).
 
 Passes come from the sim CI's rtl-sim-results/v1 block when present. Otherwise
 they are derived as (tests the gate runs) - (tests reported failed), which only
@@ -14,6 +14,12 @@ Environment:
   RTL_SIM_CONCLUSION  success | failure | timed_out | ...              (required)
   RTL_SIM_DETAIL      check output.summary (+ text)                    (optional)
   RTL_SIM_SHA / RTL_SIM_URL / RTL_SIM_RUN_URL                          (optional)
+  HORIZON_RESULTS_FILE  tt-umd-horizon results (horizon-test-results/v1) (optional)
+  HORIZON_EMU_RESULTS_FILE  Horizon emulator results, same schema, from the
+                      tt-umd-simulators "Horizon Release" check        (optional)
+  QUASAR_EMU_RESULTS_FILE  Quasar emulator results (quasar-test-results/v1),
+                      from the tt-umd-simulators "Quasar Release" check (optional)
+  HORIZON_MAX_AGE_DAYS  staleness threshold for the above (default 7)   (optional)
   RELEASE_VERSION     used in the summary and the dedup label          (optional)
   RTL_SIM_MAP         relevance mapping   (default: ./ai_ip_tests.json)
   QUASAR_SIM_YAML     the yaml the gating job runs
@@ -23,6 +29,10 @@ Environment:
   JIRA_*              as jira_client.py; JIRA_ISSUE_TYPE default Task
   JIRA_SKIP           build the report but do not file it
 
+A Jira issue is filed only when something needs attention: sim failures, an
+inconclusive sim check, or e2e suite failures. A fully green run is recorded in
+the markdown artifact and step summary only.
+
 Exits 0 whether or not tests failed -- this reports, it does not gate.
 """
 import json
@@ -30,6 +40,7 @@ import os
 import re
 import sys
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -180,17 +191,226 @@ def classify(expected, failed_rows, conclusion, detail):
     return FAILED, passed, failed + extra
 
 
-def build(mapping, expected, passed, failed, verdict, suites=None):
-    """Group the run's tests under the requirement each one serves."""
+# The requirement whose evidence comes from the tt-umd-horizon suite, not the
+# Quasar sim gate. Horizon is a separate repo/CI: it publishes its own results
+# file (horizon-test-results/v1) which the release job pulls and passes here.
+HORIZON_REQUIREMENT = "AIIPSW-15"
+
+# Horizon emulation: tt-umd-simulators' Horizon Release pipeline runs tt-metal's
+# Quasar regression lists on the Horizon Zebu emulator and posts the results,
+# in the same schema, as a "Horizon Release" check on the commit it tested.
+HORIZON_EMU_REQUIREMENT = "AIIPSW-9"
+
+
+# Horizon emulation (AIIPSW-9) is the ResNet LLK API on the Horizon emulator, so
+# only the ResNet tests of the Horizon Release check credit it. Its other tests
+# (data movement, dispatch, watcher) show tt-metal runs on Horizon at all, and
+# are reported as executed tests that map to no requirement.
+HORIZON_EMU_SCOPE = "models/demos/vision/classification/resnet50/"
+
+# Quasar emulation: tt-umd-simulators' Quasar Release pipeline runs every row of
+# tests/scripts/quasar/quasar_regression_tests.yaml and quasar_local_tests.yaml on
+# the emulator config each row names, and posts the results as a "Quasar
+# Release" check. Each row keeps its config, group, filter and runner, so it is
+# credited through the relevance map exactly like a sim row.
+QUASAR_EMU_SCHEMA = "quasar-test-results/v1"
+
+# What an emulator document must say about itself before it counts as evidence,
+# as (platform, accepted tt_metal_quasar_variant values). `platform` names the
+# emulator; tt_metal_quasar_variant is the register map the kernels were built
+# with ("" or "quasar" on the Quasar emulator, "horizon" on Horizon). `only`
+# (a narrowed test selection) and `trial` must be empty. The producer already
+# refuses to post runs that fail these checks, so this is defensive: a document
+# that fails them gives no evidence, like a stale one. tt-umd-horizon's file
+# (AIIPSW-15) has none of these fields and is not checked.
+QUASAR_EMULATOR = ("emu-quasar", ("", "quasar"))
+HORIZON_EMULATOR = ("emu-horizon", ("horizon",))
+
+
+def _emulator_document_ok(data, label, what, emulator):
+    """False (saying why) if an emulator document is narrowed, a trial, or built for another platform."""
+    platform, variants = emulator
+    for key in ("only", "trial"):
+        if data.get(key):
+            print(f"{label}: document has {key}={data.get(key)!r}, a narrowed or trial run; {what} inconclusive")
+            return False
+    if data.get("platform") and data.get("platform") != platform:
+        print(f"{label}: document platform {data.get('platform')!r} is not {platform!r}; {what} inconclusive")
+        return False
+    variant = str(data.get("tt_metal_quasar_variant") or "")
+    if variant not in variants:
+        print(
+            f"{label}: tt_metal_quasar_variant {variant!r} is not one of {list(variants)} for {platform}; {what} inconclusive"
+        )
+        return False
+    return True
+
+
+def _load_results(path, schema, label, what, max_age_days, emulator=None):
+    """The results document at `path`, or None (saying why) if missing, unreadable, off-schema, malformed or stale.
+
+    With `emulator` (QUASAR_EMULATOR / HORIZON_EMULATOR), the document must also
+    pass _emulator_document_ok.
+    """
+    if not path:
+        return None
+    p = Path(path)
+    if not p.is_file():
+        print(f"{label}: results file '{path}' not present; {what} inconclusive")
+        return None
+    try:
+        data = json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"{label}: results file unreadable ({e}); {what} inconclusive")
+        return None
+    if not isinstance(data, dict):
+        print(f"{label}: results root is {type(data).__name__}, not an object; {what} inconclusive")
+        return None
+    if data.get("schema") != schema:
+        print(f"{label}: unexpected schema {data.get('schema')!r}; {what} inconclusive")
+        return None
+    tests = data.get("tests")
+    if not isinstance(tests, list) or not all(isinstance(t, dict) for t in tests):
+        # One malformed document must not take the whole report down with it.
+        print(f"{label}: 'tests' is not a list of objects; {what} inconclusive")
+        return None
+    if emulator is not None and not _emulator_document_ok(data, label, what, emulator):
+        return None
+
+    ts = data.get("timestamp", "")
+    try:
+        when = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - when).total_seconds() / 86400
+    except (ValueError, AttributeError):
+        print(f"{label}: unparseable timestamp {ts!r}; {what} inconclusive")
+        return None
+    if age_days > max_age_days:
+        print(f"{label}: results are {age_days:.0f}d old (> {max_age_days}); {what} inconclusive")
+        return None
+    return data
+
+
+def _result_row(test, default_config):
+    """A results test as a (config, group, filter, runner) row.
+
+    tt-umd-horizon names only a tests/axi binary; the emulator checks also carry
+    each tt-metal entry's group, filter and runner (an empty filter is a whole
+    gtest binary or pytest file).
+    """
+    if test.get("group"):
+        filt = str(test.get("filter") or "")
+    else:
+        filt = str(test.get("name", "?"))
+    return {
+        "config": str(test.get("config") or default_config),
+        "group": str(test.get("group") or "tests/axi"),
+        "filter": filt,
+        "runner": str(test.get("runner") or "gtest"),
+    }
+
+
+def parse_horizon(path, req_key=HORIZON_REQUIREMENT, max_age_days=7, emulator=None):
+    """Read the tt-umd-horizon results file into evidence for one requirement.
+
+    Returns (status, extra_evidence). `status` is PASSED / FAILED / INCONCLUSIVE
+    and `extra_evidence` is {req_key: {PASSED: [...], FAILED: [...]}} of test rows,
+    empty when inconclusive. Missing / unreadable / wrong-schema / stale input all
+    yield INCONCLUSIVE with no rows -- the same conservative stance the sim path
+    takes, so the requirement simply shows "no passing evidence" until Horizon
+    publishes a fresh green result. `emulator` adds the emulator-document checks
+    (see _emulator_document_ok); tt-umd-horizon's own file is read without them.
+    """
+    data = _load_results(path, "horizon-test-results/v1", "horizon", req_key, max_age_days, emulator)
+    if data is None:
+        return INCONCLUSIVE, {}
+    tests = data.get("tests", [])
+    passed = [_result_row(t, "horizon") for t in tests if t.get("result") == "passed"]
+    failed = [_result_row(t, "horizon") for t in tests if t.get("result") == "failed"]
+    status = FAILED if failed else PASSED
+    print(f"horizon: {len(passed)} passed, {len(failed)} failed (commit {str(data.get('tested_sha',''))[:12]})")
+    return status, {req_key: {PASSED: passed, FAILED: failed}}
+
+
+def parse_horizon_emu(path, max_age_days=7):
+    """Evidence from the Horizon Release check: its ResNet tests credit AIIPSW-9.
+
+    Same return shape as parse_horizon; the other tests sit under the None key,
+    which build() reports as executed tests that map to no requirement.
+    """
+    status, evidence = parse_horizon(
+        path, req_key=HORIZON_EMU_REQUIREMENT, max_age_days=max_age_days, emulator=HORIZON_EMULATOR
+    )
+    if not evidence:
+        return status, evidence
+    hits = evidence[HORIZON_EMU_REQUIREMENT]
+    resnet = {k: [r for r in rows if r["group"].startswith(HORIZON_EMU_SCOPE)] for k, rows in hits.items()}
+    other = {k: [r for r in rows if not r["group"].startswith(HORIZON_EMU_SCOPE)] for k, rows in hits.items()}
+    return status, {HORIZON_EMU_REQUIREMENT: resnet, None: other}
+
+
+def parse_quasar_emu(path, max_age_days=7):
+    """Read the Quasar Release results into test rows for the relevance map.
+
+    Returns (status, {PASSED: [...], FAILED: [...]}), or (INCONCLUSIVE, {}) when
+    the file is missing, unreadable, off-schema or stale.
+    """
+    data = _load_results(
+        path, QUASAR_EMU_SCHEMA, "quasar-emu", "Quasar emulator evidence", max_age_days, QUASAR_EMULATOR
+    )
+    if data is None:
+        return INCONCLUSIVE, {}
+    tests = data.get("tests", [])
+    passed = [_result_row(t, "") for t in tests if t.get("result") == "passed"]
+    failed = [_result_row(t, "") for t in tests if t.get("result") == "failed"]
+    status = FAILED if failed else PASSED
+    print(f"quasar-emu: {len(passed)} passed, {len(failed)} failed (commit {str(data.get('tested_sha',''))[:12]})")
+    return status, {PASSED: passed, FAILED: failed}
+
+
+def results_source(path):
+    """One line naming where an emulator results file came from, or None if there is none."""
+    try:
+        data = json.loads(Path(path).read_text()) if path and Path(path).is_file() else None
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    t = data.get("totals") or {}
+    return (
+        f"{t.get('passed', '?')} passed, {t.get('failed', '?')} failed on tt-metal "
+        f"{str(data.get('tested_sha', ''))[:12] or '?'}, {data.get('timestamp') or '?'}: {data.get('run_url') or '-'}"
+    )
+
+
+def build(mapping, expected, passed, failed, verdict, suites=None, extra_evidence=None, mapped_evidence=None):
+    """Group the run's tests under the requirement each one serves.
+
+    `extra_evidence` ({req_key: {PASSED: [...], FAILED: [...]}}) injects evidence
+    from sources other than the sim gate (e.g. Horizon), attributed directly to a
+    requirement rather than through the (config, group, filter) map.
+    `mapped_evidence` ({PASSED: [...], FAILED: [...]}) adds test rows from another
+    Quasar source (the emulator) that are credited through the map like sim
+    rows, without touching the sim verdict or counts.
+    """
 
     def req_of(row):
         entry = match_entry(row["config"], row["group"], row["filter"], row["runner"], mapping)
         return (entry or {}).get("requirement")
 
+    mapped = mapped_evidence or {}
     covered = {}
-    for row, outcome in [(r, PASSED) for r in passed] + [(r, FAILED) for r in failed]:
+    for row, outcome in [(r, PASSED) for r in passed + mapped.get(PASSED, [])] + [
+        (r, FAILED) for r in failed + mapped.get(FAILED, [])
+    ]:
         key = req_of(row)
         covered.setdefault(key, {PASSED: [], FAILED: []})[outcome].append(row)
+
+    for key, hits in (extra_evidence or {}).items():
+        acc = covered.setdefault(key, {PASSED: [], FAILED: []})
+        acc[PASSED] += hits.get(PASSED, [])
+        acc[FAILED] += hits.get(FAILED, [])
 
     requirements = []
     for req in mapping.get("requirements", []):
@@ -252,6 +472,9 @@ def render_plain(report, meta):
         f"Commit:      {_commit_link(meta['sha'])}",
         f"Sim results: {meta['url']}",
         f"Release run: {meta['run_url']}",
+    ]
+    out += [f"{name}: {text}" for name, text in meta.get("emulators", [])]
+    out += [
         "",
         "--- Requirements with passing test evidence ---",
     ]
@@ -309,9 +532,10 @@ def render_plain(report, meta):
     out += [
         "",
         "Scope: the requirement evidence above covers the RTL sim tests run by the release gate "
-        f"({meta['sim_yaml_name']}, config {meta['config']}). Quasar tests that run "
-        "only in the emulator job are not included -- that job reports to Slack and "
-        "does not feed this check. Full inventory: the coverage doc in this artifact.",
+        f"({meta['sim_yaml_name']}, config {meta['config']}), plus the Quasar and Horizon "
+        "emulator runs of quasar_regression_tests.yaml and quasar_local_tests.yaml, from the "
+        'tt-umd-simulators "Quasar Release" and "Horizon Release" checks. '
+        "Full inventory: the coverage doc in this artifact.",
     ]
     return "\n".join(out)
 
@@ -336,6 +560,9 @@ def render_markdown(report, meta):
         f"| Sim results | {meta['url']} |",
         f"| Release run | {meta['run_url']} |",
         f"| Scope | `{meta['sim_yaml_name']}` @ `{meta['config']}` |",
+    ]
+    out += [f"| {name} | {text} |" for name, text in meta.get("emulators", [])]
+    out += [
         "",
     ]
     if verdict == INCONCLUSIVE:
@@ -428,10 +655,10 @@ def render_markdown(report, meta):
     out += [
         "---",
         "",
-        "Scope note: the requirement evidence above covers only the RTL sim tests the release gate runs "
-        f"(`{meta['sim_yaml_name']}`, config `{meta['config']}`). Quasar tests that run "
-        "only in the emulator job are not included — that job reports to Slack and does "
-        "not feed this check. Full inventory: "
+        "Scope note: the requirement evidence above covers the RTL sim tests the release gate runs "
+        f"(`{meta['sim_yaml_name']}`, config `{meta['config']}`), plus the Quasar and Horizon "
+        "emulator runs of `quasar_regression_tests.yaml` and `quasar_local_tests.yaml`, from "
+        "the tt-umd-simulators “Quasar Release” and “Horizon Release” checks. Full inventory: "
         "the coverage inventory attached to this same artifact.",
     ]
     return "\n".join(out)
@@ -458,7 +685,22 @@ def main():
             f"read {t['suites']} test suite(s) from TEST_REPORTS_DIR: "
             f"{t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped"
         )
-    report = build(mapping, expected, passed, failed, verdict, suites)
+    max_age = int(_env("HORIZON_MAX_AGE_DAYS", "7") or "7")
+    _horizon_status, horizon_evidence = parse_horizon(_env("HORIZON_RESULTS_FILE", ""), max_age_days=max_age)
+    horizon_emu_file = _env("HORIZON_EMU_RESULTS_FILE", "")
+    quasar_emu_file = _env("QUASAR_EMU_RESULTS_FILE", "")
+    _emu_status, emu_evidence = parse_horizon_emu(horizon_emu_file, max_age_days=max_age)
+    _quasar_status, quasar_rows = parse_quasar_emu(quasar_emu_file, max_age_days=max_age)
+    report = build(
+        mapping,
+        expected,
+        passed,
+        failed,
+        verdict,
+        suites,
+        extra_evidence={**horizon_evidence, **emu_evidence},
+        mapped_evidence=quasar_rows,
+    )
 
     meta = {
         "version": version,
@@ -467,6 +709,15 @@ def main():
         "run_url": _env("RTL_SIM_RUN_URL", "-"),
         "config": config,
         "sim_yaml_name": sim_yaml.name,
+        # Only sources that were read: a stale or invalid file is not evidence.
+        "emulators": [
+            (name, results_source(path))
+            for name, path, read in (
+                ("Quasar emulator", quasar_emu_file, quasar_rows),
+                ("Horizon emulator", horizon_emu_file, emu_evidence),
+            )
+            if read and results_source(path)
+        ],
     }
 
     markdown = render_markdown(report, meta)
@@ -481,9 +732,23 @@ def main():
         print("JIRA_SKIP set; report not filed")
         return
 
+    # A fully green run needs no ticket: the report is already in the step
+    # summary and the release artifact. File only when there is something to
+    # act on -- sim failures, an inconclusive check, or e2e suite failures.
+    suite_failures = suite_totals(suites)["failed"] if suites else 0
+    if verdict == PASSED and not suite_failures:
+        print("all green; report kept in the artifact and step summary, no Jira issue filed")
+        return
+
     scoped = _in_scope(report["requirements"])
     with_evidence = sum(1 for r in scoped if r["passed"])
-    status = {PASSED: "all gating tests passed", FAILED: "failures present", INCONCLUSIVE: "inconclusive"}[verdict]
+    status = {
+        PASSED: "all gating tests passed",
+        FAILED: "sim failures present",
+        INCONCLUSIVE: "sim check inconclusive",
+    }[verdict]
+    if suite_failures:
+        status += f", {suite_failures} e2e suite test(s) failed"
     print(
         file_issue(
             base=_env("JIRA_BASE_URL", required=True),

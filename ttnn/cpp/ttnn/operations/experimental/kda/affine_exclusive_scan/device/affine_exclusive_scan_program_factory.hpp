@@ -9,8 +9,11 @@
 namespace ttnn::experimental::prim {
 
 struct AffineExclusiveScanProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
-        const AffineExclusiveScanParams&, const AffineExclusiveScanInputs&, std::vector<Tensor>&);
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+        const AffineExclusiveScanParams&,
+        const AffineExclusiveScanInputs&,
+        std::vector<Tensor>&,
+        const ttnn::MeshCoordinateRangeSet&);
 };
 
 }  // namespace ttnn::experimental::prim

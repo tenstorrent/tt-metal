@@ -21,7 +21,8 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 
 struct RotaryEmbeddingIndexedDeviceOperation {
     struct operation_attributes_t {
-        uint32_t cluster_axis;  // mesh axis the cos/sin caches are SP-sharded along.
+        uint32_t cluster_axis;                      // mesh axis the cos/sin caches are SP-sharded along.
+        std::optional<uint32_t> seq_subshard_axis;  // optional query-row subsharding; caches stay TP-replicated.
         // Prior valid global KV length in tokens. Used only on the SCALAR path (when no `metadata`
         // tensor is supplied): a per-call scalar intentionally NOT hashed — it lives in a common
         // runtime arg patched on cache hits by MeshWorkloadFactory::override_runtime_arguments, so one
@@ -29,8 +30,14 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         // is unused (0); the reader reads kv_actual_global on-device from element [0] of the 1-element
         // `metadata` tensor.
         uint32_t kv_actual_global;  // scalar path only
+        uint32_t rotary_dim;
+        bool rotary_dim_explicit;
+        uint32_t rotary_offset;
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
+        // Write the output row-major (each row the prefix channels then the rotated ones), for a consumer that
+        // reads rows, so no untilize follows. Needs concat_prefix and a rotary region covering the whole input.
+        bool row_major_output = false;
     };
 
     struct tensor_args_t {
@@ -44,6 +51,7 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         // chunk via an in-place host update of this tensor. When empty, the op uses the scalar
         // `kv_actual_global` attribute.
         std::optional<Tensor> metadata;
+        std::optional<Tensor> concat_prefix;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -109,6 +117,11 @@ ttnn::Tensor rotary_embedding_indexed(
     uint32_t kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<uint32_t>& seq_subshard_axis,
+    const std::optional<uint32_t>& rotary_dim,
+    uint32_t rotary_offset,
+    const std::optional<ttnn::Tensor>& concat_prefix,
+    bool row_major_output = false);
 
 }  // namespace ttnn::prim

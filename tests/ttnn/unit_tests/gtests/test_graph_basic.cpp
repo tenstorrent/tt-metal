@@ -5,6 +5,7 @@
 #include <boost/move/utility_core.hpp>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -12,11 +13,13 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -40,10 +43,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
 
 namespace ttnn::graph::test {
 
@@ -765,6 +764,17 @@ TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
             ASSERT_TRUE(params.contains(ttnn::graph::kShape));
             ASSERT_TRUE(params.contains(ttnn::graph::kTensorId));
 
+            // Device tensors record a buffer type even without a backing buffer; host tensors record none
+            ASSERT_TRUE(params.contains(ttnn::graph::kStorageType));
+            const auto storage_type = params.at(ttnn::graph::kStorageType).get<std::string>();
+            if (storage_type == "DEVICE") {
+                EXPECT_TRUE(params.contains(ttnn::graph::kBufferType));
+                EXPECT_TRUE(params.contains(ttnn::graph::kMemoryConfig));
+            } else {
+                EXPECT_EQ(storage_type, "HOST");
+                EXPECT_FALSE(params.contains(ttnn::graph::kBufferType));
+            }
+
             // Check for extended tensor info
             if (params.contains(ttnn::graph::kDtype)) {
                 found_tensor_with_full_info = true;
@@ -797,6 +807,43 @@ TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
 
     EXPECT_TRUE(found_tensor_with_full_info)
         << "Expected at least one tensor node with full info (dtype, layout, etc.)";
+}
+
+// A device tensor without a backing buffer still records the buffer type its memory config declares
+TEST_P(TensorInfoTest, DeallocatedDeviceTensorKeepsBufferType) {
+    auto run_mode = GetParam();
+
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    auto tensor = ttnn::create_device_tensor(tensor_spec, device_);
+    tensor.deallocate(/*force=*/true);
+    ASSERT_FALSE(tensor.is_allocated());
+
+    nlohmann::json trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(run_mode);
+        // Report the tensor as an input the way operations do; no operation accepts a deallocated tensor
+        const auto& deallocated = tensor;
+        tt::tt_metal::GraphTracker::instance().track_function_start("probe", deallocated);
+        tt::tt_metal::GraphTracker::instance().track_function_end();
+        trace = capture.end_graph_capture();
+    }
+
+    const auto node = std::find_if(trace.begin(), trace.end(), [&](const nlohmann::json& n) {
+        return n.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeTensor &&
+               n.at(ttnn::graph::kParams).at(ttnn::graph::kTensorId).get<std::uint64_t>() == tensor.tensor_id;
+    });
+    ASSERT_NE(node, trace.end()) << "Expected a tensor node for the deallocated tensor";
+
+    const auto& params = node->at(ttnn::graph::kParams);
+    EXPECT_EQ(params.at(ttnn::graph::kStorageType), "DEVICE");
+    EXPECT_TRUE(params.contains(ttnn::graph::kMemoryConfig));
+    EXPECT_FALSE(params.contains(ttnn::graph::kAddress));
+    EXPECT_EQ(params.at(ttnn::graph::kBufferType).get<int>(), static_cast<int>(tt::tt_metal::BufferType::L1));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -965,25 +1012,24 @@ namespace {
 
 std::vector<nlohmann::json> function_starts_with_factory(const nlohmann::json& trace) {
     std::vector<nlohmann::json> nodes;
-    for (const auto& node : trace) {
-        if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeFunctionStart &&
-            node.at(ttnn::graph::kParams).contains(ttnn::graph::kProgramFactoryType)) {
-            nodes.push_back(node);
-        }
-    }
+    std::copy_if(trace.begin(), trace.end(), std::back_inserter(nodes), [](const auto& node) {
+        return node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeFunctionStart &&
+               node.at(ttnn::graph::kParams).contains(ttnn::graph::kProgramFactoryType);
+    });
     return nodes;
 }
 
+std::vector<nlohmann::json> function_starts_named(const std::vector<nlohmann::json>& nodes, std::string_view needle) {
+    std::vector<nlohmann::json> filtered;
+    std::copy_if(nodes.begin(), nodes.end(), std::back_inserter(filtered), [needle](const auto& node) {
+        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).template get<std::string>();
+        return name.find(needle) != std::string::npos;
+    });
+    return filtered;
+}
+
 bool looks_like_hex(const std::string& value) {
-    if (value.empty()) {
-        return false;
-    }
-    for (unsigned char c : value) {
-        if (!std::isxdigit(c)) {
-            return false;
-        }
-    }
-    return true;
+    return !value.empty() && std::all_of(value.begin(), value.end(), [](unsigned char c) { return std::isxdigit(c); });
 }
 
 class CustomCaptureProcessor : public tt::tt_metal::IGraphProcessor {};
@@ -1018,7 +1064,7 @@ TEST_F(TestScopedGraphCapture, ProgramFactoryTypeOnDeviceOp) {
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        const auto output_tensor = ttnn::softmax(input_tensor, -1);
+        [[maybe_unused]] const auto output_tensor = ttnn::softmax(input_tensor, -1);
         trace = capture.end_graph_capture();
     }
 
@@ -1063,13 +1109,7 @@ TEST_F(TestScopedGraphCapture, ProgramFactoryIndexDiffersAcrossPadVariants) {
     }
 
     auto factory_nodes = function_starts_with_factory(trace);
-    std::vector<nlohmann::json> pad_nodes;
-    for (const auto& node : factory_nodes) {
-        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
-        if (name.find("Pad") != std::string::npos) {
-            pad_nodes.push_back(node);
-        }
-    }
+    auto pad_nodes = function_starts_named(factory_nodes, "Pad");
     ASSERT_GE(pad_nodes.size(), 2u);
     std::string type_a = pad_nodes[0].at(ttnn::graph::kParams).at(ttnn::graph::kProgramFactoryType).get<std::string>();
     std::string type_b = pad_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramFactoryType).get<std::string>();
@@ -1096,19 +1136,13 @@ TEST_F(TestScopedGraphCapture, ProgramCacheHitFalseThenTrueInNormalMode) {
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NORMAL);
-        const auto first = ttnn::softmax(input_tensor, -1);
-        const auto second = ttnn::softmax(input_tensor, -1);
+        [[maybe_unused]] const auto first = ttnn::softmax(input_tensor, -1);
+        [[maybe_unused]] const auto second = ttnn::softmax(input_tensor, -1);
         trace = capture.end_graph_capture();
     }
 
     auto factory_nodes = function_starts_with_factory(trace);
-    std::vector<nlohmann::json> softmax_nodes;
-    for (const auto& node : factory_nodes) {
-        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
-        if (name.find("Softmax") != std::string::npos) {
-            softmax_nodes.push_back(node);
-        }
-    }
+    auto softmax_nodes = function_starts_named(factory_nodes, "Softmax");
     ASSERT_GE(softmax_nodes.size(), 2u);
     EXPECT_FALSE(softmax_nodes[0].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
     EXPECT_TRUE(softmax_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
@@ -1129,19 +1163,13 @@ TEST_F(TestScopedGraphCapture, ProgramCacheHitStaysFalseInNoDispatch) {
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        const auto first = ttnn::softmax(input_tensor, -1);
-        const auto second = ttnn::softmax(input_tensor, -1);
+        [[maybe_unused]] const auto first = ttnn::softmax(input_tensor, -1);
+        [[maybe_unused]] const auto second = ttnn::softmax(input_tensor, -1);
         trace = capture.end_graph_capture();
     }
 
     auto factory_nodes = function_starts_with_factory(trace);
-    std::vector<nlohmann::json> softmax_nodes;
-    for (const auto& node : factory_nodes) {
-        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
-        if (name.find("Softmax") != std::string::npos) {
-            softmax_nodes.push_back(node);
-        }
-    }
+    auto softmax_nodes = function_starts_named(factory_nodes, "Softmax");
     ASSERT_GE(softmax_nodes.size(), 2u);
     EXPECT_FALSE(softmax_nodes[0].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
     EXPECT_FALSE(softmax_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());

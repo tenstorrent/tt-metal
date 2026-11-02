@@ -30,7 +30,7 @@ void kernel_main() {
 
 // param_out
 #if defined(MOMENTUM)
-    constexpr auto momentum_out_args = TensorAccessorArgs<param_out_args.next_compile_time_args_offset()>();
+    constexpr auto momentum_out_args = TensorAccessorArgs<decltype(param_out_args)::next_compile_time_args_offset()>();
     auto momentum_out = TensorAccessor(momentum_out_args, momentum_out_addr);
 #endif
 

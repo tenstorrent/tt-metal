@@ -18,11 +18,11 @@ using namespace ckernel;
 // Second matmul of a fused chain.  in0 is *not* unpacked from L1 — it is moved
 // straight out of DEST into SrcB with MOVD2B.  Only SrcA (the weights) is unpacked.
 //
-// Source (in0) tile layout in DEST — what `custom_mm<split_acc, dense_packing>`
+// Source (in0) tile layout in DEST — what `custom_mm<DenseSplitAcc>`
 // produces after its finalization step, for an in0 tile of shape [r, 32]:
 //     cols  0..15  ->  rows  base + 0  .. base + (r-1)
 //     cols 16..31  ->  rows  base + 16 .. base + 16 + (r-1)
-//     next tile at base + src_tile_stride   (32 with dense_packing, else 64)
+//     next tile at base + src_tile_stride   (32 for a Dense layout, else 64)
 //
 // Output (accumulator) tile layout in DEST — the dense 2x8-row layout shared
 // with the SDPA custom matmuls:
@@ -37,7 +37,7 @@ using namespace ckernel;
 // - in0 (SrcB) tile shape: [{1, 2, 4, 8}, 32]; in1 (SrcA) tile shape: [32, 32]
 // - rt_dim: 1
 // - nt_dim: 1 to 16
-// - kt_dim: even number from 2 to 256 (inclusive)
+// - kt_dim: any integer from 1 to 256 (inclusive)
 // - fidelity: LoFi only
 
 inline void custom_mm_reuse_dest_srcb_configure_addrmod()
@@ -139,7 +139,7 @@ inline void _llk_math_custom_mm_reuse_dest_srcb_(
         "custom_mm_reuse_dest_srcb: in0 tile height must be 1, 2, 4 or 8");
 
     const std::uint32_t dest_buffer_base = get_dest_buffer_base();
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD | p_stall::WAIT_SFPU);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
 
     for (std::uint32_t i = 0; i < kt_dim; i++)
     {

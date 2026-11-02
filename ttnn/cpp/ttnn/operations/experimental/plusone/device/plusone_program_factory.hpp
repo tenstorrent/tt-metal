@@ -6,12 +6,12 @@
 
 #include "plusone_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct PlusOneProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const PlusoneParams& operation_attributes, const Tensor& input, Tensor& tensor_return_value);
 };
 

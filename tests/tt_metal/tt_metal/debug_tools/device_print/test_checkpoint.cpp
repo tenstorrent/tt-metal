@@ -41,8 +41,17 @@ constexpr uint32_t NUM_CORES = 2;
 // Fixture: DevicePrintFixture with checkpoint enabled
 class DevicePrintCheckpointTest : public DevicePrintFixture {
 protected:
-    void ExtraSetUp() override { tt::tt_metal::MetalContext::instance().rtoptions().set_checkpoint_enabled(true); }
-    void ExtraTearDown() override { tt::tt_metal::MetalContext::instance().rtoptions().set_checkpoint_enabled(false); }
+    void ExtraSetUp() override {
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        checkpoint_previous_ = rtoptions.get_checkpoint_enabled();
+        rtoptions.set_checkpoint_enabled(true);
+    }
+    void ExtraTearDown() override {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_checkpoint_enabled(checkpoint_previous_);
+    }
+
+private:
+    bool checkpoint_previous_{};
 };
 
 // Helper: create standard DRAM buffers, CBs, and run program on single core
@@ -59,7 +68,7 @@ struct SingleCoreSetup {
         size_t buf_sz = NUM_TILES * tile_size;
 
         auto device_range = distributed::MeshCoordinateRange(zero, zero);
-        Program prog = CreateProgram();
+        Program prog = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(prog));
         program = &workload.get_programs().at(device_range);
 
@@ -201,7 +210,7 @@ static void run_global_checkpoint(
     distributed::MeshWorkload workload;
     auto zero = distributed::MeshCoordinate(0, 0);
     auto dr = distributed::MeshCoordinateRange(zero, zero);
-    Program prog = CreateProgram();
+    Program prog = CreateProgram(*mesh_device);
     workload.add_program(dr, std::move(prog));
     auto& program = workload.get_programs().at(dr);
     auto& cq = mesh_device->mesh_command_queue();

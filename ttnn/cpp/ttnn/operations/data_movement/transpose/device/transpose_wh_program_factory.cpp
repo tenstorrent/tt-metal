@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -36,7 +37,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     const auto& output = output_tensor.mesh_tensor();
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
@@ -50,7 +51,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     tt::DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_dfb_data_format);
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32 ||
                             src0_dfb_data_format == tt::DataFormat::Int32 ||
@@ -110,7 +111,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .endpoint_type = DFBEndpointType::PRODUCER,
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
     if (row_major) {
         reader.source =
@@ -135,7 +136,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     // ---- writer ----
     KernelSpec writer{
         .unique_id = WRITER,
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
     if (row_major) {
         writer.source =
@@ -172,15 +173,14 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
 
     // ---- compute ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (row_major && (input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32)) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
 
     // Legacy built a ComputeConfigDescriptor directly (no TTNN ComputeKernelConfig feeding it),
     // setting only fp32_dest_acc_en and unpack_to_dest_mode; every other field kept its Metal
-    // default, which ComputeGen1Config reproduces.
-    ComputeGen1Config compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (src0_dfb_data_format == tt::DataFormat::Float32) {
+    // default, which ComputeHardwareConfig's defaults reproduce.
+    // Int32/UInt32 unpack to Dest as Float32 does: Quasar's tilize and transpose unpack to Dest only
+    // when UnpackToDest is requested, and Quasar rejects a 32-bit integer unpack into SrcA (#59515).
+    ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
+    if (fp32_dest_acc_en) {
         compute_hw.unpack_modes.insert({IN0, UnpackMode::UnpackToDest});
         if (row_major) {
             compute_hw.unpack_modes.insert({TILIZE, UnpackMode::UnpackToDest});

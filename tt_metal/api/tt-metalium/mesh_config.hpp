@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/mesh_coord.hpp>

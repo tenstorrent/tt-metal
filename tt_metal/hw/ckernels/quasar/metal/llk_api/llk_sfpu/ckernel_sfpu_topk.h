@@ -29,6 +29,18 @@ enum SortDir : bool {
     ArgMin = true,
 };
 
+enum class TopkTieOrder : std::uint8_t {
+    Unset,
+    Ascending,
+    Descending,
+};
+
+// SFPSWAP imm12 bit 0 selects the compare: 0 = two's-complement int32, 1 = fp32. TopK values
+// are always floats (FP16B/FP32), and their sign-magnitude bit patterns order backwards under
+// the int32 compare when both operands are negative, so every SFPSWAP here uses the fp32 compare.
+// The fp32 compare treats -0 == +0 and never swaps when either operand is NaN.
+constexpr std::uint32_t TOPK_SWAP_IMM12_FP32 = 0x1;
+
 // Set the per-TRISC dest section base register for the math TRISC.
 // Quasar has separate SEC0..SEC3 registers (one per TRISC); this implementation
 // runs the SFPU TopK network on the math TRISC, so SFPLOAD/SFPSTORE effective
@@ -91,11 +103,39 @@ inline void init_topk_addr_mod() {
  *
  * @note Run after the base SFPU init and before the topk execute stages.
  */
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, bool FUSED = false, bool RANK_STAMPED = false, std::uint32_t TAG_BITS = 16>
 inline void topk_init() {
+    static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");
     init_topk_addr_mod();
     init_topk();
 }
+
+// Fused-key sweeps: BH/WH-only. Declared for call-shape parity; any instantiation is a
+// compile-time error.
+template <bool APPROXIMATION_MODE, bool largest>
+inline void calculate_topk_fuse() {
+    static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Fused-key TopK is not supported on Quasar");
+}
+
+template <bool APPROXIMATION_MODE, bool largest, std::uint32_t index_store_mode = 0>
+inline void calculate_topk_defuse(std::uint32_t /*num_tiles*/) {
+    static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Fused-key TopK is not supported on Quasar");
+}
+
+// Same motivation as Fused-key sweeps above
+template <bool APPROXIMATION_MODE, bool largest, std::uint32_t TAG_BITS = 16>
+inline void calculate_topk_stamp_local_positions() {
+    static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Rank-stamped stable TopK is not supported on Quasar");
+}
+
+template <bool APPROXIMATION_MODE, bool largest, std::uint32_t TAG_BITS = 16>
+inline void calculate_topk_stamp_tile_rank_range(std::uint32_t /*dst_tile_index*/, std::uint32_t /*rank_base*/) {
+    static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Rank-stamped stable TopK is not supported on Quasar");
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void calculate_topk_canonicalize_negzero() {}
 
 // Load 8 lanes (one value LREG pair + one index LREG pair) from Dest at runtime offsets.
 // Values land in LREG0,1; indices (offset by dst_indices_offset = 128) land in LREG4,5.
@@ -221,8 +261,8 @@ inline void bitonic_topk_ph0_st1_to_1() {
     TTI_SFPTRANSP;
 
     // Step 1
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
 
     TTI_SFPTRANSP;
 }
@@ -232,12 +272,12 @@ inline void bitonic_topk_ph1_st2_to_1() {
     TTI_SFPTRANSP;
 
     // Step 2
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_02_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
 
     // Step 1
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_02_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
 
     TTI_SFPTRANSP;
 }
@@ -248,19 +288,19 @@ inline void bitonic_topk_ph1_st2_to_1() {
 // (matches the BH algorithm exactly; do not remove).
 inline void bitonic_topk_ph2_st3_to_1() {
     // Step 3
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
 
     TTI_SFPTRANSP;
 
     // Step 2
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
 
     // Step 1
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
 
     TTI_SFPTRANSP;
 }
@@ -276,12 +316,12 @@ inline void bitonic_topk_ph2_st3_to_1() {
 inline void bitonic_topk_step_N(bool sort_dir) {
     // Step N
     if (sort_dir == static_cast<bool>(SortDir::ArgMax)) {
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
     } else {
         // Min — operand order swapped relative to ArgMax.
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
     }
 }
 
@@ -303,17 +343,17 @@ inline void bitonic_topk_ph3_st4_to_1(bool sort_dir) {
     }
 
     // First execution.
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPTRANSP;
 
     // Second execution.
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(TOPK_SWAP_IMM12_FP32, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPTRANSP;
 
     if (sort_dir == static_cast<bool>(SortDir::ArgMin)) {
@@ -348,7 +388,13 @@ inline void bitonic_topk_ph3_st4_to_1(bool sort_dir) {
 // The BH implementation uses replay slots for load/store and phase bodies. Quasar keeps
 // the network inline because replayed SFPSWAP sequences do not preserve the ordering
 // this bitonic network requires.
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT = false,
+    bool FUSED = false,
+    bool RANK_STAMPED = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
 inline void calculate_bitonic_topk_phases_steps(
     const int initial_sort_dir,
     const int i_end_phase,
@@ -356,6 +402,8 @@ inline void calculate_bitonic_topk_phases_steps(
     const int i_end_step,
     const int i_start_step) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");
 
     // Per-call constants (don't depend on face/col/phase) — hoisted out of the (face, col) sweep.
     const bool single_phase = (i_start_phase == i_end_phase);
@@ -494,9 +542,19 @@ inline void calculate_bitonic_topk_phases_steps(
 // then store back via bitonic_topk_store8.
 //
 // Merge is short enough to stay inline.
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false>
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool top_min,
+    bool STABLE_SORT = false,
+    bool FUSED = false,
+    bool RANK_STAMPED = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    std::uint32_t TAG_BITS = 16>
 inline void calculate_bitonic_topk_merge(const int m_iter, const int k) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");
 
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++) {
@@ -516,7 +574,7 @@ inline void calculate_bitonic_topk_merge(const int m_iter, const int k) {
                 for (std::uint32_t inner_iter = 0; inner_iter < inner_iter_count; inner_iter++) {
                     bitonic_topk_load8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
                     TTI_SFPSWAP(
-                        0,
+                        TOPK_SWAP_IMM12_FP32,
                         top_min ? p_sfpu::LREG1 : p_sfpu::LREG0,
                         top_min ? p_sfpu::LREG0 : p_sfpu::LREG1,
                         p_sfpswap::ALL_ROWS_MAX);
@@ -558,10 +616,18 @@ inline void calculate_bitonic_topk_merge(const int m_iter, const int k) {
 // Rebuild: re-runs phase (logK-1) on a merged tile pair to reextract sorted runs.
 // A switch on `(logk - 1)` selects one of cases 0/1/2/3/default; each emits a
 // load/swap-sequence/store pattern inline for the same replay-safety reason as local sort.
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT = false,
+    bool FUSED = false,
+    bool RANK_STAMPED = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
 inline void calculate_bitonic_topk_rebuild(
     const bool initial_sort_dir, const int m_iter, const int k, const int logk, const int skip_second) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");
 
     // Per-call constants (don't depend on face/col) — hoisted out of the (face, col) sweep.
     const std::uint32_t total_datums_shift = (skip_second & 0x1);
@@ -707,6 +773,13 @@ inline void calculate_bitonic_topk_rebuild(
 // UInt16-in-32b-DEST prepare helper: no-op on Quasar (workaround only required for WH/BH).
 // Defined so compute_kernel_api.h resolves the symbol on all architectures.
 inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t /*tile_index*/) {}
+inline void _topk_uint16_move_dest_tile_to_pack_half_(std::uint32_t /*tile_index*/) {}
+// Rank-stamped strip stub: the mode itself is static_asserted off on Quasar (see topk_init /
+// the network entries), so this is unreachable; it exists only so the arch-independent
+// compute API (topk_strip_rank_tags) compiles.
+template <std::uint32_t TAG_BITS = 16>
+inline void _topk_strip_rank_tags_(std::uint32_t /*dst_tile_index*/) {}
+inline void _topk_finalize_hi16_index_tile_(std::uint32_t /*dst_tile_index*/) {}
 
 }  // namespace sfpu
 }  // namespace ckernel

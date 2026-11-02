@@ -1,0 +1,39 @@
+{
+  "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "book": {
+    "title": "Pride and Prejudice",
+    "author": "Jane Austen",
+    "source_url": "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
+    "source_sha256": "3f6bb9d6f78e0293b56acd4714dd68cb7d6d1d293402031ce9d5a216bcaf9d75",
+    "body_sha256": "d7d3b8cea07af075e17c2bdfb36185a9dba977801e57dc801758740968a44e4e",
+    "source_body_character_range": [
+      35962,
+      744280
+    ],
+    "prompt_body_character_range": [
+      2,
+      16711
+    ],
+    "body_token_range": [
+      1,
+      4096
+    ],
+    "downloaded_utc": "2026-09-17T06:30:07.858070+00:00"
+  },
+  "input": {
+    "text_file": "pride_and_prejudice.txt",
+    "text_sha256": "440b2d82539dc27ad101e943d6767a059218dc13328ff2698c8319bba1702712",
+    "token_ids_file": "token_ids.json",
+    "token_ids_sha256": "2e9bc9ae27cea8b7885c57bdc831fe4cc17e33c4469bb81e86bf51a690fa9bf1",
+    "bos_token_id": 128000,
+    "vocab_size": 128256,
+    "token_count": 4096,
+    "format": "Raw book continuation: one BOS followed by book tokens; no chat template. 2K uses the first 2048 IDs of the same pinned 4K window."
+  },
+  "checkpoint_files_sha256": {
+    "config.json": "29e4c210b0d6ac178b16b2a255a568bdb23b581e50ca1ef6a6d071dd85704e6e",
+    "tokenizer_config.json": "177c7b61e616fecb84c17ce0591acb92c6c4d60e9ac5ababfb940ff23bbcd424",
+    "tokenizer.json": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4",
+    "special_tokens_map.json": "6f38c73729248f6c127296386e3cdde96e254636cc58b4169d3fd32328d9a8ec"
+  }
+}

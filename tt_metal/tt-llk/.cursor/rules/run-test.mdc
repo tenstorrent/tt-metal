@@ -9,7 +9,6 @@ All test runs MUST be delegated to the `llk-test-runner` agent at `@.cursor/agen
 
 The agent wraps `.cursor/scripts/run_test.sh`, which:
 - Serialises simulator/silicon access via `flock` (per-arch lock file)
-- Kills stale port processes before consume
 - Sets `TT_UMD_SIMULATOR_PATH` for Quasar
 - Exposes `count` / `compile` / `simulate` / `run` subcommands
 
@@ -36,7 +35,6 @@ run test_sfpu_square_quasar.py with --no-split
 - `--rerun` — skip compile, simulate only (uses prior compile-producer artifacts)
 - `--compile-only` — compile-producer only, no simulate
 - `--no-split` — combined compile+run in one pytest invocation (issue-solver tests)
-- `--port <N>` — simulator port (default 5556)
 - `--timeout <secs>` — pytest timeout ceiling (default 600)
 
 ## Arch Inference
@@ -66,7 +64,7 @@ If `--arch` is not provided, infer in this order:
      test_file: {test_file}
      arch:      {arch}
      command:   {count|compile|simulate|run}
-     options:   {--k EXPR | --test-id ID | --maxfail N | --no-split | --port N | --timeout S} (whatever applies)
+     options:   {--k EXPR | --test-id ID | --maxfail N | --no-split | --timeout S} (whatever applies)
 
    MANDATORY pre-flight (do these BEFORE invoking run_test.sh):
 
@@ -84,7 +82,7 @@ If `--arch` is not provided, infer in this order:
 
    Read the script's exit code:
      0 = pass, 1 = test failure, 2 = compile failure,
-     3 = env error (venv missing / lock timeout / port stuck), 4 = bad args.
+     3 = env error (venv missing / lock timeout), 4 = bad args.
 
    On failure, surface the failing lines from the script's stdout/stderr.
    Use a blocking shell call (~30 min timeout); never poll.

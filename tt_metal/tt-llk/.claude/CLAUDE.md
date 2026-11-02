@@ -20,7 +20,8 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | `tt_llk_wormhole_b0/` | Wormhole B0 — llk_lib, instructions, common headers |
 | `tt_llk_blackhole/` | Blackhole — same structure as WH |
 | `tt_llk_quasar/` | Quasar — different file naming (semantic, not letter-based) |
-| `tests/python_tests/` | Python test suite |
+| `tests/python_tests/` | Python test suite (card jobs collect this tree) |
+| `tests/hardware_free/` | Host-only tests; run with `tests/run_hardware_free.sh` |
 | `tests/sources/` | C++ test source files |
 | `tests/hw_specific/` | Architecture-specific test files |
 | `docs/` | Documentation |
@@ -44,6 +45,7 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | Inspecting VCS/FSDB waves for a Quasar runtime failure | `llk-wave-debug` (`.claude/skills/llk-wave-debug/SKILL.md`) | Runs deterministic private waveform diagnosis and reports evidence (Quasar only) |
 | Porting kernels between architectures | `port-kernel` (`.claude/skills/port-kernel/SKILL.md`) | Launches source + target sages, reads test harness |
 | Creating or repairing Quasar perf tests | `quasar-perf-test` (`.claude/skills/quasar-perf-test/SKILL.md`) | Reuses correctness tests, wires `PerfConfig`, implements `PerfRunType` paths, and selects tile/dimension coverage via `PERF_TILE_SIZES` |
+| Choosing the sweep axes of a Quasar functional test | `quasar-test-coverage` (`.claude/skills/quasar-test-coverage/SKILL.md`) | Picks input dimensions (incl. dest bank switching), MX format pairs, and math fidelity so variants buy coverage |
 | Generating or refreshing a performance report | `perf-report` (`.claude/skills/perf-report/SKILL.md`) | Runs the producer/consumer perf sweep, combines `perf_data` CSVs, and validates schema, coverage, and metric plausibility |
 | Analyzing performance-report CSV parameter impact | `perf-parameter-impact` (`.claude/skills/perf-parameter-impact/SKILL.md`) | Builds paired, bottleneck-aware Canvas reports for formats, fidelity, dimensions, accumulation, indexing, and related parameters |
 | TensorShape / tile-size API conversion or coverage | `tensor-shape` (`.claude/skills/tensor-shape/SKILL.md`) | Plumbs `TensorShape` through lib/API, TRISC coverage, review checklist |
@@ -57,6 +59,7 @@ Trigger examples for `arch-lookup`:
 ## Coding Style
 
 - **`const` placement**: write `const <type>` (e.g. `const uint32_t x`), never `<type> const` (e.g. `uint32_t const x`). Semantics are identical, but the codebase uses `const <type>` everywhere — match it. Applies to all type qualifiers in the same position (e.g. `volatile`, `constexpr` modifiers on declarations).
+- **Literal arguments in HAL**: prefer existing named constants or enums for hardware modes. Otherwise, label numeric and boolean arguments in function/instruction calls and template instantiations with the declared parameter name immediately after the literal: `0 /*Shamt*/`, `false /*IsSrcB*/`, `wait(1 /*cycles*/)`. Declarations/defaults, arithmetic, assertions, and descriptor tables with a documented field layout need no redundant labels.
 
 ### Documentation
 
@@ -87,6 +90,22 @@ When tests fail with `TENSIX TIMED OUT`, the device may be hung. Reset with:
 tt-smi -r  # reset device
 ```
 Only reset for runtime failures (TIMEOUT, runtime ASSERTION). Never reset for compile errors or reconfig escapes — resetting masks reconfig bugs.
+
+### The Fuser Is the Reference
+`tests/python_tests/fuser/` defines what a correct LLK result is. Do not change it to make a kernel pass. If a kernel change disagrees with the fuser, fix the kernel, or stop and report the disagreement to the fuser owners.
+
+Do not change:
+- The fuser framework: the `.py` files directly in `fuser/` (`config_parser`, `validator`, `sweep`, `kernel_generator`, `pipeline_plan`, `golden_check`, `operand`, `base_*`, `*_node`, ...)
+- `fuser/golden/`, the reference results
+- Validation rules in `fuser/<arch>/parser.py` (allowed tile shapes and formats, `reject(...)` and `require_*` rules) and existing op entries
+- Existing op generators in `fuser/<arch>/{fpu,sfpu,packer,unpacker}/`
+- Existing YAML configs in `fuser/tests/`: no edits, deletions or looser `atol`/`rtol`
+- The harness entry points `test_fused.py`, `quasar/test_fused_quasar.py`, `perf_fused.py` and `quasar/perf_fused_quasar.py`: add no tests there; fuser cases come from YAML configs
+
+Allowed:
+- New YAML configs in `fuser/tests/` for new coverage
+- Registering a new op: adding it to the op lists in `fuser/<arch>/parser.py` and adding a generator file, without changing existing entries
+- When the same change alters an LLK function's signature, the smallest edit to the generator call that passes the new argument; say so in the PR description
 
 ## Metal Integration
 

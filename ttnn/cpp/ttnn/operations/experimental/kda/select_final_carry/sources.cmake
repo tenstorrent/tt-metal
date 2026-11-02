@@ -1,0 +1,9 @@
+set(TTNN_OP_EXPERIMENTAL_KDA_SELECT_FINAL_CARRY_API_HEADERS select_final_carry.hpp)
+
+set(TTNN_OP_EXPERIMENTAL_KDA_SELECT_FINAL_CARRY_SRCS
+    select_final_carry.cpp
+    device/select_final_carry_device_operation.cpp
+    device/select_final_carry_program_factory.cpp
+)
+
+set(TTNN_OP_EXPERIMENTAL_KDA_SELECT_FINAL_CARRY_NANOBIND_SRCS select_final_carry_nanobind.cpp)

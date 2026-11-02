@@ -17,6 +17,7 @@
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 
@@ -52,8 +53,9 @@ uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::Mes
     for (int i = 0; i < *distributed_context->size(); i++) {
         rank_translation_table[Rank{i}] = Rank{i};
     }
-    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(sender_mesh_id, rank_translation_table);
-    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(recv_mesh_id, rank_translation_table);
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(control_plane, sender_mesh_id, rank_translation_table);
+    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(control_plane, recv_mesh_id, rank_translation_table);
     Rank controller_rank = *std::min_element(sender_ranks.begin(), sender_ranks.end());
     if (distributed_context->rank() == controller_rank) {
         seed = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -167,7 +169,7 @@ bool test_socket_send_recv(
                 auto recv_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
 
-                auto sender_program = CreateProgram();
+                auto sender_program = CreateProgram(*mesh_device_);
 
                 auto sender_kernel = CreateKernel(
                     sender_program,
@@ -221,7 +223,7 @@ bool test_socket_send_recv(
                     socket.get_fabric_node_id(SocketEndpoint::SENDER, connection.sender_core.device_coord);
                 auto recv_fabric_node_id = mesh_device_->get_fabric_node_id(connection.receiver_core.device_coord);
 
-                auto recv_program = CreateProgram();
+                auto recv_program = CreateProgram(*mesh_device_);
 
                 auto recv_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
 
@@ -285,7 +287,8 @@ std::vector<tt::tt_fabric::MeshId> get_neighbor_mesh_ids(SystemConfig system_con
     std::vector<tt::tt_fabric::MeshId> recv_mesh_ids;
 
     if (system_config == SystemConfig::NANO_EXABOX || system_config == SystemConfig::EXABOX) {
-        // Exabox and Nano-Exabox currently have 5 hosts. Sender ranks assignment is customized for a particular Rank File.
+        // Exabox and Nano-Exabox currently have 5 hosts. Sender ranks assignment is customized for a particular Rank
+        // File.
         recv_mesh_ids = {
             tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{2}, tt::tt_fabric::MeshId{3}, tt::tt_fabric::MeshId{4}};
     } else if (

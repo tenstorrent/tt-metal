@@ -27,6 +27,7 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -36,8 +37,9 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "eth_test_common.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using std::vector;
 using namespace tt;
@@ -139,7 +141,7 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
     // Special case for 2 devices to ensure core pairs are not the same for send and receive
     if (device_ring.size() - 1 == 2) {
         const auto& first_mesh_device = device_ring[0];
-        auto* first_device = first_mesh_device->get_devices()[0];
+        auto* first_device = first_mesh_device->impl().get_devices()[0];
         const auto& second_mesh_device = device_ring[1];
         uint32_t i = 0;
         for (const auto& first_eth_core : first_device->get_active_ethernet_cores(true)) {
@@ -176,7 +178,7 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
     } else {
         for (uint32_t i = 0; i < device_ring.size() - 1; ++i) {
             const auto& sender_mesh_device = device_ring[i];
-            auto* sender_device = sender_mesh_device->get_devices()[0];
+            auto* sender_device = sender_mesh_device->impl().get_devices()[0];
             const auto& receiver_mesh_device = device_ring[i + 1];
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
                 if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
@@ -229,6 +231,15 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
     std::map<ChipId, tt_metal::Program> programs;
+    // Program has no default constructor semantics we want here (a Program must be bound to a MeshDevice),
+    // so create entries explicitly instead of relying on std::map::operator[].
+    auto get_program = [&programs](distributed::MeshDevice& mesh_device, ChipId chip_id) -> tt_metal::Program& {
+        auto it = programs.find(chip_id);
+        if (it == programs.end()) {
+            it = programs.emplace(chip_id, tt_metal::CreateProgram(mesh_device)).first;
+        }
+        return it->second;
+    };
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     std::map<ChipId, distributed::MeshWorkload> workloads;
@@ -245,10 +256,10 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         ////////////////////////////////////////////////////////////////////////////
         const auto& [sender_mesh_device, receiver_mesh_device, eth_sender_core, eth_receiver_core] =
             sender_receivers[i];
-        auto* sender_device = sender_mesh_device->get_devices()[0];
-        auto* receiver_device = receiver_mesh_device->get_devices()[0];
-        auto& sender_program = programs[sender_device->id()];
-        auto& receiver_program = programs[receiver_device->id()];
+        auto* sender_device = sender_mesh_device->impl().get_devices()[0];
+        auto* receiver_device = receiver_mesh_device->impl().get_devices()[0];
+        auto& sender_program = get_program(*sender_mesh_device, sender_device->id());
+        auto& receiver_program = get_program(*receiver_mesh_device, receiver_device->id());
         CoreCoord sender_receiver_core;
         for (const auto& sender_receiver : sender_receivers) {
             if (std::get<1>(sender_receiver)->get_device_ids()[0] == sender_device->id()) {
@@ -352,7 +363,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         const auto& core = std::get<2>(sender_receivers[i]);
         auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device->get_device_ids()[0],
-            device->get_devices()[0]->ethernet_core_from_logical_core(core),
+            device->impl().get_devices()[0]->ethernet_core_from_logical_core(core),
             src_eth_l1_byte_address,
             byte_size_per_device * sender_receivers.size());
         auto a = std::mismatch(full_input.begin(), full_input.end(), readback_vec.begin());
@@ -384,13 +395,22 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
     std::map<ChipId, tt_metal::Program> programs;
+    // Program has no default constructor semantics we want here (a Program must be bound to a MeshDevice),
+    // so create entries explicitly instead of relying on std::map::operator[].
+    auto get_program = [&programs](distributed::MeshDevice& mesh_device, ChipId chip_id) -> tt_metal::Program& {
+        auto it = programs.find(chip_id);
+        if (it == programs.end()) {
+            it = programs.emplace(chip_id, tt_metal::CreateProgram(mesh_device)).first;
+        }
+        return it->second;
+    };
     std::map<ChipId, distributed::MeshWorkload> workloads;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 
-    std::vector<std::shared_ptr<tt_metal::Buffer>> output_buffers;
+    std::vector<std::shared_ptr<distributed::MeshBuffer>> output_buffers;
     output_buffers.reserve(sender_receivers.size());
 
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
@@ -409,17 +429,18 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             }
         }
 
-        auto& program = programs[device_id];
+        auto& program = get_program(*device, device_id);
 
-        auto input_buffer = CreateBuffer(
-            tt_metal::InterleavedBufferConfig{device->get_devices()[0], cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type});
-        tt_metal::detail::WriteToBuffer(input_buffer, inputs[i]);
-        output_buffers.emplace_back(CreateBuffer(tt_metal::InterleavedBufferConfig{
-            device->get_devices()[0],
-            cfg.size_bytes * sender_receivers.size(),
-            cfg.page_size_bytes,
-            cfg.output_buffer_type}));
-        tt_metal::detail::WriteToBuffer(output_buffers[i], all_zeros);
+        auto input_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = cfg.size_bytes},
+            {.page_size = cfg.page_size_bytes, .buffer_type = cfg.input_buffer_type},
+            device.get());
+        distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, inputs[i], true);
+        output_buffers.emplace_back(distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = cfg.size_bytes * sender_receivers.size()},
+            {.page_size = cfg.page_size_bytes, .buffer_type = cfg.output_buffer_type},
+            device.get()));
+        distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), output_buffers[i], all_zeros, true);
 
         auto eth_sender_kernel = tt_metal::CreateKernel(
             program,
@@ -430,10 +451,10 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                 .compile_args = {
                     uint32_t(num_bytes_per_send),
                     uint32_t(num_bytes_per_send >> 4),
-                    uint32_t(device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core).x),
-                    uint32_t(device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core).y),
-                    uint32_t(input_buffer->buffer_type() == tt_metal::BufferType::DRAM),
-                    uint32_t(output_buffers[i]->buffer_type() == tt_metal::BufferType::DRAM)}});
+                    uint32_t(device->impl().get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core).x),
+                    uint32_t(device->impl().get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core).y),
+                    uint32_t(input_buffer->device_local_config().buffer_type == tt_metal::BufferType::DRAM),
+                    uint32_t(output_buffers[i]->device_local_config().buffer_type == tt_metal::BufferType::DRAM)}});
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -451,13 +472,13 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
              (uint32_t)sem_l1_byte_address});
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device_id,
-            device->get_devices()[0]->ethernet_core_from_logical_core(eth_sender_core),
+            device->impl().get_devices()[0]->ethernet_core_from_logical_core(eth_sender_core),
             std::vector{INVALID},
             sem_l1_byte_address);
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device_id,
-            device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core),
+            device->impl().get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core),
             std::vector{INVALID},
             sem_l1_byte_address);
 
@@ -471,7 +492,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).x),
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).y),
                     uint32_t(
-                        output_buffers[i]->buffer_type() ==
+                        output_buffers[i]->device_local_config().buffer_type ==
                         tt_metal::BufferType::DRAM)}});  // probably want to use NOC_1 here
 
         tt_metal::SetRuntimeArgs(
@@ -508,7 +529,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
         const auto& device = std::get<0>(sender_receivers[i]);
         const auto& core = std::get<2>(sender_receivers[i]);
         std::vector<uint32_t> readback_vec;
-        tt_metal::detail::ReadFromBuffer(output_buffers[i], readback_vec);
+        distributed::EnqueueReadMeshBuffer(device->mesh_command_queue(), readback_vec, output_buffers[i], true);
         auto a = std::mismatch(full_input.begin(), full_input.end(), readback_vec.begin());
         bool p = (a.first == full_input.end());
         pass &= p;

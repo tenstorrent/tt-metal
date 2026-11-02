@@ -26,24 +26,26 @@ import math
 
 import ttnn
 
+_PREFIX_REUSE_HALOS = 2
+
 
 def _gather_seq_len(sliding_window_size, k_chunk_size, full_seq):
-    """Ring gather-buffer seq length. Pavle's GPT-OSS sliding op requires a COMPACT halo buffer (not the
-    full sequence) — halo = ceil((window-1)/k_chunk)*k_chunk, floored at one tile (per his test). Full
-    layers (sliding_window_size=None) gather the whole sequence. Buffers are keyed by this length so a
-    sliding layer (compact) and a full layer (full) get distinct CCL-manager buffers."""
+    """Reserve two compact predecessor halos for sliding attention.
+
+    Prefix reuse can rotate Q at most one ring group before the halo, so the
+    current and predecessor halos must both fit. Full attention instead gathers
+    the entire sequence. The CCL buffer key includes this size.
+    """
     if sliding_window_size is None:
         return full_seq
     halo = math.ceil((sliding_window_size - 1) / k_chunk_size) * k_chunk_size
-    return max(halo, ttnn.TILE_SIZE)
+    return min(_PREFIX_REUSE_HALOS * max(halo, ttnn.TILE_SIZE), full_seq)
 
 
 def dense_sp_attention(
     tt_q,
     cache_k,
     cache_v,
-    tt_k_chunk,
-    tt_v_chunk,
     *,
     kv_actual,
     logical_n,
@@ -58,20 +60,22 @@ def dense_sp_attention(
     cluster_axis,
     attention_sink=None,
     sliding_window_size=None,
+    circular_kv_cache=False,
     slot_idx=0,
     layer_idx=0,
     num_layers=1,
-    write_chunk=True,
 ):
     """Cache-read ring_joint over the accumulated prefix [0:logical_n] (multi-chunk / chunked prefill).
 
     tt_q              [1, n_q_local, chunk_global, head_dim]  block-cyclic over the chunk, SP×TP sharded
     cache_k, cache_v  the block-cyclic SP KV caches (GptOssKVCache.k/.v), bf8
-    tt_k_chunk/v      this chunk's K/V to write (ignored when write_chunk=False — the per-layer seam
-                      already wrote it via write_kv_chunk)
     kv_actual         valid prefix length already in the cache before this chunk (drives on-device rotation)
     logical_n         total valid prefix length (q attends causally over [0:logical_n])
     attention_sink    per-query-head sink (weights.sinks, bf16); sliding_window_size None on full layers
+    circular_kv_cache the sliding cache is a circular buffer of whole chunk slabs; the ring read
+                      wraps its local slab addressing (chunk group g in slab g mod n_slabs, slab count
+                      derived on-device from the cache/Q geometry). False on full layers / unbounded
+                      caches. kv_actual and logical_n stay TRUE ABSOLUTE lengths either way.
     -> out            [1, n_q_local, chunk_local, head_dim]  block-cyclic over the chunk
     """
     assert cache_k.dtype == ttnn.bfloat8_b and cache_v.dtype == ttnn.bfloat8_b, (
@@ -79,27 +83,7 @@ def dense_sp_attention(
         "KV_CACHE_DTYPE=bf16 is not supported for chunked prefill (the sliding RingJointSDPA path "
         "and its gather buffers are bf8)."
     )
-    if write_chunk:
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache_k,
-            tt_k_chunk,
-            slot_idx=slot_idx,
-            layer_idx=layer_idx,
-            num_layers=num_layers,
-            kv_actual_global=kv_actual,
-            cluster_axis=cluster_axis,
-        )
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache_v,
-            tt_v_chunk,
-            slot_idx=slot_idx,
-            layer_idx=layer_idx,
-            num_layers=num_layers,
-            kv_actual_global=kv_actual,
-            cluster_axis=cluster_axis,
-        )
-
-    # Ring gather-buffer seq: full cache for full-attn layers; compact halo for sliding layers.
+    # Ring gather-buffer seq: full cache for full-attn layers; two bounded halos for sliding layers.
     _bufseq = _gather_seq_len(sliding_window_size, program_config.k_chunk_size, cache_global)
     # Full-attn layers pass sliding_window_size=None -> non-sliding full-causal ring path (sinks now
     # allowed after the device-op assert relax). Sliding layers pass 128. Buffer handles None (full).
@@ -111,8 +95,8 @@ def dense_sp_attention(
         None,
         None,
         # Persistent ring-gather scratch (once per key/size, reused across layers/chunks). Full-attn
-        # layers gather the entire per-device shard (cache_global); sliding layers use a compact halo
-        # (_bufseq). logical_n / kv_actual_isl drive causal masking. dtype MUST match the bf8 KV cache.
+        # layers gather the entire per-device shard (cache_global); sliding layers use two bounded
+        # halos (_bufseq). logical_n / kv_actual_isl drive causal masking. dtype MUST match bf8 KV.
         persistent_output_buffer_k=ccl_manager.get_ring_gather_buffer(
             f"dense_k_{_bufseq}", n_kv, _bufseq, head_dim, ttnn.bfloat8_b
         ),
@@ -143,5 +127,6 @@ def dense_sp_attention(
         # GPT-OSS additions (Pavle's sinks+sliding branch):
         attention_sink=attention_sink,
         sliding_window_size=sliding_window_size,
+        circular_kv_cache=circular_kv_cache,
     )
     return out

@@ -12,30 +12,15 @@ from math import isnan
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_equal
 
 
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_mac_all_tensors(device, h, w):
-    torch.manual_seed(0)
+def test_where_golden_treats_negative_predicates_as_true():
+    predicate = torch.tensor([-2, 0, 3, -1], dtype=torch.int32)
+    true_values = torch.tensor([10, 20, 30, 40], dtype=torch.int32)
+    false_values = torch.tensor([1, 2, 3, 4], dtype=torch.int32)
+    golden_function = ttnn.get_golden_function(ttnn.where)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16)
+    output = golden_function(predicate, true_values, false_values)
 
-    golden_fn = ttnn.get_golden_function(ttnn.mac)
-    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    input_tensor1 = ttnn.from_torch(torch_input_tensor1, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor1 = ttnn.to_device(input_tensor1, device)
-    input_tensor2 = ttnn.from_torch(torch_input_tensor2, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.to_device(input_tensor2, device)
-    output_tensor = ttnn.mac(input_tensor, input_tensor1, input_tensor2)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert torch.equal(output, torch.tensor([10, 2, 30, 40], dtype=torch.int32))
 
 
 @pytest.mark.parametrize("h", [64])
@@ -60,7 +45,7 @@ def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 def assert_where_exact(torch_input_tensor, torch_input1, torch_input2, device):
@@ -114,37 +99,6 @@ def test_where_bcast(device, dtype, hc, ht, hf, wc, wt, wf):
     torch_input_tensor2 = torch.rand((hf, wf), dtype=dtype).uniform_(-100, 100)
 
     assert_where_exact(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, device)
-
-
-def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, value=value)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    input_tensor1 = ttnn.from_torch(torch_input_tensor1, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor1 = ttnn.to_device(input_tensor1, device)
-    input_tensor2 = ttnn.from_torch(torch_input_tensor2, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.to_device(input_tensor2, device)
-    output_tensor = ttnn_function(input_tensor, input_tensor1, input_tensor2, value=value)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("value", [15.5])
-def test_addcdiv(device, h, w, value):
-    run_ternary_test_value(device, h, w, value, ttnn.addcdiv)
 
 
 @pytest.mark.parametrize(
@@ -269,7 +223,7 @@ def test_addcmul(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
     golden_fn = ttnn.get_golden_function(ttnn.addcmul)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -376,7 +330,115 @@ def test_addcdiv(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
             output_tensor,
         )
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1, allow_nonfinite=True)
+
+
+_MIXED_INPUT_CASES = [
+    (ttnn.bfloat16, ttnn.float32, None),
+    (ttnn.float32, ttnn.bfloat16, None),
+]
+_MIXED_OUTPUT_CASES = [
+    (ttnn.float32, ttnn.float32, ttnn.bfloat16),
+    (ttnn.bfloat16, ttnn.bfloat16, ttnn.float32),
+]
+_TO_TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
+
+
+def _mixed_dtype_case_id(a_dtype, bc_dtype, out_dtype):
+    name = {ttnn.bfloat16: "bf16", ttnn.float32: "fp32"}
+    return f"a_{name[a_dtype]}-bc_{name[bc_dtype]}-out_{name[out_dtype or a_dtype]}"
+
+
+def _assert_ternary_close(expected, result, out_dtype):
+    if out_dtype == ttnn.float32:
+        assert torch.allclose(result, expected, rtol=1e-5, atol=1e-5)
+    else:
+        assert_with_ulp(expected_result=expected.to(torch.bfloat16), actual_result=result, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "op, a_dtype, bc_dtype, out_dtype",
+    [
+        pytest.param(op, *case, id=f"{op}-{_mixed_dtype_case_id(*case)}")
+        for op in ["lerp", "addcdiv", "mac", "addcmul", "snake_beta"]
+        # addcmul and snake_beta require all inputs to share a dtype.
+        for case in (
+            _MIXED_OUTPUT_CASES if op in ("addcmul", "snake_beta") else _MIXED_INPUT_CASES + _MIXED_OUTPUT_CASES
+        )
+    ],
+)
+@pytest.mark.parametrize("bc_shape", [(1, 1, 64, 128), (1, 1, 1, 128)], ids=["no_bcast", "row_bcast"])
+def test_ternary_mixed_dtypes(device, op, a_dtype, bc_dtype, out_dtype, bc_shape):
+    # Regression for #60223: fp32 operands or output require an fp32 DEST and per-CB unpack formats.
+    torch.manual_seed(0)
+    a = torch.randn((1, 1, 64, 128), dtype=_TO_TORCH_DTYPE[a_dtype])
+    b = torch.randn(bc_shape, dtype=_TO_TORCH_DTYPE[bc_dtype])
+    c = (torch.rand(bc_shape) + 0.5).to(_TO_TORCH_DTYPE[bc_dtype])
+    tt_a, tt_b, tt_c = (
+        ttnn.from_torch(x, dtype=d, layout=ttnn.TILE_LAYOUT, device=device)
+        for x, d in ((a, a_dtype), (b, bc_dtype), (c, bc_dtype))
+    )
+    output_tensor = None
+    if out_dtype is not None:
+        output_tensor = ttnn.from_torch(torch.zeros(a.shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    A, B, C = a.float(), b.float(), c.float()
+    if op == "lerp":
+        output = ttnn.lerp(tt_a, tt_b, tt_c, output_tensor=output_tensor)
+        expected = A + C * (B - A)
+    elif op == "addcdiv":
+        output = ttnn.addcdiv(tt_a, tt_b, tt_c, value=0.5, output_tensor=output_tensor)
+        expected = A + 0.5 * B / C
+    elif op == "addcmul":
+        output = ttnn.addcmul(tt_a, tt_b, tt_c, value=0.5, output_tensor=output_tensor)
+        expected = A + 0.5 * B * C
+    elif op == "snake_beta":
+        output = ttnn.snake_beta(tt_a, tt_b, tt_c, output_tensor=output_tensor)
+        expected = A + torch.sin(B * A) ** 2 / C
+    else:
+        output = ttnn.mac(tt_a, tt_b, tt_c, output_tensor=output_tensor)
+        expected = A * B + C
+
+    out_dtype = out_dtype or a_dtype
+    assert output.dtype == out_dtype
+    _assert_ternary_close(expected, ttnn.to_torch(output), out_dtype)
+
+
+@pytest.mark.parametrize(
+    "op",
+    ["lerp_tts", "mac_tts", "mac_tst"],
+)
+@pytest.mark.parametrize(
+    "a_dtype, t_dtype",
+    [(ttnn.bfloat16, ttnn.float32), (ttnn.float32, ttnn.bfloat16)],
+    ids=["a_bf16-t_fp32", "a_fp32-t_bf16"],
+)
+@pytest.mark.parametrize(
+    "t_shape",
+    [(1, 1, 64, 128), (1, 1, 64, 1), (1, 1, 1, 1), (1, 1, 1, 128)],
+    ids=["no_bcast", "col_bcast", "scalar_bcast", "row_bcast"],
+)
+def test_ternary_scalar_mixed_dtypes(device, op, a_dtype, t_dtype, t_shape):
+    # Tensor-scalar variants share the predicate/tensor CB pair, which can hold different dtypes (#60223).
+    torch.manual_seed(0)
+    a = torch.randn((1, 1, 64, 128), dtype=_TO_TORCH_DTYPE[a_dtype])
+    t = torch.randn(t_shape, dtype=_TO_TORCH_DTYPE[t_dtype])
+    tt_a = ttnn.from_torch(a, dtype=a_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_t = ttnn.from_torch(t, dtype=t_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    A, T = a.float(), t.float()
+    if op == "lerp_tts":
+        output = ttnn.lerp(tt_a, tt_t, 0.25)
+        expected = A + 0.25 * (T - A)
+    elif op == "mac_tts":
+        output = ttnn.mac(tt_a, tt_t, 1.5)
+        expected = A * T + 1.5
+    else:
+        output = ttnn.mac(tt_a, 1.5, tt_t)
+        expected = A * 1.5 + T
+
+    assert output.dtype == a_dtype
+    _assert_ternary_close(expected, ttnn.to_torch(output), a_dtype)
 
 
 def test_ternary_scalar_distinguishes_cache_entries(device):
@@ -491,172 +553,218 @@ def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
     device.disable_and_clear_program_cache()
 
 
-# Same width, at least one operand with H==1 -> ROW_BCAST. One case per broadcast position so each of
-# the kernels' three per-operand LLK-broadcast blocks is exercised; one case with two operands
-# broadcast, which is the only multi-block configuration the dispatch admits (all three H==1
-# classifies as OUTER_BCAST instead) and the only one where a block's restore has to hold for the
-# block after it.
-ROW_BCAST_SHAPES = [
-    pytest.param((1, 1, 1, 128), (1, 1, 64, 128), (1, 1, 64, 128), id="bcast_a"),
-    pytest.param((1, 1, 64, 128), (1, 1, 1, 128), (1, 1, 64, 128), id="bcast_b"),
-    pytest.param((1, 1, 64, 128), (1, 1, 64, 128), (1, 1, 1, 128), id="bcast_c"),
-    pytest.param((1, 1, 1, 128), (1, 1, 1, 128), (1, 1, 64, 128), id="bcast_ab"),
-]
+def test_ternary_cache_miss_different_alignment(device):
+    """Same logical shape, over-padded TILE vs default padding, must be two cache entries."""
+    device.enable_program_cache()
 
-ROW_BCAST_OUT_DTYPES = [ttnn.bfloat16, ttnn.float32]
-
-
-def _uniform_bf16(shape, lo, hi):
-    return torch.empty(shape, dtype=torch.bfloat16).uniform_(lo, hi)
-
-
-def _check_row_bcast_output(torch_output, out, out_dtype, computes_new_values):
-    """Assert a row-broadcast result, given a reference computed in fp32.
-
-    bfloat16 output is the control: same kernel, formats happen to agree. Packing in a broadcast CB's
-    bfloat16 format would write half-length tiles into a wider output buffer, so a format regression
-    collapses PCC rather than merely degrading it. `computes_new_values` additionally pins that a
-    FLOAT32 output really carries fp32 precision -- a result packed as bfloat16 would be exactly
-    bfloat16-representable everywhere. That check is meaningless for ops that only select among their
-    inputs, since bfloat16 inputs make bfloat16-representable outputs the correct answer.
-    """
-    assert out.dtype == out_dtype, f"expected {out_dtype} output, got {out.dtype}"
-    result = ttnn.to_torch(out).float()
-    assert_with_pcc(torch_output, result, 0.999)
-    if out_dtype == ttnn.float32 and computes_new_values:
-        assert not torch.equal(
-            result, result.bfloat16().float()
-        ), "FLOAT32 output holds only bfloat16-representable values -- packed in the broadcast CB's format?"
-
-
-@pytest.mark.parametrize("a_shape, b_shape, c_shape", ROW_BCAST_SHAPES)
-@pytest.mark.parametrize("out_dtype", ROW_BCAST_OUT_DTYPES)
-@pytest.mark.parametrize("ttnn_op", [ttnn.addcmul, ttnn.addcdiv])
-def test_addc_row_bcast_preallocated_output_dtype(device, ttnn_op, out_dtype, a_shape, b_shape, c_shape):
-    """Guards the packer restore in the FPU addc row-broadcast compute kernel.
-
-    All-BFLOAT16 inputs on ROW_BCAST shapes select the LLK broadcast path, whose blocks retarget the
-    packer at a broadcast CB carrying the input dtype; the result must still be packed in the output
-    CB's format, which differs whenever a preallocated output tensor changes the dtype.
-    """
+    logical = (1, 1, 32, 32)
+    padded = [1, 1, 64, 32]
     torch.manual_seed(0)
 
-    torch_a = _uniform_bf16(a_shape, -100, 100)
-    torch_b = _uniform_bf16(b_shape, -100, 100)
-    # Keep the addcdiv denominator away from zero so the reference stays finite.
-    torch_c = _uniform_bf16(c_shape, 1, 100)
-    value = 2.0
+    def make(overpad):
+        tensors = []
+        for _ in range(3):
+            host = torch.rand(logical, dtype=torch.bfloat16)
+            if overpad:
+                tt = ttnn.tilize_with_val_padding(
+                    ttnn.from_torch(host, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16),
+                    padded,
+                    0.0,
+                )
+            else:
+                tt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            tensors.append(tt)
+        return tensors
 
-    golden_fn = ttnn.get_golden_function(ttnn_op)
-    torch_output = golden_fn(torch_a.float(), torch_b.float(), torch_c.float(), value=value)
+    over = make(True)
+    normal = make(False)
+    assert list(over[0].shape) == list(normal[0].shape)
+    assert list(over[0].padded_shape) != list(normal[0].padded_shape)
 
-    a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    c = ttnn.from_torch(torch_c, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    out = ttnn.from_torch(torch.zeros(torch_output.shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    device.clear_program_cache()
+    ttnn.addcmul(*over, value=1.0)
+    assert device.num_program_cache_entries() == 1
+    ttnn.addcmul(*normal, value=1.0)
+    assert device.num_program_cache_entries() == 2
 
-    ttnn_op(a, b, c, value=value, output_tensor=out)
-
-    _check_row_bcast_output(torch_output, out, out_dtype, computes_new_values=True)
-
-
-def _lerp_operands(a_shape, b_shape, c_shape):
-    return _uniform_bf16(a_shape, -100, 100), _uniform_bf16(b_shape, -100, 100), _uniform_bf16(c_shape, 0, 1)
-
-
-def _lerp_reference(a, b, c):
-    return torch.lerp(a, b, c)
-
-
-def _where_operands(a_shape, b_shape, c_shape):
-    predicate = torch.randint(0, 2, a_shape).to(torch.bfloat16)
-    return predicate, _uniform_bf16(b_shape, -100, 100), _uniform_bf16(c_shape, -100, 100)
+    device.disable_and_clear_program_cache()
 
 
-def _where_reference(a, b, c):
-    return torch.where(a.bool(), b, c)
+def _height_sharded(device, shard_shape=(32, 64)):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
 
 
-def _snake_beta_reference(a, b, c):
-    s = torch.sin(b * a)
-    return a + (s * s) / c
-
-
-# Every TTT ternary op other than addcmul/addcdiv routes to the same SFPU row-broadcast kernel, so
-# each of them reached the same defect. `where` only selects among its inputs, so an fp32 output of a
-# bfloat16 selection is legitimately bfloat16-representable. snake_beta needs its own shapes and has
-# its own test below.
-#
-# The op and output dtype are one axis so that `where`'s FLOAT32 cases can carry a strict xfail: they
-# fail for a defect unrelated to the pack format restore -- identically so with the kernels reverted --
-# and the mark keeps the body running, so an XPASS means that defect is fixed and the mark must go.
-ROW_BCAST_TTT_CASES = [
-    pytest.param(ttnn.lerp, _lerp_operands, _lerp_reference, True, ttnn.bfloat16, id="lerp-bf16"),
-    pytest.param(ttnn.lerp, _lerp_operands, _lerp_reference, True, ttnn.float32, id="lerp-fp32"),
-    pytest.param(ttnn.where, _where_operands, _where_reference, False, ttnn.bfloat16, id="where-bf16"),
-    pytest.param(
-        ttnn.where,
-        _where_operands,
-        _where_reference,
-        False,
-        ttnn.float32,
-        id="where-fp32",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="where with a FLOAT32 preallocated output is broken independently of the pack format restore",
-        ),
-    ),
+ROW_MAJOR_REJECTION_CASES = [
+    ("rm sharded predicate, rm interleaved operands", ttnn.ROW_MAJOR_LAYOUT, "mixed", None, None),
+    ("tile operands, rm sharded output", ttnn.TILE_LAYOUT, "interleaved", ttnn.ROW_MAJOR_LAYOUT, None),
+    ("rm sharded operands, tile sharded output", ttnn.ROW_MAJOR_LAYOUT, "sharded", ttnn.TILE_LAYOUT, None),
+    ("rm sharded operands, interleaved memory_config", ttnn.ROW_MAJOR_LAYOUT, "sharded", None, "dram"),
+    ("rm sharded operands, computed output", ttnn.ROW_MAJOR_LAYOUT, "sharded", None, None),
 ]
 
 
-@pytest.mark.parametrize("a_shape, b_shape, c_shape", ROW_BCAST_SHAPES)
-@pytest.mark.parametrize("ttnn_op, make_operands, reference, computes_new_values, out_dtype", ROW_BCAST_TTT_CASES)
-def test_ttt_row_bcast_preallocated_output_dtype(
-    device, ttnn_op, make_operands, reference, computes_new_values, out_dtype, a_shape, b_shape, c_shape
+@pytest.mark.parametrize(
+    "label, operand_layout, operand_memory, out_layout, memory_config_kwarg",
+    ROW_MAJOR_REJECTION_CASES,
+    ids=[c[0] for c in ROW_MAJOR_REJECTION_CASES],
+)
+def test_ternary_rejects_row_major(
+    device, expect_error, label, operand_layout, operand_memory, out_layout, memory_config_kwarg
 ):
-    """Guards the packer restore in the TTT SFPU row-broadcast compute kernel.
+    """ttnn.where must reject every row-major configuration in any slot."""
+    shape = (1, 1, 64, 64)
+    torch.manual_seed(0)
+    sharded = _height_sharded(device)
 
-    Same defect as test_addc_row_bcast_preallocated_output_dtype in the kernel shared by every
-    non-addc TTT ternary op. is_llk_bcast() inspects only the input dtypes, so a FLOAT32 output on
-    BFLOAT16 inputs still selects the broadcast path.
-    """
+    def make(host, layout, memory_config):
+        return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config)
+
+    pred = torch.rand(shape, dtype=torch.bfloat16) > 0.5
+    operands = [
+        pred.to(torch.bfloat16),
+        torch.rand(shape, dtype=torch.bfloat16),
+        torch.rand(shape, dtype=torch.bfloat16),
+    ]
+
+    if operand_memory == "mixed":
+        memories = [sharded, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]
+    elif operand_memory == "sharded":
+        memories = [sharded] * 3
+    else:
+        memories = [ttnn.DRAM_MEMORY_CONFIG] * 3
+
+    args = [make(host, operand_layout, memory) for host, memory in zip(operands, memories)]
+
+    kwargs = {}
+    if out_layout is not None:
+        kwargs["output_tensor"] = make(torch.zeros(shape, dtype=torch.bfloat16), out_layout, sharded)
+    if memory_config_kwarg == "dram":
+        kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+
+    with expect_error(RuntimeError, r"Tile layout"):
+        ttnn.where(*args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "call, slot",
+    [("where_true", "input_b"), ("where_false", "input_c"), ("lerp_tts", "input_b"), ("mac_tst", "input_c")],
+)
+def test_ternary_rejects_row_major_operand(device, expect_error, call, slot):
+    """A row-major operand must be rejected even when input_a is TILE."""
+    shape = (1, 1, 64, 64)
     torch.manual_seed(0)
 
-    torch_a, torch_b, torch_c = make_operands(a_shape, b_shape, c_shape)
-    torch_output = reference(torch_a.float(), torch_b.float(), torch_c.float())
+    def make(layout):
+        return ttnn.from_torch(
+            torch.rand(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device
+        )
 
-    a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    c = ttnn.from_torch(torch_c, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    out = ttnn.from_torch(torch.zeros(torch_output.shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile, rm = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT
+    with expect_error(RuntimeError, rf"requires {slot} to be in Tile layout"):
+        if call == "where_true":
+            ttnn.where(make(tile), make(rm), make(tile))
+        elif call == "where_false":
+            ttnn.where(make(tile), make(tile), make(rm))
+        elif call == "lerp_tts":
+            ttnn.lerp(make(tile), make(rm), 0.5)
+        else:
+            ttnn.mac(make(tile), 2.0, make(rm))
 
-    ttnn_op(a, b, c, output_tensor=out)
 
-    _check_row_bcast_output(torch_output, out, out_dtype, computes_new_values)
+def test_ternary_accepts_tile_sharded(device):
+    """The TILE counterpart of the rejected cases must still work."""
+    shape = (1, 1, 64, 64)
+    torch.manual_seed(0)
+    sharded = _height_sharded(device)
+
+    pred = torch.rand(shape, dtype=torch.bfloat16) > 0.5
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+
+    def make(host, memory_config):
+        return ttnn.from_torch(
+            host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    for out_memory in (sharded, ttnn.DRAM_MEMORY_CONFIG):
+        out = make(torch.zeros(shape, dtype=torch.bfloat16), out_memory)
+        result = ttnn.where(
+            make(pred.to(torch.bfloat16), sharded), make(a, sharded), make(b, sharded), output_tensor=out
+        )
+        assert_equal(ttnn.to_torch(result), torch.where(pred, a, b))
 
 
-@pytest.mark.parametrize("out_dtype", ROW_BCAST_OUT_DTYPES)
-def test_snake_beta_row_bcast_preallocated_output_dtype(device, out_dtype):
-    """Guards the packer restore for snake_beta, which shares the TTT SFPU row-broadcast kernel.
+def test_ternary_cache_miss_different_output_alignment(device):
+    """Same inputs, preallocated output over-padded vs default, must be two cache entries."""
+    device.enable_program_cache()
 
-    snake_beta requires alpha.shape == beta.shape with a non-1 extent only on the last dim, so the
-    only ROW_BCAST configuration it admits broadcasts alpha and beta together -- two blocks, where one
-    block's restore has to hold for the next.
-    """
+    logical = (1, 1, 32, 32)
+    padded = [1, 1, 64, 32]
     torch.manual_seed(0)
 
-    torch_x = _uniform_bf16((1, 1, 64, 128), -10, 10)
-    torch_alpha = _uniform_bf16((1, 1, 1, 128), -2, 2)
-    # Keep beta away from zero so the reference stays finite.
-    torch_beta = _uniform_bf16((1, 1, 1, 128), 1, 10)
+    pred = torch.rand(logical, dtype=torch.bfloat16) > 0.5
+    a = torch.rand(logical, dtype=torch.bfloat16)
+    b = torch.rand(logical, dtype=torch.bfloat16)
+    expected = torch.where(pred, a, b)
 
-    torch_output = _snake_beta_reference(torch_x.float(), torch_alpha.float(), torch_beta.float())
+    def tile(host):
+        return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    x = ttnn.from_torch(torch_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    alpha = ttnn.from_torch(torch_alpha, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    beta = ttnn.from_torch(torch_beta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    out = ttnn.from_torch(torch.zeros(torch_output.shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    def over_padded(host):
+        return ttnn.tilize_with_val_padding(
+            ttnn.from_torch(host, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16), padded, 0.0
+        )
 
-    ttnn.snake_beta(x, alpha, beta, output_tensor=out)
+    # Build every tensor before clearing so that tilize's own entries do not count.
+    inputs = [tile(pred.to(torch.bfloat16)), tile(a), tile(b)]
+    out_default = tile(torch.zeros(logical, dtype=torch.bfloat16))
+    out_over = over_padded(torch.zeros(logical, dtype=torch.bfloat16))
+    assert list(out_default.shape) == list(out_over.shape)
+    assert list(out_default.padded_shape) != list(out_over.padded_shape)
 
-    _check_row_bcast_output(torch_output, out, out_dtype, computes_new_values=True)
+    device.clear_program_cache()
+    for entries, out in enumerate((out_default, out_over), start=1):
+        assert_equal(ttnn.to_torch(ttnn.where(*inputs, output_tensor=out)), expected)
+        assert device.num_program_cache_entries() == entries
+
+    device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("pass_memory_config", [True, False])
+def test_ternary_preallocated_output_memory_distinguishes_cache_entries(device, pass_memory_config):
+    """Regression test for cache key containing the memory of the preallocated output."""
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    shape = (1, 1, 64, 64)
+    torch.manual_seed(0)
+    pred = torch.rand(shape, dtype=torch.bfloat16) > 0.5
+    t_true = torch.rand(shape, dtype=torch.bfloat16)
+    t_false = torch.rand(shape, dtype=torch.bfloat16)
+    expected = torch.where(pred, t_true, t_false)
+
+    def to_dev(host, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(
+            host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    for entries, out_memory_config in enumerate((ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG), start=1):
+        out = to_dev(torch.zeros(shape, dtype=torch.bfloat16), out_memory_config)
+        kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG} if pass_memory_config else {}
+        result = ttnn.where(
+            to_dev(pred.to(torch.bfloat16)), to_dev(t_true), to_dev(t_false), output_tensor=out, **kwargs
+        )
+
+        assert device.num_program_cache_entries() == entries, (
+            f"an output in {out_memory_config} must get its own cache entry -- sharing one "
+            "means the key does not carry the preallocated output's memory, so the cached program "
+            "addresses the wrong address space"
+        )
+        assert_equal(ttnn.to_torch(result), expected)
+
+    device.disable_and_clear_program_cache()

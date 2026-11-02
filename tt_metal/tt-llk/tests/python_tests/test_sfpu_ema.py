@@ -3,9 +3,10 @@
 
 """Functional coverage for the EMA SFPU kernel.
 
-Two tests, both driving `sources/sfpu_ema_test.cpp` through `_run_ema_on_device`:
+Three tests, all driving `sources/sfpu_ema_test.cpp` through `_run_ema_on_device`:
 
 - `test_sfpu_ema` -- the default-suite check, one alpha over 1/2/4 time tiles.
+- `test_sfpu_ema_after_binary_init` -- the same with an eltwise binary init before each `ema_tile`.
 - `test_sfpu_ema_alpha_sweep` -- nightly, 1000 alphas against an fp64 reference.
 
 The sweep exists because the value the functional test pins, alpha = 0.25, is the
@@ -34,10 +35,12 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     EMA_ALPHA_BETA,
+    EMA_INTERLEAVED_INIT,
     TILE_COUNT,
+    fp32_bits,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # EMA smoothing factor chosen for the functional test (ttnn.ema has no default alpha;
 # it is a required argument). beta is derived as 1 - alpha.
@@ -49,14 +52,12 @@ EMA_BETA = 1.0 - EMA_ALPHA
 # rounding differences to accumulate through the carry.
 SWEEP_NUM_TIME_TILES = 2
 
+AFTER_INIT_NUM_TIME_TILES = 2
+
 # k/1000 for k in 0..999. alpha=0 is a degenerate pass-through (beta=1) and is kept
 # deliberately: it is the cheapest check that the carry term is actually multiplied
 # in rather than ignored.
 _ALPHA_STEPS = 1000
-
-
-def _f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _ema_golden(input_2d: torch.Tensor, alpha: float, beta: float) -> torch.Tensor:
@@ -94,11 +95,19 @@ def _ema_golden_fp64(input_2d: torch.Tensor, alpha_f32: float, beta_f32: float):
     return out
 
 
-def _run_ema_on_device(alpha: float, beta: float, num_time_tiles: int, dest_acc):
+def _run_ema_on_device(
+    alpha: float,
+    beta: float,
+    num_time_tiles: int,
+    dest_acc,
+    binary_init_before_ema: bool = False,
+):
     """Run the EMA kernel over a [num_time_tiles*32, 32] input.
 
     Returns (untilized device result, untilized 2D input view). Row = time step,
     column = parallel channel, for both.
+
+    With ``binary_init_before_ema`` an eltwise binary init runs between the datacopy and ``ema_tile``.
     """
     torch.manual_seed(0)
 
@@ -127,7 +136,8 @@ def _run_ema_on_device(alpha: float, beta: float, num_time_tiles: int, dest_acc)
         formats,
         templates=[
             APPROX_MODE(ApproximationMode.No),
-            EMA_ALPHA_BETA(alpha_bits=_f32_bits(alpha), beta_bits=_f32_bits(beta)),
+            EMA_ALPHA_BETA(alpha_bits=fp32_bits(alpha), beta_bits=fp32_bits(beta)),
+            EMA_INTERLEAVED_INIT(binary_init_before_ema=binary_init_before_ema),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
@@ -149,16 +159,16 @@ def _run_ema_on_device(alpha: float, beta: float, num_time_tiles: int, dest_acc)
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
     return res_tensor, golden_input
 
 
-# dest_acc=Yes (32-bit DEST) is intentionally not swept: the EMA kernel is hardcoded for
-# 16-bit bf16 DEST (_ema_load/store_current_input_ use SFPLOADI_MOD0_FLOATB at fixed fp16
-# offsets with no is_fp32_dest_acc_en branch), so a 32-bit DEST is not supported.
+# Both DEST widths are swept. The kernel's SFPLOAD/SFPSTORE take the element format from
+# the configured DEST rather than fixing it, so each width has to be covered on its own;
+# the ttnn ema op runs with a 32-bit DEST, so that leg is the one production uses.
 @parametrize(
-    dest_acc=[DestAccumulation.No],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     num_time_tiles=[1, 2, 4],
 )
 def test_sfpu_ema(dest_acc, num_time_tiles):
@@ -170,6 +180,27 @@ def test_sfpu_ema(dest_acc, num_time_tiles):
     assert passed_test(
         golden_tensor, res_tensor, DataFormat.Float16_b
     ), "EMA result does not match golden"
+
+
+# One axis, so pytest's own parametrize: the harness helper hands a single axis over as a tuple.
+@pytest.mark.parametrize(
+    "dest_acc",
+    [DestAccumulation.No, DestAccumulation.Yes],
+    ids=["dest_acc:No", "dest_acc:Yes"],
+)
+def test_sfpu_ema_after_binary_init(dest_acc):
+    res_tensor, golden_input = _run_ema_on_device(
+        EMA_ALPHA,
+        EMA_BETA,
+        AFTER_INIT_NUM_TIME_TILES,
+        dest_acc,
+        binary_init_before_ema=True,
+    )
+    golden_tensor = _ema_golden(golden_input, EMA_ALPHA, EMA_BETA)
+
+    assert passed_test(
+        golden_tensor, res_tensor, DataFormat.Float16_b
+    ), "EMA result after an eltwise binary init does not match golden"
 
 
 @pytest.mark.nightly

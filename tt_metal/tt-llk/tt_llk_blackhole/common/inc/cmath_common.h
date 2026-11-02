@@ -35,8 +35,8 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
 // The flag is a math-ALU concern: only read by MOVA2D/MOVB2D/MOVB2A/MVMUL/ELWADD/ELWMUL (the math
 // thread), never by the SFPU. Crucially, NO instruction changes it as a side effect -- it moves only
 // on an explicit cfg_reg_rmw. So the math thread owns it and we simply track its real value: each op
-// sets the value it needs, and an already-correct value is a no-op (skip the pipe-draining STALLWAIT +
-// RMW). src_zero_flag_hw caches that physical value (0xff = unknown, only at power-on).
+// sets the value it needs, and an already-correct value is a no-op (skip the RMW). src_zero_flag_hw
+// caches that physical value (0xff = unknown, only at power-on).
 //
 // What each op wants:
 //   FP compute (matmul / eltwise-binary / reduce compute-phase) and format reconfigs -> the
@@ -54,12 +54,14 @@ static std::uint32_t src_zero_flag_hw       = 0xff; // last value written to the
 static std::uint32_t src_zero_flag_srca_fmt = 0xff; // cached operand formats feeding the compute default
 static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
-// The one writer. Out-of-line so the STALLWAIT + RMW exist in a single copy (code size — a matmul
-// kernel otherwise overflows its slot).
+// The one writer. Out-of-line so the write exists in a single copy (code size — a matmul kernel
+// otherwise overflows its slot).
+// No STALLWAIT: every reader (SrcB zero-flag generation, the SrcA MOV path) latches this flag when its
+// FPU instruction issues and carries it down the pipe, so the write cannot change an instruction already
+// in flight. The SFPU never reads it.
 inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t value)
 {
     src_zero_flag_hw = value;
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(value);
 }
 
@@ -88,7 +90,7 @@ inline void _configure_src_zero_flag_(const bool disable)
 
 // FP compute / format reconfig: the flag follows the operand formats. Reads the cached SrcA/SrcB formats
 // -- maintained by the reconfig sites, the only places the SrcA/SrcB format actually changes -- and applies
-// the operand-driven value, skipping the pipe-draining write when the flag already holds it (the steady
+// the operand-driven value, skipping the write when the flag already holds it (the steady
 // state in hot loops). Takes no format args and stores nothing, so the inlined fast path at every init site
 // stays tiny AND the caches can never diverge (they are refreshed on every format change, independent of
 // whether the resulting flag value changed).
@@ -117,8 +119,7 @@ inline void _configure_preserve_zero_flag_state_()
 inline void _configure_copy_zero_flag_state_(const std::uint32_t src_dst_format)
 {
     const std::uint32_t fmt = src_dst_format & 0x1F;
-    const bool flush_fp8 =
-        (fmt == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) || (fmt == static_cast<std::uint32_t>(DataFormat::Lf8));
+    const bool flush_fp8    = (fmt == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) || (fmt == static_cast<std::uint32_t>(DataFormat::Lf8));
     _configure_src_zero_flag_(!flush_fp8);
 }
 
@@ -137,6 +138,19 @@ inline void reset_counters(const std::uint32_t setrwc)
 inline void incr_counters(const std::uint32_t incr_a, const std::uint32_t incr_b, const std::uint32_t incr_d, const std::uint32_t incr_cr)
 {
     TT_INCRWC(incr_cr, incr_d, incr_b, incr_a);
+}
+
+// MOVD2A/MOVD2B write SrcA/SrcB from Dest, so they fall outside the Src auto-wait, which covers
+// only instructions that read Src. Gate the row moves on the target bank's DVALID, and drain
+// in-flight math so the Dest values those moves read back have settled.
+inline void srca_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
+}
+
+inline void srcb_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
 }
 
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
@@ -165,7 +179,7 @@ inline void move_d2a_row_broadcast_fixed_face(const std::uint8_t addrmod)
 {
     // MOVD2A does not auto-wait for SrcA[MatrixUnit.SrcABank].AllowedClient == MatrixUnit, so gate on SRCA_VLD
     // before the row moves (mirrors move_d2b_fixed_face's SRCB_VLD wait). See llk_math_transpose_dest.h. tt-llk#1664.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
     // // Seems to make things 200 clocks slower. Really shouldn't though.
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, addrmod, p_movd2a::MOV_1_ROW, 0);
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 1, addrmod, p_movd2a::MOV_1_ROW, 0);
@@ -196,11 +210,11 @@ inline void wait_bank_valid()
 {
     if constexpr (SrcReg == Srcs::SrcA)
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
     }
     else
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
     }
 }
 

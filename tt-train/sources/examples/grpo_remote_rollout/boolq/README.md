@@ -70,7 +70,7 @@ specific to this two-rank deployment.
 ## LlamaCompleterRemoteRollout
 
 ```python
-from utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
+from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
 ```
 
 Llama-specific implementation of `GRPOCompleter`. Loads the ttml
@@ -97,9 +97,9 @@ completer = LlamaCompleterRemoteRollout(
 | Parameter            | Type                 | Description                                                                                                           |
 | -------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `ctx`                | `LlamaCompletionCtx` | Generation parameters (max tokens, temperature, completions per prompt).                                              |
-| `transformer_config` | `TransformerConfig`  | Model architecture config (parsed from the YAML training config).                                                     |
+| `transformer_config` | `TransformerConfig`  | Run settings from the YAML training config; the architecture comes from the checkpoint's `config.json`.               |
 | `mesh_device`        | `ttnn.MeshDevice`    | Already-opened TTML mesh. The caller owns its lifetime; the completer does not open or close it.                      |
-| `model_source`       | `str`                | HuggingFace model ID or path to a local directory containing `model.safetensors`.                                     |
+| `model_source`       | `str`                | HuggingFace model ID, or a local directory holding its `.safetensors` files, `config.json` and tokenizer.             |
 | `inference_client`   | `MPIRolloutClient`   | RPC client to the TTT rank. The completer routes `generate` and `push_weights` calls through this.                    |
 | `enable_ddp`         | `bool`               | Enable distributed data parallelism across the TTML mesh. Must agree with the `enable_ddp` in the YAML device config. |
 
@@ -127,8 +127,8 @@ optimizer steps.
 ```python
 import os
 from datasets import load_dataset
-from utils.mpi_rollout import MPIRolloutClient
-from utils.llama_grpo_completer import (
+from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutClient
+from grpo_remote_rollout.utils.llama_grpo_completer import (
     LlamaCompletionCtx, LlamaCompleterRemoteRollout, WeightSyncCallback,
 )
 from ttml.trainers import GRPOTrainer, get_grpo_config
@@ -181,10 +181,10 @@ finally:
 
 ```python
 import ttnn
-from utils.mpi_rollout import MPIRolloutServer
-from utils.ttt_generation_worker import TttGenerationWorker
-from utils.weight_bridge import HostWeightBridge
-from utils.llama_ttt_presets import (
+from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutServer
+from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
+from grpo_remote_rollout.utils.weight_bridge import HostWeightBridge
+from grpo_remote_rollout.utils.llama_ttt_presets import (
     bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad,
 )
 

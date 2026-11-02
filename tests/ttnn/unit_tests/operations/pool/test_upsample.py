@@ -600,3 +600,46 @@ def test_upsample_nearest_float_interleaved(device, input_shape, scale_factor_h,
         pcc_passed, pcc_message = assert_with_pcc(torch_result, output_torch, pcc=0.9999)
         logger.info(pcc_message)
         assert pcc_passed, f"PCC check failed: {pcc_message}"
+
+
+@pytest.mark.parametrize(
+    "input_memory_config, output_memory_config",
+    [
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+    ],
+    ids=["dram_to_l1", "l1_to_dram"],
+)
+# Row sizes that are not a multiple of the DRAM alignment, so input and output aligned page sizes differ
+@pytest.mark.parametrize("num_channels", [8, 24, 40])
+@pytest.mark.parametrize("dtype, torch_dtype", [(ttnn.bfloat16, torch.bfloat16), (ttnn.float32, torch.float32)])
+@pytest.mark.parametrize("scale_factor", [1.5, 0.75])
+def test_upsample_nearest_float_mixed_memory(
+    device, input_memory_config, output_memory_config, num_channels, dtype, torch_dtype, scale_factor
+):
+    """Test float-scale upsample when input and output buffers have different alignments."""
+    torch.manual_seed(0)
+
+    input_nchw = torch.randn([1, num_channels, 8, 8], dtype=torch_dtype)
+    input_nhwc = input_nchw.permute(0, 2, 3, 1)
+
+    torch_result = nn.functional.interpolate(
+        input_nchw, scale_factor=(scale_factor, scale_factor), mode="nearest"
+    ).permute(0, 2, 3, 1)
+
+    input_tensor = ttnn.from_torch(
+        input_nhwc,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+    )
+
+    output_tensor = ttnn.upsample(
+        input_tensor, [scale_factor, scale_factor], mode="nearest", memory_config=output_memory_config
+    )
+    assert output_tensor.memory_config().buffer_type == output_memory_config.buffer_type
+    output_torch = ttnn.to_torch(output_tensor)
+
+    assert list(output_torch.shape) == list(torch_result.shape)
+    assert torch.equal(output_torch, torch_result)

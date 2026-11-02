@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 
 #include <tt-metalium/host_api.hpp>
@@ -22,7 +23,7 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& page_size = input_tensor.buffer()->page_size();
 
     TT_FATAL(
-        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+        (input_tensor.device()->arch() != tt::ARCH::BLACKHOLE) ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
@@ -32,10 +33,10 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
         "AllReduceAsync currently only supports even number of blocks in the reduction kernel.");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_reduce need to be allocated in buffers on device!");
 
     TT_FATAL(buffer_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
-    TT_FATAL(buffer_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+    TT_FATAL(buffer_tensor.is_allocated(), "Operands to all_reduce need to be allocated in buffers on device!");
 
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(
@@ -90,16 +91,15 @@ AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperati
 
 AllReduceAsyncDeviceOperation::topology_return_value_t AllReduceAsyncDeviceOperation::compute_output_topologies(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // after all_reduce, the output is fully replicated across all devices on `cluster_axis`.
-    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    if (args.cluster_axis < output_placements.size()) {
-        output_placements[args.cluster_axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-    }
-
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
+    // After all_reduce every device on `cluster_axis` holds the same bytes: Replicate on that axis, the other mesh
+    // axes inherited from the input. The helper expands a collapsed 1-D label to one placement per mesh axis first,
+    // so the edit lands on `cluster_axis` rather than index 0. No honest label (nullopt, already reported): the
+    // output keeps the input's label. Returning {} would instead hand the framework the union over the input and
+    // `buffer_tensor`.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto output_topology = ttnn::operations::ccl::common::all_reduce_output_topology(
+        input_tensor, std::optional<uint32_t>(args.cluster_axis));
+    return {output_topology.value_or(input_tensor.tensor_topology())};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllReduceAsyncDeviceOperation::tensor_return_value_t>
@@ -150,12 +150,12 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     //
     // RING topology (bisection argument):
     //   RS phase — bisection link carries (N-1)*S/(2N) bytes.
-    //   AG phase — bisection link carries ceil((N-1)*S/2) bytes.
+    //   AG phase — bisection link carries ceil((N-1)*S/(2N)) bytes.
     //   Hops per phase: ceil((N-1)/2) (ring diameter).
     //
     // LINEAR topology (edge-device bottleneck):
     //   RS phase — edge link carries (N-1)*S/N bytes.
-    //   AG phase — edge link carries (N-1)*S bytes.
+    //   AG phase — edge link carries (N-1)*S/N bytes (gathers the S/N-byte RS output).
     //   Hops per phase: N-1 (linear diameter).
     // =========================================================================
     uint64_t rs_bottleneck_bytes = 0;  // reduce-scatter phase: bytes through the most-loaded link
@@ -165,11 +165,11 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
         // Single device: no fabric communication
     } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
         rs_bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
-        ag_bottleneck_bytes = tt::div_up((N - 1) * S, 2);
+        ag_bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
         num_hops = tt::div_up(N - 1, 2u);
     } else {
         rs_bottleneck_bytes = (N - 1) * slice_size;
-        ag_bottleneck_bytes = (N - 1) * S;
+        ag_bottleneck_bytes = (N - 1) * slice_size;
         num_hops = N - 1;
     }
     // AllReduce = ReduceScatter + AllGather: two sequential fabric phases, so their

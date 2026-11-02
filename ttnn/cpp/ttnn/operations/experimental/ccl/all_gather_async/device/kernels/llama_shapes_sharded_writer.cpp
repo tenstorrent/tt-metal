@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -48,8 +49,9 @@ void kernel_main() {
 
     size_t arg_idx = 0;
     // Load the input tensor spec
-    address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
-    const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
+    address_t tensor_address0 = get_common_arg_val<address_t>(ttnn::ccl::LlamaGatherWriterCommonArgs::output);
+    const size_t out_ready_sem_bank_addr =
+        get_common_arg_val<uint32_t>(ttnn::ccl::LlamaGatherWriterCommonArgs::semaphore);
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
@@ -59,7 +61,7 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
-    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t barrier_sem = get_common_arg_val<uint32_t>(ttnn::ccl::LlamaGatherWriterCommonArgs::barrier);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));

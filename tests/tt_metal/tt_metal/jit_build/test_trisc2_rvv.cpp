@@ -33,18 +33,17 @@
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-#include "common/mesh_dispatch_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_build_utils.hpp"
 #include "llrt/rtoptions.hpp"
+#include "mock_blackhole_fixture.hpp"
 
 namespace tt::tt_metal {
 
@@ -53,6 +52,8 @@ namespace {
 constexpr const char* kRvvKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/trisc2_rvv_vadd.cpp";
 // Matches the flags HalJitBuildQueryBlackHole::rvv_compile_flags emits.
 constexpr const char* kBhRvvMarch = "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f";
+// The -mcpu Blackhole TRISC compiles pass ahead of kBhRvvMarch; sfpi g++ rejects any command without one.
+constexpr const char* kBhTensixMcpu = "-mcpu=tt-bh-tensix";
 
 // Resolve the sfpi g++ the JIT build uses (local runtime/sfpi, then system sfpi).
 std::string sfpi_gxx_path() {
@@ -78,7 +79,8 @@ bool sfpi_supports_bh_zve32f() {
         std::filesystem::temp_directory_path() /
         ("tt_metal_rvv_march_probe_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(scratch);
-    const std::vector<std::string> args = {gxx, kBhRvvMarch, "-E", "-x", "c++", "/dev/null", "-o", "/dev/null"};
+    const std::vector<std::string> args = {
+        gxx, kBhTensixMcpu, kBhRvvMarch, "-E", "-x", "c++", "/dev/null", "-o", "/dev/null"};
     const bool ok = tt::jit_build::utils::exec_command(args, scratch.string(), (scratch / "probe.log").string());
     std::error_code ec;
     std::filesystem::remove_all(scratch, ec);
@@ -141,25 +143,12 @@ bool elf_contains_vector_instructions(const std::string& elf_path) {
 // Fixture lives in the named namespace: gtest TEST_F classes derive from it
 // with external linkage, and an anonymous-namespace base trips
 // -Werror=subobject-linkage under gcc Unity builds (merge-queue build-sweeps).
-class Trisc2RvvMockBlackholeFixture : public MeshDispatchFixture {
+class Trisc2RvvMockBlackholeFixture : public MockBlackholeMeshDispatchFixture {
 protected:
-    // Mock mode must be registered BEFORE the base fixture opens its shared devices — and that
-    // happens at suite scope (MeshDispatchFixture::SetUpTestSuite), not in SetUp. Overriding the
-    // suite hooks keeps this whole suite off silicon: the shared devices are created as mock
-    // Blackhole and every compile is pure host-side JIT.
-    static void SetUpTestSuite() {
-        experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
-        MeshDispatchFixture::SetUpTestSuite();
-    }
-    static void TearDownTestSuite() {
-        MeshDispatchFixture::TearDownTestSuite();
-        experimental::disable_mock_mode();
-    }
-
     // Create + JIT-compile the RVV vadd kernel; returns the kernel (full name is set by compile).
     std::shared_ptr<Kernel> compile_rvv_kernel(bool enable_trisc2_rvv) {
         distributed::MeshDevice* device = devices_.at(0).get();
-        Program program = CreateProgram();
+        Program program = CreateProgram(*device);
         KernelHandle handle = CreateKernel(
             program,
             kRvvKernelPath,
@@ -197,13 +186,7 @@ protected:
 
     // The kernel's exported compile recipe cflags for one compute processor.
     std::string recipe_cflags(const std::shared_ptr<Kernel>& kernel, int processor_id) {
-        distributed::MeshDevice* device = devices_.at(0).get();
-        const auto& hal = MetalContext::instance().hal();
-        const uint32_t core_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        const uint32_t class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-        const JitBuildState& state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), core_idx, class_idx, processor_id);
-        return state.export_target_recipe(kernel.get()).cflags;
+        return kernel_build_state(*kernel, processor_id).export_target_recipe(kernel.get()).cflags;
     }
 };
 

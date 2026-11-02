@@ -8,13 +8,14 @@ Covers the single entry point of
 hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_add_rsqrt.h,
 promoted out of the deepseek_v3_b1 demo tree by tt-metal #52709:
 
-    calculate_add_rsqrt<APPROX, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>(addend)
-        ->  dst = rsqrt(dst + addend)
+    calculate_add_rsqrt<APPROX, ITERATIONS, fp32_dest_acc_en, FAST_APPROX, typed_bf16_store,
+                        INPUT_SCALE>(addend)
+        ->  dst = rsqrt(dst * INPUT_SCALE + addend)
 
 The fused form exists for RMSNorm's rsqrt(variance + epsilon): the add happens inside
 the SFPU slot, so the variance never round-trips through DEST at the dest width.
 
-Three template axes, all reachable from the compute API (add_rsqrt_tile):
+Template axes, all reachable from the compute API (add_rsqrt_tile):
 
   APPROX        LUT-only SQRT_10-bits body vs the SQRT_23-bits Newton refinement.
                 Swept in the main test, with a looser tolerance for the approx body.
@@ -25,18 +26,20 @@ Three template axes, all reachable from the compute API (add_rsqrt_tile):
                 That guard is the ONLY thing the flag changes, so it is unobservable on
                 a non-negative domain -- test_sfpu_add_rsqrt_fast_approx_negative_guard
                 is the case that actually separates the two settings.
+  INPUT_SCALE   An fp32 factor on x ahead of the add, for a mean folded out of a bf16
+                reduce. 1.0 (the default) skips the multiply; the other values are
+                test_sfpu_add_rsqrt_input_scale.
 
-Domain. rsqrt is only defined for x + addend > 0, so the main sweep stays strictly
+Domain. rsqrt is only defined for x * INPUT_SCALE + addend > 0, so every sweep stays strictly
 positive; the negative and zero arguments are their own tests with their own exact
 expectations (NaN and +inf respectively) rather than tolerance comparisons, since
 neither is a value passed_test can meaningfully bound.
 """
 
-import struct
 
-import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import round_to_dest_width
 from helpers.llk_params import (
@@ -52,8 +55,11 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     SFPU_FAST_APPROX,
+    SFPU_INPUT_SCALE,
+    SFPU_TYPED_BF16_STORE,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
+    fp32_bits,
 )
 from helpers.utils import passed_test
 
@@ -115,15 +121,6 @@ _RTOL = {
 }
 
 
-def _bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
-
-def _skip_unsupported(formats, dest_acc):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
-
-
 def _build_add_rsqrt(
     formats,
     dest_acc,
@@ -131,6 +128,8 @@ def _build_add_rsqrt(
     approx=ApproximationMode.No,
     fast_approx=False,
     spec_A=None,
+    typed_bf16_store=False,
+    input_scale=1.0,
 ):
     """Build one variant without running it, returning (configuration, src_A).
 
@@ -154,7 +153,9 @@ def _build_add_rsqrt(
         templates=[
             APPROX_MODE(approx),
             SFPU_FAST_APPROX(fast_approx),
-            SFPU_UNARY_SCALAR(_bits(addend)),
+            SFPU_TYPED_BF16_STORE(typed_bf16_store),
+            SFPU_INPUT_SCALE(fp32_bits(input_scale)),
+            SFPU_UNARY_SCALAR(fp32_bits(addend)),
             VECTOR_MODE(VectorMode.RC),
         ],
         runtimes=[],
@@ -200,10 +201,19 @@ def _run_add_rsqrt(
     approx=ApproximationMode.No,
     fast_approx=False,
     spec_A=None,
+    typed_bf16_store=False,
+    input_scale=1.0,
 ):
     """Compile+run one variant, returning (device_tensor, input_tensor) as fp32."""
     configuration, src_A = _build_add_rsqrt(
-        formats, dest_acc, addend, approx=approx, fast_approx=fast_approx, spec_A=spec_A
+        formats,
+        dest_acc,
+        addend,
+        approx=approx,
+        fast_approx=fast_approx,
+        spec_A=spec_A,
+        typed_bf16_store=typed_bf16_store,
+        input_scale=input_scale,
     )
     return _finish_add_rsqrt(configuration, src_A, formats, dest_acc)
 
@@ -213,12 +223,15 @@ def _run_add_rsqrt(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     addend=list(ADDENDS),
     approx=[ApproximationMode.No, ApproximationMode.Yes],
+    typed_bf16_store=[False, True],
 )
-def test_sfpu_add_rsqrt(formats, dest_acc, addend, approx):
+def test_sfpu_add_rsqrt(formats, dest_acc, addend, approx, typed_bf16_store):
     """rsqrt(x + addend) over a strictly positive domain."""
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
-    device, seen = _run_add_rsqrt(formats, dest_acc, addend, approx=approx)
+    device, seen = _run_add_rsqrt(
+        formats, dest_acc, addend, approx=approx, typed_bf16_store=typed_bf16_store
+    )
 
     # Golden mirrors the functor: add in fp32, rsqrt, then the functor's own
     # convert<vFloat16b>(Nearest) when the dest is 16-bit.
@@ -234,6 +247,55 @@ def test_sfpu_add_rsqrt(formats, dest_acc, addend, approx):
         custom_atol=_ATOL,
     ), (
         f"add_rsqrt mismatch (addend={addend}, approx={approx.name}, "
+        f"dest_acc={dest_acc.name}, rtol={rtol})"
+    )
+
+
+# 1/7168 and 1/1536 are the RMSNorm mean factors of a 7168- and a 1536-wide row. Neither
+# is a power of two, so bf16 holds them only to within 2^-9 -- the rounding the fp32
+# scale exists to avoid. 2.5 is a factor above 1.
+INPUT_SCALES = (1.0 / 7168, 1.0 / 1536, 2.5)
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_scale=list(INPUT_SCALES),
+    approx=[ApproximationMode.No, ApproximationMode.Yes],
+)
+def test_sfpu_add_rsqrt_input_scale(formats, dest_acc, input_scale, approx):
+    """rsqrt(x * input_scale + addend), with the scale applied at fp32.
+
+    x spans uniform(0.1, 4.0) / input_scale, so x * input_scale covers the main sweep's
+    domain and its tolerances carry over. The Float32 cell on the SQRT_23 body is the one
+    that separates an fp32 scale from a bf16 one: rounding 1/7168 to bf16 moves the result
+    by about 1e-3 relative, three orders over that cell's rtol.
+    """
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    addend = 1e-6
+
+    device, seen = _run_add_rsqrt(
+        formats,
+        dest_acc,
+        addend,
+        approx=approx,
+        input_scale=input_scale,
+        spec_A=StimuliSpec.uniform(low=0.1 / input_scale, high=4.0 / input_scale),
+    )
+
+    scale = torch.tensor(input_scale, dtype=torch.float32)
+    golden = round_to_dest_width(torch.rsqrt(seen * scale + addend), dest_acc)
+
+    rtol = _RTOL[(approx, formats.output_format.is_32_bit())]
+
+    assert passed_test(
+        golden,
+        device,
+        formats.output_format,
+        custom_rtol=rtol,
+        custom_atol=_ATOL,
+    ), (
+        f"add_rsqrt input_scale mismatch (input_scale={input_scale}, approx={approx.name}, "
         f"dest_acc={dest_acc.name}, rtol={rtol})"
     )
 
@@ -277,7 +339,7 @@ def test_sfpu_add_rsqrt_fast_approx_negative_guard(formats, dest_acc, approx):
     defect. Comparing the two builds pins the same intent without depending on a value
     the implementation does not define.
     """
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     # Strictly negative even after the addend is applied. Both builds seed the same, so
     # the two runs see identical stimuli and can be compared lane by lane.
@@ -331,7 +393,7 @@ def test_sfpu_add_rsqrt_zero_argument(formats, dest_acc, approx):
     than an undefined-domain hole -- worth pinning, since the default positive sweep
     never reaches it and RMSNorm with eps=0 on an all-zero row does.
     """
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     device, _ = _run_add_rsqrt(
         formats,

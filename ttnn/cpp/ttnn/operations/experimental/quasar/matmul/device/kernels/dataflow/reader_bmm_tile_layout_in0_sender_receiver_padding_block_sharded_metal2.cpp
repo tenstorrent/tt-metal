@@ -122,7 +122,7 @@ void kernel_main() {
 
     // The resident in0 shard is reached by L1 base address from a local TensorAccessor over the in0
     // tensor (no borrowed self-loop CB, which Metal 2.0 forbids on DM kernels).
-    uint32_t in0_tensor_shard_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::in0).get_noc_addr(0));
+    uint32_t in0_tensor_shard_read_addr = noc_address_backend::extract_local_address(TensorAccessor(tensor::in0).get_noc_addr(0));
     uint32_t in0_tensor_read_addr = 0;
 
     MatmulOpReceiver fused_op_receiver;

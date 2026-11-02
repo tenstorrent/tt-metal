@@ -7,8 +7,10 @@
 
 #include "experimental/llk_unpack_A_custom.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 inline void llk_unpack_A_custom(const std::uint32_t operand, const std::uint32_t tile_index) {
+    SAN_HOOK(unsupported());
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;

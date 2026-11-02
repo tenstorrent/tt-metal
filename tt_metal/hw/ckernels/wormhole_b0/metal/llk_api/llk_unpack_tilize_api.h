@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "sanitizer/api.h"
 #include <cstdint>
 #include "llk_unpack_tilize.h"
 #include "llk_unpack_common_api.h"
@@ -25,6 +27,14 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
+    SAN_HOOK(init<OperationUnpackTilize>(
+        StateVal<OperationUnpackTilize::BlockCtDim>(ct_dim),
+        StateVal<OperationUnpackTilize::NarrowTile>(narrow_tile),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces)));
+
     _llk_unpack_tilize_init_(
         unpack_src_format[operand_id], unpack_dst_format[operand_id], ct_dim, face_r_dim, narrow_tile, num_faces);
 }
@@ -32,11 +42,9 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 /**
  * Tear down the tilize unpacker configuration so a subsequent operation can reprogram the unpacker.
  *
- * Face count and face row dimension are derived from the operand's CB metadata (mirroring
- * llk_unpack_tilize_init) so the canonical Tile_x_dim / SrcA stride restore matches the operand's
- * tile geometry. Deriving face_r_dim (rather than defaulting it to FACE_R_DIM) is what lets the
- * tiny-tile (face_r_dim < 16) restore reach the Compute API, whose tilize_uninit /
- * tilize_uninit_with_dt call this with the operand only.
+ * Tile geometry comes from the operand's CB metadata, so the Tile_x_dim restore matches the operand
+ * rather than a hardcoded 16x16 face. The face count is passed for the sanitizer only, since the
+ * teardown does not write the tile descriptor on Wormhole.
  *
  * @param operand Input circular buffer / operand index.
  */
@@ -44,6 +52,11 @@ inline void llk_unpack_tilize_uninit(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+    SAN_HOOK(uninit<OperationUnpackTilize>(
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces)));
+
     _llk_unpack_tilize_uninit_(
         (std::uint32_t)unpack_dst_format[operand_id], ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }
@@ -68,6 +81,15 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
         get_local_cb_interface(operand_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
     WAYPOINT("UPTW");
+    SAN_HOOK(execute<OperationUnpackTilize>(
+        StateVal<OperationUnpackTilize::BlockCtDim>(block_ct_dim),
+        StateVal<OperationUnpackTilize::NarrowTile>(narrow_tile),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces),
+        StateDiscard<std::uint32_t>(tile_index)));
+
     _llk_unpack_tilize_(
         base_address,
         tile_index,
@@ -119,6 +141,7 @@ template <
     bool zero_srcA = false,
     bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
+    SAN_HOOK(unsupported());
     _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
@@ -144,6 +167,7 @@ template <
     bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
@@ -191,6 +215,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
     std::uint32_t block_ct_dim) {
+    SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
@@ -248,6 +273,7 @@ template <
     bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA, std::uint32_t operandB, std::uint32_t block_c_tiles_a, std::uint32_t tile_idx_b) {
+    SAN_HOOK(unsupported());
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
         llk_unpack_tilizeA_B<zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
     }
@@ -266,6 +292,10 @@ inline void llk_unpack_tilizeA_B_block(
 inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32_t full_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
+    SAN_HOOK(init<OperationUnpackFastTilizeWh>(
+        StateVal<OperationUnpackFastTilizeWh::FullDim>(full_dim),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id])));
+
     _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim);
 }
 
@@ -276,6 +306,8 @@ inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_fast_tilize_uninit() {
+    SAN_HOOK(uninit<OperationUnpackFastTilizeWh>());
+
     _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
 }
 
@@ -301,6 +333,14 @@ inline void llk_unpack_fast_tilize_block(
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
 
+    SAN_HOOK(execute<OperationUnpackFastTilizeWh>(
+        StateVal<OperationUnpackFastTilizeWh::FullDim>(full_dim),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces),
+        StateDiscard<std::uint32_t>(tile_index),
+        StateDiscard<std::uint32_t>(unit_dim),
+        StateDiscard<std::uint32_t>(num_units)));
+
     _llk_unpack_fast_tilize_block_(
         base_address, tile_index, unpack_src_format[operand_id], unit_dim, num_units, full_dim, num_faces);
 }
@@ -309,9 +349,16 @@ inline void llk_unpack_fast_tilize_block(
  * Tear down the combined tilize-A / unpack-B configuration so a subsequent operation can reprogram
  * the unpacker.
  *
+ * Tile geometry comes from the operand's CB metadata, so the Tile_x_dim restore matches the operand
+ * rather than a hardcoded 16x16 face.
+ *
  * @param operand Input circular buffer / operand index.
  */
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     std::uint32_t operand_id = get_operand_id(operand);
-    _llk_unpack_tilizeA_B_uninit_((std::uint32_t)unpack_dst_format[operand_id]);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+    _llk_unpack_tilizeA_B_uninit_(
+        (std::uint32_t)unpack_dst_format[operand_id], ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }

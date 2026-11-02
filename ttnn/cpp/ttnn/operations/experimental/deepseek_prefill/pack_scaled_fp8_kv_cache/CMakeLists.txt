@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_pack_scaled_fp8_kv_cache
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_pack_scaled_fp8_kv_cache REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_pack_scaled_fp8_kv_cache TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_pack_scaled_fp8_kv_cache)
 
 set_target_properties(
@@ -16,7 +16,12 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.h
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_deepseek_prefill_pack_scaled_fp8_kv_cache
@@ -28,7 +33,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+        FILES ${kernels} shared_with_host/packed_kv_layout.hpp
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PACK_SCALED_FP8_KV_CACHE_SRCS}
 )

@@ -69,11 +69,12 @@ const DFBSpecName SAMPLING_LOCAL_VALS{"local_vals"};
 const DFBSpecName SAMPLING_OUTPUT_IND{"output_ind"};
 const DFBSpecName SAMPLING_RAND_TILE{"rand_tile"};
 // The sampled index, staged in SRAM before the writer sends this core's word to the output tensor.
-const DFBSpecName SAMPLING_OUTPUT{"output"};
+const ScratchpadSpecName SAMPLING_OUTPUT{"output"};
 // Per-user k, p and temperature. Each is NOC-read whole, in one entry covering every core, so no core
 // issues an unaligned read for its own value; `temp` doubles as the scalar operand compute broadcasts.
-const DFBSpecName SAMPLING_K{"k"};
-const DFBSpecName SAMPLING_P{"p"};
+// `k` and `p` are writer-private scratchpads; `temp` is a dataflow buffer handed to compute.
+const ScratchpadSpecName SAMPLING_K{"k"};
+const ScratchpadSpecName SAMPLING_P{"p"};
 const DFBSpecName SAMPLING_TEMP{"temp"};
 
 const TensorParamName SAMPLING_INPUT_VALUES_TENSOR{"input_values"};
@@ -111,7 +112,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     uint32_t random_seed = 0;
 
-    auto* device = &input_values_tensor.mutable_device();
+    const auto& device = input_values_tensor.device();
 
     // The bitonic top-k LLK carries sort indices through the dest register, and the index
     // load/store width is tied to fp32_dest_acc_en (INT32 when enabled, LO16 otherwise). WH/BH
@@ -120,24 +121,17 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     // architecture (e.g. Quasar, which additionally lacks UInt16/UInt32 tile (DFB) metadata
     // support) uses 32-bit (Int32) index intermediates with fp32 dest accumulation enabled. This
     // is gated on !(WH || BH) so new architectures default to the safe 32-bit path.
-    const bool use_32bit_index = !(device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);
+    const bool use_32bit_index = !(device.arch() == tt::ARCH::WORMHOLE_B0 || device.arch() == tt::ARCH::BLACKHOLE);
 
-    // The stable bitonic top-k network (ties keep the lowest candidate position, so the sampled
-    // token id for an exact tie does not depend on how the network swaps equal values) is only
-    // implemented in the WH/BH LLKs; the Quasar LLK static_asserts STABLE_SORT == false. Gate on
-    // the architectures that implement it so new architectures fall back to the unstable network
-    // instead of failing to build the kernel.
-    const bool stable_sort = (device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);
+    // Use the stable bitonic top-k network: on exact value ties the candidate at the lowest position
+    // wins, so the sampled index does not depend on how the network swaps equal values.
+    const bool stable_sort = true;
 
     tt::DataFormat input_values_dfb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
     tt::DataFormat input_indices_dfb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_indices_tensor.dtype());
     tt::DataFormat index_dfb_data_format = use_32bit_index ? tt::DataFormat::Int32 : tt::DataFormat::UInt16;
-    // On the 32-bit path (e.g. Quasar), validation already requires k to be INT32 (UInt32 DFB
-    // metadata is unsupported there), so the dtype-derived format is correct as-is.
-    tt::DataFormat k_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
-    tt::DataFormat p_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(p.dtype());
     tt::DataFormat temp_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(temp.dtype());
 
     uint32_t input_values_tile_size = tile_size(input_values_dfb_data_format);
@@ -158,7 +152,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     uint32_t Wt = input_shape[3] / tile_width;
     auto num_cores = num_users;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     CoreRangeSet core_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
 
     if (sub_core_grids.has_value()) {
@@ -246,9 +240,6 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
             aligned_final_indices_rm_unit_size,
             Ht * tile_height,
             input_indices_dfb_data_format),
-        make_dfb(SAMPLING_OUTPUT, aligned_out0_unit_size, 1, index_dfb_data_format),
-        make_dfb(SAMPLING_K, k_chunk_size, 1, k_dfb_data_format),
-        make_dfb(SAMPLING_P, p_chunk_size, 1, p_dfb_data_format),
         make_dfb(SAMPLING_TEMP, temp_chunk_size, 1, temp_dfb_data_format),
     };
 
@@ -289,13 +280,13 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
              {"tile_height", tile_height},
              {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
              {"num_users", num_users}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // 32-bit (Int32) sort indices require fp32 dest accumulation so the top-k LLK loads/stores
     // indices in INT32 mode; the 16-bit (UInt16) path uses LO16 mode with fp32 dest acc off. Every
     // other field keeps its default, matching what the compute config defaulted to before.
-    const ComputeGen1Config compute_config{
+    const ComputeHardwareConfig compute_config{
         .enable_32_bit_dest = use_32bit_index,
     };
 
@@ -417,25 +408,14 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     // One writer per running core. `core_id` is the only value that differs between them, and it is a
     // compile-time argument, so each core gets its own KernelSpec rather than one shared spec.
-    // `output`, `k` and `p` are bound as both PRODUCER and CONSUMER because this kernel is their only
-    // toucher: `k` and `p` are NOC-read staging it then indexes by core, and `output` is a plain SRAM
-    // window it fills and sends without running a FIFO operation on it at all.
+    // `output`, `k` and `p` are writer-private scratchpads: `k` and `p` are NOC-read staging it then
+    // indexes by core, and `output` is a plain SRAM window it fills and sends.
     auto make_writer = [&](uint32_t core_index) {
         return KernelSpec{
             .unique_id = sampling_writer_name(core_index),
             .source = SAMPLING_WRITER_SOURCE,
             .dfb_bindings =
                 {DFBBinding{
-                     .dfb_spec_name = SAMPLING_OUTPUT,
-                     .accessor_name = "out",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = SAMPLING_OUTPUT,
-                     .accessor_name = "out",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 },
-                 DFBBinding{
                      .dfb_spec_name = SAMPLING_TOPK_MASK,
                      .accessor_name = "mask",
                      .endpoint_type = DFBEndpointType::PRODUCER,
@@ -471,29 +451,22 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                      .endpoint_type = DFBEndpointType::CONSUMER,
                  },
                  DFBBinding{
-                     .dfb_spec_name = SAMPLING_K,
-                     .accessor_name = "k",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = SAMPLING_K,
-                     .accessor_name = "k",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = SAMPLING_P,
-                     .accessor_name = "p",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = SAMPLING_P,
-                     .accessor_name = "p",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 },
-                 DFBBinding{
                      .dfb_spec_name = SAMPLING_TEMP,
                      .accessor_name = "temp",
                      .endpoint_type = DFBEndpointType::PRODUCER,
+                 }},
+            .scratchpad_bindings =
+                {ScratchpadBinding{
+                     .scratchpad_spec_name = SAMPLING_OUTPUT,
+                     .accessor_name = "out",
+                 },
+                 ScratchpadBinding{
+                     .scratchpad_spec_name = SAMPLING_K,
+                     .accessor_name = "k",
+                 },
+                 ScratchpadBinding{
+                     .scratchpad_spec_name = SAMPLING_P,
+                     .accessor_name = "p",
                  }},
             .tensor_bindings =
                 {TensorBinding{
@@ -521,7 +494,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                  {"num_cores", num_cores},
                  {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
                  {"num_users", num_users}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
     };
 
@@ -551,6 +524,13 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         .name = "sampling",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
+        // k/p hold the whole per-user chunk: the writer NOC-reads all of it and indexes by core_id.
+        // out is one full output stick, so index_out[core_id] sits at the same byte offset as its
+        // slot in the output tensor.
+        .scratchpads =
+            {ScratchpadSpec{.unique_id = SAMPLING_OUTPUT, .size_per_node = aligned_out0_unit_size},
+             ScratchpadSpec{.unique_id = SAMPLING_K, .size_per_node = k_chunk_size},
+             ScratchpadSpec{.unique_id = SAMPLING_P, .size_per_node = p_chunk_size}},
         .tensor_parameters =
             {TensorParameter{.unique_id = SAMPLING_INPUT_VALUES_TENSOR, .spec = input_values_tensor.tensor_spec()},
              TensorParameter{.unique_id = SAMPLING_INPUT_INDICES_TENSOR, .spec = input_indices_tensor.tensor_spec()},

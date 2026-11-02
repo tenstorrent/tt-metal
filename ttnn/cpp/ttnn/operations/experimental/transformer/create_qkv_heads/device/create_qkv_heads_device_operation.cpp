@@ -16,7 +16,7 @@ void CreateQKVHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
@@ -42,6 +42,11 @@ void CreateQKVHeadsDeviceOperation::validate_on_program_cache_miss(
     uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
     uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
 
+    TT_FATAL(
+        args.num_q_heads > 0 && args.num_kv_heads > 0,
+        "num_q_heads ({}) and num_kv_heads ({}) must be greater than 0",
+        args.num_q_heads,
+        args.num_kv_heads);
     TT_FATAL(
         args.num_q_heads % args.num_kv_heads == 0,
         "Number of q heads {} must fit evenly into number of kv heads {}",

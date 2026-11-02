@@ -1,0 +1,70 @@
+# CosyVoice2 REFERENCE-ONLY requirements (host CPU), install step 2 of 2 -- from PyPI only.
+# Step 1 is requirements-reference-torch.txt (torch/torchaudio 2.11.0+cpu from the PyTorch CPU index).
+# Install this file with the constraints in requirements-reference-lock.txt (`-c`): the complete resolved set,
+# indirect dependencies included, so a rebuild gets exactly the venv the recorded reference came from.
+#
+# NOTHING IN THIS FILE IS INSTALLED TO RUN THE MODEL. It builds the reference venv, a host-only environment with
+# three jobs, all under scripts/: running the upstream frontend over the fixed corpus (prepare_inputs.py), running
+# the upstream PyTorch CosyVoice2 on the same corpus (run_reference.py), and scoring any run (eval_wer_sim.py).
+# The on-device model, the demo and every test run in tt-metal's python_env; the only package they add is in
+# requirements.txt (inflect). docs/security.md documents the boundary and the advisory disposition.
+#
+# Upstream reference: FunAudioLLM/CosyVoice @ 074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc (same commit CosyVoice1
+# pinned), checked out with --recursive for third_party/Matcha-TTS; point COSYVOICE2_REPO at it.
+#
+# Deltas from upstream's requirements.txt (the same kind CosyVoice1 made, re-derived here):
+#   1. torch/torchaudio 2.11.0+cpu (step 1), pinned to python_env's torch; upstream pins 2.3.1 for CUDA 12.1.
+#      torchaudio >= 2.9 needs TorchCodec for torchaudio.load, which upstream's load_wav calls; scripts/
+#      reference_env.py replaces load_wav with an equivalent soundfile read (same libsndfile decode, same
+#      Resample), so no TorchCodec/FFmpeg is needed.
+#   2. GPU- and serving-only packages dropped: deepspeed, onnxruntime-gpu (-> onnxruntime), tensorrt-cu12*,
+#      fastapi*, uvicorn, gradio, grpcio*, tensorboard. None is imported on the reference path.
+#   3. Only what the reference path imports is listed. The closure was established by loading
+#      cosyvoice.cli.cosyvoice.CosyVoice2 on the real checkpoint and adding each missing module in turn:
+#      modelscope, gdown, matplotlib, wget, pyarrow were needed; x-transformers (CosyVoice3's DiT), onnx,
+#      networkx, pydantic, rich were not. pyworld is imported too, but only by the training data pipeline
+#      (cosyvoice.dataset.processor.compute_f0), and every release that installs on Python 3.10 needs
+#      pkg_resources (see 6), so it is not installed: scripts/reference_env.py stands in a module that raises on
+#      use.
+#   4. wetext deliberately NOT installed: upstream's text_normalize then skips it ("no frontend is avaliable"),
+#      exactly as the device-side normalizer does, so both sides normalize text identically.
+#   5. Versions: CosyVoice1's advisory-cleared pins where it had them (diffusers, hydra-core, lightning,
+#      modelscope, pyarrow); onnxruntime is held at 1.18.0 on purpose -- CosyVoice1 measured a different
+#      speech-token sequence from a newer onnxruntime for the same audio, and speech tokens reroute everything
+#      downstream. transformers is python_env's 5.12.1, not upstream's 4.51.3; scripts/reference_env.py refuses any
+#      other version. Under 5.x, upstream's LLM loads in bf16, and its decode loop's length-1 attention mask is
+#      right-padded with zeros (generation then runs to max_len). Two shims in reference_env.py restore 4.51.3's
+#      behaviour, and they are exact: 4.51.3 with no shims gave bit-identical reference output on all seven corpus
+#      cases (2026-09-27), and tests/reference/test_reference_env.py keeps checking the shimmed decode. 4.51.3 itself
+#      carries 18 transformers CVEs, 3 of them HIGH (docs/security.md).
+#   6. setuptools 81.0.0: torch 2.11.0 requires setuptools<82, so CVE-2026-59890 (fixed from 83.0.0) cannot be
+#      cleared while torch is pinned to python_env's; 81.0.0 is the newest release torch accepts and clears the
+#      older setuptools advisories the torch step's copy (78.1.0) carries. Disposition in docs/security.md.
+
+# torch/torchaudio come from step 1 (+cpu builds). Restated here so this PyPI-only step cannot replace them:
+# '==2.11.0' matches the installed 2.11.0+cpu (PEP 440 local versions). Without it, uv re-resolved torch to
+# PyPI's default CUDA build (2.14.0 plus ~15 nvidia-* packages) -- measured, 2026-09-27.
+torch==2.11.0
+torchaudio==2.11.0
+
+numpy==1.26.4
+openai-whisper==20250625
+onnxruntime==1.18.0
+transformers==5.12.1
+tokenizers==0.22.2
+huggingface-hub==1.33.0
+inflect==7.5.0
+librosa==0.10.2
+soundfile==0.12.1
+HyperPyYAML==1.2.3
+conformer==0.3.2
+diffusers==0.38.0
+hydra-core==1.3.4
+omegaconf==2.3.0
+lightning==2.6.6
+modelscope==1.27.0
+gdown==5.2.2
+matplotlib==3.7.5
+wget==3.2
+pyarrow==23.0.1
+setuptools==81.0.0

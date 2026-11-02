@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include <hostdevcommon/fabric_common.h>                   // chan_id_t
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
@@ -22,12 +22,22 @@ namespace tt::tt_fabric {
 // Reuse the capture data structure for import overrides so export and import are consistent.
 using ChannelTrimmingOverrides =
     FabricDatapathUsageL1Results<true, builder_config::MAX_NUM_VCS, builder_config::num_max_sender_channels>;
+static_assert(
+    builder_config::num_max_sender_channels <= sizeof(uint16_t) * 8,
+    "Channel trimming sender masks must cover every flattened sender channel");
+static_assert(
+    builder_config::MAX_NUM_VCS <= sizeof(uint16_t) * 8,
+    "Channel trimming receiver masks must cover every virtual channel");
 
 struct Vc0TrimFastPathInfo {
     bool terminal_or_source_only = false;
     bool worker_only_nonforwarding = false;
     bool terminal_only_nonforwarding = false;
     bool enable_terminal_speedy_rx = false;
+    // Raw VC0 usage of this router's own row, kept so the link peer can check what it will
+    // receive from us: which sender channels ever transmitted, and whether receiver 0 saw traffic.
+    uint16_t vc0_sender_used_mask = 0;
+    bool vc0_receiver_observed_traffic = false;
     std::optional<uint16_t> local_sender_max_packet_size_bytes;
     std::optional<uint16_t> peer_sender_max_packet_size_bytes;
 };
@@ -47,7 +57,7 @@ inline bool has_real_channel_trimming_capture_entry(
     if (!capture_overrides.has_value()) {
         return false;
     }
-    return capture_overrides->find(make_override_key(chip_id, eth_chan)) != capture_overrides->end();
+    return capture_overrides->contains(make_override_key(chip_id, eth_chan));
 }
 
 // Per-VC override specification for channel trimming.
@@ -100,10 +110,35 @@ std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info(
 bool vc0_speedy_path_enabled(
     std::size_t actual_sender_channels_vc0, bool deadlock_avoidance_enabled, const Vc0TrimFastPathInfo& info);
 
+// Deadlock avoidance / first-level ack and the speedy receiver are link protocols: a sender with
+// first-level ack returns credits upstream only on acks, and a receiver without it never sends
+// them, so both ends of a cable must decide alike. Trimming derives these from each router's own
+// row; this keeps the protocol-dropping choices only when the peer's row agrees. An unresolved
+// peer (another rank's mesh, or no row) keeps deadlock avoidance / first-level ack and never runs
+// the speedy receiver. A sender-only row may still run the speedy sender where the direction has
+// no deadlock avoidance: it writes src_ch_id, so a normal receiver credits it correctly.
+void apply_vc0_trim_fast_path_link_symmetry(
+    Vc0TrimFastPathInfo& local_info, const std::optional<Vc0TrimFastPathInfo>& peer_info);
+
 // Propagate sender packet-size metadata across a physical link. Terminal speedy RX
 // remains a 2D-only optimization and additionally requires a matching worker-only peer.
 void apply_vc0_trim_fast_path_peer_info(
     Vc0TrimFastPathInfo& local_info, const Vc0TrimFastPathInfo& peer_info, bool allow_terminal_speedy_rx);
+
+// One router's VC0 fast-path choices, resolved against the router on the other end of its link.
+// Deadlock avoidance / first-level ack stay on unless info.terminal_or_source_only.
+struct Vc0LinkTrimResolution {
+    Vc0TrimFastPathInfo info;
+    bool speedy = false;
+};
+
+// Resolve a router's own row against its link peer's own row (nullopt when the peer is unresolved).
+Vc0LinkTrimResolution resolve_vc0_link_trim(
+    const Vc0TrimFastPathInfo& local_row,
+    std::optional<Vc0TrimFastPathInfo> peer_row,
+    std::size_t actual_sender_channels_vc0,
+    bool base_deadlock_avoidance,
+    bool allow_terminal_speedy_rx);
 
 // Keep the existing packet-count amortization for normal-sized packets, but cap
 // the number of packets batched so that a batch does not exceed the same byte

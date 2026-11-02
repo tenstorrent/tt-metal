@@ -10,21 +10,8 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel::math;
-
-/**
- * @brief Enable or disable FP32 accumulation in the destination register for both FPU and SFPU.
- *
- * @param enable: True to enable FP32 dest accumulation, false to disable.
- */
-inline void _llk_math_set_fp32_dest_acc_(bool enable)
-{
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(enable);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(enable);
-}
 
 /**
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
@@ -36,18 +23,18 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @param srca_data_format: Data format of source A (DataFormat enum underlying value).
  * @param srcb_data_format: Data format of source B (DataFormat enum underlying value).
+ * @note The SrcA/SrcB ALU format fields are DATA_FORMAT_BIT_COUNT (4) bits wide and adjacent; they are packed with
+ *       alu_src_format_cfg(), which masks formats whose value has higher bits set (UInt8 = 30, UInt32 = 24) before the
+ *       shift, as the unpacker does. Shifting the raw value would land SrcA's bit 4 on SrcB's LSB.
  * @note srcb_data_format programs ALU_FORMAT_SPEC_REG1_SrcB, which the SFPU also reads to interpret data it loads from DEST.
  *       For SFPU work, pass a srcb_data_format whose exponent family (BF16 vs FP16) matches the data in DEST (tt-llk #951).
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
-    llk::san::math_operand_configure(srca_data_format, srcb_data_format);
-
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-    std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
-    std::uint32_t config_data       = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
-                                (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
+    std::uint32_t int8_math_enabled     = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
+    std::uint32_t config_data           = alu_src_format_cfg(srca_data_format, srcb_data_format) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
     constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
 
@@ -62,6 +49,7 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
 
     // Establish the operand-driven baseline for the Src zero-substitution flag. This is a SrcA+SrcB format
     // change, so refresh both format caches before applying (the no-arg configurator and the compute-op
@@ -119,7 +107,7 @@ inline void _llk_math_pack_sync_init_()
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0)
     {
-    }; // Wait for previous packs to finish before claiming all dest
+    } // Wait for previous packs to finish before claiming all dest
     if constexpr (Dst == DstSync::SyncFull)
     {
         TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_1);
@@ -149,8 +137,6 @@ inline void _llk_math_pack_sync_init_()
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
 {
-    llk::san::math_operand_configure<true>(srca_data_format, llk::san::IGNORE);
-
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
@@ -158,14 +144,15 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format);
-        std::uint32_t config_data       = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
+        std::uint32_t config_data =
+            (masked_data_format(srca_data_format) << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
     }
     else
     {
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(masked_data_format(srca_data_format));
     }
 
     // Re-establish the operand-driven baseline for the new SrcA format. This reconfig is the only place the
@@ -189,8 +176,6 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
 {
-    llk::san::math_operand_configure<true>(llk::san::IGNORE, srcb_data_format);
-
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
@@ -198,14 +183,15 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         std::uint32_t int8_math_enabled = is_int8_or_int32_format(srcb_data_format);
-        std::uint32_t config_data       = (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
+        std::uint32_t config_data =
+            (masked_data_format(srcb_data_format) << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_ADDR32, 0, config_mask>(config_data);
     }
     else
     {
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(srcb_data_format);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(masked_data_format(srcb_data_format));
     }
 
     // Re-establish the operand-driven baseline for the new SrcB format. This reconfig is the only place the
@@ -230,8 +216,6 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
-    llk::san::math_operand_configure<true>(srca_data_format, srcb_data_format);
-
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
@@ -239,15 +223,14 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
-        std::uint32_t config_data       = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
-                                    (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
+        std::uint32_t config_data       = alu_src_format_cfg(srca_data_format, srcb_data_format) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
     }
     else
     {
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
-        std::uint32_t config_data           = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT);
+        std::uint32_t config_data           = alu_src_format_cfg(srca_data_format, srcb_data_format);
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
     }

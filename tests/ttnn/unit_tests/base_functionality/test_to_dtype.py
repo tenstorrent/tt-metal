@@ -31,7 +31,8 @@ def get_types_from_binding_framwork():
             dtype
             for _, dtype in ttnn.DataType._member_map_.items()
             # skipping FP8_E4M3 for now, until it is fully supported in tt-metal
-            if dtype != ttnn.DataType.INVALID and dtype != ttnn.DataType.FP8_E4M3
+            # MX formats are Quasar-only and covered by tests/ttnn/unit_tests/tensor/test_mx_dtypes.py
+            if dtype != ttnn.DataType.INVALID and dtype != ttnn.DataType.FP8_E4M3 and not ttnn.is_mx_dtype(dtype)
         ]
         FLOAT_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if is_ttnn_float_type(dtype)]
     else:
@@ -93,8 +94,8 @@ def test_to_float_dtype(height, width, from_dtype, to_dtype):
     # bf8/bf4/float32 all use torch.float internally
     if to_dtype == ttnn.bfloat16 and from_dtype != ttnn.bfloat16:
         assert_with_ulp(
-            torch_input_tensor.to(torch.bfloat16),
-            output_tensor.to(torch.bfloat16),
+            expected_result=torch_input_tensor.to(torch.bfloat16),
+            actual_result=output_tensor.to(torch.bfloat16),
             ulp_threshold=1,
         )
     else:

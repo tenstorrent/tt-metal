@@ -14,10 +14,23 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+/**
+ * @brief Set the SrcA address step used to stream matmul in1 columns.
+ *
+ * tile_size is in unpacker L1 address units (16-byte words), not bytes. Only the
+ * column-streaming path (ct_dim >= rt_dim, no in1 kernel broadcast) uses this step.
+ * A stride of one restores the normal contiguous-tile step.
+ */
+inline void _llk_unpack_AB_matmul_set_in1_column_stride_(const std::uint32_t tile_size, const std::uint32_t stride_tiles)
+{
+    LLK_ASSERT(tile_size > 0 && tile_size <= 0xffff, "Matmul tile size must fit the SrcA address-step register");
+    LLK_ASSERT(stride_tiles > 0 && stride_tiles <= 0xffff / tile_size, "Matmul column stride must fit the SrcA address-step register");
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size * stride_tiles), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+}
 
 /**
  * @brief Program the unpacker MOP/replay buffer for a matmul operand unpack.
@@ -56,7 +69,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             {
                 if (unpA_partial_face)
                 {
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     TTI_UNPACR(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
@@ -86,7 +99,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
 
                 if (unpA_partial_face)
                 {
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     TTI_UNPACR(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
@@ -126,7 +139,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             {
                 if (unpB_partial_face)
                 {
-                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     TTI_UNPACR(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
@@ -156,7 +169,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
 
                 if (unpB_partial_face)
                 {
-                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     TTI_UNPACR(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
@@ -240,20 +253,6 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
     // 16x16 matmul not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
     LLK_ASSERT(!(unpA_num_faces == 1 && unpB_num_faces == 1), "16x16 by 16x16 matmul is not supported");
-
-    // sstanisic todo: unpb_num_faces is annoying (see #47440)
-    llk::san::unpack_operand_check(
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        llk::san::IGNORE);
-    llk::san::operation_init<llk::san::Operation::UnpackABMatmul>(
-        kernel_broadcast_a, kernel_broadcast_b, ct_dim, rt_dim, kt_dim, unpA_partial_face, unpB_partial_face);
 
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
@@ -344,9 +343,6 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t rt_dim   = 1,
     const std::uint32_t kt_dim   = 1)
 {
-    llk::san::operation_check<llk::san::Operation::UnpackABMatmul>(
-        kernel_broadcast_a, kernel_broadcast_b, ct_dim, rt_dim, kt_dim, unpA_partial_face, unpB_partial_face);
-
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
@@ -391,7 +387,7 @@ inline void _llk_unpack_AB_matmul_(
         {
             if (unpB_partial_face)
             {
-                TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                 // Do face by face unpacking
                 TTI_UNPACR(
                     SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
@@ -409,7 +405,7 @@ inline void _llk_unpack_AB_matmul_(
             if (unpA_partial_face)
             {
                 // Do face by face unpacking
-                TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                 TTI_UNPACR(
                     SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_UNPACR(

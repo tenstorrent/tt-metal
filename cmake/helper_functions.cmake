@@ -68,7 +68,7 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
         target_include_directories(${TEST_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
         if(TARGET TT::CommonPCH)
-            target_precompile_headers(${TEST_TARGET} REUSE_FROM TT::CommonPCH)
+            tt_reuse_precompile_headers(${TEST_TARGET} TT::CommonPCH)
         endif()
 
         set_target_properties(

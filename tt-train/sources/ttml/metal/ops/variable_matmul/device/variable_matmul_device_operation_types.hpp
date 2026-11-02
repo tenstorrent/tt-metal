@@ -39,7 +39,7 @@ struct VariableMatmulParams {
 
     // When true, the input tensor is interpreted as transposed for matmul purposes:
     // stored shape [..., K, M] but used as [..., M, K]. Reader applies stride swap,
-    // compute kernel applies intra-tile transpose via transpose_wh_tile into a dedicated CB.
+    // compute kernel applies intra-tile transpose via transpose_tile into a dedicated CB.
     bool transpose_a = false;
     // When true, the weight tensor is interpreted as transposed for matmul purposes:
     // stored shape [..., N, K] but used as [..., K, N]. Reader applies stride swap,

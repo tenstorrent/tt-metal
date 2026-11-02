@@ -5,8 +5,12 @@
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "layout/page_config_impl.hpp"
 #include "layout/tensor_layout_impl.hpp"
@@ -32,6 +36,14 @@ std::optional<std::string> get_shape_fits_shard_grid_error(
     const auto physical_shard_shape = tensor_layout.impl().get_physical_shard_shape();
     const auto physical_shard_height = physical_shard_shape.height();
     const auto physical_shard_width = physical_shard_shape.width();
+    const bool divides_by_height = memory_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED;
+    const bool divides_by_width = memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+    if ((divides_by_height && physical_shard_height == 0) || (divides_by_width && physical_shard_width == 0)) {
+        return fmt::format(
+            "Shard shape must be greater than 0 in each sharded dim, got [{}, {}]",
+            physical_shard_height,
+            physical_shard_width);
+    }
 
     const auto& shard_spec = memory_config.shard_spec().value();
     uint32_t num_cores = shard_spec.num_cores();
@@ -104,9 +116,9 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
              dtype == DataType::UINT8 || dtype == DataType::INT8 || dtype == DataType::UINT16 ||
              dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B ||
-             dtype == DataType::FP8_E4M3),
-            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or FP8_E4M3 dtypes are "
-            "supported on device!");
+             dtype == DataType::FP8_E4M3 || is_mx(dtype)),
+            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, FP8_E4M3, or MX dtypes "
+            "are supported on device!");
     };
     auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
@@ -120,6 +132,17 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
                 TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
+                break;
+            case DataType::MXFP8_E4M3:
+            case DataType::MXFP8_E5M2:
+            case DataType::MXFP6_E2M3:
+            case DataType::MXFP6_E3M2:
+            case DataType::MXFP4:
+            case DataType::MXINT8:
+            case DataType::MXINT4:
+            case DataType::MXINT2:
+                // Arch validation (MX is Quasar only) happens when the tensor is placed on a device.
+                TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for {} dtype!", dtype);
                 break;
             case DataType::FP8_E4M3:
                 // Arch validation is each producer op's responsibility (e.g., the combine op
@@ -300,16 +323,15 @@ MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
         nd_shard_spec.shard_distribution_strategy = ShardDistributionStrategy::GRID_2D;
     }
 
-    auto result = create_memory_config_with_prepopulated_shard_specs(
-        mem_config.memory_layout(),
-        mem_config.buffer_type(),
-        mem_config.shard_spec(),
-        std::move(nd_shard_spec),
-        mem_config.created_with_nd_shard_spec());
-    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(mem_config)) {
-        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(result, true);
-    }
-    return result;
+    return create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = mem_config.memory_layout(),
+        .buffer_type = mem_config.buffer_type(),
+        .shard_spec = mem_config.shard_spec(),
+        .nd_shard_spec = std::move(nd_shard_spec),
+        .created_with_nd_shard_spec = mem_config.created_with_nd_shard_spec(),
+        .per_core_allocation = experimental::per_core_allocation::is_per_core_allocation(mem_config),
+        .range_lockstep_allocation = experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config),
+    });
 }
 
 std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() const {
@@ -382,12 +404,16 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     }
 
     if (shard_kind != TensorMemoryLayout::BLOCK_SHARDED) {
-        return create_memory_config_with_prepopulated_shard_specs(
-            shard_kind,
-            mem_config.buffer_type(),
-            std::move(shard_spec),
-            mem_config.nd_shard_spec(),
-            mem_config.created_with_nd_shard_spec());
+        return create_memory_config_with_prepopulated_shard_specs({
+            .memory_layout = shard_kind,
+            .buffer_type = mem_config.buffer_type(),
+            .shard_spec = std::move(shard_spec),
+            .nd_shard_spec = mem_config.nd_shard_spec(),
+            .created_with_nd_shard_spec = mem_config.created_with_nd_shard_spec(),
+            .per_core_allocation = experimental::per_core_allocation::is_per_core_allocation(mem_config),
+            .range_lockstep_allocation =
+                experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config),
+        });
     }
 
     // Block sharding requires a contiguous grid of cores
@@ -408,12 +434,15 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    return create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout::BLOCK_SHARDED,
-        mem_config.buffer_type(),
-        std::move(shard_spec),
-        mem_config.nd_shard_spec(),
-        mem_config.created_with_nd_shard_spec());
+    return create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+        .buffer_type = mem_config.buffer_type(),
+        .shard_spec = std::move(shard_spec),
+        .nd_shard_spec = mem_config.nd_shard_spec(),
+        .created_with_nd_shard_spec = mem_config.created_with_nd_shard_spec(),
+        .per_core_allocation = experimental::per_core_allocation::is_per_core_allocation(mem_config),
+        .range_lockstep_allocation = experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config),
+    });
 }
 
 }  // namespace tt::tt_metal

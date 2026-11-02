@@ -27,7 +27,7 @@ For resnet50 the constructor is called with kernel_size=3, stride=2 and a (N, 3,
     padding = [3, 3, 3, 3, 0, 1]
     fold_output_shape = (N, 230//2, 230//2, 4*2*2) = (N, 115, 115, 16)
 
-The input to fold is the ROW_MAJOR, HEIGHT_SHARDED NCHW image (setup_l1_sharded_input shards it over
+The input to fold is the ROW_MAJOR, HEIGHT_SHARDED NCHW image (setup_input shards it over
 the flattened N*C*H rows). This test reproduces that exact configuration; only the batch and the core
 count are tied to the device so it runs on the small Quasar sim grid as well as full silicon.
 
@@ -94,14 +94,6 @@ def _fit_cores(total_rows, device):
     return num_cores, grid
 
 
-@pytest.mark.xfail(
-    run=False,
-    reason="use_transpose_as_fold=True routes through the Quasar transpose_wh compute (transpose_wh_rm), "
-    "which deadlocks in the tilize->transpose dest_section_flip TTI_STALLWAIT (LLK hand-off item). This is "
-    "the WH/BH fold path; the Quasar resnet model uses the direct channels-last fold (use_transpose_as_fold="
-    "False, input_is_nhwc=True) instead -- see ttnn_functional_resnet50.run() and test_fold_c8.py. run=False "
-    "so the deadlock does not execute.",
-)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1, 2], ids=["b1", "b2"])
 def test_quasar_fold(mesh_device, batch_size):
@@ -123,7 +115,7 @@ def test_quasar_fold(mesh_device, batch_size):
     golden = torch.permute(golden, (0, 2, 3, 1))
 
     # HEIGHT-shard the ROW_MAJOR NCHW image over the flattened N*C*H rows, tied to the device grid
-    # (mirrors setup_l1_sharded_input). Use an exact divisor so shards are unpadded.
+    # (mirrors setup_input). Use an exact divisor so shards are unpadded.
     total_rows = batch_size * c * h
     num_cores, grid = _fit_cores(total_rows, device)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)

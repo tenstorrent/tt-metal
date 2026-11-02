@@ -8,9 +8,10 @@ excludeAgent: "cloud-agent"
 
 ## 🔴 CRITICAL
 
-- **Stable API surface discipline**: constants, types, or functions in stable public headers (`tt_metal/api/`) must not be removed or change semantics without a deprecation path. The `tt_metal/api/experimental/` subtree is exempt — experimental APIs may change or be removed freely without deprecation. If an internal-only constant (e.g., `max_runtime_args`) has no external consumers, move it to `impl/` rather than keeping it public "just in case."
+- **Stable API surface discipline**: constants, types, or functions in stable public headers (`tt_metal/api/tt-metalium/`, excluding `experimental/`) must not be removed or change semantics without a deprecation path. Experimental and `tt_metal/api/internal/` interfaces carry no stability guarantee. Follow `scripts/validate_api/README.md` for tier boundaries and same-PR migration of deprecated production usages. If an internal-only constant (e.g., `max_runtime_args`) has no external consumers, move it to `impl/` rather than keeping it public "just in case."
 - **No singletons or global state without ContextID**: global instance lookups (e.g., `find_any_existing_instance()`) are fragile with multiple contexts. Pass an explicit `ContextID` or context reference to managers and builders.
 - **Kernel binary portability**: kernel binaries are per-device and per-architecture. Precompiled/cached binaries must include arch and device identifiers in their cache keys. Do not assume a binary compiled for one device works on another.
+- **Ringbuffer and credit-counter wrap**: verify that ring offsets remain correct when credit counters wrap. Deriving an offset with `counter % ring_units` preserves the ring position across wrap only if the counter modulus is divisible by `ring_units`. Wrap-safe credit accounting alone does not guarantee correct addressing.
 
 ## 🟡 IMPORTANT
 
@@ -28,6 +29,7 @@ excludeAgent: "cloud-agent"
 - **Accept typed resource references, not raw addresses**: kernel helper functions should accept references to typed resources (CB, DFB, NoC handle) rather than raw `uint32_t` addresses. This catches misuse at compile time and improves readability.
 - **Prefer top-level APIs in tests, but allow impl access when justified**: integration and feature tests should exercise the public API surface rather than reaching into `*_impl` internals. However, reaching into the implementation is legitimate when a unit test needs to verify an internal invariant directly (e.g., that a sync was placed at the right point) — the alternative of forcing a race makes tests unreliable. It is also legitimate for unit tests to exercise concepts we intentionally do not expose via the public API (e.g., launching kernels on DRAM cores), so we are not forced into only large integration tests. When impl access is used to work around a genuinely missing public API (not for the cases above), prefer filing an issue.
 - **Watcher validation for mutually exclusive modes**: when a hardware resource has exclusive modes (e.g., iDMA mode on a command buffer), add watcher checks that fire if the resource is misused while in that mode. Silent corruption is worse than a watcher assert.
+- **Blackhole NoC MID hygiene**: On Blackhole cards, `noc_async_read`/`noc_async_write` and their `_one_packet` and `_with_state` forms do not program `NOC_TARG_ADDR_MID`/`NOC_RET_ADDR_MID`, which are required to read/write over PCIe and are sticky per command buffer. Route PCIe traffic through `noc_async_{read,write}_pcie` for a single transfer, or `_set_pcie_state`, then `_with_state`, then `_clear_pcie_state` for a loop so the setup and teardown are paid once. MID may only be written once `noc_cmd_buf_ready` reports NOC_CMD_CTRL idle; the clear helpers wait on it themselves, so no barrier is needed before them.
 - **Track limitations with issues**: when asserting on a known limitation (e.g., restricting buffer resizing scenarios), open a tracking issue (P2+) for the future relaxation. The assert message should reference the issue number.
 
 ## 🟢 SUGGESTION
@@ -54,3 +56,4 @@ excludeAgent: "cloud-agent"
 - [ ] Kernel helpers accept typed resource refs, not raw addresses
 - [ ] Tests prefer public APIs; impl access is justified (internal-invariant or non-public concept) or backed by a filed issue
 - [ ] Exclusive-mode resources have watcher checks for misuse
+- [ ] Ring offsets remain correct across both ring wrap and credit-counter wrap

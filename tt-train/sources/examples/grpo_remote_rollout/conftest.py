@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import os
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(__file__))
+EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
+
+# On sys.path so `grpo_remote_rollout`, the package this directory defines, is importable.
+sys.path.insert(0, str(EXAMPLES_ROOT))

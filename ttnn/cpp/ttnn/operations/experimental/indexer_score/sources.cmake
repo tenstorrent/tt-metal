@@ -8,6 +8,7 @@ set(TTNN_OP_EXPERIMENTAL_INDEXER_SCORE_API_HEADERS
     device/indexer_score_device_operation.hpp
     device/indexer_score_device_operation_types.hpp
     device/indexer_score_program_factory.hpp
+    device/kernels/indexer_score_runtime_args.hpp
     device/ring_indexer_score_dsa_program_factory.hpp
 )
 

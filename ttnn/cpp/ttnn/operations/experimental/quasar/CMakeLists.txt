@@ -14,8 +14,14 @@ set_target_properties(
             api
 )
 
-# Match every per-op kernel directory: kernels/, kernels_ng/, kernels_dfb/.
-file(GLOB_RECURSE kernels */device/kernels*/*)
+# Match every per-op kernel directory: kernels/, kernels_ng/, kernels_dfb/, kernels_qsr/.
+file(
+    GLOB_RECURSE kernels
+    */device/kernels*/*.cpp
+    */device/kernels*/*.hpp
+    */*/device/kernels*/*.cpp
+    */*/device/kernels*/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_quasar

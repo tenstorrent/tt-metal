@@ -16,11 +16,14 @@
 #include <tt_stl/enum.hpp>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <ostream>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/utils/semver.hpp>
+#include <string_view>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -33,8 +36,9 @@
 #include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/io_window_config.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
@@ -56,6 +60,50 @@ struct HalProcessorIdentifier {
 std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
 bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
+enum class HalL1MemAddrType : uint8_t {
+    BASE,
+    BARRIER,
+    MAILBOX,
+    LAUNCH,
+    WATCHER,
+    DPRINT_BUFFERS,
+    PROFILER,
+    KERNEL_CONFIG,  // End is start of unreserved memory
+    UNRESERVED,     // For ethernet and DRAM cores
+    DEFAULT_UNRESERVED,
+    CORE_INFO,
+    GO_MSG,
+    LAUNCH_MSG_BUFFER_RD_PTR,
+    GO_MSG_INDEX,
+    LOCAL,
+    BANK_TO_NOC_SCRATCH,
+    LOGICAL_TO_VIRTUAL_SCRATCH,
+    APP_SYNC_INFO,
+    APP_ROUTING_INFO,
+    RETRAIN_COUNT,
+    RETRAIN_FORCE,
+    CRC_ERR,          // Link status - CRC error count
+    CORR_CW,          // Link status - Corrected Codewords count
+    UNCORR_CW,        // Link status - Uncorrected Codewords count
+    TXQ0_RESEND_CNT,  // Link status - TX queue 0 packet resend count (Blackhole only)
+    TXQ1_RESEND_CNT,  // Link status - TX queue 1 packet resend count (Blackhole only)
+    TXQ2_RESEND_CNT,  // Link status - TX queue 2 packet resend count (Blackhole only)
+    RXQ0_PKT_DROP,    // Link status - RX queue 0 packet drop count (Blackhole only)
+    RXQ1_PKT_DROP,    // Link status - RX queue 1 packet drop count (Blackhole only)
+    RXQ2_PKT_DROP,    // Link status - RX queue 2 packet drop count (Blackhole only)
+    LINK_UP,          // Link status - Link up status
+    FABRIC_TELEMETRY,
+    ROUTING_TABLE,
+    ROUTER_STATE,
+    ROUTER_COMMAND,
+    ETH_FW_MAILBOX,
+    TENSIX_FABRIC_CONNECTIONS,
+    FABRIC_CONNECTION_LOCK,
+    ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)
+    L1_ECC_HALT,    // L1 ECC halt record and BRISC release code, l1_ecc_halt_slot_t (Blackhole Tensix only)
+    COUNT           // Keep this last so it always indicates number of enum options
+};
 
 enum class HalDramMemAddrType : uint8_t {
     BARRIER = 0,
@@ -86,6 +134,8 @@ struct HalJitBuildConfig {
     // Offset added to all L1 addresses when writing from host (via write_core).
     // Non-zero for cores where L1 NOC address != private address (e.g. DRAM cores: 0x2000000000).
     DeviceAddr l1_noc_offset = 0;
+    // True if this processor has a RISC-V Vector (RVV) unit that kernels can target.
+    bool supports_rvv = false;
 };
 
 // Ethernet Firmware mailbox messages
@@ -146,6 +196,24 @@ enum class EthDebugReg : uint8_t {
     COUNT,
 };
 
+// Hardware debug registers on Tensix cores. Populated only on Blackhole.
+enum class TensixDebugReg : uint8_t {
+    // L1 ECC control register (view select, IRQ enables, counter/IRQ clears)
+    L1_ECC_CTRL,
+    // L1 ECC status register (contents depend on the view selected in L1_ECC_CTRL)
+    L1_ECC_STATUS,
+    // PIC register holding the IRQ BRISC is handling; non-zero while BRISC is inside an interrupt handler
+    BRISC_INT_NO,
+    // PIC hardware IRQ 3 (ECC errors and watchdog); reads 1 while raised
+    PIC_HW_INT_3,
+    // PIC table of interrupt handler addresses, one word per BRISC_INT_NO value
+    PIC_INT_PCS,
+    // Watchdog control; bit 2 raises IRQ 3 until cleared
+    WDT_CNTL,
+    // Number of debug register entries
+    COUNT,
+};
+
 // Query dispatch related features depending on the arch
 enum class DispatchFeature : uint8_t {
     // Ethernet Firmware supports the usage of the mailbox API
@@ -179,6 +247,9 @@ private:
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     std::vector<uint32_t> eth_debug_regs_;
+    std::vector<uint32_t> tensix_debug_regs_;
+    // The physical RISCs the core has.
+    std::optional<uint32_t> num_physical_riscs_;
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
@@ -202,7 +273,8 @@ public:
         dev_msgs::Factory dev_msgs_factory,
         tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory,
         realtime_profiler_msgs::Factory realtime_profiler_msgs_factory,
-        std::vector<uint32_t> eth_debug_regs = {}) :
+        std::vector<uint32_t> eth_debug_regs = {},
+        std::vector<uint32_t> tensix_debug_regs = {}) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
@@ -212,6 +284,7 @@ public:
         mem_map_sizes_(std::move(mem_map_sizes)),
         eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
         eth_debug_regs_(std::move(eth_debug_regs)),
+        tensix_debug_regs_(std::move(tensix_debug_regs)),
         supports_cbs_(supports_cbs),
         supports_dfbs_(supports_dfbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
@@ -243,6 +316,21 @@ HalCoreInfoType create_unregistered_programmable_core(
     HalProgrammableCoreType programmable_core_type, const HalCoreInfoType& factory_source);
 
 void ensure_hal_core_info_slots(std::vector<HalCoreInfoType>& core_info, const HalCoreInfoType& factory_source);
+
+// Verifies the KERNEL_CONFIG ring buffer does not extend into free_region_type.
+void assert_kernel_config_no_overlap(
+    const std::vector<DeviceAddr>& mem_map_bases,
+    const std::vector<uint32_t>& mem_map_sizes,
+    HalL1MemAddrType free_region_type,
+    std::string_view core_name);
+
+// Overload for TENSIX cores whose KERNEL_CONFIG size isn't in mem_map_sizes because it's set
+// dynamically by the allocator.
+void assert_kernel_config_no_overlap(
+    const std::vector<DeviceAddr>& mem_map_bases,
+    uint32_t kernel_config_size,
+    HalL1MemAddrType free_region_type,
+    std::string_view core_name);
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
     uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
@@ -307,10 +395,11 @@ public:
     virtual std::vector<std::string> srcs(const Params& params) const = 0;
     // Returns a string of common flags to be added to compiler and linker command lines.
     virtual std::string common_flags(const Params& params) const = 0;
-    // Returns the compiler flags that enable RISC-V Vector (Zve32f) code generation for an
-    // opt-in kernel compile on this processor (see ComputeConfig::enable_trisc2_rvv), or an
-    // empty string when the processor has no vector unit / the arch does not support it.
-    // Applied per kernel at recipe-export time, never to firmware or default kernel builds.
+    // Returns the compiler flags that enable RISC-V Vector code generation for an opt-in kernel
+    // compile on this processor (ComputeConfig::enable_trisc2_rvv, QuasarComputeConfig::
+    // enable_trisc0_rvv), or an empty string when the processor has no vector unit
+    // (Hal::get_supports_rvv). Applied per kernel at recipe-export time, never to firmware or default
+    // kernel builds.
     virtual std::string rvv_compile_flags(const Params& /*params*/) const { return {}; }
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
@@ -330,6 +419,8 @@ public:
 };
 
 class Hal {
+    friend class HalJitBuildQueryQuasar;
+
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t, bool)>;
     using IramRelocateFunc = std::function<uint64_t(uint64_t)>;
@@ -342,10 +433,11 @@ public:
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
-    using VerifyFwVersionFunc = std::function<bool(tt::umd::semver_t)>;
+    using VerifyFwVersionFunc = std::function<bool(tt::umd::SemVer)>;
 
 private:
     tt::ARCH arch_;
+    IpVariant quasar_arch_variant_{IpVariant::GRENDEL};
     std::vector<HalCoreInfoType> core_info_;
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
@@ -369,13 +461,23 @@ private:
     uint32_t noc_stream_remote_dest_buf_start_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
+    uint32_t noc_stream_remote_dest_words_free_width_{};
+    uint32_t noc_stream_remote_src_reg_index_{};
     uint32_t operand_start_stream_{};
+    uint32_t risc_soft_reset_addr_{};
+    uint32_t wall_clock_low_addr_{};
+    uint32_t wall_clock_high_addr_{};
+    // Indexed by active Ethernet processor id.
+    std::vector<uint32_t> active_eth_physical_eriscs_;
     bool has_stream_registers_{};
+    bool supports_fds_{};
     NoCTopologyType noc_topology_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
     bool supports_64_bit_pcie_addressing_{};
+    // Lowest NoC address the PCIe tile serves itself instead of forwarding to the host.
+    uint64_t pcie_tile_local_noc_addr_base_ = std::numeric_limits<uint64_t>::max();
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
@@ -387,6 +489,7 @@ private:
     size_t max_pinned_memory_count_{};
     size_t total_pinned_memory_size_{};
     bool has_tile_counter_registers_{};
+    uint32_t num_dataflow_buffers_{};
     bool supports_implicit_dfb_sync_{};
     uint32_t num_tile_counters_{};
 
@@ -418,8 +521,10 @@ private:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         bool is_simulator,
-        bool enable_blackhole_dram_programmable_cores);
-    void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
+        bool enable_blackhole_dram_programmable_cores,
+        bool enable_aerisc_ptp_trace);
+    void initialize_qa(
+        uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant);
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -447,7 +552,9 @@ public:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         bool is_simulator = false,
-        bool enable_blackhole_dram_programmable_cores = false);
+        bool enable_blackhole_dram_programmable_cores = false,
+        bool enable_aerisc_ptp_trace = false,
+        IpVariant quasar_arch_variant = IpVariant::GRENDEL);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -483,7 +590,23 @@ public:
     uint32_t get_noc_stream_remote_dest_buf_space_available_update_reg_index() const {
         return noc_stream_remote_dest_buf_space_available_update_reg_index_;
     }
+    uint32_t get_noc_stream_remote_dest_words_free_width() const { return noc_stream_remote_dest_words_free_width_; }
+    uint32_t get_noc_stream_remote_src_reg_index() const { return noc_stream_remote_src_reg_index_; }
     uint32_t get_operand_start_stream() const { return operand_start_stream_; }
+    uint32_t get_risc_soft_reset_addr() const { return risc_soft_reset_addr_; }
+    // Reading the low word latches the high word, so read the low word first.
+    uint32_t get_wall_clock_low_addr() const { return wall_clock_low_addr_; }
+    uint32_t get_wall_clock_high_addr() const { return wall_clock_high_addr_; }
+    // The physical ERISC that active Ethernet processor `processor_id` runs on.
+    uint32_t get_active_eth_physical_erisc(uint32_t processor_id) const {
+        TT_FATAL(
+            processor_id < active_eth_physical_eriscs_.size(),
+            "Active Ethernet processor {} is not one of the HAL's {}",
+            processor_id,
+            active_eth_physical_eriscs_.size());
+        return active_eth_physical_eriscs_[processor_id];
+    }
+    bool supports_fds() const { return supports_fds_; }
     bool has_stream_registers() const { return has_stream_registers_; }
     bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
     bool supports_implicit_dfb_sync() const { return supports_implicit_dfb_sync_; }
@@ -510,10 +633,8 @@ public:
     float get_nan() const { return nan_; }
     float get_inf() const { return inf_; }
 
-    // NUM_CIRCULAR_BUFFERS is a temporary constant pending DFB migration
-    uint32_t get_arch_num_circular_buffers() const {
-        return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS;
-    }
+    // Max dataflow buffers (circular buffers on Gen1) per core: the number of device slots a core's DFBs can occupy.
+    uint32_t get_num_dataflow_buffers() const { return num_dataflow_buffers_; }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
 
@@ -551,6 +672,7 @@ public:
     bool get_supports_eth_debug_regs() const;
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
     uint32_t get_eth_debug_reg_addr(EthDebugReg reg) const;
+    uint32_t get_tensix_debug_reg_addr(TensixDebugReg reg) const;
     uint32_t get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
     uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
@@ -586,6 +708,9 @@ public:
     uint32_t get_read_alignment(HalMemType memory_type) const;
     uint32_t get_write_alignment(HalMemType memory_type) const;
     uint32_t get_dma_alignment() const;
+    // Smallest host-to-device write sent through PCIe DMA rather than MMIO, for a write requesting this ordering.
+    uint32_t get_dma_write_min_bytes(tt::umd::IoOrdering ordering) const;
+    bool supports_dma_reads() const;
 
     // Returns an alignment that is aligned with PCIE and the given memory type
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
@@ -596,7 +721,16 @@ public:
 
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
+    bool get_supports_rvv(
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        uint32_t processor_type_idx) const;
+
+    // The processors metal runs on a core of this type.
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+    // The physical RISCs a core of this type has.
+    // NOTE: This includes the RISCs that metal runs processors on and the ones it doesn't.
+    uint32_t get_num_physical_risc_processors(HalProgrammableCoreType programmable_core_type) const;
     // Returns the processor index within a core.  There is a 1-1 mapping between
     // (processor_class, processor_type) and processor_index.  This is useful
     // For indexing data structures on devices (only 1-d arrays are needed).
@@ -662,7 +796,9 @@ public:
     // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
     // Code that assumes that should use this interface to create go_msg_t values,
     // as it is otherwise not guaranteed by the HAL interface.
-    uint32_t make_go_msg_u32(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const;
+    // The dispatcher that sends the go fills in its own coordinates and adds its CQ's completion counter base to
+    // dispatch_message_offset, so a go names only the sub-device's completion counter.
+    uint32_t make_go_msg_u32(uint8_t signal, uint8_t dispatch_message_offset) const;
 
     // If the specified processor uses IRAM, update the launch message to set the IRAM text size.
     void set_iram_text_size(
@@ -682,6 +818,10 @@ public:
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
     bool get_supports_64_bit_pcie_addressing() const { return supports_64_bit_pcie_addressing_; }
+    // NoC addresses from this one up reach the PCIe tile's own configuration space, never the host. It bounds only
+    // that range: below it the tile's other windows apply their own PCIe attributes or targets, and only [0, 2^58)
+    // forwards an IOVA (see get_supports_64_bit_pcie_addressing) to the host unchanged.
+    uint64_t get_pcie_tile_local_noc_addr_base() const { return pcie_tile_local_noc_addr_base_; }
 
     size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }
     size_t get_total_pinned_memory_size() const { return total_pinned_memory_size_; }
@@ -788,8 +928,8 @@ inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
 
 inline uint32_t Hal::get_dma_alignment() const {
     switch (arch_) {
-        case tt::ARCH::WORMHOLE_B0: return 4;
-        // Only Wormhole B0 devices support DMA transfers today.
+        case tt::ARCH::WORMHOLE_B0:
+        case tt::ARCH::BLACKHOLE: return 4;
         default: return 1;
     }
 }
@@ -810,6 +950,18 @@ inline bool Hal::get_supports_dfbs(uint32_t programmable_core_type_index) const 
 
 inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_receiving_multicast_cmds_;
+}
+
+inline bool Hal::get_supports_rvv(
+    HalProgrammableCoreType programmable_core_type,
+    HalProcessorClassType processor_class,
+    uint32_t processor_type_idx) const {
+    return this
+        ->get_jit_build_config(
+            ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type),
+            ttsl::as_underlying_type<HalProcessorClassType>(processor_class),
+            processor_type_idx)
+        .supports_rvv;
 }
 
 inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {
@@ -878,6 +1030,12 @@ inline uint32_t Hal::get_eth_debug_reg_addr(EthDebugReg reg) const {
     const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
     return this->core_info_[index].eth_debug_regs_[ttsl::as_underlying_type<EthDebugReg>(reg)];
+}
+
+inline uint32_t Hal::get_tensix_debug_reg_addr(TensixDebugReg reg) const {
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::TENSIX);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].tensix_debug_regs_[ttsl::as_underlying_type<TensixDebugReg>(reg)];
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {

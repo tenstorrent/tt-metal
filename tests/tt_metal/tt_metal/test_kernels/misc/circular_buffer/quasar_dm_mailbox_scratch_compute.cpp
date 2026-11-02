@@ -6,6 +6,7 @@
 
 #include "api/compute/common.h"
 #include "dev_mem_map.h"
+#include "experimental/kernel_args.h"
 
 // Consumer half of the QuasarDmToTriscMailbox test: UNPACK (T0), MATH (T1) and PACK (T2) each
 // blocking-read their mailbox queue from writer slot IsolateSfpu/T3 -- the slot the DM writer
@@ -14,7 +15,7 @@
 // half.
 void kernel_main() {
     UNPACK({
-        const std::uint32_t result_l1_addr = get_arg_val<std::uint32_t>(0);
+        const std::uint32_t result_l1_addr = get_arg(args::result_l1_addr);
         const std::uint32_t v = ckernel::mailbox_read(ckernel::ThreadId::IsolateSfpuThreadId);
         volatile tt_l1_ptr std::uint32_t* const result =
             reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(result_l1_addr);
@@ -22,7 +23,7 @@ void kernel_main() {
     })
 
     MATH({
-        const std::uint32_t result_l1_addr = get_arg_val<std::uint32_t>(0);
+        const std::uint32_t result_l1_addr = get_arg(args::result_l1_addr);
         const std::uint32_t v = ckernel::mailbox_read(ckernel::ThreadId::IsolateSfpuThreadId);
         volatile tt_l1_ptr std::uint32_t* const result =
             reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(result_l1_addr);
@@ -30,7 +31,7 @@ void kernel_main() {
     })
 
     PACK({
-        const std::uint32_t result_l1_addr = get_arg_val<std::uint32_t>(0);
+        const std::uint32_t result_l1_addr = get_arg(args::result_l1_addr);
         const std::uint32_t v = ckernel::mailbox_read(ckernel::ThreadId::IsolateSfpuThreadId);
         volatile tt_l1_ptr std::uint32_t* const result =
             reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(result_l1_addr);

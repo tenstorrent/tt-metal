@@ -1,0 +1,656 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <memory>
+#include <stdexcept>
+#include <vector>
+
+#include <gtest/gtest.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+
+#include "llk_device_fixture.hpp"
+#include "impl/program/program_impl.hpp"
+
+namespace tt::tt_metal {
+namespace {
+
+void run_sdpa_recip(distributed::MeshDevice& mesh, std::uint32_t fidelity, std::uint32_t granularity) {
+    auto& cq = mesh.mesh_command_queue();
+    const CoreCoord core{0, 0};
+    constexpr std::uint32_t tiles = 3;
+    constexpr std::uint32_t tile_bytes = 2048;
+    Program program = CreateProgram(mesh);
+    auto make_buffer = [&]() {
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = tiles * tile_bytes},
+            {.page_size = tiles * tile_bytes, .buffer_type = BufferType::DRAM},
+            &mesh);
+    };
+    auto input = make_buffer();
+    auto output = make_buffer();
+    for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_16}) {
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(tile_bytes, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_bytes));
+    }
+    // The normalizer's logical tile is two 8x16 faces. Data is already in
+    // DEST; this CB supplies the compute API's operand format/shape metadata.
+    CreateCircularBuffer(
+        program,
+        core,
+        CircularBufferConfig(512, {{tt::CBIndex::c_1, tt::DataFormat::Float16_b}})
+            .set_page_size(tt::CBIndex::c_1, 512)
+            .set_unpack_face_geometry(tt::CBIndex::c_1, 8, 2));
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_recip_reconciliation.cpp",
+        core,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = false,
+            .math_approx_mode = false,
+            .compile_args = {tiles, fidelity, granularity}});
+
+    std::vector<bfloat16> source(tiles * 1024);
+    std::vector<bfloat16> golden(source.size());
+    for (std::uint32_t i = 0; i < source.size(); ++i) {
+        source[i] = bfloat16(static_cast<float>(static_cast<int>(i * 17 % 63) - 31) / 8.0f);
+        // Two 8x32 SDPA tiles occupy the first 512 elements of each full tile.
+        // The other half is a guard for writes beyond the normalized region.
+        const float divisor = i % 1024 < 512 ? 2.0f : 1.0f;
+        golden[i] = bfloat16(static_cast<float>(source[i]) / divisor);
+    }
+    distributed::EnqueueWriteMeshBuffer(cq, input, pack_bfloat16_vec_into_uint32_vec(source), true);
+    SetRuntimeArgs(program, reader, core, {input->address(), 0, tiles});
+    SetRuntimeArgs(program, writer, core, {output->address(), 0, tiles});
+    distributed::MeshWorkload workload;
+    const distributed::MeshCoordinate zero(0, 0);
+    workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+    std::vector<std::uint32_t> result;
+    distributed::EnqueueReadMeshBuffer(cq, result, output, true);
+    EXPECT_EQ(result, pack_bfloat16_vec_into_uint32_vec(golden));
+}
+
+constexpr std::uint32_t sdpa_tail_rows = 8;
+constexpr std::uint32_t sdpa_tail_cols = 32;
+constexpr std::uint32_t sdpa_tail_elements = sdpa_tail_rows * sdpa_tail_cols;
+
+std::uint32_t sdpa_tail_face_index(std::uint32_t row, std::uint32_t col) {
+    return (col / 16) * sdpa_tail_rows * 16 + row * 16 + col % 16;
+}
+
+// Exercise the real tail producer: row-wise max/sum reduction, SRCB reuse
+// broadcast multiplication, and either sparse block packing or dense untilize.
+// copy_tile alone cannot establish the short-face DEST layout this path uses.
+void run_sdpa_tail(
+    distributed::MeshDevice& mesh,
+    bool normalize,
+    bool untilize,
+    bool fp32_dest_acc,
+    bool full_sync,
+    std::uint32_t num_blocks) {
+    auto& cq = mesh.mesh_command_queue();
+    const CoreCoord core{0, 0};
+    constexpr std::uint32_t rounds = 3;
+    constexpr std::uint32_t block_size = 2;
+    constexpr std::uint32_t tile_bytes = sdpa_tail_elements * sizeof(bfloat16);
+    const std::uint32_t tiles = block_size * num_blocks;
+    Program program = CreateProgram(mesh);
+    auto make_buffer = [&](std::uint32_t count) {
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = count * tile_bytes},
+            {.page_size = count * tile_bytes, .buffer_type = BufferType::DRAM},
+            &mesh);
+    };
+    std::array<std::shared_ptr<distributed::MeshBuffer>, 4> inputs{
+        make_buffer(rounds), make_buffer(rounds), make_buffer(rounds * tiles), make_buffer(rounds * tiles)};
+    auto output = make_buffer(rounds * tiles);
+    auto output_stats = make_buffer(rounds);
+    for (const auto cb :
+         {tt::CBIndex::c_0,
+          tt::CBIndex::c_1,
+          tt::CBIndex::c_2,
+          tt::CBIndex::c_3,
+          tt::CBIndex::c_16,
+          tt::CBIndex::c_17}) {
+        const std::uint32_t pages =
+            cb == tt::CBIndex::c_0 || cb == tt::CBIndex::c_1 || cb == tt::CBIndex::c_17 ? 2 : 2 * tiles;
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(pages * tile_bytes, {{cb, tt::DataFormat::Float16_b}})
+                .set_page_size(cb, tile_bytes)
+                .set_tile_dims(cb, Tile({sdpa_tail_rows, sdpa_tail_cols})));
+    }
+    const auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_sdpa_tail_reconciliation.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = {rounds, tiles}});
+    const auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_sdpa_tail_reconciliation.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {rounds, tiles, normalize}});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_tail_reconciliation.cpp",
+        core,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = fp32_dest_acc,
+            .dst_full_sync_en = full_sync,
+            .math_approx_mode = false,
+            .compile_args = {rounds, block_size, num_blocks, normalize, untilize}});
+
+    std::array<std::vector<bfloat16>, 4> source{
+        std::vector<bfloat16>(rounds * sdpa_tail_elements, bfloat16(0.0f)),
+        std::vector<bfloat16>(rounds * sdpa_tail_elements, bfloat16(0.0f)),
+        std::vector<bfloat16>(rounds * tiles * sdpa_tail_elements),
+        std::vector<bfloat16>(rounds * tiles * sdpa_tail_elements)};
+    std::vector<float> golden(rounds * tiles * sdpa_tail_elements);
+    std::vector<float> rounding_bound(golden.size());
+    std::vector<float> golden_stats(rounds * sdpa_tail_elements, 0.0f);
+    for (std::uint32_t round = 0; round < rounds; ++round) {
+        for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
+            // Unequal, row-dependent maxima exercise both branches of max and
+            // both exponential weights. Vary every round to catch stale state.
+            const float worker_max = static_cast<float>(row % 3) * 0.5f - 0.5f;
+            const float previous_max = static_cast<float>((row + round) % 4) * 0.25f - 0.25f;
+            const float worker_sum = 1.0f + static_cast<float>((row + round) % 3) * 0.5f;
+            const float previous_sum = 1.5f + static_cast<float>((row + 2 * round) % 4) * 0.25f;
+            const auto stats_index = round * sdpa_tail_elements + sdpa_tail_face_index(row, 0);
+            source[0][stats_index] = bfloat16(worker_max);
+            source[0][stats_index + 1] = bfloat16(worker_sum);
+            source[1][stats_index] = bfloat16(previous_max);
+            source[1][stats_index + 1] = bfloat16(previous_sum);
+            const float maximum = std::max(worker_max, previous_max);
+            const float worker_weight = std::exp((worker_max - maximum) * 0.5f);
+            const float previous_weight = std::exp((previous_max - maximum) * 0.5f);
+            const float denominator = worker_sum * worker_weight + previous_sum * previous_weight;
+            golden_stats[stats_index] = maximum;
+            golden_stats[stats_index + 1] = denominator;
+            for (std::uint32_t tile = 0; tile < tiles; ++tile) {
+                for (std::uint32_t col = 0; col < sdpa_tail_cols; ++col) {
+                    const auto source_index =
+                        (round * tiles + tile) * sdpa_tail_elements + sdpa_tail_face_index(row, col);
+                    const auto worker_value = bfloat16(
+                        static_cast<float>(static_cast<int>((tile * 23 + row * 11 + col + round * 7) % 61) - 30) /
+                        16.0f);
+                    const auto previous_value = bfloat16(
+                        static_cast<float>(static_cast<int>((tile * 13 + row * 3 + col * 7 + round * 17) % 53) - 26) /
+                        16.0f);
+                    source[2][source_index] = worker_value;
+                    source[3][source_index] = previous_value;
+                    const float worker_term = static_cast<float>(worker_value) * worker_weight;
+                    const float previous_term = static_cast<float>(previous_value) * previous_weight;
+                    const float value = worker_term + previous_term;
+                    const auto output_index = untilize ? round * tiles * sdpa_tail_elements +
+                                                             row * tiles * sdpa_tail_cols + tile * sdpa_tail_cols + col
+                                                       : source_index;
+                    golden[output_index] = normalize ? value / denominator : value;
+                    // The two BF16-weighted terms can nearly cancel. Bound
+                    // coefficient/product/accumulator rounding by the terms'
+                    // magnitudes, not by their potentially tiny final sum.
+                    // Four BF16 unit roundoffs cover these rounding stages;
+                    // a separate relative-L2 check below rejects broad drift.
+                    constexpr float bf16_unit_roundoff = 1.0f / 256.0f;
+                    rounding_bound[output_index] = 4.0f * bf16_unit_roundoff *
+                                                   (std::abs(worker_term) + std::abs(previous_term)) /
+                                                   (normalize ? denominator : 1.0f);
+                }
+            }
+        }
+    }
+    for (std::uint32_t index = 0; index < inputs.size(); ++index) {
+        distributed::EnqueueWriteMeshBuffer(cq, inputs[index], pack_bfloat16_vec_into_uint32_vec(source[index]), true);
+    }
+    SetRuntimeArgs(
+        program,
+        reader,
+        core,
+        {inputs[0]->address(), inputs[1]->address(), inputs[2]->address(), inputs[3]->address()});
+    SetRuntimeArgs(program, writer, core, {output->address(), output_stats->address()});
+    distributed::MeshWorkload workload;
+    const distributed::MeshCoordinate zero(0, 0);
+    workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+    std::vector<std::uint32_t> result;
+    distributed::EnqueueReadMeshBuffer(cq, result, output, true);
+    const auto actual = unpack_uint32_vec_into_bfloat16_vec(result);
+    ASSERT_EQ(actual.size(), golden.size());
+    double squared_error = 0.0;
+    double squared_golden = 0.0;
+    for (std::uint32_t index = 0; index < actual.size(); ++index) {
+        const float value = static_cast<float>(actual[index]);
+        ASSERT_TRUE(std::isfinite(value)) << "output index=" << index;
+        ASSERT_NEAR(value, golden[index], rounding_bound[index]) << "output index=" << index;
+        squared_error += std::pow(static_cast<double>(value) - golden[index], 2);
+        squared_golden += std::pow(static_cast<double>(golden[index]), 2);
+    }
+    ASSERT_LT(std::sqrt(squared_error / squared_golden), 0.01);
+    if (!normalize) {
+        distributed::EnqueueReadMeshBuffer(cq, result, output_stats, true);
+        const auto actual_stats = unpack_uint32_vec_into_bfloat16_vec(result);
+        ASSERT_EQ(actual_stats.size(), golden_stats.size());
+        for (std::uint32_t round = 0; round < rounds; ++round) {
+            for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
+                const auto index = round * sdpa_tail_elements + sdpa_tail_face_index(row, 0);
+                ASSERT_EQ(static_cast<float>(actual_stats[index]), golden_stats[index]);
+                ASSERT_NEAR(
+                    static_cast<float>(actual_stats[index + 1]),
+                    golden_stats[index + 1],
+                    0.025f * golden_stats[index + 1]);
+            }
+        }
+    }
+}
+
+// Run the chunk API through its partial-output path, including online softmax
+// across chunks. Layout 0 preserves the original shared K/V defaults; layout 1
+// preserves separate V; layout 2 stores [K, padding, V, padding] in each row.
+// chunk_tiles is the K-chunk length in tiles, which is also the OV matmul's kt_dim.
+template <bool test_correction_fidelity = false, std::uint32_t chunk_tiles = 2>
+void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, bool full_sync) {
+    auto& cq = mesh.mesh_command_queue();
+    const CoreCoord core{0, 0};
+    constexpr std::uint32_t rounds = 3;
+    constexpr std::uint32_t chunks = test_correction_fidelity ? 3 : 2;
+    constexpr std::uint32_t qk_tiles = 2;
+    constexpr std::uint32_t v_tiles = 2;
+    constexpr std::uint32_t width = qk_tiles * 32;
+    constexpr std::uint32_t tokens = chunks * chunk_tiles * 32;
+    constexpr std::uint32_t short_tile_bytes = sdpa_tail_elements * sizeof(bfloat16);
+    constexpr std::uint32_t full_tile_bytes = 1024 * sizeof(bfloat16);
+    const std::uint32_t row_tiles = layout == 2 ? 6 : qk_tiles;
+    const std::uint32_t v_offset = layout == 2 ? 3 : 0;
+    const bool separate_v = layout == 1;
+    Program program = CreateProgram(mesh);
+    auto make_buffer = [&](std::uint32_t bytes) {
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = bytes},
+            {.page_size = bytes, .buffer_type = BufferType::DRAM},
+            &mesh);
+    };
+    auto input_q = make_buffer(rounds * qk_tiles * short_tile_bytes);
+    auto input_k = make_buffer(rounds * chunks * chunk_tiles * row_tiles * full_tile_bytes);
+    auto input_v = make_buffer(rounds * chunks * chunk_tiles * v_tiles * full_tile_bytes);
+    auto output = make_buffer(rounds * v_tiles * short_tile_bytes);
+    auto output_stats = make_buffer(rounds * short_tile_bytes);
+    for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_16, tt::CBIndex::c_17}) {
+        const auto tiles = cb == tt::CBIndex::c_17 ? 1 : qk_tiles;
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(tiles * short_tile_bytes, {{cb, tt::DataFormat::Float16_b}})
+                .set_page_size(cb, short_tile_bytes)
+                .set_tile_dims(cb, Tile({sdpa_tail_rows, sdpa_tail_cols})));
+    }
+    for (const auto cb : {tt::CBIndex::c_1, tt::CBIndex::c_2}) {
+        const auto tiles = chunk_tiles * (cb == tt::CBIndex::c_1 ? row_tiles : v_tiles);
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(tiles * full_tile_bytes, {{cb, tt::DataFormat::Float16_b}})
+                .set_page_size(cb, full_tile_bytes));
+    }
+    const std::vector<std::uint32_t> args{
+        rounds, chunks, layout, row_tiles, v_offset, test_correction_fidelity, chunk_tiles};
+    const auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_sdpa_merged_kv.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = args});
+    const auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_sdpa_tail_reconciliation.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {rounds, v_tiles, false}});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_merged_kv.cpp",
+        core,
+        ComputeConfig{
+            .math_fidelity = test_correction_fidelity ? MathFidelity::LoFi : MathFidelity::HiFi4,
+            .fp32_dest_acc_en = false,
+            .dst_full_sync_en = full_sync,
+            .math_approx_mode = false,
+            .compile_args = args});
+
+    std::vector<bfloat16> q(rounds * qk_tiles * sdpa_tail_elements);
+    // Large finite sentinels make accidentally contracting padding or reading
+    // V from the K prefix visible in the independent attention golden.
+    std::vector<bfloat16> k(rounds * chunks * chunk_tiles * row_tiles * 1024, bfloat16(8.0f));
+    std::vector<bfloat16> v(rounds * chunks * chunk_tiles * v_tiles * 1024);
+    std::vector<float> golden(rounds * v_tiles * sdpa_tail_elements);
+    std::vector<float> golden_numerator(golden.size());
+    std::vector<float> golden_max(rounds * sdpa_tail_rows);
+    std::vector<float> golden_sum(rounds * sdpa_tail_rows);
+    auto full_index = [](std::uint32_t row, std::uint32_t col) {
+        return (row / 16 * 2 + col / 16) * 256 + row % 16 * 16 + col % 16;
+    };
+    auto q_value = [](std::uint32_t round, std::uint32_t row, std::uint32_t dim) {
+        if constexpr (test_correction_fidelity) {
+            return dim == row + round ? 1.0f : 0.0f;
+        }
+        return static_cast<float>(static_cast<int>((round * 3 + row * 7 + dim * 5) % 17) - 8) / 16.0f;
+    };
+    auto k_value = [](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
+        if constexpr (test_correction_fidelity) {
+            // Uniform scores and exactly representable Q/K avoid LoFi operand
+            // truncation. The second chunk raises the scaled max by 2.5; the
+            // third keeps it fixed while exercising the next QK/OV.
+            return static_cast<float>(dim % 4) / 4.0f + static_cast<float>(round) / 4.0f +
+                   (token < chunk_tiles * 32 ? 0.0f : 5.0f);
+        }
+        // This exactly representable chunk bias changes the running maximum
+        // for some query rows, exercising the previous-output correction too.
+        const auto chunk_index = token / (chunk_tiles * 32);
+        return static_cast<float>((round * 5 + token * 7 + dim * 3) % 17) / 16.0f + static_cast<float>(chunk_index);
+    };
+    auto v_value = [&](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
+        if constexpr (test_correction_fidelity) {
+            // Exactly LoFi-representable V keeps the correction observable:
+            // chunk 1 contributes nothing, so it cannot hide an incorrect
+            // rescaling of chunk 0. Powers of two give proportional partial
+            // outputs with low SrcA mantissa bits. Chunk 2 adds a small contribution.
+            const auto chunk_index = token / (chunk_tiles * 32);
+            if (chunk_index == 0) {
+                return static_cast<float>(8u << ((dim + round) % 4));
+            }
+            return chunk_index == 1 ? 0.0f : static_cast<float>(1 + (dim + round) % 2) / 8.0f;
+        }
+        return layout == 0 ? k_value(round, token, dim)
+                           : 0.5f + static_cast<float>((round * 11 + token * 3 + dim * 7) % 23) / 16.0f;
+    };
+    for (std::uint32_t round = 0; round < rounds; ++round) {
+        for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
+            for (std::uint32_t dim = 0; dim < width; ++dim) {
+                q[(round * qk_tiles + dim / 32) * sdpa_tail_elements + sdpa_tail_face_index(row, dim % 32)] =
+                    bfloat16(q_value(round, row, dim));
+            }
+        }
+        for (std::uint32_t token = 0; token < tokens; ++token) {
+            for (std::uint32_t dim = 0; dim < width; ++dim) {
+                const auto tile_row = round * chunks * chunk_tiles + token / 32;
+                const auto within_tile = full_index(token % 32, dim % 32);
+                k[(tile_row * row_tiles + dim / 32) * 1024 + within_tile] = bfloat16(k_value(round, token, dim));
+                v[(tile_row * v_tiles + dim / 32) * 1024 + within_tile] = bfloat16(v_value(round, token, dim));
+                if (layout == 2) {
+                    k[(tile_row * row_tiles + v_offset + dim / 32) * 1024 + within_tile] =
+                        bfloat16(v_value(round, token, dim));
+                }
+            }
+        }
+        for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
+            std::array<double, tokens> scores{};
+            for (std::uint32_t token = 0; token < tokens; ++token) {
+                for (std::uint32_t dim = 0; dim < width; ++dim) {
+                    scores[token] += q_value(round, row, dim) * k_value(round, token, dim);
+                }
+                scores[token] *= 0.5;
+            }
+            const double maximum = *std::max_element(scores.begin(), scores.end());
+            // The chunk API reports the maximum before applying the 0.5 scale.
+            golden_max[round * sdpa_tail_rows + row] = maximum / 0.5;
+            double denominator = 0.0;
+            for (auto& score : scores) {
+                score = std::exp(score - maximum);
+                denominator += score;
+            }
+            golden_sum[round * sdpa_tail_rows + row] = denominator;
+            for (std::uint32_t dim = 0; dim < v_tiles * 32; ++dim) {
+                double numerator = 0.0;
+                for (std::uint32_t token = 0; token < tokens; ++token) {
+                    numerator += scores[token] * v_value(round, token, dim);
+                }
+                const auto index =
+                    (round * v_tiles + dim / 32) * sdpa_tail_elements + sdpa_tail_face_index(row, dim % 32);
+                golden_numerator[index] = numerator;
+                golden[index] = numerator / denominator;
+            }
+        }
+    }
+    distributed::EnqueueWriteMeshBuffer(cq, input_q, pack_bfloat16_vec_into_uint32_vec(q), true);
+    distributed::EnqueueWriteMeshBuffer(cq, input_k, pack_bfloat16_vec_into_uint32_vec(k), true);
+    if (separate_v) {
+        distributed::EnqueueWriteMeshBuffer(cq, input_v, pack_bfloat16_vec_into_uint32_vec(v), true);
+    }
+    SetRuntimeArgs(program, reader, core, {input_q->address(), input_k->address(), input_v->address()});
+    SetRuntimeArgs(program, writer, core, {output->address(), output_stats->address()});
+    distributed::MeshWorkload workload;
+    const distributed::MeshCoordinate zero(0, 0);
+    workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+    std::vector<std::uint32_t> result;
+    distributed::EnqueueReadMeshBuffer(cq, result, output, true);
+    const auto actual = unpack_uint32_vec_into_bfloat16_vec(result);
+    ASSERT_EQ(actual.size(), golden.size());
+    distributed::EnqueueReadMeshBuffer(cq, result, output_stats, true);
+    const auto actual_stats = unpack_uint32_vec_into_bfloat16_vec(result);
+    ASSERT_EQ(actual_stats.size(), rounds * sdpa_tail_elements);
+    for (std::uint32_t round = 0; round < rounds; ++round) {
+        for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
+            const auto index = round * sdpa_tail_elements + sdpa_tail_face_index(row, 0);
+            const auto golden_index = round * sdpa_tail_rows + row;
+            ASSERT_NEAR(
+                static_cast<float>(actual_stats[index]),
+                golden_max[golden_index],
+                0.03f * std::abs(golden_max[golden_index]))
+                << "max round=" << round << ", row=" << row;
+            const float sum = static_cast<float>(actual_stats[index + 1]);
+            ASSERT_TRUE(std::isfinite(sum));
+            ASSERT_GT(sum, 0.0f);
+            ASSERT_NEAR(sum, golden_sum[golden_index], 0.03f * golden_sum[golden_index])
+                << "sum round=" << round << ", row=" << row;
+        }
+    }
+    double squared_error = 0.0;
+    double squared_golden = 0.0;
+    for (std::uint32_t index = 0; index < actual.size(); ++index) {
+        const float numerator = static_cast<float>(actual[index]);
+        ASSERT_TRUE(std::isfinite(numerator)) << "output index=" << index;
+        ASSERT_NEAR(numerator, golden_numerator[index], 0.03f * std::abs(golden_numerator[index]))
+            << "numerator index=" << index;
+        const auto round = index / (v_tiles * sdpa_tail_elements);
+        const auto row = index % (sdpa_tail_rows * 16) / 16;
+        const auto sum_index = round * sdpa_tail_elements + sdpa_tail_face_index(row, 0) + 1;
+        // Normalize on the host to isolate chunk addressing from the existing
+        // BF16 reciprocal-minus-one rounding. Its API is tested separately by
+        // SdpaRecipFidelityAndSignalling; these attention tolerances stay strict.
+        const float value = numerator / static_cast<float>(actual_stats[sum_index]);
+        ASSERT_NEAR(value, golden[index], 0.03f * std::abs(golden[index])) << "output index=" << index;
+        squared_error += std::pow(static_cast<double>(value) - golden[index], 2);
+        squared_golden += std::pow(static_cast<double>(golden[index]), 2);
+    }
+    ASSERT_LT(std::sqrt(squared_error / squared_golden), 0.02);
+}
+
+Program make_sdpa_chunk_compile_program(distributed::MeshDevice& mesh_device, const std::vector<std::uint32_t>& args) {
+    Program program = CreateProgram(mesh_device);
+    const CoreCoord core{0, 0};
+    for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_3, tt::CBIndex::c_16}) {
+        auto config = CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048);
+        if (cb == tt::CBIndex::c_0 || cb == tt::CBIndex::c_16) {
+            config.set_unpack_face_geometry(cb, 8, 2);
+        }
+        CreateCircularBuffer(program, core, config);
+    }
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunk_compile_limits.cpp",
+        core,
+        ComputeConfig{.math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false, .compile_args = args});
+    return program;
+}
+
+}  // namespace
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaRecipFidelityAndSignalling) {
+    for (const auto fidelity : {0u, 2u, 3u, 4u, 255u}) {
+        for (const auto granularity : {1u, 2u}) {
+            SCOPED_TRACE(::testing::Message() << "fidelity=" << fidelity << ", granularity=" << granularity);
+            run_sdpa_recip(*devices_.at(0), fidelity, granularity);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaTailShortFaceProducerAndUntilize) {
+    // Three invocations reuse both DEST banks; three blocks also exercise
+    // untilize's full-width row stride and nonzero block-column offsets.
+    for (const bool normalize : {false, true}) {
+        for (const bool untilize : {false, true}) {
+            for (const bool fp32_dest_acc : {false, true}) {
+                for (const bool full_sync : {false, true}) {
+                    for (const auto num_blocks : {1u, 3u}) {
+                        SCOPED_TRACE(
+                            ::testing::Message() << "normalize=" << normalize << ", untilize=" << untilize
+                                                 << ", fp32_dest_acc=" << fp32_dest_acc << ", full_sync=" << full_sync
+                                                 << ", blocks=" << num_blocks);
+                        run_sdpa_tail(*devices_.at(0), normalize, untilize, fp32_dest_acc, full_sync, num_blocks);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvAndDefaultLayouts) {
+    for (const auto layout : {0u, 1u, 2u}) {
+        for (const bool full_sync : {false, true}) {
+            SCOPED_TRACE(::testing::Message() << "layout=" << layout << ", full_sync=" << full_sync);
+            run_sdpa_merged_kv(*devices_.at(0), layout, full_sync);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkOddChunkSize) {
+    // The OV matmul's kt_dim is the chunk length. Its reuse-dest unpack covers K tiles
+    // in pairs and then replays an odd last tile, so a 3-tile chunk runs both paths.
+    for (const auto layout : {0u, 1u, 2u}) {
+        for (const bool full_sync : {false, true}) {
+            SCOPED_TRACE(::testing::Message() << "layout=" << layout << ", full_sync=" << full_sync);
+            run_sdpa_merged_kv<false, 3>(*devices_.at(0), layout, full_sync);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSizeCompileLimits) {
+    // This is a compile-time contract test; these programs are never launched.
+    // Odd chunks of at least two tiles compile. A 1-tile chunk must be rejected: it
+    // gets the running max wrong on device (not the OV matmul, which supports kt_dim 1).
+    for (const auto chunk : {1u, 2u, 3u, 5u}) {
+        SCOPED_TRACE(::testing::Message() << "chunk=" << chunk);
+        auto program = make_sdpa_chunk_compile_program(this->device(), {chunk, 1, 1, 2, 2, 0, 0, 0});
+        if (chunk >= 2) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkCorrectionFidelityOverride) {
+    // QK and OV remain LoFi; only the previous-output correction uses HiFi4.
+    // BF16(exp(-2.5)) is 21/256, and corr - 1 is exactly representable too.
+    // This isolates fidelity from extra coefficient rounding in O + O * (corr - 1).
+    // BF16 accumulation leaves low mantissa bits in O: HiFi4 retains them,
+    // while LoFi truncates the product's copy of O to four fraction bits.
+    // That cancellation error exceeds the existing 3% attention checks.
+    // Three chunks and three invocations exercise restoration after both the
+    // override and the no-max-change correction, across both DST sync modes.
+    for (const bool full_sync : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "full_sync=" << full_sync);
+        run_sdpa_merged_kv<true>(*devices_.at(0), 2, full_sync);
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
+    // This is a compile-time contract test; these programs are never launched.
+    // 14 tiles with unit signaling and 16 tiles with grouped signaling fit the
+    // 4-bit semaphore. At 16 tiles, either unit-signaling path must be rejected.
+    for (const auto& args : {std::vector<std::uint32_t>{14, 1, 1}, {16, 2, 2}, {16, 1, 2}, {16, 2, 1}}) {
+        SCOPED_TRACE(::testing::Message() << "chunk=" << args[0] << ", qk=" << args[1] << ", exp=" << args[2]);
+        const bool fits = args[0] / args[1] + 1 <= 15 && args[0] / args[2] + 1 <= 15;
+        auto compile_args = args;
+        compile_args.insert(compile_args.end(), {2, 2, 0, 0, 0});
+        auto program = make_sdpa_chunk_compile_program(this->device(), compile_args);
+        if (fits) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+    // The output posts share the semaphore with the chunk's still-outstanding bcast-mul/dummy
+    // post, so (num_tiles_v / output_granularity) + 1 must fit as well: with unit grouping
+    // 14 output tiles fit and 15 must be rejected.
+    for (const auto num_tiles_v : {14u, 15u}) {
+        SCOPED_TRACE(::testing::Message() << "num_tiles_v=" << num_tiles_v << ", output_granularity=1");
+        const bool fits = num_tiles_v / 1 + 1 <= 15;
+        auto program = make_sdpa_chunk_compile_program(this->device(), {2, 1, 1, num_tiles_v, num_tiles_v, 0, 2, 0});
+        if (fits) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvCompileLimits) {
+    // row_tiles, V width, V offset, contraction, separate-V, accepted.
+    // An odd physical stride is valid when the QK contraction remains even.
+    const std::array<std::array<std::uint32_t, 6>, 8> cases{{
+        {6, 2, 3, 2, 0, 1},
+        {5, 2, 3, 2, 0, 1},
+        {2, 2, 0, 0, 1, 1},
+        {6, 2, 3, 1, 0, 0},
+        {6, 2, 3, 3, 0, 0},
+        {6, 2, 3, 8, 0, 0},
+        {6, 2, 5, 2, 0, 0},
+        {6, 2, 1, 2, 1, 0},
+    }};
+    for (const auto& test : cases) {
+        SCOPED_TRACE(
+            ::testing::Message() << "row_tiles=" << test[0] << ", v_tiles=" << test[1] << ", v_offset=" << test[2]
+                                 << ", qk_tiles=" << test[3] << ", separate_v=" << test[4]);
+        auto program =
+            make_sdpa_chunk_compile_program(this->device(), {2, 1, 1, test[0], test[1], test[2], test[3], test[4]});
+        if (test[5]) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+}
+
+}  // namespace tt::tt_metal

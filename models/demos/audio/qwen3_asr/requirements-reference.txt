@@ -1,0 +1,22 @@
+# CPU reference / golden-dump tooling ONLY — install in a virtualenv SEPARATE from the
+# tt-metal environment:
+#
+#   python3 -m venv /tmp/qwen3-asr-ref
+#   /tmp/qwen3-asr-ref/bin/pip install -r models/demos/audio/qwen3_asr/requirements-reference.txt
+#   /tmp/qwen3-asr-ref/bin/python models/demos/audio/qwen3_asr/reference/dump_reference.py --out <golden-dir>
+#   /tmp/qwen3-asr-ref/bin/python models/demos/audio/qwen3_asr/reference/extract_text_decoder.py --ckpt-out <ckpt-dir>
+#
+# reference/dump_reference.py, reference/extract_text_decoder.py and reference/prep_wav.py
+# run the *full* CPU Qwen3-ASR model (`from qwen_asr import Qwen3ASRModel`) to produce the
+# PCC golden tensors and to materialize the text-decoder checkpoint. That needs qwen-asr's
+# own transformers pin, which must NOT be installed into the tt-metal environment (tt-metal
+# pins a newer transformers — see tt_metal/python_env/requirements-dev.txt).
+#
+# The device-side code (tt/, server/, tests/, demo/) never imports this environment; it only
+# needs requirements.txt + requirements-processor.txt.
+qwen-asr==0.0.6
+# Tip: add --index-url https://download.pytorch.org/whl/cpu to avoid pulling the CUDA wheels;
+# this tooling is CPU-only.
+torch>=2.4,<3.0
+numpy>=1.24,<3.0
+soundfile>=0.12,<1.0

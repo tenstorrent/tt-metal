@@ -24,7 +24,7 @@ constexpr bool EXP_APPROX_MODE = get_compile_time_arg_val(sparse_sdpa::compute_c
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"  // CircularBuffer: COMPILE_FOR_TRISC-aware CB lifecycle
-#include <tt-metalium/constants.hpp>       // tt::constants::TILE_HEIGHT
+#include "api/tile_constants.h"            // tt::constants::TILE_HEIGHT
 
 // In-place scores[tile] += row-broadcast of mask row 0. cb_qk_im is held (hold_wr_ptr), so re-pack at the
 // absolute position. Caller has init'd the bcast-rows op + single-tile pack.
@@ -90,6 +90,9 @@ ALWI void tilize_packed_field() {
 }
 
 void kernel_main() {
+    constexpr bool sink_per_row = true;  // sparse query rows represent different heads
+    constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::USE_ATTENTION_SINK) != 0;
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_ATTENTION_SINK);
     constexpr uint32_t H = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::H);
     constexpr uint32_t DHt = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::DHT);
     constexpr uint32_t vDHt = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::V_DHT);
@@ -498,7 +501,10 @@ void kernel_main() {
                     cb_col_identity,
                     cb_recip_scratch,
                     cb_out_im,
-                    scale_fp32>(sum_cur.get_cb_id(), out_cur.get_cb_id(), Sqt);
+                    scale_fp32,
+                    use_attention_sink,
+                    cb_attention_sink,
+                    sink_per_row>(sum_cur.get_cb_id(), out_cur.get_cb_id(), Sqt, max_cur.get_cb_id());
                 max_cur.pop_front(Sqt);  // running max no longer needed
             }
 

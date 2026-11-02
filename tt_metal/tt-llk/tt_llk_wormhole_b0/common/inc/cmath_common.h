@@ -55,6 +55,9 @@ static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
 // The one writer. Out-of-line so the STALLWAIT + RMW exist in a single copy (code size — a matmul
 // kernel otherwise overflows its slot).
+// Keep the STALLWAIT on Wormhole: an FPU instruction reads the live flag while it waits to enter the FPU
+// (e.g. for its Src operands), so a write must not land until MATH has drained. (Blackhole latches the
+// flag per instruction at issue and needs no stall.)
 inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t value)
 {
     src_zero_flag_hw = value;
@@ -138,6 +141,19 @@ inline void incr_counters(const std::uint32_t incr_a, const std::uint32_t incr_b
     TT_INCRWC(incr_cr, incr_d, incr_b, incr_a);
 }
 
+// MOVD2A/MOVD2B write SrcA/SrcB from Dest, so they fall outside the Src auto-wait, which covers
+// only instructions that read Src. Gate the row moves on the target bank's DVALID, and drain
+// in-flight math so the Dest values those moves read back have settled.
+inline void srca_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
+}
+
+inline void srcb_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+}
+
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD); // MOVD2A for a whole face assumes unpacker will set a dummy data_valid, so we want to wait on that
@@ -160,7 +176,7 @@ inline void move_d2a_row_broadcast_fixed_face(const std::uint8_t addrmod)
 {
     // MOVD2A does not auto-wait for SrcA[MatrixUnit.SrcABank].AllowedClient == MatrixUnit, so gate on SRCA_VLD
     // before the row moves (mirrors move_d2b_fixed_face's SRCB_VLD wait). See llk_math_transpose_dest.h. tt-llk#1664.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
     // // Seems to make things 200 clocks slower. Really shouldn't though.
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, addrmod, p_movd2a::MOV_1_ROW, 0);
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 1, addrmod, p_movd2a::MOV_1_ROW, 0);
@@ -191,11 +207,11 @@ inline void wait_bank_valid()
 {
     if constexpr (SrcReg == Srcs::SrcA)
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
     }
     else
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
     }
 }
 
@@ -326,6 +342,21 @@ inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::
 
     return ((input_df == to_underlying(DataFormat::Int32)) || (input_df == to_underlying(DataFormat::Float32))) &&
            ((output_df == to_underlying(DataFormat::Int32)) || (output_df == to_underlying(DataFormat::Float32)));
+}
+
+// Pack the SrcA/SrcB ALU formats into their fields of the ALU_FORMAT_SPEC_REG0_SrcA_ADDR32 config word. The two fields
+// are DATA_FORMAT_BIT_COUNT (4) bits wide and adjacent, so each value is masked before the shift, as the unpacker does:
+// shifting a raw UInt8 (30) / UInt32 (24) in would land SrcA's bit 4 on SrcB's LSB. Writers that program both fields go
+// through this helper; writers that program one field mask it with masked_data_format() before the single-field RMW.
+inline constexpr std::uint32_t alu_src_format_cfg(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
+{
+    // masked_data_format() only keeps SrcA's spill out of SrcB if each field is exactly DATA_FORMAT_BIT_COUNT wide and
+    // both live in the one word this helper packs.
+    static_assert((ALU_FORMAT_SPEC_REG0_SrcA_MASK >> ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) == DATA_FORMAT_CONFIG_MASK);
+    static_assert((ALU_FORMAT_SPEC_REG1_SrcB_MASK >> ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) == DATA_FORMAT_CONFIG_MASK);
+    static_assert(ALU_FORMAT_SPEC_REG0_SrcA_ADDR32 == ALU_FORMAT_SPEC_REG1_SrcB_ADDR32);
+    return (masked_data_format(srca_data_format) << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) |
+           (masked_data_format(srcb_data_format) << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT);
 }
 
 inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)

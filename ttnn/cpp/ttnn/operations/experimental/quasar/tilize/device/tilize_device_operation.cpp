@@ -28,6 +28,14 @@ bool can_use_sharded_optimized_factories(
         return false;
     }
 
+    // Sharded optimized factories borrow the tensor buffers as DFBs, which must be L1.
+    if (input_tensor.memory_config().buffer_type() != BufferType::L1) {
+        return false;
+    }
+    if (operation_attributes.output_mem_config.buffer_type() != BufferType::L1) {
+        return false;
+    }
+
     auto memory_layout = input_tensor.memory_config().memory_layout();
     if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
         return false;
@@ -44,14 +52,6 @@ bool can_use_sharded_optimized_factories(
         if (operation_attributes.output_mem_config.shard_spec().value().shape[0] != tt::constants::TILE_HEIGHT) {
             return false;
         }
-        if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
-            return false;
-        }
-    }
-
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-        operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
-        return false;
     }
 
     if (operation_attributes.output_mem_config.memory_layout() != memory_layout) {
@@ -110,7 +110,7 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to tilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
 
     TT_FATAL(
@@ -209,8 +209,13 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         }
         return ttnn::prim::qsr::TilizeMultiCoreDefaultProgramFactory{};
     }
+    // The block factory's cliff reader self-loops a staging DFB (bound PRODUCER+CONSUMER by one DM kernel),
+    // which Gen2/Quasar rejects (program_spec.cpp ValidateProgramSpec: "Self-loop DFBs are not supported for
+    // data-movement kernels on Gen2"). Avoid it. For !enough_space_height the row is too wide for Default's
+    // full-row CBs to fit L1, so route to SingleCore (which caps num_tiles_per_block to fit L1 by
+    // construction) — matches the mainline tilize picker's guard; Default is NOT safe here.
     if (!operation_attributes.enough_space_height) {
-        return ttnn::prim::qsr::TilizeMultiCoreBlockProgramFactory{};
+        return ttnn::prim::qsr::TilizeSingleCoreProgramFactory{};
     }
     auto sub_core_grids = operation_attributes.sub_core_grids;
 
@@ -237,7 +242,9 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
                                     (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
-            return ttnn::prim::qsr::TilizeMultiCoreBlockProgramFactory{};
+            // Block factory has the unsupported Gen2 DM self-loop (see above). For wide tensors Default is
+            // still correct — this was only a core-count perf heuristic — so route to Default.
+            return ttnn::prim::qsr::TilizeMultiCoreDefaultProgramFactory{};
         }
     }
     return ttnn::prim::qsr::TilizeMultiCoreDefaultProgramFactory{};
@@ -254,7 +261,6 @@ ttnn::Tensor tilize(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
     bool use_multicore,
-    bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids) {
@@ -263,7 +269,6 @@ ttnn::Tensor tilize(
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),
             .use_multicore = use_multicore,
-            .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .use_low_perf = use_low_perf,
             .sub_core_grids = sub_core_grids,

@@ -77,7 +77,7 @@ elseif(NOT "${SFPI_hash}" STREQUAL "")
     FetchContent_MakeAvailable(sfpi)
 else()
     message(STATUS "No downloadable SFPI tarball for ${SFPI_arch} ${SFPI_dist}")
-    if(IS_READABLE "${SFPI_BASE}/${SFPI_filename}")
+    if(EXISTS "${SFPI_BASE}/${SFPI_filename}")
         message(STATUS "Locally-built ${SFPI_filename} present")
     else()
         file(REMOVE_RECURSE "${SFPI_BASE}/sfpi")
@@ -382,6 +382,7 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/llk_io
         -I${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_ALIAS}/common/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_ALIAS}/llk_lib
+        -I${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_ALIAS}/llk_lib/hal
     )
 
     foreach(HW_PAIR IN LISTS HW_OBJ_SRC_PAIRS)

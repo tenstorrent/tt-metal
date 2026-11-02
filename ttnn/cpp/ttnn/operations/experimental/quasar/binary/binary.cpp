@@ -409,6 +409,16 @@ inline Tensor binary_impl(
     if (binary_op_type == BinaryOpType::EQ) {
         return ttnn::eqz(ttnn::sub_sfpu(lhs, rhs, memory_config), memory_config, output);
     }
+    // s > t is t < s: reuse the tensor-scalar compare instead of subtracting.
+    if (binary_op_type == BinaryOpType::GT) {
+        return ttnn::lt_unary(rhs, lhs, memory_config, output);
+    }
+    if (binary_op_type == BinaryOpType::LT) {
+        return ttnn::gt_unary(rhs, lhs, memory_config, output);
+    }
+    if (binary_op_type == BinaryOpType::NE) {
+        return ttnn::ne_unary(rhs, lhs, memory_config, output);
+    }
 
     TT_THROW("Unsupported operation");
 }

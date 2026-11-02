@@ -23,7 +23,6 @@ namespace tt::tt_metal {
 
     namespace distributed {
     class MeshDeviceImpl;
-    class MeshWorkloadImpl;
     class MeshBuffer;
     }
 }
@@ -51,6 +50,14 @@ struct ProgramData {
     time_point compile_finished_timestamp;
     std::unordered_map<int, KernelData> kernels;
     std::unordered_map<std::size_t, ProgramBinaryStatus> binary_status_per_device;
+    std::vector<Semaphore> semaphores;
+};
+
+struct GlobalSemaphoreData {
+    uint64_t address{};
+    CoreRangeSet cores;
+    std::vector<uint32_t> chip_ids;
+    std::optional<uint32_t> reset_value;
 };
 
 struct MeshDeviceData {
@@ -93,12 +100,6 @@ struct MeshWorkloadRuntimeEntry {
 };
 
 std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs);
-
-struct MeshWorkloadData {
-    const distributed::MeshWorkloadImpl* mesh_workload = nullptr;
-    uint64_t mesh_workload_id{};
-    std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device;
-};
 
 struct CoreInfo {
     tt::tt_metal::DispatchWorkerType worker_type;

@@ -115,8 +115,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_rows", "num_tiles_per_block", "block_width_size", "num_full_blocks_in_row", "start_page_id"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // -- Writer kernel (spans all_cores) --
@@ -132,16 +131,15 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = MC_OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // -- Compute kernels (preserved multiplicity: per-group CTAs) --
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_config);
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_config);
     if (fp32_llk_acc) {
-        std::visit([&](auto& c) { c.unpack_modes.emplace(MC_INPUT_DFB, UnpackMode::UnpackToDest); }, compute_hw);
+        compute_hw.unpack_modes.emplace(MC_INPUT_DFB, UnpackMode::UnpackToDest);
     }
     const char* compute_src = "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp";
     auto make_compute = [&](const KernelSpecName& id, uint32_t nblocks_per_core_arg) {

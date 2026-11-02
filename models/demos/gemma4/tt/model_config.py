@@ -150,12 +150,56 @@ class Gemma4ModelArgs:
     # Layer pattern
     layer_types: tuple = None
     model_cache_path: Path | None = None
+    # Batched prefill escape hatch, honoured by every gemma4 batching gate and
+    # by tt_transformers' shared one. Arch-gated in __post_init__ below.
+    disable_batched_prefill: bool = False
 
     def __post_init__(self):
+        self._apply_wormhole_batched_prefill_guard()
         if self.layer_types is None:
             pattern = ["sliding_attention"] * 5 + ["full_attention"]
             self.layer_types = tuple(pattern * (self.num_hidden_layers // 6 + 1))
             self.layer_types = self.layer_types[: self.num_hidden_layers]
+
+    def _apply_wormhole_batched_prefill_guard(self):
+        """Keep Wormhole on the sequential per-user prefill path.
+
+        Multi-user batched prefill buys nothing on WH and collapses once each
+        user carries >=512 tokens. Measured on T3K 12B at concurrency 32
+        (osl 128, n 32, two reps per cell, aggregate tok/s; run-to-run spread
+        is <1%, so the 512 gap is ~400x the noise floor)::
+
+            isl 128   batched 332.7 / 331.5   sequential 330.0 / 332.6   1.00x
+            isl 256   batched 202.5 / 205.0   sequential 205.8 / 206.6   1.01x
+            isl 512   batched  51.1           sequential 198.5 / 198.6   3.89x
+
+        The same boundary is where WH wedges the device outright: batched, the
+        second consecutive isl-512 run died mid-bench (0 of 4096 tokens, metal
+        "device timeout ... unrecoverable"), while sequential completed both
+        reps. Sequential degrades smoothly (331 -> 206 -> 199) instead of
+        falling off a cliff.
+
+        This mirrors the existing per-(model, device) opt-outs: tt_transformers
+        disables batched prefill for Qwen3-32B/P150x4 and Llama-3.1-8B on
+        Blackhole (``model_config.py``), and gpt-oss disables it outright. Like
+        those, it is a workaround for the prefill path rather than a fix.
+
+        Blackhole is untouched -- it keeps batched prefill at every length,
+        which is where its own batched-prefill win was measured.
+        """
+        if self.disable_batched_prefill:
+            return  # explicitly set by the caller; never override
+        if os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1":
+            # Dev hatch (see generator_vllm will_batch): let the batched path
+            # engage on Wormhole too, so the debt-#1 fix can be cross-verified.
+            return
+        try:
+            from models.common.utility_functions import is_blackhole
+
+            self.disable_batched_prefill = not is_blackhole()
+        except Exception:
+            # Arch undeterminable (host-only unit tests): keep the shared default.
+            pass
 
     @classmethod
     def from_hf_config(cls, hf_config):
@@ -207,6 +251,24 @@ class Gemma4ModelArgs:
         )
 
     @staticmethod
+    def served_weights_dir():
+        """The checkpoint directory the serving stack downloaded, if any.
+
+        tt-inference-server downloads the weights to ``MODEL_WEIGHTS_DIR`` and
+        exposes them again as the ``HF_MODEL`` symlink directory, while vLLM is
+        started with the hub id: the container's own hub cache then holds only
+        the config and tokenizer vLLM fetched, so resolving the id there finds
+        no safetensors (the shield Galaxy runs fail at the cold load that a
+        changed cache identity forces). The first of these that is a directory
+        holding safetensors is the checkpoint to read.
+        """
+        for env in ("MODEL_WEIGHTS_DIR", "HF_MODEL", "GEMMA4_MODEL_PATH"):
+            cand = os.environ.get(env)
+            if cand and os.path.isdir(cand) and any(Path(cand).glob("*.safetensors")):
+                return cand
+        return None
+
+    @staticmethod
     def load_state_dict(weights_path, dummy_weights=False):
         """Load model state dict from safetensors (fast) or HF checkpoint."""
         if dummy_weights:
@@ -214,7 +276,26 @@ class Gemma4ModelArgs:
 
         from pathlib import Path
 
+        if not Path(weights_path).is_dir():
+            # A hub id: resolve to the local snapshot so the safetensors path below
+            # serves it. The AutoModel fallback hands out tensors that die with the
+            # model object (transformers 5 loads lazily from an mmap it closes), and
+            # weights nothing touches while the model is alive -- the vision encoders
+            # -- then read as NaN / inf / zeros.
+            try:
+                from huggingface_hub import snapshot_download
+
+                weights_path = snapshot_download(weights_path, local_files_only=True)
+                logger.info(f"Resolved hub id to local snapshot {weights_path}")
+            except Exception as e:  # not cached locally: keep the hub id for the fallback
+                logger.info(f"No local snapshot for {weights_path} ({e}); using the AutoModel loader")
         safetensor_files = sorted(Path(weights_path).glob("*.safetensors"))
+        if not safetensor_files:
+            served = Gemma4ModelArgs.served_weights_dir()
+            if served and Path(served).resolve() != Path(weights_path).resolve():
+                logger.info(f"No safetensors under {weights_path}; reading the served checkpoint {served}")
+                weights_path = served
+                safetensor_files = sorted(Path(weights_path).glob("*.safetensors"))
         if safetensor_files:
             from safetensors.torch import load_file
 
@@ -233,7 +314,8 @@ class Gemma4ModelArgs:
 
         logger.info(f"No safetensors found, loading via AutoModelForCausalLM from {weights_path}")
         model = AutoModelForCausalLM.from_pretrained(weights_path, torch_dtype="auto")
-        state_dict = model.state_dict()
+        # Materialise every tensor before the model goes away (see above).
+        state_dict = {k: v.detach().clone() for k, v in model.state_dict().items()}
         del model
 
         if any(v.dtype == torch.float32 for v in state_dict.values()):

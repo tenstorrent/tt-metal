@@ -17,6 +17,7 @@ struct FastReduceNCParams {
     const std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     // When set, packer writes this dtype instead of input.dtype() (used by the Sum precision chain).
     const std::optional<tt::tt_metal::DataType> output_dtype;
+    const std::optional<uint32_t> split_output_width = std::nullopt;
 };
 
 struct FastReduceNCInputs {

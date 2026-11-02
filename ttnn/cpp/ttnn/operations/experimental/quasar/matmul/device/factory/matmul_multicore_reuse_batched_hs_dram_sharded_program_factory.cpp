@@ -14,6 +14,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -46,10 +47,10 @@ using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 // ProgramDescriptor variant: translates the same logic as create_program_batch_sharded
 // into a lightweight ProgramDescriptor (no Program object created).
 static ProgramDescriptor create_program_batch_sharded_descriptor(
-    tt::tt_metal::IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -78,7 +79,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     bool untilize_out,
     bool skip_compute,
     bool skip_write_back) {
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     std::vector<CoreCoord> all_worker_cores_ordered;
     CoreRangeSet all_worker_cores;
@@ -116,12 +117,12 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     std::vector<uint32_t> input_storage_noc_x, input_storage_noc_y;
     std::vector<uint32_t> output_storage_noc_x, output_storage_noc_y;
     for (const auto& core : input_storage_cores_ordered) {
-        auto phys_core = device->worker_core_from_logical_core(core);
+        auto phys_core = device.worker_core_from_logical_core(core);
         input_storage_noc_x.push_back(phys_core.x);
         input_storage_noc_y.push_back(phys_core.y);
     }
     for (const auto& core : output_storage_cores_ordered) {
-        auto phys_core = device->worker_core_from_logical_core(core);
+        auto phys_core = device.worker_core_from_logical_core(core);
         output_storage_noc_x.push_back(phys_core.x);
         output_storage_noc_y.push_back(phys_core.y);
     }
@@ -142,7 +143,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     CoreRangeSet all_cores_in_rect_grid({bounding_box});
 
     uint32_t num_cores = num_workers;
-    uint32_t num_dram_banks = device->num_dram_channels();
+    uint32_t num_dram_banks = device.num_dram_channels();
     uint32_t batches_per_core = (B + num_cores - 1) / num_cores;
 
     TT_FATAL(
@@ -274,7 +275,9 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     // CB 4 & 5: output and intermediate - on worker cores
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
-    if (interm0_data_format != output_data_format) {
+    const bool share_out_interm_buffer =
+        interm0_data_format == output_data_format && (!packer_l1_acc_en || out_shard_tiles == out_block_tiles);
+    if (!share_out_interm_buffer) {
         // Separate CBs for output and intermediate
         {
             CBDescriptor cb_desc;
@@ -363,9 +366,9 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     mm_kernel_defines["MATMUL_DRAM_SHARDED"] = "1";
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // Helper to convert std::map defines to KernelDescriptor::Defines
     auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
@@ -405,7 +408,11 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         in1_writer_compile_args.push_back(bias_buffer_page_size);
         in1_writer_compile_args.push_back(bias_buffer_num_pages);
         in1_writer_compile_args.push_back(in3_block_tiles);
+        tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_writer_compile_args);
     }
+    // in1 TensorAccessorArgs for the BankView reads, appended last: CTA 10 without bias, after the bias args
+    // with bias.
+    tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_writer_compile_args);
 
     uint32_t in0_num_subblocks = per_core_M / out_subblock_h;
     uint32_t in1_num_subblocks = per_core_N / out_subblock_w;
@@ -439,7 +446,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      Build Kernel Descriptors
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
 
     writer_defines["OUT_SHARDED"] = "1";
 
@@ -630,7 +637,7 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt::tt_metal::IDevice* device = &a.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = a.device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
@@ -672,7 +679,7 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
     const auto& untilize_out = operation_attributes.untilize_out;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
     uint32_t B = ashape[1];
     uint32_t M = ashape[-2] / in0_tile_shape[0];

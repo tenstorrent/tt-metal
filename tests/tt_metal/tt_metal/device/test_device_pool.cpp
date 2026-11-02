@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <allocator.hpp>
 #include "device/device_manager.hpp"
 #include <host_api.hpp>
@@ -30,7 +30,7 @@ TEST(DevicePool, DevicePoolOpenClose) {
     std::vector<ChipId> device_ids{all_chip_ids.begin(), all_chip_ids.end()};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
     MetalContext::instance().initialize_device_manager(
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
@@ -48,7 +48,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
     int worker_l1_size = 0;
-    const auto& dispatch_core_config = MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
     MetalContext::instance().initialize_device_manager(
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
@@ -83,7 +83,7 @@ TEST(DevicePool, DevicePoolAddDevices) {
     std::vector<ChipId> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
     MetalContext::instance().initialize_device_manager(
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
@@ -115,7 +115,7 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     std::vector<ChipId> device_ids{0, 1, 2, 3};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
     MetalContext::instance().initialize_device_manager(
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = MetalContext::instance().device_manager()->get_all_active_devices();

@@ -24,7 +24,7 @@ using namespace tt::tt_metal;
 // 4. Host reads from buffer written to in step 2.
 //////////////////////////////////////////////////////////////////////////////////////////
 TEST_F(UnitMeshFixture, DramLoopbackSingleCore) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     CoreCoord core = {0, 0};
 
@@ -58,7 +58,7 @@ TEST_F(UnitMeshFixture, DramLoopbackSingleCore) {
         core,
         {l1_buffer_addr, input_dram_buffer_addr, 0, output_dram_buffer_addr, 0, dram_buffer_size});
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*output_dram_buffer, result_vec);

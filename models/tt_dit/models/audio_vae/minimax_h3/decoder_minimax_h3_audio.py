@@ -66,10 +66,12 @@ class MiniMaxH3AudioDecoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        split_mode: str = "full",
-        tap_matmul: bool = True,
-        prefer_mac: bool = True,
+        split_mode: str = "kernel",
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
+        pack_bands: dict[int, int] | None = None,
+        act_mode: str = "chain",
+        polyphase_ups: bool = True,
+        batch_shard_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -81,15 +83,26 @@ class MiniMaxH3AudioDecoder(Module):
         for rate in decoder_rates:
             self.hop_length *= rate
 
-        # The precision levers default to accurate: all three on measures 0.0045 rel RMSE /
-        # 99.9990 % PCC / 67.53 dB at 5 s stereo against 0.1046 / 99.5451 % / 40.29 dB all-fast --
-        # 23x less error for ~3x on the stage. H3-only: LTX constructs the same conv classes with
-        # its own fast defaults. Kept as attributes so the pipeline's device-weight cache key
-        # (`weights_variant`) reads the exact values this module was built with.
+        # The conv3d precision levers default to accurate. H3-only: LTX constructs the same conv
+        # classes with its own fast defaults. Kept as attributes so the pipeline's device-weight
+        # cache key (`weights_variant`) reads the exact values this module was built with. The
+        # depthwise resample filters need no lever: their conv1d kernel is exact in fp32
+        # (see compute_depthwise_conv1d.cpp).
         self.split_mode = split_mode
-        self.tap_matmul = tap_matmul
-        self.prefer_mac = prefer_mac
         self.max_c_in_block = max_c_in_block
+        self.pack_bands = dict(pack_bands or {})
+        self.act_mode = act_mode
+        self.polyphase_ups = polyphase_ups
+        self.batch_shard_axis = batch_shard_axis
+        if batch_shard_axis is not None:
+            mesh_shape = tuple(mesh_device.shape)
+            if parallel_config is None or parallel_config.mesh_axis == batch_shard_axis:
+                raise ValueError("batch_shard_axis needs a T-sharded decoder and must differ from the T-shard axis")
+            if mesh_shape[batch_shard_axis] < 2:
+                raise ValueError(
+                    f"mesh axis {batch_shard_axis} has length {mesh_shape[batch_shard_axis]}; nothing to shard"
+                )
+        self._pad_masks: dict = {}
 
         # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
         # _FP32_BLOCKINGS. Seed stubs before any conv is built; see that module for why stubs.
@@ -108,7 +121,6 @@ class MiniMaxH3AudioDecoder(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
         self.decoder = Vocoder(
             resblock_kernel_sizes=list(resblock_kernel_sizes),
@@ -125,11 +137,11 @@ class MiniMaxH3AudioDecoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            # H3-only opt-in: LTX's vocoder keeps the default fast conv1d filters and
-            # single-conv weights.
-            prefer_mac=prefer_mac,
+            # H3-only opt-in: LTX's vocoder keeps its default single-conv weights.
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
+            pack_bands=pack_bands,
+            act_mode=act_mode,
+            polyphase_ups=polyphase_ups,
         )
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:
@@ -164,8 +176,50 @@ class MiniMaxH3AudioDecoder(Module):
         """
         _, channels, _ = latents_BCT.shape
         assert channels == self.latent_channels, f"expected {self.latent_channels} latent channels, got {channels}"
-        projected = self._project_latents_device(latents_BCT)
-        return self.decoder.forward_BCT_traced(projected) if traced else self.decoder.forward_BCT(projected)
+        x = latents_BCT.transpose(1, 2).float().contiguous()
+        t_pad = self.decoder.t_pad_for(x.shape[1])
+        if t_pad:
+            x = torch.nn.functional.pad(x, (0, 0, 0, t_pad))
+        if self.batch_shard_axis is None:
+            x_dev = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+        else:
+            x_dev = self._upload_batch_sharded(x)
+            self.decoder.batch_shard = (self.batch_shard_axis, x.shape[0])
+        projected_dev = self.dec_in_proj(x_dev)
+        if t_pad:
+            projected_dev = ttnn.multiply(projected_dev, self._pad_row_mask(x.shape[1], t_pad))
+        return self.decoder.forward_device_BTC(
+            projected_dev,
+            t_pad=t_pad,
+            traced=traced,
+            trace_key=tuple(latents_BCT.shape),
+        )
+
+    def _upload_batch_sharded(self, x_BTC: torch.Tensor) -> ttnn.Tensor:
+        """Mesh row r: batch r % B."""
+        axis = self.batch_shard_axis
+        mesh_shape = tuple(self.mesh_device.shape)
+        batch = x_BTC.shape[0]
+        assert (
+            mesh_shape[axis] >= batch
+        ), f"mesh axis {axis} ({mesh_shape[axis]} devices) is shorter than the batch {batch}"
+        rows = torch.cat([x_BTC[i % batch : i % batch + 1] for i in range(mesh_shape[axis])], dim=0)
+        dims = [None, None]
+        dims[axis] = 0
+        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=mesh_shape, dims=dims)
+        return ttnn.from_torch(
+            rows, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype, mesh_mapper=mapper
+        )
+
+    def _pad_row_mask(self, t_total: int, t_pad: int) -> ttnn.Tensor:
+        key = (t_total, t_pad)
+        mask = self._pad_masks.get(key)
+        if mask is None:
+            m = torch.ones(1, t_total, 1, dtype=torch.float32)
+            m[:, t_total - t_pad :, :] = 0.0
+            mask = ttnn.from_torch(m, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+            self._pad_masks[key] = mask
+        return mask
 
     def _t_padding(self, num_frames: int) -> int:
         """T padding needed for tile-aligned per-chip shards; zero when unsharded."""

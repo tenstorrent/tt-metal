@@ -46,8 +46,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
     constexpr const char* COMPUTE_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp";
 
-    auto* device = a.device();
-
     const CoreCoord node{0, 0};
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
@@ -55,7 +53,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -127,7 +125,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
             .dfb_spec_name = SRC0, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer_spec{
@@ -143,19 +141,16 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
              {"num_blocks_per_output_column_row", num_blocks_per_column_row},
              {"num_tiles_per_output_block", num_tiles_per_block},
              {"output_single_block_width_size", output_single_block_width_size}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Compute kernel (untilize). ComputeConfig set directly: only fp32_dest_acc_en is set by the
     // legacy op -> enable_32_bit_dest; the fp32 unpack mode mirrors the legacy UnpackToDestFp32.
-    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
         compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
     }
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path{COMPUTE_SRC},

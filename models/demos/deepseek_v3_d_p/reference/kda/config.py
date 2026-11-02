@@ -9,6 +9,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+# KDA's unbounded decay gate follows torch.nn.functional.softplus defaults.
+# Hugging Face Kimi configs do not expose these algorithm-level constants.
+KDA_SOFTPLUS_BETA = 1.0
+KDA_SOFTPLUS_THRESHOLD = 20.0
+
 
 @dataclass(frozen=True)
 class KDAConfig:

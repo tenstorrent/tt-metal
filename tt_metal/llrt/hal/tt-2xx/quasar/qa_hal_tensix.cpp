@@ -4,7 +4,7 @@
 
 #define HAL_BUILD tt::tt_metal::quasar::tensix
 #include "hostdev/dev_msgs.h"
-#include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::quasar::tensix;
 
@@ -17,8 +17,8 @@ using namespace tt::tt_metal::quasar::tensix;
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
-#include "tt_align.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 
@@ -76,7 +76,7 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(DevicePrintMemoryLayout);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t) * go_message_num_entries;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_ring_t) * go_message_num_entries;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LOCAL)] =
@@ -88,6 +88,9 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] = MEM_FABRIC_CONNECTION_LOCK_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
+
+    assert_kernel_config_no_overlap(
+        mem_map_bases, default_l1_kernel_config_size, HalL1MemAddrType::DEFAULT_UNRESERVED, "Tensix");
 
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
@@ -139,12 +142,13 @@ HalCoreInfoType create_tensix_mem_map() {
         // COMPUTE
         {
             // NEO0
-            // TRISC0
+            // TRISC0 (has the vector unit)
             {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+             .supports_rvv = true},
             // TRISC1
             {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
@@ -164,12 +168,13 @@ HalCoreInfoType create_tensix_mem_map() {
              .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
             // NEO1
-            // TRISC0
+            // TRISC0 (has the vector unit)
             {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+             .supports_rvv = true},
             // TRISC1
             {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
@@ -189,12 +194,13 @@ HalCoreInfoType create_tensix_mem_map() {
              .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
             // NEO2
-            // TRISC0
+            // TRISC0 (has the vector unit)
             {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+             .supports_rvv = true},
             // TRISC1
             {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
@@ -214,12 +220,13 @@ HalCoreInfoType create_tensix_mem_map() {
              .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
             // NEO3
-            // TRISC0
+            // TRISC0 (has the vector unit)
             {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+             .supports_rvv = true},
             // TRISC1
             {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,

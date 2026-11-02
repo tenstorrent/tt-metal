@@ -68,66 +68,6 @@ struct MlaQRopeKernels {
     tt::tt_metal::KernelHandle compute;
 };
 
-static void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const MlaQRopeKernels& kernels,
-    const tt::tt_metal::Buffer* q_in_buffer,
-    const tt::tt_metal::Buffer* cos_buffer,
-    const tt::tt_metal::Buffer* sin_buffer,
-    const tt::tt_metal::Buffer* trans_buffer,
-    const tt::tt_metal::Buffer* q_out_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_blocks_per_core_group_1,
-    uint32_t num_blocks_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2,
-    uint32_t Ts,
-    uint32_t Th,
-    uint32_t Tr,
-    uint32_t n_heads) {
-    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        uint32_t num_blocks_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_2;
-        } else {
-            TT_FATAL(false, "MlaQRope: core not in any work group");
-        }
-
-        // Q [B, H, S, D] head-major pages: tile_id(b, h, sb, w) = b*H*tiles_per_head + h*tiles_per_head + sb*Th + w.
-        const uint32_t b_start = num_blocks_written / Ts;
-        const uint32_t sb_start = num_blocks_written % Ts;
-        const uint32_t tiles_per_head = Ts * Th;
-        const uint32_t q_block_base_start = b_start * n_heads * tiles_per_head + sb_start * Th;
-
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {q_in_buffer->address(),
-             cos_buffer->address(),
-             sin_buffer->address(),
-             trans_buffer->address(),
-             num_blocks_per_core,
-             sb_start,
-             q_block_base_start});
-
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {q_out_buffer->address(), num_blocks_per_core, sb_start, q_block_base_start});
-
-        SetRuntimeArgs(program, kernels.compute, core, {num_blocks_per_core});
-
-        num_blocks_written += num_blocks_per_core;
-    }
-}
-
 MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& q_in = tensor_args.q_in;
@@ -136,10 +76,11 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     auto* device = q_in.device();
     tt::tt_metal::Program program{};
 
-    const auto q_shape = q_in.padded_shape();
+    const auto q_shape = q_in.logical_shape();
     const uint32_t B = q_shape[0];
     const uint32_t S = q_shape[2];
-    const uint32_t H = q_shape[1];
+    const uint32_t qk_head = args.qk_nope_dim + args.qk_rope_dim;
+    const uint32_t H = args.packed_input ? (q_shape[3] / qk_head) : q_shape[1];
 
     const uint32_t Tn = args.qk_nope_dim / TILE_WIDTH;
     const uint32_t Tr = args.qk_rope_dim / TILE_WIDTH;
@@ -148,6 +89,7 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     const uint32_t tiles_per_head = Ts * Th;
 
     const uint32_t num_blocks = B * Ts;
+    const uint32_t packed_input_u32 = args.packed_input ? 1U : 0U;
 
     TT_FATAL(
         Tr <= 4U,
@@ -213,13 +155,15 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     auto* trans_buffer = tensor_args.trans_mat.buffer();
     auto* q_out_buffer = q_out.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args = {Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles};
+    std::vector<uint32_t> reader_compile_time_args = {
+        Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles, packed_input_u32};
     tt::tt_metal::TensorAccessorArgs(q_in_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(trans_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles};
+    std::vector<uint32_t> writer_compile_time_args = {
+        Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles, packed_input_u32};
     tt::tt_metal::TensorAccessorArgs(q_out_buffer).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
@@ -242,24 +186,39 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     kernels.compute = create_compute_kernel(
         program, all_cores, compute_compile_time_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        q_in_buffer,
-        cos_buffer,
-        sin_buffer,
-        trans_buffer,
-        q_out_buffer,
+    const uint32_t packed_block_stride = H * Th;
+    for_each_core_with_work(
         num_cores,
         num_cores_y,
-        num_blocks_per_core_group_1,
-        num_blocks_per_core_group_2,
         core_group_1,
         core_group_2,
-        Ts,
-        Th,
-        Tr,
-        H);
+        num_blocks_per_core_group_1,
+        num_blocks_per_core_group_2,
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
+            const uint32_t b_start = start_block / Ts;
+            const uint32_t sb_start = start_block % Ts;
+            // Packed: tile id of (b, sb, h=0) = block_index * H * Th
+            const uint32_t packed_base = start_block * packed_block_stride;
+            // Head-major: tile id of (b, h=0, sb) = b * H * tiles_per_head + sb * Th
+            const uint32_t head_major_base = b_start * H * tiles_per_head + sb_start * Th;
+            const uint32_t q_in_tile_base = args.packed_input ? packed_base : head_major_base;
+            const uint32_t q_out_tile_base = args.packed_input ? head_major_base : packed_base;
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                {q_in_buffer->address(),
+                 cos_buffer->address(),
+                 sin_buffer->address(),
+                 trans_buffer->address(),
+                 num_blocks,
+                 sb_start,
+                 q_in_tile_base});
+            SetRuntimeArgs(
+                program, kernels.writer, core, {q_out_buffer->address(), num_blocks, sb_start, q_out_tile_base});
+            SetRuntimeArgs(program, kernels.compute, core, {num_blocks});
+        });
 
     return cached_program_t{
         std::move(program), {kernels.reader, kernels.writer, kernels.compute, num_cores, num_cores_y}};
@@ -282,8 +241,7 @@ void MlaQRopeProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
 
-    for (uint32_t i = 0; i < shared.num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i / shared.num_cores_y, i % shared.num_cores_y};
+    for_each_core(shared.num_cores, shared.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         {
             auto& ra = reader_runtime_args[core.x][core.y];
             ra[kReaderArgQInAddr] = q_in_buffer->address();
@@ -295,7 +253,7 @@ void MlaQRopeProgramFactory::override_runtime_arguments(
             auto& ra = writer_runtime_args[core.x][core.y];
             ra[kWriterArgQOutAddr] = q_out_buffer->address();
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::mla_q_rope::device

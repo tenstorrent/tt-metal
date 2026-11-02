@@ -9,6 +9,7 @@
 #include "llk_assert.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "sanitizer/api.h"
 
 /*
  * Keep macro preconditions outside the tt-llk params wrapper. DST_SYNC is
@@ -23,6 +24,7 @@ namespace ckernel {
 template <DstSync DST_SYNC>
 inline __attribute__((always_inline)) void _sfpu_check_(
     std::uint32_t dst_index, [[maybe_unused]] VectorMode vector_mode) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT(
         (dst_index < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "dst_index exceeds max dest tiles");

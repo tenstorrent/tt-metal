@@ -22,7 +22,6 @@ from typing import Optional
 
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 
@@ -38,6 +37,12 @@ class GptOssKvCaches(KvCaches):
         return self.caches[idx]
 
 
+def _bounded_sliding_kv_cache_enabled() -> bool:
+    """GPT_OSS_BOUNDED_SLIDING_KV=1: sliding-attention layers get a small circular KV cache instead
+    of full max_seq_len slots (only GPT-OSS has sliding layers, so this stays a model-local knob)."""
+    return os.environ.get("GPT_OSS_BOUNDED_SLIDING_KV", "0") == "1"
+
+
 class GptOssPrefillAdapter(PrefillModelAdapter):
     """GPT-OSS-120B prefill adapter (GQA + attention sinks + sliding/full alternation + EP MoE)."""
 
@@ -48,6 +53,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
     prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
     default_gate_mode = "DEVICE_FP32"
+    verify_layer_completions = True
 
     # --- test metadata ---
     hf_repo_id = "openai/gpt-oss-120b"
@@ -73,20 +79,17 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     # Weight cache
     # ------------------------------------------------------------------
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
-        """Mirror the pytest weight_cache_path layout:
-        $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {sp}x{tp}. None if explicitly empty.
-
-        Use ``sp * tp`` for N — not ``ttnn.get_num_devices()``. The runner calls this from
-        ``_print_config`` before ``open_mesh_device``; with co-located migration workers
-        ``GetNumAvailableDevices`` can throw ``unordered_map::at`` and abort Gate 2.
+        """The model's own tilized-cache layout, $PREFILL_TTNN_CACHE / tensor_cache_bfp8_MeshShape([sp, tp]),
+        so the runner reads the files the standalone harness writes (``ModelArgs.weight_cache_path``).
+        None if PREFILL_TTNN_CACHE is explicitly empty. Built from the mesh shape alone: the runner calls
+        this before ``open_mesh_device``.
         """
         env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
         if not env_cache:
             return None
-        arch = "bh" if is_blackhole() else "wh"
-        sp, tp = mesh_shape
-        num_devices = int(sp) * int(tp)
-        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
+        from models.demos.gpt_oss_d_p.tt.model_config import tensor_cache_dir_name
+
+        path = Path(env_cache) / tensor_cache_dir_name("bfp8", mesh_shape)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -104,6 +107,10 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         """
         from models.demos.gpt_oss_d_p.tt.attention import allocate_kv_cache
 
+        bounded = _bounded_sliding_kv_cache_enabled()
+        layer_types = getattr(hf_config, "layer_types", None)
+        if layer_types is not None:
+            layer_types = list(layer_types)[params.first_layer_idx : params.first_layer_idx + params.num_layers]
         return GptOssKvCaches(
             [
                 allocate_kv_cache(
@@ -113,6 +120,11 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
                     sp_axis=params.sp_axis,
                     num_users=params.num_users,
                     head_dim=hf_config.head_dim,
+                    layer_types=layer_types,
+                    bounded_sliding_kv_cache=bounded,
+                    chunk_sizes=(params.chunk_size,),
+                    sliding_window=getattr(hf_config, "sliding_window", 128),
+                    bank_aligned=True,
                 )
             ]
         )
@@ -125,6 +137,10 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
         from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
+        expert_dtype = os.getenv("EXPERT_DTYPE", "bf4")
+        if expert_dtype not in ("bf4", "bf8"):
+            raise ValueError(f"EXPERT_DTYPE must be bf4 or bf8, got {expert_dtype!r}")
+        logger.info(f"GPT-OSS routed-expert weights: {expert_dtype}")
         runtime_config = TtPrefillRuntimeConfig(
             num_layers=params.num_layers,
             max_seq_len=params.max_seq_len,
@@ -134,6 +150,8 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,
             weight_cache_path=params.weight_cache_path,
+            # Same knob as the standalone harness; the tilized cache files are keyed by dtype.
+            expert_weight_dtype=ttnn.bfloat8_b if expert_dtype == "bf8" else ttnn.bfloat4_b,
             owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
             # PREFILL_TOPOLOGY=linear runs pods without torus wraparound (same knob as the harness).
             topology=(
@@ -142,6 +160,9 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             first_layer_idx=params.first_layer_idx,
+            # Same knob as allocate_kv_cache, so the runtime's gating (migration / cache-read
+            # asserts) agrees with the engine-owned cache it is handed.
+            bounded_sliding_kv_cache=_bounded_sliding_kv_cache_enabled(),
         )
 
         if os.getenv("GPT_OSS_WEIGHTS_FROM_CACHE") == "1":
@@ -150,6 +171,16 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             model_args = ModelArgs(mesh_device=mesh_device)
             logger.info("Loading real bf16 gpt-oss weights (slow: safetensors read)...")
             state_dict = ModelArgs.load_state_dict(model_args.weights_path)
+
+        # A reduced first-rank run must construct only the layers its KV cache
+        # holds. Model otherwise follows the checkpoint's full layer count.
+        if params.first_layer_idx == 0 and params.num_layers < hf_config.num_hidden_layers:
+            from copy import deepcopy
+
+            hf_config = deepcopy(hf_config)
+            hf_config.num_hidden_layers = params.num_layers
+            if getattr(hf_config, "layer_types", None) is not None:
+                hf_config.layer_types = hf_config.layer_types[: params.num_layers]
 
         return TtPrefillRuntime(
             mesh_device=mesh_device,

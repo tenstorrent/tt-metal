@@ -553,6 +553,7 @@ void bind_unary_operation_with_int_parameter(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -662,6 +663,7 @@ void bind_softplus(nb::module_& mod) {
             threshold (float, optional): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values. Defaults to `20`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -712,6 +714,7 @@ void bind_xielu(nb::module_& mod) {
             alpha_n (float, optional): Alpha negative constant. Defaults to `0.8`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -764,6 +767,7 @@ void bind_unary_rdiv(
             {4} (string): {5}. Can be  None, "trunc", "floor". Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -822,6 +826,7 @@ void bind_tanh_like(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             fast_and_approximate_mode (Boolean, optional): Enables a performance-optimized approximation method. When True, the operation runs faster but may produce results with minor precision differences. Defaults to `False`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -872,6 +877,7 @@ void bind_sigmoid_accurate(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -983,6 +989,63 @@ void bind_gelu(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none()));
 }
 
+// geglu is bound separately from the other GLU-family ops (glu/reglu/swiglu use
+// bind_unary_operation_with_dim_parameter) because it exposes the GELU variant selector.
+void bind_geglu(nb::module_& mod) {
+    static constexpr auto doc = R"doc(
+        Applies geglu to :attr:`input_tensor` element-wise.
+
+        Split the tensor into two parts, apply the GELU function on the second tensor, and then perform multiplication with the first tensor.
+
+        .. math::
+            \mathrm{output\_tensor}_i = \verb|geglu|(\mathrm{input\_tensor}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            dim (int): Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3). Defaults to `-1`.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            variant (ttnn.GeluVariant, optional): Select the GELU implementation used for the gate. Defaults to `GeluVariant.Accurate`.
+
+                - `Accurate`: piecewise Gaussian CDF in BF16, or erf-based evaluation in FP32. Most accurate.
+                - `FastLut`: 6-segment piecewise-linear lookup table. Fastest and least accurate; over the
+                  normal BF16 range the absolute error reaches 0.024 near zero, and every input at or below
+                  -3 returns exactly 0.
+                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))) evaluated in FP32.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE, ROW_MAJOR
+
+            System memory is not supported.
+
+            Last dimension of input tensor should be divisible by 64.
+
+        )doc";
+
+    ttnn::bind_function<"geglu">(
+        mod,
+        doc,
+        nb::overload_cast<const Tensor&, int32_t, const std::optional<tt::tt_metal::MemoryConfig>&, GeluVariant>(
+            &ttnn::geglu),
+        nb::arg("input_tensor"),
+        nb::arg("dim") = -1,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("variant") = GeluVariant::ACCURATE);
+}
+
 void bind_sigmoid(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
@@ -999,6 +1062,7 @@ void bind_sigmoid(nb::module_& mod) {
             mode (ttnn.SigmoidMode, optional): Select sigmoid mode to use. Defaults to `SigmoidMode.Accurate`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1099,6 +1163,7 @@ void bind_identity(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1642,8 +1707,8 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::alt_complex_rotate90,
         R"doc((\mathrm{{output\_tensor}}_{2i}, \mathrm{{output\_tensor}}_{2i+1}) = (-\mathrm{{input\_tensor}}_{2i+1}, \mathrm{{input\_tensor}}_{2i}))doc",
-        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         "",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         R"doc(The last dimension of the input tensor must be even.)doc");
     bind_unary_operation_subcoregrids<"deg2rad">(
         mod,
@@ -1828,18 +1893,7 @@ void py_module(nb::module_& mod) {
 
         )doc");
 
-    bind_unary_operation_with_dim_parameter<"geglu", &ttnn::geglu>(
-        mod,
-        "dim",
-        "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
-        "Split the tensor into two parts, apply the GELU function on the second tensor, and then perform "
-        "multiplication with the first tensor.",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(System memory is not supported.
-
-           Last dimension of input tensor should be divisible by 64.
-
-        )doc");
+    bind_geglu(mod);
 
     bind_unary_operation_with_dim_parameter<"swiglu", &ttnn::swiglu>(
         mod,
@@ -1903,10 +1957,10 @@ void py_module(nb::module_& mod) {
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite_2param<"var_hw", &ttnn::var_hw>(
         mod,
-        R"doc(Computes the variance across the height (H) and width (W) dimensions for each batch and channel. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
+        R"doc(Computes the population variance over the last two dimensions, height (H) and width (W), for every index of the leading dimensions. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W. Both means divide by the logical H x W, so tile padding is not counted. The output keeps the input's rank with H and W reduced to 1, e.g. [N, C, 1, 1] for an [N, C, H, W] input and [1, 1] for an [H, W] input.)doc");
     bind_unary_composite_2param<"std_hw", &ttnn::std_hw>(
         mod,
-        R"doc(Computes the standard deviation across the height (H) and width (W) dimensions for each batch and channel. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
+        R"doc(Computes the population standard deviation over the last two dimensions, height (H) and width (W), for every index of the leading dimensions. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W, dividing by the logical H x W, so tile padding is not counted. The output keeps the input's rank with H and W reduced to 1, e.g. [N, C, 1, 1] for an [N, C, H, W] input and [1, 1] for an [H, W] input.)doc");
     bind_unary_composite_2param<"normalize_hw", &ttnn::normalize_hw>(
         mod,
         R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc",

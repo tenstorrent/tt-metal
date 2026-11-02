@@ -3,12 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Shared mesh configuration parameters for dispatch/combine PCC tests.
+Shared mesh configuration parameters for prefill PCC tests.
 
-The op_unit_tests test_prefill_dispatch.py, test_ttnn_dispatch_combine.py, and
-test_combine_subdevices.py, plus perf/test_prefill_dispatch_combine.py, import
-ALL_MESH_CONFIGS to avoid duplicating the same pytest.param entries.
-test_combine_subdevices.py pins the `fabric2d-mesh-4x2` ID.
+Two lists, for two different parametrize signatures:
+
+- ``ALL_MESH_CONFIGS`` -- ``(shape, device_params, nlinks)``, for dispatch/combine. The
+  op_unit_tests test_prefill_dispatch.py, test_ttnn_dispatch_combine.py, and
+  test_combine_subdevices.py, plus perf/test_prefill_dispatch_combine.py, import it to avoid
+  duplicating the same pytest.param entries. test_combine_subdevices.py pins the
+  `fabric2d-mesh-4x2` ID.
+- ``V4_MESH_CONFIGS`` -- ``(shape, device_params, topology)``, for the DeepSeek-V4 attention
+  blocks. pcc/test_ttnn_hca.py, pcc/test_ttnn_csa.py, pcc/test_ttnn_csa_compressor.py and
+  perf/test_ttnn_hca_perf.py share it. It carries the topology explicitly rather than deriving
+  it, because these tests pass it down into the block as a constructor argument.
 
 FabricConfig is the single source of truth. Consumers derive their cluster-axis CCL
 topology with ``per_axis_topology`` instead of carrying a second parameter.
@@ -58,25 +65,6 @@ def _mesh_param(shape, fabric, payload, nlinks, topo_marker, test_id, reliabilit
 
 
 ALL_MESH_CONFIGS = [
-    # Existing two-chip rows cannot form a useful ring; migrate them one-for-one to Fabric2D.
-    _mesh_param(
-        (2, 1),
-        ttnn.FabricConfig.FABRIC_2D,
-        get_max_payload_size(),
-        1,
-        "linear",
-        "fabric2d-2x1-1link",
-        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
-    ),
-    _mesh_param(
-        (2, 1),
-        ttnn.FabricConfig.FABRIC_2D,
-        get_max_payload_size(),
-        2,
-        "linear",
-        "fabric2d-2x1-2link",
-        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
-    ),
     # Local policy: one 2x2 QuietBox case, canonical 2x4 LoudBox, and one 4x2 axis diagnostic.
     _mesh_param(
         (2, 2),
@@ -157,10 +145,46 @@ ALL_MESH_CONFIGS = [
         (8, 4),
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         get_max_payload_size(),
+        1,
+        "mesh-8x4",
+        "fabric2d-torus-xy-8x4-1link",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+    ),
+    _mesh_param(
+        (8, 4),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        get_max_payload_size(),
         2,
         "mesh-8x4",
         "fabric2d-torus-xy-8x4-2link",
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+    ),
+]
+
+
+# (shape, device_params, topology) for the V4 attention blocks -- HCA and CSA, PCC and perf.
+# Blackhole runs a mesh config only when it uses every chip, so one shape per box class.
+V4_MESH_CONFIGS = [
+    pytest.param(
+        (2, 2),
+        fabric2d_device_params(),
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+        id="fabric2d-mesh-2x2",
+    ),
+    pytest.param(
+        (4, 2),
+        fabric2d_device_params(),
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+        id="fabric2d-mesh-4x2",
+    ),
+    pytest.param(
+        (8, 4),
+        torus_xy_device_params(),
+        ttnn.Topology.Ring,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="torus-xy-8x4",
     ),
 ]
 

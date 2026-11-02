@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
+
 #include "ttnn/operations/experimental/kda/affine_exclusive_scan/device/affine_exclusive_scan_program_factory.hpp"
 
 #include <vector>
@@ -19,14 +21,15 @@
 
 namespace ttnn::experimental::prim {
 
-ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::create_program_artifacts(
-    const AffineExclusiveScanParams& attrs, const AffineExclusiveScanInputs& in, std::vector<Tensor>& outputs) {
-    const auto& a = in.a.mesh_tensor();
-    const auto& b = in.b.mesh_tensor();
+ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory::create_mesh_workload_artifacts(
+    const AffineExclusiveScanParams& attrs,
+    const AffineExclusiveScanInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const auto& summaries = in.summaries.mesh_tensor();
     const auto& initial_state = in.initial_state.mesh_tensor();
     const auto& output = outputs[0].mesh_tensor();
-    const auto& device = a.device();
-    const auto arch = device.arch();
+    const auto& device = summaries.device();
 
     const uint32_t key_tiles = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t value_tiles = attrs.value_dim / tt::constants::TILE_WIDTH;
@@ -51,15 +54,18 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     const tt::tt_metal::experimental::DFBSpecName from_remote_affine_dfb_name{"from_remote_affine"};
     const tt::tt_metal::experimental::DFBSpecName initial_state_dfb_name{"initial_state"};
     const tt::tt_metal::experimental::DFBSpecName final_dfb_name{"final"};
+    const tt::tt_metal::experimental::DFBSpecName tail_affine_dfb_name{"tail_affine"};
+    const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
+    const tt::tt_metal::experimental::DFBSpecName reset_b_dfb_name{"reset_b"};
 
     const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
     const tt::tt_metal::experimental::SemaphoreSpecName arrival_semaphore_name{"arrival"};
     const tt::tt_metal::experimental::SemaphoreSpecName release_semaphore_name{"release"};
 
-    const tt::tt_metal::experimental::TensorParamName a_tensor_name{"a"};
-    const tt::tt_metal::experimental::TensorParamName b_tensor_name{"b"};
+    const tt::tt_metal::experimental::TensorParamName summaries_tensor_name{"summaries"};
     const tt::tt_metal::experimental::TensorParamName initial_state_tensor_name{"initial_state"};
     const tt::tt_metal::experimental::TensorParamName output_tensor_name{"output"};
+    const tt::tt_metal::experimental::TensorParamName tail_entry_states_tensor_name{"tail_entry_states"};
 
     auto make_dfb = [](const tt::tt_metal::experimental::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
         return tt::tt_metal::experimental::DataflowBufferSpec{
@@ -69,7 +75,8 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
             .data_format_metadata = format,
         };
     };
-    const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.a.dtype());
+    const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.summaries.dtype());
+    const uint32_t segmented_affine_tiles = key_matrix_tiles + state_matrix_tiles;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dataflow_buffers = {
         make_dfb(initial_a_dfb_name, key_matrix_tiles, summary_format),
         make_dfb(initial_b_dfb_name, state_matrix_tiles, summary_format),
@@ -80,6 +87,9 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
         make_dfb(from_remote_affine_dfb_name, key_matrix_tiles + state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(initial_state_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(final_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
+        make_dfb(tail_affine_dfb_name, segmented_affine_tiles, summary_format),
+        make_dfb(tail_entry_states_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
+        make_dfb(reset_b_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
     };
     // Initial inputs/state and final output are one-shot transfers. TO_REMOTE stays single-slot because dataflow
     // releases the current block before the remote input that makes compute runnable.
@@ -123,6 +133,8 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                     initial_state_dfb_name, "initial_state", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     final_dfb_name, "final", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::ProducerOf(tail_affine_dfb_name, "tail_affine"),
+                tt::tt_metal::experimental::ProducerOf(tail_entry_states_dfb_name, "tail_entry_states"),
             },
         .semaphore_bindings =
             {
@@ -132,26 +144,36 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
             },
         .tensor_bindings =
             {
-                tt::tt_metal::experimental::TensorBinding{a_tensor_name, "a"},
-                tt::tt_metal::experimental::TensorBinding{b_tensor_name, "b"},
+                tt::tt_metal::experimental::TensorBinding{summaries_tensor_name, "summaries"},
                 tt::tt_metal::experimental::TensorBinding{initial_state_tensor_name, "initial_state"},
                 tt::tt_metal::experimental::TensorBinding{output_tensor_name, "output"},
             },
         .compile_time_args =
-            {{"Kt", key_tiles}, {"Vt", value_tiles}, {"BH", attrs.batch_heads}, {"G", groups_per_head}},
+            {{"Kt", key_tiles},
+             {"Vt", value_tiles},
+             {"BH", attrs.batch_heads},
+             {"G", groups_per_head},
+             {"has_tail", static_cast<uint32_t>(in.tail_entry_states.has_value())}},
         .runtime_arg_schema = {.runtime_arg_names = {"worker_index", "group"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_common_runtime_varargs = 2 * group_heads},
     };
 
-    auto compute_hardware_config = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
-    auto& unpack_modes = tt::tt_metal::experimental::unpack_modes(compute_hardware_config);
-    for (const auto& name : {local_a_dfb_name, local_b_dfb_name, from_remote_affine_dfb_name, initial_state_dfb_name}) {
+    auto compute_hardware_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    auto& unpack_modes = compute_hardware_config.unpack_modes;
+    for (const auto& name :
+         {local_a_dfb_name,
+          local_b_dfb_name,
+          from_remote_affine_dfb_name,
+          initial_state_dfb_name,
+          tail_entry_states_dfb_name,
+          reset_b_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
     if (summary_format == tt::DataFormat::Float32) {
         unpack_modes[initial_a_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
         unpack_modes[initial_b_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
+        unpack_modes[tail_affine_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
 
     tt::tt_metal::experimental::KernelSpec compute{
@@ -182,6 +204,10 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                     initial_state_dfb_name, "initial_state", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     final_dfb_name, "final", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::ConsumerOf(tail_affine_dfb_name, "tail_affine"),
+                tt::tt_metal::experimental::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
+                tt::tt_metal::experimental::ProducerOf(reset_b_dfb_name, "reset_b"),
+                tt::tt_metal::experimental::ConsumerOf(reset_b_dfb_name, "reset_b"),
             },
         .compile_time_args = {{"Kt", key_tiles}, {"Vt", value_tiles}, {"G", groups_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"group"}},
@@ -208,7 +234,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
 
     tt::tt_metal::experimental::ProgramSpec program_spec{
         .name = "affine_exclusive_scan",
-        .kernels = {std::move(dataflow), std::move(compute)},
         .dataflow_buffers = std::move(dataflow_buffers),
         .semaphores =
             {
@@ -218,8 +243,8 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
             },
         .tensor_parameters =
             {
-                tt::tt_metal::experimental::TensorParameter{.unique_id = a_tensor_name, .spec = a.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = b_tensor_name, .spec = b.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{
+                    .unique_id = summaries_tensor_name, .spec = summaries.tensor_spec()},
                 tt::tt_metal::experimental::TensorParameter{
                     .unique_id = initial_state_tensor_name, .spec = initial_state.tensor_spec()},
                 tt::tt_metal::experimental::TensorParameter{
@@ -238,16 +263,32 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     tt::tt_metal::experimental::ProgramRunArgs program_run_args;
     program_run_args.kernel_run_args = {std::move(dataflow_run), std::move(compute_run)};
     program_run_args.tensor_args = {
-        {a_tensor_name, a},
-        {b_tensor_name, b},
+        {summaries_tensor_name, summaries},
         {initial_state_tensor_name, initial_state},
         {output_tensor_name, output},
     };
+    // The tail seed exists only with tail transforms; kernels resolve it with get_token_if_present.
+    if (in.tail_entry_states) {
+        const auto& tail_entry_states = in.tail_entry_states->mesh_tensor();
+        program_spec.tensor_parameters.push_back(
+            {.unique_id = tail_entry_states_tensor_name, .spec = tail_entry_states.tensor_spec()});
+        program_run_args.tensor_args.emplace(tail_entry_states_tensor_name, tail_entry_states);
+        dataflow.tensor_bindings.push_back({tail_entry_states_tensor_name, "tail_entry_states"});
+    }
 
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(program_spec),
-        .run_params = std::move(program_run_args),
-    };
+    kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, dataflow, compute);
+    kda_factory_detail::bind_actual_end(program_spec, program_run_args, in.actual_end, dataflow);
+    program_spec.kernels = {std::move(dataflow), std::move(compute)};
+    return kda_factory_detail::chronology_workload(
+        ttnn::device_operation::ProgramArtifacts{
+            .spec = std::move(program_spec),
+            .run_params = std::move(program_run_args),
+        },
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.local_rows,
+        dataflow_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim

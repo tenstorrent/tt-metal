@@ -30,7 +30,7 @@ from .audio_ops import (
     _zero_stuff_t,
     depthwise_tap_filter,
 )
-from .module import Module
+from .module import Module, release_device_cache
 
 
 def _make_hann_sinc_kernel_1d(*, ratio: int) -> tuple[torch.Tensor, int, int, int, int]:
@@ -71,7 +71,6 @@ class LowPassFilter1d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
     ) -> None:
         super().__init__()
         if cutoff < 0.0 or cutoff > 0.5:
@@ -92,7 +91,6 @@ class LowPassFilter1d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        self.prefer_mac = prefer_mac
 
         kernel = _make_kaiser_sinc_kernel_1d(cutoff, half_width, kernel_size)
         self._taps_cpu = kernel.tolist()
@@ -103,6 +101,11 @@ class LowPassFilter1d(Module):
             t = state.pop("filter")
             assert tuple(t.shape) == (1, 1, self.kernel_size)
             self._taps_cpu = t.reshape(self.kernel_size).float().tolist()
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._conv1d_cache)
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         """``x_BTC``: ``(B, T, C)`` ROW_MAJOR. Returns ``(B, T_out, C)``.
@@ -137,7 +140,6 @@ class LowPassFilter1d(Module):
             mesh_device=self.mesh_device,
             dtype=self.dtype,
             cache=self._conv1d_cache,
-            prefer_mac=self.prefer_mac,
         )
 
 
@@ -160,7 +162,6 @@ class UpSample1d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
     ) -> None:
         super().__init__()
         sharded = parallel_config is not None and parallel_config.factor > 1
@@ -173,7 +174,6 @@ class UpSample1d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        self.prefer_mac = prefer_mac
 
         if window == "hann":
             kernel, self.kernel_size, self.pad, self.pad_left_crop, self.pad_right_crop = _make_hann_sinc_kernel_1d(
@@ -201,6 +201,11 @@ class UpSample1d(Module):
             t = state.pop("filter")
             assert tuple(t.shape) == (1, 1, self.kernel_size)
             self._taps_cpu = t.reshape(self.kernel_size).float().tolist()
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._conv1d_cache)
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -241,7 +246,6 @@ class UpSample1d(Module):
                 mesh_device=self.mesh_device,
                 dtype=self.dtype,
                 cache=self._conv1d_cache,
-                prefer_mac=self.prefer_mac,
             )
             ph1 = depthwise_tap_filter(
                 base,
@@ -250,7 +254,6 @@ class UpSample1d(Module):
                 mesh_device=self.mesh_device,
                 dtype=self.dtype,
                 cache=self._conv1d_cache,
-                prefer_mac=self.prefer_mac,
             )
             if base is not x_pad:
                 ttnn.deallocate(base)
@@ -270,7 +273,6 @@ class UpSample1d(Module):
             mesh_device=self.mesh_device,
             dtype=self.dtype,
             cache=self._conv1d_cache,
-            prefer_mac=self.prefer_mac,
         )
 
         T_y = y.shape[1]
@@ -291,7 +293,6 @@ class DownSample1d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
     ) -> None:
         super().__init__()
         self.ratio = ratio
@@ -307,7 +308,6 @@ class DownSample1d(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            prefer_mac=prefer_mac,
         )
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
@@ -330,7 +330,6 @@ class Activation1d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -343,7 +342,6 @@ class Activation1d(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            prefer_mac=prefer_mac,
         )
         self.downsample = DownSample1d(
             ratio=down_ratio,
@@ -352,7 +350,6 @@ class Activation1d(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            prefer_mac=prefer_mac,
         )
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:

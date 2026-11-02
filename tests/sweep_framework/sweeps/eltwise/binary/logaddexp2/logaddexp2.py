@@ -28,6 +28,30 @@ parameters = {
         "input_b_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "value_range": [(-60, 100)],
+    },
+    # Operands up to 1e4 in magnitude, past the point where the composed form overflowed
+    # (exp2() saturates above 128). The result is bounded by its inputs, max(a, b) <= result <= max(a, b) + 1,
+    # so every output here must be finite. Matched dtypes: mixed inputs are not accepted.
+    "beyond_exp2_range_bf16": {
+        "input_shape": [[1, 1, 32, 32], [1, 1, 256, 256], [2, 3, 64, 128]],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "value_range": [(-1e4, 1e4)],
+    },
+    "beyond_exp2_range_fp32": {
+        "input_shape": [[1, 1, 32, 32], [1, 1, 256, 256], [2, 3, 64, 128]],
+        "input_a_dtype": [ttnn.float32],
+        "input_b_dtype": [ttnn.float32],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "value_range": [(-1e4, 1e4)],
     },
 }
 
@@ -53,16 +77,17 @@ def run(
     input_b_layout,
     input_a_memory_config,
     input_b_memory_config,
+    value_range,
     *,
     device,
 ) -> list:
     torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-60, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=value_range[0], high=value_range[1], dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-60, high=100, dtype=torch.float32), input_b_dtype
+        partial(torch_random, low=value_range[0], high=value_range[1], dtype=torch.float32), input_b_dtype
     )(input_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.logaddexp2)

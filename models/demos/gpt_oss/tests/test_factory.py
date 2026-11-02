@@ -113,6 +113,11 @@ class TestFactory:
         }
 
 
+# CCL ops allocate their carried GlobalSemaphores in L1_SMALL when the device has the region
+# (ttnn::ccl::prefer_l1_small_buffer_type), which keeps them out of general L1.
+L1_SMALL_SIZE = 16384
+
+
 def parametrize_mesh_with_fabric(mesh_shapes=None):
     """Universal mesh + fabric parametrization for gpt_oss tests.
 
@@ -168,7 +173,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         params = [
             pytest.param(
                 (1, 1),
-                {"fabric_config": None, TRACE_MODEL_KEY_PARAM: "gpt-oss-120b"},
+                {"fabric_config": None, "l1_small_size": L1_SMALL_SIZE, TRACE_MODEL_KEY_PARAM: "gpt-oss-120b"},
                 id="1x1",
                 marks=pytest.mark.skip(reason="No supported gpt_oss mesh shape fits on this system"),
             )
@@ -179,6 +184,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
                 shape,
                 {
                     "fabric_config": (None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D_RING),
+                    "l1_small_size": L1_SMALL_SIZE,
                     TRACE_MODEL_KEY_PARAM: "gpt-oss-120b",
                 },
                 id=f"{shape[0]}x{shape[1]}",

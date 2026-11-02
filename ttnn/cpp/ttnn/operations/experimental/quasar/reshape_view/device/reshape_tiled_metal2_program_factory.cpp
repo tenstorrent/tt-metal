@@ -142,8 +142,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
             {{"max_map_size_bytes", mapping_page_size_bytes}, {"tile_size_bytes", input_tile_size_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
         // Explicit CB credit ops (staged reads) -> disable implicit sync (Quasar tile-counter double-count).
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -162,8 +161,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
              {"max_map_entries", max_map_entries},
              {"element_sz_bytes", element_sz_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     spec.kernels = {reader, writer};

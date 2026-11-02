@@ -12,7 +12,6 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_memory_checks.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -78,17 +77,6 @@ inline void _llk_unpack_hw_configure_(
 {
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
-
-    llk::san::unpack_operand_configure(
-        is_fp32_dest_acc_en,
-        unpA_src_format,
-        unpB_src_format,
-        unpA_dst_format,
-        unpB_dst_format,
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces);
 
     configure_unpack_AB<is_fp32_dest_acc_en, false, false, false>(
         unpA_src_format, unpB_src_format, unpA_dst_format, unpB_dst_format, unpA_face_r_dim, unpB_face_r_dim, 0, unpA_num_faces, unpB_num_faces);
@@ -234,17 +222,6 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
             static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), is_fp32_dest_acc_en),
         "Unsupported unpacker to register conversion.");
 
-    llk::san::unpack_operand_configure<true>(
-        llk::san::IGNORE,
-        unpack_src_format,
-        llk::san::IGNORE,
-        unpack_dst_format,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE);
-
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
     if constexpr (!skip_int8)
     {
@@ -320,17 +297,6 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
             static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), is_fp32_dest_acc_en),
         "Unsupported unpacker to register conversion.");
 
-    llk::san::unpack_operand_configure<true>(
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        unpack_src_format,
-        llk::san::IGNORE,
-        unpack_dst_format,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE);
-
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
     if constexpr (!skip_int8)
     {
@@ -373,8 +339,33 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 inline void _llk_unpack_set_srcb_dummy_valid_()
 {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    // Stall_Clr_Cntrl=1: each publication waits on Unpackers[i].SrcBank -- the bank it
+    // actually clears -- rather than MatrixUnit.Src?Bank, a different bank once
+    // double-buffering reaches steady state. Carried by the instruction itself, so it
+    // cannot go stale the way a separate preceding stall can once SET_DVALID flips the
+    // bank pointer. Wormhole uses a preceding stall only because it has no such operand.
+    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+}
+
+/**
+ * @brief Zero both banks of one source register.
+ *
+ * A face shorter than the rows the math op reads fills only its own rows. The rest keep the previous op's data.
+ * Unpacks never write those rows, so zeroing both banks once at init keeps them zero for this op.
+ * Math moves (MOVD2A, MOVD2B, MOVB2A) do write them, so re-run the init after any op that writes SrcA or SrcB.
+ * Without Stall_Clr_Cntrl the clear waits for the Matrix Unit to release both banks, so it cannot zero operands
+ * the previous op still uses. The stalls keep the unpackers from writing during the clear, which drops those writes.
+ *
+ * @tparam src: Source register to clear, values = <SrcA/SrcB>
+ */
+template <Srcs src>
+inline void _llk_unpack_clear_src_banks_()
+{
+    static_assert(src == SrcA || src == SrcB, "src must be SrcA or SrcB");
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+    TTI_UNPACR_NOP(src, 0, 0, 0, 0, 0 /*Stall_Clr_Cntrl*/, 1 /*Bank_Clr_Ctrl: both banks*/, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, src == SrcA ? p_stall::UNPACK0 : p_stall::UNPACK1);
 }
 
 /**

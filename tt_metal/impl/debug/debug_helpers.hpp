@@ -19,6 +19,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "llrt/core_descriptor.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -59,10 +60,12 @@ inline static CoreDescriptorSet GetAllCores(
     for (const auto& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
+    // Only the DRAM cores Metal runs firmware on. On Blackhole each bank's NOC0 endpoint runs the syseng (MRISC)
+    // firmware from the bottom of its L1, which is where the debug buffers would land.
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         const auto& soc_desc = cluster.get_soc_desc(device_id);
-        for (const auto& dram_core : soc_desc.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
-            all_cores.insert({{dram_core.x, dram_core.y}, CoreType::DRAM});
+        for (const auto& logical_core : soc_desc.get_metal_dram_cores(CoordSystem::LOGICAL)) {
+            all_cores.insert({logical_core, CoreType::DRAM});
         }
     }
     // Quasar dispatch-engine tiles use synthetic logical coords CoreCoord(index, 0) over the soc
@@ -90,9 +93,10 @@ inline static CoreDescriptorSet GetAllCores(
     return dispatch_cores;
 }
 
-inline uint64_t GetDevicePrintBufAddr(const Hal& hal, ChipId device_id, const CoreCoord& virtual_core) {
+inline uint64_t GetDevicePrintBufAddr(MetalEnvImpl& env, ChipId device_id, const CoreCoord& virtual_core) {
+    const auto& hal = env.get_hal();
     return hal.get_dev_noc_addr(
-        llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
+        llrt::get_core_type(env, device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 }
 
 inline std::string_view get_core_type_name(CoreType ct) {
@@ -247,6 +251,10 @@ inline std::string get_debug_assert_message(
             return "detected invalid NOC command buffer state before starting the next kernel "
                    "(write-capable NOC packet tags must be zero so implicit transaction ID users start with "
                    "transaction ID 0).";
+        case dev_msgs::DebugAssertNocMidNotClearedTripped:
+            return "detected invalid NOC command buffer state before starting the next kernel "
+                   "(NOC_TARG/RET_ADDR_MID must be zero; a PCIe address left there is inherited by the next "
+                   "on-chip transaction on that command buffer and silently misroutes it).";
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
@@ -365,7 +373,7 @@ inline EnableSymbolsInfo get_enable_symbols_info(const Hal& hal, HalProgrammable
             info.processor_names.push_back(hal.get_processor_class_name(core_type, i, false));
         }
         for (uint32_t i = 0; i < num; ++i) {
-            std::string abbrev = hal.get_processor_class_name(core_type, i, true);
+            const std::string& abbrev = hal.get_processor_class_name(core_type, i, true);
             add_legacy_entry(abbrev, info.processor_names[i]);
         }
     } else if (core_type == HalProgrammableCoreType::DISPATCH) {

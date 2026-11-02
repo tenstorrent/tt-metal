@@ -80,9 +80,7 @@ inline void weighted_reduce_addrmod_init() {
               .set(ADDR_MOD_6)));
     PACK((addr_mod_pack_t{
         .y_src = {.incr = 0, .clr = 0, .cr = 0},
-        .y_dst = {.incr = 1, .clr = 0, .cr = 0},
         .z_src = {.incr = 1, .clr = 0},
-        .z_dst = {.incr = 0, .clr = 0},
     }
               .set(ADDR_MOD_3)));
 }

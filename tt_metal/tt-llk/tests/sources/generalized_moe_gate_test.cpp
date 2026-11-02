@@ -63,7 +63,8 @@ constexpr std::uint32_t ID_FORMAT = ckernel::to_underlying(DataFormat::UInt16);
 //
 // BINARY stays at Transpose::None: it is here to pin the FPU mop's arithmetic across all four faces,
 // and a transposed SrcA would only make its golden restate what the unpacker did.
-constexpr auto GATE_UNPACK_TRANSPOSE = (GMG_MODE == MODE_GATE) ? ckernel::Transpose::Both : ckernel::Transpose::None;
+constexpr auto GATE_UNPACK_TRANSPOSE =
+    (GMG_MODE == MODE_GATE) ? (GMG_TRANSPOSE_OF_FACES ? ckernel::Transpose::Both : ckernel::Transpose::IntraFace) : ckernel::Transpose::None;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -103,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             if constexpr (GMG_MODE == MODE_GATE && GMG_SIGMOID)
             {
-                // transpose_wh_tile: the 32x32 transpose is the unpacker's, both flags set.
+                // transpose_tile: the 32x32 transpose is the unpacker's, both flags set.
                 //
                 // acc_to_dest is true on the init and false on the call, which is the asymmetry
                 // transpose_init/transpose_tile ship and neither value is arbitrary. The init ignores
@@ -221,6 +222,9 @@ static inline void gmg_sanitize_scratch()
     constexpr int IDS_LO        = IDS_TILE * DREG_PER_TILE;           // 32 (even cols of IDS row 0)
     constexpr int IDS_HI        = IDS_LO + 1;                         // 33 (odd  cols)
     constexpr int NUM_DREG      = NUM_DEST_TILES * DREG_PER_TILE;     // 128
+    // Top-8 answer = lanes 0..3 of each even/odd row-half; vConstTileId is 2 * lane.
+    constexpr int ANSWER_LANES         = 4;
+    constexpr int ANSWER_TILE_ID_LIMIT = 2 * ANSWER_LANES;
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int k = 0; k < NUM_DREG; ++k)
     {
@@ -230,18 +234,27 @@ static inline void gmg_sanitize_scratch()
         }
         sfpi::dst_reg[k] = 0.0f;
     }
-    // Mask each answer row-half to the top-8: with columns split even/odd, cols 0..7 are the first four
-    // even and first four odd columns -> lanes 0..3 -> vConstTileId < 8; zero the residue past them.
-    // (Same vFloat mod-0 raw-bit round-trip finalize_ungrouped uses for the idx row -- kept ids survive.)
-    for (const int dreg : {SCORES_LO, SCORES_HI, IDS_LO, IDS_HI})
+    // Mask each answer row-half to the top-8; zero the residue past them.
+    for (const int dreg : {SCORES_LO, SCORES_HI})
     {
         sfpi::vFloat v = sfpi::dst_reg[dreg];
-        v_if (sfpi::vConstTileId >= 8)
+        v_if (sfpi::vConstTileId >= ANSWER_TILE_ID_LIMIT)
         {
             v = 0.0f;
         }
         v_endif;
         sfpi::dst_reg[dreg] = v;
+    }
+    // Id rows go through the U16 layout: a float round trip would store an id with a zero low byte (256) as 0.
+    for (const int dreg : {IDS_LO, IDS_HI})
+    {
+        sfpi::vUInt v = sfpi::dst_reg[dreg].mode<sfpi::DataLayout::U16>();
+        v_if (sfpi::vConstTileId >= ANSWER_TILE_ID_LIMIT)
+        {
+            v = 0;
+        }
+        v_endif;
+        sfpi::dst_reg[dreg].mode<sfpi::DataLayout::U16>() = v;
     }
 }
 
@@ -257,7 +270,14 @@ static inline void run_gate()
         GMG_SFPU_CALL(generalized_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<false /* is_32bit */>();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, false /* is_32bit */>();
-        GMG_SFPU_CALL(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
+        if constexpr (GMG_DO_EXTRA_SCALE)
+        {
+            GMG_SFPU_CALL(generalized_moe_gate_top8_scaled, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE, GMG_EXTRA_SCALE);
+        }
+        else
+        {
+            GMG_SFPU_CALL(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
+        }
     }
     else
     {
@@ -297,7 +317,7 @@ static inline void run_gate()
     // transpose is the one step the run-producing path skips.
     if constexpr (!(GMG_PRODUCE_RUN && !GMG_GROUPED))
     {
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */, GMG_OUTPUT_TILES>();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false /* is_32bit */>();
     }
 }
@@ -324,7 +344,7 @@ static inline void run_move()
     }
     else if constexpr (GMG_SUB_OP == MOVE_STEP2)
     {
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */, GMG_OUTPUT_TILES>();
         mop_dest_reset();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false /* is_32bit */>();
     }
@@ -363,8 +383,7 @@ static inline void run_placement()
     }
     else if constexpr (GMG_SUB_OP == RUN_PLACE_FIELD)
     {
-        GMG_SFPU_CALL(
-            generalized_moe_gate_place_field_from_interm, (APPROX_MODE, GMG_FIELD, GMG_FROM_LO, GMG_FROM_HI, GMG_TO_LO, GMG_TO_HI));
+        GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, GMG_FIELD, GMG_FROM_LO, GMG_FROM_HI, GMG_TO_LO, GMG_TO_HI));
     }
     else if constexpr (GMG_SUB_OP == RUN_MERGE16)
     {
@@ -376,14 +395,11 @@ static inline void run_placement()
         // the pair at {0,2}+{4,6} is sorted, normalized and transposed to the output layout. Note
         // finalize does its own merge, so unlike the RUN_COMBINE tail there is no merge16 here.
         GMG_SFPU_CALL(
-            generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, 0 /* field */, 0 /* src_lo */, 2 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            generalized_moe_gate_place_field_from_interm, (APPROX_MODE, 0 /* field */, 0 /* src_lo */, 2 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(
-            generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, 1 /* field */, 4 /* src_lo */, 6 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            generalized_moe_gate_place_field_from_interm, (APPROX_MODE, 1 /* field */, 4 /* src_lo */, 6 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(
-            generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, 2 /* field */, 8 /* src_lo */, 10 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            generalized_moe_gate_place_field_from_interm, (APPROX_MODE, 2 /* field */, 8 /* src_lo */, 10 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(generalized_moe_gate_finalize_ungrouped, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */>();
         mop_dest_reset();
@@ -407,14 +423,11 @@ static inline void run_placement()
         // over the intermediate region only because a test kernel cannot re-unpack between fields
         // the way the op's copy_tile does; place_field's own test sweeps the source offsets.
         GMG_SFPU_CALL(
-            generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, 0 /* field */, 0 /* src_lo */, 2 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            generalized_moe_gate_place_field_from_interm, (APPROX_MODE, 0 /* field */, 0 /* src_lo */, 2 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(
-            generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, 1 /* field */, 4 /* src_lo */, 6 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            generalized_moe_gate_place_field_from_interm, (APPROX_MODE, 1 /* field */, 4 /* src_lo */, 6 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(
-            generalized_moe_gate_place_field_from_interm,
-            (APPROX_MODE, 2 /* field */, 8 /* src_lo */, 10 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
+            generalized_moe_gate_place_field_from_interm, (APPROX_MODE, 2 /* field */, 8 /* src_lo */, 10 /* src_hi */, 4 /* dst_lo */, 6 /* dst_hi */));
         GMG_SFPU_CALL(generalized_moe_gate_merge16_to_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TO_LO, GMG_TO_HI, GMG_IDX_OFFSET));
     }
 }
@@ -424,6 +437,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const auto tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     // Two sections walk both DEST halves under DstSync::Half. Only the second reaches a non-zero
@@ -439,7 +453,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 is_fp32_dest_acc_en,
                 BroadcastType::NONE,
                 false /* is_int_fpu_en */,
-                PackMode::Default>(params.num_faces, ID_FORMAT);
+                PackMode::Default>(tensor_shape, ID_FORMAT);
 
             const auto copy_to_dest_tile = [](const std::uint32_t tile, const std::uint32_t format = ID_FORMAT)
             {
@@ -469,7 +483,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             if constexpr (GMG_MODE == MODE_GATE && GMG_SIGMOID)
             {
-                // The op's enable_sigmoid front-end: transpose_wh_tile then sigmoid_tile leave the
+                // The op's enable_sigmoid front-end: transpose_tile then sigmoid_tile leave the
                 // activated score in the score region, which the RELOAD binary below reads back through
                 // MOVD2A instead of taking SrcA from the unpacker. The transpose itself is the
                 // unpacker's; math only datacopies what it produced.
@@ -478,7 +492,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     is_fp32_dest_acc_en,
                     BroadcastType::NONE,
                     false /* is_int_fpu_en */,
-                    PackMode::Default>(params.num_faces, formats.math);
+                    PackMode::Default>(tensor_shape, formats.math);
                 copy_to_dest_tile(SCORES_TILE, formats.math);
 
                 SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (false /* fast_and_approx */));
@@ -526,10 +540,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (GMG_MODE != MODE_BINARY && !STEP2_RUNS)
         {
-// Wait until unpack has posted both dummy valids; clearing before they arrive leaves unpack blocked after math completes.
-TTI_STALLWAIT(
-    p_stall::STALL_MATH,
-    p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+            // Wait until unpack has posted both dummy valids; clearing before they arrive leaves unpack blocked after math completes.
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
         }
 

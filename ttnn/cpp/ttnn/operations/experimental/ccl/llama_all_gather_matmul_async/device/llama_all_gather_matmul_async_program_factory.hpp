@@ -17,6 +17,9 @@ struct LlamaAllGatherMatmulAsyncSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
     std::vector<tt::tt_metal::CoreCoord> intermediate_cores_vec;
     uint32_t ring_index{};
+    // The intermediate CB is globally allocated over the intermediate tensor's buffer, so its address
+    // has to be re-pointed on every cache hit; keep the handle to do that.
+    tt::tt_metal::CBHandle cb_inter{};
     ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_shared_variables;
 };
 

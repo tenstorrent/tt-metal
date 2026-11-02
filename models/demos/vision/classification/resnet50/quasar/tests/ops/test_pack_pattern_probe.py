@@ -35,7 +35,19 @@ CONFIGS = [
 ]
 
 
-@pytest.mark.parametrize("in_h,in_w,C,kernel,stride,padding", [c[:6] for c in CONFIGS], ids=[c[6] for c in CONFIGS])
+# A 2x2 window gives an input tile face geometry of {face_r_dim=4, num_faces=4} (y=4, z=4), which Quasar's LLK
+# validate_buffer_desc rejects (z=4 requires y_dim=16). Not resnet-used; xfail until the LLK adds tiny-tile
+# (z=1) SrcA support for the reduce-col strided tilize (strict=False so a later XPASS is visible).
+_QSR_2X2_XFAIL = pytest.mark.xfail(
+    reason="face_r_dim=4/num_faces=4 (2x2 window) unsupported on Quasar; awaiting LLK tiny-tile reduce support",
+    strict=False,
+)
+
+
+@pytest.mark.parametrize(
+    "in_h,in_w,C,kernel,stride,padding",
+    [pytest.param(*c[:6], id=c[6], marks=([_QSR_2X2_XFAIL] if c[3] == (2, 2) else [])) for c in CONFIGS],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_scratch_pack_dprint(mesh_device, in_h, in_w, C, kernel, stride, padding):
     device = mesh_device

@@ -106,8 +106,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     return result;
 }
 
+// Force inlining so the scheduled reciprocal callbacks do not make SFPI outline
+// this loop and lose constant tile indices at the caller.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_fmod_int32_body(dst_index_in0, dst_index_in1, dst_index_out);

@@ -8,9 +8,15 @@
 #include <gtest/gtest.h>
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 namespace {
+
+// Use the arch of the silicon under test. TODO: query the fixture's MetalEnv once tests hold one.
+FabricEriscDatamoverOptions silicon_options() {
+    return FabricEriscDatamoverOptions{.arch = tt::tt_metal::MetalContext::instance().hal().get_arch()};
+}
 
 TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWorkerInjection) {
     constexpr size_t channel_buffer_size = 14432;
@@ -22,7 +28,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWork
     for (const auto topology : {Topology::Mesh, Topology::Torus}) {
         const FabricStaticSizedChannelsAllocator allocator(
             topology,
-            FabricEriscDatamoverOptions{},
+            silicon_options(),
             sender_channels,
             receiver_channels,
             channel_buffer_size,
@@ -52,6 +58,26 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWork
     }
 }
 
+TEST(FabricStaticSizedChannelsAllocatorTest, MeshCapsLocalWorkerInjectionDepth) {
+    // Worker injection depth stays capped no matter how much buffering space is available.
+    constexpr size_t channel_buffer_size = 14432;
+    constexpr size_t available_space = channel_buffer_size * 10000;
+    constexpr std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels = {4, 3, 0};
+    constexpr std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels = {1, 1, 0};
+    const std::vector<MemoryRegion> memory_regions = {{0, available_space}};
+
+    const FabricStaticSizedChannelsAllocator allocator(
+        Topology::Torus,
+        silicon_options(),
+        sender_channels,
+        receiver_channels,
+        channel_buffer_size,
+        available_space,
+        memory_regions);
+
+    EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), MAX_CHANNEL_BUFFER_SLOTS);
+}
+
 TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {
     constexpr size_t channel_buffer_size = 14384;
     constexpr size_t available_space = 366656;
@@ -61,7 +87,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {
 
     const FabricStaticSizedChannelsAllocator allocator(
         Topology::Ring,
-        FabricEriscDatamoverOptions{},
+        silicon_options(),
         sender_channels,
         receiver_channels,
         channel_buffer_size,

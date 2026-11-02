@@ -49,6 +49,7 @@ from callstack_provider import (
     run as get_callstack_provider,
 )
 from run_checks import run as get_run_checks, device_description_serializer
+from ttexalens.hardware.risc_debug import RiscDebug
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import CallstackEntry
 from ttexalens.context import Context
@@ -67,13 +68,12 @@ DEFAULT_MAX_LOCATIONS = 10
 
 def _frame_signature(
     callstack: list[CallstackEntry], message: str | None
-) -> tuple[str | None | tuple[str | None, str | None, int | None, int | None], ...]:
+) -> tuple[str | None | tuple[str | None, str | None, int | None], ...]:
     return (message,) + tuple(
         (
             frame.function_name,
             frame.file_info.file if frame.file_info is not None else None,
             frame.file_info.line if frame.file_info is not None else None,
-            frame.file_info.column if frame.file_info is not None else None,
         )
         for frame in callstack
     )
@@ -135,7 +135,11 @@ class AggregationBucket:
         d = first.dispatcher_core_data
         self.kernel_name = d.kernel_name
         self.op_id = d.host_assigned_id
-        self.callstack = first.kernel_callstack_with_message
+        cs = first.kernel_callstack_with_message
+        if not cs.callstack and first.pc is not None:
+            # No frames to show the PC, so prefix it to the failure message
+            cs = KernelCallstackWithMessage(callstack=[], message=f"0x{first.pc:08X} {cs.message}")
+        self.callstack = cs
         self.risc_name = risc_name
 
         # Existing aggregation for plain text mode
@@ -199,15 +203,17 @@ def _collect_aggregated(
 ) -> list[AggregatedCallstackRow] | None:
     """Collect callstacks and aggregate cores stopped in a kernel by (frames, risc, op_id)."""
 
-    def per_core(location: OnChipCoordinate, risc_name: str) -> CallstacksData | None:
+    def per_core(risc_debug: RiscDebug) -> CallstacksData | None:
+        risc_name = risc_debug.risc_location.risc_name
+        location = risc_debug.risc_location.location
         try:
             if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
                 return None
             # Filter DONE / not-enabled-by-design cores
-            if callstack_provider.dispatcher_data.is_idle_in_default_view(location, risc_name):
+            if callstack_provider.dispatcher_data.is_idle_in_default_view(risc_debug.risc_location):
                 return None
 
-            return callstack_provider.get_cached_callstacks(location, risc_name)
+            return callstack_provider.get_cached_callstacks(risc_debug)
         except TimeoutDeviceRegisterError:
             raise
         except Exception as e:

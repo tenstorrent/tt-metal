@@ -44,7 +44,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
 
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::tt_metal::IDevice* const device = output_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* const device = output_tensor.device();
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t input_batch = input_shape[0];
@@ -65,7 +65,13 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
         center_y = (static_cast<float>(input_height) - 1.0f) / 2.0f;
     }
 
-    const uint16_t fill_value_bf16 = nearest_float_to_bfloat16(operation_attributes.fill);
+    const bool is_bfloat16 = input_tensor.dtype() == DataType::BFLOAT16;
+    uint32_t fill_value_bits;
+    if (is_bfloat16) {
+        fill_value_bits = nearest_float_to_bfloat16(operation_attributes.fill);
+    } else {
+        fill_value_bits = std::bit_cast<uint32_t>(operation_attributes.fill);
+    }
     const uint32_t total_output_sticks = input_batch * input_height * input_width;
 
     const uint32_t element_size = input_tensor.element_size();
@@ -128,24 +134,26 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
     const uint32_t aligned_output_stick_nbytes = any_sharded ? effective_channels * output_tensor.element_size()
                                                              : pool::get_aligned_stick_size(input_shape, output_tensor);
 
+    // DRAM and L1 align sticks differently: size the shared CB page for the larger, and stride both kernels by it.
+    const uint32_t output_cb_page_size = std::max(aligned_input_stick_nbytes, aligned_output_stick_nbytes);
+
     const uint32_t available_l1 = NUM_TILES_DEST * tt::constants::TILE_HW * element_size;
     const uint32_t l1_for_cb = available_l1 / NEAREST_BUFFERING_FACTOR;
-    const uint32_t max_cb_pages_from_l1 = l1_for_cb / aligned_input_stick_nbytes;
+    const uint32_t max_cb_pages_from_l1 = l1_for_cb / output_cb_page_size;
 
     const uint32_t max_sticks_per_core =
         any_sharded ? input_nsticks_per_core : std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
     uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
     TT_FATAL(
         num_cb_pages > 0,
-        "Not enough L1 for even a single CB page: aligned_input_stick_nbytes={} exceeds l1_for_cb={}",
-        aligned_input_stick_nbytes,
+        "Not enough L1 for even a single CB page: output_cb_page_size={} exceeds l1_for_cb={}",
+        output_cb_page_size,
         l1_for_cb);
     const uint32_t burst_size = num_cb_pages < MAX_BURST_SIZE ? num_cb_pages : MAX_BURST_SIZE;
     // CB total size must be an even multiple of burst_size (required by cb_push_back/cb_pop_front API)
     num_cb_pages = round_down(num_cb_pages, burst_size);
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
-    const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
 
     const uint32_t fill_cb_index = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
@@ -187,13 +195,13 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
         .buffer = any_sharded ? output_tensor.buffer() : nullptr,
     });
 
-    const bool fill_is_zero = (fill_value_bf16 == 0);
+    const bool fill_is_zero = (fill_value_bits == 0);
 
     const uint32_t effective_stick_nbytes = any_sharded ? effective_channels * element_size : input_stick_nbytes;
 
     std::vector<uint32_t> reader_compile_time_args = {
         output_cb_index,
-        aligned_input_stick_nbytes,
+        output_cb_page_size,
         input_batch,
         input_height,
         input_width,
@@ -214,6 +222,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
         aligned_output_stick_nbytes,
         num_cb_pages,
         burst_size,
+        output_cb_page_size,
     };
 
     auto* output_buffer = output_tensor.buffer();
@@ -251,25 +260,29 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             } else {
                 start_stick_id = i * input_nsticks_per_core;
             }
+            // An unevenly sharded tensor's last shard is only partly backed by real sticks.
+            const uint32_t num_sticks = start_stick_id >= total_output_sticks
+                                            ? 0
+                                            : std::min(input_nsticks_per_core, total_output_sticks - start_stick_id);
 
             reader_desc.emplace_runtime_args(
                 core,
                 {
                     input_tensor.buffer(),
-                    input_nsticks_per_core,
+                    num_sticks,
                     start_stick_id,
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                    static_cast<uint32_t>(fill_value_bf16),
+                    fill_value_bits,
                 });
 
             writer_desc.emplace_runtime_args(
                 core,
                 {
                     output_tensor.buffer(),
-                    input_nsticks_per_core,
+                    num_sticks,
                     start_stick_id,
                 });
         }
@@ -290,7 +303,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                    static_cast<uint32_t>(fill_value_bf16),
+                    fill_value_bits,
                 });
 
             writer_desc.emplace_runtime_args(

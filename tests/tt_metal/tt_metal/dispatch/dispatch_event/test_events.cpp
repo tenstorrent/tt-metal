@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
+#include "tt_metal/distributed/mesh_event_impl.hpp"
 #include <memory>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -55,7 +57,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
     uint32_t last_read_address = 0;
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     for (const DataMovementMode data_movement_mode : {DataMovementMode::READ, DataMovementMode::WRITE}) {
         auto start = std::chrono::system_clock::now();
@@ -116,8 +118,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
 
     for (size_t i = 0; i < num_events; i++) {
         auto event = cq.enqueue_record_event_to_host();
-        EXPECT_EQ(event.id(), cmds_issued_per_cq + 1);  // Event ids start at 1
-        EXPECT_EQ(event.mesh_cq_id(), cq.id());
+        EXPECT_EQ(event.impl().id(), cmds_issued_per_cq + 1);  // Event ids start at 1
+        EXPECT_EQ(event.impl().mesh_cq_id(), cq.id());
         cmds_issued_per_cq++;
     }
     distributed::Finish(cq);
@@ -241,7 +243,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
 TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const size_t num_buffers = 2;
     const uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));
@@ -259,8 +261,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
     for (size_t i = 0; i < num_buffers; i++) {
         log_debug(tt::LogTest, "i: {} - Going to record event, write, wait, synchronize.", i);
         auto event = std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host());
-        EXPECT_EQ(event->mesh_cq_id(), cq.id());
-        EXPECT_EQ(event->id(), events_issued_per_cq + 1);  // Event ids start at 1
+        EXPECT_EQ(event->impl().mesh_cq_id(), cq.id());
+        EXPECT_EQ(event->impl().id(), events_issued_per_cq + 1);  // Event ids start at 1
 
         distributed::DeviceLocalBufferConfig local_config{.page_size = page_size, .buffer_type = BufferType::DRAM};
         distributed::ReplicatedBufferConfig buffer_config{.size = page_size};

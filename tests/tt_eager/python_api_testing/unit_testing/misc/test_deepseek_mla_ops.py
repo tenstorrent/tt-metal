@@ -21,17 +21,16 @@ from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_blackhole
+from models.common.reference_rope import ReferenceRMSNorm
+from models.common.utility_functions import nearest_y, skip_for_blackhole
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
 from models.demos.deepseek_v3.reference.deepseek.rope_helpers import (
     precompute_freqs_cis,
     apply_rotary_emb,
 )
-from models.common.utility_functions import nearest_y
 from transformers import AutoConfig
 from types import SimpleNamespace
 

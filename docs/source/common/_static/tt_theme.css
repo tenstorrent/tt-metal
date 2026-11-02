@@ -1213,39 +1213,57 @@ html.writer-html5 .rst-content dl.py > dt {
   display: none !important;
 }
 
-/* All spans inside signature: inline monospace */
-.rst-content dt.tt-api-sig-box span,
-.rst-content dt.tt-api-sig-box * {
+/* All spans inside signature: inline monospace.
+   Targets dt.sig directly — the .tt-api-sig-box class this used to rely on was
+   added in the browser by api_style.js, which is no longer used. */
+.rst-content dl.py > dt.sig span,
+.rst-content dl.py > dt.sig *,
+.rst-content dl.cpp > dt.sig span,
+.rst-content dl.cpp > dt.sig * {
   font-family: var(--font-mono) !important;
   font-size: 14px !important;
   display: inline !important;
 }
 
 /* Python sig colours */
-.rst-content dt.tt-api-sig-box .sig-prename { color: #3a5452 !important; }
-.rst-content dt.tt-api-sig-box .sig-name    { color: #1e86a9 !important; }
-.rst-content dt.tt-api-sig-box .sig-paren,
-.rst-content dt.tt-api-sig-box .p           { color: #092221 !important; }
-.rst-content dt.tt-api-sig-box .sig-param   { color: #092221 !important; }
+.rst-content dt.sig .sig-prename { color: #3a5452 !important; }
+.rst-content dt.sig .sig-name    { color: #1e86a9 !important; }
+.rst-content dt.sig .sig-paren,
+.rst-content dt.sig .p           { color: #092221 !important; }
+.rst-content dt.sig .sig-param   { color: #092221 !important; }
 /* Property value (= <nanobind.nb_func object>) */
-.rst-content dt.tt-api-sig-box em.property  { color: #3a5452 !important; font-style: normal !important; }
+.rst-content dt.sig em.property  { color: #3a5452 !important; font-style: normal !important; }
 
-/* Copy button: absolute top-right */
-.tt-api-copy-btn {
+/* Copy button on a signature: vertically centred on the right of the box.
+   The button itself comes from sphinx-copybutton (copybutton_selector in
+   conf.py also lists dt.sig); this only places and tones it. */
+.rst-content dt.sig > button.copybtn {
   position: absolute !important;
   right: 16px !important;
   top: 50% !important;
   transform: translateY(-50%) !important;
   background: none !important;
   border: none !important;
+  box-shadow: none !important;
   cursor: pointer !important;
   padding: 0 !important;
-  display: flex !important;
-  align-items: center !important;
+  width: 20px !important;
+  height: 20px !important;
   opacity: 0.7 !important;
   transition: opacity 120ms ease !important;
 }
-.tt-api-copy-btn:hover { opacity: 1 !important; }
+
+/* Copy button on a code example: top-right inside the card. */
+.rst-content .admonition-example button.copybtn {
+  top: 12px !important;
+  right: 12px !important;
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  opacity: 0.7 !important;
+}
+
+.rst-content button.copybtn:hover { opacity: 1 !important; }
 
 /* ── dl reset (all API types) ───────────────────────────────── */
 .rst-content dl.cpp.function,
@@ -1267,8 +1285,11 @@ html.writer-html5 .rst-content dl.py > dt {
   border-left: none !important;
 }
 
-/* ── Description paragraph ──────────────────────────────────── */
-p.tt-api-description {
+/* ── Description paragraph ──────────────────────────────────────
+   The summary paragraph is the first <p> in the signature's <dd>; selecting it
+   directly removes the need for api_style.js to tag it. */
+.rst-content dl.py > dd > p:first-child,
+.rst-content dl.cpp > dd > p:first-child {
   font-size: 16px !important;
   font-weight: 400 !important;
   color: #092221 !important;
@@ -1277,20 +1298,19 @@ p.tt-api-description {
   margin: 0 0 40px !important;
 }
 
-/* Hide the raw field-list (replaced by api_style.js sections) only on builds
-   with the custom shell that loads api_style.js — plain builds keep the native
-   Parameters/Returns fields visible. */
-body:has(.tt-top-nav) .rst-content dl.py > dd dl.field-list {
-  display: none !important;
+/* ── Field list (Parameters / Keyword Arguments / Returns) ───
+   The native docutils field list is kept and styled in place. tt_api_build.py
+   only wraps each entry's name and description in .tt-api-param-name /
+   .tt-api-param-desc, which is the one thing CSS cannot do for itself. Nothing
+   is hidden, so a page still reads correctly if this stylesheet fails to load
+   or the markup changes shape. */
+.rst-content dl.py > dd > dl.field-list,
+.rst-content dl.cpp > dd > dl.field-list {
+  display: block !important;
+  margin: 0 0 40px !important;
 }
 
-/* ── Section headings (Parameters / Returns) added by JS ────── */
-.tt-api-section {
-  margin-bottom: 40px;
-}
-
-.tt-api-section-heading,
-h2.tt-api-section-heading {
+.rst-content dl.field-list > dt {
   font-family: "Neue Haas Unica Pro", "Degular", -apple-system, BlinkMacSystemFont, sans-serif !important;
   font-weight: 500 !important;
   font-size: 22px !important;
@@ -1298,9 +1318,46 @@ h2.tt-api-section-heading {
   color: #092221 !important;
   letter-spacing: 0 !important;
   margin: 0 0 24px !important;
+  padding: 0 !important;
+  background: none !important;
   display: block !important;
-  align-items: unset !important;
-  gap: unset !important;
+  float: none !important;
+  width: auto !important;
+}
+
+/* The theme renders the label's colon; the design does not show it. */
+.rst-content dl.field-list > dt .colon {
+  display: none !important;
+}
+
+.rst-content dl.field-list > dd {
+  margin: 0 0 40px !important;
+  padding: 0 !important;
+}
+
+.rst-content dl.field-list > dd > ul.simple {
+  list-style: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* One parameter per row: name line, then description line. */
+.rst-content dl.field-list > dd > ul.simple > li,
+.rst-content dl.field-list > dd > p {
+  padding: 0 0 16px !important;
+  border-bottom: 1px solid #c7d9d8 !important;
+  margin: 0 0 16px !important;
+}
+
+.rst-content dl.field-list > dd > ul.simple > li:last-child,
+.rst-content dl.field-list > dd > p:last-child {
+  border-bottom: none !important;
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.rst-content dl.field-list > dd > ul.simple > li > p {
+  margin: 0 !important;
 }
 
 /* ── Parameter list ─────────────────────────────────────────── */
@@ -1319,45 +1376,54 @@ h2.tt-api-section-heading {
   margin-bottom: 16px;
 }
 
-.tt-api-param-name {
+/* tt_api_build.py emits these as inline elements so that they nest legally
+   inside the field list's <p>; the design puts them on separate lines. */
+.rst-content .tt-api-param-name {
+  display: block !important;
   font-size: 16px !important;
   line-height: 1.35 !important;
   margin: 0 !important;
   letter-spacing: 0 !important;
 }
 
-.tt-param-name {
+/* Parameter name — <strong> from autodoc, plain text from a Breathe table. */
+.rst-content .tt-api-param-name,
+.rst-content .tt-api-param-name strong {
   font-weight: 500 !important;
   color: #092221 !important;
 }
 
-.tt-param-type {
+/* Parameter type — every <em> autodoc puts in the parentheses. */
+.rst-content .tt-api-param-name em {
   font-weight: 400 !important;
+  font-style: normal !important;
   color: #3a5452 !important;
   letter-spacing: 0.25px !important;
 }
 
-.tt-api-param-desc {
+.rst-content .tt-api-param-desc {
+  display: block !important;
   font-size: 14px !important;
   font-weight: 400 !important;
   color: #092221 !important;
   line-height: 1.35 !important;
   letter-spacing: 0.25px !important;
-  margin: 0 !important;
+  margin: 8px 0 0 !important;
 }
 
-/* Hide raw docutils table (replaced by api_style.js list) — gated on the custom
-   shell that loads api_style.js so plain builds keep native API tables. */
-body:has(.tt-top-nav) .rst-content dl.cpp.function table.docutils,
-body:has(.tt-top-nav) .rst-content dl.py.function table.docutils,
-body:has(.tt-top-nav) .rst-content dl.py.class table.docutils {
-  display: none !important;
-}
+/* NOTE: there used to be rules here hiding `dl.py … table.docutils` and
+   `dl.py > dd > dl.field-list`, because api_style.js was expected to rebuild
+   both in the browser. Two things went wrong with that arrangement and both
+   are fixed by not hiding anything:
 
-/* Hide field-list via CSS too (JS also removes from DOM) */
-body:has(.tt-top-nav) .rst-content dl.py > dd > dl.field-list {
-  display: none !important;
-}
+     * the JS never shipped, so the published pages hid their Parameters,
+       Keyword Arguments and Returns fields with nothing to put back (#53397);
+     * the table rule matched *any* docutils table inside a Python signature —
+       including the supported-dtypes table in an op's Note, which no JS ever
+       rebuilt, so it was invisible even when the script did run.
+
+   Breathe's C++ parameter tables are now reshaped by tt_api_build.py at build
+   time, so there is no raw markup left to hide. */
 
 /* Hide headerlink in h1 */
 .rst-content section > h1 > a.headerlink {
@@ -1368,18 +1434,25 @@ body:has(.tt-top-nav) .rst-content dl.py > dd > dl.field-list {
    EXAMPLE BLOCK — Figma node 240:8481
    ═══════════════════════════════════════════════════════════════ */
 
-.tt-example-block {
+/* The ttnn pages emit the example as `.. admonition:: Example`, which already
+   wraps the title and the code block — so the bordered card and its header bar
+   are plain CSS on the markup Sphinx produces. api_style.js used to build this
+   wrapper in the browser, which was never needed. */
+.rst-content .admonition-example {
   border: 1px solid #c7d9d8 !important;
   border-radius: 8px !important;
   overflow: hidden !important;
   width: 100% !important;
   margin-top: 40px !important;
+  padding: 0 !important;
+  background: #ffffff !important;
   box-sizing: border-box !important;
 }
 
-.tt-example-header {
+.rst-content .admonition-example > .admonition-title {
   background: #e5f2f1 !important;
   padding: 10px 16px !important;
+  margin: 0 !important;
   font-family: var(--font-main) !important;
   font-size: 14px !important;
   font-weight: 500 !important;
@@ -1389,9 +1462,13 @@ body:has(.tt-top-nav) .rst-content dl.py > dd > dl.field-list {
   border-bottom: 1px solid #c7d9d8 !important;
 }
 
-.tt-example-block .highlight,
-.tt-example-block .doctest,
-.tt-example-block .highlight-default {
+/* The theme puts an icon in front of every admonition title. */
+.rst-content .admonition-example > .admonition-title::before {
+  display: none !important;
+}
+
+.rst-content .admonition-example > div[class^="highlight"],
+.rst-content .admonition-example > div[class*=" highlight"] {
   background: #ffffff !important;
   padding: 16px 20px !important;
   position: relative !important;
@@ -1412,10 +1489,8 @@ body:has(.tt-top-nav) .rst-content dl.py > dd > dl.field-list {
 }
 
 /* Kill ALL borders/backgrounds Sphinx/RTD puts on pre/code inside example */
-.tt-example-block pre,
-.tt-example-block code,
-.tt-example-block .highlight pre,
-.tt-example-block .doctest pre {
+.rst-content .admonition-example pre,
+.rst-content .admonition-example code {
   font-family: var(--font-mono) !important;
   font-size: 13px !important;
   line-height: 1.4 !important;
@@ -1430,82 +1505,22 @@ body:has(.tt-top-nav) .rst-content dl.py > dd > dl.field-list {
   white-space: pre !important;
 }
 
-/* Line numbers table — built by JS */
-.tt-example-table {
-  width: 100% !important;
-  border-collapse: collapse !important;
-  border: none !important;
-  padding: 0 !important;
-  display: table !important;
-  box-sizing: border-box !important;
-}
-
-.tt-example-table tr {
-  border: none !important;
-  background: transparent !important;
-}
-
-.tt-example-table td {
-  border: none !important;
-  padding: 0 !important;
-  vertical-align: top !important;
-  line-height: 1.4 !important;
-  font-family: var(--font-mono) !important;
-  font-size: 13px !important;
-  background: transparent !important;
-}
-
-.tt-example-table td.tt-lineno {
-  color: #678583 !important;
-  text-align: right !important;
-  padding: 0 20px 0 4px !important;
-  user-select: none !important;
-  white-space: nowrap !important;
-  width: 1% !important;
-  min-width: 2ch !important;
-  border-right: 1px solid #e5f2f1 !important;
-}
-
-.tt-example-table td.tt-codeline {
-  color: #092221 !important;
-  white-space: pre !important;
-  width: 100% !important;
-  padding: 0 0 0 20px !important;
-}
+/* NOTE: the .tt-example-table / .tt-lineno / .tt-codeline rules that lived
+   here styled a line-number table that api_style.js built in the browser.
+   Sphinx can emit line numbers itself, but only through :linenos: on each
+   directive — and our example blocks come from docstrings, so there is no
+   directive to annotate. The numbers are dropped rather than reintroduced
+   via html_codeblock_linenos_style, which is deprecated in the Sphinx we
+   pin and is a no-op unless :linenos: is set anyway. */
 
 /* Keep >>> prompts gray, rest dark */
-.tt-example-block .gp { color: #678583 !important; }
-.tt-example-block .go { color: #678583 !important; }  /* output */
-.tt-example-block .n,
-.tt-example-block .nb,
-.tt-example-block .mi,
-.tt-example-block .o,
-.tt-example-block .p { color: #092221 !important; }
-
-/* Copy button for example block — 32×32 bordered button, top-right of code area */
-.tt-example-copy-btn {
-  position: absolute !important;
-  top: 20px !important;
-  right: 20px !important;
-  width: 32px !important;
-  height: 32px !important;
-  border: 1px solid #c7d9d8 !important;
-  border-radius: 6px !important;
-  background: #ffffff !important;
-  cursor: pointer !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  padding: 0 !important;
-  opacity: 0.8 !important;
-  transition: opacity 120ms ease !important;
-  box-sizing: border-box !important;
-}
-
-.tt-example-copy-btn:hover {
-  opacity: 1 !important;
-  border-color: #092221 !important;
-}
+.rst-content .admonition-example .gp { color: #678583 !important; }
+.rst-content .admonition-example .go { color: #678583 !important; }  /* output */
+.rst-content .admonition-example .n,
+.rst-content .admonition-example .nb,
+.rst-content .admonition-example .mi,
+.rst-content .admonition-example .o,
+.rst-content .admonition-example .p { color: #092221 !important; }
 
 /* ═══════════════════════════════════════════════════════════════
    API INDEX CARDS (Figma 55-4153) — autosummary tables → cards
@@ -1543,6 +1558,19 @@ body:has(.tt-top-nav) .rst-content dl.py > dd > dl.field-list {
   font-family: var(--font-mono) !important;
   font-size: 14px !important;
   line-height: 1.7 !important;
+  margin: 0 !important;
+}
+
+/* autosummary links the name through a <code class="xref">; the card owns the
+   look, so strip the theme's literal styling back off it. */
+.rst-content .tt-api-card-name code,
+.rst-content .tt-api-card-name code.literal {
+  font-family: var(--font-mono) !important;
+  font-size: 14px !important;
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  color: inherit !important;
 }
 
 .tt-api-card-name a,

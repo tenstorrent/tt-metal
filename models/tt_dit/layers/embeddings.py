@@ -20,7 +20,7 @@ ACT2CLS = {
     "silu": ttnn.silu,
     "mish": ttnn.mish,
     "gelu": ttnn.gelu,
-    "gelu_tanh": partial(ttnn.gelu, fast_and_approximate_mode=True),
+    "gelu_tanh": partial(ttnn.gelu, variant=ttnn.GeluVariant.Tanh),
     "relu": ttnn.relu,
 }
 
@@ -59,7 +59,6 @@ class Timesteps(Module):
 
     def forward(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
         # Time projection (sinusoidal embedding)
-        assert timestep.dtype == self.dtype, f"Input timestep {timestep.dtype} and model dtype {self.dtype} must match"
         emb = self.scale * timestep * self.time_proj_factor
         c = ttnn.cos(emb)
         s = ttnn.sin(emb)

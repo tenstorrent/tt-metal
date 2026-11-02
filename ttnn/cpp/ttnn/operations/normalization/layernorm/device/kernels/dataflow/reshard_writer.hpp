@@ -13,13 +13,14 @@
 // Move this core's output block to the storage cores that own it. `output_base_addr` is the base
 // address of the output tensor's shard, which is the same on every core it is sharded across, so it
 // doubles as the destination address on each storage core.
+template <typename DFB>
 inline void write_resharded_data(
-    Noc& noc,
-    DataflowBuffer& dfb_out,
+    const Noc& noc,
+    DFB& dfb_out,
     uint32_t output_base_addr,
     uint32_t num_segments_to_write_back,
     uint32_t storage_core_start_offset,
-    tt_l1_ptr uint32_t* segment_args,
+    const tt_l1_ptr uint32_t* segment_args,
     uint32_t worker_core_stride_w_bytes,
     uint32_t storage_core_stride_w_bytes,
     uint32_t block_ht) {
@@ -27,16 +28,16 @@ inline void write_resharded_data(
     uint32_t args_idx = 0;
     uint32_t worker_core_read_offset = 0;
 
-    UnicastEndpoint remote;
+    const UnicastEndpoint remote;
 
     uint32_t num_tiles_in_write_queue = 0;
 
     for (uint32_t i = 0; i < num_segments_to_write_back; ++i) {
-        uint32_t write_size = segment_args[args_idx++];
-        uint32_t storage_core_x = segment_args[args_idx++];
-        uint32_t storage_core_y = segment_args[args_idx++];
+        const uint32_t write_size = segment_args[args_idx++];
+        const uint32_t storage_core_x = segment_args[args_idx++];
+        const uint32_t storage_core_y = segment_args[args_idx++];
 
-        uint32_t num_tiles_to_write_in_current_segment = write_size / out_single_tile_size_bytes * block_ht;
+        const uint32_t num_tiles_to_write_in_current_segment = write_size / out_single_tile_size_bytes * block_ht;
 
         uint32_t src_offset = worker_core_read_offset;
         uint32_t dst_addr = output_base_addr;
@@ -48,7 +49,7 @@ inline void write_resharded_data(
         for (uint32_t h = 0; h < block_ht; ++h) {
             for (uint32_t w = 0; w < num_tiles_to_write_in_current_segment; ++w) {
                 num_tiles_in_write_queue += 1;
-                dfb_out.wait_front(num_tiles_in_write_queue);
+                dfb_out.wait_front(static_cast<uint16_t>(num_tiles_in_write_queue));
                 noc.async_write(
                     dfb_out,
                     remote,
@@ -64,4 +65,9 @@ inline void write_resharded_data(
         worker_core_read_offset += write_size;
     }
     noc.async_write_barrier();
+
+    // The output tiles are waited cumulatively as they are written out to the storage cores. The
+    // barrier above is the last use of them, so pop the whole queue to leave the buffer
+    // balanced. (The sibling helper in rms_allgather waits and pops one tile at a time instead.)
+    dfb_out.pop_front(static_cast<uint16_t>(num_tiles_in_write_queue));
 }

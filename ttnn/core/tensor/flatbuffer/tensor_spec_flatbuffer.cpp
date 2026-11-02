@@ -5,22 +5,24 @@
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn {
 
-CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
-    std::vector<CoreRange> ranges;
+tt::tt_metal::CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
+    std::vector<tt::tt_metal::CoreRange> ranges;
     ranges.reserve(core_range_set->ranges()->size());
     for (const auto* range : *core_range_set->ranges()) {
         ranges.emplace_back(
             tt::tt_metal::CoreCoord{range->start()->x(), range->start()->y()}, tt::tt_metal::CoreCoord{range->end()->x(), range->end()->y()});
     }
-    return CoreRangeSet{std::move(ranges)};
+    return tt::tt_metal::CoreRangeSet{std::move(ranges)};
 }
 
 flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& core_range_set) {
+    flatbuffers::FlatBufferBuilder& builder, const tt::tt_metal::CoreRangeSet& core_range_set) {
     std::vector<flatbuffers::Offset<flatbuffer::CoreRange>> range_offsets;
     range_offsets.reserve(core_range_set.ranges().size());
     for (const auto& range : core_range_set.ranges()) {
@@ -43,6 +45,14 @@ tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
         case flatbuffer::DataType::UInt16: return tt::tt_metal::DataType::UINT16;
         case flatbuffer::DataType::Int32: return tt::tt_metal::DataType::INT32;
         case flatbuffer::DataType::Int8: return tt::tt_metal::DataType::INT8;
+        case flatbuffer::DataType::MxFp8E4M3: return tt::tt_metal::DataType::MXFP8_E4M3;
+        case flatbuffer::DataType::MxFp8E5M2: return tt::tt_metal::DataType::MXFP8_E5M2;
+        case flatbuffer::DataType::MxFp6E2M3: return tt::tt_metal::DataType::MXFP6_E2M3;
+        case flatbuffer::DataType::MxFp6E3M2: return tt::tt_metal::DataType::MXFP6_E3M2;
+        case flatbuffer::DataType::MxFp4: return tt::tt_metal::DataType::MXFP4;
+        case flatbuffer::DataType::MxInt8: return tt::tt_metal::DataType::MXINT8;
+        case flatbuffer::DataType::MxInt4: return tt::tt_metal::DataType::MXINT4;
+        case flatbuffer::DataType::MxInt2: return tt::tt_metal::DataType::MXINT2;
         case flatbuffer::DataType::Invalid: return tt::tt_metal::DataType::INVALID;
     }
     TT_THROW("Unsupported DataType from flatbuffer.");
@@ -60,6 +70,14 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
         case tt::tt_metal::DataType::INT8: return flatbuffer::DataType::Int8;
         case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 cannot be serialized to flatbuffer");
+        case tt::tt_metal::DataType::MXFP8_E4M3: return flatbuffer::DataType::MxFp8E4M3;
+        case tt::tt_metal::DataType::MXFP8_E5M2: return flatbuffer::DataType::MxFp8E5M2;
+        case tt::tt_metal::DataType::MXFP6_E2M3: return flatbuffer::DataType::MxFp6E2M3;
+        case tt::tt_metal::DataType::MXFP6_E3M2: return flatbuffer::DataType::MxFp6E3M2;
+        case tt::tt_metal::DataType::MXFP4: return flatbuffer::DataType::MxFp4;
+        case tt::tt_metal::DataType::MXINT8: return flatbuffer::DataType::MxInt8;
+        case tt::tt_metal::DataType::MXINT4: return flatbuffer::DataType::MxInt4;
+        case tt::tt_metal::DataType::MXINT2: return flatbuffer::DataType::MxInt2;
         case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
     }
     TT_THROW("Unsupported DataType to flatbuffer.");
@@ -153,7 +171,7 @@ tt::tt_metal::ShardDistributionStrategy from_flatbuffer(flatbuffer::ShardDistrib
 }
 
 tt::tt_metal::ShardSpec from_flatbuffer(const flatbuffer::ShardSpec* spec) {
-    CoreRangeSet grid = from_flatbuffer(spec->grid());
+    tt::tt_metal::CoreRangeSet grid = from_flatbuffer(spec->grid());
     std::array<uint32_t, 2> shape = {spec->shape_h(), spec->shape_w()};
     tt::tt_metal::ShardOrientation orientation = from_flatbuffer(spec->orientation());
     return tt::tt_metal::ShardSpec(grid, shape, orientation);
@@ -262,7 +280,8 @@ flatbuffers::Offset<flatbuffer::MemoryConfig> to_flatbuffer(
         shard_spec,
         nd_shard_spec,
         config.created_with_nd_shard_spec(),
-        tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(config));
+        tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(config),
+        tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(config));
 }
 
 tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* config) {
@@ -274,16 +293,15 @@ tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* confi
     if (config->nd_shard_spec()) {
         nd_shard_spec = from_flatbuffer(config->nd_shard_spec());
     }
-    auto memory_config = tt::tt_metal::create_memory_config_with_prepopulated_shard_specs(
-        from_flatbuffer(config->memory_layout()),
-        from_flatbuffer(config->buffer_type()),
-        shard_spec,
-        nd_shard_spec,
-        config->created_with_nd_shard_spec());
-    if (config->per_core_allocation()) {
-        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
-    }
-    return memory_config;
+    return tt::tt_metal::create_memory_config_with_prepopulated_shard_specs({
+        .memory_layout = from_flatbuffer(config->memory_layout()),
+        .buffer_type = from_flatbuffer(config->buffer_type()),
+        .shard_spec = shard_spec,
+        .nd_shard_spec = nd_shard_spec,
+        .created_with_nd_shard_spec = config->created_with_nd_shard_spec(),
+        .per_core_allocation = config->per_core_allocation(),
+        .range_lockstep_allocation = config->range_lockstep_allocation(),
+    });
 }
 
 flatbuffers::Offset<flatbuffer::TensorSpec> to_flatbuffer(

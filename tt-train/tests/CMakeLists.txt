@@ -3,10 +3,11 @@ enable_testing()
 
 set(SOURCES
     core/tensor_utils_test.cpp
-    core/n300_utils_test.cpp
+    core/mesh_1x2_utils_test.cpp
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
     core/random_tests.cpp
+    core/program_utils_test.cpp
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
@@ -33,6 +34,7 @@ set(SOURCES
     datasets/generators_test.cpp
     datasets/dataloader_test.cpp
     optimizers/adamw_composite_test.cpp
+    optimizers/bf16_parameter_guard_test.cpp
     optimizers/sgd_test.cpp
     optimizers/adamw_test.cpp
     optimizers/muon_composite_test.cpp
@@ -56,6 +58,9 @@ set(SOURCES
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
     ops/distributed/ring_sdpa_schedule_test.cpp
+    ops/distributed/mesh_workload_cache_hit_test.cpp
+    ops/distributed/gumbel_sample_mesh_test.cpp
+    ops/distributed/moe_ep_mesh_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
@@ -68,21 +73,27 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/softmax_backward_op_test.cpp
     ops/silu_op_test.cpp
+    ops/qkv_causal_conv1d_silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
     ops/sdpa_bw_op_test.cpp
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
+    ops/swiglu_packed_op_test.cpp
     ops/moe_ffn_swiglu_op_test.cpp
     ops/moe_group_op_test.cpp
     ops/moe_ungroup_op_test.cpp
     ops/moe_profile_sweep_test.cpp
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
-    ops/mla_qkv_assemble_op_test.cpp
+    ops/conv3d_op_test.cpp
+    ops/mla_kv_assemble_op_test.cpp
+    ops/multi_head_test.cpp
     ops/variable_matmul_test.cpp
     utils/memory_utils_test.cpp
+    utils/training_utils_test.cpp
     ops/mla_q_rope_op_test.cpp
+    ops/gumbel_sample_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
@@ -102,7 +113,7 @@ set_target_properties(
             TRUE
 )
 target_compile_options(ttml_tests PRIVATE -fPIC)
-target_precompile_headers(ttml_tests REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(ttml_tests ttml_pch)
 
 # Suppress false-positive -Wnonnull from xtensor internals on GCC < 13.
 # At -O3, GCC over-inlines xbroadcast::has_linear_assign and wrongly flags std::equal as null.
@@ -164,7 +175,7 @@ target_link_libraries(
         ttml
         TTNN::TTNN
 )
-target_precompile_headers(swiglu_fusion_benchmark REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(swiglu_fusion_benchmark ttml_pch)
 
 add_executable(moe_ffn_swiglu_benchmark benchmark/moe_ffn_swiglu_benchmark.cpp)
 target_link_libraries(
@@ -173,7 +184,16 @@ target_link_libraries(
         ttml
         TTNN::TTNN
 )
-target_precompile_headers(moe_ffn_swiglu_benchmark REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(moe_ffn_swiglu_benchmark ttml_pch)
+
+add_executable(swiglu_packed_benchmark benchmark/swiglu_packed_benchmark.cpp)
+target_link_libraries(
+    swiglu_packed_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+tt_reuse_precompile_headers(swiglu_packed_benchmark ttml_pch)
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
@@ -186,10 +206,12 @@ if(TARGET benchmark::benchmark)
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
+        benchmark/rmsnorm_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp
         benchmark/mla_q_rope_benchmark.cpp
-        benchmark/mla_qkv_assemble_benchmark.cpp
+        benchmark/mla_kv_assemble_benchmark.cpp
         benchmark/transpose_matmul_benchmark.cpp
+        benchmark/qkv_causal_conv1d_silu_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
@@ -203,6 +225,6 @@ if(TARGET benchmark::benchmark)
                 benchmark::benchmark
         )
         target_include_directories(${BENCH_TARGET} PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
-        target_precompile_headers(${BENCH_TARGET} REUSE_FROM ttml_pch)
+        tt_reuse_precompile_headers(${BENCH_TARGET} ttml_pch)
     endforeach()
 endif()

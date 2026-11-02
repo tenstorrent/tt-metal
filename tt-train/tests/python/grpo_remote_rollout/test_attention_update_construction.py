@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Construction-equivalence test for ``Attention.update`` (real weights, HF auth).
+"""Construction-equivalence test for ``Attention.update`` (real weights).
 
 Round-trip per layer: generate -> snapshot wqkv/wo -> overwrite with a constant
 (must change output) -> restore via update -> generate must match the original.
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+import ttnn
 
 from _completer_utils import as_update_input, generate_one, open_completer, to_torch_2d
 

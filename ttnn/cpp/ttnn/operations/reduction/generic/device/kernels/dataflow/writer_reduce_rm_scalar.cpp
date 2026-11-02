@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
@@ -57,7 +58,7 @@ void reduce_rm_writer() {
 
     const auto dst_accessor = TensorAccessor(tensor::dst);
 
-    Noc noc;
+    const Noc noc;
     // dfb::out carries the tiled reduce result produced by the compute kernel.
     DataflowBuffer dfb_tile(dfb::out);
     const uint32_t tile_size_bytes = dfb_tile.get_tile_size();
@@ -114,15 +115,9 @@ void reduce_rm_writer() {
 
         while (outputs_remaining > 0) {
             // Pick the largest chunk that stays within one (nc, slice) group and within remaining work.
-            uint32_t wt_in_chunk = wt_tiles_per_chunk;
-            if (wt_in_chunk > Wt - wt_in_nc) {
-                wt_in_chunk = Wt - wt_in_nc;
-            }
-            if (wt_in_chunk > outputs_remaining) {
-                wt_in_chunk = outputs_remaining;
-            }
+            const uint32_t wt_in_chunk = std::min(wt_tiles_per_chunk, std::min(Wt - wt_in_nc, outputs_remaining));
 
-            dfb_tile.wait_front(wt_in_chunk);
+            dfb_tile.wait_front(static_cast<uint16_t>(wt_in_chunk));
 
             for (uint32_t wt = 0; wt < wt_in_chunk; ++wt) {
                 const uint32_t w_tile_col = wt_in_nc + wt;
@@ -156,14 +151,14 @@ void reduce_rm_writer() {
                         dfb_tile,
                         dst_accessor,
                         face_valid * datum_bytes,
-                        {.offset_bytes = src_tile_offset + src_idx_in_tile * datum_bytes},
+                        {.offset_bytes = src_tile_offset + (src_idx_in_tile * datum_bytes)},
                         {.page_id = nc_slice, .offset_bytes = (w_base_col + face_col) * datum_bytes});
                 }
 #endif
             }
 
             noc.async_write_barrier();
-            dfb_tile.pop_front(wt_in_chunk);
+            dfb_tile.pop_front(static_cast<uint16_t>(wt_in_chunk));
 
             wt_in_nc += wt_in_chunk;
             outputs_remaining -= wt_in_chunk;

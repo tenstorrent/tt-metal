@@ -99,7 +99,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--tier",
         default="light",
-        choices=["light", "medium", "deploy"],
+        choices=["light", "medium", "deploy", "pre_reboot"],
         help="Diagnostic tier passed to the diag suite",
     )
     p.add_argument(
@@ -175,6 +175,17 @@ def parse_args() -> argparse.Namespace:
         "(slurm launch mode only; ignored under orchestration)",
     )
     p.add_argument(
+        "--last-iteration",
+        choices=("true", "false"),
+        default="true",
+        help="Whether this is the final attempt of the launcher's retry loop "
+        "(orchestration only). When false a failure is not the verdict yet — the "
+        "launcher reruns the suite, power cycling the node first if it is "
+        "configured to — so the run is recorded as a discarded pre-reboot row and "
+        "JIRA ticketing plus the real CSV upload are left to the final attempt. "
+        "Defaults to true, so a single run and the Slurm path behave as before.",
+    )
+    p.add_argument(
         "--exclude",
         choices=("true", "false"),
         default="false",
@@ -196,6 +207,7 @@ def parse_args() -> argparse.Namespace:
     args.upload_sftp = args.upload_sftp == "true"
     args.cleanup = args.cleanup == "true"
     args.reboot_on_failure = args.reboot_on_failure == "true"
+    args.last_iteration = args.last_iteration == "true"
     args.exclude = args.exclude == "true"
     return args
 
@@ -267,7 +279,12 @@ def _clean_version(value: str | None) -> str:
 
 def collect_run_artifacts(artifacts_dir: Path | None, *, node: str, slurm_job_id: str) -> tuple[list[Path], list[str]]:
     """A run's result files plus the ``[^name]`` attachment names JIRA renders
-    inline, so the failure and recovery paths attach and name the same set."""
+    inline, so the failure and recovery paths attach and name the same set.
+
+    Callers pass ``results_dir`` rather than the directory ``run_diag_subprocess``
+    hands back, which is *None* when the suite never started. Telemetry is
+    collected before that point, so the dump is on disk and worth attaching even
+    on the run where nothing else is."""
     result_files: list[Path] = []
     if artifacts_dir and artifacts_dir.is_dir():
         result_files = sorted(p for p in artifacts_dir.rglob("*") if p.is_file())
@@ -332,10 +349,17 @@ def main() -> int:
     )
     print(version_header, flush=True)
 
+    # Resolved before the telemetry call so the raw dump lands under the same
+    # logs/ the diag suite writes to, which is what collect_run_artifacts walks.
+    results_dir = Path(args.results_dir or (Path(log_dir) / f"{node}-{slurm_job_id}-results"))
+
     # Collect Prometheus metrics from local telemetry endpoint. The port defaults
     # per deployment and --telemetry-port overrides it (see
     # telemetry_port_for_launch_mode).
-    prom_metrics = collect_prometheus_metrics(port=telemetry_port_for_launch_mode(launch_mode, args.telemetry_port))
+    prom_metrics = collect_prometheus_metrics(
+        port=telemetry_port_for_launch_mode(launch_mode, args.telemetry_port),
+        dump_path=results_dir / "logs" / f"telemetry_{node}.prom",
+    )
     prom_output = ""
     if prom_metrics:
         prom_output = format_prometheus_metrics(prom_metrics)
@@ -349,7 +373,6 @@ def main() -> int:
 
     # Run the diag suite as a subprocess. It writes its JSON report + per-test
     # logs straight into results_dir on the host filesystem.
-    results_dir = Path(args.results_dir or (Path(log_dir) / f"{node}-{slurm_job_id}-results"))
     exit_code, test_output, artifacts_dir = run_diag_subprocess(
         tier=args.tier,
         timeout_seconds=timeout_seconds,
@@ -402,16 +425,53 @@ def main() -> int:
             )
             effective_code = 0
 
+    # Retry-aware reporting, orchestration only. There the launcher owns the retry
+    # loop: it holds the node's Allocation for the whole sequence and reruns this
+    # suite (power cycling the node in between when its BMC support is enabled), so
+    # a failure on a non-final attempt is not the verdict yet. Report it the way the
+    # Slurm self-heal reports a pre-reboot run — a discarded row, so the attempt
+    # stays visible without counting against the node in fleet stats — and leave
+    # ticketing and the real upload to whichever attempt runs last.
+    #
+    # Ticketing here instead would open a ticket for every transient fault the
+    # retry is meant to absorb, and then close it again on the next attempt.
+    if effective_code != 0 and launch_mode == "orchestration" and not args.last_iteration:
+        log.info(
+            "Test failed (exit %d) on a non-final attempt; the launcher will rerun "
+            "the suite on %s. Recording a discarded pre-reboot row and skipping "
+            "JIRA ticketing.",
+            effective_code,
+            node,
+        )
+        pre_reboot_csv = run_csv_analysis(
+            json_report=json_report,
+            node=node,
+            slurm_job_id=slurm_job_id,
+            ticket_key=None,
+            versions=versions,
+            telemetry=telemetry_summary,
+            discard=1,
+            discard_reason="reboot_pending",
+            run_id_suffix="-pre-reboot",
+        )
+        if pre_reboot_csv and args.upload_sftp and sftp_user and sftp_host:
+            upload_csv_sftp(pre_reboot_csv, sftp_user, sftp_host, log_dir=log_dir, launch_mode=launch_mode)
+        if args.cleanup and pre_reboot_csv:
+            remove_path(tempfile.gettempdir(), pre_reboot_csv)
+        return effective_code
+
     # Reboot-and-rerun self-heal. This is the one behavior that can't be shared
     # between the deployments: it drives Slurm (scontrol reboot + requeue), which
-    # orchestration has no equivalent for, so there we say so and ticket instead.
+    # orchestration has no equivalent for — there the launcher power cycles the
+    # node out of band and the branch above defers to it.
     restart_count = slurm_restart_count()
     # Set only when self-heal tried but couldn't reboot/requeue; surfaced on the ticket.
     reboot_failure: str | None = None
     if effective_code != 0 and args.reboot_on_failure and launch_mode != "slurm":
         log.warning(
             "--reboot-on-failure is not supported in %s launch mode (reboot-and-requeue "
-            "needs Slurm); proceeding to JIRA ticketing",
+            "needs Slurm; the launcher's power cycle is driven by --last-iteration); "
+            "proceeding to JIRA ticketing",
             launch_mode,
         )
     elif should_reboot(
@@ -467,7 +527,7 @@ def main() -> int:
         else:
             # Files this run will reference with [^name] so JIRA renders them
             # inline with the comment/description.
-            result_files, attachment_names = collect_run_artifacts(artifacts_dir, node=node, slurm_job_id=slurm_job_id)
+            result_files, attachment_names = collect_run_artifacts(results_dir, node=node, slurm_job_id=slurm_job_id)
 
             existing_key = find_open_ticket_for_node(
                 node=node,
@@ -575,7 +635,7 @@ def main() -> int:
                 # Attach this passing run's artifacts so the closed ticket carries
                 # the recovery evidence (telemetry, Grafana, CSVs) next to the logs.
                 result_files, attachment_names = collect_run_artifacts(
-                    artifacts_dir, node=node, slurm_job_id=slurm_job_id
+                    results_dir, node=node, slurm_job_id=slurm_job_id
                 )
                 add_comment_to_jira(
                     ticket_key=recovered_key,

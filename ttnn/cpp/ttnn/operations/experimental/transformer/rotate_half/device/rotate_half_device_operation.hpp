@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <variant>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "rotate_half_device_operation_types.hpp"
-#include "rotate_half_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
@@ -16,6 +19,16 @@ struct RotateHalfDeviceOperation {
     using tensor_args_t = Tensor;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
+
+    struct RotateHalfProgramFactory {
+        // Single-core program: the row/tile counts derive from the input's padded shape (hashed), so
+        // the input and output buffer addresses are the only per-dispatch state and their tensor
+        // bindings are the whole cache-hit refresh.
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& input,
+            tensor_return_value_t& tensor_return_value);
+    };
     using program_factory_t = std::variant<RotateHalfProgramFactory>;
 
     static void validate_on_program_cache_miss(

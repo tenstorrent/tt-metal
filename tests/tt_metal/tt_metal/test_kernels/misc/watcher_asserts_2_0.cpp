@@ -11,6 +11,7 @@
 #include "api/debug/ring_buffer.h"
 #include "api/kernel_thread_globals.h"
 #include "internal/firmware_common.h"
+#include "watcher_test_helpers.h"
 #include "experimental/kernel_args.h"
 
 #if defined(COMPILE_FOR_TRISC)
@@ -40,10 +41,7 @@ void kernel_main() {
     if (a == b) {
         // Signal completion to dispatcher before the assert hangs the kernel so the
         // dispatcher (and Device::close) can still make progress.
-        volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-        go_message_in->signal = RUN_MSG_DONE;
-        uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
-        notify_dispatch_core_done(dispatch_addr, noc_index);
+        signal_completion_before_hang();
     }
 #else
 #if defined(COMPILE_FOR_TRISC)
@@ -82,7 +80,7 @@ void kernel_main() {
             case 6: asm volatile("sw %0, 0x2(x0)" : "=r"(tmp)); break;  // store not aligned
             case 7: *p = 0; break;                                      // store access fault
 #if defined(COMPILE_FOR_TRISC) and defined(ARCH_QUASAR)
-            case 8: INSTRUCTION_WORD(TT_OP(0xbc, 0)); break;  // illegal instruction
+            case 8: TTI_INSN(TT_OP(0xbc, 0)); break;  // illegal instruction
             case 9:
                 RISCV_DEBUG_REGS->CHICKEN_BITS |= T6_DEBUG_REGS__CHICKEN_BITS__ALLOW_UNSAFE_SEMPOST_SEMGET_bm;
                 TTI_SEMGET(0, 2);

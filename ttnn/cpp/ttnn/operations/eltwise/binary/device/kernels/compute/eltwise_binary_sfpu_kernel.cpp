@@ -22,6 +22,7 @@
 #include "api/compute/binary_max_min.h"
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
+#include "api/compute/nextafter.h"
 #include "api/compute/gcd.h"
 #include "api/compute/lcm.h"
 #include "api/compute/binary_comp.h"
@@ -51,7 +52,7 @@ void kernel_main() {
     copy_init(dfb_in0.get_id());
 
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {

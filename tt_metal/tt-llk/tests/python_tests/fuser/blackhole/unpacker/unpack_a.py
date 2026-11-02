@@ -2,20 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.unpack_a import unpack_a_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 from helpers.llk_params import BroadcastType
 
 
 class UnpackerA(Unpacker):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
+    golden_fn = staticmethod(unpack_a_golden)
 
     def get_headers(self) -> List[str]:
         return [
@@ -23,29 +24,6 @@ class UnpackerA(Unpacker):
             "llk_unpack_common.h",
             "llk_unpack_tilize.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if compute_unit.broadcast_type != BroadcastType.None_:
-            tensor_b = self.broadcast_golden(
-                tensor_a, config, operation, compute_unit, operand=compute_unit.src_a
-            )
-            tensor_a = None
-        else:
-            tensor_a = self.transpose_golden(tensor_a, config, operation, compute_unit)
-            tensor_b = None
-
-        tensor_a, tensor_b = self.reuse_dest_golden(
-            tensor_a, tensor_b, config, operation, compute_unit
-        )
-
-        return tensor_a, tensor_b
 
     def perf_set_valid(
         self,
@@ -123,7 +101,7 @@ class UnpackerA(Unpacker):
 
         return (
             f"_llk_unpack_A_<{broadcast_type}, {acc_to_dest}, {reuse_dest}, {unpack_to_dest}>(\n"
-            f"    L1_ADDRESS({buffer_a}[{block.tile_id_global}]), {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
+            f"    L1_ADDRESS({buffer_a}[{block.tile_id_src_a}]), {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
             f");\n"
         )
 

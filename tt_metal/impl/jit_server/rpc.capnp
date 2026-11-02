@@ -30,6 +30,9 @@ struct TargetRecipe {
     weakenedFirmwareName @10 :Text;
     firmwareIsKernelObject @11 :Bool;
     linkerOptLevel @12 :Text;
+
+    # Source umbrella path; empty means no PCH. Ignored for preprocessed inputs.
+    pchUmbrella @13 :Text;
 }
 
 struct CompileRequest {

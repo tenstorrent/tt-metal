@@ -41,7 +41,7 @@ constexpr const char* KERNEL_READER_INTERLEAVED =
     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp";
 constexpr const char* KERNEL_WRITER_INTERLEAVED =
     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp";
-constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY =
+constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY_METAL2 =
     "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy_metal2.cpp";
 
 }  // namespace
@@ -112,8 +112,6 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     // reader-produced IN directly.
     const m2::DFBSpecName& writer_dfb = convert_df ? OUT : IN;
 
-    const auto arch = device->arch();
-
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = KERNEL_READER_INTERLEAVED,
@@ -133,7 +131,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     m2::KernelSpec writer{
@@ -155,15 +153,15 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Compute kernel (only present when converting data format): consumes IN, produces OUT.
-    // ComputeGen1Config defaults match the legacy ComputeConfigDescriptor{} defaults; opt_level is set
+    // ComputeHardwareConfig's defaults match the legacy ComputeConfigDescriptor{} defaults; opt_level is set
     // to O3 explicitly (legacy compute defaults to O3; Metal 2.0 CompilerOptions defaults to O2).
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
-        .source = KERNEL_COMPUTE_ELTWISE_COPY,
+        .source = KERNEL_COMPUTE_ELTWISE_COPY_METAL2,
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
@@ -182,7 +180,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
             {
                 .runtime_arg_names = {"per_core_tile_cnt"},
             },
-        .hw_config = m2::ComputeGen1Config{},
+        .hw_config = m2::ComputeHardwareConfig{},
     };
 
     // Runtime args: each core owns a contiguous span of tiles.

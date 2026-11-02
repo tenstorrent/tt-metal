@@ -94,22 +94,31 @@ def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
             position_embeddings=(cos, sin),
         ).float()
 
-    block = Qwen3VlVisionBlock(
-        hidden_size=HIDDEN_SIZE,
-        num_heads=NUM_HEADS,
-        intermediate_size=INTERMEDIATE_SIZE,
-        hidden_act=HIDDEN_ACT,
-        norm_eps=NORM_EPS,
-        mesh_device=submesh,
-        parallel=_parallel(submesh, tp_axis, sp_axis, num_links),
-    )
-    block.load_torch_state_dict(reference.blocks[0].state_dict())
+    parallel = _parallel(submesh, tp_axis, sp_axis, num_links)
     tt_cos, tt_sin = vision_rope_tensors(grid, head_dim=HEAD_DIM, spatial_merge_size=SPATIAL_MERGE_SIZE)
-    out = block.forward(
-        sp_shard(x, submesh, sp_axis),
-        pos_embeds=(sp_shard(tt_cos, submesh, sp_axis), sp_shard(tt_sin, submesh, sp_axis)),
-        cu_seqlens=cu_seqlens,
-    )
-    actual = tensor.to_torch(out, mesh_axes=[sp_axis, None])
 
+    def run(kv_gather_capacity):
+        block = Qwen3VlVisionBlock(
+            hidden_size=HIDDEN_SIZE,
+            num_heads=NUM_HEADS,
+            intermediate_size=INTERMEDIATE_SIZE,
+            hidden_act=HIDDEN_ACT,
+            norm_eps=NORM_EPS,
+            mesh_device=submesh,
+            parallel=parallel,
+            kv_gather_capacity=kv_gather_capacity,
+        )
+        block.load_torch_state_dict(reference.blocks[0].state_dict())
+        out = block.forward(
+            sp_shard(x, submesh, sp_axis),
+            pos_embeds=(sp_shard(tt_cos, submesh, sp_axis), sp_shard(tt_sin, submesh, sp_axis)),
+            cu_seqlens=cu_seqlens,
+        )
+        return tensor.to_torch(out, mesh_axes=[sp_axis, None])
+
+    actual = run(None)
     assert_quality(golden, actual, pcc=0.99)
+
+    if sp_axis is not None and len(cu_seqlens) <= 2:
+        # An oversized K/V gather buffer, as every patch rung shares, must not change a single bit.
+        assert torch.equal(run(4 * total), actual), "kv_gather_capacity changed the block output"

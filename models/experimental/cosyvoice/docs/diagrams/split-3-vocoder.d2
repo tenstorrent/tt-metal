@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Stage 3 of 3 -- Mel -> Waveform, HiFTNet / HiFi-GAN path (~0.08 GB FP32).
+# Verified: ~40 convolutions (tt/hifigan/conv.py:35); n_fft = 16 (tt/hifigan/istft.py).
+
+direction: down
+
+classes: {
+  dev: { style: { fill: "#eef6ff"; stroke: "#0969da" } }
+}
+
+from_flow: "← Stage 2: flow decoder" { style: { fill: "#f6f8fa"; stroke: "#8b949e" } }
+
+vocoder: "3. Mel → Waveform\nHiFTNet / HiFi-GAN path · ~0.08 GB FP32" {
+  class: dev
+
+  f0: "F0 predictor"
+
+  source: "NSF excitation" {
+    class: dev
+    sine: "SineGen\nphase + harmonic excitation"
+    noise: "Noise source"
+    sine -> noise
+  }
+
+  convs: "≈40 convolution layers"
+
+  istft: "Inverse STFT" {
+    class: dev
+    dft: "n_fft = 16\nfixed 16 × 9 matrix multiply"
+    ola: "Windowing + overlap-add\n→ transposed convolution"
+    norm: "NOLA normalization"
+    dft -> ola -> norm
+  }
+
+  waveform: "22.05 kHz waveform\n.wav" { shape: document; style: { fill: "#dafbe1"; stroke: "#1a7f37" } }
+
+  f0 -> source
+  source -> convs
+  convs -> istft
+  istft -> waveform
+}
+
+from_flow -> vocoder.f0: "mel spectrogram"
+
+out: "Generated speech\n22.05 kHz WAV" { shape: document; style: { fill: "#dafbe1"; stroke: "#1a7f37" } }
+vocoder.waveform -> out: "speech"

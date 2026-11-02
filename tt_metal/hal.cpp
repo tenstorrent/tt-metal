@@ -5,7 +5,7 @@
 #include <hal.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "common/tt_backend_api_types.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <cstdint>
 #include <string>
 
@@ -25,11 +25,6 @@ tt::ARCH get_arch() { return tt::tt_metal::MetalContext::instance().hal().get_ar
 std::string get_arch_name() {
     auto arch_enum = tt::tt_metal::MetalContext::instance().hal().get_arch();
     return tt::get_string_lowercase(arch_enum);
-}
-
-uint32_t get_l1_size() {
-    return tt::tt_metal::MetalContext::instance().hal().get_dev_size(
-        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
 }
 
 uint32_t get_dram_alignment() { return tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::DRAM); }
@@ -65,8 +60,8 @@ float get_nan() { return tt::tt_metal::MetalContext::instance().hal().get_nan();
 
 float get_inf() { return tt::tt_metal::MetalContext::instance().hal().get_inf(); }
 
-uint32_t get_arch_num_circular_buffers() {
-    return tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-}
+uint32_t get_num_dataflow_buffers() { return tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers(); }
+
+uint32_t get_arch_num_circular_buffers() { return get_num_dataflow_buffers(); }
 
 }  // namespace tt::tt_metal::hal

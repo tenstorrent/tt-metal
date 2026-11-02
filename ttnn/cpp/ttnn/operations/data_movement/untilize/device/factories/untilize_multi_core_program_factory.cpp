@@ -55,9 +55,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     Buffer* src0_buffer = a.buffer();
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t tensor_height = a.physical_volume() / tensor_width;
@@ -157,7 +157,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         .unique_id = READER,
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC0, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (use_block_reader) {
         reader_spec.source = std::filesystem::path{READER_BLOCK_SRC};
@@ -211,16 +211,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
                   "num_unpadded_cols_per_input_block",
                   "width_wise_output_block_start_index",
                   "num_cols_already_processed_in_first_output_block"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Compute kernel(s) — full + cliff (cliff only for interleaved input).
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
     auto make_compute = [&](const KernelSpecName& id) {
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
             compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
         }

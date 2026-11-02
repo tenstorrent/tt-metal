@@ -19,7 +19,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return {false, "Operands to shard need to be on device!"};
     }
-    if (input_tensor.buffer() == nullptr) {
+    if (!input_tensor.is_allocated()) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
 
@@ -34,7 +34,10 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     // Use the normalized memory config for validation so that convertible ND specs are accepted.
     auto resolved_output_mem_config = output_mem_config;
     if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
-        auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+        // Normalize from the input alone: with a pre-allocated output, compute_output_specs just hands
+        // back the caller's own spec, so the checks below would end up testing that tensor against itself.
+        auto output_spec =
+            compute_output_specs(operation_attributes, tensor_args_t{input_tensor, /*output_tensor=*/std::nullopt});
         if (output_spec.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
             return {
                 false,
@@ -57,7 +60,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
         if (output_tensor.storage_type() != StorageType::DEVICE) {
             return {false, "Operands to shard need to be on device!"};
         }
-        if (output_tensor.buffer() == nullptr) {
+        if (!output_tensor.is_allocated()) {
             return {false, "Operands to shard need to be allocated in buffers on device!"};
         }
         if (output_tensor.device() != input_tensor.device()) {

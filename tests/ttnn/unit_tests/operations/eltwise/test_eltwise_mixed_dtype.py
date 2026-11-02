@@ -79,7 +79,9 @@ def test_neg_mixed_dtype(device, isolate_program_cache):
         golden_fn = ttnn.get_golden_function(ttnn_op)
         golden = golden_fn(ttnn.to_torch(input_tensor)).to(TORCH_DTYPE[out_dt])
         assert output_tensor.dtype == out_dt
-        assert_with_ulp(golden, output_tensor, ULP_THRESHOLD[(in_dt, out_dt)])
+        assert_with_ulp(
+            expected_result=golden, actual_result=output_tensor, ulp_threshold=ULP_THRESHOLD[(in_dt, out_dt)]
+        )
 
     entries_after_first_pass = device.num_program_cache_entries()
     # second pass over the same (in, out) pairs must be program-cache hits
@@ -88,6 +90,52 @@ def test_neg_mixed_dtype(device, isolate_program_cache):
     assert (
         device.num_program_cache_entries() == entries_after_first_pass
     ), "second pass over the same (in, out) pairs must be program-cache hits"
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("is_sharded", [False, True])
+@pytest.mark.parametrize("use_sub_core_grids", [False, True])
+@pytest.mark.parametrize("scalar", [1.3, -1.3])
+def test_remainder_mixed_float_output(device, layout, is_sharded, use_sub_core_grids, scalar):
+    """Mixed float outputs retain precision and the unary layout/grid support."""
+    # Format-specific: +/-1.3 is not binary-exact, so the remainders need more
+    # precision than BF16; writing FP32 must not retain BF16-intermediate rounding.
+    shape = (32, 32)
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if is_sharded:
+        memory_config = ttnn.create_sharded_memory_config(
+            shape=shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    torch_input = torch.tensor([-5, -1, 0, 1, 2, 5, 8, 10], dtype=torch.bfloat16).repeat(128).reshape(shape)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.float32),
+        dtype=ttnn.float32,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    # Compute the reference at output precision: a BF16 intermediate would lose
+    # fractional remainder bits before the final FP32 write.
+    expected = torch.remainder(torch_input.float(), scalar)
+    for _ in range(2):
+        result = ttnn.remainder(
+            input_tensor,
+            scalar,
+            output_tensor=output_tensor,
+            sub_core_grids=core_grid if use_sub_core_grids else None,
+        )
+        assert result.buffer_address() == output_tensor.buffer_address(), "remainder must reuse the preallocated output"
+        assert result.dtype == ttnn.float32, "remainder must preserve the preallocated output dtype"
+        torch.testing.assert_close(ttnn.to_torch(output_tensor), expected, rtol=1e-6, atol=1e-6)
 
 
 def test_neg_rejects_int_float_preallocated_output(device, expect_error):
