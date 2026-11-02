@@ -246,3 +246,23 @@
   - `test_conv2d_nhwc_sharded.py::test_conv2d_nhwc_height_resnet_pinned`: layer2 downsample, 1×1 s2, layer1 at pinned geometry.
   - `test_conv2d_nhwc_sharded.py::test_conv2d_nhwc_height_weights_streamed`: resident fallback.
   - `test_conv2d_nhwc_perf_probe.py`: `test_perf_probe_resnet_*` and `test_l1_peak_resnet_height`.
+
+## Refinement 7 — TILE activations (+ bf8b activations): techniques 1, 2, 3 / regime R9
+- Date: 2026-11-02
+- What was done:
+  - SUPPORTED: `layout += TILE`, `dtype += bfloat8_b` (TILE only; bf8b × ROW_MAJOR is INVALID in feature_spec). EXCLUSIONS: TILE × depthwise (no golden cell; R11's per-channel-tile window is not wired to the TILE untilize).
+  - Technique 1 (sharded TILE, HEIGHT / BLOCK / WIDTH): each core untilizes one contiguous range of input tile-rows once per kernel. The range is its own shard ∪ the window of its whole m range. Own tile-rows come in place from the zero-copy `cb_in_shard`; halo tile-rows are fetched from the owning shards (one NoC read per owner run) into the new `cb_win_tiles`. The untilized window lands in `cb_act_window` (now compute-produced; bf8b → bf16). The existing gather reads it as one contiguous stick source (`ShardSource` with no halo split), and the tilize / matmul / multicast run unchanged.
+  - Technique 2 (DRAM-interleaved TILE): built on R0 (prepare's interleaved K order) rather than an in-op virtual HEIGHT placement. Per m-block, the reader reads the window's whole input tile-rows from DRAM, compute untilizes them, and the gather runs as above. One dispatch, no `to_layout`.
+  - Output: TILE in → TILE out. The final pack (`add_bias_bcast_rows`, or a `copy` with no bias; packer ReLU around it) writes tiles straight into the output shard (TileRowMajor = the shard's tile order) or, on R0, into `cb_out_rm`, which the writer drains as tile pages.
+  - Technique 3 / R9 (`TILE_DIRECT_IN0`): for 1×1, stride 1, p 0, one K-block per slice, and output tile-row r on the core holding input tile-row r, the shard's tiles are in0. HEIGHT matmuls `cb_in_shard` in place; BLOCK/WIDTH multicast shard K-blocks from `cb_in_shard`. No untilize, gather or tilize; the RM CBs shrink to one page.
+  - A 4-D TILE input is accepted when W and W_out are tile multiples. Otherwise `ValueError` (pass it flattened with `input_spatial`).
+  - Compute policy: bf8b activations use the bf16 policy (HiFi2, fp32 DEST); bf8b × bf8b runs at LoFi (the ResNet50 reference fidelity).
+- Perf: R9 vs the general TILE path (BH, AICLK 1350, per-core max kernel cycles, bf8b TILE, bf8b weights, bias, relu): ResNet layer1 1×1 HEIGHT 28,187 → 21,975 (−22%); layer3 1×1 BLOCK 35,632 → 23,223 (−35%). One run each; the margins are far outside noise.
+- Accuracy achieved: every TILE golden cell passes its dtype gate (fp32 PCC 0.999 / rel-RMS 0.02; bf16 0.995 / 0.05; bf8b 0.99 / 0.10), relu included.
+- Golden test progress:
+  - `test_golden.py -k _TILE`: 167 passed, 19 xfailed (`C_in = 4` DRAM TILE: `c_in_unaligned`, Refinement 8), 0 failed.
+  - TILE model-placement loose cases: 5/5 in SUPPORTED pass (4 ResNet50 bf8b TILE + relu, SDXL DRAM-TILE downsample). SDXL conv_in waits on Refinement 8.
+  - ROW_MAJOR regression slice (HEIGHT + BLOCK / WIDTH / interleaved representatives + ResNet / SDXL perf loose cases): 160 + 3 passed, 0 failed. Unit directory: 147 passed.
+- Issues encountered: a `shard_h / 32` division by zero on ROW_MAJOR HEIGHT (shard_h < 32) broke the reader build; guarded.
+- Tests added: `test_conv2d_nhwc_tile.py` (8 placements × {bf8b, bf16} with relu, plus the 4-D TILE accept / refuse case); `test_conv2d_nhwc_perf_probe.py::test_perf_probe_tile_1x1` (R9 A/B).
+- Not done / findings: the DRAM TILE path does not overlap the next m-block's untilize with the current matmul (compute untilizes at m-block start). The R0 window is whole tile-rows, so ρ is a little above the RM column-clipped window. Neither was measured or optimized here.

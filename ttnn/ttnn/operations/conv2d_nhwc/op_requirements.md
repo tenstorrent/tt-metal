@@ -175,7 +175,7 @@ No SUPPORTED change.
 
 **Outcome**: per-core max kernel cycles on BH @1350 MHz, before → after (achievable): layer1 3×3 116.0k → 38.8k (38.0k); layer2 downsample 165.3k → 41.0k (41.0k); layer2 3×3 81.3k → 35.7k (27.0k); 1×1 s2 shortcut 25.3k → 17.9k (20.3k). `device_l1_peak_bytes` 581,120 / 534,272 / 397,824 / 264,320 B, all under `achievable_l1_peak_bytes`. Levers: tap-major gather, resident weights with one multicast, single-K m-block pipeline, output shards placed on the input cores covering their windows, LoFi for bf16 × bf8b. Remaining gap is layer2 3×3: it is compute-bound behind the weight landing (~13k cycles to read and multicast 157 KB, ~18 B/cycle into each core even with the chip idle), then ~22k of matmul + tilize. Overlapping the two with per-K-block multicast chunks (`HEIGHT_RESIDENT_KBLOCKS`) measured flat. The next lever is a dual-NoC weight multicast (half the slice from each data-movement RISC of the sender), not tried here because it needs a second multicast channel on the reader kernel.
 
-### [ ] Refinement 7 — TILE activations (+ bf8b activations): techniques 1, 2, 3 / regime R9
+### [x] Refinement 7 — TILE activations (+ bf8b activations): techniques 1, 2, 3 / regime R9
 
 **Goal**: add `ttnn.TILE_LAYOUT` to `SUPPORTED["layout"]` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, in-kernel. The output takes the input's layout. A TILE input is accepted 4-D only when W and W_out are tile multiples; otherwise it is refused.
 - **Sharded (technique 1)**: every core untilizes its own TILE shard (zero-copy shard-backed CB of tiles) and the halo tile-rows its window reads, once per kernel, into row-major L1. bf8b untilizes to bf16. The gather / tilize / matmul then run unchanged. The output is packed as tiles straight into the TILE output shard; the TileRowMajor partials are already the shard's tile order.
@@ -195,6 +195,8 @@ No SUPPORTED change.
 - Every golden TILE cell otherwise inside SUPPORTED passes (HEIGHT / BLOCK / WIDTH / DRAM-interleaved, 1×1 and 3×3, strided, relu), and so do all bf8b-activation cells.
 - The ResNet50 bf8b TILE and SDXL DRAM-TILE `_MODEL_PLACEMENT_CASES` pass (conv_in `C_in = 4` once Refinement 8 lands).
 - 0 loud categories.
+
+**Outcome**: landed. All 167 TILE golden cells pass (19 `C_in = 4` cells xfail on `c_in_unaligned`, Refinement 8), and so do the 5 in-SUPPORTED TILE model-placement cases (ResNet50 bf8b TILE + relu ×4, SDXL DRAM-TILE downsample). DRAM TILE runs on R0 with per-m-block tile-row windows, not an in-op HEIGHT placement. R9 cuts the ResNet 1×1 TILE cases by 22% (HEIGHT) and 35% (BLOCK) vs the general TILE path. TILE × depthwise is an EXCLUSION (no golden cell).
 
 ### [ ] Refinement 8 — Channel alignment, dilation, grouped convs
 

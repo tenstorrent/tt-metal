@@ -285,7 +285,7 @@ The output layout follows the input. Sharded output geometry: HEIGHT keeps the i
 | channel alignment | `tap_width`/`band_tiles` already encode the padding. The reader zero-fills each window stick's pad lanes once at kernel start (a 0 weight × a stale NaN gives NaN). The writer writes `C_out` columns only. |
 | stride / dilation | Only the window bounds and the gather run decomposition change. With d > 1 a band becomes `kW` runs of `tap_width`. |
 | relu | `pack_relu_config(ReluConfig::zero())` around the final output pack only (the bias pack, or the untilize pack when there is no bias), cleared before the next block's tilize and partial packs (technique 4) |
-| TILE | R3/R4 untilize the shard and halo once per kernel (technique 1). R9 is the 1×1 path. A DRAM TILE input is resharded inside the op (technique 2). |
+| TILE | R3/R4/R5 untilize the shard and halo once per kernel (technique 1). R9 is the 1×1 path (`TILE_DIRECT_IN0`). As built (Refinement 7), a DRAM TILE input runs on R0: per m-block, the window's whole tile-rows are read and untilized (technique 2, with no in-op resharding). The output is packed as tiles. |
 
 ## Work Distribution
 

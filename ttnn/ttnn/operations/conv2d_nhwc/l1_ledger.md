@@ -178,3 +178,19 @@ Measured plans and `device_l1_peak_bytes` (bf16 × bf8b, bias):
 | weight | 1 (read once by the first compute core) | one multicast of `K_t·N_t` tiles to the input grid's bounding rectangle (once per kernel, not per m-block) |
 | bias | 1 per core | none |
 | output | 0 | none |
+
+## Refinement 7 — TILE activations (+ bf8b)
+
+The RM pipeline CBs (`cb_act_window`, `cb_act_rm`, `cb_act_tiles`, `cb_act_send`) take `rm_dtype(dtype)`: bf8b untilizes to bf16 (`T = 2048`), other dtypes as before. TILE outputs are packed as tiles of the output dtype (`T_out = tile_bytes(dtype)`; bf8b 1088).
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_act_window` (TILE) | `win_tile_rows · c_tiles` (page = RM tile `T`; one tile-row = 32 sticks of `tap_width = c_tiles·32`) | sharded: the core's whole untilized window (own shard ∪ window of its whole m range); DRAM: one m-block's window tile-rows | `{m: sharded spans the core range (once per kernel) / DRAM spans one m-block (affine in bm); n, k: streams (reused)}` | `rm_dtype` | compute (untilize) | reader (gather source) | sharded: whole kernel; DRAM: per m-block | Replaces the RM halo scratch (same index, now compute-produced). Cannot alias `cb_win_tiles`: untilize reads one while writing the other. |
+| `cb_win_tiles` (13, TILE only) | sharded: `max(halo_before + halo_after) · c_tiles`; DRAM: `win_tile_rows · c_tiles` | the halo (sharded) / window (DRAM) tiles awaiting untilize | `{m: as cb_act_window}` | input dtype (bf8b 1088) | reader (NoC: owner-shard runs / DRAM tiles) | compute (untilize) | until untilized | The own shard is never copied: compute untilizes it in place from `cb_in_shard` (zero-copy). Only halo tile-rows are staged here. |
+| `cb_out_shard` (TILE) | `core_m_tiles · bn` (page `T_out`) | — | as before | output dtype | compute (bias add / copy pack) | — (it is the output tensor) | whole kernel | Zero-copy on the output shard. TileRowMajor partials are the shard's tile order. |
+| `cb_out_rm` (R0 TILE) | `max(2, 2·sb_h) · bn` (page `T_out`) | one row group (`sb_h·bn`) | `{m: streams}` | output dtype | compute (bias add / copy pack) | writer (tile pages `t·N_t + n`) | per row group | Two row groups double-buffer the pack against the DRAM write. |
+| R9 (`direct_in0`) | `cb_act_window`, `cb_act_rm`, `cb_act_send`, `cb_win_tiles`: 1 page each (idle); HEIGHT `cb_act_tiles`: 1 page | — | — | — | — | — | — | in0 is `cb_in_shard` itself (HEIGHT: compute's matmul; BLOCK/WIDTH: the writer multicasts shard K-blocks into `cb_act_tiles`, which keeps the input dtype). |
+
+Footprint additions (TILE): sharded `+ win_tile_rows·32·tap_width·elem_bytes + halo_tile_rows·c_tiles·T_in` (replacing the per-block RM halo scratch); R0 `+ win_tile_rows·c_tiles·T_in` (the window term becomes whole tile-rows).
+
+Data movement (TILE): sharded input as before (shard resident; halo once per kernel as whole tile-rows, one NoC read per owner run); DRAM TILE input `g_n · ρ_tile` crossings (ρ over whole window tile-rows per m-block); output 1. R9: the input never leaves L1 on HEIGHT, and is multicast once along the row on BLOCK/WIDTH.

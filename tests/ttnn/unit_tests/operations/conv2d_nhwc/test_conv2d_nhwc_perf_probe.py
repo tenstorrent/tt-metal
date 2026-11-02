@@ -157,3 +157,36 @@ def test_l1_peak_resnet_height(device, name):
     peak = int(ttnn.graph.extract_resource_usage_per_core(trace).peak_total)
     print(f"L1_PEAK_BYTES {name}={peak}")
     assert peak > 0
+
+
+# Refinement 7: R9 (shard tiles = in0) vs the general TILE path (untilize -> gather -> tilize) on the
+# ResNet50 bf8b TILE 1x1 model-placement cases.
+_R9_CASES = {
+    "layer1_1x1_height": (((16, 56, 56, 64), 256, 1, 0, 1, 1, 1), ML.HEIGHT_SHARDED, (480, 64), 105),
+    "layer3_1x1_block": (((16, 14, 14, 1024), 256, 1, 0, 1, 1, 1), ML.BLOCK_SHARDED, (320, 128), (8, 10)),
+}
+
+
+@pytest.mark.parametrize("direct", [True, False], ids=["r9", "general"])
+@pytest.mark.parametrize("case", list(_R9_CASES))
+def test_perf_probe_tile_1x1(device, case, direct, monkeypatch):
+    import sys as _sys
+
+    import ttnn.operations.conv2d_nhwc  # noqa: F401
+    from eval.golden_tests.conv2d_nhwc.helpers import run_conv2d_nhwc
+
+    pd = _sys.modules["ttnn.operations.conv2d_nhwc.conv2d_nhwc_program_descriptor"]
+    monkeypatch.setattr(pd, "TILE_DIRECT_IN0", direct)
+    inputs, ml, shard, cores = _R9_CASES[case]
+    extras = {"shard_shape": list(shard), "core_grid" if isinstance(cores, tuple) else "num_cores": cores}
+    run_conv2d_nhwc(
+        inputs,
+        dtype=ttnn.bfloat8_b,
+        weight_dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        bias_mode="with_bias",
+        memory_layout=ml,
+        activation="relu",
+        device=device,
+        extras=extras,
+    )
