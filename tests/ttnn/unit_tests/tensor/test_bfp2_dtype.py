@@ -178,6 +178,25 @@ def test_bfp2_device_typecast_integer(device, integer):
     assert torch.equal(ttnn.to_torch(ttnn.typecast(integer_tensor, ttnn.bfloat2_b)), x)
 
 
+def test_bfp2_device_typecast_sharded_same_dtype(device):
+    # Only a BFLOAT2_B -> BFLOAT2_B cast reaches the sharded typecast factory: no other format has the 320-byte tile.
+    x = _ternary((128, 128))
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        [32, 128],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    tt_tensor = ttnn.from_torch(
+        x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    result = ttnn.typecast(tt_tensor, ttnn.bfloat2_b)
+
+    assert result.dtype == ttnn.bfloat2_b
+    assert torch.equal(ttnn.to_torch(result), x)
+
+
 def test_bfp2_add_integer_to_bfp2(device):
     # Binary ops convert their result to the requested dtype through the same typecast kernel.
     x = _ternary((64, 64)).abs().to(torch.int32)
