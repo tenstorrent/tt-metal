@@ -8,13 +8,18 @@ edges, N > 1) and BLOCK / WIDTH sharded (no K exchange), bias / no bias, relu, a
 bf16 x bf8b mixed-precision case.
 """
 
+import os
+import sys
+
 import pytest
 import torch
 import ttnn
 
 from ttnn.operations.conv2d_nhwc import conv2d_nhwc, prepare_conv2d_bias, prepare_conv2d_weights
 
-from .test_conv2d_nhwc_sharded import _sharded_config, pcc
+sys.path.insert(0, os.path.dirname(__file__))
+from test_conv2d_nhwc_sharded import _sharded_config, pcc  # noqa: E402
+
 
 ML = ttnn.TensorMemoryLayout
 _TORCH = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16, ttnn.bfloat8_b: torch.bfloat16}

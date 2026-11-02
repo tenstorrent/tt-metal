@@ -68,6 +68,10 @@ DW_ACT_TILE_ROWS = 1
 # R11 depthwise: cb_weight_tiles depth in (taps x bn) weight blocks — 2 lets the writer fetch the
 # next (m, n)-block's tap weights while compute works on the current one.
 DW_WEIGHT_DEPTH = 2
+# R11 depthwise interleaved: minimum output tile-rows per core on the m split. Each core's DRAM
+# window re-reads the kH-1 halo rows, and a depthwise window is one small DRAM page per stick, so
+# the op is DRAM-request bound: taller per-core blocks cut the total request count.
+DW_CORE_M_TILES_MIN = 1
 # Compute config policy, per (activation dtype, weight dtype): the single source for the
 # descriptor's ComputeConfigDescriptor, the DEST capacity used by the subblock rule and the
 # accumulator (partials) page format. The public signature takes no compute_kernel_config,
@@ -258,6 +262,8 @@ def select_blocking(
 
     # Core split: m first, n only over the cores the m split leaves idle.
     core_m_tiles = _div_up(M_t, min(M_t, num_cores))
+    if is_depthwise(C_in, groups):
+        core_m_tiles = min(M_t, max(core_m_tiles, DW_CORE_M_TILES_MIN))
     g_m = _div_up(M_t, core_m_tiles)
     n_budget = max(1, num_cores // g_m)
     core_n_tiles = next(d for d in _divisors(N_t) if N_t // d <= n_budget)

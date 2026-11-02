@@ -97,3 +97,27 @@ Refinement 3 (bf16 × bf8b, same config): bm = 13, bk = 3, 60 K-blocks, F = halo
 | weight | BLOCK g_m > 1: 1 per grid column per m-block (row-0 read + column multicast); WIDTH/single row: 1 per core | column multicast `(g_m − 1)·|W column slice|` |
 | bias | 1 per core | none |
 | output | 0 (written into the L1 output shard; WIDTH tail rows copied core-locally) | none |
+
+## Refinement 4 — depthwise (regime R11) deltas
+
+Same CB set; no CB added or removed. `taps = kH·kW`; the depthwise K-block is `bk = taps · bn` (one per n-block, `num_k_blocks = 1`).
+
+| CB | Depthwise capacity (pages) | Live set | Axis accounting | Shares with / why not |
+|----|----------------------------|----------|-----------------|-----------------------|
+| `cb_act_window` | `window_sticks_max`, page = `core_n_tiles·32·elem_bytes` (R0: only the core's own channel tiles, read at channel offset `n_tile_start·32`); sharded: the halo, page = the slice stick | as dense | `{m: spans → window(bm); n: spans → core_n_tiles (whole core range, every n-block reads it); taps: streams}` | as dense |
+| `cb_act_rm` | `ACT_RM_DEPTH · taps · bn` | one tile-row `taps · bn` | `{m: streams (tile-row); n: spans → bn; taps: spans → taps}` | as dense (double-buffered gather vs tilize) |
+| `cb_act_tiles` | `DW_ACT_TILE_ROWS · taps · bn` (= one tile-row) | one tile-row | `{m: streams (one tile-row: no in0 reuse across rows); n: spans → bn; taps: spans}` | Smaller than dense (`bm·bk`): the tap accumulation consumes a tile-row before the next is tilized (same TRISCs), so a depth of 1 suffices. |
+| `cb_weight_tiles` | `DW_WEIGHT_DEPTH · taps · bn` (`weight_k_rows = taps`), weight dtype; each tile's row 0 = the tap's per-channel weights | `taps · bn` (fronted for the whole (m, n) block) | `{m: streams (re-read per m-block); n: spans → bn; taps: spans}` | Depth 2 prefetches the next (m, n) block's tap weights. Rows 1..31 of every tile are zero (the row-broadcast operand reads row 0 only): 32× the bytes of the real weights, still ≤ `2·taps·bn` tiles. |
+| `cb_partials` / `cb_biased` | `bm · bn` | `bm · bn` | `{m: spans → bm (one tile-row pushed per pass); n: spans → bn; taps: accumulated in DEST (WholeShape), packed once per output tile}` | as dense; no packer L1 accumulation on this path |
+| `cb_act_send` | not allocated (no K exchange: each depthwise channel slice is self-contained) | — | — | — |
+
+Depthwise footprint: `F_dw = window·tap_bytes + (ACT_RM_DEPTH + DW_ACT_TILE_ROWS)·taps·bn·T + DW_WEIGHT_DEPTH·taps·bn·T_w + bm·bn·T_acc + bias + out`. Walk: bn (whole core range first) then bm.
+
+### Data-movement budget (depthwise)
+
+| Tensor | DRAM crossings | Why |
+|--------|----------------|-----|
+| input (R0) | `ρ` (each byte read by one n-core only: windows hold only the core's channel tiles) | halo rows re-read by neighbouring m-cores |
+| input (BLOCK/WIDTH) | 0 (resident shard); halo from same-column shards over the NoC | no row multicast |
+| weight | `g_m · nb_m` per channel slice (`taps · core_n_tiles` tiles each) | no column multicast (tiny) |
+| output | 1 | |

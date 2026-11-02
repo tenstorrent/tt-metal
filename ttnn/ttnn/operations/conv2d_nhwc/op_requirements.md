@@ -104,7 +104,7 @@ No SUPPORTED change.
 - Bottleneck now: compute alone is 194k cycles (unpack-bound 1×2 subblock, because bm = 13 is prime). The row act exchange alone is ~174k (transfer-bound, 2.9k cycles per 78 KB block). Together they give 258k because the overlap is imperfect (likely L1 contention).
 - Next would be bk = 6 or 2×2 subblocks. Both exceed the L1 target at bm = 13. A two-RISC act exchange (two blocks in flight) or a gated LoFi / bf16-DEST policy are the alternatives. Not done: they are either over the L1 target or need a new precision gate / RISC split beyond this refinement's scope.
 
-### [ ] Refinement 4 — Depthwise convolution (regime R11)
+### [x] Refinement 4 — Depthwise convolution (regime R11)
 
 **Goal**: add `"depthwise"` to `SUPPORTED["groups_mode"]` (`groups == C_in`, `C_out` a multiple of `C_in`). This is a **scheme-change in compute**: a block-diagonal matmul would waste `C_in`× the FLOPs.
 - The output tile (pixels × channels) is computed as `Σ_taps act_tap ⊙ w_tap`: an eltwise multiply with a row-broadcast of each tap's per-channel weights, accumulated in DEST (`eltwise_chain` / `BinaryFpu` with `DestAccumulation`).
@@ -119,6 +119,8 @@ No SUPPORTED change.
 - Strided depthwise (MobileNet dw2/4/6/8) is in scope: stride is already supported.
 
 **Done when**: every golden depthwise cell otherwise inside SUPPORTED passes on interleaved and BLOCK/WIDTH (the 1024-channel WIDTH depthwise INPUTS row included), including the strided ones and the bf16 × bf8b depthwise loose case. The dense paths are unregressed and 0 loud categories.
+
+**Outcome**: landed. All golden depthwise cells inside SUPPORTED pass (interleaved, WIDTH 1024, strided, 5×5, bf16 × bf8b loose), plus the 99 newly reachable depthwise pytorch-sweep cells. The channel multiplier (C_out = m·C_in, m > 1) is a typed refusal: no golden or translated cell uses it (finding, not a follow-up). Perf (BH, bf16 × bf8b, per-core kernel max): 112×112×32 77 µs, 56×56×128 35 µs, 112×112×64 s2 56 µs, WIDTH 7×7×1024 10 µs, BLOCK 28×28×256 15 µs. The interleaved shapes are bound by the DRAM window fetch: one 64–256 B page per stick, with each core re-reading its halo rows (~3× at 1.1 output rows per core). `DW_CORE_M_TILES_MIN` (taller per-core blocks) is a live knob at its no-op default: 7 gives −16% on 112×112×32 but +70% on 56×56×128.
 
 ### [ ] Refinement 5 — HEIGHT_SHARDED placement (regime R3) + weight multicast (R1)
 

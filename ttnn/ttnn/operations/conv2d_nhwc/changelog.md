@@ -146,3 +146,35 @@
 - Tests added: `test_conv2d_nhwc_perf_probe.py`:
   - `test_l1_peak_block_sdxl_l1_bf16_bf8b` — the harness's graph-capture L1 peak
   - guard probes `test_guard_interleaved_bf16_relu`, `test_guard_block_bf16_nobias`, `test_guard_width_strided`
+
+## Refinement 4 — Depthwise convolution (regime R11)
+- Date: 2026-11-02
+- What was done: `SUPPORTED["groups_mode"] += "depthwise"` (groups == C_in == C_out), on interleaved and BLOCK / WIDTH. It is a second compute structure, not a block-diagonal matmul.
+  - **Gather** (reader, shared R0 / R4/R5 code): per n-block one K-block of `taps × bn` tiles. The im2col row is `[tap][bn·32 channels]`. New segment builder `build_segments_dw` and edge path `gather_row_dw`. The existing interior run loop (affine stateful reads) is reused unchanged. When bn covers the whole window stick, the kW taps of a kernel row are one read.
+  - **R0 window**: holds only the core's own channel tiles (a DRAM read at channel offset `n_tile_start·32`, new reader RT arg). Each input byte is read by one n-core only.
+  - **Compute**: per tile-row, tilize `taps × bn` per-tap tiles, then per output tile one `eltwise_chain`: `BinaryFpu<Mul>` with the tap weights row-broadcast, both operands on `Col` mapping + `Strided {ct, bn}` (tile `tap·bn + ct`), `DestAccumulation::WholeShape` over the taps, one pack into `cb_partials`. Then the same `bias_and_untilize` (bias, ReLU, untilize into DRAM rows or the output shard).
+  - **Weights**: `prepare_conv2d_weights` lays out `[kH·kW·32, C_out]`, with row 0 of tap t's tile-row = `w[:, 0, kh, kw]`. This is placement-independent. The writer reads `weight_k_rows = taps` rows per block (new CT arg; dense passes bk).
+  - **Sharded**: no K exchange (each channel slice is self-contained), no weight column multicast. `nt_s = shard width / 32`, and the output shard is the core's own slice. A shard width that is not a tile multiple is a typed refusal.
+  - **Refusals**: a channel multiplier (C_out ≠ C_in) is a typed `UnsupportedAxisValue`.
+  - `prepare_conv2d_bias`'s groups placeholder now reads groups > 1 as depthwise.
+  - Reused: every CB, the gather run loop, tilize, bias / untilize / ReLU, the writer weight stream and the descriptor branches. Added: `_dw_plan_keys` (one source for the dense-vs-depthwise plan differences), knobs `DW_ACT_TILE_ROWS = 1`, `DW_WEIGHT_DEPTH = 2` and `DW_CORE_M_TILES_MIN = 1`, the depthwise footprint / walk in both selectors, and 3 CT args + 1 RT arg.
+- Accuracy achieved:
+  - fp32: PCC ≥ 0.999, rel-RMS ≤ 0.02.
+  - bf16 (incl. × bf8b): PCC ≥ 0.995, rel-RMS ≤ 0.05.
+  - Shapes: 14×14×32, 2×9×11×64, 28×28×96 k5, 56×56×128 s2, 7×7×1024, 112×112×32, 16×16×64 p0; WIDTH 7×7×1024 and 14×14×256 s2; BLOCK 28×28×256 and 2×14×14×128 k5; bias / no bias; relu.
+- Golden test progress:
+  - `test_golden.py` depthwise slice (`-k g16_ or g32_ …`): 157 passed, 0 failed, 0 XPASS. That includes every depthwise cell inside SUPPORTED: 103 interleaved / strided / 5×5 cells, 5 WIDTH 1024 cells and the loose bf16 × bf8b case.
+  - Remaining depthwise xfails: unaligned channels (16, 48, 240), dilation and HEIGHT.
+  - `test_translated.py`: all 164 depthwise sweep ids. 99 passed (newly reachable, incl. 2048-channel and 150×150 cells); 65 xfail are typed refusals.
+- Perf (BH, AICLK 1350, bf16 × bf8b, per-core kernel max):
+  - interleaved: 112×112×32 76.9 µs, 56×56×128 34.6 µs, 112×112×64 s2 55.6 µs
+  - WIDTH 7×7×1024: 10.3 µs; BLOCK 28×28×256: 14.6 µs
+  - Zone breakdown (112×112×32): the DRAM window fetch is 50k cycles mean (83k max) of 103k, for ~450 64 B sticks per core. That is DRAM-request / issue bound, made worse by the ~3× halo re-read at 1.1 output rows per core. Output write is 6k.
+  - `DW_CORE_M_TILES_MIN` (taller per-core blocks) is kept at its no-op default. At 7 it gives 112×112×32 77 → 64 µs, but at 4 it gives 56×56×128 35 → 59 µs.
+  - Next levers (not done): split the window fetch across both data-movement RISCs (the writer idles during it), or native HEIGHT-sharded input (Refinement 5), which removes the DRAM stick reads.
+- Issues encountered:
+  - A `static_assert` inside `if constexpr` in a non-template function fired on the dense path; it is now made conditional.
+  - The aggregate profiler duration is still corrupted; per-core spans from `profile_log_device.csv` were used.
+- Tests added:
+  - `tests/ttnn/unit_tests/operations/conv2d_nhwc/test_conv2d_nhwc_depthwise.py`: 26 cases, including the multiplier refusal.
+  - Depthwise perf probes in `test_conv2d_nhwc_perf_probe.py`.

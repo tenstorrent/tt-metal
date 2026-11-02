@@ -71,3 +71,30 @@ def test_guard_block_bf16_nobias(device):
 
 def test_guard_width_strided(device):
     run_sharded(device, (1, 14, 14, 256), 512, 3, 1, 2, ML.WIDTH_SHARDED, True)
+
+
+# Refinement 4 depthwise (R11) probes: MobileNet-style shapes, bf16 x bf8b.
+def _dw(device, shape, stride, memory_layout):
+    from test_conv2d_nhwc_depthwise import run_dw
+
+    run_dw(device, shape, 3, 1, stride, memory_layout, True, ttnn.bfloat16, ttnn.bfloat8_b)
+
+
+def test_perf_probe_dw_il_112x112x32(device):
+    _dw(device, (1, 112, 112, 32), 1, ML.INTERLEAVED)
+
+
+def test_perf_probe_dw_il_56x56x128(device):
+    _dw(device, (1, 56, 56, 128), 1, ML.INTERLEAVED)
+
+
+def test_perf_probe_dw_il_112x112x64_s2(device):
+    _dw(device, (1, 112, 112, 64), 2, ML.INTERLEAVED)
+
+
+def test_perf_probe_dw_width_7x7x1024(device):
+    _dw(device, (1, 7, 7, 1024), 1, ML.WIDTH_SHARDED)
+
+
+def test_perf_probe_dw_block_28x28x256(device):
+    _dw(device, (1, 28, 28, 256), 1, ML.BLOCK_SHARDED)
