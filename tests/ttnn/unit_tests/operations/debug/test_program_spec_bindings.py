@@ -271,6 +271,111 @@ def test_lists_dicts_and_optional_fields_are_copies():
     # hw_config is a variant and config_1xx an optional, so each read returns a copy.
     kernel.hw_config.config_1xx = None
     assert kernel.hw_config.config_1xx is not None
+    # ttnn.NOC values have aliases, so compare the values rather than the enum members.
+    config = E.create_reader_datamovement_config()
+    noc = config.config_1xx.noc.value
+    config.config_1xx.noc = ttnn.NOC.NOC_1 if noc == ttnn.NOC.NOC_0.value else ttnn.NOC.NOC_0
+    assert config.config_1xx.noc.value == noc
+
+
+def test_each_field_reads_back_what_it_was_given():
+    # Each value differs from its field's default and from the other fields of its type, so a property or constructor
+    # argument bound to another member would not read it back. Enums are compared with their type, as other enums'
+    # values are equal; ttnn.NOC by value, as its members have aliases.
+    def same_member(value, member):
+        return type(value) is type(member) and value.value == member.value
+
+    for field in FIELDS[E.TensorSpecRelaxations]:
+        relaxations = E.TensorSpecRelaxations(**{field: True})
+        assert [name for name in FIELDS[E.TensorSpecRelaxations] if getattr(relaxations, name)] == [field]
+
+    schema = E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["each"], common_runtime_arg_names=["all"])
+    assert (schema.runtime_arg_names, schema.common_runtime_arg_names) == (["each"], ["all"])
+    dfb = E.DataflowBufferSpec(
+        unique_id="in",
+        entry_size=64,
+        num_entries=3,
+        data_format_metadata=ttnn.bfloat8_b,
+        tile_format_metadata=ttnn.Tile([16, 32]),
+        borrowed_from="input",
+        advanced_options=E.DFBAdvancedOptions(alias_with=["view"]),
+    )
+    assert (dfb.unique_id, dfb.entry_size, dfb.num_entries, dfb.borrowed_from) == ("in", 64, 3, "input")
+    assert dfb.data_format_metadata == ttnn.bfloat8_b and dfb.tile_format_metadata.tile_shape == [16, 32]
+    assert dfb.advanced_options.alias_with == ["view"]
+    overrides = E.DFBRunOverrides(dfb="in", entry_size=64, num_entries=3)
+    assert (overrides.dfb, overrides.entry_size, overrides.num_entries) == ("in", 64, 3)
+    scratchpad = E.ScratchpadSpec(
+        unique_id="scratch",
+        size_per_node=128,
+        data_format_metadata=ttnn.uint32,
+        tile_format_metadata=ttnn.Tile([16, 32]),
+    )
+    assert (scratchpad.unique_id, scratchpad.size_per_node) == ("scratch", 128)
+    assert scratchpad.data_format_metadata == ttnn.uint32 and scratchpad.tile_format_metadata.tile_shape == [16, 32]
+
+    dfb_binding = E.DFBBinding(
+        dfb_spec_name="in",
+        accessor_name="reader_in",
+        endpoint_type=E.DFBEndpointType.CONSUMER,
+        access_pattern=E.DFBAccessPattern.BLOCKED,
+        block_size=2,
+    )
+    assert (dfb_binding.dfb_spec_name, dfb_binding.accessor_name, dfb_binding.block_size) == ("in", "reader_in", 2)
+    assert same_member(dfb_binding.endpoint_type, E.DFBEndpointType.CONSUMER)
+    assert same_member(dfb_binding.access_pattern, E.DFBAccessPattern.BLOCKED)
+    for binding_type, name_field in (
+        (E.SemaphoreBinding, "semaphore_spec_name"),
+        (E.ScratchpadBinding, "scratchpad_spec_name"),
+        (E.TensorBinding, "tensor_parameter_name"),
+    ):
+        binding = binding_type(**{name_field: "spec", "accessor_name": "accessor"})
+        assert (getattr(binding, name_field), binding.accessor_name) == ("spec", "accessor")
+
+    compute = E.ComputeHardwareConfig(
+        fpu_math_fidelity=ttnn.MathFidelity.LoFi,
+        sfpu_precision_mode=E.Precision.Approximate,
+        enable_32_bit_dest=True,
+        double_buffer_dest=False,
+    )
+    assert same_member(compute.fpu_math_fidelity, ttnn.MathFidelity.LoFi)
+    assert same_member(compute.sfpu_precision_mode, E.Precision.Approximate)
+    assert (compute.enable_32_bit_dest, compute.double_buffer_dest) == (True, False)
+    sub_configs = {
+        "config_1xx": E.ComputeHardwareConfig.Compute1XXConfig(bfp_pack_precision_mode=E.Precision.Precise),
+        "config_12x": E.ComputeHardwareConfig.Compute12XConfig(enable_pack_rvv=True),
+        "config_2xx": E.ComputeHardwareConfig.Compute2XXConfig(enable_unpack_rvv=True),
+    }
+    for name, sub_config in sub_configs.items():
+        compute = E.ComputeHardwareConfig(**{name: sub_config})
+        assert [field for field in sub_configs if getattr(compute, field) is not None] == [name]
+    config_1xx = E.ComputeHardwareConfig(config_1xx=sub_configs["config_1xx"]).config_1xx
+    assert same_member(config_1xx.bfp_pack_precision_mode, E.Precision.Precise)
+    assert E.ComputeHardwareConfig(config_12x=sub_configs["config_12x"]).config_12x.enable_pack_rvv
+    assert E.ComputeHardwareConfig(config_2xx=sub_configs["config_2xx"]).config_2xx.enable_unpack_rvv
+
+    dm_1xx = E.DataMovementHardwareConfig.DataMovement1XXConfig(
+        processor=ttnn.DataMovementProcessor.RISCV_1,
+        noc=ttnn.NOC.NOC_1,
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        dedicated_noc_sharing=E.DedicatedNocSharing.SHARED_DISJOINT_TRAFFIC,
+    )
+    dm_2xx = E.DataMovementHardwareConfig.DataMovement2XXConfig(
+        disable_dfb_implicit_sync_for=["in"], disable_dfb_implicit_sync_for_all=True
+    )
+    config = E.DataMovementHardwareConfig(config_1xx=dm_1xx, config_2xx=dm_2xx)
+    assert same_member(config.config_1xx.processor, ttnn.DataMovementProcessor.RISCV_1)
+    assert same_member(config.config_1xx.noc, ttnn.NOC.NOC_1)
+    assert same_member(config.config_1xx.noc_mode, ttnn.NOC_MODE.DM_DYNAMIC_NOC)
+    assert same_member(config.config_1xx.dedicated_noc_sharing, E.DedicatedNocSharing.SHARED_DISJOINT_TRAFFIC)
+    assert config.config_2xx.disable_dfb_implicit_sync_for == ["in"]
+    assert config.config_2xx.disable_dfb_implicit_sync_for_all
+
+    options = E.KernelSpec.CompilerOptions(include_paths=["include"])
+    assert [str(path) for path in options.include_paths] == ["include"]
+    kernel = _kernel(scratchpad_bindings=[E.ScratchpadBinding(scratchpad_spec_name="scratch", accessor_name="s")])
+    bindings = [(binding.scratchpad_spec_name, binding.accessor_name) for binding in kernel.scratchpad_bindings]
+    assert bindings == [("scratch", "s")]
 
 
 def test_writes_reach_nested_objects():
@@ -424,6 +529,9 @@ def test_run_args_reject_unknown_attributes(expect_error):
         run_args.dfb_run_override = None
     run_args.dfb_run_overrides = [E.DFBRunOverrides(dfb="in", num_entries=4)]
     assert run_args.dfb_run_overrides[0].num_entries == 4
+    # The attribute that keeps the tensors alive changes only with tensor_args.
+    with expect_error(AttributeError, "'ProgramRunArgs' object attribute '_tensor_args' is read-only"):
+        run_args._tensor_args = {}
 
     # A Python subclass may add attributes of its own, as for the other classes.
     class StepRunArgs(E.ProgramRunArgs):
@@ -432,9 +540,11 @@ def test_run_args_reject_unknown_attributes(expect_error):
     subclass_run_args = StepRunArgs()
     subclass_run_args.step = 1
     assert subclass_run_args.step == 1
+    with expect_error(AttributeError, "'StepRunArgs' object attribute '_tensor_args' is read-only"):
+        subclass_run_args._tensor_args = {}
 
 
-def test_tensor_args_hold_the_tensors(device):
+def test_tensor_args_hold_the_tensors(device, expect_error):
     tensor = ttnn.from_torch(torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     run_args = E.ProgramRunArgs(tensor_args={"input": tensor})
     assert run_args.tensor_args["input"] is tensor
@@ -444,6 +554,13 @@ def test_tensor_args_hold_the_tensors(device):
 
     run_args.tensor_args = {"output": tensor}
     assert list(run_args.tensor_args) == ["output"]
+
+    # A rejected assignment leaves the run args as they were.
+    host_tensor = ttnn.from_torch(torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "tensor_args\\['input'\\] must be a tensor allocated on a device"):
+        run_args.tensor_args = {"input": host_tensor}
+    assert list(run_args.tensor_args) == ["output"]
+    assert run_args.tensor_args["output"] is tensor
 
 
 class DictWithFailingCopy(dict):
@@ -474,6 +591,16 @@ def test_a_subclass_setattr_cannot_drop_the_tensors(device):
         def __setattr__(self, name, value):
             pass
 
+    class RunArgsIgnoringPrivateWrites(E.ProgramRunArgs):
+        def __setattr__(self, name, value):
+            if not name.startswith("_"):
+                super().__setattr__(name, value)
+
     tensor = ttnn.from_torch(torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     run_args = RunArgsIgnoringWrites(tensor_args={"input": tensor})
     assert run_args.tensor_args["input"] is tensor
+
+    # An assignment to tensor_args reaches the setter, which stores the tensors' owners itself.
+    run_args = RunArgsIgnoringPrivateWrites(tensor_args={"input": tensor})
+    run_args.tensor_args = {"output": tensor}
+    assert list(run_args.tensor_args) == ["output"]

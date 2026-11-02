@@ -19,8 +19,9 @@ namespace nb = nanobind;
 void py_module_types(nb::module_& mod);
 
 // __setattr__ for the classes that keep their tensors alive in a Python attribute (and so need nb::dynamic_attr()).
-// On an instance of bound_type itself it sets the class's own attributes and that one, and rejects any other name with
-// AttributeError, as the classes without dynamic_attr do; a Python subclass may set any attribute.
+// On an instance of bound_type itself it sets the class's own attributes and rejects any other name with
+// AttributeError, as the classes without dynamic_attr do; a Python subclass may set attributes of its own. The
+// attribute that holds the tensors (_tensor_args) is read-only for both: only set_tensor_owners writes it.
 void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type);
 
 // Stores owners, the Python objects that keep the tensors of a run args object alive, in its _tensor_args attribute.
