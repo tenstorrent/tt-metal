@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "metal/common/const_utils.hpp"
+#include "metal/common/sdpa_work_split.hpp"
 #include "metal/ops/sdpa_fw/sdpa_fw_program_config.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
@@ -77,12 +78,9 @@ SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChun
 uint64_t l1_bytes(const SDPAForwardCbTiles& tiles);
 
 // Work item = one Q chunk of one head stack, see kernels/sdpa_fw_work_list.hpp. Each core gets a list
-// of runs of consecutive items.
-struct ItemRun {
-    uint32_t first_item;
-    uint32_t num_items;
-};
-using CoreItemRuns = std::vector<ItemRun>;
+// of runs of consecutive items (metal/common/sdpa_work_split.hpp, shared with sdpa_bw).
+using ttml::metal::CoreItemRuns;
+using ttml::metal::ItemRun;
 
 uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks);
 
