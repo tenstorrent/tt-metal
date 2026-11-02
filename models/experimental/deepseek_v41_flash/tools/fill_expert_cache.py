@@ -18,11 +18,14 @@ cache and renamed into place, so an interrupted run leaves no truncated entries.
 
 The files are the ones experts built for a 1x4 mesh read, one per expert and part holding all four
 ranks' shards. ``--tp-size N`` writes a 1xN mesh's instead, and ``--tp-size 1`` the single-chip
-files ``test_moe.py`` and the TP1 decoder-layer test read.
+files ``test_moe.py`` and the TP1 decoder-layer test read. ``--balance-dram-banks`` writes the
+K-split gate_up (``gate_up_fused.tp4.k4``) that experts built with ``balance_dram_banks=True`` read,
+as the decode demo does under ``DEEPSEEK_V4_BALANCE_DRAM_BANKS=1``; down is the same file either way.
 
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 20 21 24
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --layers 1 2 --tp-size 1
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers
+    python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --all-layers --balance-dram-banks
     python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --dspark
 """
 
@@ -48,7 +51,9 @@ from models.experimental.deepseek_v41_flash.tt.config import (
 )
 from models.experimental.deepseek_v41_flash.tt.decode.moe import fused_experts_config, padded_expert_provider
 from models.experimental.deepseek_v4_flash.tt.decode.moe import (
+    _FUSED_TILE,
     _fused_nd_dram_config,
+    _gate_up_k_shards,
     _interleave_gate_up,
     _interleave_gate_up_tp,
     _load_fused_weight,
@@ -57,34 +62,57 @@ from models.experimental.deepseek_v4_flash.tt.decode.moe import (
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 
-_PARTS = ("gate_up_fused", "down_fused")
 _MOCK_CLUSTER_DESC = (
     Path(__file__).resolve().parents[4]
     / "tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_P150.yaml"
 )
 
 
-def _tp_tag(tp_size: int) -> str:
-    return f".tp{tp_size}" if tp_size > 1 else ""
+def _layout(config, tp_size: int, balance_dram_banks: bool):
+    """``(padded I, local I, swiglu_cols, k_shards, sys_cfg)`` as ``DeepSeekV41PreloadedExperts`` lays a
+    rank's experts out at ``tp_size``."""
+    fused_config, sys_cfg = fused_experts_config(config, tp_size=tp_size)
+    padded = fused_config.moe_intermediate_size
+    local = padded // tp_size
+    swiglu_cols = _swiglu_cols_per_core(local, sys_cfg.moe.fused_num_cores)
+    k_shards = (
+        _gate_up_k_shards(local // swiglu_cols, config.hidden_size // _FUSED_TILE, sys_cfg.moe.fused_dram_banks)
+        if balance_dram_banks
+        else 1
+    )
+    return padded, local, swiglu_cols, k_shards, sys_cfg
+
+
+def _part_names(tp_size: int, k_shards: int) -> tuple[str, str]:
+    """The gate_up / down cache-name suffixes after ``experts.E.``, as the experts' constructor names them."""
+    tp_tag = f".tp{tp_size}" if tp_size > 1 else ""
+    k_tag = f".k{k_shards}" if k_shards > 1 else ""
+    return f"gate_up_fused{tp_tag}{k_tag}", f"down_fused{tp_tag}"
 
 
 class _ExpertWriter:
     """Writes routed experts into the cache files ``DeepSeekV41PreloadedExperts`` reads, converted
-    the way its constructor converts them at ``tp_size``."""
+    the way its constructor converts them at ``tp_size`` and ``balance_dram_banks``."""
 
-    def __init__(self, snapshot: Path, dtype: ttnn.DataType, cache_dir: str, scratch: str, tp_size: int):
+    def __init__(
+        self,
+        snapshot: Path,
+        dtype: ttnn.DataType,
+        cache_dir: str,
+        scratch: str,
+        tp_size: int,
+        balance_dram_banks: bool,
+    ):
         self.config = load_config(snapshot)
         self.loader = DeepseekV4WeightLoader(snapshot)
         self.dtype = dtype
         self.cache = WeightCache(cache_dir)
         self.scratch = scratch
         self.tp_size = tp_size
-        fused_config, sys_cfg = fused_experts_config(self.config, tp_size=tp_size)
-        self.padded = fused_config.moe_intermediate_size
-        local = self.padded // tp_size
+        self.padded, local, self.swiglu_cols, k_shards, sys_cfg = _layout(self.config, tp_size, balance_dram_banks)
+        self.parts = _part_names(tp_size, k_shards)
         hidden, num_cores, banks = self.config.hidden_size, sys_cfg.moe.fused_num_cores, sys_cfg.moe.fused_dram_banks
-        self.swiglu_cols = _swiglu_cols_per_core(local, num_cores)
-        self.gate_up_nd = _fused_nd_dram_config(hidden, 2 * local, 2 * self.swiglu_cols, banks)
+        self.gate_up_nd = _fused_nd_dram_config(hidden // k_shards, 2 * local, 2 * self.swiglu_cols, banks)
         self.down_nd = _fused_nd_dram_config(local, hidden, hidden // num_cores, banks)
         self.gate_up_mapper = self.down_mapper = None
         if tp_size > 1:
@@ -107,9 +135,9 @@ class _ExpertWriter:
             gate_up = _interleave_gate_up_tp(gate_up, self.tp_size, self.swiglu_cols)
         else:
             gate_up = _interleave_gate_up(gate_up.t().contiguous(), self.swiglu_cols)
-        tag = _tp_tag(self.tp_size)
-        self._write(group, f"experts.{e}.gate_up_fused{tag}", gate_up, self.gate_up_nd, self.gate_up_mapper)
-        self._write(group, f"experts.{e}.down_fused{tag}", down.t().contiguous(), self.down_nd, self.down_mapper)
+        gate_up_part, down_part = self.parts
+        self._write(group, f"experts.{e}.{gate_up_part}", gate_up, self.gate_up_nd, self.gate_up_mapper)
+        self._write(group, f"experts.{e}.{down_part}", down.t().contiguous(), self.down_nd, self.down_mapper)
 
     def _write(self, group: str, name: str, weight: torch.Tensor, nd_config: ttnn.MemoryConfig, mapper) -> None:
         scratch_file = os.path.join(self.scratch, f"{group}.ffn.{name}")
@@ -121,10 +149,18 @@ class _ExpertWriter:
 _writer = None
 
 
-def _init_worker(snapshot: Path, dtype_name: str, cache_dir: str, scratch: str, threads: int, tp_size: int) -> None:
+def _init_worker(
+    snapshot: Path,
+    dtype_name: str,
+    cache_dir: str,
+    scratch: str,
+    threads: int,
+    tp_size: int,
+    balance_dram_banks: bool,
+) -> None:
     global _writer
     torch.set_num_threads(threads)
-    _writer = _ExpertWriter(snapshot, getattr(ttnn, dtype_name), cache_dir, scratch, tp_size)
+    _writer = _ExpertWriter(snapshot, getattr(ttnn, dtype_name), cache_dir, scratch, tp_size, balance_dram_banks)
 
 
 def _fill(group: str, e: int) -> None:
@@ -142,6 +178,11 @@ def main():
     parser.add_argument("--cache-dir", default=CACHE_DIR)
     parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
     parser.add_argument("--tp-size", type=int, default=4, help="TP ranks of the 1xN mesh the experts are built for")
+    parser.add_argument(
+        "--balance-dram-banks",
+        action="store_true",
+        help="K-split gate_up shards over every DRAM bank (decode only; the prefill op reads whole-K shards)",
+    )
     parser.add_argument("--force", action="store_true", help="rewrite experts that are already cached")
     args = parser.parse_args()
 
@@ -158,15 +199,20 @@ def main():
         groups = {f"layers.{i}": config.num_local_experts for i in args.layers}
     dtype = getattr(ttnn, args.dtype)
     cache = WeightCache(args.cache_dir)
-    tag = _tp_tag(args.tp_size)
+    k_shards = _layout(config, args.tp_size, args.balance_dram_banks)[3]
+    if args.balance_dram_banks and k_shards == 1:
+        logger.warning(f"TP{args.tp_size}'s gate_up already covers every DRAM bank; writing the whole-K files")
+    parts = _part_names(args.tp_size, k_shards)
     todo = [
         (group, e)
         for group, count in groups.items()
         for e in range(count)
-        if args.force or not all(cache.sub(f"{group}.ffn").hit(f"experts.{e}.{p}{tag}", dtype) for p in _PARTS)
+        if args.force or not all(cache.sub(f"{group}.ffn").hit(f"experts.{e}.{p}", dtype) for p in parts)
     ]
     total = sum(groups.values())
-    logger.info(f"{len(todo)} of {total} experts to convert into {args.cache_dir}, {args.workers} workers")
+    logger.info(
+        f"{len(todo)} of {total} experts to convert into {args.cache_dir} ({', '.join(parts)}), {args.workers} workers"
+    )
     if not todo:
         return
 
@@ -187,6 +233,7 @@ def main():
                 scratch,
                 max(1, os.cpu_count() // args.workers),
                 args.tp_size,
+                args.balance_dram_banks,
             ),
         ) as pool:
             futures = [pool.submit(_fill, group, e) for group, e in todo]

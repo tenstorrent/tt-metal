@@ -10,6 +10,13 @@ The reference (``tests/reference.py``) steps the same layers the same way.
 ``test_attention_decode_s5`` feeds the same positions as ``S``-row ROW_MAJOR blocks, ``hidden``
 ``[1, S, 1, D]``, through ``decode`` (DSpark's parallel verify), against the same token-by-token reference.
 
+``test_attention_decode_profile`` (one chip) and ``test_attention_decode_profile_tp4`` (a 1x4 submesh) time
+every decode variant at a long context, with no reference: the caches are filled with random values as if
+the context had been decoded, a few positions build the programs, and the last ``PROFILE_STEPS`` positions
+are bracketed per layer by ``ATTN_L<layer>_START`` / ``_END`` Tracy signposts. Run them under Tracy:
+
+    python -m tracy -p -r -v -m pytest models/experimental/deepseek_v41_flash/tests/decode/test_attention.py -k profile
+
 The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint).
 
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_attention.py
@@ -28,7 +35,13 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     attention_weights,
     load_config,
 )
-from models.experimental.deepseek_v41_flash.tt.decode.attention import DeepSeekV41Attention, build_decode_caches
+from models.experimental.deepseek_v41_flash.tt.decode.attention import (
+    CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS,
+    KEY_SPLIT_CROSSOVER_KEYS,
+    DeepSeekV41Attention,
+    build_decode_caches,
+    key_split_layers,
+)
 from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
@@ -36,6 +49,14 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 PCC = 0.95
 # DSpark's block: the token plus four drafts.
 S = 5
+# One layer of every decode variant: window only (0), ratio-2 kv + index source (2) and consumer (3),
+# ratio-1 candidate source (20), consumer (21) and index-only source / candidate consumer (24).
+PROFILE_LAYERS = (0, 2, 3, 20, 21, 24)
+# Positions decoded before the profiled ones, so every program is built; four cover both ratio-2 parities.
+PROFILE_WARMUP_STEPS = 4
+PROFILE_STEPS = 4
+TP_SIZE = 4
+PARENT_MESH = (8, 4)
 
 
 def _snapshot():
@@ -163,3 +184,121 @@ def test_attention_decode_s5(device, layers, seq_len):
                 passing, pcc = comp_pcc(expected[i][k].reshape(-1), got[k], PCC)
                 logger.info(f"layer {i} (ratio {config.compress_ratios[i]}) pos {pos} (row {k}): PCC {pcc}")
                 assert passing, f"layer {i} pos {pos} (row {k} of the block at {start}): PCC {pcc} < {PCC}"
+
+
+def _rope_halves(config, snapshot, layer_idx: int, max_seq: int):
+    """``(cos_half, sin_half)`` ``[max_seq, Rd/2]`` of layer ``layer_idx``, as the checkpoint's attention builds
+    them: base ``rope_theta`` without YaRN for a sliding layer, YaRN at ``compress_rope_theta`` for a compressed one."""
+    scaling = config.rope_scaling
+    if config.compress_ratios[layer_idx]:
+        original_seq_len, base = scaling["original_max_position_embeddings"], config.compress_rope_theta
+    else:
+        original_seq_len, base = 0, config.rope_theta
+    freqs = load_reference(snapshot).precompute_freqs_cis(
+        config.qk_rope_head_dim,
+        max_seq,
+        original_seq_len,
+        base,
+        scaling["factor"],
+        scaling["beta_fast"],
+        scaling["beta_slow"],
+    )
+    return freqs.real.contiguous(), freqs.imag.contiguous()
+
+
+def _fill_caches(caches: dict, device, tp_size: int) -> None:
+    """Random values in every buffer a step reads but does not rewrite, as if the whole context had been decoded.
+
+    Layers of one group alias the same tensors, which are filled once. Random index keys spread the selected
+    rows evenly over the context, where real keys tend to cluster.
+    """
+    mapper = ttnn.ReplicateTensorToMesh(device) if tp_size > 1 else None
+    filled = set()
+    for cache in caches.values():
+        for name in ("kv", "win_kv", "win_gate", "comp_kv", "idx_key_cache", "pool_keys"):
+            t = getattr(cache, name, None)
+            if t is None or id(t) in filled:
+                continue
+            filled.add(id(t))
+            host = ttnn.from_torch(torch.randn(list(t.shape)), dtype=t.dtype, layout=t.layout, mesh_mapper=mapper)
+            ttnn.copy_host_to_device_tensor(host, t)
+
+
+def _profile_decode(device, seq_len: int, tp_size: int) -> None:
+    """Decode ``PROFILE_LAYERS`` at the last positions of a ``seq_len`` context, the last ``PROFILE_STEPS`` of
+    them between per-layer signposts."""
+    from tracy import signpost
+
+    snapshot = _snapshot()
+    config = load_config(snapshot)
+    loader = DeepseekV4WeightLoader(snapshot)
+    cache = WeightCache(CACHE_DIR)
+    attns = {
+        i: DeepSeekV41Attention(
+            config,
+            i,
+            attention_weights(loader, i),
+            device,
+            cache=cache.sub(f"layers.{i}.attn"),
+            weight_dtype=ttnn.bfloat4_b,
+            tp_size=tp_size,
+        )
+        for i in PROFILE_LAYERS
+    }
+    if tp_size > 1:
+        # The traced decode's choice at this position (see DeepSeekV41Model).
+        split = key_split_layers(
+            config, PROFILE_LAYERS, seq_len, KEY_SPLIT_CROSSOVER_KEYS, CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS
+        )
+        for i, attn in attns.items():
+            if attn.is_index_source:
+                attn.indexer.split_keys = i in split
+    caches = build_decode_caches(device, config, PROFILE_LAYERS, seq_len)
+    _fill_caches(caches, device, tp_size)
+    rope = {i: _rope_halves(config, snapshot, i, seq_len) for i in PROFILE_LAYERS}
+
+    torch.manual_seed(0)
+    hidden_config = width_sharded_l1_config(1, config.hidden_size, device, tile_height=1)
+    for pos in range(seq_len - PROFILE_WARMUP_STEPS - PROFILE_STEPS, seq_len):
+        profiled = pos >= seq_len - PROFILE_STEPS
+        for i in PROFILE_LAYERS:
+            hidden = ttnn.from_torch(
+                torch.randn(1, 1, 1, config.hidden_size),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=hidden_config,
+            )
+            inputs = attns[i].decode_inputs(pos, *rope[i])
+            if profiled:
+                signpost(f"ATTN_L{i}_START")
+            out = attns[i].decode(hidden, scache=caches[i], **inputs)
+            if profiled:
+                signpost(f"ATTN_L{i}_END")
+            assert list(out.shape) == [1, 1, 1, config.hidden_size]
+            ttnn.deallocate(out)
+    ttnn.synchronize_device(device)
+
+
+PROFILE_CONTEXTS = pytest.mark.parametrize("seq_len", (4096, 32768, 131072), ids=("ctx4k", "ctx32k", "ctx128k"))
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(3600)
+@PROFILE_CONTEXTS
+@torch.no_grad()
+def test_attention_decode_profile(device, seq_len):
+    _profile_decode(device, seq_len, tp_size=1)
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
+@PROFILE_CONTEXTS
+@torch.no_grad()
+def test_attention_decode_profile_tp4(mesh_device, seq_len):
+    if tuple(mesh_device.shape) != PARENT_MESH:
+        pytest.skip(f"needs an {PARENT_MESH[0]}x{PARENT_MESH[1]} mesh, got {tuple(mesh_device.shape)}")
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, TP_SIZE), ttnn.MeshCoordinate(0, 0))
+    _profile_decode(submesh, seq_len, tp_size=TP_SIZE)
