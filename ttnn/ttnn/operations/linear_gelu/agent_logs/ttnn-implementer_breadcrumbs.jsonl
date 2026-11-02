@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","tests":"unit 35/35, regression 6/6, golden non_aligned|DRAM 73/73, perf 8x512 L1/L1 195.4us DRAM-x 199.4 DRAM-out 196.2 8x500 195.5","ts":"2026-11-02T21:45:01+00:00"}
