@@ -234,11 +234,16 @@ std::vector<DataFormat> get_unpack_dst_formats(
 }
 
 bool quasar_unpack_to_dest_en(
-    std::span<const DataFormat> buf_formats, const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode) {
+    std::span<const DataFormat> buf_formats,
+    const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode,
+    bool fp32_dest_acc_en) {
     for (const auto mode : unpack_to_dest_mode) {
         if (mode != tt::tt_metal::UnpackToDestMode::Default) {
             return true;
         }
+    }
+    if (!fp32_dest_acc_en) {
+        return false;
     }
     for (const auto format : buf_formats) {
         if (format == DataFormat::Int32 || format == DataFormat::UInt32) {
@@ -249,7 +254,7 @@ bool quasar_unpack_to_dest_en(
 }
 
 bool any_unpack_to_dest(const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode) {
-    return quasar_unpack_to_dest_en({}, unpack_to_dest_mode);
+    return quasar_unpack_to_dest_en({}, unpack_to_dest_mode, /*fp32_dest_acc_en=*/false);
 }
 
 DataFormat get_single_pack_src_format(

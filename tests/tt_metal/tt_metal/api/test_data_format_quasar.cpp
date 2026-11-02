@@ -26,23 +26,29 @@ TEST(DataFormatQuasar, Int32BufferEnablesToDestWithoutModeEntry) {
     const std::array<DataFormat, 4> int32_formats{
         DataFormat::Int32, DataFormat::Float16_b, DataFormat::Invalid, DataFormat::Invalid};
     const std::vector<UnpackToDestMode> all_default(int32_formats.size(), kDefault);
-    EXPECT_TRUE(tt::quasar_unpack_to_dest_en(int32_formats, all_default));
+    EXPECT_TRUE(tt::quasar_unpack_to_dest_en(int32_formats, all_default, /*fp32_dest_acc_en=*/true));
     // An empty mode vector (legacy path with no modes) must not hide the format-derived route.
-    EXPECT_TRUE(tt::quasar_unpack_to_dest_en(int32_formats, {}));
+    EXPECT_TRUE(tt::quasar_unpack_to_dest_en(int32_formats, {}, /*fp32_dest_acc_en=*/true));
+    // A 16-bit-DEST kernel may share the core with an Int32 DFB it never consumes: format alone must not route.
+    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(int32_formats, all_default, /*fp32_dest_acc_en=*/false));
+    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(int32_formats, {}, /*fp32_dest_acc_en=*/false));
 
     const std::array<DataFormat, 4> uint32_formats{
         DataFormat::Float16_b, DataFormat::UInt32, DataFormat::Invalid, DataFormat::Invalid};
-    EXPECT_TRUE(tt::quasar_unpack_to_dest_en(uint32_formats, all_default));
+    EXPECT_TRUE(tt::quasar_unpack_to_dest_en(uint32_formats, all_default, /*fp32_dest_acc_en=*/true));
+    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(uint32_formats, all_default, /*fp32_dest_acc_en=*/false));
 
     const std::array<DataFormat, 4> bf16_formats{
         DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Invalid, DataFormat::Invalid};
-    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(bf16_formats, all_default));
-    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(bf16_formats, {}));
+    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(bf16_formats, all_default, /*fp32_dest_acc_en=*/true));
+    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(bf16_formats, {}, /*fp32_dest_acc_en=*/true));
 
     const std::array<DataFormat, 1> fp32_formats{DataFormat::Float32};
-    EXPECT_TRUE(tt::quasar_unpack_to_dest_en(fp32_formats, {kToDestFp32}));
-    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(fp32_formats, {kDefault}));
-    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(fp32_formats, {}));
+    EXPECT_TRUE(tt::quasar_unpack_to_dest_en(fp32_formats, {kToDestFp32}, /*fp32_dest_acc_en=*/true));
+    // An explicit entry routes regardless of the DEST width; the JIT rejects the 16-bit pairing separately.
+    EXPECT_TRUE(tt::quasar_unpack_to_dest_en(fp32_formats, {kToDestFp32}, /*fp32_dest_acc_en=*/false));
+    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(fp32_formats, {kDefault}, /*fp32_dest_acc_en=*/true));
+    EXPECT_FALSE(tt::quasar_unpack_to_dest_en(fp32_formats, {}, /*fp32_dest_acc_en=*/true));
 }
 
 TEST(DataFormatQuasar, CanonicalFormatFoldsUInt32IntoInt32) {

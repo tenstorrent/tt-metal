@@ -1144,15 +1144,18 @@ void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& o
         "#define DST_SYNC_MODE DstSync::Sync{}\n",
         options.fp32_dest_acc_en,
         options.dst_full_sync_en ? "Full" : "Half");
-    // (Quasar only) Kernel-wide unpack-to-dest sync selector: true iff any operand routes to Dest, either by an
-    // explicit unpack_modes entry or because it is Int32/UInt32, which Quasar can only unpack to Dest. UNPACR_DEST
-    // writes 32-bit rows, so the route needs the 32-bit Dest; refuse the build instead of letting the kernel hang.
+    // (Quasar only) Kernel-wide unpack-to-dest sync selector: an explicit unpack_modes entry, or an Int32/UInt32
+    // operand on the core when the 32-bit Dest is on. An explicit entry with a 16-bit Dest cannot run (UNPACR_DEST).
     if (arch == tt::ARCH::QUASAR) {
-        const bool unpack_to_dest_en =
-            tt::quasar_unpack_to_dest_en(options.hlk_desc.buf_dataformat_arr, options.unpack_to_dest_mode);
+        const bool explicit_to_dest = std::any_of(
+            options.unpack_to_dest_mode.begin(), options.unpack_to_dest_mode.end(), [](UnpackToDestMode mode) {
+                return mode != UnpackToDestMode::Default;
+            });
         TT_FATAL(
-            !unpack_to_dest_en || options.fp32_dest_acc_en,
+            !explicit_to_dest || options.fp32_dest_acc_en,
             "Quasar unpack-to-dest requires fp32_dest_acc_en: operand(s) route to DEST but DEST is 16-bit");
+        const bool unpack_to_dest_en = tt::quasar_unpack_to_dest_en(
+            options.hlk_desc.buf_dataformat_arr, options.unpack_to_dest_mode, options.fp32_dest_acc_en);
         fmt::format_to(std::ostreambuf_iterator<char>(out), "constexpr bool UnpackToDestEn = {};\n", unpack_to_dest_en);
     }
 }
