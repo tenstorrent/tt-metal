@@ -134,16 +134,28 @@ extern "C" __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_pr
 #if defined(LLK_TRISC_MATH)
     constexpr std::uint32_t PACK_MAILBOX_INDEX = 2;
     constexpr std::uint64_t SETTLE_CYCLES      = 4096;
+    constexpr std::uint64_t POLL_GAP_CYCLES    = 1024;
 
     mailbox_t pack_mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start) + PACK_MAILBOX_INDEX;
+    // Wait without L1 traffic: a polling loop here competes with the packer on L1 port 3 while the pack thread still
+    // works (PACK_ISOLATE: up to +70 %). The pack tail pushes one word into the pack->math hardware mailbox after its
+    // completion store; the pop blocks until then. The L1 check below only guards against a stale mailbox word.
+    (void)ckernel::mailbox_read(ckernel::ThreadId::PackThreadId);
     while (ckernel::load_blocking(pack_mailbox) != ckernel::KERNEL_COMPLETE)
     {
+        const std::uint64_t gap_start = ckernel::read_wall_clock();
+        while (ckernel::read_wall_clock() - gap_start < POLL_GAP_CYCLES)
+        {
+        }
     }
     const std::uint64_t settle_start = ckernel::read_wall_clock();
     while (ckernel::read_wall_clock() - settle_start < SETTLE_CYCLES)
     {
     }
     (void)ckernel::load_blocking(pack_mailbox);
+#elif defined(LLK_TRISC_PACK)
+    // After main's completion store (its last L1 access): wake the math tail through the hardware mailbox (not L1).
+    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, ckernel::KERNEL_COMPLETE);
 #endif
 }
 #endif
