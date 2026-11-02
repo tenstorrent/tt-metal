@@ -373,8 +373,11 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         tensor_args.gathered_k,
         tensor_args.gathered_v,
         tensor_args.block_mask};
-    if (tensor_args.pooled_route()) {
+    // Runs before any validation (the cache lookup hashes first), so each optional is checked on its own.
+    if (tensor_args.pooled_k.has_value()) {
         input_tensors.push_back(*tensor_args.pooled_k);
+    }
+    if (tensor_args.pooled_v.has_value()) {
         input_tensors.push_back(*tensor_args.pooled_v);
     }
     if (tensor_args.block_counts.has_value()) {
@@ -396,7 +399,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.all_gather_tensor_args,
         args.block_size,
         args.q_blocks_per_pass,
-        tensor_args.pooled_route(),
+        tensor_args.pooled_k.has_value(),
+        tensor_args.pooled_v.has_value(),
         tensor_args.block_counts.has_value());
 }
 
@@ -465,6 +469,10 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const std::optional<uint32_t> q_blocks_per_pass,
     const std::optional<ttnn::Tensor>& block_counts) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
+    // Checked before the launch: a cache hit skips the miss-path validation.
+    TT_FATAL(
+        pooled_k.has_value() == pooled_v.has_value(),
+        "pooled_k and pooled_v must be passed together (Sol-Attn) or both omitted (kept blocks only)");
 
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
