@@ -25,7 +25,7 @@
     # so only the prefetcher run sets perf), and cover the prefetcher path with a SINGLE
     # repeat batch (this run reports/validates perf). See #47820 for the multi-batch work.
     pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
-    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
+    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher --repeat_batches 1
     pytest --timeout 420 models/ttt_compat/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
   model: llama3.1-8b
   model_family: Llama
