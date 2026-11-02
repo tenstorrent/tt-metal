@@ -7,7 +7,13 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
-from helpers.llk_params import DestAccumulation, L1Accumulation, Tilize, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    L1Accumulation,
+    PerfRunType,
+    Tilize,
+    format_dict,
+)
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
     DestSync,
@@ -15,12 +21,14 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     L1_ACC,
+    LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -29,6 +37,97 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.utils import passed_test, result_tensor
+
+_CPP_SOURCE = "sources/pack_dest_bank_test.cpp"
+
+
+def create_pack_dest_bank_config(
+    formats,
+    dest_acc,
+    l1_acc,
+    num_faces,
+    tilize,
+    dest_index,
+    tile_count,
+    num_blocks,
+    num_tiles_in_block,
+    variant_stimuli,
+    *,
+    input_dimensions=None,
+    loop_factor=1,
+    is_perf=False,
+    run_types=None,
+):
+    """Build the shared functional/performance destination-bank configuration."""
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
+    runtimes = [
+        DEST_INDEX(dest_index),
+        TILE_COUNT(tile_count),
+        NUM_BLOCKS(num_blocks),
+        NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        NUM_FACES(num_faces),
+        L1_ACC(l1_acc),
+    ]
+    if input_dimensions is not None:
+        runtimes.insert(0, generate_input_dim(input_dimensions, input_dimensions))
+
+    return create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs={
+            "test_name": _CPP_SOURCE,
+            "formats": formats,
+            "templates": [
+                TILIZE(tilize),
+                LOOP_FACTOR(loop_factor),
+            ],
+            "runtimes": runtimes,
+            "variant_stimuli": variant_stimuli,
+            "dest_acc": dest_acc,
+            "l1_acc": l1_acc,
+            "unpack_to_dest": unpacks_to_dest(formats.input_format, dest_acc, tilize),
+        },
+    )
+
+
+def run_functional_pack_dest_bank(
+    configuration, formats, tile_count, num_faces, golden_tensor
+):
+    """Run the sparse functional test after zeroing every declared result tile."""
+    configuration.generate_variant_hash()
+    if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+        configuration.build_elfs()
+
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    configuration.write_runtimes_to_L1()
+    configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+
+    zero_tiles = torch.zeros(tile_count * 32 * 32, dtype=golden_tensor.dtype)
+    zero_pack = StimuliConfig.get_packer(formats.output_format)
+    StimuliConfig.write_matrix(
+        zero_tiles,
+        tile_count,
+        zero_pack,
+        configuration.variant_stimuli.buf_res_addr,
+        configuration.variant_stimuli.buf_res_tile_size,
+        num_faces,
+        configuration.variant_stimuli.face_r_dim,
+        TestConfig.TENSIX_LOCATION,
+        configuration.variant_stimuli.write_full_tiles,
+    )
+
+    configuration.run_elf_files()
+    configuration.wait_for_tensix_operations_finished()
+    res_from_L1 = configuration.variant_stimuli.collect_results(
+        TestConfig.TENSIX_LOCATION
+    )
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
+
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
 
 def get_valid_tilize_datacopy(formats):
@@ -91,8 +190,6 @@ def test_pack_dest_bank(
     torch_format = format_dict[formats.output_format]
     golden_tensor = src_A.to(torch_format)
 
-    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc, tilize)
-
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
         dest_acc,
@@ -106,22 +203,17 @@ def test_pack_dest_bank(
         ),
     )
 
-    configuration = TestConfig(
-        "sources/pack_dest_bank_test.cpp",
+    configuration = create_pack_dest_bank_config(
         formats,
-        templates=[
-            TILIZE(tilize),
-        ],
-        runtimes=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            DEST_INDEX(dest_index),
-            TILE_COUNT(tile_cnt_A),
-            NUM_FACES(num_faces),
-            L1_ACC(l1_acc),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
+        dest_acc,
+        l1_acc,
+        num_faces,
+        tilize,
+        dest_index,
+        tile_cnt_A,
+        num_blocks,
+        num_tiles_in_block,
+        StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -132,44 +224,12 @@ def test_pack_dest_bank(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
         ),
-        dest_acc=dest_acc,
-        l1_acc=l1_acc,
-        unpack_to_dest=unpack_to_dest,
+        input_dimensions=input_dimensions,
     )
 
-    configuration.generate_variant_hash()
-    if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-        configuration.build_elfs()
-
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
-
-    configuration.write_runtimes_to_L1()
-    configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
-
-    zero_tiles = torch.zeros(tile_cnt_A * 32 * 32, dtype=torch_format)
-    zero_pack = StimuliConfig.get_packer(formats.output_format)
-    StimuliConfig.write_matrix(
-        zero_tiles,
-        tile_cnt_A,
-        zero_pack,
-        configuration.variant_stimuli.buf_res_addr,
-        configuration.variant_stimuli.buf_res_tile_size,
-        num_faces,
-        configuration.variant_stimuli.face_r_dim,
-        TestConfig.TENSIX_LOCATION,
-        configuration.variant_stimuli.write_full_tiles,
+    run_functional_pack_dest_bank(
+        configuration, formats, tile_cnt_A, num_faces, golden_tensor
     )
-
-    configuration.run_elf_files()
-    configuration.wait_for_tensix_operations_finished()
-    res_from_L1 = configuration.variant_stimuli.collect_results(
-        TestConfig.TENSIX_LOCATION
-    )
-
-    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
-
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
 
 @parametrize(
@@ -197,24 +257,17 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
     torch_format = format_dict[formats.output_format]
     golden_tensor = src_A.to(torch_format)
 
-    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
-
-    configuration = TestConfig(
-        "sources/pack_dest_bank_test.cpp",
+    configuration = create_pack_dest_bank_config(
         formats,
-        templates=[
-            TILIZE(tilize),
-        ],
-        runtimes=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            DEST_INDEX(dest_index),
-            TILE_COUNT(tile_cnt_A),
-            NUM_FACES(num_faces),
-            L1_ACC(l1_acc),
-            NUM_BLOCKS(2),
-            NUM_TILES_IN_BLOCK(4),
-        ],
-        variant_stimuli=StimuliConfig(
+        dest_acc,
+        l1_acc,
+        num_faces,
+        tilize,
+        dest_index,
+        tile_cnt_A,
+        2,
+        4,
+        StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -225,41 +278,9 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
         ),
-        dest_acc=dest_acc,
-        l1_acc=l1_acc,
-        unpack_to_dest=unpack_to_dest,
+        input_dimensions=input_dimensions,
     )
 
-    configuration.generate_variant_hash()
-    if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-        configuration.build_elfs()
-
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
-
-    configuration.write_runtimes_to_L1()
-    configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
-
-    zero_tiles = torch.zeros(tile_cnt_A * 32 * 32, dtype=torch_format)
-    zero_pack = StimuliConfig.get_packer(formats.output_format)
-    StimuliConfig.write_matrix(
-        zero_tiles,
-        tile_cnt_A,
-        zero_pack,
-        configuration.variant_stimuli.buf_res_addr,
-        configuration.variant_stimuli.buf_res_tile_size,
-        num_faces,
-        configuration.variant_stimuli.face_r_dim,
-        TestConfig.TENSIX_LOCATION,
-        configuration.variant_stimuli.write_full_tiles,
+    run_functional_pack_dest_bank(
+        configuration, formats, tile_cnt_A, num_faces, golden_tensor
     )
-
-    configuration.run_elf_files()
-    configuration.wait_for_tensix_operations_finished()
-    res_from_L1 = configuration.variant_stimuli.collect_results(
-        TestConfig.TENSIX_LOCATION
-    )
-
-    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
-
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
