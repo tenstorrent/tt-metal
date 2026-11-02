@@ -2549,10 +2549,10 @@ Program build_exit_relay_program(
         // RT args: the cable connection on this lane's link, the credit connections
         // (master only), then the per-slot words.
         std::vector<uint32_t> rt;
-        tt::tt_fabric::append_fabric_connection_rt_args(exit_node, entry_node, z_links[lane], program, core, rt);
+        tt::tt_fabric::append_fabric_connection_rt_args(*mesh, exit_node, entry_node, z_links[lane], program, core, rt);
         if (master) {
             for (const auto& [node, link] : credit_conns) {
-                tt::tt_fabric::append_fabric_connection_rt_args(exit_node, node, link, program, core, rt);
+                tt::tt_fabric::append_fabric_connection_rt_args(*mesh, exit_node, node, link, program, core, rt);
             }
         }
         for (uint32_t k = 0; k < num_slots; ++k) {
@@ -2713,10 +2713,10 @@ Program build_entry_relay_program(
         // direction connections, then 11 words per slot (the same for both lanes).
         std::vector<uint32_t> rt;
         if (master) {
-            tt::tt_fabric::append_fabric_connection_rt_args(entry_node, exit_node, z_link, program, core, rt);
+            tt::tt_fabric::append_fabric_connection_rt_args(*mesh, entry_node, exit_node, z_link, program, core, rt);
         }
         for (const auto& [node, link] : conns[lane]) {
-            tt::tt_fabric::append_fabric_connection_rt_args(entry_node, node, link, program, core, rt);
+            tt::tt_fabric::append_fabric_connection_rt_args(*mesh, entry_node, node, link, program, core, rt);
         }
         for (uint32_t k = 0; k < num_slots; ++k) {
             if (k == own_slot) {
@@ -2910,6 +2910,7 @@ void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const 
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_sender_program(
+                *mesh,
                 *impl.backing_tensor.mesh_buffer().get_device_buffer(c),
                 core,
                 config_addr,
@@ -3000,6 +3001,7 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_receiver_program(
+                *mesh,
                 *impl.backing_tensor.mesh_buffer().get_device_buffer(c),
                 core,
                 config_addr,
