@@ -8,6 +8,18 @@
 // Runtime args: x_addr, w_addr, s_addr, c0, nc.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
+
+// Bounded semaphore wait (debug safety): never hangs the chip; on timeout the caller reports and continues.
+inline bool bounded_wait(volatile tt_l1_ptr uint32_t* p, uint32_t v) {
+    for (uint32_t i = 0; i < (1u << 24); ++i) {
+        invalidate_l1_cache();
+        if (*p == v) {
+            return true;
+        }
+    }
+    return false;
+}
 
 void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
@@ -29,22 +41,7 @@ void kernel_main() {
     constexpr uint32_t sem_ready_id = get_compile_time_arg_val(10), sem_valid_id = get_compile_time_arg_val(11);
     volatile tt_l1_ptr uint32_t* valid = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_valid_id));
     const uint64_t ready_noc = get_noc_addr(snd_x, snd_y, get_semaphore(sem_ready_id));
-    for (uint32_t G = 0; G < ng; ++G) {
-        cb_reserve_back(cb_x, MT * 32);
-        if constexpr (mc) {
-            noc_semaphore_set(valid, 0);
-            noc_semaphore_inc(ready_noc, 1);
-            noc_semaphore_wait(valid, 1);
-        } else {
-            uint32_t l1 = get_write_ptr(cb_x);
-            for (uint32_t m = 0; m < MT; ++m) {
-                for (uint32_t t = 0; t < 32; ++t, l1 += xtb) {
-                    noc_async_read(get_noc_addr(m * kt + G * 32 + t, xg), l1, xtb);
-                }
-            }
-            noc_async_read_barrier();
-        }
-        cb_push_back(cb_x, MT * 32);
+    auto read_codes = [&](uint32_t G) {
         for (uint32_t c = c0; c < c0 + nc; ++c) {
             const uint32_t bank = c / cpb, j = c % cpb;
             cb_reserve_back(cb_s, 1);
@@ -56,6 +53,30 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_s, 1);
             cb_push_back(cb_c, 32);
+        }
+    };
+    for (uint32_t G = 0; G < ng; ++G) {
+        cb_reserve_back(cb_x, MT * 32);
+        if constexpr (mc) {
+            // Signal ready, fetch this block's code/scale tiles while the sender gathers everyone, then wait.
+            // cb_c/cb_s hold 2 x nc blocks, so this never blocks on compute (which waits on x first).
+            noc_semaphore_set(valid, 0);
+            noc_semaphore_inc(ready_noc, 1);
+            read_codes(G);
+            if (!bounded_wait(valid, 1)) {
+                DPRINT("PMM recv valid timeout G={} sender=({},{})\n", G, snd_x, snd_y);
+            }
+            cb_push_back(cb_x, MT * 32);
+        } else {
+            uint32_t l1 = get_write_ptr(cb_x);
+            for (uint32_t m = 0; m < MT; ++m) {
+                for (uint32_t t = 0; t < 32; ++t, l1 += xtb) {
+                    noc_async_read(get_noc_addr(m * kt + G * 32 + t, xg), l1, xtb);
+                }
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_x, MT * 32);
+            read_codes(G);
         }
     }
 }

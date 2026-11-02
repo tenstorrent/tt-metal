@@ -46,11 +46,14 @@ def pmm(x, w, s, k: int, n: int, gu: bool = False):
     outs = [ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, m, n]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device,
                                            ttnn.DRAM_MEMORY_CONFIG) for _ in range(2 if gu else 1)]
     g = device.compute_with_storage_grid_size()
-    mc = os.environ.get("BONSAI_PMM_MC", "0") == "1"  # WIP: the first multicast run hung chip 3 (18:37)
+    mc = os.environ.get("BONSAI_PMM_MC", "1") == "1"
     if mc:
         # x' multicast: one sender at logical (g.x-1, 0) reads x' once and multicasts it to a worker rectangle
         # of width g.x-1, so all workers share one x' stream instead of each reading it from DRAM.
-        wx = g.x - 1
+        # Worker rectangle: logical columns 0..g.x-2 (the sender sits in the last column). It spans Blackhole's
+        # non-Tensix NOC columns 8-9, which is fine for multicast. The 18:37 hang was the corner order:
+        # BRISC kernels use NOC1 here, so pmm_xsend.cpp swaps the corners for NOC1.
+        wx = int(os.environ.get("BONSAI_PMM_WX", g.x - 1))
         per = -(-ncols // (wx * g.y))
         used = -(-ncols // per)
         h = -(-used // wx)
@@ -107,7 +110,8 @@ def pmm(x, w, s, k: int, n: int, gu: bool = False):
         kernels=kernels,
         semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=allr, initial_value=0),
                     ttnn.SemaphoreDescriptor(id=1, core_ranges=allr, initial_value=0)],
-        cbs=[cb(0, ttnn.bfloat16, xtb, 2 * mt * 32), cb(1, ttnn.DataType.BFLOAT2_B, wtb, 64), cb(2, ttnn.float32, 4096, 2),
+        cbs=[cb(0, ttnn.bfloat16, xtb, 2 * mt * 32), cb(1, ttnn.DataType.BFLOAT2_B, wtb, max(64, 2 * per * 32)),
+             cb(2, ttnn.float32, 4096, max(2, 2 * per)),
              cb(3, ttnn.bfloat16, xtb, 32), cb(4, ttnn.float32, 4096, per * mt), cb(16, ttnn.bfloat16, xtb, 2 * mt)])
     ttnn.generic_op([x, wt, s] + outs, prog)
     return tuple(outs) if gu else outs[0]
