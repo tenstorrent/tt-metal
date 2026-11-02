@@ -51,6 +51,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import torch
+from loguru import logger
 from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
 
 import ttnn
@@ -229,6 +230,9 @@ class Qwen38TTNNAcceptConstants:
     sentinel_tail: Any
     sentinel_lane: Any
     compute_config: Any
+    # FP32 TILE [1,1,1,32]: 0.0 in lanes 0..k, ZERO_EMBEDDING_TOKEN past them (the lanes greedy resolve's token row plus
+    # this row is the verify lane row; QWEN38_VERIFY_GREEDY_LANES)
+    sentinel_row: Any = None
 
     @classmethod
     def build(cls, mesh_device, mesh_contract: Qwen38MeshContract, *, drafts: int) -> "Qwen38TTNNAcceptConstants":
@@ -271,13 +275,29 @@ class Qwen38TTNNAcceptConstants:
                     fp32_dest_acc_en=True,
                     packer_l1_acc=False,
                 ),
+                sentinel_row=upload(
+                    torch.where(
+                        lane < drafts + 1,
+                        torch.zeros(CHUNK_ROWS),
+                        torch.full((CHUNK_ROWS,), float(ZERO_EMBEDDING_TOKEN)),
+                    ).reshape(1, 1, 1, CHUNK_ROWS),
+                    ttnn.TILE_LAYOUT,
+                    "verify lane sentinel row",
+                ),
             )
         except BaseException:
             _deallocate(*uploaded)
             raise
 
     def deallocate(self) -> None:
-        _deallocate(self.prefix_upper, self.arange_plus_one, self.arange_col, self.sentinel_tail, self.sentinel_lane)
+        _deallocate(
+            self.prefix_upper,
+            self.arange_plus_one,
+            self.arange_col,
+            self.sentinel_tail,
+            self.sentinel_lane,
+            *([self.sentinel_row] if self.sentinel_row is not None else []),
+        )
 
 
 @dataclass(frozen=True)
@@ -1290,7 +1310,33 @@ def _embed_rows(model: Qwen38TTNNTextModel, token_row):
     return residual
 
 
-def _resolve_rows(model: Qwen38TTNNTextModel, hidden_rows, *, rows: int, sentinel_tail, retain: list | None = None):
+def _lane_sentinel_row(constants, rows: int):
+    """The constants' sentinel row when it serves ``rows`` (= k + 1) live rows, else None (the chain's lane row)."""
+
+    row = getattr(constants, "sentinel_row", None)
+    return row if row is not None and rows == constants.drafts + 1 else None
+
+
+def _verify_greedy_lanes_enabled() -> bool:
+    """QWEN38_VERIFY_GREEDY_LANES (default on; "0" = the chain's candidates and resolve): the verify heads' greedy tail
+    on ttnn/fused/greedy_tail's rows form.  It takes effect only while the fused greedy_tail kernel is served."""
+
+    if os.environ.get("QWEN38_VERIFY_GREEDY_LANES", "1") == "0":
+        return False
+    from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
+
+    return fused_kernels.enabled("greedy_tail")
+
+
+def _resolve_rows(
+    model: Qwen38TTNNTextModel,
+    hidden_rows,
+    *,
+    rows: int,
+    sentinel_tail,
+    retain: list | None = None,
+    sentinel_row=None,
+):
     """Final-mixer output rows -> the ``rows`` real rows -> LM head -> the FP32 ROW_MAJOR ``[1,1,1,32]`` row of
     per-row global greedy ids (lanes past ``rows`` hold ``ZERO_EMBEDDING_TOKEN`` from ``sentinel_tail``).
 
@@ -1309,6 +1355,31 @@ def _resolve_rows(model: Qwen38TTNNTextModel, hidden_rows, *, rows: int, sentine
         head_rows = ttnn.slice(hidden_rows, (0, 0, 0, 0), (1, 1, rows, LOCAL_HIDDEN_SIZE), memory_config=dram)
         head_rows.update_tensor_topology(hidden_rows.tensor_topology())
     logits = lm_head(head_rows)
+    if sentinel_row is not None and rows != CHUNK_ROWS and _verify_greedy_lanes_enabled():
+        # QWEN38_VERIFY_GREEDY_LANES: the fused greedy tail's rows form (scan, merge, one gather, resolve) in place of
+        # the chain's 60 programs; its token row (lane j = row j's id, 0.0 past the rows) + the sentinel row is the chain's
+        # lane row (ids and zeros add exactly in fp32), laid out ROW_MAJOR
+        candidates = lm_head.greedy_candidates_lanes(logits)
+        if getattr(candidates, "packed", None) is not None:
+            if retain is None:
+                _deallocate(logits.tensor)
+            else:
+                retain.append(logits)
+            logger.info("verify head: greedy tail on the fused rows form for {} rows", rows)
+            token_row = lm_head.resolve_greedy_lanes_on_device(candidates)
+            _deallocate(candidates.local_indices, candidates.local_values, candidates.packed)
+            _deallocate(head_rows)
+            summed = ttnn.add(token_row, sentinel_row, memory_config=dram)
+            _deallocate(token_row)
+            lanes = ttnn.to_layout(summed, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+            _deallocate(summed)
+            if _shape(lanes) != TOKEN_ROW_SHAPE or lanes.dtype != ttnn.float32 or lanes.layout != ttnn.ROW_MAJOR_LAYOUT:
+                raise RuntimeError(
+                    f"resolved verify lanes must be FP32 ROW_MAJOR {TOKEN_ROW_SHAPE}, got {tensor_metadata(lanes)}"
+                )
+            return lanes
+        _deallocate(candidates.local_indices, candidates.local_values)  # the chain's candidates: not the fused form
+        # fall through to the chain below (its own candidates; the logits stay alive)
     candidates = lm_head.greedy_candidates(logits, values_by_gather=True)
     if retain is None:
         _deallocate(logits.tensor)
@@ -1376,7 +1447,13 @@ def _forward_alignment(
         selectors=selectors,
     )
     hidden = alignment.final_mixer.rows(residual, flat_views=True)
-    lanes = _resolve_rows(model, hidden, rows=verify.rows, sentinel_tail=constants.sentinel_tail)
+    lanes = _resolve_rows(
+        model,
+        hidden,
+        rows=verify.rows,
+        sentinel_tail=constants.sentinel_tail,
+        sentinel_row=_lane_sentinel_row(constants, verify.rows),
+    )
     _deallocate(hidden)
     first_draft = ttnn.gather(lanes, 3, accept.accepted_index, memory_config=dram)
     _deallocate(lanes)
@@ -1450,7 +1527,11 @@ def forward_verify(
         if hidden_observer is not None:
             hidden_observer(hidden)
         argmax_lanes = _resolve_rows(
-            model, hidden, rows=verify.rows, sentinel_tail=verify.accept_constants.sentinel_tail
+            model,
+            hidden,
+            rows=verify.rows,
+            sentinel_tail=verify.accept_constants.sentinel_tail,
+            sentinel_row=_lane_sentinel_row(verify.accept_constants, verify.rows),
         )
         _deallocate(hidden)
         stage("head")

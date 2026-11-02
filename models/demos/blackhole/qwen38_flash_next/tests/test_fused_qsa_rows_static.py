@@ -197,7 +197,7 @@ def test_post_attention_rows_is_a_default_bitwise_program_on_48_cores() -> None:
     assert kernel.default_on is True and qsa_rows.PA_NAME in fused.DEFAULT_ON
     assert kernel.fused is qsa_rows.post_attention_rows  # the launch is the family's (its __init__)
     assert kernel.composed is qsa_rows.post_attention_rows_composed is pa.post_attention_rows_composed
-    assert len(pa.ITEMS) == 48 == qsa_block.LOCAL_HEADS * qsa_block.HEAD_TILES
+    assert len(pa.ITEMS) == qsa_block.LOCAL_HEADS * qsa_block.HEAD_TILES  # 48 at TP=4, 24 at TP=8
     source = inspect.getsource(qsa_rows.post_attention_rows)
     assert "if any(w.count != 1 for w in work):" in source  # one output tile per core
     assert "outputs=((out, 3),)," in source and '"post_attention_rows",' in source

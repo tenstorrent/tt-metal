@@ -22,6 +22,8 @@ masks them.
 
 from __future__ import annotations
 
+from loguru import logger
+
 import ttnn
 
 from .. import program as fp
@@ -124,13 +126,28 @@ SCORE_PAGES = fp.kernel_source(NAME, "score_pages.cpp")
 PAGES_BATCH = 4  # pages per read / write round on a core (8 KB of L1)
 
 
+_ADMISSION_SEEN: set = set()
+
+
+def _note_admission(name: str, admitted: bool, detail) -> bool:
+    """Log once per program, verdict and shape whether the verify tile took the fused program or the chain (an enabled
+    program that is never admitted shows no gain and no error); returns ``admitted``."""
+
+    key = (name, admitted, detail)
+    if key not in _ADMISSION_SEEN:
+        _ADMISSION_SEEN.add(key)
+        logger.info("qsa_rows: {} {} for {}", name, "ADMITTED" if admitted else "NOT admitted", detail)
+    return admitted
+
+
 def score_pages_admits(local_scores, blocks) -> bool:
     """Program 4's input contract as a predicate: one row tile of score rows ``[1, 1, 1..32, W >= blocks]`` bf16
     ROW_MAJOR with ``blocks`` a positive multiple of the page; anything else (the 128-row chunk's four tiles, the slab)
     keeps the chain's slice + reshape."""
 
     shape = tuple(local_scores.shape)
-    return (
+    return _note_admission(
+        PAGES_NAME,
         len(shape) == 4
         and shape[:2] == (1, 1)
         and 1 <= shape[2] <= ttnn.TILE_SIZE
@@ -139,7 +156,8 @@ def score_pages_admits(local_scores, blocks) -> bool:
         and type(blocks) is int
         and blocks > 0
         and blocks % PAGE == 0
-        and blocks <= shape[3]
+        and blocks <= shape[3],
+        (shape, blocks),
     )
 
 
@@ -302,14 +320,19 @@ def post_attention_rows_admits(attention, qg_ws, qg_first: int = 0) -> bool:
     tile; the one-row draft) and sparse_sdpa's ROW_MAJOR ``[1, 32, rows, 256]``; the chunk body's six-branch gate
     ``[1, LOCAL_HEADS, rows, 256]``, the 128-row chunk and the slab keep the chain."""
 
+    detail = (tuple(attention.shape), tuple(qg_ws.shape), qg_first)
     if not (fp.is_row_tile(qg_ws) and fp.is_tile_width(qg_ws) and qg_ws.layout == ttnn.TILE_LAYOUT):
-        return False  # the linear's tile shard, one row tile wide enough for the qg window
+        return _note_admission(
+            PA_NAME, False, detail
+        )  # the linear's tile shard, one row tile wide enough for the qg window
     rows = int(qg_ws.shape[-2])
-    return (
+    return _note_admission(
+        PA_NAME,
         tuple(attention.shape) == (1, qsa_block.SPARSE_HEADS, rows, qsa_block.HEAD_DIM)
         and attention.dtype == ttnn.bfloat16
         and attention.layout == ttnn.ROW_MAJOR_LAYOUT
-        and qg_first + qsa_block.QG_WIDTH // fp.TILE <= fp.tile_width_of(qg_ws) // fp.TILE
+        and qg_first + qsa_block.QG_WIDTH // fp.TILE <= fp.tile_width_of(qg_ws) // fp.TILE,
+        detail,
     )
 
 

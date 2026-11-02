@@ -89,6 +89,8 @@ TP8_READY: frozenset[str] = frozenset(
         "qsa_selection_row",
         "qsa_score_merge",
         "qsa_rows",
+        "qsa_rows_post_attention",  # QWEN38_TP8_QSA_ROWS_POST (default on); every shape derives from the per-device head count
+        "qsa_score_pages",  # QWEN38_TP8_QSA_SCORE_PAGES (default on)
         "gr_read",
         "ple",
         "gr_fold",
@@ -207,6 +209,12 @@ def default_names() -> frozenset[str]:
 TP8_DEFAULT_ON: frozenset[str] = frozenset({"final_mixer"})
 
 
+TP8_KNOBS = {
+    "QWEN38_TP8_QSA_ROWS_POST": "qsa_rows_post_attention",
+    "QWEN38_TP8_QSA_SCORE_PAGES": "qsa_score_pages",
+}
+
+
 def edge_trim_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
     """The registry kernels ``QWEN38_EDGE_TRIM=1`` adds at TP=8 (default off): ``candidate_row`` (ttnn/fused/edge_trim)."""
 
@@ -228,6 +236,9 @@ def enabled_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
     if TP_SIZE == 4:
         return names
     ready = TP8_READY | edge
+    for knob, name in TP8_KNOBS.items():  # the TP=8 additions each have their own off switch ("0" = the chain)
+        if environ.get(knob, "1") == "0":
+            ready = ready - {name}
     if (
         environ.get(MTP_ROWS_TP8_ENV, "1") == "1"
     ):  # QWEN38_MTP_ROWS_TP8: the MTP verify-rows kernels at TP=8 (default on)
