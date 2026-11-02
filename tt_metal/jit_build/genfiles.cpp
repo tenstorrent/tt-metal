@@ -585,7 +585,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // 0-based index names the same word.
     content << "FORCE_INLINE const uint32_t* get_vararg_addr(uint32_t idx) { return reinterpret_cast<const "
                "uint32_t*>(get_arg_addr("
-            << named_rta_words << " + idx)); }\n"
+            << rta_layout.vararg_section_offset << " + idx)); }\n"
             << "FORCE_INLINE const uint32_t* get_common_vararg_addr(uint32_t idx) { return reinterpret_cast<const "
                "uint32_t*>(get_common_arg_addr("
             << crta_layout.vararg_section_offset << " + idx)); }\n";
