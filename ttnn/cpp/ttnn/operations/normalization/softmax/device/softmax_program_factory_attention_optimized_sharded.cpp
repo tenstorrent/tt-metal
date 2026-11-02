@@ -133,7 +133,10 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     // define core ranges (full sharded grid)
     std::uint32_t num_cores_c = program_config.compute_with_storage_grid_size.x;
     std::uint32_t num_cores_r = program_config.compute_with_storage_grid_size.y;
-    const CoreRangeSet all_device_cores{CoreRange({0, 0}, {num_cores_c - 1, num_cores_r - 1})};
+    // The kernels run where the input's shards live, which need not start at core (0, 0).
+    const CoreCoord grid_start = input_tensor.shard_spec().value().grid.bounding_box().start_coord;
+    const CoreRangeSet all_device_cores{
+        CoreRange(grid_start, {grid_start.x + num_cores_c - 1, grid_start.y + num_cores_r - 1})};
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
     const KernelSpecName READER{"reader"};
@@ -475,13 +478,13 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
         for (std::uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             for (std::uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-                emit_reader_args(CoreCoord{core_idx_x, core_idx_y});
+                emit_reader_args(CoreCoord{grid_start.x + core_idx_x, grid_start.y + core_idx_y});
             }
         }
     } else {
         for (std::uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
             for (std::uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-                emit_reader_args(CoreCoord{core_idx_x, core_idx_y});
+                emit_reader_args(CoreCoord{grid_start.x + core_idx_x, grid_start.y + core_idx_y});
             }
         }
     }

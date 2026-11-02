@@ -53,7 +53,6 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     auto shard_spec = input_tensor.shard_spec().value();
-    bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto& all_cores = shard_spec.grid;
     uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
 
@@ -155,10 +154,15 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     uint32_t HtWt_tile_size = Ht_per_shard * Wts;
     uint32_t num_blocks = num_hw_blocks_per_shard * HtWt_tile_size;
 
-    auto bbox = all_cores.bounding_box();
-    std::vector<CoreCoord> cores =
-        grid_to_cores_with_noop(bbox.end_coord.x, bbox.end_coord.y, num_cores_x, num_cores_y, row_major);
-    const uint32_t num_active = all_cores.num_cores();
+    // Every core of the device grid, row by row; active ones are those that hold a shard.
+    // The shard grid need not start at core (0, 0), so activity is decided by membership.
+    std::vector<CoreCoord> cores;
+    cores.reserve(num_cores_x * num_cores_y);
+    for (uint32_t y = 0; y < num_cores_y; ++y) {
+        for (uint32_t x = 0; x < num_cores_x; ++x) {
+            cores.emplace_back(x, y);
+        }
+    }
 
     ProgramRunArgs run_args;
     ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = READER};
@@ -168,7 +172,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     // Cores outside the shard grid still run the kernels; legacy handed them a zero-filled
     // argument set so they fall straight through their loops, and that is preserved here.
     for (uint32_t i = 0; i < cores.size(); ++i) {
-        const bool active = i < num_active;
+        const bool active = all_cores.contains(cores[i]);
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values, cores[i], {{"num_tiles_per_core", active ? num_blocks : 0}});
         AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, cores[i], {{"num_units", active ? num_blocks : 0}});

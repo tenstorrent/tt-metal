@@ -365,3 +365,122 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
         atol=0.001,
         frobenius_threshold=0.031,
     )
+
+
+def _offset_height_sharded_config(origin, grid_dims, shard_shape, orientation):
+    start = ttnn.CoreCoord(origin[0], origin[1])
+    end = ttnn.CoreCoord(origin[0] + grid_dims[0] - 1, origin[1] + grid_dims[1] - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(start, end)})
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize(
+    "shard_orient",
+    [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR],
+    ids=["CM", "RM"],
+)
+@pytest.mark.parametrize(
+    "origin, grid_dims",
+    [
+        ((0, 0), (2, 1)),
+        ((1, 1), (2, 1)),
+        ((2, 0), (1, 2)),
+        ((0, 2), (4, 1)),
+        ((1, 1), (2, 2)),
+        ((3, 2), (1, 4)),
+    ],
+    ids=["origin_2x1", "off11_2x1", "off20_1x2", "off02_4x1", "off11_2x2", "off32_1x4"],
+)
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+def test_softmax_in_place_offset_shard_grid(device, in_dtype, origin, grid_dims, shard_orient):
+    torch.manual_seed(0)
+    device_grid = device.compute_with_storage_grid_size()
+    if origin[0] + grid_dims[0] > device_grid.x or origin[1] + grid_dims[1] > device_grid.y:
+        pytest.skip("shard grid does not fit the device compute grid")
+
+    num_cores = grid_dims[0] * grid_dims[1]
+    shard_shape = [32, 64]
+    input_shape = (1, 1, shard_shape[0] * num_cores, shard_shape[1])
+    input_tensor = torch.randn(input_shape).bfloat16().float()
+
+    sharded_mem_config = _offset_height_sharded_config(origin, grid_dims, shard_shape, shard_orient)
+    in_t = ttnn.from_torch(
+        input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_dims,
+        subblock_w=2,
+        block_h=1,
+        block_w=2,
+    )
+    out_t = ttnn.softmax_in_place(in_t, program_config=program_config)
+    tt_output = ttnn.to_torch(ttnn.to_memory_config(out_t, ttnn.DRAM_MEMORY_CONFIG))
+
+    golden = torch.softmax(input_tensor, dim=-1)
+    assert_numeric_metrics(
+        golden,
+        tt_output,
+        pcc_threshold=0.999,
+        rtol=0.085,
+        atol=0.001,
+        frobenius_threshold=0.031,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize(
+    "shard_orient",
+    [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR],
+    ids=["CM", "RM"],
+)
+@pytest.mark.parametrize(
+    "origin, grid_dims",
+    [((0, 0), (2, 1)), ((1, 1), (2, 1)), ((0, 2), (4, 1)), ((1, 1), (2, 2))],
+    ids=["origin_2x1", "off11_2x1", "off02_4x1", "off11_2x2"],
+)
+def test_scale_mask_softmax_in_place_offset_shard_grid(device, origin, grid_dims, shard_orient):
+    torch.manual_seed(0)
+    device_grid = device.compute_with_storage_grid_size()
+    if origin[0] + grid_dims[0] > device_grid.x or origin[1] + grid_dims[1] > device_grid.y:
+        pytest.skip("shard grid does not fit the device compute grid")
+
+    num_cores = grid_dims[0] * grid_dims[1]
+    shard_shape = [32, 64]
+    input_shape = (1, 1, shard_shape[0] * num_cores, shard_shape[1])
+    scale = 0.5
+    input_tensor = torch.randn(input_shape).bfloat16().float()
+    attention_mask = torch.where(torch.rand(1, 1, 32, 64) > 0.5, torch.tensor(0.0), torch.tensor(-float("inf")))
+    attention_mask[..., 0] = 0.0
+    attention_mask = attention_mask.repeat(1, 1, num_cores, 1)
+
+    sharded_mem_config = _offset_height_sharded_config(origin, grid_dims, shard_shape, shard_orient)
+    in_t = ttnn.from_torch(
+        input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
+    )
+    mask_t = ttnn.from_torch(
+        attention_mask,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_dims,
+        subblock_w=2,
+        block_h=1,
+        block_w=2,
+    )
+    out_t = ttnn.scale_mask_softmax_in_place(in_t, scale, mask_t, program_config=program_config)
+    tt_output = ttnn.to_torch(ttnn.to_memory_config(out_t, ttnn.DRAM_MEMORY_CONFIG))
+
+    golden = torch.softmax(input_tensor * scale + attention_mask, dim=-1)
+    assert_numeric_metrics(
+        golden,
+        tt_output,
+        pcc_threshold=0.999,
+        rtol=0.085,
+        atol=0.001,
+        frobenius_threshold=0.031,
+    )

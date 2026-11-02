@@ -821,3 +821,49 @@ def test_permute_cache_miss_different_factory_row_major(device, isolate_program_
     assert_with_pcc(ref2, out2, 0.9999)
 
     assert device.cache_entries_counter.total == 2
+
+
+@pytest.mark.parametrize(
+    "orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+    ids=["row_major", "col_major"],
+)
+@pytest.mark.parametrize(
+    "origin, grid_dims",
+    [
+        ((0, 0), (2, 2)),
+        ((1, 1), (2, 2)),
+        ((2, 0), (1, 4)),
+        ((0, 2), (4, 1)),
+        ((1, 2), (2, 4)),
+        ((3, 0), (1, 1)),
+    ],
+    ids=["origin_2x2", "off11_2x2", "off20_1x4", "off02_4x1", "off12_2x4", "off30_1x1"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+def test_transpose_wh_height_sharded_offset_shard_grid(device, dtype, origin, grid_dims, orientation):
+    device_grid = device.compute_with_storage_grid_size()
+    if origin[0] + grid_dims[0] > device_grid.x or origin[1] + grid_dims[1] > device_grid.y:
+        pytest.skip("shard grid does not fit the device compute grid")
+
+    torch.manual_seed(0)
+    num_cores = grid_dims[0] * grid_dims[1]
+    shard_shape = [32, 64]
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.rand((num_cores, 1, 32, 64), dtype=torch_dtype)
+
+    start = ttnn.CoreCoord(origin[0], origin[1])
+    end = ttnn.CoreCoord(origin[0] + grid_dims[0] - 1, origin[1] + grid_dims[1] - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(start, end)})
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, shard_shape, orientation),
+    )
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    tt_output = ttnn.transpose(tt_input, -2, -1)
+    result = ttnn.to_torch(ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG))
+
+    assert_with_pcc(torch_input.transpose(-2, -1).float(), result.float(), 0.9999)

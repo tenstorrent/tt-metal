@@ -1003,3 +1003,43 @@ def test_attn_matmul_compute_grid_shorter_than_device(device):
     golden = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
     assert_numeric_metrics(golden, sub_grid_output, pcc_threshold=0.999, check_allclose=False, check_frobenius=False)
     assert torch.equal(sub_grid_output, full_grid_output)
+
+
+@pytest.mark.parametrize("in1_origin", [(0, 1), (1, 0), (1, 1)], ids=["off01", "off10", "off11"])
+def test_group_attn_matmul_rejects_offset_in1_shard_grid(in1_origin, device, expect_error):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if in1_origin[0] + 8 > compute_grid_size.x or in1_origin[1] + 4 > compute_grid_size.y:
+        pytest.skip("shard grid does not fit the device compute grid")
+
+    batch, K, seq_len, q_heads, kv_heads = 32, 64, 128, 16, 1
+    torch.manual_seed(0)
+    input_tensor_a = torch.randn([1, q_heads, batch, K]).bfloat16()
+    input_tensor_b = torch.randn([batch, kv_heads, K, seq_len]).bfloat16()
+
+    tt_input_tensor_a = ttnn.from_torch(
+        input_tensor_a,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    start = ttnn.CoreCoord(in1_origin[0], in1_origin[1])
+    end = ttnn.CoreCoord(in1_origin[0] + 7, in1_origin[1] + 3)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(start, end)})
+    in1_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [kv_heads * K, seq_len], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_input_tensor_b = ttnn.from_torch(
+        input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in1_mem_config
+    )
+
+    with expect_error(RuntimeError, "shard grid must be the first"):
+        ttnn_group_attn_matmul(
+            tt_input_tensor_a,
+            tt_input_tensor_b,
+            compute_with_storage_grid_size=compute_grid_size,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+        )
