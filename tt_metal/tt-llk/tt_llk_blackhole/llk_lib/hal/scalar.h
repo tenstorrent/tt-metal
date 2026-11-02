@@ -209,6 +209,32 @@ constexpr void validate_gpr(const hal::Gpr<Index> operand)
     }
 }
 
+template <BinaryOperation Operation, std::uint32_t Value>
+inline constexpr void validate_static_immediate()
+{
+    if constexpr (Operation == BinaryOperation::ShiftLeft || Operation == BinaryOperation::ShiftRight)
+    {
+        static_assert(Value <= 31u, "Scalar-unit shift amount must fit in five bits");
+    }
+    else
+    {
+        static_assert(Value <= ImmediateLimit, "Scalar-unit immediate must fit in six bits");
+    }
+}
+
+template <BinaryOperation Operation>
+constexpr void validate_runtime_immediate(const std::uint32_t value)
+{
+    if constexpr (Operation == BinaryOperation::ShiftLeft || Operation == BinaryOperation::ShiftRight)
+    {
+        require_valid(value <= 31u, "Scalar-unit shift amount must fit in five bits");
+    }
+    else
+    {
+        require_valid(value <= ImmediateLimit, "Scalar-unit immediate must fit in six bits");
+    }
+}
+
 template <BinaryOperation Operation, typename Rhs>
 constexpr void validate_rhs(const Rhs rhs)
 {
@@ -217,11 +243,11 @@ constexpr void validate_rhs(const Rhs rhs)
     {
         if constexpr (Traits::is_static)
         {
-            static_assert(Traits::static_value <= ImmediateLimit, "Scalar-unit immediate must fit in six bits");
+            validate_static_immediate<Operation, Traits::static_value>();
         }
         else
         {
-            require_valid(Traits::value(rhs) <= ImmediateLimit, "Scalar-unit immediate must fit in six bits");
+            validate_runtime_immediate<Operation>(Traits::value(rhs));
         }
     }
     else
@@ -239,7 +265,7 @@ inline constexpr std::uint32_t static_binary_operation()
     static_assert(Lhs < 64u, "Scalar-unit lhs GPR index must be in [0, 63]");
     if constexpr (Traits::is_immediate)
     {
-        static_assert(Traits::static_value <= ImmediateLimit, "Scalar-unit immediate must fit in six bits");
+        validate_static_immediate<Operation, Traits::static_value>();
     }
     else
     {
