@@ -62,18 +62,16 @@ void kernel_main() {
 
     uint32_t reader_idx = 0;
 
-    // TODO: need to make the read coalescing optimization cleaner
-    // pass coalesce_window_inner_reads as a compile time arg and num_coalesced_reads so we can constexpr the if
-    // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both
-    // src/dst side we check if window_inner == weight_size_w to make sure coalescing is legal along full window_inner
-    // so the loop can be removed
-    constexpr uint32_t num_coalesced_reads = weight_size_w;
-    constexpr uint32_t coalesced_read_bytes =
-        ((dilation_w == 1) ? num_coalesced_reads * conv_act_c_read_bytes : conv_act_c_read_bytes);
+    // Coalesce the weight_size_w sticks of a kernel row into a single read when they are contiguous on both src/dst
+    // side and fit in one NoC burst; otherwise fall back to one read per stick.
     // the conditional selecting between coalescing and no-colescing must be constexpr to that compiler can optimized
     // the other path away this has shown to be a big perf win
+    constexpr bool coalesce_reads = coalesce_kernel_w_reads<dilation_w, weight_size_w, conv_act_c_read_bytes>();
+    constexpr uint32_t num_coalesced_reads = coalesce_reads ? weight_size_w : 1;
+    constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
+    // Activation reuse lays out full kernel rows; split them into per-stick reads when they cannot be coalesced.
+    constexpr uint32_t kernel_w_num_reads = (dilation_w == 1) ? weight_size_w / num_coalesced_reads : 1;
 
-    // coalesce reads along weight_size_w
     uint32_t act_l1_read_addr = dfb_sharded_act.get_read_ptr();
 
     static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
@@ -97,7 +95,7 @@ void kernel_main() {
                 l1_write_addr_act = dfb_act.get_write_ptr();
 
                 read_sticks<
-                    dilation_w,
+                    coalesce_reads,
                     coalesced_read_bytes,
                     conv_act_c_read_bytes,
                     act_block_w_extra_align_bytes,
@@ -111,6 +109,7 @@ void kernel_main() {
             } else {
                 read_sticks_activation_reuse<
                     coalesced_read_bytes,
+                    kernel_w_num_reads,
                     conv_act_c_read_bytes,
                     act_block_w_extra_align_bytes,
                     window_outer_offset,

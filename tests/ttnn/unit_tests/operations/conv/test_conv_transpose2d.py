@@ -11,6 +11,7 @@ from tt_py_test_utils_common.utility_functions import (
     is_blackhole,
 )
 import ttnn
+from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv_transpose2d import (
     run_conv_transpose2d,
@@ -346,6 +347,7 @@ def test_simple_conv_t2d_weights_bias_match(
         kernel_size=(filter_height, filter_width),
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
+        output_padding=(out_pad_h, out_pad_w),
         dilation=(dilation, dilation),
         has_bias=True,
         groups=1,
@@ -369,6 +371,7 @@ def test_simple_conv_t2d_weights_bias_match(
         kernel_size=(filter_height, filter_width),
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
+        output_padding=(out_pad_h, out_pad_w),
         dilation=(dilation, dilation),
         groups=1,
         conv_config=conv_config,
@@ -394,6 +397,133 @@ def test_simple_conv_t2d_weights_bias_match(
     ), "Bias from conv_transpose2d don't match bias from prepare_conv_transpose2d_bias"
 
     logger.info("Weights and bias from conv_transpose2d match prepare functions exactly!")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+@pytest.mark.parametrize("input_channels", [64, 128])
+@pytest.mark.parametrize("input_height, input_width", [(8, 8), (16, 16), (24, 24), (32, 32), (48, 48)])
+def test_conv_t2d_prepared_bias_output_padding(device, input_channels, input_height, input_width):
+    """
+    Weights and bias pre-prepared with output_padding != 0 must be laid out for the same auto-shard
+    decision as conv_transpose2d itself; at 288 output channels height and block sharding pad the bias
+    to different widths (9 vs 10 tiles).
+    """
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+
+    batch_size = 1
+    output_channels = 288
+    kernel_size = (3, 3)
+    stride = (2, 2)
+    padding = (1, 1)
+    output_padding = (1, 1)
+    dilation = (1, 1)
+    dtype = ttnn.bfloat16
+
+    torch.manual_seed(0)
+    torch_input_tensor_nchw = torch.randn(
+        [batch_size, input_channels, input_height, input_width], dtype=torch.bfloat16
+    ).float()
+    torch_weight_tensor = torch.randn([input_channels, output_channels, *kernel_size], dtype=torch.bfloat16).float()
+    torch_bias_tensor = torch.randn([1, 1, 1, output_channels], dtype=torch.bfloat16).float()
+    torch_out_golden_tensor = torch.nn.functional.conv_transpose2d(
+        torch_input_tensor_nchw,
+        torch_weight_tensor,
+        bias=torch_bias_tensor.reshape(-1),
+        stride=stride,
+        padding=padding,
+        output_padding=output_padding,
+        dilation=dilation,
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1)),
+        dtype,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    conv_config = ttnn.Conv2dConfig(weights_dtype=dtype, shard_layout=None, output_layout=ttnn.TILE_LAYOUT)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    common_args = dict(
+        input_memory_config=ttnn.L1_MEMORY_CONFIG,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        output_padding=output_padding,
+        dilation=dilation,
+        groups=1,
+        device=device,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        input_dtype=dtype,
+    )
+    tt_weight_tensor = ttnn.prepare_conv_transpose2d_weights(
+        weight_tensor=ttnn.from_torch(torch_weight_tensor, dtype),
+        weights_format="IOHW",
+        has_bias=True,
+        **common_args,
+    )
+    tt_bias_tensor = ttnn.prepare_conv_transpose2d_bias(
+        bias_tensor=ttnn.from_torch(torch_bias_tensor, dtype),
+        **common_args,
+    )
+
+    conv_args = dict(
+        input_tensor=tt_input_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        output_padding=output_padding,
+        dilation=dilation,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=1,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+        dtype=dtype,
+    )
+
+    # Let the op prepare its own bias from host so it can be compared against the pre-prepared one.
+    [_, _, [_, bias_from_conv]] = ttnn.conv_transpose2d(
+        weight_tensor=ttnn.from_torch(torch_weight_tensor, dtype),
+        bias_tensor=ttnn.from_torch(torch_bias_tensor, dtype),
+        **conv_args,
+    )
+    assert torch.equal(
+        ttnn.to_torch(bias_from_conv.cpu()), ttnn.to_torch(tt_bias_tensor.cpu())
+    ), "Bias from prepare_conv_transpose2d_bias doesn't match the bias prepared by conv_transpose2d"
+
+    [tt_output_tensor_on_device, [out_height, out_width], _] = ttnn.conv_transpose2d(
+        weight_tensor=tt_weight_tensor,
+        bias_tensor=tt_bias_tensor,
+        **conv_args,
+    )
+
+    out = ttnn.to_torch(tt_output_tensor_on_device.cpu())
+    out = out.reshape(batch_size, out_height, out_width, out.shape[-1])[:, :, :, :output_channels]
+    out = torch.permute(out, (0, 3, 1, 2))
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, torch_out_golden_tensor, pcc=0.99)
+    logger.info(f"PCC = {pcc_msg}")
+    assert passing, pcc_msg
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)

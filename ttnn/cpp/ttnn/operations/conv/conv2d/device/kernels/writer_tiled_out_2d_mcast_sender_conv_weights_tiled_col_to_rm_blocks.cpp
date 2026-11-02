@@ -120,8 +120,9 @@ void kernel_main() {
     uint32_t reader_idx = start_reader_idx;
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
-    constexpr uint32_t coalesced_read_bytes =
-        ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
+    constexpr bool coalesce_reads = coalesce_kernel_w_reads<dilation_w, weight_size_w, conv_act_c_read_bytes>();
+    constexpr uint32_t num_coalesced_reads = coalesce_reads ? weight_size_w : 1;
+    constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
 
@@ -172,7 +173,7 @@ void kernel_main() {
                         experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
                         read_activation_data<
                             sliced_inner_dim,
-                            dilation_w,
+                            coalesce_reads,
                             coalesced_read_bytes,
                             conv_act_c_read_bytes,
                             act_block_w_extra_align_bytes,
