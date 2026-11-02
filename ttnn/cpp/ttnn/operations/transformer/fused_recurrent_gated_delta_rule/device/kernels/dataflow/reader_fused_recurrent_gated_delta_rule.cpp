@@ -21,8 +21,10 @@ void kernel_main() {
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t use_blk_idx = get_compile_time_arg_val(2);
     constexpr uint32_t gb_fused = get_compile_time_arg_val(3);
+    // Vt is this core's share of V (all of it, or half under QWEN36_1C_GDN_VSPLIT); Vt_full addresses the tensors.
+    constexpr uint32_t Vt_full = get_compile_time_arg_val(4);
 
-    constexpr auto q_a = TensorAccessorArgs<4>();
+    constexpr auto q_a = TensorAccessorArgs<5>();
     constexpr auto k_a = TensorAccessorArgs<q_a.next_compile_time_args_offset()>();
     constexpr auto v_a = TensorAccessorArgs<k_a.next_compile_time_args_offset()>();
     constexpr auto d_a = TensorAccessorArgs<v_a.next_compile_time_args_offset()>();
@@ -114,7 +116,22 @@ void kernel_main() {
         // Watcher-checked caller contract: the block belongs to head h and lies inside the ring.
         ASSERT(s0_block % BH == h && s0_block < T * BH);
     }
-    read_into(s0_acc, cb_S, s0_block * kv, kv);
+    // This core's V columns of S: Kt row segments of Vt tiles, starting at tile v0 of each row of Vt_full.
+    const uint32_t v0 = get_arg_val<uint32_t>(12);
+    if constexpr (Vt == Vt_full) {
+        read_into(s0_acc, cb_S, s0_block * kv, kv);
+    } else {
+        CircularBuffer cbS(cb_S);
+        cbS.reserve_back(kv);
+        for (uint32_t kt = 0; kt < Kt; kt++) {
+            for (uint32_t vt = 0; vt < Vt; vt++) {
+                noc.async_read(s0_acc, cbS, tb, {.page_id = s0_block * Kt * Vt_full + kt * Vt_full + v0 + vt},
+                               {.offset_bytes = (kt * Vt + vt) * tb});
+            }
+        }
+        noc.async_read_barrier();
+        cbS.push_back(kv);
+    }
 
     // GQA: q/k may carry only H = HV/gqa query heads, so value-head h reads query head h/gqa. With
     // gqa == 1 this is exactly h*T+t, the pre-expanded form, so the pre-expanded callers are
@@ -128,7 +145,7 @@ void kernel_main() {
         const uint32_t qk_block = qk_h * T + t;
         read_into(q_acc, cb_q, qk_block * Kt, Kt);
         read_into(k_acc, cb_k, qk_block * Kt, Kt);
-        read_into(v_acc, cb_v, block * Vt, Vt);
+        read_into(v_acc, cb_v, block * Vt_full + v0, Vt);
         if constexpr (!gb_fused) {
             read_into(d_acc, cb_decay, block, 1);
             read_into(b_acc, cb_beta, block, 1);

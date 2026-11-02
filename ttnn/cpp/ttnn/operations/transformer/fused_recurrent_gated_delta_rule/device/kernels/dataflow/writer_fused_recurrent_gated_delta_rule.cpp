@@ -22,8 +22,9 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
+    constexpr uint32_t Vt_full = get_compile_time_arg_val(3);  // Vt is this core's share of V (QWEN36_1C_GDN_VSPLIT)
 
-    constexpr auto o_a = TensorAccessorArgs<3>();
+    constexpr auto o_a = TensorAccessorArgs<4>();
     constexpr auto st_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
 
     const uint32_t h = get_arg_val<uint32_t>(0);
@@ -31,6 +32,7 @@ void kernel_main() {
     const uint32_t o_addr = get_arg_val<uint32_t>(2);
     const uint32_t st_addr = get_arg_val<uint32_t>(3);
     const uint32_t BH = get_arg_val<uint32_t>(4);  // set by the program factory; token-major stride
+    const uint32_t v0 = get_arg_val<uint32_t>(5);  // first V tile of this core's part
 
     const uint32_t tb = get_tile_size(cb_out);  // fp32; o and state share it
     const auto o_acc = TensorAccessor(o_a, o_addr, tb);
@@ -53,13 +55,30 @@ void kernel_main() {
         cb.pop_front(n);
     };
 
+    // State block b: Kt rows of Vt_full tiles; this core owns tiles [v0, v0 + Vt) of each row (all of them unless split).
+    auto write_state = [&](uint32_t block) {
+        if constexpr (Vt == Vt_full) {
+            write_from(cbst, st_acc, block * kv, kv);
+        } else {
+            cbst.wait_front(kv);
+            auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbst);
+            for (uint32_t kt = 0; kt < Kt; kt++) {
+                for (uint32_t vt = 0; vt < Vt; vt++) {
+                    noc.async_write(src, st_acc, tb, {.offset_bytes = (kt * Vt + vt) * tb},
+                                    {.page_id = block * Kt * Vt_full + kt * Vt_full + v0 + vt});
+                }
+            }
+            noc.async_write_barrier();
+            cbst.pop_front(kv);
+        }
+    };
     for (uint32_t t = 0; t < T; t++) {
-        write_from(cbout, o_acc, (h * T + t) * cv, cv);  // o stays head-major
+        write_from(cbout, o_acc, (h * T + t) * Vt_full + v0, cv);  // o stays head-major
         if constexpr (per_token) {
-            write_from(cbst, st_acc, (t * BH + h) * kv, kv);  // state is token-major
+            write_state(t * BH + h);  // state is token-major
         }
     }
     if constexpr (!per_token) {
-        write_from(cbst, st_acc, h * kv, kv);  // final state only
+        write_state(h);  // final state only
     }
 }
