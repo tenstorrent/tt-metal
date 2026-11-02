@@ -34,15 +34,14 @@ namespace experimental {
 /**
  * Reduce init: programs UNPACK (AB reduce), MATH, and the PACK edge-mask. compute_kernel_hw_startup(data,
  * scaler, out) must already have programmed the formats. Uses DATA, SCALER and OUT geometry. The scaler may be a
- * [1,32] tile: the unpacker reads only the first row of each scaler face. SUM/AVG REDUCE_ROW reads the scaler
- * through the unpacker compute_kernel_hw_startup configured for the data, so there the scaler must be shaped like
- * the data.
+ * [1,32] tile, except for SUM/AVG REDUCE_ROW: that path reads the scaler through the unpacker
+ * compute_kernel_hw_startup set up for the data, so the scaler must be shaped like the data.
  *
  * | Template | reduce_type | SUM / AVG / MAX                                | PoolType  | | True |
  * | Template | reduce_dim  | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR       | ReduceDim | | True |
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode              | bool       | | False |
  * | Function | data        | Input operand A (reduced); drives geometry    | LLKOperand | | True |
- * | Function | scaler      | Scaler operand B; its geometry drives the scaler unpack | LLKOperand | | True |
+ * | Function | scaler      | Scaler operand B                              | LLKOperand | | True |
  * | Function | out         | Output operand (drives the packer edge mask)  | LLKOperand | | True |
  */
 // clang-format on
@@ -72,8 +71,7 @@ ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<SF, SS> /*scaler*/
 
 // clang-format off
 /**
- * Reduce init for a scaler shaped like the data: same as reduce_init(data, scaler, out) with the scaler's geometry
- * taken from `data`.
+ * reduce_init(data, scaler, out) for a scaler shaped like the data.
  *
  * | Template | reduce_type | SUM / AVG / MAX                                | PoolType  | | True |
  * | Template | reduce_dim  | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR       | ReduceDim | | True |

@@ -22,11 +22,10 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 /**
- * @brief Rows per face that unpacker B reads in a two-operand unpack: only the rows the math thread consumes.
+ * @brief Rows per face that unpacker B reads: the rows math uses.
  *
- * ROW and SCALAR broadcast use SrcB row 0 alone (the math SrcB address does not advance inside a face, see
- * @ref eltwise_binary_configure_addrmod), so B reads one row per face whatever its shape. NONE and COL consume
- * every row A does, so B reads A's face rows and must have at least that many.
+ * ROW and SCALAR read one row, since math uses only SrcB row 0. NONE and COL read A's face rows, so B needs at
+ * least that many.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape_a: Tensor shape of source A
@@ -49,19 +48,19 @@ inline std::uint32_t _llk_unpack_AB_srcb_face_r_dim_(const ckernel::TensorShape 
 /**
  * @brief Configure the MOP (Micro-Operation Program) for unpacking two source operands A and B
  *
- * SrcA walks its faces row by row (column by column with inter-face transpose). SrcB follows the broadcast:
- * - NONE: one B face per A face.
- * - COL: one B face per row of A faces, at the start of the matching row of B faces.
- * - ROW: B's first row of faces, re-read for every row of A faces.
- * - SCALAR: B's first face, read once per tile.
+ * B faces read per broadcast type:
+ * - NONE: one per A face.
+ * - COL: the first face of each row of B faces, once per row of A faces.
+ * - ROW: B's first row of faces, for every row of A faces.
+ * - SCALAR: B's first face, once per tile.
  *
  * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows zeroes both SrcA and
  * both SrcB banks here, because the FPU reads at least MAX_FPU_ROWS rows per face.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param transpose_of_faces: Whether to transpose faces (reorder faces 0,2,1,3)
- * @param tensor_shape_a: Tensor shape of source A; sets the face loop
- * @param tensor_shape_b: Tensor shape of source B; sets where each row of B faces starts
+ * @param tensor_shape_a: Tensor shape of source A
+ * @param tensor_shape_b: Tensor shape of source B
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape tensor_shape_a, const ckernel::TensorShape tensor_shape_b)
@@ -82,20 +81,20 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 
     static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    // Z increment of 2 steps down a column of faces; with transpose num_faces_c_dim is 1 or 2, and 1 has one face per column.
+    // Z += 2 moves down a column of faces (transpose allows at most two face columns).
     static constexpr std::uint32_t unpack_srca_transpose = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     const std::uint32_t outerloop = transpose_of_faces ? num_faces_c_dim : num_faces_r_dim;
     const std::uint32_t innerloop = transpose_of_faces ? num_faces_r_dim : num_faces_c_dim;
     const std::uint32_t srca_op   = transpose_of_faces ? unpack_srca_transpose : unpack_srca;
-    // With transpose, each outer pass ends at the bottom of a column of faces; move SrcA to the top of the next.
+    // With transpose, move SrcA to the top of the next column of faces.
     const std::uint32_t srca_next_column = transpose_of_faces ? TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001) : TT_OP_NOP;
 
     if constexpr (BType == BroadcastType::COL)
     {
         LLK_ASSERT(num_faces_c_dim >= num_faces_r_dim, "BroadcastType::COL does not support a 32x16 SrcA tile");
         LLK_ASSERT(tensor_shape_b.num_faces_r_dim >= num_faces_r_dim, "BroadcastType::COL needs a SrcB face for every row of SrcA faces");
-        // B's first column is broadcast across a row of A faces; then point B at the start of its next row of faces.
+        // After each row of A faces, move B to its next row of faces.
         ckernel_template tmp(outerloop, innerloop, srca_op);
         tmp.set_start_op(unpack_srcb);
         tmp.set_end_ops(TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, tensor_shape_b.num_faces_c_dim, 0b0001), srca_next_column);
@@ -105,7 +104,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     {
         LLK_ASSERT(num_faces_c_dim >= num_faces_r_dim, "BroadcastType::ROW does not support a 32x16 SrcA tile");
         LLK_ASSERT(tensor_shape_b.num_faces_c_dim >= num_faces_c_dim, "BroadcastType::ROW needs a SrcB face for every column of SrcA faces");
-        // B's first row of faces pairs with every row of A faces.
+        // Re-read B's first row of faces for every row of A faces.
         ckernel_template tmp(outerloop, innerloop, unpack_srcb, srca_op);
         tmp.set_end_ops(TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001), srca_next_column);
         tmp.program();
@@ -136,19 +135,18 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 /**
  * @brief Initialize unpacker to unpack two source operands A and B into SrcA and SrcB registers
  *
- * Configures the unpacker hardware for dual-operand unpacking with support for various broadcast modes and
- * optional transpose. Each unpacker reads only what the math thread consumes from its operand: A reads its
- * full faces, and B reads the rows given by @ref _llk_unpack_AB_srcb_face_r_dim_ (one row for ROW/SCALAR).
+ * Configures two-operand unpacking with optional broadcast and transpose. A reads full faces; B reads the rows
+ * math uses (see @ref _llk_unpack_AB_srcb_face_r_dim_).
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @param tensor_shape_a: Tensor shape of source A (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
- * @param tensor_shape_b: Tensor shape of source B, e.g. a [1,32] tile for a ROW/SCALAR broadcast operand
+ * @param tensor_shape_a: Tensor shape of source A
+ * @param tensor_shape_b: Tensor shape of source B, e.g. [1,32] for ROW/SCALAR broadcast
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
  * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows waits for math and
  * zeroes both SrcA and both SrcB banks (see @ref _llk_unpack_AB_mop_config_). Re-run this init after any op that
  * writes SrcA or SrcB, for example a MOVD2A or MOVD2B.
- * @note Leaves each unpacker's datum count (x_end) programmed, and SrcB's can differ from SrcA's. Each op's init
- * reprograms the datum count it uses, so @ref _llk_unpack_AB_uninit_ is a no-op.
+ * @note B's datum count (x_end) can differ from A's. Each op's init sets the counts it uses, so
+ * @ref _llk_unpack_AB_uninit_ is a no-op.
  * @ref _llk_unpack_AB_ is the matching execute call.
  * @ref _llk_math_eltwise_binary_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
@@ -177,14 +175,12 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape_a, cons
 }
 
 /**
- * @brief Initialize unpacker to unpack two source operands A and B that share one tensor shape.
- *
- * Forwards to the two-shape init with B's shape equal to A's.
+ * @brief Initialize unpacker for operands A and B that share one tensor shape.
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape of both sources (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
- * @note Forwards to the two-shape @ref _llk_unpack_AB_init_, whose notes apply.
+ * @note Calls the two-shape @ref _llk_unpack_AB_init_; its notes apply.
  * @ref _llk_unpack_AB_ is the matching execute call.
  */
 template <BroadcastType BType = BroadcastType::NONE>
@@ -200,7 +196,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
- * @note Forwards to the two-shape @ref _llk_unpack_AB_init_, whose notes apply.
+ * @note Calls the two-shape @ref _llk_unpack_AB_init_; its notes apply.
  * @ref _llk_unpack_AB_ is the matching execute call.
  */
 template <BroadcastType BType = BroadcastType::NONE>
@@ -218,7 +214,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckern
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Nonzero to enable both inter-face and within-face transpose, zero for none.
- * @note Forwards to the two-shape @ref _llk_unpack_AB_init_, whose notes apply.
+ * @note Calls the two-shape @ref _llk_unpack_AB_init_; its notes apply.
  * @ref _llk_unpack_AB_ is the matching execute call.
  */
 template <BroadcastType BType = BroadcastType::NONE>

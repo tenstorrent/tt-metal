@@ -101,8 +101,7 @@ def _unique_dimensions(dimensions):
     return [list(dim) for dim in dict.fromkeys(tuple(dim) for dim in dimensions)]
 
 
-# Fills every SrcB datum past its own tile. Large enough that a single poisoned datum reaching
-# math breaks the result.
+# Fills SrcB past its own tile; one datum reaching math breaks the result.
 SRCB_POISON = 1024.0
 
 
@@ -124,13 +123,11 @@ def _faces(tile, tile_dimensions):
 def _srcb_own_shape_operands(
     src_B_tilized_flat, tile_cnt, tile_dimensions, tile_dimensions_B
 ):
-    """SrcB tiles of their own shape, laid out in SrcA-tile-sized L1 slots.
+    """SrcB tiles of their own shape in SrcA-tile-sized L1 slots, poisoned past each tile.
 
-    Returns the L1 stimuli and an SrcA-shaped view of each SrcB tile for the broadcast golden.
-    Each slot starts with a SrcB tile of tile_dimensions_B and holds SRCB_POISON past it, so an
-    unpacker that reads SrcB with SrcA's geometry pulls poison into the result. The golden view
-    puts each SrcB face in the SrcA face at the same (face row, face column), cut to SrcA's face
-    rows, and poison everywhere the broadcast must not read.
+    Returns the L1 stimuli and, for the broadcast golden, an SrcA-shaped copy of each SrcB tile:
+    each SrcB face in the SrcA face at the same position, cut to SrcA's face rows, and poison
+    elsewhere.
     """
     size_A = tile_dimensions[0] * tile_dimensions[1]
     size_B = tile_dimensions_B[0] * tile_dimensions_B[1]

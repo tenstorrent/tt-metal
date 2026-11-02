@@ -61,8 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         if constexpr (IS_SWAPPED_REDUCE_ROW)
         {
-            // Scaler -> SrcA through unpacker 0, data -> SrcB through unpacker 1: each unpacker gets the
-            // geometry and format of the operand it reads.
+            // Unpacker 0 reads the scaler and unpacker 1 the data; configure each for its operand.
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
                 formats.unpack_B_src,
                 formats.unpack_A_src,

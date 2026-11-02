@@ -130,9 +130,7 @@ def test_eltwise_binary_bfp4_b_broadcast(
     )
 
 
-# SrcB in its own tile shape, as production feeds it: a [1,32] row for ROW and SCALAR, and a
-# 16-column tile with SrcA's rows of faces for COL. Each SrcB tile sits in an SrcA-tile-sized L1
-# slot with poison past its end (see _srcb_own_shape_operands).
+# (SrcA, SrcB) tile shapes: a [1,32] SrcB for ROW and SCALAR, a 16-column SrcB for COL.
 SRCB_SHAPE_CASES = {
     BroadcastType.Row: [
         ([16, 16], [1, 32]),

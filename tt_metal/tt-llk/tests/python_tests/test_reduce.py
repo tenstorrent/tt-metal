@@ -147,20 +147,16 @@ def _scaler_tile(tile_shape, tile_dimensions, reduce_dim, pool_type):
     )
 
 
-# Fills every scaler datum the unpacker must not reach. Large enough that a single poisoned
-# datum reaching math breaks the result.
+# Fills every scaler datum the unpacker must not reach; one reaching math breaks the result.
 SCALER_POISON = 1024.0
 
 
 def _poisoned_scaler_slots(tile_shape, scaler_shape, scaler_value):
-    """A scaler of its own shape, written at the start of a run of data-tile-sized L1 slots.
+    """A scaler of its own shape in data-tile-sized L1 slots, with one spare slot of poison after it.
 
-    The stimuli writer lays out B in data-tile-sized slots, so the scaler takes as many slots as it
-    needs plus one more, leaving poison past its end whatever its size. Only the first row of each
-    scaler face holds the scaler. The other scaler rows and everything past the scaler tile hold
-    SCALER_POISON, so an unpacker that reads past the scaler or the wrong scaler faces corrupts the
-    result. SUM/AVG REDUCE_ROW reads full-height scaler faces whole; their poisoned rows reach only
-    dest columns the packer drops.
+    Only the first row of each scaler face holds the scaler; everything else is SCALER_POISON.
+    (SUM/AVG REDUCE_ROW reads full-height scaler faces whole, but those rows reach only result
+    columns the packer drops.)
 
     Returns the slots and how many there are.
     """
@@ -348,8 +344,8 @@ def test_reduce(
     )
 
 
-# Scaler shapes unlike the data's: a [1,32] scaler (production's reduce scaler), one with full-height
-# faces but fewer of them than a 32x32 tile, and a full tile next to smaller data tiles.
+# A [1,32] scaler, a [16,32] scaler (full-height faces, but fewer than a 32x32 tile), and a 32x32
+# scaler next to smaller data tiles.
 REDUCE_SCALER_DIMENSIONS = [[1, 32], [16, 32], [32, 32]]
 
 
@@ -358,8 +354,7 @@ REDUCE_SCALER_DIMENSIONS = [[1, 32], [16, 32], [32, 32]]
     scaler_dimensions=lambda tile_dimensions: [
         dims for dims in REDUCE_SCALER_DIMENSIONS if dims != tile_dimensions
     ],
-    # Float formats only: the poisoned scaler slot is laid out datum by datum, with no
-    # block-float exponent section.
+    # Float formats only: the poisoned slot has no block-float exponent section.
     formats=[
         fmt
         for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
@@ -372,7 +367,7 @@ REDUCE_SCALER_DIMENSIONS = [[1, 32], [16, 32], [32, 32]]
 def test_reduce_scaler_shape(
     tile_dimensions, scaler_dimensions, formats, dest_acc, reduce_dim, pool_type
 ):
-    """The scaler unpacks from its own tile shape, reading only the first row of each of its faces."""
+    """The scaler unpacks from its own tile shape."""
     _run_reduce_test(
         formats,
         dest_acc,

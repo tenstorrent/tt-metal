@@ -21,10 +21,9 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 /**
- * @brief Whether a reduce unpacks its operands swapped: scaler into SrcA and data into SrcB.
+ * @brief Whether the reduce unpacks the scaler into SrcA and the data into SrcB.
  *
- * SUM/AVG REDUCE_ROW multiplies each data row by a scaler column with MVMUL, which takes the scaler from SrcA.
- * Every other reduce keeps data in SrcA and the scaler in SrcB.
+ * True for SUM/AVG REDUCE_ROW, whose MVMUL takes the scaler from SrcA.
  *
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
@@ -36,11 +35,10 @@ constexpr bool _llk_unpack_AB_reduce_swaps_operands_()
 }
 
 /**
- * @brief Whether the swapped SUM/AVG REDUCE_ROW path reads only the first row of each scaler face.
+ * @brief Whether the swapped path reads one row per scaler face, into a zeroed SrcA.
  *
- * MVMUL reads every row of SrcA faces 0 and 1. A scaler with full-height faces is read whole and fills those faces,
- * so its other rows must be zero, as in a standard reduce scaler tile. A shorter scaler, e.g. [1,32], fills one row
- * per face, so both SrcA banks are zeroed once in @ref _llk_unpack_AB_reduce_mop_config_.
+ * True for a scaler shorter than a face, e.g. [1,32]; the zeros keep the result's other columns zero. A full-height
+ * scaler face is read whole, so its rows past the first must be zero, as in a standard reduce scaler tile.
  *
  * @param tensor_shape_scaler: Shape of the scaler operand.
  */
@@ -50,7 +48,7 @@ inline bool _llk_unpack_AB_reduce_scaler_row_only_(const ckernel::TensorShape te
 }
 
 /**
- * @brief Whether the swapped SUM/AVG REDUCE_ROW path reads a full 32x32 scaler tile in one UNPACR, as it reads the data.
+ * @brief Whether the swapped path reads a 32x32 scaler in one UNPACR, like the data.
  *
  * @param tensor_shape: Shape of the data operand.
  * @param tensor_shape_scaler: Shape of the scaler operand.
@@ -64,23 +62,19 @@ inline bool _llk_unpack_AB_reduce_scaler_whole_tile_(const ckernel::TensorShape 
 /**
  * @brief Configures the unpacker MOP for reduction operations.
  *
- * The data operand is unpacked face by face, except for a full 4-face SUM/AVG REDUCE_ROW, which unpacks the whole
- * data tile in one UNPACR. The scaler contributes only the first row of each of its faces, the row the math thread
- * reads: one row per data face, cycling through the scaler's own faces when it has fewer than the data (e.g. a
- * [1,32] scaler with a 32x32 tile). SUM/AVG REDUCE_ROW reads a full-height scaler face whole instead (see
- * @ref _llk_unpack_AB_reduce_scaler_row_only_).
+ * The data is unpacked face by face, or in one UNPACR for a 4-face SUM/AVG REDUCE_ROW. The scaler gives the first
+ * row of one of its faces per data face, cycling through its faces when it has fewer than the data. The swapped
+ * path can read scaler faces whole (see @ref _llk_unpack_AB_reduce_scaler_row_only_).
  *
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @param tensor_shape: Shape of the data operand, including face_r_dim and num_faces.
+ * @param tensor_shape: Shape of the data operand.
  * @param tensor_shape_scaler: Shape of the scaler operand.
  *
- * @note For tiny tiles (face_r_dim < 16), the data bank is cleared before each face so the rows past it pad correctly.
+ * @note For faces shorter than 16 rows, the data bank is cleared before each face.
  * @note For REDUCE_SCALAR operations, SrcA is cleared before unpacking because SrcA is clobbered in the Math kernel.
- * @note For SUM/AVG REDUCE_ROW with a scaler shorter than a face, both SrcA banks are zeroed here, waiting for math
- *       to release them, so MVMUL sees only the scaler column and writes zeros to the other dest columns. The unpacker
- *       writes the same scaler rows every tile and this math path never writes SrcA, so the zeros last for the op.
- *       Re-run the init after any op that writes SrcA, for example a MOVD2A or MOVB2A.
+ * @note With a short scaler on the swapped path, both SrcA banks are zeroed once here. This math path never writes
+ *       SrcA, so they stay zero; re-run the init after any op that does (e.g. MOVD2A, MOVB2A).
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_shape, const ckernel::TensorShape tensor_shape_scaler)
@@ -106,12 +100,11 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
 
     if (swap_operands && num_faces == MAX_NUM_FACES)
     {
-        // MVMUL multiplies the whole data tile by SrcA faces 0 and 1 in one handoff (see reduce_configure_mop): unpack
-        // the data tile with one UNPACR, and scaler faces 0 and 1 into those two SrcA faces.
+        // One handoff per tile: the whole data tile, and scaler faces 0 and 1 into the SrcA faces MVMUL reads.
         LLK_ASSERT(tensor_shape_scaler.num_faces_c_dim == tensor_shape.num_faces_c_dim, "The scaler needs a face for every column of data faces");
         if (_llk_unpack_AB_reduce_scaler_whole_tile_(tensor_shape, tensor_shape_scaler))
         {
-            // A full 32x32 scaler goes in whole, one UNPACR per operand.
+            // One UNPACR per operand.
             constexpr std::uint32_t whole_tile_replay_len = 2;
             load_replay_buf(
                 0,
@@ -141,7 +134,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
         return;
     }
 
-    // One SrcA/SrcB handoff per data face; the scaler wraps back to its first face when it has fewer faces than the data.
+    // One handoff per data face; the scaler wraps when it has fewer faces.
     const bool wrap_scaler = num_scaler_faces < num_faces;
     LLK_ASSERT(
         !wrap_scaler || tensor_shape_scaler.num_faces_c_dim == tensor_shape.num_faces_c_dim,
@@ -179,15 +172,12 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
  *
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @param tensor_shape: Shape of the data operand (operand A), including face_r_dim and num_faces.
- * @param tensor_shape_scaler: Shape of the scaler operand (operand B), e.g. a [1,32] tile.
+ * @param tensor_shape: Shape of the data operand (operand A).
+ * @param tensor_shape_scaler: Shape of the scaler operand (operand B), e.g. [1,32].
  *
- * @note For SUM/AVG REDUCE_ROW, operands are swapped: scaler→SrcA, data→SrcB. Configure each unpacker for the operand
- *       it reads before this init, formats and face geometry: unpacker 0 for the scaler, unpacker 1 for the data. A
- *       scaler shaped unlike the data needs the face geometry swapped too, not just the formats.
+ * @note For SUM/AVG REDUCE_ROW, operands are swapped: scaler→SrcA, data→SrcB. Configure unpacker 0 for the scaler
+ *       and unpacker 1 for the data before this init, face geometry as well as formats.
  * @note For MAX REDUCE_ROW, original layout is kept: data→SrcA (transposed via haloize), scaler→SrcB.
- * @note The scaler's unpacker reads one row (FACE_C_DIM datums) per face, except on the swapped SUM/AVG REDUCE_ROW
- *       path, where it reads a full-height scaler face whole; the data's reads full faces.
  * @ref _llk_unpack_AB_reduce_ is the matching execute call.
  * @ref _llk_math_reduce_init_ is the matching init on the math thread (this is the scaler operand unpack pairing).
  */
@@ -218,8 +208,7 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape,
     {
         config_unpacker_x_end<data_adc>(tensor_shape.face_r_dim);
     }
-    // The scaler's unpacker reads one row per face, except on the swapped path: a full 32x32 scaler whole, like the
-    // data, and any other full-height scaler face whole.
+    // The scaler reads one row per face, unless the swapped path reads it whole.
     if (swap_operands && _llk_unpack_AB_reduce_scaler_whole_tile_(tensor_shape, tensor_shape_scaler))
     {
         TT_SETADCXX(scaler_adc, MAX_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
@@ -239,7 +228,7 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape,
  *
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @param tensor_shape: Shape of the data and scaler tensors, including face_r_dim and num_faces.
+ * @param tensor_shape: Shape of both the data and the scaler.
  * @ref _llk_unpack_AB_reduce_ is the matching execute call.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
