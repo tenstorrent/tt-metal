@@ -694,11 +694,18 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full", "kernel"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', 'full' or 'kernel', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        self.trace_audio = preset.get("trace_audio", False) if trace_audio is None else bool(trace_audio)
-        # The audio traces are captured by `warmup`, which only a bucketed or dynamic-length pipeline runs.
-        assert (
-            not self.trace_audio or self.bucket_denoise or self.dynamic_length
-        ), "trace_audio requires bucket_denoise or dynamic_length"
+        if self.dynamic_length:
+            # The dynamic-length path is eager end to end: no stage of it is traced, so the preset's audio
+            # trace is not captured, and asking for one explicitly is an error.
+            if trace_audio:
+                raise ValueError("dynamic_length is eager-only: trace_audio cannot be combined with it")
+            self.trace_audio = False
+            if preset.get("trace_audio", False):
+                self._host_log("audio decode: eager (the dynamic-length path takes no traces)")
+        else:
+            self.trace_audio = preset.get("trace_audio", False) if trace_audio is None else bool(trace_audio)
+        # The audio traces are captured by `warmup`, which only a bucketed pipeline runs.
+        assert not self.trace_audio or self.bucket_denoise, "trace_audio requires bucket_denoise"
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
             audio_t_factor, default=preset.get("audio_t_factor", _DEFAULT_AUDIO_T_FACTOR)
         )

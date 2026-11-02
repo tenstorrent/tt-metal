@@ -376,6 +376,8 @@ alignment (256 rows), and the DiT ops that used to key a program on the padded l
 instead; the norms' worker split (`row_capacity`) and the ring attention's K/V gather pair are sized once
 at `max_sequence_length / 8` rows per device. Eager only: a trace freezes the length, so the quad preset
 stays bucketed and traced, and the Wormhole 4x8 preset stays bucketed (dynamic length is unmeasured there).
+No stage of a dynamic-length pipeline is traced: the preset's `trace_audio` is ignored on that path (an
+explicit `trace_audio=True` raises), so the audio decoder runs eagerly too (about 0.3 s per request).
 A dynamic-length `task="ref2va"` pipeline also defaults to `dit_fsdp=True` when its preset has no `dit_fsdp`
 key (the Blackhole 4x8): that gather pair is sized at the ref2va cap (326656 rows against t2va's 120320), and
 beside unsharded resident weights the 880 MB allocation does not fit at construction, while bucketed ref2va and
@@ -399,7 +401,8 @@ ladders (`MINIMAX_H3_*_BUCKET_LADDER_4X8`), the `bucket_denoise` and `bucket_lad
 presets (which then carry `max_sequence_length`, 120320 t2va / 326656 ref2va, instead), the env switch and
 the yielding rule in `_resolve_denoise_path`, so that `bucket_denoise` collapses to `trace_denoise`.
 `_select_bucket`, `_warm_denoise_buckets`, `_capture_denoise`, `validate_bucket_ladder` and the quad
-ladders stay: the quad's traced path uses them until it moves to a device-scalar length. The encoder-side
+ladders stay: the quad's traced path uses them until an eager quad step is cheap enough on the host to drop
+the trace (the agreed route; a device-scalar length is not planned). The encoder-side
 presentation and vision-patch ladders are unrelated to denoise bucketing and stay regardless.
 
 Every program choice is frozen at construction into **length classes** keyed on rows per device
@@ -446,9 +449,9 @@ pipeline-level hashes.
   flag is compile-time; create and every cache hit assert it) and rejects one K head per chip, whose
   shared-K chain is host-built per length.
 - Eager only. Runtime arguments are frozen in a captured trace, so a replay serves the captured length
-  whatever the buffers hold. Three guards: the pipeline refuses `dynamic_length` with `trace_denoise`, the
-  transformer's `forward` raises while a trace capture is active, and the `Tracer` rejects a replay input
-  whose shape differs from the captured one.
+  whatever the buffers hold. Four guards: the pipeline refuses `dynamic_length` with `trace_denoise` or
+  `trace_audio` (and ignores the preset's audio trace), the transformer's `forward` raises while a trace
+  capture is active, and the `Tracer` rejects a replay input whose shape differs from the captured one.
 - Device state. Sized once and written in place, true rows leading: the assembly source table, the ring
   attention's K/V gather pair and the prompt arena (at the arena caps / `max_sequence_length`); the fused
   norms' worker split is likewise fixed at `max_sequence_length / SP` rows. Per request: the hidden stream,
