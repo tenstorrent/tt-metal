@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCacheGeometry,
     declared_seq_shard_factor,
     is_tp_deduped_kv_cache,
+    striped_cache_to_host,
 )
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
@@ -784,19 +785,8 @@ class ttMLA:
         """
         storage = kvpe_cache.storage
         if len(list(storage.tensor_topology().distribution_shape())) == 2:
-            n0, n1 = mesh_device.shape[0], mesh_device.shape[1]
-            sharded = ttnn.to_torch(
-                storage,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-            )  # [slots, n1, n0 * rows_per_chip, width]
-            rows = sharded.shape[2] // n0
-            # SP-major stripe order, as ring_mla writes it: row-major over the mesh (axis 0 outer) with SP on
-            # axis 0, column-major (axis 1 outer) with SP on axis 1.
-            if sp_axis == 0:
-                coords = [(a0, a1) for a0 in range(n0) for a1 in range(n1)]
-            else:
-                coords = [(a0, a1) for a1 in range(n1) for a0 in range(n0)]
-            host = torch.cat([sharded[:, a1 : a1 + 1, a0 * rows : (a0 + 1) * rows] for a0, a1 in coords], dim=2)
+            # SP-major stripe order, as ring_mla writes it.
+            host = striped_cache_to_host(storage, mesh_device, sp_axis).unsqueeze(1)
         else:
             # SP shards concatenate on the sequence dim; only one TP replica is read back.
             host = ttnn.to_torch(storage, mesh_composer=get_sp_mesh_composer(mesh_device, sp_axis, concat_dim=2))

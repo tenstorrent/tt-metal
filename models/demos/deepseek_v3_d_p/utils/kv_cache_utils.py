@@ -389,6 +389,22 @@ def create_kv_chunk_address_table_block_cyclic(
     )
 
 
+def striped_cache_to_host(tensor, mesh_device, sp_axis: int) -> torch.Tensor:
+    """Read a cache striped over every mesh coordinate (TP-deduped KV: the rank-2 dim-2 sharding) back to
+    host in stripe order. The chip at SP position s and TP position t holds stripe s*tp + t, as ring_mla
+    writes it, for SP on either mesh axis. Returns the physical rows ``[slots, seq_len_cache, row]``; an
+    MlaKvCache's caller decodes them with ``unpack_host``, which works row by row."""
+    tp_axis = 1 - sp_axis
+    sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
+    dims = [0, 0]
+    dims[sp_axis], dims[tp_axis] = 2, 1  # SP stripes along the sequence, TP slices on dim 1
+    host = ttnn.to_torch(
+        tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=mesh_device.shape)
+    )  # [slots, tp, sp * rows_per_chip, row]
+    rows = host.shape[2] // sp
+    return torch.cat([host[:, t, s * rows : (s + 1) * rows] for s in range(sp) for t in range(tp)], dim=1)
+
+
 def _sp_row_coords(mesh_shape, sp_axis, sp_row):
     """Mesh coordinates of the chips at SP position ``sp_row``, in TP order, for SP on ``sp_axis``."""
     coords = []
