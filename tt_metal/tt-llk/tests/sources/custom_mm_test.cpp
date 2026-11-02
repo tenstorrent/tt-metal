@@ -89,8 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    // in1 (B, [32,32] tiles, or [32,16] ones of half the size when num_faces_B is 2) is SrcA; in0 (A, [M,32] tiles)
-    // is SrcB.
+    // in1 (B, [32,32] or [32,16] tiles) is SrcA; in0 (A, [M,32] tiles) is SrcB.
     const std::uint32_t in1_tile_size = params.TILE_SIZE_UNPACK_B / TILE_NUM_FACES * params.num_faces_B;
 
     // hw_configure takes the SrcA operand first, so pass the B-matrix (buffer_B) params
@@ -209,7 +208,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Pack with the output face geometry that lands in DEST (M rows, 2 faces, or 1 for [M, 16] tiles), and the
     // strides of the layout's tile spacing, as custom_mm_block_init sets them.
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-    // Output tiles are [M, 32], or [M, 16] (a single face) when in1 is a [32, 16] tile
     const std::uint32_t out_tile_c_dim = params.num_faces * FACE_C_DIM;
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(

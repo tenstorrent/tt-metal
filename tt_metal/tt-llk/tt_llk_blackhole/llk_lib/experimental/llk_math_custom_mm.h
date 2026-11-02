@@ -118,10 +118,8 @@ inline void custom_mm_configure_addrmod()
                           // for fusing matmul and activation
 }
 
-// A [32, 16] in1 tile has a single face per k-face, so each MVMUL moves to the next k-face in SrcA and SrcB alike.
-// The second k-face accumulates onto the first's output rows, or 8 rows below them if split_acc.
-// Run after custom_mm_configure_addrmod: this intentionally overrides its ADDR_MOD_0, and the narrow MOP leaves its
-// ADDR_MOD_1 and ADDR_MOD_6 unused. The other mods are shared with the full-tile MOP.
+// Narrow in1: each MVMUL steps to the next k-face in SrcA and SrcB, accumulating onto the same output rows (+8 if
+// split_acc). Run after custom_mm_configure_addrmod; overrides its ADDR_MOD_0 and leaves ADDR_MOD_1 and 6 unused.
 template <CustomMmDestLayout layout>
 inline void custom_mm_configure_narrow_addrmod()
 {
@@ -249,7 +247,7 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param ct_dim: Number of output column tiles, 1 to 34.
  * @param in1_num_faces: Faces in an in1 (SrcA) tile: 4 for [32, 32], 2 for [32, 16] ([16, 32] with transpose),
- *                       which gives [M, 16] output tiles holding only output face 0.
+ *                       which gives [M, 16] output tiles.
  * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_custom_mm_ asserts
  *       under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_custom_mm_init_, giving it the same face count.
@@ -329,7 +327,6 @@ inline void _llk_math_custom_mm_(
             lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
         }
         // Run the full replay - the last ELWADD as it differs on the last ct_dim iteration and is issued directly after
-        // (narrow tiles have a single ELWADD, so this is their only one)
         lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len - 1);
         TTI_ELWADD(3, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
     }

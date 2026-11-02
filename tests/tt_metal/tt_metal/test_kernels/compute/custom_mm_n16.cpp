@@ -10,9 +10,8 @@
 #include "api/compute/cb_api.h"
 #include "tests/tt_metal/tt_metal/test_kernels/compute/cb_operand_helpers.h"
 
-// custom_mm with [32, 16] weight tiles ([16, 32] when transposed), giving ct_dim [rows, 16] output tiles.
-// in0 holds kt_dim * ct_dim tiles because the reader feeds both inputs the same count; only the first kt_dim are used.
-// api selects the overloads: 0 = CB ids, 1 = LLKOperand in0 and in1, 2 = CB in0 with LLKOperand in1 and output.
+// custom_mm with [32, 16] in1 tiles ([16, 32] when transposed), giving ct_dim [rows, 16] output tiles.
+// api: 0 = CB ids, 1 = LLKOperand in0 and in1, 2 = CB in0 with LLKOperand in1 and output.
 void kernel_main() {
     constexpr std::uint32_t kt_dim = get_compile_time_arg_val(0);
     constexpr std::uint32_t ct_dim = get_compile_time_arg_val(1);

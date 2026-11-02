@@ -19,10 +19,8 @@ namespace {
 constexpr std::uint32_t FACE = 16;
 constexpr std::uint32_t TILE_DIM = 32;
 
-// custom_mm through the CB API with N = 16: [32, 16] weight tiles, or [16, 32] ones holding B^T when transposed, and
-// [rows, 16] output tiles. api picks the compute overloads: CB ids, LLKOperand in0 and in1, or CB in0 with
-// LLKOperand in1 and output. Small integer operands keep every partial sum exact in a bf16 DEST, so the result must
-// match the golden bit for bit.
+// custom_mm with N = 16: [32, 16] in1 tiles ([16, 32] holding B^T when transposed) and [rows, 16] output tiles.
+// Small integer operands keep every sum exact in bf16, so the result must match the golden bit for bit.
 void run_custom_mm_n16(
     distributed::MeshDevice& mesh,
     std::uint32_t rows,
@@ -85,8 +83,8 @@ void run_custom_mm_n16(
             .compile_args = {
                 kt, ct, static_cast<std::uint32_t>(transpose), static_cast<std::uint32_t>(split_acc), rows, api}});
 
-    // A in {0, 1, 2} and B in {-1, 0, 1}: |sums| stay within 2 * K <= 256, exact in bf16. Both vary along K with a
-    // period of 3, which divides neither a face (16) nor a tile (32), so reading the wrong in0 face or tile shows.
+    // A in {0, 1, 2}, B in {-1, 0, 1}: |sums| <= 2 * K <= 256, exact in bf16. Both have period 3 along K, which
+    // divides neither 16 nor 32, so a wrong in0 face or tile read shows.
     auto a_value = [](std::uint32_t m, std::uint32_t k) { return static_cast<float>((m + k) % 3); };
     auto b_value = [](std::uint32_t k, std::uint32_t n) { return static_cast<float>((k * 5 + n * 7) % 3) - 1.0f; };
 
@@ -147,8 +145,8 @@ void run_custom_mm_n16(
 }  // namespace
 
 TEST_F(LLKBlackholeSingleCardFixture, CustomMatmulN16) {
-    // rows 1 would give 32-byte output tiles, below the DRAM write alignment; the tt-llk test covers it.
-    // The CB API takes the full sweep; the LLKOperand overloads share its LLK calls, so one shape per mode suffices.
+    // rows 1 gives 32-byte output tiles, below the DRAM write alignment; the tt-llk test covers it.
+    // The LLKOperand overloads share the CB API's LLK calls, so one shape each suffices.
     for (const bool transpose : {false, true}) {
         for (const bool split_acc : {false, true}) {
             for (const auto api : {0u, 1u, 2u}) {

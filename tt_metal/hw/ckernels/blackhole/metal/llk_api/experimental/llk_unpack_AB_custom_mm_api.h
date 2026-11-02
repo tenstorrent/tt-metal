@@ -29,8 +29,8 @@
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
  * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
  * @param operand0: CB of the activations, whose face_r_dim this reads. Its data goes to SrcB.
- * @param operand1: CB of the weights, whose unpack format selects the instruction tuning and whose face count (4, or 2
- *                  for [32, 16] tiles) sets the SrcA unpack size. Its data goes to SrcA.
+ * @param operand1: CB of the weights (SrcA). Its unpack format selects the instruction tuning and its face count (4,
+ *                  or 2 for [32, 16] tiles) the unpack size.
  * @param ct_dim: Output width in tiles, 1 to 34.
  * @note Call this before @ref llk_unpack_AB_custom_mm, and again after any other op has run, in particular one
  *       that writes SrcB.

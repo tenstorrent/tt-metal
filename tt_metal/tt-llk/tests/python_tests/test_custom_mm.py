@@ -190,7 +190,7 @@ def _build_custom_mm(
                 stimuli_format=in1_format,
                 tile_dimensions=[DEFAULT_TILE_R_DIM, tile_c],
             )
-            # BFP packers take the face count: 2 for a [32,16] tile. The others pack the whole tensor.
+            # BFP packers need the face count; the others pack the whole tensor.
             packed_tile = (
                 in1_packer(tiled_blk, num_faces=in1_num_faces)
                 if in1_format in _BFP_UNPACKERS
@@ -233,8 +233,7 @@ def _build_custom_mm(
             DEST_SYNC(dest_sync),
         ],
         runtimes=[
-            # in0 uses 2 faces (M x 16 each). in1 (B) uses 4 full faces and the result 2,
-            # or 2 and 1 for 16-wide tiles.
+            # Faces: in0 2 (M x 16 each); in1 4 and result 2, or 2 and 1 for 16-wide tiles.
             NUM_FACES(
                 num_faces=tile_c // FACE_C_DIM,
                 num_faces_A=2,
@@ -721,9 +720,8 @@ def test_custom_mm_flushes_denormal_srcb_after_keep_flag(ct):
     ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"
 
 
-# N = 16: in1 is a 2-face [32,16] tile and each output tile a single [M,16] face, so a tile takes two MVMULs (one
-# per k-face) instead of four, and the SplitAcc finalize merges a single face. The DEST layouts are unchanged, with
-# the output face 1 slot left unused.
+# N = 16: 2-face [32,16] in1 tiles and single-face [M,16] output tiles, so two MVMULs per tile instead of four.
+# The DEST layouts are unchanged; the output face 1 slot stays unused.
 N16 = 16
 N16_CT_DIMS_16BIT = [1, 3, 16]
 # Odd and above 1, so the Compact cases accumulate over several k-tiles.
@@ -793,8 +791,7 @@ def test_custom_mm_n16_compact(formats, M, ct):
     )
 
 
-# Long K and the BFP weight paths with half-size [32,16] in1 tiles: the post1 unpack tuning (Bfp4_b) and a Bfp8_b B
-# split over several TT_MOPs.
+# Long K and the BFP weight paths (Bfp4_b post1 tuning, Bfp8_b split over several TT_MOPs) with [32,16] in1 tiles.
 N16_BFP_LONG_K_CASE_IDS = ("k256-ct1", "k130-ct4-bfp8", "k9-ct2-bfp4-post1")
 N16_BFP_LONG_K_CASES = [
     case for case in LONG_K_CASES + ODD_K_CASES if case.id in N16_BFP_LONG_K_CASE_IDS
