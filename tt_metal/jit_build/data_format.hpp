@@ -29,19 +29,26 @@ bool is_all_fp32_formats(std::span<const DataFormat> data_format);
 // True for any OCP MX block-scaled format.
 bool is_mx_format(DataFormat data_format);
 
-std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_formats);
+// Quasar has no UInt32 unpack/pack encoding: the 32-bit integer path carries it as Int32 (same bits).
+DataFormat quasar_canonical_format(DataFormat data_format);
+
+// Formats are canonicalised for Quasar (see quasar_canonical_format) when arch == QUASAR.
+std::vector<DataFormat> get_unpack_src_formats(
+    std::span<const DataFormat> data_formats, tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 std::vector<DataFormat> get_unpack_dst_formats(
     std::span<const DataFormat> buf_formats,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
-    bool int_fpu_en = false);
+    bool int_fpu_en = false,
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 
-// True if any data-flow buffer is configured to unpack directly to Dest (i.e. any entry is not
-// UnpackToDestMode::Default). Used to derive the (Quasar-only) kernel-wide UnpackToDestEn sync
-// selector from the same per-operand vector that drives the unpack dst formats, so the two agree.
-// Quasar has no performance penalty for unpacking to Dest for any data format, unlike WH/BH
-// which restrict it to 32-bit formats; the routing is captured kernel-wide, not per-operand.
+// (Quasar only) Kernel-wide UnpackToDestEn: any explicit to-dest mode entry, or any Int32/UInt32 operand,
+// which Quasar can only unpack to DEST.
+bool quasar_unpack_to_dest_en(
+    std::span<const DataFormat> buf_formats, const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode);
+
+[[deprecated("use quasar_unpack_to_dest_en")]]
 bool any_unpack_to_dest(const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode);
 
 std::vector<DataFormat> get_pack_src_formats(
@@ -51,6 +58,7 @@ std::vector<DataFormat> get_pack_src_formats(
     bool bfp8_pack_precise,
     bool int_fpu_en = false,
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
-std::vector<DataFormat> get_pack_dst_formats(std::span<const DataFormat> buf_formats);
+std::vector<DataFormat> get_pack_dst_formats(
+    std::span<const DataFormat> buf_formats, tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 
 }  // namespace tt

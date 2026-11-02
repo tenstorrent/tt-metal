@@ -122,10 +122,17 @@ ExpPrecision get_data_exp_precision(std::span<const DataFormat> data_formats) {
     return get_exp_precision(last_valid_format);
 }
 
-std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_formats) {
+DataFormat quasar_canonical_format(DataFormat data_format) {
+    return (data_format == DataFormat::UInt32) ? DataFormat::Int32 : data_format;
+}
+
+std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_formats, tt::ARCH arch) {
     std::vector<DataFormat> unpack_src_format;
     unpack_src_format.reserve(data_formats.size());
     for (auto src_format : data_formats) {
+        if (arch == tt::ARCH::QUASAR) {
+            src_format = quasar_canonical_format(src_format);
+        }
         if (src_format == DataFormat::RawUInt32 || src_format == DataFormat::RawUInt16 ||
             src_format == DataFormat::RawUInt8) {
             switch (src_format) {
@@ -185,7 +192,8 @@ std::vector<DataFormat> get_unpack_dst_formats(
     DataFormat unpack_conditional_dst_format,
     bool /*fp32_dest_acc_en*/,
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
-    bool int_fpu_en) {
+    bool int_fpu_en,
+    tt::ARCH arch) {
     if (!unpack_to_dest_mode.empty()) {
         TT_FATAL(
             // Allow size >= buf_formats.size() to support host-side allocations sized for
@@ -200,7 +208,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
     unpack_dst_format.reserve(buf_formats.size());
 
     for (size_t i = 0; i < buf_formats.size(); i++) {
-        DataFormat src_format = buf_formats[i];
+        DataFormat src_format = (arch == tt::ARCH::QUASAR) ? quasar_canonical_format(buf_formats[i]) : buf_formats[i];
         if (src_format == DataFormat::RawUInt32 || src_format == DataFormat::RawUInt16 ||
             src_format == DataFormat::RawUInt8) {
             switch (src_format) {
@@ -225,13 +233,23 @@ std::vector<DataFormat> get_unpack_dst_formats(
     return unpack_dst_format;
 }
 
-bool any_unpack_to_dest(const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode) {
+bool quasar_unpack_to_dest_en(
+    std::span<const DataFormat> buf_formats, const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode) {
     for (const auto mode : unpack_to_dest_mode) {
         if (mode != tt::tt_metal::UnpackToDestMode::Default) {
             return true;
         }
     }
+    for (const auto format : buf_formats) {
+        if (format == DataFormat::Int32 || format == DataFormat::UInt32) {
+            return true;
+        }
+    }
     return false;
+}
+
+bool any_unpack_to_dest(const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode) {
+    return quasar_unpack_to_dest_en({}, unpack_to_dest_mode);
 }
 
 DataFormat get_single_pack_src_format(
@@ -384,6 +402,9 @@ std::vector<DataFormat> get_pack_src_formats(
     pack_src_formats.reserve(data_formats.size());
     DataFormat pack_src_format;
     for (auto src_format : data_formats) {
+        if (arch == tt::ARCH::QUASAR) {
+            src_format = quasar_canonical_format(src_format);
+        }
         pack_src_format = get_single_pack_src_format(
             src_format, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, int_fpu_en, arch);
         pack_src_formats.push_back(pack_src_format);
@@ -392,10 +413,13 @@ std::vector<DataFormat> get_pack_src_formats(
     return pack_src_formats;
 }
 
-std::vector<DataFormat> get_pack_dst_formats(std::span<const DataFormat> buf_formats) {
+std::vector<DataFormat> get_pack_dst_formats(std::span<const DataFormat> buf_formats, tt::ARCH arch) {
     std::vector<DataFormat> pack_dst_format;
     pack_dst_format.reserve(buf_formats.size());
     for (auto dst_format : buf_formats) {
+        if (arch == tt::ARCH::QUASAR) {
+            dst_format = quasar_canonical_format(dst_format);
+        }
         if (dst_format == DataFormat::RawUInt32 || dst_format == DataFormat::RawUInt16 ||
             dst_format == DataFormat::RawUInt8) {
             switch (dst_format) {
