@@ -30,7 +30,7 @@ namespace tt::tt_metal {
 /*
  * rand_tile fills Float16_b tiles with draws in [from, from + scale]. Every element must be in
  * range and the draws must cover the BF16 grid of the range, whether Dest is 16-bit or 32-bit
- * (issue #14213: a store whose width ignores the Dest mode corrupts half of each tile).
+ * (a store whose width ignores the Dest mode corrupts half of each tile).
  */
 namespace unit_tests::compute::sfpu::rand_tile {
 

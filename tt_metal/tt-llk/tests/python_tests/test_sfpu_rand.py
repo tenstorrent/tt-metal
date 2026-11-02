@@ -6,7 +6,7 @@ rand SFPU test. Covers llk_sfpu/ckernel_sfpu_rand.h on Wormhole and Blackhole.
 rand has no element-wise golden, so the test checks properties: every element of the
 tile is a draw inside [from, from + scale], and the draws cover the value grid that the
 Dest width and output format can represent. A store whose width does not match the Dest
-mode leaves elements outside the range (issue #14213).
+mode leaves elements outside the range.
 """
 
 import struct
