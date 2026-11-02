@@ -13,7 +13,7 @@ ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:<tag>    
 
 - 21.7 GB on disk. No weights or caches inside.
 - Offline copy (5.4 GB tar): `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_rc4c_785f0df9b28.tar` (`docker load -i <tar>`).
-- The image contains the model catalog (`/home/container_app_user/model_specs/model_spec.json`, baked at build time). **No runtime spec file is needed**: the server picks the catalog entry from `--model`, `--tt-device` and `--impl`. (The `assets/runtime_spec_*.json` files are for the previous release and are not used by rc4c.)
+- The image contains the model catalog (`/home/container_app_user/model_specs/model_spec.json`, baked at build time). **No runtime spec file is needed**: the server picks the catalog entry from `--model`, `--tt-device` and `--impl`. (The `assets/runtime_spec_*.json` files are not used by rc4c.)
 
 ## Configurations
 
@@ -30,7 +30,7 @@ docker run --rm --entrypoint cat dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b
 
 ## Start
 
-Once per host (driver, 32 chips in `/dev/tenstorrent`, 1 GiB hugepages at `/dev/hugepages-1G`, Docker; the caches on a local disk; the rc4c validation started a server only when `MemAvailable` was at least 300 GB, a limit set by the validation script, not a measured requirement). Disk figures of the previous release (checkpoint 476 GB, weight cache about 610 GB, kernel cache about 43 GB) were not re-measured for rc4c.
+Once per host (driver, 32 chips in `/dev/tenstorrent`, 1 GiB hugepages at `/dev/hugepages-1G`, Docker; the caches on a local disk; the rc4c validation started a server only when `MemAvailable` was at least 300 GB, a limit set by the validation script, not a measured requirement). Cache disk sizes were not measured for rc4c (earlier images: checkpoint 476 GB, weight cache about 610 GB, kernel cache about 43 GB).
 
 The weight cache is keyed by directory only, so each checkpoint needs its own empty `$CACHE` (the server stamps `$CACHE/weights/ckpt_id.json` with the checkpoint id on first use and refuses to start if the stamp names a different one).
 
