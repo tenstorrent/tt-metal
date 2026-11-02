@@ -186,14 +186,40 @@ def _linear_blocking(
     return per_core_m, per_core_n, fitting[-1], subblock_h, subblock_w, transpose
 
 
-def sdpa_program_config(mesh_device, chunk_size: int = 128):
-    """SDPA program config: q and k chunks of chunk_size on the device's whole compute grid.
+# The q chunks sdpa_program_config picks from. Chunks below 128 are left out: on a P150 a q chunk of 64 saved 0.4 ms
+# of the 3.7 ms its query rows predict at 672x672, and none has been timed at a size where the rule would pick it.
+SDPA_Q_CHUNK_SIZES = (128, 160, 192, 256)
+# On a P150 k chunks of 256 ran a 672x672 image about as fast as q chunks of 160, but change the output's rounding.
+SDPA_K_CHUNK_SIZE = 128
 
-    Without a program config the op takes chunks of 32; chunks of 128 run a 672x672 image (2304 patches) faster.
+
+def sdpa_program_config(mesh_device, seq_len: int, num_heads: int):
+    """SDPA program config for seq_len queries and keys in each of num_heads heads, on the device's whole compute grid:
+    k chunks of SDPA_K_CHUNK_SIZE and the q chunk of SDPA_Q_CHUNK_SIZES that leaves the slowest core the fewest query
+    rows, the larger on a tie. A new config at each call, so a caller may change its own.
+
+    Without a program config the op takes chunks of 32; chunks of 128 and up run a 672x672 image (2304 patches) faster.
     exp_approx_mode stays unset, so SDPA keeps the op's default (approximate) exp either way.
     """
+    grid = mesh_device.compute_with_storage_grid_size()
     return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
-        q_chunk_size=chunk_size,
-        k_chunk_size=chunk_size,
+        compute_with_storage_grid_size=grid,
+        q_chunk_size=_sdpa_q_chunk_size(seq_len, num_heads, grid.x * grid.y),
+        k_chunk_size=SDPA_K_CHUNK_SIZE,
     )
+
+
+# Unbounded: one int per patch count and grid, and ttnn keeps a compiled SDPA program for each anyway.
+@functools.lru_cache(maxsize=None)
+def _sdpa_q_chunk_size(
+    seq_len: int, num_heads: int, cores: int, *, q_chunk_sizes: tuple[int, ...] = SDPA_Q_CHUNK_SIZES
+) -> int:
+    """sdpa_program_config's q chunk, of q_chunk_sizes, on a grid of `cores` cores. q_chunk_sizes defaults to
+    SDPA_Q_CHUNK_SIZES's value at import and, as an argument, is part of the cache key.
+
+    Each q chunk runs over all of k and v, so on a tie the larger chunk makes fewer passes: at 672x672 on a 12x10 P150
+    chunks of 64 and of 160 both left the slowest core 320 rows, and those of 160 ran 3.3 ms faster.
+    """
+    # The op deals the num_heads x ceil(seq_len / q) q chunks evenly over the cores, so the slowest core runs
+    # ceil(num_heads * ceil(seq_len / q) / cores) chunks of q rows.
+    return min(q_chunk_sizes, key=lambda q: (math.ceil(num_heads * math.ceil(seq_len / q) / cores) * q, -q))
