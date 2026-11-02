@@ -347,7 +347,9 @@ Tests, in order:
    rt4096: 6.39 s (2564 tok/s) against 7.66 s today and 7.18 s with rt4096 alone (-16.6 %), the first token
    identical; KDA+MoE layers 156 -> 126 ms, DSA+MoE 244 -> 212 ms. Served (2026-11-02): the plan kernel is the
    default, the 1 M profile runs 4096 sub-chunks, the paged sparse keys gathered on both NoCs and the KDA
-   snapshot ring on device: c1 1 M TTFT 494.8 -> 427.6 s. (e) The next expert-glue item, scoped from the regions
+   snapshot ring on device: c1 1 M TTFT 494.8 -> 427.6 s. (e) DONE 2026-11-02 (`custom_ops/pick_combine`, the default
+   `GLM53_REGIONS_COMBINE=kernel`: pick_combine 3.0-5.3 ms at T=4096 for the chain's 4.7 + 2.2 ms, the 1 M chunk's
+   free pass 6.50 -> 5.74 s, served c1 1 M TTFT 427.6 -> 385.1 s). The item as scoped from the regions
    path's tail: at rt4096 the `comb` round trip (`ttnn.embedding` of every pick's 12 KB bf16 row into a
    [T*k, H] table, 403 MB written and read back by `post_combine_reduce`) plus the combine itself cost ~4-5 ms
    of the 25 ms sub-chunk, i.e. ~0.7 s of the 6.5 s chunk across the 42 MoE layers (~50 s per 1 M prefill). A

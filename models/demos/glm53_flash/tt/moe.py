@@ -1809,9 +1809,11 @@ class TtRoutedExperts(LightweightModule):
 
     # ---------------------------------------------- GLM53_REGIONS_PLAN (custom_ops/region_plan; "chain" = the ttnn chain)
     def _combine_serves(self) -> bool:
-        """``GLM53_REGIONS_COMBINE=kernel``: the pick gather + weighted combine as one op (custom_ops/pick_combine);
-        the default is the ttnn chain (``embedding`` + ``post_combine_reduce``)."""
-        return os.environ.get("GLM53_REGIONS_COMBINE", "chain") == "kernel"
+        """``GLM53_REGIONS_COMBINE=kernel`` (the default since 2026-11-02): the pick gather + weighted combine as one
+        op (custom_ops/pick_combine: 3.0-5.3 ms at T=4096 on the 8x4 against the chain's 4.7 + 2.2 ms; the 1 M
+        chunk's free pass 6.50 -> 5.74 s; served c1 1 M TTFT 427.6 -> 385.1 s); ``GLM53_REGIONS_COMBINE=chain``
+        restores the ttnn chain (``embedding`` + ``post_combine_reduce``)."""
+        return os.environ.get("GLM53_REGIONS_COMBINE", "kernel") == "kernel"
 
     def _pick_combine_op(self):
         from models.demos.glm53_flash.custom_ops.pick_combine.op import PickCombine

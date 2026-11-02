@@ -2331,3 +2331,18 @@ axis rule); the kwarg forwarding (`sp_size_kwargs`) and the test's ttnn feature 
 (`mesh_model`) takes its chronology from `local_bounds` (never the absolute chunk start, which would split a segment
 at `start % T`). Validation queued on the stock runtime (`~/ashai/glm53/tt-metal` @73fb055f995, no override):
 `test_mesh_local_kda` on the (2,4) block and the 8x4, then the served c1 1 M needle (rows-independent waves).
+
+### 2026-11-02 05:15: pick_combine is the default combine: served c1 1 M 427.6 -> 385.1 s
+
+`custom_ops/pick_combine` (the pick gather + weighted combine as one generic op: per 32-token block and 8-tile
+column slice the reader gathers the block's 32 x k expert rows into L1 and builds the k diagonal weight tiles, the
+compute tilizes the picks and accumulates `diag(w[:, j]) @ pick_j` in fp32 DST (eight accumulators need
+`dst_full_sync_en`; the half-sync mode holds four and corrupted every second slice), the writer scatters the tile
+pages) replaces the `embedding` gather table + `post_combine_reduce` chain. Measured: chip 0 at T=2048/4096 2x the
+chain and closer to the fp32 golden; the 8x4 at T=4096 stamps pick_combine 3.0-5.3 ms where the chain stamped
+pick_gather 4.7 + post_combine 2.2 ms (regions total 20.1-23.5 vs 25.0 ms; path regions 16384 tokens 102.4 vs
+115.2 ms wall, pcc 0.999607); the last 1 M chunk's free pass 5.74 s (2854 tok/s) vs 6.50 s paged (DSA+MoE 206 vs
+227 ms per layer, KDA+MoE 108 vs 125); served c1 1 M needle FOUND, TTFT **385.1 s** against 427.6 s (chunks
+~5.9-6.2 s vs 6.55-6.78 s). Served c1 1 M ladder: 494.8 (chain) -> 472.5 (rt4096) -> 443.0 (plan kernel) -> 456.9
+(paged) -> 434.1 (device ring) -> 427.6 (dual-NoC gather) -> 385.1 s (pick_combine): -22.2 %.
+`GLM53_REGIONS_COMBINE=kernel` is the code default; `chain` restores the ttnn chain.
