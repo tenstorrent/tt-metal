@@ -19,8 +19,8 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_i
 CSA_LAYER_MARGIN = 0.01
 
 # Device-to-device agreement for a rerun chunk: same weights, tokens and programs over the same state. Reruns
-# measure 1.000000; a chunk that attends another request's state entirely measures 0.9996-0.9999 on
-# Flash's sliding layers and lower everywhere else.
+# measure 1.000000; a chunk that attends another request's state entirely measures at most 0.99993 (Flash's
+# sliding layers) and lower everywhere else. The floor sits between the two, so it cannot drop to 0.99993.
 REPLAY_FLOOR = 0.99999
 
 # The multi-user prefill schedule, keyed by user-slot count.
@@ -31,8 +31,11 @@ REPLAY_FLOOR = 0.99999
 USER_REQUESTS = {1: [(0, 2, None)], 2: [(0, 2, None), (1, 2, None), (0, 1, 0)]}
 # (request, chunk) in the order the chunks reach the device.
 USER_SCHEDULE = {1: [(0, 0), (0, 1)], 2: [(0, 0), (1, 0), (0, 1), (2, 0), (1, 1)]}
-# Requests run again on their own slot once the schedule is done, every other slot empty.
-USER_ISOLATED = {1: [], 2: [1]}
+# (request, slot) run again once the schedule is done, every slot reset first. The slot is another request's:
+# its index key rows still hold that request's keys, which a reset does not clear, so a chunk that scored
+# rows it had not written itself would no longer reproduce its interleaved run. A replay on the same slot
+# cannot show that, since it rewrites the rows it would otherwise read with identical keys.
+USER_ISOLATED = {1: [], 2: [(1, 0)]}
 
 
 def pack_streams(x, tp_factor):

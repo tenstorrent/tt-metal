@@ -18,8 +18,9 @@ That grading cannot see one user's state leaking into another's: with random wei
 chunk that attends the wrong request's state entirely still lands within ~0.002 PCC of the reference,
 far above the floors. Isolation is checked on device instead, where a rerun of the same chunks is
 exact. The third request replays the first one's opening chunk on the reused slot, and once the
-schedule is done the second request runs again alone, every other slot empty. Both must reproduce the
-interleaved outputs to ``REPLAY_FLOOR``, which a full leak misses on every layer of both models.
+schedule is done the second request runs again alone on slot 0, whose index key rows still hold the
+first request's keys. Both must reproduce the interleaved outputs to ``REPLAY_FLOOR``, which a full leak
+misses on every layer of both models.
 """
 
 import pytest
@@ -92,9 +93,11 @@ def run_transformer_chunked(mesh_device, device_params, num_links, num_users, mo
     )
     del state_dict
 
-    def prefill(req, chunk, per_layer, outs):
-        """One chunk of request ``req`` on its slot, its layer taps and output appended to the sinks."""
-        slot, start = requests[req][0], chunk * CHUNK
+    def prefill(req, chunk, per_layer, outs, slot=None):
+        """One chunk of request ``req`` on ``slot`` (its own by default), its layer taps and output appended
+        to the sinks."""
+        slot = requests[req][0] if slot is None else slot
+        start = chunk * CHUNK
         if chunk == 0:
             # What TtV4Runtime.prefill_chunk does at the head of a request.
             model.reset_streams(slot)
@@ -122,12 +125,12 @@ def run_transformer_chunked(mesh_device, device_params, num_links, num_users, mo
         programs = now
 
     isolated = {}
-    for req in USER_ISOLATED[num_users]:
+    for req, rerun_slot in USER_ISOLATED[num_users]:
         for slot in range(num_users):
             model.reset_streams(slot)
         isolated[req] = ([[] for _ in range(_NUM_LAYERS)], [])
         for chunk in range(requests[req][1]):
-            prefill(req, chunk, *isolated[req])
+            prefill(req, chunk, *isolated[req], slot=rerun_slot)
     assert mesh_device.num_program_cache_entries() == programs, "the isolated reruns compiled new programs"
 
     for req, ((slot, n_chunks, replays), (ref_out, ref_layers)) in enumerate(zip(requests, refs)):

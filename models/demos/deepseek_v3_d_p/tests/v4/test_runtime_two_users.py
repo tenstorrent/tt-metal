@@ -7,13 +7,13 @@ parameters prefill_runner derives, and every chunk goes through ``TtV4Runtime.pr
 runner's arguments, so the runtime alone decides which slot's attention state to reset.
 
 The schedule is test_transformer_chunked's two-user one: two requests interleaved chunk by chunk, a third
-reusing slot 0 while slot 1's request is mid-prefill, then the slot 1 request again with nothing between its
-chunks. Real weights for the first few layers of the checkpoint, random tokens.
+reusing slot 0 while slot 1's request is mid-prefill, then the slot 1 request again on slot 0 with nothing
+between its chunks. Real weights for the first few layers of the checkpoint, random tokens.
 
 Graded device to device only, for the reason test_transformer_chunked gives: a chunk that reads another
 slot's state still lands near the CPU reference, while a device rerun of the same chunks is exact. The
 reused slot must reproduce the first request's opening chunk, and the interleaved slot 1 request must
-reproduce its uninterrupted rerun. Accuracy against a reference is the chunked and depth tests' job.
+reproduce its uninterrupted rerun over slot 0's leftover index key rows. Accuracy against a reference is the chunked and depth tests' job.
 
 On one rank ``prefill_chunk`` returns None and discards the model's output, so the test wraps the model's
 ``forward``, which the runtime calls through the instance, to read each layer's streams and the output.
@@ -117,9 +117,11 @@ def run_runtime_two_users(mesh_device, num_links, adapter_name, num_layers):
         programs = mesh_device.num_program_cache_entries()
         expected_acks = []
 
-        def prefill(req, chunk, per_layer, outs):
-            """One chunk of request ``req`` as the runner hands it to the runtime."""
-            slot, start = _REQUESTS[req][0], chunk * CHUNK
+        def prefill(req, chunk, per_layer, outs, slot=None):
+            """One chunk of request ``req`` on ``slot`` (its own by default), as the runner hands it to the
+            runtime."""
+            slot = _REQUESTS[req][0] if slot is None else slot
+            start = chunk * CHUNK
             ids = input_ids[req][0, start : start + CHUNK].tolist()
             ret = runtime.prefill_chunk(
                 runtime.make_chunk_input(ids),
@@ -149,15 +151,14 @@ def run_runtime_two_users(mesh_device, num_links, adapter_name, num_layers):
             prefill(req, chunk, per_layer[req], outs[req])
 
         isolated = {}
-        for req in _ISOLATED:
-            # The runtime resets the request's own slot at its head; the others are emptied here.
-            slot = _REQUESTS[req][0]
+        for req, rerun_slot in _ISOLATED:
+            # The runtime resets the rerun's slot at its head; the others are emptied here.
             for other in range(_NUM_USERS):
-                if other != slot:
+                if other != rerun_slot:
                     runtime.model.reset_streams(other)
             isolated[req] = ([[] for _ in range(num_layers)], [])
             for chunk in range(_REQUESTS[req][1]):
-                prefill(req, chunk, *isolated[req])
+                prefill(req, chunk, *isolated[req], slot=rerun_slot)
 
         assert acks.records == [a for chunk_acks in expected_acks for a in chunk_acks], "layer acks out of contract"
 
