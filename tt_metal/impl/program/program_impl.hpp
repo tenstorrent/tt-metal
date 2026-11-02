@@ -388,16 +388,22 @@ public:
     };
 
     // Per-core PrefetcherPipe slot record. A slot is reserved (geometry only) before the program
-    // compiles and bound to a live pipe object afterwards: `pipe` / `config_page_addr` stay
-    // null / 0 until commit_prefetcher_pipe_slot_bind runs for this core. Dispatch reads the record only when a
-    // program is enqueued, by which point every participant must be bound.
+    // compiles and bound to a live pipe object afterwards: `pipe` / `pipe_identity` /
+    // `config_page_addr` stay empty / 0 / 0 until commit_prefetcher_pipe_slot_bind runs for this core.
+    // Dispatch reads the record only when a program is enqueued, by which point every participant
+    // must be bound to a pipe that is still alive.
     struct PrefetcherPipeParticipant {
         uint8_t prefetcher_pipe_id;
         uint32_t config_page_addr;
         uint32_t entry_size;
         uint8_t relay_dfb_id;
-        // Live pipe this core's slot is bound to (non-owning; the handle must outlive the program).
-        experimental::PrefetcherPipeImpl* pipe = nullptr;
+        // Pipe this core's slot is bound to. Weak: a cached program can outlive its pipe until a pipe
+        // with the same binding key replaces it, and dispatch rejects a binding whose pipe is gone.
+        std::weak_ptr<experimental::PrefetcherPipeImpl> pipe;
+        // identity() of `pipe`, 0 until bound. It outlives the pipe, so the sticky-binding checks
+        // still know which pipe a slot was bound to after that pipe is destroyed.
+        experimental::PrefetcherPipeIdentity pipe_identity{0};
+        bool is_bound() const { return pipe_identity != experimental::PrefetcherPipeIdentity{0}; }
     };
 
     // Program-wide PrefetcherPipe slot (dense [0, num) id space, one per kernel accessor, i.e. per
@@ -470,7 +476,8 @@ public:
     //     points the slot's relay DFB (if any) at the pipe ring, and fills the per-core records.
     //     Only valid right after a successful check of the same batch.
     // Rebinding the same pipe is a no-op. A different pipe on an already-bound core is rejected
-    // unless it replaces `replaced`, the pipe the parameter was bound to, whose key it matches.
+    // unless it replaces `replaced`, the identity of the pipe the parameter was bound to, whose key
+    // it matches.
     // Legal after compile.
     struct PrefetcherPipeBindPreflight {
         std::unordered_map<const experimental::PrefetcherPipeImpl*, uint32_t> armed_lanes;
@@ -483,7 +490,7 @@ public:
         uint8_t prefetcher_pipe_id,
         const CoreRangeSet& cores,
         const experimental::PrefetcherPipeImpl& prefetcher_pipe,
-        const experimental::PrefetcherPipeImpl* replaced,
+        experimental::PrefetcherPipeIdentity replaced,
         PrefetcherPipeBindPreflight& preflight) const;
     void commit_prefetcher_pipe_slot_bind(
         uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe);
@@ -537,14 +544,13 @@ public:
             bool sender_role = false;
         };
         std::vector<SlotCores> slots;
-        // Pipe object bound by SetProgramRunArgs. A later bind may replace it only with a pipe of
-        // the same bound_pipe_key; bound_pipe may be destroyed by then, so it is never dereferenced
-        // for that check.
-        experimental::PrefetcherPipeImpl* bound_pipe = nullptr;
-        // identity() of bound_pipe. Same-pipe checks compare this, not the address: a destroyed
-        // pipe's address can be reused by a new pipe, but its identity never is.
+        // identity() of the pipe SetProgramRunArgs bound, 0 until one is. Same-pipe checks compare
+        // this, not the address: a destroyed pipe's address can be reused by a new pipe, but its
+        // identity never is. The bound pipe may be destroyed while the program lives on; a later bind
+        // may replace it only with a pipe of the same bound_pipe_key.
         experimental::PrefetcherPipeIdentity bound_pipe_identity{0};
         PrefetcherPipeBindingKey bound_pipe_key;
+        bool is_bound() const { return bound_pipe_identity != experimental::PrefetcherPipeIdentity{0}; }
         // Whether `pipe` may be bound: nothing is bound yet, it is the bound pipe, or it matches the
         // bound pipe's key.
         bool accepts(const experimental::PrefetcherPipeImpl& pipe) const;

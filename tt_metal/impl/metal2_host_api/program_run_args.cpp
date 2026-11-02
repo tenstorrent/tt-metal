@@ -285,7 +285,7 @@ void ValidatePrefetcherPipeArgs(
                 continue;
             }
             TT_FATAL(
-                program_impl.get_prefetcher_pipe_parameter(declared)->bound_pipe != nullptr,
+                program_impl.get_prefetcher_pipe_parameter(declared)->is_bound(),
                 "PrefetcherPipeParameter '{}' is declared in the Program but has no PrefetcherPipeArgument entry.",
                 declared);
         }

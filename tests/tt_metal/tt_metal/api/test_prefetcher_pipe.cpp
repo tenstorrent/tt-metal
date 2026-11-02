@@ -1319,8 +1319,8 @@ TEST_F(PrefetcherPipeFixture, ProgramSpec_AssignsDistinctSlotsPerAccessor) {
     args.advanced_options.prefetcher_pipe_args = {
         {name0, m2::PrefetcherPipeArgument{pipe0}}, {name1, m2::PrefetcherPipeArgument{pipe1}}};
     m2::SetProgramRunArgs(program, args);
-    EXPECT_EQ(per_core.at(CoreCoord(0, 0))[0].pipe, &pipe0.impl());
-    EXPECT_EQ(per_core.at(CoreCoord(0, 1))[0].pipe, &pipe1.impl());
+    EXPECT_EQ(per_core.at(CoreCoord(0, 0))[0].pipe.lock().get(), &pipe0.impl());
+    EXPECT_EQ(per_core.at(CoreCoord(0, 1))[0].pipe.lock().get(), &pipe1.impl());
 
     program.impl().compile(mesh_device.get());
     program.impl().finalize_offsets(mesh_device.get());
@@ -1352,8 +1352,8 @@ TEST_F(PrefetcherPipeFixture, ProgramRunArgs_SameObjectMultiplePrograms) {
     const auto& per_core_b = program_b.impl().get_per_core_prefetcher_pipes().at(CoreCoord(0, 0));
     EXPECT_EQ(per_core_a[0].config_page_addr, config_addr);
     EXPECT_EQ(per_core_b[0].config_page_addr, config_addr);
-    EXPECT_EQ(per_core_a[0].pipe, &pipe.impl());
-    EXPECT_EQ(per_core_b[0].pipe, &pipe.impl());
+    EXPECT_EQ(per_core_a[0].pipe.lock().get(), &pipe.impl());
+    EXPECT_EQ(per_core_b[0].pipe.lock().get(), &pipe.impl());
     EXPECT_EQ(pipe.buffer_address(), fifo_start);
 }
 
@@ -3180,8 +3180,8 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiPipeAccessor_CrossProgram_2S2R
         const auto& per_core = receiver_program.impl().get_per_core_prefetcher_pipes();
         ASSERT_EQ(per_core.at(receiver_a).size(), 1u);
         ASSERT_EQ(per_core.at(receiver_b).size(), 1u);
-        EXPECT_EQ(per_core.at(receiver_a)[0].pipe, &pipe_a.impl());
-        EXPECT_EQ(per_core.at(receiver_b)[0].pipe, &pipe_b.impl());
+        EXPECT_EQ(per_core.at(receiver_a)[0].pipe.lock().get(), &pipe_a.impl());
+        EXPECT_EQ(per_core.at(receiver_b)[0].pipe.lock().get(), &pipe_b.impl());
     }
 
     const SenderKernelParams sender_params{

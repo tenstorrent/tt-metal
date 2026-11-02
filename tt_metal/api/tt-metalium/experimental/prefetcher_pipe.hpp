@@ -71,10 +71,11 @@ public:
     // Internal (PrefetcherPipeSpace): wrap a carved implementation object.
     explicit PrefetcherPipe(std::unique_ptr<PrefetcherPipeImpl> impl);
 
-    // Movable, not copyable. A handle is a pointer to the implementation object that owns the
-    // claim on the space, and a Program's binding points at that object rather than at the
-    // handle, so relocating a handle keeps every binding valid. Copying would leave two handles
-    // releasing one claim.
+    // Movable, not copyable. A handle is the sole owner of the implementation object that owns the
+    // claim on the space. A Program bound to the pipe holds a weak reference to that object rather
+    // than to the handle, so relocating a handle keeps every binding valid, and destroying it leaves
+    // the Program able to tell that its pipe is gone. Copying would leave two handles releasing one
+    // claim.
     PrefetcherPipe(const PrefetcherPipe&) = delete;
     PrefetcherPipe& operator=(const PrefetcherPipe&) = delete;
     PrefetcherPipe(PrefetcherPipe&&) noexcept;
@@ -124,7 +125,7 @@ public:
     const PrefetcherPipeImpl& impl() const { return *pimpl_; }
 
 private:
-    std::unique_ptr<PrefetcherPipeImpl> pimpl_;
+    std::shared_ptr<PrefetcherPipeImpl> pimpl_;
 };
 
 // Which L1 a PrefetcherPipeSpace takes its data ring and config pages from.

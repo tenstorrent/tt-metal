@@ -188,16 +188,17 @@ private:
 // Implementation of the PrefetcherPipe host object declared in
 // tt-metalium/experimental/prefetcher_pipe.hpp: one sender -> receivers mapping carved from a
 // space. It claims its cores in the space, composes each core's config page and stamps those
-// pages onto the device; addresses come from the space. A PrefetcherPipe holds one of these and
-// forwards to it, and the host runtime records a binding by pointing at one. That pointer is only
-// as good as the handle: destroying the PrefetcherPipe destroys this object and releases the claim,
-// which is why the handle must outlive every Program bound to it. Moving a handle hands this
-// object to the new owner without relocating it, so destruction is the only way to get there.
+// pages onto the device; addresses come from the space. A PrefetcherPipe owns one of these and
+// forwards to it, and the host runtime records a binding as a weak reference to one. Destroying the
+// PrefetcherPipe destroys this object and releases the claim. A Program bound to it must then be
+// rebound, to a pipe with the same binding key, before dispatch reads the binding again; dispatch
+// rejects one that was not. Moving a handle hands this object to the new owner without relocating
+// it, so destruction is the only way to get there.
 //
 // The space pointer is non-owning (the PrefetcherPipeSpace handle owns the space). Every
 // accessor that needs the space goes through space(), which rejects a pipe whose space has
 // already been destroyed.
-class PrefetcherPipeImpl {
+class PrefetcherPipeImpl : public std::enable_shared_from_this<PrefetcherPipeImpl> {
 public:
     PrefetcherPipeImpl(PrefetcherPipeSpaceImpl& space, CoreCoord sender_core, const CoreRangeSet& receiver_cores);
     PrefetcherPipeImpl(

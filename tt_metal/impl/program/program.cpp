@@ -1560,7 +1560,8 @@ uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
                  .config_page_addr = 0,
                  .entry_size = entry_size,
                  .relay_dfb_id = std::numeric_limits<uint8_t>::max(),
-                 .pipe = nullptr});
+                 .pipe = {},
+                 .pipe_identity = experimental::PrefetcherPipeIdentity{0}});
         }
     }
     prefetcher_pipe_slots_.push_back(
@@ -1577,7 +1578,7 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
     uint8_t prefetcher_pipe_id,
     const CoreRangeSet& cores,
     const experimental::PrefetcherPipeImpl& prefetcher_pipe,
-    const experimental::PrefetcherPipeImpl* replaced,
+    experimental::PrefetcherPipeIdentity replaced,
     PrefetcherPipeBindPreflight& preflight) const {
     const PrefetcherPipeSlot& slot = get_prefetcher_pipe_slot(prefetcher_pipe_id);
     TT_FATAL(cores.num_cores() > 0, "PrefetcherPipe slot {} bind requires a non-empty core set", prefetcher_pipe_id);
@@ -1640,8 +1641,8 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
             prefetcher_pipe_id,
             core.str());
         TT_FATAL(
-            participant->pipe == nullptr || participant->pipe == &prefetcher_pipe ||
-                (replaced != nullptr && participant->pipe == replaced),
+            !participant->is_bound() || participant->pipe_identity == prefetcher_pipe.identity() ||
+                participant->pipe_identity == replaced,
             "PrefetcherPipe slot {} on core {} is already bound to a different PrefetcherPipe object; a Program "
             "binds one pipe per slot, or one that replaces it at the same addresses with the same geometry",
             prefetcher_pipe_id,
@@ -1687,7 +1688,8 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
             std::optional<DeviceAddr> ring_addr;
             for (const CoreCoord& core : corerange_to_cores(relay_dfb->core_ranges)) {
                 for (const auto& a : per_core_prefetcher_pipes_.at(core)) {
-                    if (a.prefetcher_pipe_id == prefetcher_pipe_id && a.pipe != nullptr && a.pipe != &prefetcher_pipe) {
+                    if (a.prefetcher_pipe_id == prefetcher_pipe_id && a.is_bound() &&
+                        a.pipe_identity != prefetcher_pipe.identity()) {
                         ring_addr = relay_dfb->borrowed_addr_;
                     }
                 }
@@ -1731,7 +1733,8 @@ void detail::ProgramImpl::commit_prefetcher_pipe_slot_bind(
         auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
             return a.prefetcher_pipe_id == prefetcher_pipe_id;
         });
-        participant->pipe = &prefetcher_pipe;
+        participant->pipe = prefetcher_pipe.weak_from_this();
+        participant->pipe_identity = prefetcher_pipe.identity();
         participant->config_page_addr = prefetcher_pipe.config_address();
     }
 }
@@ -1769,8 +1772,8 @@ void detail::ProgramImpl::validate_prefetcher_pipe_consumer_threads(const Kernel
                     continue;  // sender: partition-R uses the kernel's own thread count, no lane binding
                 }
                 // A bound pipe may have been armed by another program; otherwise the slot's own P.
-                const uint32_t lanes =
-                    participant.pipe != nullptr ? participant.pipe->num_credit_lanes() : slot.num_credit_lanes;
+                const std::shared_ptr<const experimental::PrefetcherPipeImpl> pipe = participant.pipe.lock();
+                const uint32_t lanes = pipe != nullptr ? pipe->num_credit_lanes() : slot.num_credit_lanes;
                 // "Some" rather than "every": a receiver core may also host unrelated DM kernels.
                 // Keeps the common single-kernel mismatch from becoming a silent device hang.
                 if (std::find(dm_thread_counts.begin(), dm_thread_counts.end(), lanes) == dm_thread_counts.end()) {
@@ -1877,7 +1880,7 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
     for (const CoreCoord& core : corerange_to_cores(relay_cores)) {
         for (const auto& a : per_core_prefetcher_pipes_.at(core)) {
             TT_FATAL(
-                a.prefetcher_pipe_id != prefetcher_pipe_id || a.pipe == nullptr,
+                a.prefetcher_pipe_id != prefetcher_pipe_id || !a.is_bound(),
                 "Internal error: PrefetcherPipe slot {} bound on core {} before its relay DFB was registered",
                 prefetcher_pipe_id,
                 core.str());
@@ -1947,7 +1950,7 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
             it != prefetcher_pipe_parameters_.end(), "Program declares no PrefetcherPipeParameter '{}'", bind.name);
         PrefetcherPipeParameterBinding& binding = it->second;
 
-        if (binding.bound_pipe != nullptr && binding.bound_pipe_identity == prefetcher_pipe.identity()) {
+        if (binding.is_bound() && binding.bound_pipe_identity == prefetcher_pipe.identity()) {
             continue;  // sticky: same object again is a no-op
         }
         TT_FATAL(
@@ -1981,7 +1984,7 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
                 slot_cores.prefetcher_pipe_id,
                 prefetcher_pipe_slot_bind_cores(bind.name, slot_cores, prefetcher_pipe),
                 prefetcher_pipe,
-                binding.bound_pipe,
+                binding.bound_pipe_identity,
                 preflight);
         }
         to_commit.push_back({.name = &bind.name, .binding = &binding, .pipe = &prefetcher_pipe});
@@ -1995,7 +1998,6 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
                 prefetcher_pipe_slot_bind_cores(*checked.name, slot_cores, *checked.pipe),
                 *checked.pipe);
         }
-        checked.binding->bound_pipe = checked.pipe;
         checked.binding->bound_pipe_identity = checked.pipe->identity();
         checked.binding->bound_pipe_key = prefetcher_pipe_binding_key(*checked.pipe);
     }
@@ -2014,8 +2016,7 @@ detail::ProgramImpl::PrefetcherPipeBindingKey detail::ProgramImpl::prefetcher_pi
 }
 
 bool detail::ProgramImpl::PrefetcherPipeParameterBinding::accepts(const experimental::PrefetcherPipeImpl& pipe) const {
-    return bound_pipe == nullptr || bound_pipe_identity == pipe.identity() ||
-           bound_pipe_key == prefetcher_pipe_binding_key(pipe);
+    return !is_bound() || bound_pipe_identity == pipe.identity() || bound_pipe_key == prefetcher_pipe_binding_key(pipe);
 }
 
 CoreRangeSet detail::ProgramImpl::prefetcher_pipe_slot_bind_cores(

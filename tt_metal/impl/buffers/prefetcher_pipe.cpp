@@ -963,8 +963,8 @@ PrefetcherPipe& PrefetcherPipe::operator=(PrefetcherPipe&&) noexcept = default;
 
 PrefetcherPipe::~PrefetcherPipe() = default;
 
-// A Program records a binding by pointing at the PrefetcherPipeImpl, so relocating a handle has to
-// leave that object alone; holding it behind a pointer is what makes that true. Containers relocate
+// A Program records a binding as a weak reference to the PrefetcherPipeImpl, so relocating a handle
+// has to leave that object alone; holding it behind a pointer is what makes that true. Containers relocate
 // on growth, and a throwing move there would strand the claim, so require the move to be noexcept.
 static_assert(
     std::is_nothrow_move_constructible_v<PrefetcherPipe> && !std::is_copy_constructible_v<PrefetcherPipe>,
