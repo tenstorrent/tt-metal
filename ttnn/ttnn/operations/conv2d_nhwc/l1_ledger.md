@@ -148,3 +148,33 @@ Measured plans (bf16 × bf8b, bias; F = CB footprint, shards extra):
 | weight | 1 per m-block (core 0 reads; `ceil(core_m_tiles/bm)` = 1 at the whole-shard default) | multicast `(g_m − 1)·|W|` per m-block (dense and depthwise); off when the core set needs > 3 rectangles or m-block counts differ |
 | bias | 1 per core | none |
 | output | 0 (untilized into the L1 output shard) | none |
+
+## Refinement 6 — HEIGHT resident weights, single-K pipeline, tap-major gather
+
+| CB | HEIGHT capacity / meaning (R6) | Shares with / why not |
+|----|--------------------------------|-----------------------|
+| `cb_weight_tiles` (2) | the whole weight slice, `K_t · N_t` tiles (weight dtype), resident for the kernel's life. Allocated on the bounding rectangle of the input cores (multicast landing slot, sinks included). | Concurrent with every compute CB. It replaces the depth-6 stream (6·bk·N_t), so it is smaller whenever K_t < 6·bk. Not resident when no blocking fits: the streamed path is the fallback. |
+| `cb_act_rm` (1) | `bm · bk` (single-K pipeline: one whole m-block, bk = K_t); else `ACT_RM_DEPTH · bk` | The extra m-block of capacity is what overlaps the gather of m-block i+1 with compute of m-block i. Tap-major pages hold 32-pixel × tap blocks: same bytes per page. |
+| `cb_act_tiles` (4) | `bm · K_t` | unchanged role |
+| `cb_partials` / `cb_biased` | `bm · N_t` fp32 | alias pair, unchanged |
+| `cb_act_window2` (11) / `cb_act_rm2` (12) | only with `SPLIT_GATHER` (off): the writer RISC's halo window and RM im2col for odd m-blocks | Separate from 0 / 1 because a CB has one producer. |
+
+Footprint (single-K): `F = halo(bm)·tap_bytes + bm·K_t·T (rm) + bm·K_t·T (act) + K_t·N_t·T_w + bm·N_t·T_acc + N_t·T_w (bias)`. The walk takes the largest bm with ≥ `HEIGHT_MIN_M_BLOCKS` m-blocks under `SHARDED_CB_BUDGET_BYTES`.
+
+Measured plans and `device_l1_peak_bytes` (bf16 × bf8b, bias):
+
+| Case | bm | bk | halo sticks | peak L1 (B) | achievable (B) |
+|------|----|----|-------------|-------------|----------------|
+| layer1 3×3 | 5 | 18 | 57 | 581,120 | 723,456 |
+| layer2 downsample | 1 | 36 | 233 | 534,272 | 670,576 |
+| layer2 3×3 | 1 | 36 | 29 | 397,824 | 450,928 |
+| 1×1 s2 | 2 | 2 | ≤265 | 264,320 | 317,040 |
+
+### Data-movement budget (HEIGHT, R6)
+
+| Tensor | DRAM crossings | Cross-core traffic |
+|--------|----------------|--------------------|
+| input | 0 (L1 resident) | halo from neighbour shards, one NoC read per owner run. Output shards sit on the input core covering their window, so strided convs move the window minus the resident overlap, not the whole window. |
+| weight | 1 (read once by the first compute core) | one multicast of `K_t·N_t` tiles to the input grid's bounding rectangle (once per kernel, not per m-block) |
+| bias | 1 per core | none |
+| output | 0 | none |

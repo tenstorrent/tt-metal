@@ -7,6 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import pytest  # noqa: E402
 import ttnn  # noqa: E402
 from test_conv2d_nhwc_sharded import ML, run_sharded  # noqa: E402
 
@@ -141,3 +142,18 @@ def test_perf_probe_resnet_layer2_3x3(device):
 
 def test_perf_probe_resnet_shortcut_1x1_s2(device):
     _resnet_height(device, "shortcut_1x1_s2")
+
+
+@pytest.mark.parametrize("name", list(RESNET_HEIGHT))
+def test_l1_peak_resnet_height(device, name):
+    """Per-core L1 peak (graph capture, as the harness's device_l1_peak_bytes) of a ResNet HEIGHT case."""
+    device.disable_and_clear_program_cache()
+    ttnn.graph._cpp_begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        _resnet_height(device, name)
+    finally:
+        trace = ttnn.graph._cpp_end_graph_capture()
+        device.enable_program_cache()
+    peak = int(ttnn.graph.extract_resource_usage_per_core(trace).peak_total)
+    print(f"L1_PEAK_BYTES {name}={peak}")
+    assert peak > 0

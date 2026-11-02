@@ -593,40 +593,32 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
         }
         WindowSource window_src{window_base, row_lo, col_lo, win_w};
         ShardSource shard_src{};
-        {
-#ifdef ABL_ZONE
-            DeviceZoneScopedN("FETCH");
-#endif
-            if constexpr (!k_exchange) {
-                const auto input = TensorAccessor(input_args, input_addr);
-                for (int32_t row = row_lo; row <= row_hi; ++row) {
-                    const int32_t c0 = row == row_lo ? col_lo : mid_lo;
-                    const int32_t c1 = row == row_hi ? last_hi : mid_hi;
-                    uint32_t dst =
-                        window_base + static_cast<uint32_t>((row - row_lo) * win_w + (c0 - col_lo)) * tap_bytes;
-                    uint32_t s = static_cast<uint32_t>(row) * W + static_cast<uint32_t>(c0);
-                    for (int32_t c = c0; c <= c1; ++c, ++s) {
-                        noc_async_read(input.get_noc_addr(s, win_chan_offset), dst, stick_bytes);
-                        dst += tap_bytes;
-                    }
+        if constexpr (!k_exchange) {
+            const auto input = TensorAccessor(input_args, input_addr);
+            for (int32_t row = row_lo; row <= row_hi; ++row) {
+                const int32_t c0 = row == row_lo ? col_lo : mid_lo;
+                const int32_t c1 = row == row_hi ? last_hi : mid_hi;
+                uint32_t dst = window_base + static_cast<uint32_t>((row - row_lo) * win_w + (c0 - col_lo)) * tap_bytes;
+                uint32_t s = static_cast<uint32_t>(row) * W + static_cast<uint32_t>(c0);
+                for (int32_t c = c0; c <= c1; ++c, ++s) {
+                    noc_async_read(input.get_noc_addr(s, win_chan_offset), dst, stick_bytes);
+                    dst += tap_bytes;
                 }
-            } else {
-                // ---- fetch_halo_block: window sticks [win_lo, win_hi] outside [own_lo, own_hi) ----
-                // (mirrors host _window_stick_range / _halo_sticks)
-                const int32_t win_lo = row_lo * static_cast<int32_t>(W) + col_lo;
-                const int32_t win_hi = row_hi * static_cast<int32_t>(W) + last_hi;
-                const int32_t b_end = own_lo < win_hi + 1 ? own_lo : win_hi + 1;
-                const int32_t n_before = b_end > win_lo ? b_end - win_lo : 0;
-                const int32_t after_lo = own_hi > win_lo ? own_hi : win_lo;
-                const int32_t n_after = win_hi + 1 > after_lo ? win_hi + 1 - after_lo : 0;
-                shard_src = ShardSource{shard_base, window_base, own_lo, own_hi, win_lo, after_lo, n_before};
-#ifndef ABL_FETCH
-                fetch_sticks(win_lo, win_lo + n_before, window_base);
-                fetch_sticks(after_lo, after_lo + n_after, window_base + static_cast<uint32_t>(n_before) * tap_bytes);
-#endif
             }
-            noc_async_read_barrier();
+        } else {
+            // ---- fetch_halo_block: window sticks [win_lo, win_hi] outside [own_lo, own_hi) ----
+            // (mirrors host _window_stick_range / _halo_sticks)
+            const int32_t win_lo = row_lo * static_cast<int32_t>(W) + col_lo;
+            const int32_t win_hi = row_hi * static_cast<int32_t>(W) + last_hi;
+            const int32_t b_end = own_lo < win_hi + 1 ? own_lo : win_hi + 1;
+            const int32_t n_before = b_end > win_lo ? b_end - win_lo : 0;
+            const int32_t after_lo = own_hi > win_lo ? own_hi : win_lo;
+            const int32_t n_after = win_hi + 1 > after_lo ? win_hi + 1 - after_lo : 0;
+            shard_src = ShardSource{shard_base, window_base, own_lo, own_hi, win_lo, after_lo, n_before};
+            fetch_sticks(win_lo, win_lo + n_before, window_base);
+            fetch_sticks(after_lo, after_lo + n_after, window_base + static_cast<uint32_t>(n_before) * tap_bytes);
         }
+        noc_async_read_barrier();
         set_local_read_state();
 
         // ---- gather_im2col_kblock, per n-block (activation is reused across n) ----
@@ -646,15 +638,8 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
                 for (uint32_t t = 0; t < block_m_tiles; ++t) {
                     const uint32_t tile = t0 + t;
                     cb_reserve_back(cb_act_rm, block_k_tiles);
-#ifdef ABL_GZONE
-                    DeviceZoneScopedN("GATHER");
-#endif
                     const uint32_t dst_base = get_write_ptr(cb_act_rm);
-#ifdef ABL_GATHER
-                    if (true) {
-                    } else
-#endif
-                        if (tile >= t1) {
+                    if (tile >= t1) {
                         // Ragged block tail: tile-row past the core's range.
                         zero_run(zeros_noc, dst_base, TILE_DIM * im2col_row_bytes);
                     } else if constexpr (tap_major && k_exchange) {

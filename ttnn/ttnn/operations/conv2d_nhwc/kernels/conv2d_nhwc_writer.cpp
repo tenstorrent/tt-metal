@@ -106,8 +106,8 @@ void kernel_main() {
     const uint32_t m_tiles_this_core = get_arg_val<uint32_t>(4);
     const uint32_t num_m_blocks = get_arg_val<uint32_t>(5);
     const uint32_t n_tile_start = get_arg_val<uint32_t>(6);
-    const uint32_t my_slice = get_arg_val<uint32_t>(7);  // R4/R5: this core's channel slice
-    const bool is_sink = get_arg_val<uint32_t>(8) != 0;  // receive-only rectangle filler (WIDTH)
+    const uint32_t my_slice = get_arg_val<uint32_t>(7);                         // R4/R5: this core's channel slice
+    const bool is_sink = get_arg_val<uint32_t>(8) != 0;                         // receive-only rectangle filler (WIDTH)
     const bool reads_weights = !weight_mcast || get_arg_val<uint32_t>(9) != 0;  // column's weight reader
 
     const auto weights = TensorAccessor(weight_args, weight_addr);
@@ -142,9 +142,6 @@ void kernel_main() {
     // of the first m-block, the weights at its first matmul)
     auto load_bias = [&]() {
         if constexpr (has_bias) {
-#ifdef ABL_WZONE
-            DeviceZoneScopedN("BIAS");
-#endif
             const auto bias = TensorAccessor(bias_args, bias_addr);
             const uint32_t bias_tile_bytes = get_tile_size(cb_bias_tiles);
             cb_reserve_back(cb_bias_tiles, core_n_tiles);
@@ -188,9 +185,6 @@ void kernel_main() {
     // transaction id, and multicasts chunk c as soon as its reads land while chunks c+1.. are still
     // in flight (the read issue is RISC-bound: it overlaps the multicast). Receivers push per chunk.
     if constexpr (weights_resident) {
-#ifdef ABL_WZONE
-        DeviceZoneScopedN("WRES");
-#endif
         constexpr uint32_t total_rows = num_k_blocks * weight_k_rows;
         constexpr uint32_t num_chunks = (total_rows + weight_chunk_rows - 1) / weight_chunk_rows;
         static_assert(!weights_resident || num_chunks <= MAX_WEIGHT_TRIDS, "one read transaction id per chunk");
@@ -225,24 +219,11 @@ void kernel_main() {
             }
         };
         if (reads_weights) {
-            {
-#ifdef ABL_WZONE
-                DeviceZoneScopedN("WISSUE");
-#endif
-                for (uint32_t c = 0; c < num_chunks && c < WEIGHT_CHUNK_LEAD; ++c) {
-                    issue_chunk(c);
-                }
+            for (uint32_t c = 0; c < num_chunks && c < WEIGHT_CHUNK_LEAD; ++c) {
+                issue_chunk(c);
             }
             for (uint32_t c = 0; c < num_chunks; ++c) {
-                {
-#ifdef ABL_WZONE
-                    DeviceZoneScopedN("WBAR");
-#endif
-                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, c + 1);
-                }
-#ifdef ABL_WZONE
-                DeviceZoneScopedN("WSEND");
-#endif
+                dataflow_kernel_lib::async_read_barrier_with_trid(noc, c + 1);
                 if constexpr (weight_mcast) {
                     // The resident region is never rewritten: no source guard needed (the kernel-end
                     // write barrier drains the multicast).

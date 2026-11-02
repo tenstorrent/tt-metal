@@ -30,8 +30,6 @@ import ttnn
 # slicing), never a generic error: the harness reads them as deliberate refusals.
 from ttnn.operations._op_contract import UnsupportedAxisValue
 
-import os as _os  # ABLATION-TEMP
-
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE = 32
@@ -99,6 +97,9 @@ WEIGHT_MCAST_CHUNKS = 1
 # Single-K pipeline with resident weights: split K into (up to) this many K-blocks, each one weight
 # multicast chunk, so the first m-block's matmul overlaps the weight multicast. 1 = one K-block.
 HEIGHT_RESIDENT_KBLOCKS = 1
+# Single-K pipeline: at least this many m-blocks per core (when the shard has the tile-rows), so
+# the gather of m-block i+1 overlaps the compute of m-block i even when one block would fit.
+HEIGHT_MIN_M_BLOCKS = 2
 # R3 split gather: the writer RISC (idle once the resident weights are multicast) fetches + gathers
 # the odd m-blocks into its own window / rm CBs while the reader takes the even ones; compute
 # tilizes m-block i from the CB of RISC i % 2. Used with the single-K pipeline when it fits.
@@ -128,8 +129,6 @@ COMPUTE_POLICY_BY_WEIGHT = {
 def compute_policy(dtype, weight_dtype):
     """(math_fidelity, fp32_dest_acc_en, dst_tiles, acc_dtype) for a dtype pair."""
     fidelity, fp32_acc = COMPUTE_POLICY_BY_WEIGHT.get((dtype, weight_dtype), COMPUTE_POLICY[dtype])
-    if _os.environ.get("CONV2D_NHWC_HIFI2") and dtype == ttnn.bfloat16:  # ABLATION-TEMP
-        fidelity = ttnn.MathFidelity.HiFi2  # ABLATION-TEMP
     dst_tiles = 4 if fp32_acc else 8  # half-sync DEST capacity in tiles
     acc_dtype = ttnn.float32 if fp32_acc else ttnn.bfloat16  # partials page follows DEST width
     return fidelity, fp32_acc, dst_tiles, acc_dtype
@@ -665,7 +664,8 @@ def select_blocking_sharded(
         # matmul switch per m-block) and make cb_act_rm one whole m-block deep, so the reader
         # gathers m-block i+1 while compute works on m-block i. Largest bm that fits.
         bk = slice_k_tiles // resident_kblocks
-        for bm in sorted(_divisors(core_m_tiles), reverse=True):
+        bms = [d for d in _divisors(core_m_tiles) if core_m_tiles // d >= HEIGHT_MIN_M_BLOCKS or d == 1]
+        for bm in sorted(bms, reverse=True):
             halo = halo_max(bm)
             if footprint(bm, bk, halo, True, roles) <= budget and (roles == 1 or _div_up(core_m_tiles, bm) > 1):
                 return bm, bk, halo
@@ -861,29 +861,6 @@ def _core_range_set(coords):
 def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, output_tensor, plan, grid):
     p = plan
     bm, bk, bn = p["block_m_tiles"], p["block_k_tiles"], p["block_n_tiles"]
-    if _os.environ.get("CONV2D_NHWC_PLAN"):  # ABLATION-TEMP
-        print(
-            "PLAN",
-            {
-                k: p.get(k)
-                for k in (
-                    "block_m_tiles",
-                    "block_k_tiles",
-                    "num_k_blocks",
-                    "act_rm_rows",
-                    "window_sticks_max",
-                    "footprint",
-                    "weight_mcast",
-                    "tap_major",
-                    "weights_resident",
-                    "num_gather_roles",
-                    "out_subblock_h",
-                    "out_subblock_w",
-                    "core_m_tiles",
-                    "g_m",
-                )
-            },
-        )  # ABLATION-TEMP
     has_bias = p["has_bias"]
     kx = p.get("k_exchange", False)  # sharded R4/R5 placement (shard input, shard output)
     act_mcast = p.get("act_mcast", False)  # K exchange across > 1 channel slice
@@ -1163,31 +1140,19 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         # Receive-only: every round of every m-block (WIDTH: one m range for the whole group).
         writer_rt[xy.x][xy.y] = [0, 0, 0, 0, p["M_t"], _div_up(p["M_t"], bm), 0, 0, 1, 0]
 
-    import os as _os2  # ABLATION-TEMP
-
-    _swap = bool(_os2.environ.get("CONV2D_NHWC_SWAP"))  # ABLATION-TEMP
-    _wnoc = ttnn.NOC.NOC_0 if _swap else ttnn.NOC.NOC_1
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "conv2d_nhwc_reader.cpp"),
         core_ranges=cores,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
-        config=(
-            ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)
-            if _swap
-            else ttnn.ReaderConfigDescriptor()
-        ),
+        config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "conv2d_nhwc_writer.cpp"),
         core_ranges=mcast_cores,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
-        config=(
-            ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)
-            if _swap
-            else ttnn.WriterConfigDescriptor()
-        ),
+        config=ttnn.WriterConfigDescriptor(),
     )
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "conv2d_nhwc_compute.cpp"),
@@ -1196,10 +1161,6 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         runtime_args=compute_rt,
         config=ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=fp32_acc),
     )
-    _abl = [d for d in _os.environ.get("CONV2D_NHWC_ABLATE", "").split(",") if d]  # ABLATION-TEMP
-    if _abl:  # ABLATION-TEMP
-        for _k in (reader, writer, compute):  # ABLATION-TEMP
-            _k.defines = [(d, "1") for d in _abl]  # ABLATION-TEMP
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
     if act_mcast:
         # K exchange: one channel, groups = one grid row (BLOCK) / all WIDTH cores, rotating
@@ -1207,7 +1168,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         mcast = ttnn.Mcast(
             device,
             # The writer (WriterConfigDescriptor) issues on NOC_1 (preferred DRAM-write NoC).
-            ttnn.McastConfig(noc=_wnoc, handshake=True),
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
             mcast_cores,
             mcast_cores.num_cores() if sink_cores else p["g_n"],
             ttnn.McastRotatingSenderConfig(),
@@ -1223,7 +1184,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         # fixed sender = the group's first core (writer RT `mi == 0`).
         w_mcast = ttnn.Mcast(
             device,
-            ttnn.McastConfig(noc=_wnoc, handshake=True),
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
             weight_group,
             weight_group.num_cores() if weight_group is not cores else p["g_m"],
             ttnn.McastFixedSenderConfig(sender_index=weight_sender),

@@ -202,3 +202,47 @@
   - `_sharded_config` gained a HEIGHT branch
 
   `test_conv2d_nhwc_depthwise.py`: 3 HEIGHT cases plus HEIGHT bf16 × bf8b relu.
+
+## Refinement 6 — Speed up the perf-flagged ResNet50 HEIGHT convs
+- Date: 2026-11-02
+- What was done (HEIGHT / R3 path; no SUPPORTED change):
+  - **Tap-major gather** (`TAP_MAJOR_GATHER`; HEIGHT, stride 1, dilation 1, whole-tile taps). A K-block's RM data is laid out per tap as one contiguous 32-pixel × C_in block, and compute tilizes one tap wide (`tilize_w`). A tap's pixels along one output row then come from one NoC read, not one read per pixel per kernel-row band. bk is a whole number of taps. The prepared K order is unchanged.
+  - **Resident weights** (`WEIGHTS_RESIDENT`). The whole weight slice stays in `cb_weight_tiles` for the kernel's life and is read and multicast once, before the first m-block. Compute reads it in place (matmul in1 `NoWaitNoPop` + per-K-block base offset, cumulative waits). The sender reads per DRAM bank with stateful reads, one address computation per bank (weight issue 7.4k → 3.2k cycles). The bias is loaded after the weights. If no resident blocking fits L1, the op falls back to the streamed path with the old placement.
+  - **Single-K m-block pipeline** (`HEIGHT_SINGLE_K_PIPELINE`, `HEIGHT_MIN_M_BLOCKS = 2`). The whole K is one K-block (no packer-L1 partials passes), with the largest bm that fits. `cb_act_rm` is one whole m-block deep, so the gather of m-block i+1 overlaps compute of m-block i.
+  - **Output placement** (`HEIGHT_ALIGN_OUTPUT`). Output shard r is computed on, and placed on, the input core whose shard best covers its window (monotone in r). For stride-1 this is identical to before. For strided convs most of the window becomes resident instead of far-away halo (layer2 downsample fetch was ~100k cycles of NoC0 wrap-around traffic). The weight multicast spans the bounding rectangle of the input grid (one rectangle); input cores holding no output shard are receive-only sinks.
+  - **Fidelity**: `COMPUTE_POLICY_BY_WEIGHT` makes bf16 × bf8b run at LoFi with fp32 DEST (the reference fidelity). ResNet cases rel-RMS ≈ 0.020–0.025, PCC ≥ 0.9997.
+  - Parked knobs, live at trivial defaults:
+    - `WEIGHT_MCAST_CHUNKS = 1`: per-chunk multicast rounds pay a ~1.5k-cycle handshake each; 4 and 8 chunks measured slower.
+    - `HEIGHT_RESIDENT_KBLOCKS = 1`: progressive K-blocked delivery measured flat on layer2 3×3 and slower elsewhere.
+    - `SPLIT_GATHER = False`: the writer RISC gathers odd m-blocks into its own CBs (`CB_ACT_WINDOW2` / `CB_ACT_RM2`). It helped the strided cases (1×1 s2 23.4k → 20.3k) before output alignment; after alignment the reader is no longer the bound.
+  - Reused: the HEIGHT sharded path, every CB, the halo fetch, the matmul / bias / untilize helpers and the Mcast channel. Added: `kernels/conv2d_nhwc_gather.hpp` (the reader's gather, shared with the writer for the split; the reader is now a thin wrapper), `gather_tile_row_taps`, the resident-weight writer block (with trid chunks), compute `ResidentIn1Offset`, and host `out_shards` / weight group / sinks.
+- Perf (BH p150b, AICLK 1350 MHz, per-core max kernel cycles, bf16 × bf8b, bias). Before → after (achievable):
+  - layer1 3×3 56×56×64: 116.0k → 38.8k (38.0k)
+  - layer2 downsample s2: 165.3k → 41.0k (41.0k)
+  - layer2 3×3 28×28×128: 81.3k → 35.7k (27.0k)
+  - 1×1 s2 shortcut: 25.3k → 17.9k (20.3k)
+  - `device_l1_peak_bytes` (graph capture) 581,120 / 534,272 / 397,824 / 264,320 B, vs achievable 723,456 / 670,576 / 450,928 / 317,040 B.
+- Bottleneck now:
+  - layer2 3×3 is compute-bound (matmul ≈ 10.6k, tilize ≈ 6.2k, bias / untilize over 4 m-blocks), queued behind the weight landing. Reading and multicasting 157 KB of bf8b weights takes ≈ 13k cycles (~18 B/cycle into each core, even with the chip idle).
+  - layer1 is compute-bound (~38k).
+  - Next lever: a dual-NoC weight multicast (half the slice from each data-movement RISC of the sender core). Not done: it needs a second multicast channel attached to the reader kernel.
+- No-regression guard set (before → after, per-core max cycles): all within ±1–3% noise.
+  - interleaved bf16 relu: 101.8k → 101.6k
+  - BLOCK no-bias: 40.3k → 40.1k
+  - WIDTH strided: 97.2k → 97.8k
+  - SDXL L1 BLOCK: 258–260k → 257k
+  - depthwise interleaved / WIDTH / BLOCK: 102.5k / 46.6k / 75–78k / 13.9k / 19.7k → 102.9k / 46.4k / 76–78k / 14.1k / 18.9k
+  - BLOCK 28×28×256: 81.0k / 19.5k → 81.1k / 18.7k
+- Accuracy achieved:
+  - ResNet HEIGHT cases: PCC ≥ 0.9997, rel-RMS ≤ 0.025 (bf16 × bf8b, gate 0.995 / 0.05).
+  - Every unit test at its prior tolerance.
+- Golden test progress:
+  - `test_golden.py -k "(BFLOAT16 and BFLOAT8_B) or HEIGHT"`: 308 passed, 292 xfailed, 416 skipped, 0 failed, 0 XPASS.
+  - After the final `HEIGHT_MIN_M_BLOCKS` change, `-k HEIGHT`: 100 passed, 124 xfailed, 72 skipped, 0 failed.
+- Issues encountered:
+  - A non-uniform m-block count silently disabled the weight multicast (every core read the weights from DRAM). Resident weights are multicast once, so that gate no longer applies to them.
+  - A NoC0 halo fetch from a "later" shard wraps the torus. Fixed by aligning the output placement, not by changing NoCs.
+- Tests added:
+  - `test_conv2d_nhwc_sharded.py::test_conv2d_nhwc_height_resnet_pinned`: layer2 downsample, 1×1 s2, layer1 at pinned geometry.
+  - `test_conv2d_nhwc_sharded.py::test_conv2d_nhwc_height_weights_streamed`: resident fallback.
+  - `test_conv2d_nhwc_perf_probe.py`: `test_perf_probe_resnet_*` and `test_l1_peak_resnet_height`.

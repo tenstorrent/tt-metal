@@ -115,15 +115,6 @@ struct TilizeKBlock {
     }
     ALWI void tilize_kblock(uint32_t block) const {
         if constexpr (!act_mcast) {
-#ifdef ABL_TILIZE
-            for (uint32_t t = 0; t < block_m_tiles; ++t) {
-                cb_wait_front(cb_act_rm, block_k_tiles);
-                cb_pop_front(cb_act_rm, block_k_tiles);
-            }
-            cb_reserve_back(cb_act_tiles, block_m_tiles * block_k_tiles);
-            cb_push_back(cb_act_tiles, block_m_tiles * block_k_tiles);
-            return;
-#endif
             PACK((llk_pack_reconfig_l1_acc(0)));
             if (num_gather_roles > 1 && (m_block & 1)) {
                 tilize<tilize_w, cb_act_rm2, cb_act_tiles>(block_m_tiles * tilize_blocks_per_row);
@@ -286,47 +277,35 @@ void kernel_main() {
             for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
                 // conv_matmul_block: caller owns the accumulator's single reserve / push.
                 partials.reserve_back(block_out_tiles);
-#ifdef ABL_MATMUL
-                for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-                    TilizeKBlock{my_slice, m_block}(kb, 0, false);
-                    cb_wait_front(cb_act_tiles, block_m_tiles * block_k_tiles);
-                    cb_pop_front(cb_act_tiles, block_m_tiles * block_k_tiles);
-                    if constexpr (!weights_resident) {
-                        cb_wait_front(cb_weight_tiles, block_k_tiles * block_n_tiles);
-                        cb_pop_front(cb_weight_tiles, block_k_tiles * block_n_tiles);
-                    }
-                }
-                if (false)
-#endif
-                    matmul_block<
-                        false,
-                        true,
-                        LastBlockTarget::Interm,
-                        OutputCBLayout::TileRowMajor,
-                        matmul_config::InitMode::ShortAfterPreKBlock,
-                        InputPolicy::WaitAndPopPerKBlock,
-                        in1_policy,
-                        NoPostCompute,
-                        TilizeKBlock,
-                        NoPostKBlock,
-                        0,
-                        NoKBlockInnerDimFn,
-                        NoIn0Source,
-                        In1Offset,
-                        true>(
-                        act_tiles,
-                        weight_tiles,
-                        partials,
-                        partials,
-                        shape,
-                        {},
-                        TilizeKBlock{my_slice, m_block},
-                        block_n_tiles,
-                        block_n_tiles,
-                        {},
-                        {},
-                        {},
-                        In1Offset{});
+                matmul_block<
+                    false,
+                    true,
+                    LastBlockTarget::Interm,
+                    OutputCBLayout::TileRowMajor,
+                    matmul_config::InitMode::ShortAfterPreKBlock,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    in1_policy,
+                    NoPostCompute,
+                    TilizeKBlock,
+                    NoPostKBlock,
+                    0,
+                    NoKBlockInnerDimFn,
+                    NoIn0Source,
+                    In1Offset,
+                    true>(
+                    act_tiles,
+                    weight_tiles,
+                    partials,
+                    partials,
+                    shape,
+                    {},
+                    TilizeKBlock{my_slice, m_block},
+                    block_n_tiles,
+                    block_n_tiles,
+                    {},
+                    {},
+                    {},
+                    In1Offset{});
                 partials.push_back(block_out_tiles);
                 PACK((llk_pack_reconfig_l1_acc(0)));
 

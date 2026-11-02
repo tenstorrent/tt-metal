@@ -146,7 +146,7 @@ No SUPPORTED change.
 
 The output is HEIGHT-sharded and there are 0 loud categories.
 
-### [ ] Refinement 6 — Speed up the perf-flagged ResNet50 HEIGHT convs
+### [x] Refinement 6 — Speed up the perf-flagged ResNet50 HEIGHT convs
 
 **Type**: perf
 
@@ -172,6 +172,8 @@ No SUPPORTED change.
 - Measured device-ns improves on each flagged case toward its `achievable_ns`, with `device_l1_peak_bytes` reported against `achievable_l1_peak_bytes`.
 - Their precision gates hold and the golden suite is green.
 - No regression across the config-spanning guard set (interleaved R0, BLOCK, WIDTH, HEIGHT; dense and depthwise; with/without bias; relu).
+
+**Outcome**: per-core max kernel cycles on BH @1350 MHz, before → after (achievable): layer1 3×3 116.0k → 38.8k (38.0k); layer2 downsample 165.3k → 41.0k (41.0k); layer2 3×3 81.3k → 35.7k (27.0k); 1×1 s2 shortcut 25.3k → 17.9k (20.3k). `device_l1_peak_bytes` 581,120 / 534,272 / 397,824 / 264,320 B, all under `achievable_l1_peak_bytes`. Levers: tap-major gather, resident weights with one multicast, single-K m-block pipeline, output shards placed on the input cores covering their windows, LoFi for bf16 × bf8b. Remaining gap is layer2 3×3: it is compute-bound behind the weight landing (~13k cycles to read and multicast 157 KB, ~18 B/cycle into each core even with the chip idle), then ~22k of matmul + tilize. Overlapping the two with per-K-block multicast chunks (`HEIGHT_RESIDENT_KBLOCKS`) measured flat. The next lever is a dual-NoC weight multicast (half the slice from each data-movement RISC of the sender), not tried here because it needs a second multicast channel on the reader kernel.
 
 ### [ ] Refinement 7 — TILE activations (+ bf8b activations): techniques 1, 2, 3 / regime R9
 
