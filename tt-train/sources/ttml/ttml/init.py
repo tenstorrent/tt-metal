@@ -72,10 +72,6 @@ def manual_seed(seed: int) -> None:
     _rng = np.random.default_rng(seed)
 
 
-def _get_device():
-    return ttml.autograd.AutoContext.get_instance().get_device()
-
-
 def _calculate_fan_in_and_fan_out(shape) -> tuple[int, int]:
     # ttml pads weight shapes to 4D with leading 1s (e.g. [1, 1, out, in]).
     # Strip them so the standard PyTorch fan calculation works correctly.
@@ -204,18 +200,8 @@ def normal(mean: float = 0.0, std: float = 1.0):
 
 
 def _constant_materialize(shape, val, mapper=None):
-    if mapper is not None:
-        data = np.full(shape, val, dtype=np.float32)
-        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-    device = _get_device()
-    t = ttnn.full(
-        shape,
-        fill_value=val,
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.Layout.TILE,
-    )
-    return ttml.autograd.create_tensor(t)
+    data = np.full(shape, val, dtype=np.float32)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
 def constant(val: float):
@@ -231,17 +217,8 @@ def constant(val: float):
 
 
 def _zeros_materialize(shape, mapper=None):
-    if mapper is not None:
-        data = np.zeros(shape, dtype=np.float32)
-        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-    device = _get_device()
-    t = ttnn.zeros(
-        shape,
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.Layout.TILE,
-    )
-    return ttml.autograd.create_tensor(t)
+    data = np.zeros(shape, dtype=np.float32)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
 def zeros():
@@ -257,17 +234,8 @@ def zeros():
 
 
 def _ones_materialize(shape, mapper=None):
-    if mapper is not None:
-        data = np.ones(shape, dtype=np.float32)
-        return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-    device = _get_device()
-    t = ttnn.ones(
-        shape,
-        device=device,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.Layout.TILE,
-    )
-    return ttml.autograd.create_tensor(t)
+    data = np.ones(shape, dtype=np.float32)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
 def ones():
