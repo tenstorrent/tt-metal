@@ -16,12 +16,13 @@
 #          PREFILL_GANG_TOKENS (2048) arriving while others decode is split into PREFILL_CHUNK_TOKENS (1024) spans
 #          between decode steps. Needs vllm-tt-plugin branch resident-mu-sched (TT chunk core + gangs). Host sampling
 #          unless SAMPLE_ON_DEVICE=1 (needs the rows-mode hub feed, WP7).
-#   multi-ttft: multi with the interleaved prefill policy instead of prefill gangs (PREFILL_GANG_TOKENS 0): a long prompt
-#          is split into PREFILL_CHUNK_TOKENS spans between decode steps, so first tokens come sooner (c=16 TTFT ~1/3 of
-#          multi's) and the running users' decode is slower (TPOT 2-4x multi's at 2K-10K prompts)
-#   multi-long: multi without the 128 PP chunk (RESIDENT_PREFILL_CHUNKS 256,512,1024) and with a 29,440-block pool
-#          (RESIDENT_MAX_TOKENS_ALL_USERS 1,884,160; the plugin adds one block per slot, so the engine logs 29,456):
-#          7 users at 256K, 8 at 230K, 16 at 115K; TTFT +49 ms at 128-token prompts.
+#          No 128 PP chunk (RESIDENT_PREFILL_CHUNKS 256,512,1024) and a 29,440-block pool (RESIDENT_MAX_TOKENS_ALL_USERS
+#          1,884,160; the plugin adds one block per slot, so the engine logs 29,456): 7 users at 256K, 8 at 230K, 16 at
+#          115K; TTFT +49 ms at 128-token prompts.
+#   multi-ttft: multi with the interleaved prefill policy instead of prefill gangs (= multi with PREFILL_GANG_TOKENS=0,
+#          the package's TTFT-first option): a long prompt is split into PREFILL_CHUNK_TOKENS spans between decode
+#          steps, so first tokens come sooner and the running users' decode is slower
+#   multi-long: the same as multi (its sizing became multi's, 2026-11-02)
 #
 # env: HF_MODEL (required; a local checkpoint dir, or a repo id the offline HF cache resolves), PORT (8000),
 #   SERVED_MODEL_NAME (Qwen/Qwen3.8-27B), MAX_MODEL_LEN (32768), VLLM_VENV (a venv with vLLM 0.26 + vllm-tt-plugin),
@@ -58,20 +59,19 @@ case $PROFILE in
   mtp) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentMTPForCausalLM ;;
   dflash2) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentDFlashForCausalLM ;;
   multi | multi-long | multi-ttft)
-    if [ "$PROFILE" = multi-long ]; then
-      # long contexts: no 128 PP chunk (its small-matmul weight copies, 3.21 GB/chip) buys a 29,440-block pool of
-      # 64 positions (TTFT +49 ms at 128-token prompts, +20 ms at 512, none from 2K; accuracy-gated). The plugin adds
-      # max_num_seqs blocks of output reservation (16 -> 29,456 blocks), and 30,016 + 16 OOMs at build: launch 1's
-      # 288 MiB GDN state finds 37.06 MB/bank free of the 37.75 MB it needs; 29,440 passed the card churn (queue_wp8_r3)
-      export RESIDENT_PREFILL_CHUNKS=${RESIDENT_PREFILL_CHUNKS:-256,512,1024}
-      export RESIDENT_MAX_TOKENS_ALL_USERS=${RESIDENT_MAX_TOKENS_ALL_USERS:-1884160}
-    fi
+    # The package's multi-user profile (user decision 2026-11-02: the former multi-long sizing for every multi
+    # profile; multi-long stays as an alias). No 128 PP chunk (its small-matmul weight copies, 3.21 GB/chip) buys a
+    # 29,440-block pool of 64 positions (TTFT +49 ms at 128-token prompts, +20 ms at 512, none from 2K;
+    # accuracy-gated). The plugin adds max_num_seqs blocks of output reservation (16 -> 29,456 blocks), and 30,016 + 16
+    # OOMs at build: launch 1's 288 MiB GDN state finds 37.06 MB/bank free of the 37.75 MB it needs; 29,440 passed the
+    # card churn (queue_wp8_r3) and, with PPPrefill.run_batch's staging, a 250K-token prompt (lane sched rb1).
+    # The former multi sizing: RESIDENT_PREFILL_CHUNKS=128,256,512,1024 RESIDENT_MAX_TOKENS_ALL_USERS=1540096.
+    export RESIDENT_PREFILL_CHUNKS=${RESIDENT_PREFILL_CHUNKS:-256,512,1024}
+    export RESIDENT_MAX_TOKENS_ALL_USERS=${RESIDENT_MAX_TOKENS_ALL_USERS:-1884160}
     SEQS=${MAX_NUM_SEQS:-16}  # the shipped multi profiles: two launches
     # the rows build's attention / GDN core split: 28 attention workers, 4 GDN head groups (accuracy-gated, -6 to -9 %
     # step time at <= 32K); the single-user profiles keep the defaults (32 workers)
     export RESIDENT_ATTN_WORKERS=${RESIDENT_ATTN_WORKERS:-28} RESIDENT_HEAD_GROUPS=${RESIDENT_HEAD_GROUPS:-4}
-    # the shipped KV pool: 24,064 blocks of 64 positions (16 slots leave ~0.66 GB/chip; 24,640 fails at build)
-    export RESIDENT_MAX_TOKENS_ALL_USERS=${RESIDENT_MAX_TOKENS_ALL_USERS:-1540096}
     SAMPLING=''
     [ "${SAMPLE_ON_DEVICE:-0}" = 1 ] && SAMPLING=', "sample_on_device_mode": "decode_only"'
     # prefill gangs (plugin resident-mu-sched): waiting prompts run whole, several per prefill step, capped at
