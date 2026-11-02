@@ -90,14 +90,14 @@ _WALL_SAMPLES = 30
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 _LOUDBOX_PERF_SKU = "bh_loudbox"
 _GALAXY = "SP8xTP4"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), from runs 41209975005,
-# 41209981451 and 41209987401. Production prefill runs untraced, so untraced is held to the traced reference where
+# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), from runs 41501648694,
+# 41501662481 and 41501677551. Production prefill runs untraced, so untraced is held to the traced reference where
 # it reaches it. The untraced ordinary layer does not: its reads are host-dispatch bound on the 8x4 mesh, so it has
 # its own reference and, following the host CPU, a wider band. Galaxies off the pool can sit outside the band; run
 # them with ATTN_RES_PERF_REPORT_ONLY=1.
 _GALAXY_REFERENCE_E2E_US = {
-    "traced": {"boundary": 435.0, "ordinary": 119.0},
-    "untraced": {"boundary": 435.0, "ordinary": 150.0},
+    "traced": {"boundary": 394.0, "ordinary": 118.0},
+    "untraced": {"boundary": 394.0, "ordinary": 150.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
