@@ -20,6 +20,7 @@ import pytest
         (torch.tensor([4294967295], dtype=torch.int64), ttnn.uint32, "UINT32"),
         (torch.tensor([1.5], dtype=torch.float32), ttnn.bfloat8_b, "BFLOAT8_B"),
         (torch.tensor([2.5], dtype=torch.float32), ttnn.bfloat4_b, "BFLOAT4_B"),
+        (torch.tensor([-0.5], dtype=torch.float32), ttnn.bfloat2_b, "BFLOAT2_B"),
         (torch.tensor([200], dtype=torch.uint8), ttnn.uint8, "UINT8 edge case"),
         # Zero values
         (torch.tensor([0], dtype=torch.uint8), ttnn.uint8, "UINT8 zero"),
@@ -28,6 +29,7 @@ import pytest
         (torch.tensor([0], dtype=torch.int64), ttnn.uint32, "UINT32 zero"),
         (torch.tensor([0.0], dtype=torch.float32), ttnn.bfloat8_b, "BFLOAT8_B zero"),
         (torch.tensor([0.0], dtype=torch.float32), ttnn.bfloat4_b, "BFLOAT4_B zero"),
+        (torch.tensor([0.0], dtype=torch.float32), ttnn.bfloat2_b, "BFLOAT2_B zero"),
         # Maximum values
         (torch.tensor([255], dtype=torch.uint8), ttnn.uint8, "UINT8 max"),
         (torch.tensor([2147483647], dtype=torch.int32), ttnn.int32, "INT32 max"),
@@ -65,6 +67,7 @@ import pytest
         (torch.tensor([[[[1000000]]]], dtype=torch.int64), ttnn.uint32, "4D UINT32"),
         (torch.tensor([[[[3.14]]]], dtype=torch.float32), ttnn.bfloat8_b, "4D BFLOAT8_B"),
         (torch.tensor([[[[2.71]]]], dtype=torch.float32), ttnn.bfloat4_b, "4D BFLOAT4_B"),
+        (torch.tensor([[[[4.0]]]], dtype=torch.float32), ttnn.bfloat2_b, "4D BFLOAT2_B"),
     ],
 )
 def test_tensor_item_basic_types(device, torch_tensor, ttnn_dtype, description):
