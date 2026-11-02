@@ -16,6 +16,7 @@
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/events.hpp"
+#include "tt-metalium/distributed.hpp"
 
 using namespace tt::tt_metal;
 
@@ -33,6 +34,11 @@ void py_module_types(nb::module_& mod) {
 }
 
 void py_module(nb::module_& mod) {
+    mod.def(
+        "event_query",
+        &tt::tt_metal::distributed::EventQuery,
+        nb::arg("mesh_event"),
+        "Return whether all participating devices completed an event, without waiting.");
     // Multi Device APIs
     mod.def(
         "record_event",

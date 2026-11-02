@@ -118,6 +118,7 @@ from ttnn._ttnn.events import (
     record_event,
     wait_for_event,
     event_synchronize,
+    event_query,
 )
 
 from ttnn._ttnn.operations.trace import (

@@ -1,0 +1,28 @@
+{
+  "config_id": "decoder_bfp8",
+  "weight_groups": {
+    "attention": "bfp8",
+    "mlp": "bfp8",
+    "down": "bfp8",
+    "lm_head": "bfp8"
+  },
+  "layer_exceptions": {},
+  "compute_fidelities": {
+    "attention": "HiFi2",
+    "mlp": "HiFi2",
+    "down": "HiFi2",
+    "lm_head": "HiFi2"
+  },
+  "activation_dtype": "bfloat8_b",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": {
+    "prefill": "bfloat8_b",
+    "decode": "bfloat16"
+  },
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16",
+  "embedding_dtype": "bfloat16",
+  "norm_dtype": "bfloat16",
+  "max_seq_len": 262144
+}
