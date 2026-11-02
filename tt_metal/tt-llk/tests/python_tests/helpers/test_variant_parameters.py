@@ -29,6 +29,7 @@ from .llk_params import (
     MathFidelity,
     MathOperation,
     NarrowTile,
+    PackUntilizeBenchmark,
     PerfRunType,
     ReduceOrder,
     ReducePool,
@@ -55,7 +56,7 @@ from .sfpu_dispatch_constants import (
 )
 
 
-def _fp32_bits(value: float) -> int:
+def fp32_bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
@@ -90,6 +91,18 @@ class THROTTLE_LEVEL(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
+
+
+@dataclass
+class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
+    pack_untilize_benchmark: PackUntilizeBenchmark
+
+    def convert_to_cpp(self) -> str:
+        is_perf = self.pack_untilize_benchmark != PackUntilizeBenchmark.Functional
+        return (
+            f"// pack_untilize benchmark: {self.pack_untilize_benchmark.value}\n"
+            f"constexpr bool PACK_UNTILIZE_IS_PERF = {str(is_perf).lower()};"
+        )
 
 
 @dataclass
@@ -414,7 +427,7 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
     relu_max_threshold: float = RELU_MAX_THRESHOLD
 
     def convert_to_cpp(self) -> str:
-        bits = struct.unpack("<I", struct.pack("<f", self.relu_max_threshold))[0]
+        bits = fp32_bits(self.relu_max_threshold)
         return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
 
 
@@ -428,7 +441,7 @@ class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         value = self.max_min_scalar
-        bits = _fp32_bits(value) if isinstance(value, float) else value & 0xFFFFFFFF
+        bits = fp32_bits(value) if isinstance(value, float) else value & 0xFFFFFFFF
         return f"#define SFPU_UNARY_MAX_MIN_SCALAR {bits:#010x}u"
 
 
@@ -477,8 +490,8 @@ class SFPU_POLYGAMMA_ORDER(TemplateParameter):
             raise ValueError(f"polygamma supports orders 1 to 11, got {n}")
         scale = (-1) ** (n + 1) * math.factorial(n)
         return (
-            f"#define SFPU_POLYGAMMA_N_BITS {_fp32_bits(n):#x}u\n"
-            f"#define SFPU_POLYGAMMA_SCALE_BITS {_fp32_bits(scale):#x}u"
+            f"#define SFPU_POLYGAMMA_N_BITS {fp32_bits(n):#x}u\n"
+            f"#define SFPU_POLYGAMMA_SCALE_BITS {fp32_bits(scale):#x}u"
         )
 
 
@@ -524,7 +537,7 @@ class SFPU_DROPOUT_PARAMS(TemplateParameter):
         ), f"dropout seed {self.dropout_seed:#x} is not 32-bit"
 
     def convert_to_cpp(self) -> str:
-        scale_bits = struct.unpack("<I", struct.pack("<f", self.dropout_scale))[0]
+        scale_bits = fp32_bits(self.dropout_scale)
         return "\n".join(
             (
                 f"#define SFPU_DROPOUT_PROBABILITY {self.dropout_probability:#010x}u",
@@ -2205,10 +2218,12 @@ class EMA_INTERLEAVED_INIT(TemplateParameter):
 
 @dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
-    offset: int = 0
+    tile_dst_ct_offset: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t TILE_DST_CT_OFFSET = {self.offset};"
+        return (
+            f"constexpr std::uint32_t TILE_DST_CT_OFFSET = {self.tile_dst_ct_offset};"
+        )
 
 
 @dataclass
@@ -2409,7 +2424,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
                          omits the LLK argument; zero and kt_dim retain tight packing.
     sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
     preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
-                         copy_tile_init does.
+                         copy_init does.
     """
 
     signal_granularity: int = 1
@@ -2529,8 +2544,8 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {_fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {_fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.scalar1)}u;"
         )
 
 

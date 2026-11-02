@@ -17,6 +17,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "context/metal_context.hpp"
+#include "debug/l1_ecc_halt.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
@@ -36,7 +37,6 @@
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/math.hpp>
-#include "tt_align.hpp"
 #include <tt-umd/types/blackhole_eth.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
@@ -236,8 +236,21 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                         virtual_core.y);
                 }
             }
+            // 1. Find BRISCs an earlier process left in an interrupt handler, before their halt records are cleared.
+            const std::vector<internal::LatchedBrisc> released_briscs =
+                internal::find_latched_briscs(descriptor_->metal_context(), device_id);
+            internal::clear_l1_ecc_halt_records(descriptor_->metal_context(), device_id);
+            // 2. With every core held in reset, point those interrupts at code that returns from the handler.
             reset_cores(device_id);
-            initialize_and_launch_firmware(device_id);
+            internal::release_latched_briscs(descriptor_->metal_context(), device_id, released_briscs);
+            // 3. Load firmware and release the cores. A latched BRISC returns from the handler first, then boots.
+            try {
+                initialize_and_launch_firmware(device_id);
+            } catch (const std::exception&) {
+                // A BRISC that stayed in its interrupt handler is the likelier cause of a firmware init timeout.
+                internal::check_briscs_released(descriptor_->metal_context(), device_id, released_briscs);
+                throw;
+            }
         }
     }
     initialized_ = true;
@@ -281,6 +294,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             } catch (const std::runtime_error& e) {
                 log_warning(
                     tt::LogMetal, "Skipping RISC reset on device {} during teardown: {}", device_id, e.what());
+            }
+            try {
+                internal::report_l1_ecc_at_close(descriptor_->metal_context(), device_id);
+            } catch (const std::runtime_error& e) {
+                log_warning(
+                    tt::LogMetal, "Skipping L1 ECC report on device {} during teardown: {}", device_id, e.what());
             }
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW
