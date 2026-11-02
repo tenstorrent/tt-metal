@@ -63,25 +63,33 @@ MIN_CSRRC = 1
 SEQUENCE_WINDOW_WORDS = 16
 
 
-def _executable_words(elf_path):
-    """Every 4-byte aligned word of every executable PROGBITS section."""
+def _executable_words_with_addresses(elf_path):
+    """Every 4-byte aligned word of every executable PROGBITS section, with the word address
+    list and the address -> word index map (for following jumps)."""
     data = elf_path.read_bytes()
     assert data[:4] == b"\x7fELF" and data[4] == 1, f"{elf_path} is not a 32-bit ELF"
 
     (e_shoff,) = struct.unpack_from("<I", data, 0x20)
     e_shentsize, e_shnum, _ = struct.unpack_from("<HHH", data, 0x2E)
 
-    words = []
+    words, word_addresses, index_of_address = [], [], {}
     for i in range(e_shnum):
-        _, sh_type, sh_flags, _, sh_offset, sh_size = struct.unpack_from(
+        _, sh_type, sh_flags, sh_addr, sh_offset, sh_size = struct.unpack_from(
             "<IIIIII", data, e_shoff + i * e_shentsize
         )
         SHT_PROGBITS, SHF_EXECINSTR = 1, 0x4
         if sh_type != SHT_PROGBITS or not (sh_flags & SHF_EXECINSTR):
             continue
         for off in range(sh_offset, sh_offset + sh_size - 3, 4):
+            index_of_address[sh_addr + (off - sh_offset)] = len(words)
+            word_addresses.append(sh_addr + (off - sh_offset))
             words.append(struct.unpack_from("<I", data, off)[0])
-    return words
+    return words, (word_addresses, index_of_address)
+
+
+def _executable_words(elf_path):
+    """Every 4-byte aligned word of every executable PROGBITS section."""
+    return _executable_words_with_addresses(elf_path)[0]
 
 
 def _has_gathering_sequence(words):
@@ -196,13 +204,12 @@ FUNCT3_CSRRS, FUNCT3_CSRRC = 0b010, 0b011
 # disable_gathering() is csrrs, fence, csrrs, csrrc, fence, then three TTNOPs; allow
 # slack for scheduling.
 DISABLE_WINDOW_WORDS = 16
-# enable_gathering() is a single csrrc that follows the recorded body; allow a few
-# scalar instructions between the body's last Tensix instruction and it.
-ENABLE_SLACK_WORDS = 8
-# A recorded body that takes runtime operands (TT_* rather than TTI_*) composes each Tensix
-# instruction in a register and stores it, so it spans more words than its record length;
-# the enable_gathering() csrrc lands correspondingly later.
-ENABLE_SLACK_WORDS_RUNTIME_OPERANDS = 48
+# enable_gathering() is a single csrrc right after the recorded body. The body is `len` Tensix
+# instructions, but the words between the record and that csrrc also hold the RISC-V code the
+# compiler schedules among them (MOP programming, loop control, the composition of runtime
+# operands), and GCC may cross-jump a body's common tail into shared code, so the walk to the
+# csrrc counts Tensix words and follows unconditional jumps, up to this many words.
+BODY_WALK_LIMIT_WORDS = 512
 TT_OPCODE_REPLAY = 0x04
 # _calculate_where_'s plain-SFPLOAD path (DISABLE_SFPLOADMACRO) records 6 instructions: three
 # SFPLOADs, SFPSETCC, SFPENCC, SFPSTORE. Its SFPLOADMACRO paths record 3 and 4, so the length
@@ -230,42 +237,139 @@ def _replay_records(words):
     return records
 
 
-def _unbracketed_records(words, records, enable_slack_words=ENABLE_SLACK_WORDS):
+# A record whose length is a runtime value (_llk_pack_block_contiguous_mop_config_) is not an
+# inline .ttinsn word: the compiler composes the REPLAY word from `lui rd, 0x4000` (the REPLAY
+# opcode in the top byte), `addi rd, rd, 1` (load_mode) and the length, and stores it to the
+# instruction buffer. Those are matched separately, with a wider window before them.
+RISCV_OPCODE_LUI = 0x37
+RISCV_OPCODE_OP_IMM = 0x13
+RISCV_OPCODE_STORE = 0x23
+RISCV_OPCODE_JAL = 0x6F
+FUNCT3_SW = 0b010
+REPLAY_OPCODE_LUI_IMM = (
+    TT_OPCODE_REPLAY << 12
+)  # lui immediate placing 0x04 in bits 31:24
+RUNTIME_RECORD_COMPOSE_WORDS = 12
+RUNTIME_RECORD_DISABLE_WINDOW_WORDS = 32
+
+
+def _runtime_replay_records(words):
+    """(index of the instruction-buffer store, None) of every REPLAY record composed at runtime."""
+    records = []
+    for i, word in enumerate(words):
+        if word & 0x7F != RISCV_OPCODE_LUI or word >> 12 != REPLAY_OPCODE_LUI_IMM:
+            continue
+        rd = (word >> 7) & 0x1F
+        addi_rd_rd_1 = RISCV_OPCODE_OP_IMM | (rd << 7) | (rd << 15) | (1 << 20)
+        window = words[i + 1 : i + RUNTIME_RECORD_COMPOSE_WORDS]
+        if addi_rd_rd_1 not in window:
+            continue  # a playback word (no load_mode bit), e.g. a MOP template operand
+        for j in range(i + 1, min(i + RUNTIME_RECORD_COMPOSE_WORDS, len(words))):
+            if (
+                words[j] & 0x7F == RISCV_OPCODE_STORE
+                and (words[j] >> 12) & 0x7 == FUNCT3_SW
+            ):
+                records.append((j, None))
+                break
+    return records
+
+
+def _is_tensix_word(word):
+    """Inline ``.ttinsn`` words are the only words outside the 32-bit RISC-V opcode space."""
+    return word & 0x3 != 0x3
+
+
+def _jal_zero_target(words, index, addresses):
+    """Word index of the target of ``jal zero, imm`` at ``index``, or None."""
+    word = words[index]
+    if word & 0x7F != RISCV_OPCODE_JAL or (word >> 7) & 0x1F != 0:
+        return None
+    imm = (
+        ((word >> 31) & 0x1) << 20
+        | ((word >> 12) & 0xFF) << 12
+        | ((word >> 20) & 0x1) << 11
+        | ((word >> 21) & 0x3FF) << 1
+    )
+    if imm & (1 << 20):
+        imm -= 1 << 21
+    word_addresses, index_of_address = addresses
+    return index_of_address.get(word_addresses[index] + imm)
+
+
+def _first_cfg0_op_after(words, index, addresses):
+    """(op, tensix words seen) for the first cfg0 CSR op after word ``index``, following
+    unconditional jumps; op is None if none is found within the walk limit."""
+    tensix = 0
+    position = index + 1
+    for _ in range(BODY_WALK_LIMIT_WORDS):
+        if position >= len(words):
+            break
+        target = _jal_zero_target(words, position, addresses)
+        if target is not None:
+            position = target
+            continue
+        op = _cfg0_csr_op(words[position])
+        if op:
+            return op, tensix
+        if _is_tensix_word(words[position]):
+            tensix += 1
+        position += 1
+    return None, tensix
+
+
+def _unbracketed_records(
+    words, records, addresses, disable_window_words=DISABLE_WINDOW_WORDS
+):
     """The records not bracketed by disable_gathering()'s csrrs/csrrs/csrrc before and
-    enable_gathering()'s csrrc as the first cfg0 CSR op after the body (within the slack).
+    enable_gathering()'s csrrc as the first cfg0 CSR op after the body. A body that issues
+    more Tensix instructions than its record length (an under-counted record: the tail would
+    not be in the buffer) is reported too; a runtime-length record (length None) is only
+    checked for the bracket.
     """
     unbracketed = []
     for index, length in records:
         before = [
-            _cfg0_csr_op(w) for w in words[max(0, index - DISABLE_WINDOW_WORDS) : index]
+            _cfg0_csr_op(w) for w in words[max(0, index - disable_window_words) : index]
         ]
         before = [op for op in before if op]
-        after = [
-            _cfg0_csr_op(w)
-            for w in words[index + 1 + length : index + 1 + length + enable_slack_words]
-        ]
-        after = [op for op in after if op]
         disabled = before[-3:] == ["s", "s", "c"]
-        enabled = after[:1] == ["c"]
-        if not (disabled and enabled):
+        after, tensix = _first_cfg0_op_after(words, index, addresses)
+        enabled = after == "c"
+        overlong = length is not None and tensix > length
+        if not (disabled and enabled) or overlong:
             unbracketed.append(
-                f"record at word {index} (len {length}): "
-                f"disable_gathering before={disabled}, enable_gathering after={enabled}"
+                f"record at word {index} (len {'runtime' if length is None else length}): "
+                f"disable_gathering before={disabled}, enable_gathering after={enabled}, "
+                f"Tensix instructions before the enable={tensix}"
             )
     return unbracketed
 
 
-def _assert_records_bracketed(words, records, enable_slack_words=ENABLE_SLACK_WORDS):
-    unbracketed = _unbracketed_records(words, records, enable_slack_words)
-    assert not unbracketed, (
-        "replay record(s) not bracketed by disable_gathering()/enable_gathering() with "
-        "ENABLE_GATHERING defined; record through ckernel::load_replay_buf instead of a raw "
-        "lltt::record / TTI_REPLAY:\n  " + "\n  ".join(unbracketed)
+def _check_elf_records(elf_path):
+    """All replay records of ``elf_path``, and the ones not bracketed."""
+    words, addresses = _executable_words_with_addresses(elf_path)
+    inline = _replay_records(words)
+    runtime = _runtime_replay_records(words)
+    unbracketed = _unbracketed_records(words, inline, addresses) + _unbracketed_records(
+        words, runtime, addresses, RUNTIME_RECORD_DISABLE_WINDOW_WORDS
     )
+    return inline + runtime, unbracketed
 
 
-def _math_elf_words(configuration):
-    """Build ``configuration`` and return the executable words of its math ELF."""
+def _assert_records_bracketed(elf_path):
+    """Every replay record of ``elf_path`` sits inside the bracket; returns the records."""
+    records, unbracketed = _check_elf_records(elf_path)
+    assert not unbracketed, (
+        f"{elf_path.name}: replay record(s) not bracketed by disable_gathering()/"
+        "enable_gathering() with ENABLE_GATHERING defined; record through "
+        "ckernel::load_replay_buf instead of a raw lltt::record / TTI_REPLAY:\n  "
+        + "\n  ".join(unbracketed)
+    )
+    return records
+
+
+def _math_elf(configuration):
+    """Build ``configuration`` and return its math ELF."""
     # Build only: the assertions are on the binary.
     configuration.prepare()
     math_elf = (
@@ -276,7 +380,7 @@ def _math_elf_words(configuration):
         / "math.elf"
     )
     assert math_elf.is_file(), f"math ELF was not built: {math_elf}"
-    return _executable_words(math_elf)
+    return math_elf
 
 
 @blackhole_only
@@ -318,13 +422,10 @@ def test_replay_records_are_gathering_bracketed():
         test_name="sources/eltwise_unary_sfpu_gathering_test.cpp",
         fast_mode=FastMode.No,
     )
-    words = _math_elf_words(configuration)
-
-    records = _replay_records(words)
+    records = _assert_records_bracketed(_math_elf(configuration))
     assert (
         records
     ), "no replay record found in the exp math ELF; the bf16 TTI path moved"
-    _assert_records_bracketed(words, records)
 
 
 @blackhole_only
@@ -356,14 +457,11 @@ def test_welfords_replay_record_is_gathering_bracketed():
         ),
         dest_acc=DestAccumulation.No,
     )
-    words = _math_elf_words(configuration)
-
-    records = _replay_records(words)
+    records = _assert_records_bracketed(_math_elf(configuration))
     assert records, (
         "no replay record found in the welfords math ELF; "
         "_llk_math_welfords_sfpu_init_ no longer programs the replay buffer"
     )
-    _assert_records_bracketed(words, records)
 
 
 @blackhole_only
@@ -419,42 +517,22 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
         dest_acc=DestAccumulation.No,
         compile_time_formats=True,
     )
-    words = _math_elf_words(configuration)
-
-    records = _replay_records(words)
+    records = _assert_records_bracketed(_math_elf(configuration))
     assert any(length == WHERE_PLAIN_SFPLOAD_RECORD_LEN for _, length in records), (
         f"no replay record of length {WHERE_PLAIN_SFPLOAD_RECORD_LEN} in the where math ELF "
         f"(record lengths found: {[length for _, length in records]}); DISABLE_SFPLOADMACRO no "
         "longer selects the plain-SFPLOAD path of _calculate_where_, so this test is not "
         "covering it"
     )
-    _assert_records_bracketed(
-        words, records, enable_slack_words=ENABLE_SLACK_WORDS_RUNTIME_OPERANDS
-    )
 
 
 # ---------------------------------------------------------------------------------------------
 # Every Blackhole kernel that records a replay buffer, built the way tt-metal builds kernels under
 # TT_METAL_ENABLE_GATHERING=1 (the harness honours the same variable: test_config.py adds
-# -DENABLE_GATHERING). One existing test variant per kernel is built with --compile-producer in a
-# private build directory and every record found in its math and pack ELFs must be bracketed.
-#
-# A record whose length is a runtime value (_llk_pack_block_contiguous_mop_config_) is not an
-# inline .ttinsn word: the compiler composes the REPLAY word from `lui rd, 0x4000` (the REPLAY
-# opcode in the top byte), `addi rd, rd, 1` (load_mode) and the length, and stores it to the
-# instruction buffer. Those are matched separately, with a wider window because the recorded body
-# that follows is a loop.
-RISCV_OPCODE_LUI = 0x37
-RISCV_OPCODE_OP_IMM = 0x13
-RISCV_OPCODE_STORE = 0x23
-FUNCT3_SW = 0b010
-REPLAY_OPCODE_LUI_IMM = (
-    TT_OPCODE_REPLAY << 12
-)  # lui immediate placing 0x04 in bits 31:24
-RUNTIME_RECORD_COMPOSE_WORDS = 12
-RUNTIME_RECORD_DISABLE_WINDOW_WORDS = 32
-RUNTIME_RECORD_ENABLE_SLACK_WORDS = 256
-
+# -DENABLE_GATHERING -mno-tt-tensix-optimize-replay). One existing test variant per kernel path
+# is built with --compile-producer in a private build directory and every record found in its
+# math and pack ELFs must be bracketed. Keep the node ids in sync with the tests' parametrisation:
+# a stale id fails with the "stale node id" message below.
 # (kernel, pytest node id relative to python_tests, ELF that must carry the record)
 GATHERING_BUILD_VARIANTS = [
     (
@@ -488,6 +566,12 @@ GATHERING_BUILD_VARIANTS = [
         "binary bcast column (broadcast helper)",
         "test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_bcast[formats:Float16_b->Float16_b-"
         "bcast_dim:Column-mathop:SfpuElwsub-dest_acc:No]",
+        "math",
+    ),
+    (
+        "sfpu reduce max/min uint16 in a 32-bit Dest (manual swap chain)",
+        "test_sfpu_reduce.py::test_sfpu_reduce[formats:UInt16->UInt16-mathop:ReduceColumn-dest_acc:Yes-"
+        "input_bounds:(0, 1000)-reduce_pool:Max-dimension_combinations:[32, 32]-reduced_extent:15]",
         "math",
     ),
     (
@@ -527,6 +611,11 @@ GATHERING_BUILD_VARIANTS = [
         "math",
     ),
     (
+        "topk_xl K=2048 (face transposes from Dst, msb removal, index separation)",
+        "test_topk_xl.py::test_topk_xl[K:2048-num_chunks:1-partial_tail:False]",
+        "math",
+    ),
+    (
         "topk_xl unfused macro",
         "test_topk_xl_unfused_macro.py::test_topk_xl_unfused_macro_chained[K:512-num_chunks:2]",
         "math",
@@ -539,8 +628,18 @@ GATHERING_BUILD_VARIANTS = [
         "pack",  # the split sort records on the pack thread
     ),
     (
-        "generalized moe gate (eltwise binary reload + single-face transposes)",
+        "generalized moe gate shipping config (single-face transposes)",
         "test_generalized_moe_gate.py::test_generalized_moe_gate_shipping_config[dest_sync:Half-num_faces:4]",
+        "math",
+    ),
+    (
+        "generalized moe gate grouped (step1 transpose)",
+        "test_generalized_moe_gate.py::test_generalized_moe_gate_grouped[seed:128-approx:No]",
+        "math",
+    ),
+    (
+        "generalized moe gate eltwise binary reload",
+        "test_generalized_moe_gate.py::test_generalized_moe_gate_binary[math_op:Elwadd-reload:True]",
         "math",
     ),
     (
@@ -582,161 +681,6 @@ GATHERING_BUILD_VARIANTS = [
 ]
 
 
-RISCV_OPCODE_JAL = 0x6F
-# A recorded body is `len` Tensix instructions; the RISC-V words the compiler schedules between
-# them (MOP programming, loop control) do not count, and GCC may cross-jump a body's common tail
-# into shared code, so the walk follows unconditional jumps (jal zero). Enough slack for the
-# interleaved RISC-V code of the longest body.
-BODY_WALK_LIMIT_WORDS = 512
-
-
-def _is_tensix_word(word):
-    """Inline ``.ttinsn`` words are the only words outside the 32-bit RISC-V opcode space."""
-    return word & 0x3 != 0x3
-
-
-def _jal_zero_target(words, index, addresses):
-    """Word index of the target of ``jal zero, imm`` at ``index``, or None.
-
-    ``addresses`` is the (word address list, address -> word index map) pair of
-    ``_executable_words_with_addresses``."""
-    word = words[index]
-    if word & 0x7F != RISCV_OPCODE_JAL or (word >> 7) & 0x1F != 0:
-        return None
-    imm = (
-        ((word >> 31) & 0x1) << 20
-        | ((word >> 12) & 0xFF) << 12
-        | ((word >> 20) & 0x1) << 11
-        | ((word >> 21) & 0x3FF) << 1
-    )
-    if imm & (1 << 20):
-        imm -= 1 << 21
-    word_addresses, index_of_address = addresses
-    return index_of_address.get(word_addresses[index] + imm)
-
-
-def _walk_body(words, index, length, addresses):
-    """Index of the first word after ``length`` Tensix words following ``index``, following
-    unconditional jumps; None if the walk runs out of words or limit."""
-    seen = 0
-    position = index + 1
-    for _ in range(BODY_WALK_LIMIT_WORDS):
-        if position >= len(words):
-            return None
-        if seen == length:
-            return position
-        target = _jal_zero_target(words, position, addresses)
-        if target is not None:
-            position = target
-            continue
-        if _is_tensix_word(words[position]):
-            seen += 1
-        position += 1
-    return None
-
-
-def _runtime_replay_records(words):
-    """(index of the instruction-buffer store, None) of every REPLAY record composed at runtime."""
-    records = []
-    for i, word in enumerate(words):
-        if word & 0x7F != RISCV_OPCODE_LUI or word >> 12 != REPLAY_OPCODE_LUI_IMM:
-            continue
-        rd = (word >> 7) & 0x1F
-        addi_rd_rd_1 = RISCV_OPCODE_OP_IMM | (rd << 7) | (rd << 15) | (1 << 20)
-        window = words[i + 1 : i + RUNTIME_RECORD_COMPOSE_WORDS]
-        if addi_rd_rd_1 not in window:
-            continue  # a playback word (no load_mode bit), e.g. a MOP template operand
-        for j in range(i + 1, min(i + RUNTIME_RECORD_COMPOSE_WORDS, len(words))):
-            if (
-                words[j] & 0x7F == RISCV_OPCODE_STORE
-                and (words[j] >> 12) & 0x7 == FUNCT3_SW
-            ):
-                records.append((j, None))
-                break
-    return records
-
-
-def _unbracketed_records(
-    words, records, addresses, disable_window_words, enable_slack_words
-):
-    """The records not bracketed by disable_gathering()'s csrrs/csrrs/csrrc before and
-    enable_gathering()'s csrrc as the first cfg0 CSR op after the body (within the slack).
-    """
-    unbracketed = []
-    for index, length in records:
-        before = [
-            _cfg0_csr_op(w) for w in words[max(0, index - disable_window_words) : index]
-        ]
-        before = [op for op in before if op]
-        body_end = (
-            index + 1 if length is None else _walk_body(words, index, length, addresses)
-        )
-        if body_end is None:
-            unbracketed.append(f"record at word {index} (len {length}): body not found")
-            continue
-        after = []
-        position = body_end
-        for _ in range(enable_slack_words):
-            if position >= len(words):
-                break
-            target = _jal_zero_target(words, position, addresses)
-            if target is not None:
-                position = target
-                continue
-            op = _cfg0_csr_op(words[position])
-            if op:
-                after.append(op)
-                break
-            position += 1
-        disabled = before[-3:] == ["s", "s", "c"]
-        enabled = after[:1] == ["c"]
-        if not (disabled and enabled):
-            unbracketed.append(
-                f"record at word {index} (len {'runtime' if length is None else length}): "
-                f"disable_gathering before={disabled}, enable_gathering after={enabled}"
-            )
-    return unbracketed
-
-
-def _executable_words_with_addresses(elf_path):
-    """``_executable_words`` plus (word address list, address -> word index), for following jumps."""
-    data = elf_path.read_bytes()
-    (e_shoff,) = struct.unpack_from("<I", data, 0x20)
-    e_shentsize, e_shnum, _ = struct.unpack_from("<HHH", data, 0x2E)
-    words, word_addresses, index_of_address = [], [], {}
-    for i in range(e_shnum):
-        _, sh_type, sh_flags, sh_addr, sh_offset, sh_size = struct.unpack_from(
-            "<IIIIII", data, e_shoff + i * e_shentsize
-        )
-        SHT_PROGBITS, SHF_EXECINSTR = 1, 0x4
-        if sh_type != SHT_PROGBITS or not (sh_flags & SHF_EXECINSTR):
-            continue
-        for off in range(sh_offset, sh_offset + sh_size - 3, 4):
-            address = sh_addr + (off - sh_offset)
-            index_of_address[address] = len(words)
-            word_addresses.append(address)
-            words.append(struct.unpack_from("<I", data, off)[0])
-    assert words == _executable_words(elf_path)
-    return words, (word_addresses, index_of_address)
-
-
-def _check_elf_records(elf_path):
-    """All replay records of ``elf_path``, and the ones not bracketed."""
-    words, addresses = _executable_words_with_addresses(elf_path)
-    inline = _replay_records(words)
-    runtime = _runtime_replay_records(words)
-    unbracketed = _unbracketed_records(
-        words, inline, addresses, DISABLE_WINDOW_WORDS, ENABLE_SLACK_WORDS
-    ) + _unbracketed_records(
-        words,
-        runtime,
-        addresses,
-        RUNTIME_RECORD_DISABLE_WINDOW_WORDS,
-        RUNTIME_RECORD_ENABLE_SLACK_WORDS,
-    )
-    return inline + runtime, unbracketed
-
-
 @blackhole_only
 @pytest.mark.parametrize(
     "kernel, node_id, recording_elf",
@@ -775,6 +719,11 @@ def test_kernel_replay_records_are_gathering_bracketed(
         env=env,
         capture_output=True,
         text=True,
+    )
+    # pytest exit 4 = usage error, 5 = nothing collected: the node id no longer exists.
+    assert build.returncode not in (4, 5), (
+        f"{kernel}: stale node id {node_id!r}; update GATHERING_BUILD_VARIANTS to the test's "
+        f"current parametrisation:\n{build.stdout[-2000:]}\n{build.stderr[-1000:]}"
     )
     assert (
         build.returncode == 0

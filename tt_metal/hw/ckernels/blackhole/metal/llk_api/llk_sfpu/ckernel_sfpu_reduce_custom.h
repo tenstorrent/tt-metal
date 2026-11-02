@@ -54,7 +54,6 @@ inline void _init_reduce_max_col_subblock_4x2_() {
 
     // ***********************************************************
     // Record replay buffer
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf(
         0,
         8,

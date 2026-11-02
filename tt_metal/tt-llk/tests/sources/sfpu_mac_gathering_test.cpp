@@ -37,9 +37,9 @@ void run_kernel([[maybe_unused]] RUNTIME_PARAMETERS params)
 void run_kernel([[maybe_unused]] RUNTIME_PARAMETERS params)
 {
     // bf16 Dest: the six-instruction body (three SFPLOADs, SFPMAD, SFPSTOCHRND, SFPSTORE).
-    ckernel::sfpu::mac_init<false, false, DataFormat::Float16_b>();
+    ckernel::sfpu::mac_init<false /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, DataFormat::Float16_b>();
     // fp32 Dest: the five-instruction body, recorded into the same slot.
-    ckernel::sfpu::mac_init<false, true, DataFormat::Float32>();
+    ckernel::sfpu::mac_init<false /*APPROXIMATE*/, true /*is_fp32_dest_acc_en*/, DataFormat::Float32>();
 }
 
 #endif

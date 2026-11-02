@@ -68,7 +68,6 @@ inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in
 }
 
 inline void calculate_sfpu_gcd_init() {
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf(0, 7 * 4, [] {
 #pragma GCC unroll 4
         for (int i = 0; i < 4; ++i) {

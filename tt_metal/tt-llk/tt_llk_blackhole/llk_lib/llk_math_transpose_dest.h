@@ -280,7 +280,6 @@ inline void transpose_dest_configure_mop()
 {
     if constexpr (is_32bit)
     {
-        // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
         load_replay_buf(
             ckernel::math::replay_buf_offset,
             16,

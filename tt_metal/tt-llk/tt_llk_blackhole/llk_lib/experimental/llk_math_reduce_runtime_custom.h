@@ -168,7 +168,6 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t blo
         if constexpr (is_fp32_dest_acc_en)
         {
             // FP32 path records the same 15-instruction layout; only the execute-side replay differs.
-            // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
             ckernel::load_replay_buf(
                 0,
                 15,
@@ -196,7 +195,6 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t blo
         else
         {
             // Non-FP32 single face-row: 2 GMPOOLs + one transpose block (6 instrs) + CLR_B = 9 instructions.
-            // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
             ckernel::load_replay_buf(
                 0,
                 9,
@@ -231,7 +229,6 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t blo
 
     // See _llk_math_reduce_max_row_ for a full algorithm explanation
     // Put the following 15 instructions in a REPLAY buffer
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     ckernel::load_replay_buf(
         0,
         15,

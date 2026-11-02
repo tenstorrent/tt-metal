@@ -1925,7 +1925,6 @@ inline void transpose_dest_face_32b()
 template <std::uint32_t N>
 inline void transpose_faces_from_dst()
 {
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf<Exec>(0, transpose_face_body_len, [] { transpose_dest_face_32b_body(); });
     for (std::uint32_t face = 1; face < N; face++)
     {
@@ -3615,7 +3614,6 @@ inline void _topk_xl_add_lsb_indices_()
 
         // ── OR the precomputed indices into the low 16 bits of every DST word.
         // Same 16-slot record/replay shape as the column-major body below.
-        // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
         load_replay_buf<Exec>(
             0,
             16,
@@ -3704,7 +3702,6 @@ inline void _topk_xl_add_lsb_indices_()
     // The body (12 instructions: 4 loads + 4 ORs + 4 stores + 4 IADDs) is
     // recorded into replay slots [0..15] once and replayed for the
     // remaining iters.
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf<Exec>(
         0,
         16,
@@ -3798,7 +3795,6 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf<Exec>(
         0,
         16,
@@ -3900,7 +3896,6 @@ inline void _topk_xl_remove_msb_values_()
     {
         // Caller must quiesce MATH and retain ADDR_MOD_7 = zero advance while
         // PACK owns LREG0 and replay slots [0, 3). SyncHalf alone is insufficient.
-        // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
         load_replay_buf<Exec>(
             0,
             3,
@@ -4244,7 +4239,6 @@ inline void _topk_xl_separate_indices_()
     constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
     constexpr int indices_offset         = num_tiles_per_sequence * 64;
 
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf<Exec>(
         0,
         9,

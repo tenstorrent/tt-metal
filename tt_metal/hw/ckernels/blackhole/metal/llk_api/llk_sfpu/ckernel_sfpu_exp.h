@@ -1237,7 +1237,6 @@ void exp_init() {
         //   SHFT2 uses: LREG2, LREG3, LREG0, LREG1, LREG2, ...
         // ===================================================================
 
-        // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
         load_replay_buf(0, 32, [] {
             // 16 pairs of LM + SHFT2 (LREG pattern repeats every 4 pairs)
             // Pairs 0-1: dummy SHFT2s, Pairs 2-15: real SHFT2s for elements 0-13

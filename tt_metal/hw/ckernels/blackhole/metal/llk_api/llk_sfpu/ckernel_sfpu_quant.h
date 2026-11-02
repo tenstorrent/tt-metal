@@ -199,7 +199,6 @@ void quant_init(const uint zero_point) {
     }
     constexpr std::uint32_t REPLAY_LEN =
         OUTPUT_FORMAT == DataFormat::Int8 ? QUANT_REPLAY_LEN_INT8_OUT : QUANT_REPLAY_LEN_2S_COMP;
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf(QUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         // m = RNE(A * B + zp_hi) + RNE_MAGIC
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /*mod1*/);
@@ -252,7 +251,6 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         OUTPUT_FORMAT == DataFormat::Int8
             ? (INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_OUT : REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN)
             : (INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_IN : REQUANT_REPLAY_LEN_2S_COMP);
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf(REQUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         if constexpr (!INT8_INPUT) {
             // LREG0 has the input in 2's complement format. Convert to sign-magnitude before SFPCAST.
@@ -291,7 +289,6 @@ void dequant_init(const uint zero_point) {
     constexpr std::uint32_t REPLAY_LEN =
         (SIGN_MAGNITUDE_FORMAT || INT8_INPUT) ? DEQUANT_REPLAY_LEN_SIGN_MAGN : DEQUANT_REPLAY_LEN_2S_COMP;
 
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf(DEQUANT_REPLAY_SLOT, REPLAY_LEN, [] {
         if constexpr (!SIGN_MAGNITUDE_FORMAT && !INT8_INPUT) {
             // Input arrives in 2's-complement bits in LREG0 (INT32_2S_COMP

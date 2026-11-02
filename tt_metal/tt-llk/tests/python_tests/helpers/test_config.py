@@ -411,6 +411,7 @@ class TestConfig:
         configuration tt-metal ships. ENABLE_GATHERING leaves Blackhole instruction gathering on
         at boot (boot.h) and brackets every replay-buffer record with disable/enable_gathering
         (ckernel::load_replay_buf). Wormhole has no gathering; Quasar ignores the define.
+        "1" only, like TT_METAL_DISABLE_SFPLOADMACRO.
         """
         return os.environ.get("TT_METAL_ENABLE_GATHERING") == "1"
 
@@ -1446,9 +1447,11 @@ class TestConfig:
 
         if TestConfig.gathering_build():
             # Every RISC, the shared firmware included, so boot.h leaves gathering on everywhere.
-            # The compiler's own replay optimisation turns unrolled SFPU loops into records it
-            # never brackets, so it is off in this build.
-            gathering_options = "-DENABLE_GATHERING -mno-tt-tensix-optimize-replay "
+            gathering_options = "-DENABLE_GATHERING "
+            if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
+                # As tt-metal's JIT build does on Blackhole only: the compiler's own replay
+                # optimisation turns unrolled SFPU loops into records it never brackets.
+                gathering_options += "-mno-tt-tensix-optimize-replay "
             OPTIONS_COMPILE += gathering_options
             NON_COVERAGE_OPTIONS_COMPILE += gathering_options
 

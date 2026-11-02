@@ -1223,7 +1223,6 @@ template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type>
 inline void init_reduce_max_min_int32() {
     _init_sfpu_config_reg();
 
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf(0, 3, [] {
         TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, 1);
         TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG5, 1);
@@ -1272,7 +1271,6 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     // cannot use it because the fused load+swap leaves no place to mask the garbage high bits, so it
     // is routed to the manual calculate_reduce_max_min_uint16() path instead.
     constexpr std::uint32_t buffer_len = 11;
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf(0, buffer_len, [] {
         TTI_INCRWC(0, 4, 0, 0);
         TTI_SFPLOADMACRO(5, INSTRUCTION_MODE, ADDR_MOD_7, 2);
@@ -1324,7 +1322,6 @@ inline void init_reduce_sum_avg() {
     //   - Used by optimized column reduce (second pass, after cross-face add + transpose)
 
     if constexpr (is_integer_mode) {
-        // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
         load_replay_buf(0, 9, [] {
             // Full reduce (positions 0-5): interleaved upper/lower face summation
             TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, 4);  // LREG2 = LREG2 + LREG3
@@ -1340,7 +1337,6 @@ inline void init_reduce_sum_avg() {
             TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);  // LREG0 = LREG0 + LREG1
         });
     } else {
-        // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
         load_replay_buf(0, 9, [] {
             // Full reduce (positions 0-5): interleaved to eliminate read-after-write dependencies
             TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // A1
@@ -1758,7 +1754,6 @@ inline void init_reduce_max_min_int32_signed() {
     sfpi::vConstIntPrgm0 = INT32_SWAP_ORDER_MASK;
 
     // The column kernel maps each face first, so a plain VEC_MIN_MAX orders signed Int32 (INT32_MIN included).
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf(0, INT32_COL_SWAP_CHAIN_LEN, [] {
         TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG5, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);

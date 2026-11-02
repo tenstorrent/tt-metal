@@ -103,7 +103,6 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
             0);
 
         // Enter recording mode: capture next replay_len instructions
-        // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
         ckernel::load_replay_buf(
             0,
             replay_len,

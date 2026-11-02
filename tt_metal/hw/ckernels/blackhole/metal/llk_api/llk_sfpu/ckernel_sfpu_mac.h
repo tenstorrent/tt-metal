@@ -59,7 +59,6 @@ inline void mac_init() {
     // is what we want; only the store overrides it, with the auto-advancing mod set above.
     constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
 
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     load_replay_buf(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>, [] {
         sfpi::vFloat a = sfpi::dst_reg[0].mode<dst_fmt>();
         sfpi::vFloat b = sfpi::dst_reg[32].mode<dst_fmt>();

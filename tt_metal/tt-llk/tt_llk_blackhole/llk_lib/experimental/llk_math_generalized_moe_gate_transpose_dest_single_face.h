@@ -45,7 +45,6 @@ inline void generalized_moe_gate_transpose_dest_single_face_step0_configure_mop(
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
     // Load replay buffer with the transpose sequence for one 16x16 face (face 0: rows 0-15)
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     ckernel::load_replay_buf(
         ckernel::math::replay_buf_offset,
         16,
@@ -86,7 +85,6 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_configure_mop(
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
     // Load replay buffer with the transpose sequence for one 16x16 face (face 0: rows 0-15)
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     ckernel::load_replay_buf(
         ckernel::math::replay_buf_offset,
         11,
@@ -124,7 +122,6 @@ template <std::uint32_t num_tiles, bool is_32bit, std::uint32_t d2b_dst, std::ui
 inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_mop()
 {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     ckernel::load_replay_buf(
         ckernel::math::replay_buf_offset,
         11,
@@ -160,7 +157,6 @@ inline void generalized_moe_gate_copy4rows_configure_mop()
     static_assert(!is_32bit, "32-bit is not supported");
     // srcb selects the 4-row SrcB scratch window (16/20/24/28). Back-to-back copy4rows calls use
     // DISJOINT srcb windows so a later MOVB2D cannot read a previous copy's SrcB leftover.
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     ckernel::load_replay_buf(
         ckernel::math::replay_buf_offset,
         5,
@@ -181,7 +177,6 @@ template <std::uint32_t num_tiles = 1, bool is_32bit>
 inline void generalized_moe_gate_transpose_dest_single_face_step2_configure_mop()
 {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     ckernel::load_replay_buf(
         ckernel::math::replay_buf_offset,
         4,

@@ -89,7 +89,6 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_configure_addrmod_()
 __attribute__((noinline)) void _llk_pack_fast_tilize_load_replay_()
 {
     // Tile replay [0..15]: 16 PACRs, Last=1 on final.
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     ckernel::load_replay_buf(
         REPLAY_TILE_OFFSET,
         REPLAY_TILE_LEN,
@@ -103,7 +102,6 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_load_replay_()
 
     // Address-update replay [16..19]: advance L1_Dest_addr for next tile.
     // Same pattern as BH pack-untilize (llk_pack_untilize.h:94-108).
-    // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
     ckernel::load_replay_buf(
         REPLAY_ADDR_UPDATE_OFFSET,
         REPLAY_ADDR_UPDATE_LEN,

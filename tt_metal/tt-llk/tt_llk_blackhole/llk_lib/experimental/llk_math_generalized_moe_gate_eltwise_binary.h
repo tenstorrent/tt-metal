@@ -100,7 +100,6 @@ inline void generalized_moe_gate_eltwise_binary_configure_mop(const std::uint32_
     {
         // Record (without executing) the 5 instructions that move a whole face from DEST to SRCA, then
         // replay them as the mop's start op. The count below must match the 5 instructions recorded here.
-        // Recorded through load_replay_buf: an ENABLE_GATHERING build disables instruction gathering around the record.
         ckernel::load_replay_buf(
             ckernel::math::replay_buf_offset,
             5,
