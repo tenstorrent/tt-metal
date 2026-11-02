@@ -51,6 +51,13 @@ def scales_view(s, s_tiles: int):
     return s, [0, 1, 0, 0]
 
 
+def scale_tiles(s):
+    """(bytes per scale tile, CB data format, fp16 flag): A's BONSAI_SCALE16 tiles are 2 KB fp16 in a bf16 carrier CB."""
+    if getattr(s, "fp16", False):
+        return 2048, ttnn.bfloat16, 1
+    return 4096, ttnn.float32, 0
+
+
 def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b, fidelity=None):
     """w, s: a3.weights_for_device output for codes [K, N_pad] (gu: (gate, up) column pairs).
     n: real output columns (gu: per half). Returns [1, 1, K, n] DRAM tensor(s) (gu: (gate, up))."""
@@ -58,6 +65,7 @@ def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b, fideli
     device = wt.device()
     kt = k // 32
     st, sl = scales_view(s, ((kt // 32) + 3) // 4)
+    stb, sfmt, s16 = scale_tiles(s)
     assert kt % 32 == 0 and n % 32 == 0
     ng = kt // 32
     s_tiles = (ng + 3) // 4
@@ -89,13 +97,13 @@ def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b, fideli
         compile_time_args=ct, runtime_args=rt, config=cfg)
     prog = ttnn.ProgramDescriptor(
         kernels=[
-            kd("dequant_reader.cpp", [ng, s_tiles, cpb, wtb, ncols] + sl, rd, ttnn.ReaderConfigDescriptor()),
+            kd("dequant_reader.cpp", [ng, s_tiles, cpb, wtb, ncols] + sl + [stb], rd, ttnn.ReaderConfigDescriptor()),
             kd("dequant_writer.cpp", [ng, n // 32, int(gu), otb, int(os.environ.get("BONSAI_DQ_SKIPW", "0")), ncols], wr, ttnn.WriterConfigDescriptor()),
-            kd("dequant_compute.cpp", [ng, 4 if _FP32_DEST else 8, ncols, sx, cpb, sl[0], s_tiles] + sl[1:], cp, ttnn.ComputeConfigDescriptor(
+            kd("dequant_compute.cpp", [ng, 4 if _FP32_DEST else 8, ncols, sx, cpb, sl[0], s_tiles] + sl[1:] + [s16], cp, ttnn.ComputeConfigDescriptor(
                 math_fidelity=fidelity or _DQ_FID, fp32_dest_acc_en=_FP32_DEST, math_approx_mode=False)),
         ],
         semaphores=[],
-        cbs=[cb(0, ttnn.DataType.BFLOAT2_B, wtb, 64), cb(1, ttnn.float32, 4096, 2), cb(16, dtype, otb, 64)])
+        cbs=[cb(0, ttnn.DataType.BFLOAT2_B, wtb, 64), cb(1, sfmt, stb, 2), cb(16, dtype, otb, 64)])
     ttnn.generic_op([wt, st] + outs, prog)
     return tuple(outs) if gu else outs[0]
 

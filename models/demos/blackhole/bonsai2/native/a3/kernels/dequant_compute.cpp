@@ -12,6 +12,17 @@
 #include "api/compute/pack.h"
 #include "api/compute/reg_api.h"
 #include "scale_loc.h"
+
+// A's BONSAI_SCALE16: scale tiles hold fp16 (2 KB) in a CB declared bf16 as a carrier; SrcB is reprogrammed to
+// Float16 for the bcast-row multiply (exact: the scales are fp16 in the GGUF).
+template <bool s16>
+inline void scale_srcb_fp16() {
+    if constexpr (s16) {
+        UNPACK((_llk_unpack_reconfig_data_format_srcb_impl_<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(
+            (uint32_t)DataFormat::Float16, (uint32_t)DataFormat::Float16, 2048)));
+        MATH((_llk_math_reconfig_data_format_srcb_<DST_ACCUM_MODE>((uint32_t)DataFormat::Float16)));
+    }
+}
 #include "api/compute/compute_kernel_api.h"
 
 // A2b (PackedW): code tiles are 256 B with no exponent section; unpacker 0 (SrcA) forces exponent 127.
@@ -30,11 +41,13 @@ void kernel_main() {
     constexpr uint32_t cpb = get_compile_time_arg_val(4), pk = get_compile_time_arg_val(5);
     constexpr uint32_t s_tiles = get_compile_time_arg_val(6), tail_t = get_compile_time_arg_val(7);
     constexpr uint32_t s_full = get_compile_time_arg_val(8), rem = get_compile_time_arg_val(9);
+    constexpr bool s16 = get_compile_time_arg_val(10) == 1;
     constexpr uint32_t dt = get_compile_time_arg_val(1);  // tiles per DST half: 8 (bf16 DST) or 4 (fp32)
     constexpr uint32_t cb_w = 0, cb_s = 1, cb_out = 16;
 
     compute_kernel_hw_startup(cb_w, cb_s, cb_out);
     mul_bcast_rows_init(cb_w, cb_s);
+    scale_srcb_fp16<s16>();
     if constexpr (sx) {
         force_shared_exp<true>();
     }

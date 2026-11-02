@@ -39,6 +39,7 @@ void kernel_main() {
     const InterleavedAddrGen<true> xg{.bank_base_address = x_addr, .page_size = xtb};
     constexpr uint32_t pk = get_compile_time_arg_val(12), tail_t = get_compile_time_arg_val(13);
     constexpr uint32_t s_full = get_compile_time_arg_val(14), rem = get_compile_time_arg_val(15);
+    constexpr uint32_t s_tb = get_compile_time_arg_val(16);  // scale tile bytes: 4096 fp32, 2048 fp16
     constexpr uint32_t mc = get_compile_time_arg_val(7);  // 1: x' arrives by multicast from the sender core
     constexpr uint32_t snd_x = get_compile_time_arg_val(8), snd_y = get_compile_time_arg_val(9);
     constexpr uint32_t sem_ready_id = get_compile_time_arg_val(10), sem_valid_id = get_compile_time_arg_val(11);
@@ -49,8 +50,7 @@ void kernel_main() {
             const uint32_t bank = c / cpb, j = c % cpb;
             cb_reserve_back(cb_s, 1);
             const ScaleLoc loc = scale_loc<pk, s_tiles, tail_t, s_full, rem>(j, G);
-            noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr + loc.tile * 4096),
-                           get_write_ptr(cb_s), 4096);
+            noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr + loc.tile * s_tb), get_write_ptr(cb_s), s_tb);
             cb_reserve_back(cb_c, 32);
             noc_async_read(get_noc_addr_from_bank_id<true>(bank, w_addr + (j * kt + G * 32) * wtb),
                            get_write_ptr(cb_c), 32 * wtb);
