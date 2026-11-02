@@ -291,3 +291,27 @@ def test_missing_refinement_reason_is_accepted(tmp_path):
     report["missing_signals"] = ["math.some_reason", "math.wait.some_condition"]
     report["missing_core_signals"] = []
     assert _verdict(tmp_path, report, _csv_row(50.0))["bottleneck"] == "math"
+
+
+def test_floor_above_measured_is_flagged_with_the_multi_cycle_opcodes(tmp_path):
+    # 40 SWAP + 40 NOP + 48 other per tile issue in 128 cycles; a 2-cycle SWAP cost puts the floor at 168.
+    rates = {
+        "default": {"cycles": 1, "source": "s"},
+        "opcodes": {"SFPSWAP": {"cycles": 2, "source": "s"}},
+    }
+    by_op = {"SFPSWAP": 40 * 128, "SFPNOP": 40 * 128, "SFPLOAD": 48 * 128}
+    report = _report(128 * 128, {"math": _thread(128 * 128, by_opcode=by_op)})
+    verdict = perf_headroom.headroom_verdict(
+        report, _csv_row(128.0), rates, run_type="MATH_ISOLATE"
+    )
+    assert verdict["stall_headroom_pct"] < 0
+    assert verdict["floor_check"] == {
+        "ok": False,
+        "multi_cycle_opcodes": ["SFPSWAP"],
+    }
+    assert "floor above measured" in perf_headroom._summary(verdict)
+
+
+def test_floor_check_is_ok_normally(tmp_path):
+    report = _report(6400, {"math": _thread(2560, idle=3840)})
+    assert _verdict(tmp_path, report, _csv_row(50.0))["floor_check"]["ok"] is True

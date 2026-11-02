@@ -247,7 +247,19 @@ def headroom_verdict(
             "source": best_count_source or "",
             "pct": _round(100.0 * (current - best_count) / current) if current else 0.0,
         }
+    # A floor above the measured time means some issue cost is overstated (e.g. an opcode
+    # costed at 2 whose second cycle is already paid by an explicit SFPNOP or a stall).
+    multi = sorted(
+        name
+        for name in b["instructions_by_opcode"]
+        if rates["opcodes"].get(name, rates["default"])["cycles"] > 1
+    )
+    floor_check = {
+        "ok": b["floor_per_tile"] <= csv_per_tile * 1.005,
+        "multi_cycle_opcodes": multi,
+    }
     return {
+        "floor_check": floor_check,
         "run_type": run_type,
         "wave_status": status,
         "missing_signals": report.get("missing_signals", []),
@@ -302,6 +314,12 @@ def _summary(v: dict) -> str:
         f"stall headroom  : {v['stall_headroom_pct']} % (measured vs no-stall floor "
         f"{v['units'][v['bottleneck']]['floor_per_tile']} cyc/tile)",
     ]
+    fc = v.get("floor_check") or {"ok": True}
+    if not fc["ok"]:
+        lines.append(
+            "WARNING         : floor above measured: issue costs overstated for "
+            f"{', '.join(fc['multi_cycle_opcodes']) or 'unknown opcodes'}; stall headroom is not meaningful"
+        )
     ih = v["instruction_headroom"]
     if ih:
         lines.append(
