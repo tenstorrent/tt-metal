@@ -200,7 +200,7 @@ ttrun_acquire_card() {
     TRIAGE_EXTRA_ARGS="$TTPOOL_TRIAGE_EXTRA_ARGS"
     _ttrun_say "card(s)=${TTPOOL_CARDS} (${TTPOOL_LABEL}) logs=${TTPOOL_LOGS_DIR}"
     if ! ttpool_reset_if_dirty; then
-        echo "${TTRUN_PREFIX}_ERROR: Device reset (tt-smi -r ${TTPOOL_CARDS}) failed"
+        echo "${TTRUN_PREFIX}_ERROR: Device reset of card(s) ${TTPOOL_CARDS} failed"
         return 1
     fi
 }
