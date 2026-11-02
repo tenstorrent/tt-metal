@@ -1350,7 +1350,11 @@ X12_V2_BITS = 4 | 8192 | 16384 | 32768 | 65536 | 131072
 X12_SHIP = LAZY_OPTS | NARROW_GR_BIT | SFPU_GATE_BIT | SFPU_FACE_BIT
 
 
-@pytest.mark.parametrize("v2", [X12_V2_BITS, 4 | 8192, 16384 | 65536, 32768, 131072], ids=lambda v: f"v2_{v}")
+@pytest.mark.parametrize(
+    "v2",
+    [X12_V2_BITS, 4 | 8192, 16384 | 65536, 32768, 131072, 90116, 122884, 221188, 245760, 172036, 155652, 204804],
+    ids=lambda v: f"v2_{v}",
+)
 @pytest.mark.parametrize("B,T,vb", [(8, 4, 4), (1, 4, 4), (8, 4, 1)])
 def test_x12_lazy_v2_bits_bit_identical(device, request, B, T, vb, v2):
     g = GEOS[0]
