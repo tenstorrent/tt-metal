@@ -31,9 +31,7 @@ import os
 import re
 import sys
 
-from cxx_source import blank_noncode
-
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from precommit_common import REPO_ROOT, blank_noncode
 
 DECL = re.compile(
     r"\b(?:(?:const|constexpr|static|inline|volatile|thread_local)\s+)*bool\s+(?:(?:const|volatile)\s+)*"

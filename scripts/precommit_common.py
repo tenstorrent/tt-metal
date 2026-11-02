@@ -2,13 +2,46 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared view of C++ source for the pre-commit checks.
+"""Shared helpers for the pre-commit checks.
 
-Comments, literals and preprocessor lines are blanked in place so a later scan
-sees only code, while offsets and line numbers stay the same.
+``blank_noncode`` blanks comments, literals and preprocessor lines in place so a
+later scan sees only code, while offsets and line numbers stay the same.
+``safe_repo_path`` resolves a caller-supplied path and rejects one that leaves
+the repository.
+``safe_git_rev`` validates a git revision string against an allowlist so option
+flags cannot be injected into git commands.
 """
 
+import os
 import re
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Characters a git revision from the environment may contain. Built into a new string so a
+# value such as "--output=/tmp/x" never reaches the git command line.
+_REV_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./^+~-")
+
+
+def safe_git_rev(rev):
+    """A git revision made only of allowlisted characters, or None."""
+    if not rev or len(rev) > 256 or rev[0] in "-." or any(char not in _REV_CHARS for char in rev):
+        return None
+    return "".join(char for char in rev if char in _REV_CHARS)
+
+
+def safe_repo_path(path):
+    """Absolute path under the repository, or None when it escapes the tree.
+
+    pre-commit passes repo-relative paths, but the path is still caller input.
+    """
+    if not path:
+        return None
+    joined = path if os.path.isabs(path) else os.path.join(REPO_ROOT, path)
+    resolved = os.path.realpath(joined)
+    if resolved != REPO_ROOT and not resolved.startswith(REPO_ROOT + os.sep):
+        return None
+    return resolved
+
 
 # u8R"delim( ... )delim" and the other raw-string prefixes.
 _RAW_START = re.compile(r'(?:u8|[uUL])?R"([^ ()\\\t\n]{0,16})\(')

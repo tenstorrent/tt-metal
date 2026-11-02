@@ -22,9 +22,7 @@ import re
 import subprocess
 import sys
 
-from cxx_source import blank_noncode
-
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from precommit_common import REPO_ROOT, blank_noncode, safe_git_rev, safe_repo_path
 
 # Files that are the source of truth. Definitions inside them are the API.
 ALLOWLIST = {
@@ -180,12 +178,13 @@ PLAIN_TYPES = {
 
 
 def relpath(path):
+    """Slash-normalized path. Absolute paths are made repo-relative when they stay inside it."""
     path = path.replace("\\", "/")
     if os.path.isabs(path):
-        try:
-            path = os.path.relpath(path, REPO_ROOT).replace("\\", "/")
-        except ValueError:
-            pass
+        confined = safe_repo_path(path)
+        if confined is None:
+            return path
+        return os.path.relpath(confined, REPO_ROOT).replace("\\", "/")
     while path.startswith("./"):
         path = path[2:]
     return path
@@ -447,31 +446,69 @@ def parse_added_lines(diff_text):
     return added
 
 
-def added_lines(path):
-    """Lines added by this commit. None when git cannot answer."""
-    from_ref = os.environ.get("PRE_COMMIT_FROM_REF")
-    to_ref = os.environ.get("PRE_COMMIT_TO_REF")
-    rel = relpath(path)
-    if from_ref and to_ref:
-        cmd = ["git", "diff", "-U0", "--no-ext-diff", from_ref, to_ref, "--", rel]
-    else:
-        cmd = ["git", "diff", "-U0", "--no-ext-diff", "--cached", "--", rel]
+def _b_path(header):
+    """Repo-relative path from a ``diff --git a/... b/...`` header, or None."""
+    quoted = re.fullmatch(r'diff --git "a/(.*)" "b/(.*)"', header)
+    if quoted:
+        return quoted.group(2).replace('\\"', '"').replace("\\\\", "\\")
+    plain = re.fullmatch(r"diff --git a/(.*) b/(.*)", header)
+    if plain is None:
+        return None
+    if plain.group(1) == plain.group(2):
+        return plain.group(2)
+    marker = " b/"
+    index = header.rfind(marker)
+    if index < 0:
+        return None
+    return header[index + len(marker) :]
+
+
+def added_lines_by_path(diff_text):
+    """Map a repo-relative path to the 1-based lines added in that file's diff."""
+    found = {}
+    for chunk in re.split(r"(?=^diff --git )", diff_text, flags=re.M):
+        if not chunk.startswith("diff --git "):
+            continue
+        header = chunk.split("\n", 1)[0]
+        path = _b_path(header)
+        if path:
+            found[path] = parse_added_lines(chunk)
+    return found
+
+
+def _git_diff(args):
     try:
-        diff = subprocess.check_output(cmd, cwd=REPO_ROOT, stderr=subprocess.DEVNULL, text=True)
+        return subprocess.check_output(
+            ["git", "diff", "-U0", "--no-ext-diff", *args, "--"],
+            cwd=REPO_ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
-    if not diff.strip() and not (from_ref and to_ref):
-        # A manual run on an unstaged edit. Still report only the unstaged additions.
-        try:
-            diff = subprocess.check_output(
-                ["git", "diff", "-U0", "--no-ext-diff", "--", rel],
-                cwd=REPO_ROOT,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError):
+
+
+def commit_added_lines():
+    """Added lines for every file in this commit. None when git cannot answer.
+
+    The diff is of the whole commit. Caller-supplied paths are not command arguments.
+    ``PRE_COMMIT_FROM_REF`` and ``PRE_COMMIT_TO_REF`` are passed only after ``safe_git_rev``.
+    """
+    from_ref = os.environ.get("PRE_COMMIT_FROM_REF")
+    to_ref = os.environ.get("PRE_COMMIT_TO_REF")
+    if from_ref or to_ref:
+        safe_from = safe_git_rev(from_ref)
+        safe_to = safe_git_rev(to_ref)
+        if safe_from is None or safe_to is None:
             return None
-    return parse_added_lines(diff)
+        diff = _git_diff([safe_from, safe_to])
+    else:
+        diff = _git_diff(["--cached"])
+        if diff is not None and not diff.strip():
+            diff = _git_diff([])
+    if diff is None:
+        return None
+    return added_lines_by_path(diff)
 
 
 def main(argv=None):
@@ -491,25 +528,32 @@ def main(argv=None):
     if not args.files:
         parser.error("pass files to check, or --list")
 
+    added = None
+    if not args.all_lines:
+        added = commit_added_lines()
+        if added is None:
+            print(
+                "check_redefined_helpers: git diff failed or the revision was rejected; skipping (fail open)",
+                file=sys.stderr,
+            )
+            return 0
+
     violations = []
     for filepath in args.files:
+        resolved = safe_repo_path(filepath)
+        if resolved is None:
+            print(f"check_redefined_helpers: refusing path outside the repo: {filepath}", file=sys.stderr)
+            return 1
+        rel = os.path.relpath(resolved, REPO_ROOT).replace("\\", "/")
         try:
-            with open(filepath, encoding="utf-8", errors="replace") as handle:
+            with open(resolved, encoding="utf-8", errors="replace") as handle:
                 text = handle.read()
         except OSError as exc:
-            print(f"check_redefined_helpers: cannot read {filepath}: {exc}", file=sys.stderr)
+            print(f"check_redefined_helpers: cannot read {rel}: {exc}", file=sys.stderr)
             return 1
-        only = None
-        if not args.all_lines:
-            only = added_lines(filepath)
-            if only is None:
-                print(
-                    f"check_redefined_helpers: git diff failed for {filepath}; skipping (fail open)",
-                    file=sys.stderr,
-                )
-                continue
-        for line_no, _kind, name, advice in find_violations(filepath, text, only):
-            violations.append((relpath(filepath), line_no, name, advice))
+        only = None if added is None else added.get(rel, set())
+        for line_no, _kind, name, advice in find_violations(rel, text, only):
+            violations.append((rel, line_no, name, advice))
 
     if not violations:
         return 0

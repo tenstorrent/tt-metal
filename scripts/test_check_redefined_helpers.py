@@ -12,8 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_redefined_helpers as chk  # noqa: E402
-
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from precommit_common import REPO_ROOT as REPO  # noqa: E402
 
 
 def names(path, body, lines=None):
@@ -165,6 +164,41 @@ def test_real_copies_match_the_catalog():
         with open(os.path.join(REPO, rel), encoding="utf-8") as handle:
             found = [item[2] for item in chk.find_violations(rel, handle.read())]
         assert name in found, rel
+
+
+def test_git_rev_rejects_option_injection():
+    assert chk.safe_git_rev("abc123def") == "abc123def"
+    assert chk.safe_git_rev("origin/main") == "origin/main"
+    assert chk.safe_git_rev("HEAD^") == "HEAD^"
+    assert chk.safe_git_rev("--output=/tmp/x") is None
+    assert chk.safe_git_rev("-c") is None
+    assert chk.safe_git_rev("HEAD;rm") is None
+    assert chk.safe_git_rev("rev\n--version") is None
+
+
+def test_paths_outside_the_repo_are_refused():
+    assert chk.safe_repo_path("/etc/passwd") is None
+    inside = chk.safe_repo_path("scripts/check_redefined_helpers.py")
+    assert inside is not None
+    assert inside.endswith(os.path.join("scripts", "check_redefined_helpers.py"))
+
+
+def test_diff_is_split_by_path_without_passing_the_path_to_git():
+    diff = """\
+diff --git a/ttnn/a.cpp b/ttnn/a.cpp
+--- a/ttnn/a.cpp
++++ b/ttnn/a.cpp
+@@ -1,0 +1,1 @@
++uint32_t div_up(uint32_t a, uint32_t b);
+diff --git a/old b/ttnn/b.cpp
+--- a/old
++++ b/ttnn/b.cpp
+@@ -0,0 +4,1 @@
++constexpr uint32_t TILE_HEIGHT = 32;
+"""
+    found = chk.added_lines_by_path(diff)
+    assert found["ttnn/a.cpp"] == {1}
+    assert found["ttnn/b.cpp"] == {4}
 
 
 def test_diff_parser_counts_only_additions():
