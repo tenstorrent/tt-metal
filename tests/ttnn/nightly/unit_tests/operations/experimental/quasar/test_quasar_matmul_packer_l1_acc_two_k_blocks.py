@@ -4,7 +4,11 @@
 
 """#58177 in the Quasar copy of the 2D, 1D in1-multicast and Reuse factories: with packer_l1_acc requested, two K
 blocks must keep partial sums in the accumulation format like more blocks do, instead of rounding them through the
-block-float output format. The same matmul split into two and into four K blocks must be equally accurate."""
+block-float output format. The same matmul split into two and into four K blocks must be equally accurate.
+
+#61018: with fp32_dest_acc_en the partials DFB is Float32 and the Metal 2.0 validator rejected the program for lack of
+an unpack_modes entry. The Quasar factories now accumulate fp32 partials in L1 (packer) and keep the partials on the
+src path, so every fp32-accumulation config builds and matches an fp32 torch golden."""
 
 import pytest
 import torch
@@ -49,6 +53,20 @@ def _two_vs_four_k_blocks_config(family, in0_block_w):
             fused_activation=None,
             mcast_in0=False,
         )
+    if family == "1d_in0":  # M stays on every core, N is split (8 tiles -> 1 per core)
+        return qsr.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
+            in0_block_w=in0_block_w,
+            out_subblock_h=4,
+            out_subblock_w=1,
+            out_block_h=8,
+            out_block_w=1,
+            per_core_M=8,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
     return qsr.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
         in0_block_w=in0_block_w,
@@ -87,3 +105,39 @@ def test_quasar_matmul_packer_l1_acc_two_k_blocks(device, family):
         _, pcc[num_k_blocks] = comp_pcc(torch_output, ttnn.to_torch(output).float())
     logger.info(f"{family}: PCC with 2 K blocks {pcc[2]:.5f}, with 4 K blocks {pcc[4]:.5f}")
     assert 1 - pcc[2] <= 1.1 * (1 - pcc[4]), f"{family}: PCC with 2 K blocks {pcc[2]:.5f}, with 4 K blocks {pcc[4]:.5f}"
+
+
+@pytest.mark.parametrize("family", ["reuse", "1d_in1", "1d_in0", "2d"])
+@pytest.mark.parametrize("num_k_blocks, packer_l1_acc", [(4, False), (4, True), (1, False)])
+def test_fp32_dest_acc_reuse_1d_2d(device, family, num_k_blocks, packer_l1_acc):
+    """The #61018 repro (256x512 @ 512x256 bf16, HiFi4, fp32_dest_acc_en) through every factory, with and without
+    packer_l1_acc requested, and with a single K block (the partials DFB is consumed even then)."""
+    torch.manual_seed(0)
+    M, N = 256, 256
+    in0_block_w = 4
+    K = 32 * in0_block_w * num_k_blocks
+
+    torch_input_a = torch.randn(1, 1, M, K).bfloat16()
+    torch_input_b = torch.randn(1, 1, K, N).bfloat16()
+    golden = torch_input_a.float() @ torch_input_b.float()
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=packer_l1_acc
+    )
+
+    output = ttnn.experimental.quasar.matmul(
+        ttnn_input_a,
+        ttnn_input_b,
+        program_config=_two_vs_four_k_blocks_config(family, in0_block_w),
+        compute_kernel_config=compute_kernel_config,
+    )
+    output = ttnn.to_torch(output).float()
+    atol = 0.02 * golden.abs().max().item()
+    max_err = (output - golden).abs().max().item()
+    logger.info(
+        f"{family}, {num_k_blocks} K blocks, packer_l1_acc={packer_l1_acc}: max abs err {max_err:.4g} vs atol {atol:.4g}"
+    )
+    assert torch.allclose(
+        output, golden, rtol=0.02, atol=atol
+    ), f"{family}: max abs err {max_err:.4g} vs atol {atol:.4g}"
