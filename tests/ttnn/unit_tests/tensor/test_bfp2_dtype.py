@@ -198,6 +198,17 @@ def test_bfp2_device_typecast_signed_integer(device, integer):
     assert torch.equal(ttnn.to_torch(ttnn.typecast(integer_tensor, ttnn.bfloat2_b)), x)
 
 
+def test_bfp2_device_typecast_uint16_matches_golden(device):
+    # The uint16 golden truncates or rounds depending on the input dtype; 0.5 (exact in BFLOAT2_B) tells them apart.
+    x = torch.full((32, 32), 0.5)
+    bfp2_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.to_torch(ttnn.typecast(bfp2_tensor, ttnn.uint16))
+    golden = ttnn.get_golden_function(ttnn.typecast)(x, ttnn.uint16, input_dtype=ttnn.bfloat2_b)
+
+    assert torch.equal(result.to(torch.int64), golden.to(torch.int64))
+
+
 def test_bfp2_device_typecast_sharded_same_dtype(device):
     # Only a BFLOAT2_B -> BFLOAT2_B cast reaches the sharded typecast factory: no other format has the 320-byte tile.
     x = _ternary((128, 128))
