@@ -809,13 +809,6 @@ void BufferImpl::deallocate_impl(Buffer& self) {
 Buffer::~Buffer() {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDelete, *this);
-#if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
-    // Capture keys Buffers by address, which a later Buffer may reuse. Forget this one even if a nested call didn't
-    // capture its deletion. Its deallocation below is then not captured either: replay deletes the Buffer already.
-    if (auto& capture = LightMetalCaptureContext::get(); capture.is_tracing() && capture.is_in_map(this)) {
-        capture.remove_from_map(this);
-    }
-#endif
     if (impl_ && impl_->allocation_status_ != BufferImpl::AllocationStatus::DEALLOCATED) {
         impl_->deallocate(*this);
     }
