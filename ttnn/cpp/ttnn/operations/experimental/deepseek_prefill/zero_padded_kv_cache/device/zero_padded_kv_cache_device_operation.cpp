@@ -195,6 +195,10 @@ void validate_runtime_args(
     }
 }
 
+std::optional<TensorSpec> optional_spec(const std::optional<Tensor>& tensor) {
+    return tensor.has_value() ? std::optional<TensorSpec>{tensor->tensor_spec()} : std::nullopt;
+}
+
 }  // namespace
 
 ZeroPaddedKvCacheDeviceOperation::program_factory_t ZeroPaddedKvCacheDeviceOperation::select_program_factory(
@@ -270,27 +274,25 @@ ZeroPaddedKvCacheDeviceOperation::tensor_return_value_t ZeroPaddedKvCacheDeviceO
 ttsl::hash::hash_t ZeroPaddedKvCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // slot_idx and valid_global are per-call scalars (patched, NOT hashed). layer_idx, num_layers,
-    // cluster_axis, chunk_size_global and pad_align are structural (hashed). Hash the full cache shape.
+    // cluster_axis, chunk_size_global and pad_align are structural (hashed). Hash the cache's whole
+    // TensorSpec: the full shape drives the program, and the rest of the spec (Alignment included) is
+    // keyed because Metal 2.0 requires an exact layout match on every cache hit (#59915).
     const auto& cache = tensor_args.cache;
     // The tensor-vs-scalar choice changes the reader/writer programs (compile args + which kernel
-    // branch compiles), so hash slot_idx.has_value() to keep the two variants distinct; slot_idx and
-    // valid_global themselves are never hashed on either path.
+    // branch compiles); hashing each metadata tensor's optional TensorSpec keeps the two variants
+    // distinct. On the metadata path the reader and writer bake a TensorAccessorArgs built from slot_idx
+    // into their compile-time args, so the bank table it selects cannot be refreshed on a cache hit.
+    // Only the metadata tensors' specs are keyed, never their values, on either path.
     return tt::tt_metal::operation::hash_operation<ZeroPaddedKvCacheDeviceOperation>(
-        tensor_args.slot_idx.has_value(),
         args.layer_idx,
         args.num_layers,
         args.cluster_axis,
         args.tp_axis,
         args.chunk_size_global,
         args.pad_align,
-        cache.dtype(),
-        cache.layout(),
-        cache.memory_config(),
-        cache.padded_shape(),
-        // On the metadata path the reader and writer bake a TensorAccessorArgs built from slot_idx into
-        // their compile-time args, so the bank table it selects cannot be refreshed on a cache hit. Only
-        // the config is keyed, never the value; valid_global is pinned to match by validate_runtime_args.
-        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{});
+        cache.tensor_spec(),
+        optional_spec(tensor_args.slot_idx),
+        optional_spec(tensor_args.valid_global));
 }
 
 tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
