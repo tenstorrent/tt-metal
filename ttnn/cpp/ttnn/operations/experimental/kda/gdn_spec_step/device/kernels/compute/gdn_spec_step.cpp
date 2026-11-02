@@ -40,6 +40,15 @@
 //       [(I + N^4)] (FPU matmuls, SFPU adds); RHS = BETA o (vc - E o KS) (SFPU); U = (I + N)^-1 RHS (FPU) -> u_out;
 //       O = (QK o G) U + E o QS (FPU matmul onto the exact SFPU product) -> the tail's accumulator. Rows outside the
 //       user's stay exactly 0: every coefficient tile, kn / qn and vc are 0 there. Block 0 also sends K^T (kt_out).
+// SFPU_GATE: softplus_tile picks its algorithm on INP_FLOAT32, which only the eltwise-unary program factory defines.
+// Without it the gates got the BF16 branch: a degree-6 polynomial (rel err ~1.6e-3 at 0) and the residual clamped to 0
+// for |a + dt_bias| > 5, i.e. softplus = 0 and decay = exp(0) = 1 (no forgetting) for every a + dt_bias < -5 -- in
+// Qwen3.8 24% of the GDN heads have dt_bias < -5 (its long-memory heads). The FP32 branch (degree-8 polynomial on
+// [0, 5], Cody-Waite exp tail) matches the writer's exact gates to <= 4e-4 relative. Only softplus (and erf / i1 /
+// digamma, unused here) read INP_FLOAT32.
+#if defined(GDN_SFPU_GATE) && GDN_SFPU_GATE && !defined(INP_FLOAT32)
+#define INP_FLOAT32 1
+#endif
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/compute/gdn_step_helpers.hpp"
 #include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
 
