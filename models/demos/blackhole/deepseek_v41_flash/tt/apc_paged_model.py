@@ -450,48 +450,65 @@ class PagedApc:
             for sl, h in hp:
                 ttnn.to_torch(h)
                 ttnn.deallocate(sl)
-            # the save kernels on the STAGING tensors of the copy (their sharding / layout differ from the persistent slabs ``build`` warmed them with) with all-SKIP tables: no data is touched
-            n_u = m.rows * m.U
-            shard = ttnn.ShardTensor2dMesh(m.md, dims=(0, 1), mesh_shape=(m.rows, m.cols))
-            rep0 = ttnn.ShardTensor2dMesh(m.md, dims=(0, None), mesh_shape=(m.rows, m.cols))
-            keep = []
-            self.ks.set_save([None] * n_u)
-            stage = {}
-            for lid in self.ks.store:
-                R = self.ks.geom[lid].nrb * 32
-                stage[lid] = ttnn.from_torch(
-                    torch.zeros(n_u, m.cols, R, APS.IDIM, dtype=torch.bfloat16),
-                    device=m.md,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=shard,
-                )
-            self.ks.save(stage)
-            keep += list(stage.values())
-            for pn in self.hs.store:
-                self.hs.set_save(pn, [None] * n_u)
-                st_ = {
-                    lid: ttnn.from_torch(
-                        torch.zeros(n_u, 1, APS.WINDOW, APS.HEAD_DIM, dtype=torch.bfloat16),
-                        device=m.md,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        mesh_mapper=rep0,
-                    )
-                    for lid in self.hs.layers[pn]
-                }
-                self.hs.save(pn, st_)
-                keep += list(st_.values())
-            ttnn.synchronize_device(m.md)
-            for x in keep:
-                ttnn.deallocate(x)
+            if (
+                os.environ.get("DSV41_WARM_XROW_SAVE", "0") == "1"
+            ):  # (before the captures: see ``warm_xrow_late``; this variant hung a server under load in 2 of 2 tests)
+                self._warm_xrow_save()
         finally:
             m.release_user(b)
         ttnn.synchronize_device(m.md)
         dt = time.perf_counter() - t0
         self.log(f"APC paged: cross-row copy ops warmed on an idle user in {dt:.1f} s")
+        return dt
+
+    def _warm_xrow_save(self):
+        """the save kernels on the STAGING tensors of the copy (their sharding / layout differ from the persistent slabs ``build`` warmed them with) with all-SKIP tables: no data is touched"""
+        m = self.model
+        n_u = m.rows * m.U
+        shard = ttnn.ShardTensor2dMesh(m.md, dims=(0, 1), mesh_shape=(m.rows, m.cols))
+        rep0 = ttnn.ShardTensor2dMesh(m.md, dims=(0, None), mesh_shape=(m.rows, m.cols))
+        keep = []
+        self.ks.set_save([None] * n_u)
+        stage = {}
+        for lid in self.ks.store:
+            R = self.ks.geom[lid].nrb * 32
+            stage[lid] = ttnn.from_torch(
+                torch.zeros(n_u, m.cols, R, APS.IDIM, dtype=torch.bfloat16),
+                device=m.md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=shard,
+            )
+        self.ks.save(stage)
+        keep += list(stage.values())
+        for pn in self.hs.store:
+            self.hs.set_save(pn, [None] * n_u)
+            st_ = {
+                lid: ttnn.from_torch(
+                    torch.zeros(n_u, 1, APS.WINDOW, APS.HEAD_DIM, dtype=torch.bfloat16),
+                    device=m.md,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=rep0,
+                )
+                for lid in self.hs.layers[pn]
+            }
+            self.hs.save(pn, st_)
+            keep += list(st_.values())
+        ttnn.synchronize_device(m.md)
+        for x in keep:
+            ttnn.deallocate(x)
+
+    def warm_xrow_late(self):
+        """``_warm_xrow_save`` AFTER every trace was captured (DSV41_WARM_XROW_LATE=1; the end of the vLLM warm-up)"""
+        if self.ks is None or not self.idx.xrow or os.environ.get("DSV41_WARM_XROW_LATE", "0") != "1":
+            return 0.0
+        t0 = time.perf_counter()
+        self._warm_xrow_save()
+        dt = time.perf_counter() - t0
+        self.log(f"APC paged: cross-row save kernels warmed after the captures in {dt:.1f} s")
         return dt
 
     def xrow_copy(self, b, rid, plan, tokens, e):
