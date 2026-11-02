@@ -5,9 +5,9 @@ Release `0.24.0-785f0df-2406dcb` (internal name rc4c, vLLM 0.31.0). Start-up com
 | | |
 |---|---|
 | Image (target name, **not pushed yet**) | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-785f0df-2406dcb` |
-| Local image | `dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-a83b4c6` (id `<IMAGE ID: to be filled in from the tool-fix build>`; also tagged locally with the ghcr name above). The ghcr tag is unchanged, but its content now includes the plugin tool-calling fix (plugin `a83b4c6` instead of `d7b6901`). |
+| Local image | `dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-a83b4c6` (id `ae6ac9b615f5`, built on .34; also tagged locally with the ghcr name above). The ghcr tag is unchanged, but its content now includes the plugin tool-calling fix (plugin `a83b4c6` instead of `d7b6901`). |
 | Commits | tt-metal `785f0df9b28` (branch `ssinghal/dsv4p1-rc3`; the release notes live in later docs-only commits of that branch), tt-inference-server `2406dcb15` (`ssinghal/dsv4p1-rc3-ttis`), vllm-tt-plugin `a83b4c6` (tool-calling fix, on top of `d7b6901`) (`ssinghal/dsv4p1-rc3-plugin`) |
-| Offline copy | `<tar of the a83b4c6 image: path to be filled in>` (`docker load -i`); the earlier tar `img_rc4c_785f0df9b28.tar` holds the image without the tool-calling fix |
+| Offline copy | no tar written yet for the a83b4c6 image (`docker save` it before distributing); the earlier tar `img_rc4c_785f0df9b28.tar` holds the image without the tool-calling fix |
 
 This release is **B=8 only**. B=16 and B=4 are not part of this release (the catalog still contains their entries; they were not validated for it).
 
@@ -75,14 +75,14 @@ These use a shared prompt on purpose, so they hit the prefix cache (`res_a1/`): 
 
 ## Accuracy and checks (rc4c, B=8, 1M build, catalog default)
 
-All results in this section were measured on the rc4c image with plugin `d7b6901`, before the tool-calling fix; the fix (plugin `a83b4c6`) touches only the plugin's tool-call handling (`entrypoints.py`, `tool_arg_typing.py`, `tool_result_validation.py`). Re-run results for tool calling: see the Tool-calling row.
+All results in this section were measured on the rc4c image with plugin `d7b6901`, before the tool-calling fix; the fix (plugin `a83b4c6`) touches only the plugin's tool-call handling (`entrypoints.py`, `tool_arg_typing.py`, `tool_result_validation.py`). Results for the tool-calling fix: see the last row of the table.
 
 | Check | Result | Source |
 |---|---|---|
 | GSM8K (lm-eval, flexible-extract) | 96.21 % (stderr 0.53) | `res_a2/gsm.log` |
 | GPQA diamond (zero-shot CoT, flexible-extract) | 78.79 % (stderr 2.91) | `res_a2/gpqa.log` |
 | Needle in a haystack | found at 65,557 / 131,085 / 262,142 / 599,956 / 1,039,901 prompt tokens (1M run: 596 s) | `res_a2/needle_*.json`, `needle1m.log` |
-| Tool-calling checks (`toolchecks`) | 35 PASS, 0 FAIL on the image with plugin `d7b6901` (without the tool-calling fix); the re-run on the `a83b4c6` image is pending (`dsv4-logs/toolfix/RESULTS.md`, not written yet) | `res_a1/toolchecks.log` |
+| Tool-calling checks and fix tests (plugin `a83b4c6`) | tool suite 35 PASS, 0 FAIL; structured matrix 28/28; extra tool-id and typing checks 33 PASS, 0 FAIL (stream and non-stream); GSM8K sanity, 50 questions, flexible-extract 1.00 (50/50), strict-match 0.76. These ran on the rc4c `d7b6901` image with the patched plugin `src/` mounted read-only; the `a83b4c6` image holds the same three files (sha256 equal), so no separate boot test was run | `dsv4-logs/toolfix/RESULTS.md` (`res_t1/toolchecks.log`, `matrix.log`, `res_t2/extra.log`, `gsm.log`) |
 | Structured-output matrix (json_schema / regex / choice / tools, plain and stream, greedy and sampled) | 28/28 on two reruns (`res_a3/matrix_rerun1.log`, `matrix_rerun2.log`) and 28/28 mixed with background load (`res_a1/matrix_mixed.log`); **the first run was 27/28** (one `json_schema/plain/sampled` cell failed, `res_a1/matrix.log`) | files named |
 | API checks | 23/23 | `res_a1/api.log` |
 | Pre-stream validation | HTTP 400 for unsupported streaming combinations; supported ones HTTP 200 | `res_a1/prestream.log` |
