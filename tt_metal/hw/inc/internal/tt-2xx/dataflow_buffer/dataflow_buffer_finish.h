@@ -71,6 +71,8 @@ FORCE_INLINE void dfb_dm_kernel_exit(uint32_t hartid, volatile uint8_t* run_stat
     WAYPOINT("DXW");
     uint32_t records[NUM_DFB_POOL_TXN_IDS];
     uint32_t record_mask = 0;    // bit per pool txn id that has a record
+    volatile uint8_t* const share_out = dfb_l1_uncached_byte_ptr(
+        reinterpret_cast<uintptr_t>(&g_dfb_exit_share[hartid - ReservedDMProcessorsPerCoreType][0]));
     uint32_t implicit_mask = 0;  // bit per implicit-sync DFB
     for (uint32_t m = dfb_mask; m != 0; m &= m - 1) {
         const uint32_t d = static_cast<uint32_t>(__builtin_ctz(m));
@@ -92,8 +94,8 @@ FORCE_INLINE void dfb_dm_kernel_exit(uint32_t hartid, volatile uint8_t* run_stat
         // bit). The host allocates each side's txn ids as one ascending block (TxnIdAllocator::allocate),
         // so txn_ids[0] is the lowest.
         const uint32_t slot = intf.txn_ids[0] - DFB_TXN_ID_BASE;
-        records[slot] = static_cast<uint32_t>(progress.loop) | (static_cast<uint32_t>(progress.pos) << 16) |
-                        (static_cast<uint32_t>(progress.share) << 24);
+        records[slot] = static_cast<uint32_t>(progress.loop) | (static_cast<uint32_t>(progress.pos) << 16);
+        share_out[slot] = progress.share;  // DM0 reads it only once the record below is there
         record_mask |= 1u << slot;
         progress = {};
     }
@@ -102,6 +104,7 @@ FORCE_INLINE void dfb_dm_kernel_exit(uint32_t hartid, volatile uint8_t* run_stat
     // reached it. This is separate from DONE because the drain below can wait on DM0's flush of a side.
     volatile uint32_t* record_out = dfb_l1_uncached_u32_ptr(
         reinterpret_cast<uintptr_t>(&g_dfb_exit_record[hartid - ReservedDMProcessorsPerCoreType][0]));
+    asm volatile("fence w, w" ::: "memory");  // the shares must be there before the records are
     for (uint32_t m = record_mask; m != 0; m &= m - 1) {
         const uint32_t slot = static_cast<uint32_t>(__builtin_ctz(m));
         record_out[slot] = records[slot];
@@ -182,8 +185,9 @@ inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
         const uint32_t rec = *rec_slot;
         *rec_slot = DFB_EXIT_RECORD_NONE;
         const uint32_t loop = rec & 0xFFFFu;
-        const uint32_t pos = (rec >> 16) & 0xFFu;
-        const uint32_t share = rec >> 24;
+        const uint32_t pos = rec >> 16;
+        const uint32_t share = *dfb_l1_uncached_byte_ptr(
+            reinterpret_cast<uintptr_t>(&g_dfb_exit_share[hart - ReservedDMProcessorsPerCoreType][record_slot]));
         // What each of the issuer's counters is owed: `loop` full txn-id batches plus `pos` entries into the
         // next, mod 2^16 like the counters. Ops are spread the way commit_implicit_* spreads them: broadcast
         // puts every op on all counters, split gives each counter 1/num_tcs of every op, otherwise ops go

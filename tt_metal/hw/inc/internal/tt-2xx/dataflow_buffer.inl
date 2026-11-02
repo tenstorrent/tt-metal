@@ -135,8 +135,9 @@ inline uint16_t dfb_dm_per_tc(const LocalDFBInterface& intf, uint16_t n) {
 
 // Implicit sync: one op of `block` entries is done, so move this DM's place in the txn-id batches.
 inline void dfb_implicit_advance(const LocalDFBInterface& intf, DFBImplicitProgress& progress, uint32_t block) {
+    ASSERT(block <= 0xFFu);
     progress.share = static_cast<uint8_t>(block);
-    progress.pos = static_cast<uint8_t>(progress.pos + block);
+    progress.pos = static_cast<uint16_t>(progress.pos + block);
     ASSERT(progress.pos <= intf.num_entries_per_txn_id);
     if (progress.pos == intf.num_entries_per_txn_id) {
         progress.pos = 0;

@@ -67,13 +67,12 @@ struct dfb_init_entry_hdr_t {
     uint8_t flags;
     uint8_t stride_size_tiles;
     uint8_t num_txn_ids;
-    uint8_t threshold;
-    uint8_t num_entries_per_txn_id;
-    uint8_t num_entries_per_txn_id_per_tc;
+    uint16_t num_entries_per_txn_id;
+    uint16_t num_entries_per_txn_id_per_tc;
     uint8_t producer_signal_bit;  // bit position in dfb_signal[dfb_id]; 0xFF if consumer
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
-    uint8_t broadcast_tc;         // DM pack byte 22 → iface.broadcast_tc (DM unpack only)
-    uint8_t remapper_pair_index;  // TRISC byte 22; DM pack byte 23
+    uint8_t broadcast_tc;         // DM pack byte 23 → iface.broadcast_tc (DM unpack only)
+    uint8_t remapper_pair_index;  // TRISC byte 22; DM pack byte 12
     uint8_t intra_shadow_tc_id;   // TRISC byte 23: intra-tensix ClientR shadow TC; 0xFF / unused on DM
     uint16_t block_size;          // bytes 28-29: how many tiles exist in one block
     uint8_t split_tc;             // byte 3: tiles are split across all tile counters (1) or not (0)
@@ -91,10 +90,11 @@ static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignmen
 //   w0 [7:0]=logical_dfb_id  [15:8]=num_tcs  [23:16]=flags  [31:24]=split_tc
 //   w1 = entry_size (u32)
 //   w2 = stride_size_precomp (u32): host pre-computed per hart type — DM=raw bytes, TRISC=tile units
-//   w3 [7:0]=stride_size_tiles  [15:8]=num_txn_ids  [23:16]=threshold  [31:24]=num_entries_per_txn_id
-//   w4 [7:0]=num_entries_per_txn_id_per_tc  [15:8]=producer_signal_bit  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
+//   w3 [7:0]=stride_size_tiles  [15:8]=num_txn_ids  [31:16]=reserved (TRISC carries no txn counts)
+//   w4 [7:0]=reserved  [15:8]=producer_signal_bit  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
 //   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index
-//      [31:24]=intra_shadow_tc_id (TRISC) / remapper_pair_index (DM pack)
+//      [31:24]=intra_shadow_tc_id (TRISC)
+// A DM entry reuses w3-w5 for its txn-id scalars (dfb_write_dm_scalar_pack_to_blob).
 //   w6 [15:0]=num_entries  [31:16]=capacity
 //   w7 [15:0]=block_size  [31:16]=entries_to_jump (u16)
 
@@ -111,9 +111,6 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     h.stride_size_precomp = w2;
     h.stride_size_tiles = static_cast<uint8_t>(w3);
     h.num_txn_ids = static_cast<uint8_t>(w3 >> 8);
-    h.threshold = static_cast<uint8_t>(w3 >> 16);
-    h.num_entries_per_txn_id = static_cast<uint8_t>(w3 >> 24);
-    h.num_entries_per_txn_id_per_tc = static_cast<uint8_t>(w4);
     h.producer_signal_bit = static_cast<uint8_t>(w4 >> 8);
     h.txn_ids[0] = static_cast<uint8_t>(w4 >> 16);
     h.txn_ids[1] = static_cast<uint8_t>(w4 >> 24);
@@ -129,8 +126,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     return h;
 }
 
-// DM unpack: w3–w5 are the 12B scalar pack in LocalDFBInterface DTCM order.
-// See dfb_write_dm_scalar_pack_to_blob.
+// DM unpack: w3–w5 are the 12B txn-id scalar pack. See dfb_write_dm_scalar_pack_to_blob.
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
     const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7];
@@ -142,17 +138,16 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
     h.entry_size = w1;
     h.stride_size_precomp = w2;
     h.stride_size_tiles = 0;
+    h.remapper_pair_index = static_cast<uint8_t>(w3);
     h.producer_signal_bit = static_cast<uint8_t>(w3 >> 8);
     h.txn_ids[0] = static_cast<uint8_t>(w3 >> 16);
     h.txn_ids[1] = static_cast<uint8_t>(w3 >> 24);
     h.txn_ids[2] = static_cast<uint8_t>(w4);
     h.txn_ids[3] = static_cast<uint8_t>(w4 >> 8);
-    h.threshold = static_cast<uint8_t>(w4 >> 16);
-    h.num_entries_per_txn_id = static_cast<uint8_t>(w4 >> 24);
-    h.num_entries_per_txn_id_per_tc = static_cast<uint8_t>(w5);
-    h.num_txn_ids = static_cast<uint8_t>(w5 >> 8);
-    h.broadcast_tc = static_cast<uint8_t>(w5 >> 16);
-    h.remapper_pair_index = static_cast<uint8_t>(w5 >> 24);
+    h.num_entries_per_txn_id = static_cast<uint16_t>(w4 >> 16);
+    h.num_entries_per_txn_id_per_tc = static_cast<uint16_t>(w5);
+    h.num_txn_ids = static_cast<uint8_t>(w5 >> 16);
+    h.broadcast_tc = static_cast<uint8_t>(w5 >> 24);
     h.intra_shadow_tc_id = 0xFFu;  // intra-tensix never targets a DM hart
     h.num_entries = static_cast<uint16_t>(w6);
     h.capacity = static_cast<uint16_t>(w6 >> 16);
@@ -162,17 +157,16 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
 }
 
 #ifndef COMPILE_FOR_TRISC
-// Write iface bytes [8,20) from the unpacked header as three u32 stores (matches DM blob
-// scalar-pack layout). Avoids a second L1 read of header bytes 12–23.
+// Write iface bytes [8,20) from the unpacked header as three u32 stores. Avoids a second L1 read of
+// header bytes 12–23.
 FORCE_INLINE void dfb_write_dm_iface_scalars_from_hdr(LocalDFBInterface& iface, const dfb_init_entry_hdr_t& eh) {
     const uint32_t pack_w0 = static_cast<uint32_t>(eh.num_tcs) | (static_cast<uint32_t>(eh.txn_ids[0]) << 16) |
                              (static_cast<uint32_t>(eh.txn_ids[1]) << 24);
     const uint32_t pack_w1 = static_cast<uint32_t>(eh.txn_ids[2]) | (static_cast<uint32_t>(eh.txn_ids[3]) << 8) |
-                             (static_cast<uint32_t>(eh.threshold) << 16) |
-                             (static_cast<uint32_t>(eh.num_entries_per_txn_id) << 24);
-    const uint32_t pack_w2 =
-        static_cast<uint32_t>(eh.num_entries_per_txn_id_per_tc) | (static_cast<uint32_t>(eh.num_txn_ids) << 8) |
-        (static_cast<uint32_t>(eh.broadcast_tc) << 16) | (static_cast<uint32_t>(eh.remapper_pair_index) << 24);
+                             (static_cast<uint32_t>(eh.num_entries_per_txn_id) << 16);
+    const uint32_t pack_w2 = static_cast<uint32_t>(eh.num_entries_per_txn_id_per_tc) |
+                             (static_cast<uint32_t>(eh.num_txn_ids) << 16) |
+                             (static_cast<uint32_t>(eh.broadcast_tc) << 24);
     uint32_t* const dm_scalar = reinterpret_cast<uint32_t*>(&iface.num_tcs_to_rr);
     dm_scalar[0] = pack_w0;
     dm_scalar[1] = pack_w1;

@@ -418,6 +418,8 @@ That requires the batch to divide evenly across txn ids, participating DMs, and 
 | `num_entries_per_txn_id_per_tc` (`per_txn_per_tc`) | Entries each of that DM’s RR TCs owns in the batch → stored as `tiles_to_post` / `tiles_to_ack` in `TxnDFBDescriptor` |
 
 
+`threshold`, `per_txn` and `per_txn_per_tc` are 16 bits, like the tile counters and the hardware's tiles-to-process threshold registers, so a txn id can cover up to 65535 entries. The entries of one op (`block_size` on a BLOCKED side, a STRIDED side's counter share) are tracked in 8 bits, so the host rejects more than 255 entries per op.
+
 **Normal (non–ALL-consumer) side:**
 
 - `entry_threshold = num_entries / num_txn_ids`
@@ -589,7 +591,7 @@ The host only accepts batches that cover whole round-robin rounds of a DM's coun
 **Kernel DM (DM2–7), `dfb_dm_kernel_exit`.** The DFBs it is bound to come from the kernel's bindings at compile time (`KERNEL_BOUND_DFB_MASK` in `kernel_bindings_generated.h`), or for a legacy kernel from this hart's participation mask in the DFB config.
 
 1. For each implicit-sync DFB, wait until its reads and writes on the DFB's txn ids have completed (`TR_ACK` and `WR_SENT` 0 on every txn id), so tiles-to-process counts all of them. Then zero the progress for the next launch.
-2. Write `loop`/`pos`/`share` for each such DFB to its exit record (`g_dfb_exit_record[hart][lowest txn id of the side]`), then set its run state (its `subordinate_sync` byte) to `RUN_SYNC_MSG_DFB_DRAINING` (watcher shows `E`).
+2. Write `loop` and `pos` for each such DFB to its exit record (`g_dfb_exit_record[hart][lowest txn id of the side]`) and `share` to the same slot of `g_dfb_exit_share`, share first, then set its run state (its `subordinate_sync` byte) to `RUN_SYNC_MSG_DFB_DRAINING` (watcher shows `E`).
 3. Wait for its implicit-sync writes to land, per DFB txn id.
 4. Drain.
 

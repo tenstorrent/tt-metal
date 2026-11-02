@@ -90,7 +90,7 @@ uint32_t align_dfb_config_transfer_size(const Hal& hal, uint32_t payload_bytes) 
 dfb_dm0_txn_descriptor_image_t build_dm0_txn_descriptor_image(
     uint8_t num_tcs,
     const std::vector<::dfb::PackedTileCounter>& tcs,
-    uint8_t tiles_to_post_or_ack,
+    uint16_t tiles_to_post_or_ack,
     const dfb_dm0_finish_info_t& finish) {
     TT_FATAL(
         num_tcs <= ::dfb::MAX_TCS_PER_TXN,
@@ -127,7 +127,7 @@ std::vector<uint8_t> serialize_dm0_isr_txn_hw_pool_for_core(
 
     const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
     std::vector<uint8_t> pool(hw_bytes, 0);
-    auto write_threshold = [&](uint8_t txn_id, uint8_t threshold) {
+    auto write_threshold = [&](uint8_t txn_id, uint16_t threshold) {
         dfb_dm0_isr_txn_threshold_t entry = {};
         entry.threshold = threshold;
         std::memcpy(
@@ -919,14 +919,16 @@ size_t serialize_dfb_config_for_core(
             flags |= static_cast<uint8_t>(dfb->tensix_trisc_mask & DFB_HART_FLAG_TRISC_MASK);
             entry.flags = flags;
 
-            // Txn descriptor (DM harts 0-7 only; TRISC leaves zero).
+            // Txn descriptor (DM harts 0-7 only; TRISC leaves zero). The 16-bit counts go straight into the DM
+            // scalar pack below, not through `entry`.
+            uint16_t num_entries_per_txn_id = 0;
+            uint16_t num_entries_per_txn_id_per_tc = 0;
             if (is_dm_hart) {
                 const dfb_txn_id_descriptor_t& txn =
                     rc.is_producer ? dfb->producer_txn_descriptor : dfb->consumer_txn_descriptor;
                 entry.num_txn_ids = txn.num_txn_ids;
-                entry.threshold = txn.num_entries_to_process_threshold;
-                entry.num_entries_per_txn_id = txn.num_entries_per_txn_id;
-                entry.num_entries_per_txn_id_per_tc = txn.num_entries_per_txn_id_per_tc;
+                num_entries_per_txn_id = txn.num_entries_per_txn_id;
+                num_entries_per_txn_id_per_tc = txn.num_entries_per_txn_id_per_tc;
                 for (uint8_t t = 0; t < txn.num_txn_ids && t < ::dfb::NUM_TXN_IDS; t++) {
                     entry.txn_ids[t] = txn.txn_ids[t];
                 }
@@ -944,20 +946,18 @@ size_t serialize_dfb_config_for_core(
             // Write fixed header.
             std::memcpy(out.data() + offset, &entry, sizeof(entry));
 
-            // DM harts: mirror bytes [12,24) in LocalDFBInterface DTCM order so
-            // dfb_unpack_entry_header_dm stays consistent with on-disk layout.
+            // DM harts: bytes [12,24) carry the txn-id scalars in the layout
+            // dfb_unpack_entry_header_dm reads.
             if (is_dm_hart) {
                 dfb_write_dm_scalar_pack_to_blob(
                     out.data() + offset,
-                    num_tcs,
+                    entry.remapper_pair_index,
                     producer_signal_bit[di][h],
                     entry.txn_ids,
-                    entry.threshold,
-                    entry.num_entries_per_txn_id,
-                    entry.num_entries_per_txn_id_per_tc,
+                    num_entries_per_txn_id,
+                    num_entries_per_txn_id_per_tc,
                     entry.num_txn_ids,
-                    static_cast<uint8_t>((flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u),
-                    entry.remapper_pair_index);
+                    static_cast<uint8_t>((flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u));
             }
 
             // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 32B header,
@@ -1354,15 +1354,23 @@ static std::optional<std::string> dfb_txn_descriptor_violation(
             entry_threshold,
             block_size);
     }
-    if (entry_threshold / block_size > 0xFFu || per_txn_all > 0xFFu) {
+    if (entry_threshold / block_size > 0xFFFFu || per_txn_all > 0xFFFFu) {
         return fmt::format(
-            "Implicit-sync DFB descriptor overflow: threshold {} / per_txn {} exceed uint8_t (num_entries {}, "
+            "Implicit-sync DFB descriptor overflow: threshold {} / per_txn {} exceed uint16_t (num_entries {}, "
             "num_txn_ids {}, num_prods_or_cons {}). Reduce num_entries or use explicit sync.",
             entry_threshold / block_size,
             per_txn_all,
             num_entries,
             num_txn_ids,
             num_prods_or_cons);
+    }
+    // A DM tracks the entries of the op it is issuing in 8 bits (DFBImplicitProgress::share).
+    if (std::max<uint32_t>(block_size, counter_share) > 0xFFu) {
+        return fmt::format(
+            "Implicit-sync DFB op size overflow: block_size {} / counter_share {} exceed uint8_t. Use explicit "
+            "sync on this side or a smaller block.",
+            block_size,
+            counter_share);
     }
     if (!consumes_all && entry_threshold % num_prods_or_cons != 0) {
         return fmt::format(
@@ -1440,10 +1448,10 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
 
     dfb_txn_id_descriptor_t desc = {};
     desc.num_txn_ids = num_txn_ids;
-    desc.num_entries_to_process_threshold = static_cast<uint8_t>(entry_threshold / block_size);
+    desc.num_entries_to_process_threshold = static_cast<uint16_t>(entry_threshold / block_size);
     // Transactions each DM producer/consumer contributes per txn id, and each of its TCs.
-    desc.num_entries_per_txn_id = static_cast<uint8_t>(consumes_all ? per_txn_all : per_txn_all / num_prods_or_cons);
-    desc.num_entries_per_txn_id_per_tc = static_cast<uint8_t>(desc.num_entries_per_txn_id / num_tcs_per_risc);
+    desc.num_entries_per_txn_id = static_cast<uint16_t>(consumes_all ? per_txn_all : per_txn_all / num_prods_or_cons);
+    desc.num_entries_per_txn_id_per_tc = static_cast<uint16_t>(desc.num_entries_per_txn_id / num_tcs_per_risc);
     for (uint8_t i = 0; i < num_txn_ids; i++) {
         desc.txn_ids[i] = txn_ids[i];
     }
