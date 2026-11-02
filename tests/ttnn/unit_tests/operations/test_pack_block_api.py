@@ -79,6 +79,8 @@ CONFIGS = [
     (ttnn.bfloat16, ttnn.bfloat8_b, False, True),
     (ttnn.float32, ttnn.bfloat8_b, True, True),
     (ttnn.float32, ttnn.float32, True, False),
+    (ttnn.int32, ttnn.int32, True, True),
+    (ttnn.int32, ttnn.int32, True, False),
 ]
 
 
@@ -99,7 +101,10 @@ def run_case(device, in_dt, out_dt, fp32_dest, full_sync, ntiles, nblocks, reini
     total = ntiles * nblocks
     core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     torch.manual_seed(ntiles * 7 + nblocks)
-    x = torch.rand(1, 1, 32, 32 * total) * 2 - 1
+    if in_dt == ttnn.int32:
+        x = torch.randint(-100000, 100000, (1, 1, 32, 32 * total), dtype=torch.int32)
+    else:
+        x = torch.rand(1, 1, 32, 32 * total) * 2 - 1
 
     def mem(dt):
         return ttnn.MemoryConfig(
@@ -121,7 +126,7 @@ def run_case(device, in_dt, out_dt, fp32_dest, full_sync, ntiles, nblocks, reini
     cc.fp32_dest_acc_en = fp32_dest
     cc.dst_full_sync_en = full_sync
     cc.math_fidelity = ttnn.MathFidelity.HiFi4
-    if in_dt == ttnn.float32:
+    if in_dt in (ttnn.float32, ttnn.int32):
         cc.unpack_to_dest_mode = [ttnn.UnpackToDestMode.UnpackToDestFp32] * 64
     comp = ttnn.KernelDescriptor(
         kernel_source=COMPUTE_SOURCE,
@@ -136,8 +141,8 @@ def run_case(device, in_dt, out_dt, fp32_dest, full_sync, ntiles, nblocks, reini
     mesh_pd[ttnn.MeshCoordinateRange(coord, coord)] = pd
     ttnn.generic_op([t_in, t_out], mesh_pd)
     ttnn.synchronize_device(device)
-    golden = ttnn.to_torch(t_in).float()
-    got = ttnn.to_torch(t_out).float()
+    golden = ttnn.to_torch(t_in).double()
+    got = ttnn.to_torch(t_out).double()
     return golden, got
 
 
@@ -149,7 +154,9 @@ def test_pack_block_api(device, in_dt, out_dt, fp32_dest, full_sync, ntiles, rei
     if not fits(fp32_dest, full_sync, ntiles):
         pytest.skip("the block does not fit the DEST section")
     golden, got = run_case(device, in_dt, out_dt, fp32_dest, full_sync, ntiles, 3, reinit)
-    if out_dt == ttnn.bfloat8_b:
+    if in_dt == ttnn.int32:
+        assert torch.equal(golden, got)
+    elif out_dt == ttnn.bfloat8_b:
         assert pcc(golden, got) > 0.999
     elif out_dt == ttnn.float32 and in_dt == ttnn.bfloat16:
         assert torch.equal(golden, got)
