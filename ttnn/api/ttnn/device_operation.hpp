@@ -594,7 +594,10 @@ void place_output_tensors(
         }
 
         mesh_device_operation_utils::update_output_tensor_topologies(
-            tensor_return_value, input_tensors, std::move(custom_topologies));
+            tensor_return_value,
+            input_tensors,
+            std::move(custom_topologies),
+            get_operation_name<device_operation_t>(operation_attributes));
     }
 }
 

@@ -8,10 +8,18 @@
 
 #include <algorithm>
 #include <functional>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <span>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <variant>
 #include <vector>
 
+#include <fmt/format.h>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -231,6 +239,142 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
         }
     }
     return tensor_coordinates;
+}
+
+std::optional<ttsl::SmallVector<bool>> sharded_per_mesh_axis(
+    const tt::tt_metal::TensorTopology& topology, const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    const auto is_shard = [](const auto& placement) {
+        return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement);
+    };
+    const auto& placements = topology.placements();
+    const size_t dims = mesh_shape.dims();
+    ttsl::SmallVector<bool> sharded(dims, false);
+    if (placements.size() == dims) {
+        for (size_t axis = 0; axis < dims; ++axis) {
+            sharded[axis] = is_shard(placements[axis]);
+        }
+        return sharded;
+    }
+    if (placements.size() == 1) {
+        const bool shard = is_shard(placements[0]);
+        for (size_t axis = 0; axis < dims; ++axis) {
+            sharded[axis] = shard && mesh_shape[static_cast<int>(axis)] > 1;
+        }
+        return sharded;
+    }
+    return std::nullopt;
+}
+
+std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
+    const ttnn::Tensor& caller_tensor, std::span<const ttnn::Tensor* const> operands, std::string_view op_name) {
+    const auto& caller_topology = caller_tensor.tensor_topology();
+    if (caller_tensor.device() == nullptr) {
+        return caller_topology;  // not a mesh tensor: nothing to compare against
+    }
+    const auto& mesh_shape = caller_tensor.device()->shape();
+    const auto caller_sharded = sharded_per_mesh_axis(caller_topology, mesh_shape);
+
+    std::string reason;
+    for (const ttnn::Tensor* operand : operands) {
+        if (operand == nullptr || operand == &caller_tensor) {
+            continue;
+        }
+        const auto& operand_topology = operand->tensor_topology();
+        if (operand_topology.mesh_coords() != caller_topology.mesh_coords()) {
+            reason = "an operand is distributed over a different set of mesh coordinates";
+            break;
+        }
+        const auto operand_sharded = sharded_per_mesh_axis(operand_topology, mesh_shape);
+        if (!caller_sharded.has_value() || !operand_sharded.has_value()) {
+            reason = "a label does not have one placement per mesh axis and is not a collapsed whole-mesh label";
+            break;
+        }
+        for (size_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+            if ((*operand_sharded)[axis] && !(*caller_sharded)[axis]) {
+                reason = fmt::format(
+                    "an operand is sharded along mesh axis {}, on which the caller's tensor is replicated", axis);
+                break;
+            }
+        }
+        if (!reason.empty()) {
+            break;
+        }
+    }
+    if (reason.empty()) {
+        return caller_topology;
+    }
+
+    static std::mutex warned_mutex;
+    static std::set<std::string, std::less<>> warned;
+    bool first_time = false;
+    {
+        std::lock_guard<std::mutex> guard(warned_mutex);
+        if (!warned.contains(op_name)) {
+            warned.emplace(op_name);
+            first_time = true;
+        }
+    }
+    if (first_time) {
+        log_warning(
+            tt::LogOp,
+            "{}: the result takes the union of the operand topologies instead of the caller-owned tensor's own label: "
+            "{}. The per-device results differ, so the caller's handle now reads as sharded (logged once per process "
+            "for this op)",
+            op_name,
+            reason);
+    }
+    return std::nullopt;
+}
+
+namespace {
+
+// The device buffer `tensor` lives in, or nullptr for a host or deallocated tensor.
+const void* device_buffer(const ttnn::Tensor& tensor) {
+    if (tensor.storage_type() != tt::tt_metal::StorageType::DEVICE || !tensor.is_allocated()) {
+        return nullptr;
+    }
+    return &tensor.mesh_buffer();
+}
+
+}  // namespace
+
+void apply_default_output_topologies(
+    const std::vector<std::reference_wrapper<ttnn::Tensor>>& outputs,
+    const std::vector<std::reference_wrapper<const ttnn::Tensor>>& inputs,
+    std::string_view op_name) {
+    std::optional<std::pair<
+        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+        tt::tt_metal::distributed::MeshShape>>
+        union_label;
+    ttsl::SmallVector<const ttnn::Tensor*> operands;
+    for (const auto& output_ref : outputs) {
+        ttnn::Tensor& output = output_ref.get();
+        const void* buffer = device_buffer(output);
+        const ttnn::Tensor* caller = nullptr;
+        operands.clear();
+        for (const auto& input_ref : inputs) {
+            const ttnn::Tensor& input = input_ref.get();
+            if (buffer != nullptr && device_buffer(input) == buffer) {
+                if (caller == nullptr) {
+                    caller = &input;
+                }
+            } else {
+                operands.push_back(&input);
+            }
+        }
+        if (caller != nullptr) {
+            if (auto label = caller_owned_output_topology(
+                    *caller, std::span<const ttnn::Tensor* const>(operands.data(), operands.size()), op_name)) {
+                output.update_tensor_topology(*label);
+                continue;
+            }
+        }
+        if (!union_label.has_value()) {
+            union_label = compute_output_placements_and_shape(inputs);
+        }
+        output.update_tensor_topology(tt::tt_metal::TensorTopology(
+            union_label->second, union_label->first, output.tensor_topology().mesh_coords()));
+    }
 }
 
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index) {
