@@ -3479,7 +3479,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_BatchGQAGateNoLse) 
     run_split_vs_unsplit(base, {128, 64, 2, 4, 0});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_DefaultPickFewHeads) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitEdge_DefaultPickFewHeads) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // The production pick (all knobs 0) on the tensor-parallel shapes that cut, against the pick with cutting
     // off; whatever the pick chooses must match the uncut run.
