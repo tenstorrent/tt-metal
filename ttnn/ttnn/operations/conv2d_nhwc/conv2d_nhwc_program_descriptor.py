@@ -55,6 +55,16 @@ OUT_RM_DEPTH = 2  # cb_out_rm depth, in (1 tile-row x bn) quanta
 ACT_SEND_DEPTH = 1  # R4/R5 cb_act_send depth, in own (bm x bk) K-blocks (tilized, awaiting multicast);
 # >= kblocks_per_slice tilizes the whole own slice at m-block start (the former own-slice prefetch).
 ACT_RECV_DEPTH = 2  # R4/R5 cb_act_tiles depth, in received (bm x bk) K-blocks (double-buffered multicast)
+# R4/R5: an own K-block is tilized (into cb_act_send) this many rounds before its own multicast round,
+# instead of as soon as the previous own block was sent: compute then never waits on the reader's
+# gather of a block that is not needed yet (that wait stalled the whole row's exchange). Clamped to
+# [1, slices - 1]; slices - 1 = as soon as the send slot frees.
+ACT_TILIZE_LEAD = 2
+# R4/R5 act exchange: a receiver acks round r + ACT_ACK_LEAD - 1 as soon as round r has landed (and the
+# landing slot is free), so the ack's NoC round trip overlaps the round in flight. 1 = ack only the
+# next round (Flag data-ready signal); > 1 switches the channel to the Counter signal (several rounds
+# acked before delivery) and is clamped to the landing depth and the slice count.
+ACT_ACK_LEAD = 1
 # R4/R5 cb_act_rm depth in whole own K-blocks (bm tile-rows x bk): the reader gathers the next own
 # K-block while the row multicasts the other S-1 slices' blocks (K order interleaves the slices),
 # so the gather leaves the compute critical path. Never below ACT_RM_DEPTH tile-rows.
@@ -65,6 +75,10 @@ ACT_RM_KBLOCKS = 1
 SHARDED_CB_BUDGET_BYTES = 480 * 1024
 MCAST_MAX_RECTANGLES = 3  # receiver rectangles one Mcast channel supports (mcast_protocol.hpp)
 WEIGHT_MCAST = True  # R4: read each weight K-block once per grid column and multicast it down the column
+# R4: the column's weight K-blocks are read + multicast by a rotating row (block w by row w % rows)
+# instead of always grid row 0, so the DRAM read issue / barrier / multicast of every block is not
+# serialized into one row's act-exchange loop.
+WEIGHT_ROTATING_SENDER = True
 BK_FLOOR = 4  # bk >= min(K_t, BK_FLOOR) on the first walk (perf lamp L7)
 # R11 depthwise: cb_act_tiles depth in tilized tile-rows (taps x bn tiles each). Compute tilizes a
 # tile-row and consumes it before tilizing the next, so one is enough; cb_act_rm (ACT_RM_DEPTH
@@ -80,8 +94,15 @@ DW_CORE_M_TILES_MIN = 1
 # Tap-major im2col K-blocks (stride 1, dilation 1, whole-tile taps): the reader lays each K-block
 # out as one contiguous 32-pixel x tap block per tap and compute tilizes one tap wide, so a tap's
 # pixels along an output row are one NoC read (not one read per pixel per kernel-row band).
-# bk becomes a whole number of taps. Enabled on HEIGHT (R3) placements.
+# bk becomes a whole number of taps. Enabled on the sharded placements in TAP_MAJOR_LAYOUTS: HEIGHT
+# (R3, Refinement 6) and BLOCK / WIDTH (R4/R5, Refinement 9: a one-channel-tile slice's band is only
+# 3 taps wide, so the per-pixel band reads were the gather's whole cost).
 TAP_MAJOR_GATHER = True
+TAP_MAJOR_LAYOUTS = (
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+)
 # R3 (HEIGHT): keep the whole weight slice resident in cb_weight_tiles (read + multicast once,
 # before the first m-block) when it fits, instead of streaming SHARDED_WEIGHT_DEPTH K-blocks per
 # m-block. Every HEIGHT core needs all of it, and the per-K-block read -> multicast rounds are
@@ -769,7 +790,7 @@ def select_blocking_sharded(
     tap_tiles = tap_width // TILE
     tap_major = (
         TAP_MAJOR_GATHER
-        and memory_layout == _ML.HEIGHT_SHARDED
+        and memory_layout in TAP_MAJOR_LAYOUTS
         and not dw
         and stride == 1
         and dilation == 1
@@ -871,6 +892,11 @@ def select_blocking_sharded(
         "tap_major": tap_major,
         "tilize_w": tap_tiles if tap_major else bk,
         "act_send_depth": send_depth(bk),
+        "act_tilize_lead": max(1, min(ACT_TILIZE_LEAD, S - 1)) if act_mcast else 0,
+        # > 1 (Counter signal, absolute rounds) needs a group of exactly the slices: no WIDTH sinks.
+        "act_ack_lead": max(1, min(ACT_ACK_LEAD, ACT_RECV_DEPTH, S))
+        if act_mcast and memory_layout == _ML.BLOCK_SHARDED
+        else 1,
         "act_rm_rows": rm_rows(bm, deep_rm),
         # Resident: the CB holds every K-block (depth = the K-block count).
         "weight_depth": DW_WEIGHT_DEPTH if dw else (slice_k_tiles // bk if weights_resident else SHARDED_WEIGHT_DEPTH),
@@ -1081,6 +1107,10 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     # The multicast helper covers at most 3 receiver rectangles; beyond that each core reads
     # its own weights (same writer path, weight_mcast off).
     weight_mcast = weight_mcast and len(weight_group.ranges()) <= MCAST_MAX_RECTANGLES
+    # BLOCK streamed weights: rotate the column's DRAM reader / multicast sender over its rows.
+    weight_rotating = (
+        WEIGHT_ROTATING_SENDER and weight_mcast and p["memory_layout"] == _ML.BLOCK_SHARDED if kx else False
+    )
     if is_height and not weight_mcast:  # no multicast: every compute core reads its own weights
         sink_cores, mcast_cores = [], cores
     if act_mcast:
@@ -1234,6 +1264,14 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         p.get("weight_chunk_rows", 1),
         1 if tile_in else 0,
         p["C_out"],
+        p.get("act_ack_lead", 1),
+        1
+        if (
+            weight_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
+            and not weight_tensor.memory_config().is_sharded()
+        )
+        else 0,
+        p["g_m"] if weight_rotating else 0,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -1283,6 +1321,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         c_tiles,
         p["win_tile_rows"],
         1 if direct_in0 else 0,
+        p.get("act_tilize_lead", 0),
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -1345,7 +1384,9 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             n_tile_start,
             ni,
             0,  # not a sink
-            1 if mi == 0 else 0,  # weight_mcast: grid row 0 reads the column's weights
+            # weight_mcast: the row (rotating sender: block w is read by row w % g_m), or 1 on grid
+            # row 0 (fixed sender: it reads the column's weights).
+            mi if weight_rotating else (1 if mi == 0 else 0),
         ] + (reader_args if gather_roles > 1 else [])
         compute_rt[xy.x][xy.y] = [num_m_blocks, ni] + tile_win[1:]
     for xy in sink_cores:
@@ -1380,7 +1421,11 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         mcast = ttnn.Mcast(
             device,
             # The writer (WriterConfigDescriptor) issues on NOC_1 (preferred DRAM-write NoC).
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
+            ttnn.McastConfig(
+                noc=ttnn.NOC.NOC_1,
+                handshake=True,
+                data_ready=ttnn.McastDataReady.Counter if p["act_ack_lead"] > 1 else ttnn.McastDataReady.Flag,
+            ),
             mcast_cores,
             mcast_cores.num_cores() if sink_cores else p["g_n"],
             ttnn.McastRotatingSenderConfig(),
@@ -1399,11 +1444,27 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
             weight_group,
             weight_group.num_cores() if weight_group is not cores else p["g_m"],
-            ttnn.McastFixedSenderConfig(sender_index=weight_sender),
+            ttnn.McastRotatingSenderConfig()
+            if weight_rotating
+            else ttnn.McastFixedSenderConfig(sender_index=weight_sender),
             weight_order,
         )
         w_mcast.attach(descriptor, "w_mcast", [writer], next_sem)
     else:
         ttnn.attach_absent_mcast(writer, "w_mcast")
+    import os as _os  # TEMP ablation hook (R9): CONV_ABLATE=A,B -> -DABLATE_A -DABLATE_B
+
+    _abl = [x for x in _os.environ.get("CONV_ABLATE", "").split(",") if x]
+    if _abl:
+        for _k in (reader, writer, compute):
+            _k.defines = [("ABLATE_" + x, "1") for x in _abl]
     descriptor.kernels = [reader, writer, compute]
     return descriptor
+
+
+# TEMP (R9 experiments): CONV_KNOBS="NAME=value,..." overrides module knobs.
+import os as _os_knobs
+
+for _kv in [x for x in _os_knobs.environ.get("CONV_KNOBS", "").split(",") if x]:
+    _k, _v = _kv.split("=")
+    globals()[_k] = type(globals()[_k])(eval(_v))

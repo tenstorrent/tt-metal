@@ -401,21 +401,55 @@ FORCE_INLINE void ReceiverPipeImpl<
     DATA_READY_SIGNAL,
     NUM_SENDERS,
     SenderCoordinates>::receive(uint32_t round) {
+    acknowledge(round);
+    wait_delivery(round);
+}
+
+template <
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS,
+    typename SenderCoordinates>
+FORCE_INLINE void ReceiverPipeImpl<
+    DataReadyBinding,
+    PRE_HANDSHAKE,
+    ConsumerReadyBinding,
+    DATA_READY_SIGNAL,
+    NUM_SENDERS,
+    SenderCoordinates>::acknowledge(uint32_t round) {
     // `round` is the caller's ABSOLUTE work round, not an index into the coord table: sender
     // selection wraps every NUM_SENDERS rounds, so a rotating receiver just forwards its loop
     // counter and never has to reduce it at the call site.
-    const uint32_t sender_index = round % NUM_SENDERS;
-    const uint32_t sender_x = coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_X];
-    const uint32_t sender_y = coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_Y];
     if constexpr (PRE_HANDSHAKE) {
+        const uint32_t sender_index = round % NUM_SENDERS;
+        const uint32_t sender_x = coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_X];
+        const uint32_t sender_y = coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_Y];
         // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
         consumer_ready_.up(noc_, sender_x, sender_y, 1);
     }
+}
+
+template <
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS,
+    typename SenderCoordinates>
+FORCE_INLINE void ReceiverPipeImpl<
+    DataReadyBinding,
+    PRE_HANDSHAKE,
+    ConsumerReadyBinding,
+    DATA_READY_SIGNAL,
+    NUM_SENDERS,
+    SenderCoordinates>::wait_delivery(uint32_t round) {
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.wait_min(round + 1);
     } else {
         data_ready_.wait(VALID);
-        data_ready_.set(INVALID);  // clear this round's flag; next receive()'s ack follows
+        data_ready_.set(INVALID);  // clear this round's flag; the next round's ack follows
     }
 }
 

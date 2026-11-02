@@ -190,3 +190,52 @@ def test_perf_probe_tile_1x1(device, case, direct, monkeypatch):
         device=device,
         extras=extras,
     )
+
+
+# Refinement 9: the three ResNet50 BLOCK perf cases (batch 16, bf16 x bf8b, bias), pinned geometry.
+RESNET_BLOCK = {
+    "layer3_ds": ((16, 28, 28, 256), 256, 3, 1, 2, (1280, 32), (8, 10)),
+    "layer3_3x3": ((16, 14, 14, 256), 256, 3, 1, 1, (314, 32), (8, 10)),
+    "layer4_3x3": ((16, 7, 7, 512), 512, 3, 1, 1, (96, 64), (8, 9)),
+}
+
+
+def _resnet_block(device, name):
+    shape, C_out, k, pad, stride, shard, grid = RESNET_BLOCK[name]
+    run_sharded(
+        device,
+        shape,
+        C_out,
+        k,
+        pad,
+        stride,
+        ML.BLOCK_SHARDED,
+        True,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        shard_shape=shard,
+        core_grid=grid,
+    )
+
+
+@pytest.mark.parametrize("name", list(RESNET_BLOCK))
+def test_perf_probe_resnet_block(device, name):
+    only = os.environ.get("R9_CASE")  # profile one case: R9_CASE=layer3_3x3
+    if only and only != name:
+        pytest.skip("R9_CASE filter")
+    _resnet_block(device, name)
+
+
+@pytest.mark.parametrize("name", list(RESNET_BLOCK))
+def test_l1_peak_resnet_block(device, name):
+    """Per-core L1 peak (graph capture, as the harness's device_l1_peak_bytes) of a ResNet BLOCK case."""
+    device.disable_and_clear_program_cache()
+    ttnn.graph._cpp_begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        _resnet_block(device, name)
+    finally:
+        trace = ttnn.graph._cpp_end_graph_capture()
+        device.enable_program_cache()
+    peak = int(ttnn.graph.extract_resource_usage_per_core(trace).peak_total)
+    print(f"L1_PEAK_BYTES {name}={peak}")
+    assert peak > 0

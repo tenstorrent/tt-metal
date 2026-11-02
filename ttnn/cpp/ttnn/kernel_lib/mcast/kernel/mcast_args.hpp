@@ -70,6 +70,8 @@ struct InactiveSenderPipe {
 
 struct InactiveReceiverPipe {
     FORCE_INLINE void receive(uint32_t = 0) {}
+    FORCE_INLINE void acknowledge(uint32_t = 0) {}
+    FORCE_INLINE void wait_delivery(uint32_t = 0) {}
     template <SourceL1Guard = SourceL1Guard::Guard>
     FORCE_INLINE void receive_and_forward(uint32_t, uint32_t, uint32_t = 0) {}
     FORCE_INLINE uint32_t receive_signal(uint32_t = 0) { return 0; }

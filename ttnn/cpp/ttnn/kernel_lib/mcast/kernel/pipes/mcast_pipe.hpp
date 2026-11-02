@@ -160,7 +160,19 @@ public:
     FORCE_INLINE explicit ReceiverPipeImpl(const Noc& noc, CoordinateSource sender_coords);
 
     // Handle receiver readiness, then wait for data from the sender selected by the absolute work round.
+    // Equivalent to acknowledge(round) followed by wait_delivery(round).
     FORCE_INLINE void receive(uint32_t round = 0);
+
+    // receive() split in its two halves, so a receiver can ack a round as soon as its landing region
+    // is free and wait for the payload later (the ack's round trip overlaps other work).
+    //   acknowledge(round)   — PRE_HANDSHAKE: tell round's sender this receiver is ready (else no-op).
+    //   wait_delivery(round) — wait for round's payload (Flag: and clear the flag).
+    // Ordering contract: Flag — acknowledge(r + 1) only after wait_delivery(r) (one flag per receiver).
+    // Counter — rounds may be acknowledged ahead of delivery, but never more than the sender rotation
+    // length ahead (a sender clears its ack count before sending, so the ack for its next round must
+    // follow the delivery of its previous one).
+    FORCE_INLINE void acknowledge(uint32_t round = 0);
+    FORCE_INLINE void wait_delivery(uint32_t round = 0);
 
     // Transport-compatible receive used by kernels that may also be configured for chain forwarding.
     // Hardware multicast lands the payload directly, so dst_l1 and size_bytes are intentionally ignored.

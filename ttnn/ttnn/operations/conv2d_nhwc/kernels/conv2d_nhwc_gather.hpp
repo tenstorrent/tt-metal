@@ -33,6 +33,12 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#ifdef ABLATE_ZONES
+#include "api/debug/kernel_profiler.hpp"
+#define GZONE(n) DeviceZoneScopedN(n)
+#else
+#define GZONE(n)
+#endif
 
 namespace conv_gather {
 
@@ -846,43 +852,56 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
                 }
                 for (uint32_t t = 0; t < block_m_tiles; ++t) {
                     const uint32_t tile = t0 + t;
-                    cb_reserve_back(cb_act_rm, block_k_tiles);
-                    const uint32_t dst_base = get_write_ptr(cb_act_rm);
-                    if (tile >= t1) {
-                        // Ragged block tail: tile-row past the core's range.
-                        zero_run(zeros_noc, dst_base, TILE_DIM * im2col_row_bytes);
-                    } else if constexpr (tap_major && contiguous_src) {
-                        gather_tile_row_taps(zeros_noc, shard_src, k0, tile * TILE_DIM, dst_base, padding);
-                    } else if constexpr (tap_major) {
-                        gather_tile_row_taps(zeros_noc, window_src, k0, tile * TILE_DIM, dst_base, padding);
-                    } else if constexpr (contiguous_src) {
-                        gather_tile_row(
-                            zeros_noc,
-                            shard_src,
-                            seg,
-                            fast_ok,
-                            k0,
-                            tile * TILE_DIM,
-                            dst_base,
-                            stride,
-                            padding,
-                            wo_int_lo,
-                            wo_int_hi);
-                    } else {
-                        gather_tile_row(
-                            zeros_noc,
-                            window_src,
-                            seg,
-                            fast_ok,
-                            k0,
-                            tile * TILE_DIM,
-                            dst_base,
-                            stride,
-                            padding,
-                            wo_int_lo,
-                            wo_int_hi);
+                    {
+                        GZONE("G_RES");
+                        cb_reserve_back(cb_act_rm, block_k_tiles);
                     }
-                    noc_async_read_barrier();
+                    {
+                        GZONE("G_TR");
+                        const uint32_t dst_base = get_write_ptr(cb_act_rm);
+#ifdef ABLATE_GATHER
+                        if (true) {
+                        } else
+#endif
+                            if (tile >= t1) {
+                            // Ragged block tail: tile-row past the core's range.
+                            zero_run(zeros_noc, dst_base, TILE_DIM * im2col_row_bytes);
+                        } else if constexpr (tap_major && contiguous_src) {
+                            gather_tile_row_taps(zeros_noc, shard_src, k0, tile * TILE_DIM, dst_base, padding);
+                        } else if constexpr (tap_major) {
+                            gather_tile_row_taps(zeros_noc, window_src, k0, tile * TILE_DIM, dst_base, padding);
+                        } else if constexpr (contiguous_src) {
+                            gather_tile_row(
+                                zeros_noc,
+                                shard_src,
+                                seg,
+                                fast_ok,
+                                k0,
+                                tile * TILE_DIM,
+                                dst_base,
+                                stride,
+                                padding,
+                                wo_int_lo,
+                                wo_int_hi);
+                        } else {
+                            gather_tile_row(
+                                zeros_noc,
+                                window_src,
+                                seg,
+                                fast_ok,
+                                k0,
+                                tile * TILE_DIM,
+                                dst_base,
+                                stride,
+                                padding,
+                                wo_int_lo,
+                                wo_int_hi);
+                        }
+                    }
+                    {
+                        GZONE("G_BAR");
+                        noc_async_read_barrier();
+                    }
                     cb_push_back(cb_act_rm, block_k_tiles);
                 }
             }

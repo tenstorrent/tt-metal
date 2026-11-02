@@ -28,6 +28,12 @@
 #include <type_traits>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
+#ifdef ABLATE_ZONES
+#include "api/debug/kernel_profiler.hpp"
+#define CZONE(n) DeviceZoneScopedN(n)
+#else
+#define CZONE(n)
+#endif
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -60,6 +66,9 @@ constexpr bool act_mcast = get_compile_time_arg_val(21) != 0;  // R4/R5 with > 1
 // R4/R5: cb_act_send depth in own K-blocks. The owner tilizes own block kb right after own block
 // kb - act_send_depth was multicast; >= kblocks_per_slice tilizes the whole own slice up front.
 constexpr uint32_t act_send_depth = get_compile_time_arg_val(22);
+// R4/R5: an own K-block is tilized this many K-blocks (rounds) before its own multicast round, and no
+// earlier than its cb_act_send slot frees (>= num_slices - 1: as soon as the slot frees).
+constexpr uint32_t act_tilize_lead = get_compile_time_arg_val(37);
 // Fused ReLU (technique 4): packer ReLU on the final output pack only — the bias pack, or the
 // untilize pack when there is no bias — and cleared right after, so the next block's tilize
 // and partial (L1-accumulated) packs never see it.
@@ -119,10 +128,12 @@ struct TilizeKBlock {
     uint32_t my_slice;
     uint32_t m_block = 0;
     ALWI void tilize_own() const {
+        CZONE("C_TIL");
         PACK((llk_pack_reconfig_l1_acc(0)));
         tilize<tilize_w, cb_act_rm, cb_act_send>(block_m_tiles * tilize_blocks_per_row);
     }
     ALWI void operator()(uint32_t block, uint32_t, bool) const {
+        CZONE("C_PRE");
         tilize_kblock(block);
         if constexpr (weights_resident) {
             // in1 is NoWaitNoPop: K-blocks 0..block of the resident weights must have landed (the
@@ -146,9 +157,17 @@ struct TilizeKBlock {
                 for (uint32_t kb = 0; kb < first; ++kb) {
                     tilize_own();
                 }
-            } else if (block > my_slice && (block - my_slice - 1) % num_slices == 0) {
-                if ((block - my_slice - 1) / num_slices + act_send_depth < kblocks_per_slice) {
-                    tilize_own();
+            } else {
+                // Own block kb (>= the first `first`) is tilized before matmul block
+                // max(after own block kb - depth was sent, act_tilize_lead rounds before its own round):
+                // just in time, so compute does not stall the row on a gather that is not needed yet.
+                for (uint32_t kb = first; kb < kblocks_per_slice; ++kb) {
+                    const uint32_t freed = (kb - act_send_depth) * num_slices + my_slice + 1;
+                    const uint32_t round = kb * num_slices + my_slice;
+                    const uint32_t jit = round > act_tilize_lead ? round - act_tilize_lead : 0;
+                    if (block == (jit > freed ? jit : freed)) {
+                        tilize_own();
+                    }
                 }
             }
         }
@@ -342,35 +361,48 @@ void kernel_main() {
             for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
                 // conv_matmul_block: caller owns the accumulator's single reserve / push.
                 partials.reserve_back(block_out_tiles);
-                matmul_block<
-                    false,
-                    true,
-                    LastBlockTarget::Interm,
-                    OutputCBLayout::TileRowMajor,
-                    matmul_config::InitMode::ShortAfterPreKBlock,
-                    InputPolicy::WaitAndPopPerKBlock,
-                    in1_policy,
-                    NoPostCompute,
-                    TilizeKBlock,
-                    NoPostKBlock,
-                    0,
-                    NoKBlockInnerDimFn,
-                    NoIn0Source,
-                    In1Offset,
-                    true>(
-                    act_tiles,
-                    weight_tiles,
-                    partials,
-                    partials,
-                    shape,
-                    {},
-                    TilizeKBlock{my_slice, m_block},
-                    block_n_tiles,
-                    block_n_tiles,
-                    {},
-                    {},
-                    {},
-                    In1Offset{});
+#ifdef ABLATE_MATMUL
+                {
+                    TilizeKBlock tk{my_slice, m_block};
+                    for (uint32_t b = 0; b < num_k_blocks; ++b) {
+                        tk(b, 0, false);
+                        act_tiles.wait_front(block_m_tiles * block_k_tiles);
+                        act_tiles.pop_front(block_m_tiles * block_k_tiles);
+                        weight_tiles.wait_front(block_k_tiles * block_n_tiles);
+                        weight_tiles.pop_front(block_k_tiles * block_n_tiles);
+                    }
+                }
+                if (false)
+#endif
+                    matmul_block<
+                        false,
+                        true,
+                        LastBlockTarget::Interm,
+                        OutputCBLayout::TileRowMajor,
+                        matmul_config::InitMode::ShortAfterPreKBlock,
+                        InputPolicy::WaitAndPopPerKBlock,
+                        in1_policy,
+                        NoPostCompute,
+                        TilizeKBlock,
+                        NoPostKBlock,
+                        0,
+                        NoKBlockInnerDimFn,
+                        NoIn0Source,
+                        In1Offset,
+                        true>(
+                        act_tiles,
+                        weight_tiles,
+                        partials,
+                        partials,
+                        shape,
+                        {},
+                        TilizeKBlock{my_slice, m_block},
+                        block_n_tiles,
+                        block_n_tiles,
+                        {},
+                        {},
+                        {},
+                        In1Offset{});
                 partials.push_back(block_out_tiles);
                 PACK((llk_pack_reconfig_l1_acc(0)));
 
