@@ -706,6 +706,10 @@ constexpr int32_t unary_max_min_int32_scalar = 64;
 const std::string unary_max_min_int32_scalar_arg =
     std::to_string(static_cast<uint32_t>(unary_max_min_int32_scalar)) + "u";
 
+// Negative comparand of the unary_*_int32 compares, passed as its two's-complement word.
+constexpr int32_t unary_comp_int32_scalar = -3;
+const std::string unary_comp_int32_scalar_arg = std::to_string(static_cast<uint32_t>(unary_comp_int32_scalar)) + "u";
+
 const map<std::string, std::map<std::string, std::string>> sfpu_int32_unary_op_to_op_name = {
     {"bitwise_and",
      {{"SFPU_OP_BITWISE_INCLUDE", "1"},
@@ -748,11 +752,115 @@ const map<std::string, std::map<std::string, std::string>> sfpu_int32_unary_op_t
      {{"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE", "1"},
       {"SFPU_OP_CHAIN_0",
        "unary_min_int32_tile_init(); unary_min_int32_tile(0, " + unary_max_min_int32_scalar_arg + ");"}}},
+    // Native Int32 (two's complement, negatives included) through unpack-to-dest: is_native_int32_unary_op.
+    {"eqz_int32", {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile_int32(0);"}}},
+    {"nez_int32", {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "nez_tile_init(); nez_tile_int32(0);"}}},
+    {"gtz_int32", {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "gtz_tile_init(); gtz_tile_int32(0);"}}},
+    {"gez_int32", {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "gez_tile_init(); gez_tile_int32(0);"}}},
+    {"ltz_int32", {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "ltz_tile_init(); ltz_tile_int32(0);"}}},
+    {"lez_int32", {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "lez_tile_init(); lez_tile_int32(0);"}}},
+    {"unary_eq_int32",
+     {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "unary_eq_tile_init(); unary_eq_tile_int32(0, " + unary_comp_int32_scalar_arg + ");"}}},
+    {"unary_ne_int32",
+     {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "unary_ne_tile_init(); unary_ne_tile_int32(0, " + unary_comp_int32_scalar_arg + ");"}}},
+    {"unary_gt_int32",
+     {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "unary_gt_tile_init(); unary_gt_tile_int32(0, " + unary_comp_int32_scalar_arg + ");"}}},
+    {"unary_ge_int32",
+     {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "unary_ge_tile_init(); unary_ge_tile_int32(0, " + unary_comp_int32_scalar_arg + ");"}}},
+    {"unary_lt_int32",
+     {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "unary_lt_tile_init(); unary_lt_tile_int32(0, " + unary_comp_int32_scalar_arg + ");"}}},
+    {"unary_le_int32",
+     {{"SFPU_OP_UNARY_COMP_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "unary_le_tile_init(); unary_le_tile_int32(0, " + unary_comp_int32_scalar_arg + ");"}}},
 };
 
 // Int32 unary ops that also see negative inputs: the sign bit sits at bit 31 in both
 // sign-magnitude and two's complement, so the result does not depend on Dest's integer encoding.
 bool is_signed_int32_unary_op(const std::string& op_name) { return op_name == "signbit_int32"; }
+
+// Native Int32 unary ops: two's-complement Int32 L1 input with negative values, routed to a 32-bit Dest
+// through unpack-to-dest, Int32 out.
+bool is_native_int32_unary_op(const std::string& op_name) {
+    return op_name == "eqz_int32" || op_name == "nez_int32" || op_name == "gtz_int32" || op_name == "gez_int32" ||
+           op_name == "ltz_int32" || op_name == "lez_int32" || op_name == "unary_eq_int32" ||
+           op_name == "unary_ne_int32" || op_name == "unary_gt_int32" || op_name == "unary_ge_int32" ||
+           op_name == "unary_lt_int32" || op_name == "unary_le_int32";
+}
+
+// Two's-complement Int32 values on both sides of zero, with the extremes planted first and zero / the
+// unary_*_int32 comparand recurring so every compare sees its tie.
+vector<uint32_t> generate_int32_unary_inputs(const unsigned int numel, const int seed) {
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int32_t> dist(-1000, 1000);
+    constexpr int32_t planted[] = {
+        std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max(),
+        0,
+        -1,
+        1,
+        unary_comp_int32_scalar,
+        unary_comp_int32_scalar - 1,
+        unary_comp_int32_scalar + 1};
+    vector<uint32_t> out(numel);
+    for (size_t i = 0; i < numel; ++i) {
+        int32_t v = dist(rng);
+        if (i < std::size(planted)) {
+            v = planted[i];
+        } else if (i % 8 == 3) {
+            v = 0;
+        } else if (i % 8 == 7) {
+            v = unary_comp_int32_scalar;
+        }
+        out[i] = std::bit_cast<uint32_t>(v);
+    }
+    return out;
+}
+
+int32_t native_int32_unary_result(const std::string& op_name, int32_t x) {
+    constexpr int32_t s = unary_comp_int32_scalar;
+    if (op_name == "eqz_int32") {
+        return x == 0 ? 1 : 0;
+    }
+    if (op_name == "nez_int32") {
+        return x != 0 ? 1 : 0;
+    }
+    if (op_name == "gtz_int32") {
+        return x > 0 ? 1 : 0;
+    }
+    if (op_name == "gez_int32") {
+        return x >= 0 ? 1 : 0;
+    }
+    if (op_name == "ltz_int32") {
+        return x < 0 ? 1 : 0;
+    }
+    if (op_name == "lez_int32") {
+        return x <= 0 ? 1 : 0;
+    }
+    if (op_name == "unary_eq_int32") {
+        return x == s ? 1 : 0;
+    }
+    if (op_name == "unary_ne_int32") {
+        return x != s ? 1 : 0;
+    }
+    if (op_name == "unary_gt_int32") {
+        return x > s ? 1 : 0;
+    }
+    if (op_name == "unary_ge_int32") {
+        return x >= s ? 1 : 0;
+    }
+    if (op_name == "unary_lt_int32") {
+        return x < s ? 1 : 0;
+    }
+    if (op_name == "unary_le_int32") {
+        return x <= s ? 1 : 0;
+    }
+    TT_THROW("Unsupported native Int32 unary op_name in test");
+}
 
 int32_t int32_unary_result(const std::string& op_name, int32_t x) {
     if (op_name == "bitwise_and") {
@@ -2433,27 +2541,40 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
 }
 
 /// Int32 unary SFPU ops: Int8 L1 -> 32-bit Dest -> Int32 L1, compared exactly. Inputs are non-negative,
-/// except for the signed ops (is_signed_int32_unary_op), which get every other nonzero value negated.
+/// except for the signed ops (is_signed_int32_unary_op), which get every other nonzero value negated, and the
+/// native Int32 ops (is_native_int32_unary_op), which read two's-complement Int32 L1 through unpack-to-dest.
 bool run_sfpu_int32_unary(distributed::MeshDevice& mesh_device, const SfpuConfig& test_config) {
     const size_t numel = test_config.num_tiles * 1024;
     const int seed = sfpu_test_seed;
-    auto packed_input = sfpu_util::generate_non_negative_int8_binary_inputs(numel, test_config.sfpu_op, seed).first;
-    if (sfpu_util::is_signed_int32_unary_op(test_config.sfpu_op)) {
-        // Flip the sign of every other value; zeros stay +0 (0x80, a sign-magnitude -0, is not a value).
-        for (size_t i = 0; i < numel; i += 2) {
-            const uint32_t shift = 8 * (i % 4);
-            if (((packed_input[i / 4] >> shift) & 0x7Fu) != 0) {
-                packed_input[i / 4] |= 0x80u << shift;
+    const bool native_int32 = sfpu_util::is_native_int32_unary_op(test_config.sfpu_op);
+    std::vector<uint32_t> packed_input;
+    std::vector<int32_t> values(numel);
+    if (native_int32) {
+        packed_input = sfpu_util::generate_int32_unary_inputs(numel, seed);
+        for (size_t i = 0; i < numel; ++i) {
+            values[i] = std::bit_cast<int32_t>(packed_input[i]);
+        }
+    } else {
+        packed_input = sfpu_util::generate_non_negative_int8_binary_inputs(numel, test_config.sfpu_op, seed).first;
+        if (sfpu_util::is_signed_int32_unary_op(test_config.sfpu_op)) {
+            // Flip the sign of every other value; zeros stay +0 (0x80, a sign-magnitude -0, is not a value).
+            for (size_t i = 0; i < numel; i += 2) {
+                const uint32_t shift = 8 * (i % 4);
+                if (((packed_input[i / 4] >> shift) & 0x7Fu) != 0) {
+                    packed_input[i / 4] |= 0x80u << shift;
+                }
             }
         }
-    }
-
-    std::vector<int32_t> values(numel);
-    for (size_t i = 0; i < numel; ++i) {
-        values[i] = sign_mag_byte_to_int8(static_cast<uint8_t>(packed_input[i / 4] >> (8 * (i % 4))));
+        for (size_t i = 0; i < numel; ++i) {
+            values[i] = sign_mag_byte_to_int8(static_cast<uint8_t>(packed_input[i / 4] >> (8 * (i % 4))));
+        }
     }
     std::vector<int32_t> expected(numel);
-    if (test_config.sfpu_op == "sum_int_col" || test_config.sfpu_op == "sum_int_row") {
+    if (native_int32) {
+        std::transform(values.begin(), values.end(), expected.begin(), [&](int32_t x) {
+            return sfpu_util::native_int32_unary_result(test_config.sfpu_op, x);
+        });
+    } else if (test_config.sfpu_op == "sum_int_col" || test_config.sfpu_op == "sum_int_row") {
         for (size_t base = 0; base < numel; base += 1024) {
             const std::vector<int32_t> tile(values.begin() + base, values.begin() + base + 1024);
             const auto out = sfpu_util::int_tile_layout_golden(test_config.sfpu_op, tile);
@@ -2465,7 +2586,10 @@ bool run_sfpu_int32_unary(distributed::MeshDevice& mesh_device, const SfpuConfig
         });
     }
     std::vector<uint32_t> packed_golden(numel);
-    std::transform(expected.begin(), expected.end(), packed_golden.begin(), int32_to_sign_mag_word);
+    // Native Int32 packs two's complement; the Int8-promoted path packs the sign-magnitude Dest encoding.
+    std::transform(expected.begin(), expected.end(), packed_golden.begin(), [&](int32_t v) {
+        return native_int32 ? std::bit_cast<uint32_t>(v) : int32_to_sign_mag_word(v);
+    });
 
     std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_int32_unary_op_to_op_name.at(test_config.sfpu_op);
     sfpu_defines["SFPU_UNARY_OP"] = "1";
@@ -4188,19 +4312,23 @@ class SingleCoreSingleMeshDeviceSfpuInt32UnaryParameterizedFixture
 TEST_P(SingleCoreSingleMeshDeviceSfpuInt32UnaryParameterizedFixture, TensixSfpuCompute) {
     const size_t num_tiles = std::get<0>(GetParam());
     const std::string sfpu_op = std::get<1>(GetParam());
-    // Same Int8 -> sign-magnitude Int32 Dest path as the binary integer ops.
+    // Same Int8 -> sign-magnitude Int32 Dest path as the binary integer ops; the native Int32 ops read
+    // two's-complement Int32 L1 through unpack-to-dest instead.
     if (arch_ == tt::ARCH::WORMHOLE_B0 || arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Int32 unary SFPU op test not fixed for WH/BH";
     }
+    const bool native_int32 = unit_tests::sfpu_util::is_native_int32_unary_op(sfpu_op);
+    const tt::DataFormat input_format = native_int32 ? tt::DataFormat::Int32 : tt::DataFormat::Int8;
     CoreRange core_range({0, 0}, {0, 0});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .num_tiles = num_tiles,
-        .tile_byte_size = tt::tile_size(tt::DataFormat::Int8),
-        .l1_input_data_format = tt::DataFormat::Int8,
+        .tile_byte_size = tt::tile_size(input_format),
+        .l1_input_data_format = input_format,
         .l1_output_data_format = tt::DataFormat::Int32,
         .cores = CoreRangeSet({core_range}),
         .sfpu_op = sfpu_op,
         .approx_mode = false,
+        .unpack_to_dest = native_int32,
         .en_32bit_dest = true};
     log_info(tt::LogTest, "Testing Int32 SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
     for (auto& device : this->devices_) {
@@ -4225,7 +4353,19 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "fill_int32"),
         std::make_tuple(1, "signbit_int32"),
         std::make_tuple(1, "unary_max_int32"),
-        std::make_tuple(1, "unary_min_int32")),
+        std::make_tuple(1, "unary_min_int32"),
+        std::make_tuple(1, "eqz_int32"),
+        std::make_tuple(1, "nez_int32"),
+        std::make_tuple(1, "gtz_int32"),
+        std::make_tuple(1, "gez_int32"),
+        std::make_tuple(1, "ltz_int32"),
+        std::make_tuple(1, "lez_int32"),
+        std::make_tuple(1, "unary_eq_int32"),
+        std::make_tuple(1, "unary_ne_int32"),
+        std::make_tuple(1, "unary_gt_int32"),
+        std::make_tuple(1, "unary_ge_int32"),
+        std::make_tuple(1, "unary_lt_int32"),
+        std::make_tuple(1, "unary_le_int32")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
