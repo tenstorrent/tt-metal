@@ -170,17 +170,11 @@ void check_tensor(
 
 // compute_output_topologies for a moreh op whose outputs are `std::optional<Tensor>` slots the caller may
 // preallocate (moreh_adamw, moreh_adam, moreh_sgd). `operands` is every tensor the op reads (nullptr for an absent
-// optional); `output_specs` is compute_output_specs' result and `preallocated_outputs` the caller-supplied slot for
-// each of its entries, in the same order; a nullopt spec is an absent output, which the framework does not visit,
-// so it gets no entry.
-//
-// A preallocated (caller-owned) output keeps the label it arrived with while that label still describes the data:
-// no operand may be sharded along a mesh axis on which the output is replicated, and every operand must span the
-// output's mesh coordinates (ttnn::device_operation::detail::caller_owned_output_topology, shared with the in-place
-// softmax / layer_norm and KV-cache hooks of PRs #59329-#59332). Otherwise -- a gradient sharded along an axis on which
-// the parameter is replicated leaves every device with a different parameter -- it takes the union of every tensor in
-// tensor_args, which is data-preserving, exactly like an output the op allocates itself. Returns {} when nothing is
-// preallocated: the framework then applies its union default itself.
+// optional); `output_specs` and `preallocated_outputs` list the outputs in the same order, and an absent output (a
+// nullopt spec) gets no entry. A preallocated output keeps its label while
+// ttnn::device_operation::detail::caller_owned_output_topology accepts it; otherwise, and for an output the op
+// allocates, the label is the union of the operands and the preallocated outputs. Returns {} when nothing is
+// preallocated, so the framework applies the union itself.
 std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologies(
     std::initializer_list<const Tensor*> operands,
     const Tensor& primary_input,
