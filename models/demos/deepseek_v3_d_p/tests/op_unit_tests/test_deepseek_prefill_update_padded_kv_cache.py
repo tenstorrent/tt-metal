@@ -315,6 +315,10 @@ def test_update_padded_kv_cache_single_device_metadata_mixed_memory_clamp(mesh_d
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+    # Every call's tensors stay allocated until the end, so the second call's metadata tensors get new
+    # addresses. Freed buffers would likely be handed back at the same addresses, which would hide a
+    # binding that is not refreshed on the cache hit.
+    keep_alive = []
     # (kv_actual_global, valid_global): a mid-chunk end in slab 0, then one tile into slab 1.
     for call, (kv_actual, valid_global) in enumerate([(0, chunk - 2 * tile - 5), (chunk, chunk + tile)]):
         before = read_cache()
@@ -345,8 +349,9 @@ def test_update_padded_kv_cache_single_device_metadata_mixed_memory_clamp(mesh_d
         expected = before.clone()
         expected[kv_actual:write_end] = sent[: write_end - kv_actual]
         assert torch.equal(after, expected), f"call {call}: cache differs in {(after != expected).any(-1).sum()} rows"
-        for t in (tt_input, slot_t, kv_t, valid_t):
-            ttnn.deallocate(t)
+        keep_alive.extend((tt_input, slot_t, kv_t, valid_t))
+    for t in keep_alive:
+        ttnn.deallocate(t)
 
 
 def _make_scalar_tensor(mesh_device, value):

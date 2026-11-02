@@ -275,6 +275,10 @@ def test_zero_padded_kv_cache_single_device_metadata_mixed_memory(mesh_device):
         )
 
     windows = {}
+    # Both calls' metadata tensors stay allocated until the end, so the second call's tensors get new
+    # addresses. Freed buffers would likely be handed back at the same addresses, which would hide a
+    # binding that is not refreshed on the cache hit.
+    keep_alive = []
     for call, (slot_idx, valid_global) in enumerate([(0, 40), (1, 300)]):
         slot_t = scalar_tensor(slot_idx, ttnn.L1_MEMORY_CONFIG)
         valid_t = scalar_tensor(valid_global, ttnn.DRAM_MEMORY_CONFIG)
@@ -284,10 +288,11 @@ def test_zero_padded_kv_cache_single_device_metadata_mixed_memory(mesh_device):
         )
         if call == 1:
             assert mesh_device.num_program_cache_entries() == entries, "second call should hit the cached program"
-        ttnn.deallocate(slot_t)
-        ttnn.deallocate(valid_t)
+        keep_alive.extend((slot_t, valid_t))
         windows[(slot_idx, 0)] = (valid_global, math.ceil(valid_global / 128) * 128)
     ttnn.synchronize_device(mesh_device)
+    for t in keep_alive:
+        ttnn.deallocate(t)
 
     _assert_cache_windows(
         cache,
