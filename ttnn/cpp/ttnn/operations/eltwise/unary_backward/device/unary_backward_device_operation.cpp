@@ -241,20 +241,11 @@ ttsl::hash::hash_t UnaryBackwardDeviceOperation::compute_program_hash(
     const auto& grad_output = tensor_args.grad_output;
 
     // args carries op_type, so entries for two different gradients can never collide.
-    // memory_config() carries the shard spec, so grid, shard shape and orientation are all in
-    // the key. They must be: the factory sizes globally allocated CBs from the shard shape and
-    // takes its core ranges from the shard grid, none of which a cache hit can refresh.
-    operation::Hash hash = operation::hash_operation<UnaryBackwardDeviceOperation>(
-        args,
-        input.dtype(),
-        input.memory_config(),
-        grad_output.dtype(),
-        grad_output.memory_config(),
-        // The full shape, not just its volume: a sharded buffer's TensorAccessorArgs bake its shape
-        // in pages into compile-time args, and the row-major path bakes in the row width.
-        input.padded_shape(),
-        // Selects tile or row-major kernels.
-        input.layout());
+    //
+    // Hash TensorSpec since the Metal 2.0 TensorParameter match compares each bound tensor's whole
+    // spec, so the key has to be at least that strict.
+    operation::Hash hash =
+        operation::hash_operation<UnaryBackwardDeviceOperation>(args, grad_output.tensor_spec(), input.tensor_spec());
 
     // args only carries the requested output_dtype/output_memory_config; when the caller
     // supplies its own output tensor that is what the factory actually binds, sizing the
@@ -262,9 +253,7 @@ ttsl::hash::hash_t UnaryBackwardDeviceOperation::compute_program_hash(
     // writer's compile-time args. Neither can be refreshed on a cache hit, so key on the
     // tensor that is really used.
     if (tensor_args.preallocated_input_grad.has_value()) {
-        const auto& preallocated = tensor_args.preallocated_input_grad.value();
-        hash =
-            ttsl::hash::hash_objects(hash, preallocated.dtype(), preallocated.layout(), preallocated.memory_config());
+        hash = ttsl::hash::hash_objects(hash, tensor_args.preallocated_input_grad->tensor_spec());
     }
 
     return hash;
