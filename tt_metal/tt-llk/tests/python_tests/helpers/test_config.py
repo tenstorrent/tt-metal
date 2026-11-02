@@ -2144,7 +2144,11 @@ class TestConfig:
 
         # BRISC boot: BRISC puts itself and the TRISCs back in soft reset once every TRISC is done (brisc.cpp), so the
         # wait polls that register and never reads L1 while a kernel runs.
-        brisc_launch = self.resolved_boot_mode() == BootMode.BRISC
+        # Versim: no host register bus (the soft reset register aliases into L1), so wait on the L1 mailboxes.
+        brisc_launch = (
+            self.resolved_boot_mode() == BootMode.BRISC
+            and TestConfig.TEST_TARGET.has_host_register_access
+        )
         if brisc_launch:
             brisc_done_mask = get_soft_reset_mask([RiscCore.BRISC, *TRISC_CORES])
             # Silicon: the overlay register BRISC marks the launch done in, off L1 and the Tensix register bus.
@@ -2188,6 +2192,9 @@ class TestConfig:
 
             if poll_callback is not None:
                 poll_callback()
+
+            if TestConfig.TEST_TARGET.run_simulator and not done:
+                time.sleep(1)  # each host access stalls the simulator
 
             if done:
                 if brisc_launch and completed_mailboxes() != mailboxes:
