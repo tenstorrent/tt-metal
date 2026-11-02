@@ -1449,13 +1449,25 @@ class DSV41PrefillSparse:
             )
         for u in range(U):
             pgw = ctx.pg.win_b if getattr(ctx, "back", False) else ctx.pg.win
-            wu = ttnn.slice(pgw, [u, 0, 0, 0], [u + 1, 1, C, WINDOW]) if (paged and ids_pre is None) else win
             perm = ctx.sp_perm_b if getattr(ctx, "back", False) else ctx.sp_perm
-            if int(perm.shape[0]) > 1 and ids_pre is None:  # per-slot perm (DSV41_PREFILL_UP_BATCH)
-                perm = ttnn.slice(perm, [u, 0, 0, 0], [u + 1, 1, int(perm.shape[2]), int(perm.shape[3])])
             if ids_pre is not None:
                 idx = ids_pre[u]
+            elif (
+                paged
+                and retile_on()
+                and os.environ.get("DSV41_PF_IDXBUILD", "0") == "1"
+                and _SORT_OK[0]
+                and C >= WINDOW
+                and int(pgw.shape[2]) >= C
+                and int(ids.shape[2]) >= C
+            ):  # DSV41_PF_IDXBUILD=1: the 8-op index row build (slice / concat / gather / concat) as one generic_op (tt/pf_retile.py build_idx)
+                from models.demos.blackhole.deepseek_v41_flash.tt import pf_retile
+
+                idx = pf_retile.build_idx(pgw, ids, perm, u, C, window=WINDOW, topk=TOPK, perm_rows=WINDOW)
             else:
+                wu = ttnn.slice(pgw, [u, 0, 0, 0], [u + 1, 1, C, WINDOW]) if paged else win
+                if int(perm.shape[0]) > 1:  # per-slot perm (DSV41_PREFILL_UP_BATCH)
+                    perm = ttnn.slice(perm, [u, 0, 0, 0], [u + 1, 1, int(perm.shape[2]), int(perm.shape[3])])
                 idx = compact_rows(ttnn.concat([wu, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3), perm)
             if (
                 os.environ.get("FA_DUMP_IDS") and not PS.CAPTURING[0] and u == 0

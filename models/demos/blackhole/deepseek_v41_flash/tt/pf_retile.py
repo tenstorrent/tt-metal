@@ -143,3 +143,39 @@ def cat_heads(o, max_cores=120):
     prog.custom_program_hash = _hash(0x6D9, U, H, C, tuple(_acc(o)), tuple(_acc(out)))
     ttnn.generic_op([o, out], prog)
     return out
+
+
+def build_idx(win_pages, ids, perm, user, C, window=128, topk=512, perm_rows=128, max_cores=120):
+    """sparse_sdpa index rows of one user in ONE generic_op: idx [1, 1, C, window + topk] uint32 RM with row r = [win_pages[user, r] | ids[user, r]] and, for r < perm_rows, permuted by perm[(user or 0), r]
+    (``prefill_sparse.compact_rows``). win_pages [U, 1, C, window], ids [U, 1, C, topk], perm [P, 1, perm_rows, window + topk] (P = 1 or U): uint32 row-major.
+    """
+    mesh = ids.device()
+    K = window + topk
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, C, K]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+    )
+    g = mesh.compute_with_storage_grid_size()
+    n_cores = min(max_cores, C, int(g.x) * int(g.y))
+    cores = [(cx, cy) for cy in range(int(g.y)) for cx in range(int(g.x))][:n_cores]
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for cx, cy in cores])
+    pbase = (user * perm_rows) if int(perm.shape[0]) > 1 else 0
+    rt = ttnn.RuntimeArgs()
+    for i, (cx, cy) in enumerate(cores):
+        cnt = (C - i + n_cores - 1) // n_cores
+        rt[cx][cy] = [i, n_cores, cnt, user * int(win_pages.shape[2]), user * int(ids.shape[2]), pbase]
+    rowb = K * 4
+    cbs = [_cb(core_set, 0, 1, 3 * rowb, ttnn.uint32)]
+    k = _kernel(
+        "idx_build.cpp",
+        core_set,
+        [0, window, topk, perm_rows] + _acc(win_pages) + _acc(ids) + _acc(perm) + _acc(out),
+        rt,
+        ttnn.ReaderConfigDescriptor(),
+        common=[win_pages.buffer_address(), ids.buffer_address(), perm.buffer_address(), out.buffer_address()],
+    )
+    prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=cbs)
+    prog.custom_program_hash = _hash(
+        0x6DA, C, user, tuple(_acc(win_pages)), tuple(_acc(ids)), tuple(_acc(perm)), tuple(_acc(out))
+    )
+    ttnn.generic_op([win_pages, ids, perm, out], prog)
+    return out
