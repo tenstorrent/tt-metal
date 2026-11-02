@@ -556,6 +556,56 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
+# Rows too wide for L1 with gamma and beta select the large-tensor kernel, which streams each row in blocks and
+# switches the packer between several output buffers. Issue #62517: on Quasar this hung with fp32_dest_acc_en.
+@pytest.mark.parametrize("h", [4096])
+@pytest.mark.parametrize("w", [8192, 16384])
+def test_large_layer_norm_wide_rows_with_weight_and_bias(device, h, w):
+    torch.manual_seed(0)
+    dtype = torch.bfloat16
+
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
+    torch_weight = torch.rand((w,), dtype=dtype)
+    torch_bias = torch.rand((w,), dtype=dtype)
+
+    torch_output_tensor = torch.nn.functional.layer_norm(
+        torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=False)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
+    output_tensor = ttnn.layer_norm(
+        input_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # Packing into the wrong buffer left the output all zeros.
+    assert torch.isfinite(output_tensor).all()
+    assert output_tensor.count_nonzero() > 0
+
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        try:
+            assert_output_accuracy(torch_output_tensor, output_tensor)
+        except AssertionError:
+            pytest.xfail("Quasar REDUCE_ROW truncates the fp32 running sum on every tile (#60931)")
+    else:
+        assert_output_accuracy(torch_output_tensor, output_tensor)
+
+
 @pytest.mark.parametrize("h, w", [(24, 42), (2048, 2048)])
 @pytest.mark.parametrize("legacy_reduction", [True, False])
 def test_large_layer_norm_with_legacy_reduction(device, h, w, legacy_reduction):

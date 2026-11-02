@@ -31,7 +31,7 @@ template <
     typename DFB1,
     typename DFB2,
     typename DFB3>
-ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& dfb_max_scaler_obj, DFB2& dfb_max_obj, DFB3& dfb_out_obj) {
+ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& /*dfb_max_scaler_obj*/, DFB2& dfb_max_obj, DFB3& dfb_out_obj) {
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
     compute_kernel_lib::reduce<
@@ -61,8 +61,8 @@ void kernel_main() {
     constexpr std::uint32_t block_h = get_arg(args::block_h);
     constexpr std::uint32_t block_w = get_arg(args::block_w);
     constexpr std::uint32_t subblock_w = get_arg(args::subblock_w);
-    constexpr bool causal_mask = get_arg(args::causal_mask);
-    constexpr bool sharded_causal_mask = get_arg(args::sharded_causal_mask);
+    constexpr bool causal_mask = get_arg(args::causal_mask) != 0;
+    constexpr bool sharded_causal_mask = get_arg(args::sharded_causal_mask) != 0;
 #ifdef NUMERIC_STABLE
     constexpr bool numeric_stable = true;
 #else
