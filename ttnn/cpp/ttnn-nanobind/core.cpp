@@ -198,6 +198,7 @@ void py_module(nb::module_& mod) {
 
         Returns:
             dict: the keyword arguments of `ttnn.set_printoptions` (profile, sci_mode, precision).
+            profile is a lowercase name. sci_mode is None, True, or False.
 
         Examples:
             >>> saved = ttnn.get_printoptions()

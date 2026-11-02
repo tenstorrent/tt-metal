@@ -184,7 +184,7 @@ def test_mx_print_and_item(dtype):
     x = torch.full((32, 32), 0.5, dtype=torch.float32)
     tt_tensor = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
-    # The print profile is process-wide. A test that ran before in this worker can leave it set to "empty".
+    # Print options are process-wide. A test that ran before in this worker can leave them changed.
     saved_printoptions = ttnn.get_printoptions()
     ttnn.set_printoptions(profile="short")
     try:

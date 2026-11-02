@@ -221,3 +221,19 @@ def test_advanced_print_options(device, profile, sci_mode, precision):
     tensor_as_string = str(tensor)
 
     assert tensor_as_string == ADVANCED_GOLDEN_TENSOR_STRINGS[(profile, sci_mode, precision)]
+
+
+@pytest.mark.parametrize("profile", ["empty", "short", "full"])
+@pytest.mark.parametrize("sci_mode", [None, True, False])
+@pytest.mark.parametrize("precision", [2, 6])
+def test_get_printoptions_round_trip(profile, sci_mode, precision):
+    saved_printoptions = ttnn.get_printoptions()
+    try:
+        ttnn.set_printoptions(profile=profile, sci_mode=sci_mode, precision=precision)
+        expected = {"profile": profile, "sci_mode": sci_mode, "precision": precision}
+        assert ttnn.get_printoptions() == expected
+
+        ttnn.set_printoptions(**ttnn.get_printoptions())
+        assert ttnn.get_printoptions() == expected
+    finally:
+        ttnn.set_printoptions(**saved_printoptions)
