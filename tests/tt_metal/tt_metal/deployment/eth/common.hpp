@@ -346,7 +346,7 @@ static void tensix_zero_dram(
     uint32_t dram_bank_id) {
     /* ==================== */
     TT_FATAL(dram_start_addr < dram_end_addr, "start addr must be less than end addr");
-    tt_metal::Program zero_program = tt_metal::Program();
+    tt_metal::Program zero_program = tt_metal::CreateProgram(*mesh_device);
 
     auto* const device = mesh_device->impl().get_devices()[0];
     CoreCoord core_grid = device->compute_with_storage_grid_size();
@@ -423,7 +423,7 @@ static void tensix_counter_dram(
     uint32_t dram_bank_id) {
     /* ==================== */
     TT_FATAL(dram_start_addr < dram_end_addr, "start addr must be less than end addr");
-    tt_metal::Program zero_program = tt_metal::Program();
+    tt_metal::Program zero_program = tt_metal::CreateProgram(*mesh_device);
 
     auto* const device = mesh_device->impl().get_devices()[0];
     CoreCoord core_grid = device->compute_with_storage_grid_size();
@@ -504,7 +504,7 @@ static bool tensix_compare_dram_banks(
     TT_FATAL(dram_start_addr < dram_end_addr, "start addr must be less than end addr");
     // log_critical(tt::LogTest, "      comparing {} and {}", dram_bank_id0, dram_bank_id1);
 
-    tt_metal::Program cmp_program = tt_metal::Program();
+    tt_metal::Program cmp_program = tt_metal::CreateProgram(*mesh_device);
 
     auto* const device = mesh_device->impl().get_devices()[0];
     CoreCoord core_grid = device->compute_with_storage_grid_size();
