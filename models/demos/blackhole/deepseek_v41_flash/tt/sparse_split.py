@@ -44,7 +44,10 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     ``ckc``: the device compute kernel config (fidelity / approx / fp32 acc are read from it). -> bf16 ROW_MAJOR [1,H,S,v_dim].
     """
     md = q.device()
-    H, S, D = int(q.shape[1]), int(q.shape[2]), int(q.shape[3])
+    qt = (
+        q.layout == ttnn.TILE_LAYOUT
+    )  # q [1,S,32,512] TILE (qk_heads output): read as tile pages, no RM regroup / tilize
+    H, S, D = (32, int(q.shape[1]), int(q.shape[3])) if qt else (int(q.shape[1]), int(q.shape[2]), int(q.shape[3]))
     topk = int(idx.shape[3])
     assert H == 32 and D == v_dim == 512 and sink is not None
     assert q.dtype == ttnn.bfloat16 and idx.dtype == ttnn.uint32 and kv.dtype in (ttnn.bfloat16, ttnn.fp8_e4m3)
@@ -54,6 +57,8 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     RING = int(os.environ.get("SS_RING", "8"))
     QMODE = int(os.environ.get("SS_QMODE", "1"))
     QROWS = int(os.environ.get("SS_QROWS", "9"))
+    if qt:
+        QMODE = 2
     assert n_cores <= grid.x * grid.y
     DHt = vDHt = D // 32
     Skt = k_chunk // 32
@@ -153,7 +158,9 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     ]
     bc = [0, 1, 1, 0, 0]
     reader_ct = [H, S, topk, k_chunk, D, Q_RM, K_RM, MASK_PART, IDX, CTRL, 2, kv_b, 4] + bc
-    reader_ct += [0, v_dim, K_SCALE_BC, 0, KREQ, KACK, G, RING, QMODE, QROWS] + _acc(q) + _acc(kv) + _acc(idx)
+    reader_ct += (
+        [0, v_dim, K_SCALE_BC, 0, KREQ, KACK, G, RING, QMODE, (Q_IN if qt else QROWS)] + _acc(q) + _acc(kv) + _acc(idx)
+    )
     writer_ct = [H, S, vDHt, OUT_RM, SCALE, COL_ID, NEGINF, 2] + bc
     writer_ct += [
         0,
@@ -236,6 +243,7 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
         MA,
         MB,
         CORR_R,
+        int(qt),
     ]
     rt_r, rt_w, rt_c = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for i, (cx, cy) in enumerate(cores):

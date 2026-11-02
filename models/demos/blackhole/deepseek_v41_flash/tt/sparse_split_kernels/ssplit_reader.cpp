@@ -77,6 +77,7 @@ void kernel_main() {
     constexpr uint32_t NSPLIT = get_compile_time_arg_val(ssplit::reader_ct_arg::NSPLIT);
     constexpr uint32_t ring_depth = get_compile_time_arg_val(ssplit::reader_ct_arg::RING);
     constexpr bool q_in_reader = get_compile_time_arg_val(ssplit::reader_ct_arg::QMODE) == 1;
+    constexpr bool q_tiled = get_compile_time_arg_val(ssplit::reader_ct_arg::QMODE) == 2;
     constexpr uint32_t q_rows_r = get_compile_time_arg_val(ssplit::reader_ct_arg::QROWS_R);
     const uint32_t tok_start = get_arg_val<uint32_t>(0);
     const uint32_t split_g = get_arg_val<uint32_t>(1);
@@ -103,6 +104,17 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
 
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
+        if constexpr (q_tiled) {
+            DeviceZoneScopedN("R_QT");
+            experimental::CB q_in_cb(
+                q_rows_r);  // Q arrives as the 16 tile pages of its user tile-row (qk_heads output [1,T,32,512] TILE)
+            q_in_cb.reserve_back(16);
+            for (uint32_t c = 0; c < 16; ++c) {
+                noc.async_read(q, q_in_cb, 2048, {.page_id = tok * 16 + c}, {.offset_bytes = c * 2048});
+            }
+            noc.async_read_barrier();
+            q_in_cb.push_back(16);
+        }
         if constexpr (q_in_reader) {
             DeviceZoneScopedN("R_Q");
             q_cb.reserve_back(H);

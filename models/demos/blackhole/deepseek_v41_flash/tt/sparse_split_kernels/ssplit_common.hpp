@@ -190,6 +190,7 @@ enum : uint32_t {
     CB_MA,
     CB_MB,
     CB_CORR_R,
+    QTILED,
     END,
 };
 }  // namespace compute_ct_arg

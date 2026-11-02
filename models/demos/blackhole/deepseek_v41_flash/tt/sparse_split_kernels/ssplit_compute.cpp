@@ -143,6 +143,7 @@ void kernel_main() {
     constexpr uint32_t cb_ma = get_compile_time_arg_val(ssplit::compute_ct_arg::CB_MA);
     constexpr uint32_t cb_mb = get_compile_time_arg_val(ssplit::compute_ct_arg::CB_MB);
     constexpr uint32_t cb_corr_r = get_compile_time_arg_val(ssplit::compute_ct_arg::CB_CORR_R);
+    constexpr bool q_tiled = get_compile_time_arg_val(ssplit::compute_ct_arg::QTILED) != 0;
     constexpr uint32_t H = get_compile_time_arg_val(ssplit::compute_ct_arg::H);
     constexpr uint32_t DHt = get_compile_time_arg_val(ssplit::compute_ct_arg::DHT);
     constexpr uint32_t vDHt = get_compile_time_arg_val(ssplit::compute_ct_arg::V_DHT);
@@ -204,7 +205,9 @@ void kernel_main() {
         // tilize Q rows -> [Sqt, DHt]
         {
             DeviceZoneScopedN("QTIL");
-            compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
+            if constexpr (!q_tiled) {
+                compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
+            }
         }
 
         // Per-token control from the reader: num_active_chunks (>=1; all-sentinel chunks are skipped) and

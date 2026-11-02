@@ -101,14 +101,17 @@ class _PagedMixin:
             nq=getattr(self, "nq", 1),  # spec verify blocks: rows of one user are consecutive (user = row // nq)
         )
         q32 = ttnn.reshape(q, (1, T, PAD_HEADS, HEAD_DIM), (1, T, PAD_HEADS, HEAD_DIM))
-        # untilize FIRST, then regroup the row-major rows (a tile permute + untilize of [1,T,32,512] is 4 ops / 44 us at T=1; for T=1 the regroup is a view)
-        q32 = ttnn.to_layout(q32, ttnn.ROW_MAJOR_LAYOUT)
-        qh = (
-            ttnn.reshape(q32, (1, PAD_HEADS, 1, HEAD_DIM)) if T == 1 else ttnn.permute(q32, (0, 2, 1, 3))
-        )  # [1,32,T,512] RM (heads x users)
         split = int(
             os.environ.get("DSV41_SPARSE_SPLIT", "0")
         )  # call-time arm: key-split sparse_sdpa (tt/sparse_split.py), cores per query row
+        if split > 1 and T > 1 and os.environ.get("DSV41_SPARSE_SPLIT_QTILE", "1") == "1":
+            qh = q32  # the split kernel reads the 16 tile pages of each user's q tile-row directly (no to_layout / permute)
+        else:
+            # untilize FIRST, then regroup the row-major rows (a tile permute + untilize of [1,T,32,512] is 4 ops / 44 us at T=1; for T=1 the regroup is a view)
+            q32 = ttnn.to_layout(q32, ttnn.ROW_MAJOR_LAYOUT)
+            qh = (
+                ttnn.reshape(q32, (1, PAD_HEADS, 1, HEAD_DIM)) if T == 1 else ttnn.permute(q32, (0, 2, 1, 3))
+            )  # [1,32,T,512] RM (heads x users)
         if split > 1 and T > 1:
             o = SS.sparse_sdpa_split(
                 qh,
@@ -137,7 +140,8 @@ class _PagedMixin:
                 compute_kernel_config=self._ckc_sp_call(),
                 attention_sink=self.sp_sink,
             )
-        ttnn.deallocate(qh)
+        if qh is not q32:  # the tile-q path reads the caller's q in place
+            ttnn.deallocate(qh)
         ttnn.deallocate(idx)
         if T <= 32 and AF.flag("DSV41_ATTN_POSTFUSE"):
             return o  # [1,32,T,512] ROW_MAJOR as the SDPA wrote it: _finish rotates + concatenates it in one program (AF.rope_concat)
