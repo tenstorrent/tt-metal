@@ -79,18 +79,22 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     bool use_qk_l2norm,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    bool head_major_output) {
+    bool head_major_output,
+    bool head_major_input) {
     TT_FATAL(!use_qk_l2norm, "fused_recurrent_gated_delta_rule: use_qk_l2norm not done here; L2-normalize q/k on host");
 
     auto* dev = q_in.device();
-    const auto& qs = q_in.logical_shape();  // [B,T,H,K]
-    const auto& vs = v_in.logical_shape();  // [B,T,HV,V]
-    const uint32_t B = qs[0];
-    const uint32_t T = qs[1];
-    const uint32_t H = qs[2];
-    const uint32_t K = qs[3];
-    const uint32_t HV = vs[2];
-    const uint32_t V = vs[3];
+    const auto& qs = q_in.logical_shape();  // [B,T,H,K]; head_major_input: [H,1,K] (B = T = 1)
+    const auto& vs = v_in.logical_shape();  // [B,T,HV,V]; head_major_input: [HV,1,V]
+    TT_FATAL(
+        !head_major_input || (qs.rank() == 3 && vs.rank() == 3 && qs[1] == 1 && vs[1] == 1),
+        "head_major_input wants q/k [H,1,K] and v [HV,1,V] (one user, one token)");
+    const uint32_t B = head_major_input ? 1 : qs[0];
+    const uint32_t T = head_major_input ? 1 : qs[1];
+    const uint32_t H = head_major_input ? qs[0] : qs[2];
+    const uint32_t K = head_major_input ? qs[2] : qs[3];
+    const uint32_t HV = head_major_input ? vs[0] : vs[2];
+    const uint32_t V = head_major_input ? vs[2] : vs[3];
     TT_FATAL(HV % H == 0, "HV ({}) must be divisible by H ({})", HV, H);
     const uint32_t BH = B * HV;
 
@@ -102,9 +106,13 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // q/k keep their H query heads: the READER replicates head hv/G onto core hv, which costs one
     // integer divide per core instead of a repeat_interleave tensor. At decode that expand was two
     // untilize/concat/tilize/copy chains, ~11 us each.
-    q = head_split(q, B, T, H, K);  // [B*H, T, K]  (H = HV/G query heads)
-    k = head_split(k, B, T, H, K);
-    ttnn::Tensor v = head_split(v_in, B, T, HV, V);  // [BH, T, V]
+    // head_major_input: the caller already holds q/k/v as [heads, T=1, D] (one head per tile-row), which is
+    // what head_split produces, so the three permutes go.
+    if (!head_major_input) {
+        q = head_split(q, B, T, H, K);  // [B*H, T, K]  (H = HV/G query heads)
+        k = head_split(k, B, T, H, K);
+    }
+    ttnn::Tensor v = head_major_input ? as_f32(v_in) : head_split(v_in, B, T, HV, V);  // [BH, T, V]
 
     // decay = exp(g); beta as-is (already sigmoid'd). exp is elementwise, so it commutes with the
     // layout change; doing it here keeps it on the compact [B,T,H] form (2 tiles at decode rather

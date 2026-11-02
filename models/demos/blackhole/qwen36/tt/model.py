@@ -228,6 +228,10 @@ class Qwen36Model:
             os.makedirs(_cache, exist_ok=True)
             self._native_lm = TernaryLinear(shared_for(mesh_device), "output.weight", _cache,
                                             out_mem=ttnn.DRAM_MEMORY_CONFIG)
+            if "lmnorm" in sites():  # the final decode RMSNorm fused into the LM head's prep (rmsprep)
+                from models.demos.blackhole.bonsai2.native.a3 import op as _a3op
+
+                self._lm_gamma = _a3op.norm_gamma(mesh_device, state_dict["norm.weight"])
 
         self.vocab_size = args.vocab_size
         # True: return pre-gather vocab-sharded logits for per-shard argmax + host combine.
@@ -592,7 +596,7 @@ class Qwen36Model:
             )
         return logits
 
-    def _final_norm_decode(self, x):
+    def _final_norm_decode(self, x, native=True):
         """Final RMSNorm before the LM head (TP decode).
 
         The bare `self.norm(x, DECODE)` runs plain ttnn.rms_norm on a DRAM-interleaved [32,dim]
@@ -600,6 +604,9 @@ class Qwen36Model:
         config runs the sharded multi-core norm across lm_head_core_grid instead; output_mem_config
         is forced back to DRAM so the LM-head matmul input is byte-identical (layout-only change).
         """
+        if native and getattr(self, "_lm_gamma", None) is not None and x.shape[-2] <= ttnn.TILE_SIZE:
+            self._native_lm.norm(x, self._lm_gamma, self.args.norm_eps)  # _lm_head(x) picks up the fused prep
+            return x
         if self.num_devices > 1:
             nc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
@@ -1002,7 +1009,7 @@ class Qwen36Model:
         for i, layer in enumerate(self.layers):
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tensor)
 
-        x = self._final_norm_decode(x)
+        x = self._final_norm_decode(x, native=not self._ondev_argmax)
         if self._ondev_argmax:
             # Pre-gather vocab-sharded logits; caller argmaxes shards, skips all-gather + readback.
             logits = ttnn.linear(x, self.lm_head_weight)
@@ -1039,7 +1046,7 @@ class Qwen36Model:
         # LATER forward and all-gathers it, so it must survive the final norm + lm_head below (a
         # to_memory_config is a no-op alias when x is already DRAM, so the norm would free it).
         hidden = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_hidden else None
-        x = self._final_norm_decode(x)
+        x = self._final_norm_decode(x, native=not (sharded_lm_head or self._ondev_argmax))
         if sharded_lm_head or self._ondev_argmax:
             # Pre-gather vocab-sharded logits (on-device sampling / greedy argmax).
             logits = ttnn.linear(x, self.lm_head_weight)

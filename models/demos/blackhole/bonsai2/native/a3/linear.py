@@ -47,10 +47,36 @@ class TernaryLinear:
             return codes, scales
 
         cache = os.path.join(cache_dir, name) if cache_dir else None
-        self.w, self.s = a3.weights_for_device(shared.device, build, cache=cache)
+        self.w, self.s = a3.weights_for_device(shared.device, build, cache=cache, kn=(k, n_pad))
 
-    def forward(self, x, out_mem=None):
+    def norm(self, h, gamma, eps, emit=False):
+        """Decode RMSNorm fused into the prep (a3.rmsprep); the next forward on h (or the returned rows,
+        or any view of either) skips its prep. emit: also return the normalized rows, for consumers
+        besides this projection (the GDN a|b matmul)."""
         sh = self.sh
+        assert not h.is_sharded(), "rmsprep reads an interleaved residual"
+        y = (ttnn.allocate_tensor_on_device(h.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, sh.device, ttnn.L1_MEMORY_CONFIG)
+             if emit else None)
+        x8 = a3.masked_input_buffer(sh.device, sh.workers, self.k)
+        a3.rmsprep(h, gamma, sh.m[self.k], x8, sh.workers, eps, y_out=y)
+        self._pending = ((y if emit else h).buffer_address(), x8)
+        return y
+
+    def forward(self, x, out_mem=None, split=0):
+        """split: also cut the output at column split, returning (out[..., :split], out[..., split:])."""
+        sh = self.sh
+        mem = out_mem or self.out_mem
+        alloc = lambda n: ttnn.allocate_tensor_on_device(ttnn.Shape(list(x.shape)[:-1] + [n]), ttnn.bfloat16,  # noqa: E731
+                                                         ttnn.TILE_LAYOUT, sh.device, mem)
+        assert split % 32 == 0, "the split falls on a tile column"
+        out, out2 = (alloc(split), alloc(self.n - split)) if split else (alloc(self.n), None)
+        pending, self._pending = getattr(self, "_pending", None), None
+        if pending is not None and pending[0] == x.buffer_address():  # normed by norm(): x8 is ready
+            a3.ternary_linear(pending[1], self.w, self.s, out, sh.workers, cache=False, n_real=self.n,
+                              out2=out2, n_split=split)
+            ttnn.deallocate(pending[1])
+            return (out, out2) if split else out
+        assert pending is None, "norm() was called but forward got another tensor (a copy of the residual?)"
         x_in = x
         if x.dtype != ttnn.bfloat16:  # prep reads bf16 rows; the GDN out-proj input is fp32
             x = ttnn.typecast(x, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -58,18 +84,18 @@ class TernaryLinear:
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         x8 = a3.masked_input_buffer(sh.device, sh.workers, self.k)
         a3.prep(x, sh.m[self.k], x8, sh.workers, src_tile32=True)
-        out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(x.shape)[:-1] + [self.n]), ttnn.bfloat16,
-                                             ttnn.TILE_LAYOUT, sh.device, out_mem or self.out_mem)
-        a3.ternary_linear(x8, self.w, self.s, out, sh.workers, cache=False, n_real=self.n)
+        a3.ternary_linear(x8, self.w, self.s, out, sh.workers, cache=False, n_real=self.n, out2=out2, n_split=split)
         ttnn.deallocate(x8)
         if x is not x_in:
             ttnn.deallocate(x)
-        return out
+        return (out, out2) if split else out
 
 
 # Sites that passed their e2e gate; each joins in its own commit.
-VALIDATED = {"mlp", "gdn_out", "gdn_in", "attn_qkv", "attn_o", "lm_head"}
-WIRED = {"mlp", "gdn_out", "gdn_in", "attn_o", "attn_qkv", "lm_head"}
+VALIDATED = {"mlp", "gdn_out", "gdn_in", "attn_qkv", "attn_o", "lm_head", "ffnorm", "attnnorm", "lmnorm"}
+# ffnorm / attnnorm / lmnorm: the decode RMSNorm in front of the MLP / attention or GDN in-projection / LM head
+# fused into the prep (rmsprep)
+WIRED = {"mlp", "gdn_out", "gdn_in", "attn_o", "attn_qkv", "lm_head", "ffnorm", "attnnorm", "lmnorm"}
 
 
 def sites():

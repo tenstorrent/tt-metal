@@ -402,10 +402,13 @@ def prep(x, m, x8, workers, src_tile32: bool = True, units_per_core: int = 0, sc
 KERNEL_V2 = "models/demos/blackhole/bonsai2/native/a3/kernels/ternary_mm_v2_kernel.cpp"
 
 
-def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0, cache: bool = True, n_real: int = 0):
-    """cache=False when x8 is a fresh allocation: a cached descriptor would re-bind a freed buffer."""
+def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0, cache: bool = True, n_real: int = 0,
+                   out2=None, n_split: int = 0):
+    """cache=False when x8 is a fresh allocation: a cached descriptor would re-bind a freed buffer.
+    out2: output columns from n_split on go there instead (same layout and memory as out)."""
     if not cache:
-        ttnn.generic_op([x8, _t(w), s, out], _v2_prog(x8, w, s, out, workers, gu, k, n_real))
+        ttnn.generic_op([x8, _t(w), _t(s), out] + ([out2] if out2 is not None else []),
+                        _v2_prog(x8, w, s, out, workers, gu, k, n_real, out2, n_split))
         return out
     """x8: masked_input_buffer filled by prep(). w/s: from weights_for_device().
     out: L1 interleaved, [.., 32, N] 32x32 tiles (row 0 written, rest zero) or [1, 1, 1, N] 1x32 tiles.
@@ -415,11 +418,11 @@ def ternary_linear(x8, w, s, out, workers, gu: bool = False, k: int = 0, cache: 
         if len(_progs) > 256:  # outputs are fresh allocations, so keys churn; descriptors don't bind them
             _progs.clear()
         _progs[key] = _v2_prog(x8, w, s, out, workers, gu, k, n_real)
-    ttnn.generic_op([x8, _t(w), s, out], _progs[key])
+    ttnn.generic_op([x8, _t(w), _t(s), out], _progs[key])
     return out
 
 
-def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
+def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0, out2=None, n_split=0):
     """n_real: output tiles past this index are padding columns of w and are not written."""
     device = x8.device()
     k = k or x8.memory_config().shard_spec.shape[1]  # x8 may be wider (one buffer serves every K)
@@ -452,7 +455,11 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
                                        tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])))]),
            cb(2, ttnn.float32, 2 * cols * s_tiles, ttnn.Tile([32, 32])),
            cb(4, ttnn.bfloat16, 2, ttnn.Tile([1, 32])),
-           cb(5, ttnn.bfloat16, 1, ttnn.Tile([32, 32]))]
+           cb(5, ttnn.bfloat16, 1, ttnn.Tile([32, 32])),
+           cb(6, ttnn.float32, 1, ttnn.Tile([32, 32]))]
+    packed_s = isinstance(s, PackedS)
+    tail_t = s.tail_t if packed_s else 1
+    s_core_bytes = (cols_per_core // tail_t * s.tiles_per_group() if packed_s else cols_per_core * s_tiles) * 4096
     vcs, seen = [], []
     for core, bank, _ in workers:
         vc = bank & 0x3
@@ -461,7 +468,7 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
         seen.append((core, bank))
         vcs.append((core, vc))
     common = [("tm_per_core_n", pcn), ("tm_num_g", num_g), ("tm_gu", int(gu)), ("tm_is_active_core", 1),
-              ("tm_shared_exp", int(packed))]
+              ("tm_shared_exp", int(packed)), ("tm_tail_t", tail_t)]
     modes = [ttnn.UnpackToDestMode.Default] * 64
     modes[2] = ttnn.UnpackToDestMode.UnpackToDestFp32
     cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
@@ -481,8 +488,10 @@ def _v2_prog(x8, w, s, out, workers, gu, k, n_real=0):
         per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
             ncrisc_args=[(c, [w.buffer_address() + i * cols_per_core * kt * tile_bytes, b, vc])
                          for (c, b, i), (_, vc) in zip(workers, vcs)],
-            brisc_args=[(c, [s.buffer_address() + i * cols_per_core * s_tiles * 4096, out.buffer_address(),
-                             col0(b, i) * pcn, n_real // 32 or (1 << 30), b]) for c, b, i in workers],
+            brisc_args=[(c, [s.buffer_address() + i * s_core_bytes, out.buffer_address(),
+                             col0(b, i) * pcn, n_real // 32 or (1 << 30), b,
+                             out2.buffer_address() if out2 is not None else 0,
+                             n_split // 32 if out2 is not None else (1 << 30)]) for c, b, i in workers],
         ),
     )
     return ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=[], cbs=cbs)
@@ -506,8 +515,65 @@ class PackedW:
         return self.t.buffer_address()
 
 
+class PackedS:
+    """fp32 scale tiles with shared tails (see the A3 v2 kernel): per column s_full full tiles, and
+    one tail tile per tail_t consecutive columns; per DRAM bank, per group: [tail][main c0]...
+    Raw bytes, uint32 row-major, height-sharded so each bank's bytes are contiguous."""
+
+    def __init__(self, t, tail_t, s_full, rem, cols_per_bank):
+        self.t, self.tail_t, self.s_full, self.rem, self.cols_per_bank = t, tail_t, s_full, rem, cols_per_bank
+        self.dtype, self.shape = ttnn.float32, tuple(t.shape)
+
+    def buffer_address(self):
+        return self.t.buffer_address()
+
+    def tiles_per_group(self):
+        return self.tail_t * self.s_full + (1 if self.rem else 0)
+
+
+def tail_group(num_g, cols_per_core):
+    rem = num_g % 4
+    if rem == 0:
+        return 1
+    return max(t for t in (4, 2, 1) if t * rem <= 4 and cols_per_core % t == 0)
+
+
+def _fp32_tile_bytes(t):
+    """[.., 32, 32] fp32 -> [.., 1024] in face order (0,0),(0,1),(1,0),(1,1), row-major faces."""
+    lead = t.shape[:-2]
+    return t.reshape(*lead, 2, 16, 2, 16).swapaxes(-3, -2).reshape(*lead, 1024)
+
+
+def pack_scales(scales_gn, banks, tail_t):
+    """scales [K/128, N] -> uint32 [banks * rows, 256] in the PackedS layout."""
+    import numpy as np
+
+    groups, n = scales_gn.shape
+    num_g = groups // SUPER
+    s_full, rem = num_g // 4, num_g % 4
+    nt = n // 32
+    s = np.asarray(scales_gn, dtype=np.float32).reshape(num_g, SUPER, nt, 32)  # G, row, col tile, col
+    full = np.zeros((nt, max(s_full, 1), 32, 32), np.float32)
+    for G in range(4 * s_full):
+        full[:, G // 4, (G % 4) * 8:(G % 4) * 8 + 8, :] = s[G].transpose(1, 0, 2)
+    groups_out = []
+    for g0 in range(0, nt, tail_t):
+        if rem:
+            tail = np.zeros((32, 32), np.float32)
+            for ti in range(tail_t):
+                for r in range(rem):
+                    b = (ti * rem + r) * 8
+                    tail[b:b + 8] = s[4 * s_full + r, :, g0 + ti]
+            groups_out.append(_fp32_tile_bytes(tail)[None])
+        for c in range(g0, g0 + tail_t):
+            if s_full:
+                groups_out.append(_fp32_tile_bytes(full[c, :s_full]))
+    flat = np.concatenate(groups_out).reshape(-1)  # all banks, in column order; banks own contiguous columns
+    return flat.view(np.uint32).reshape(banks, -1).reshape(-1, 256)
+
+
 def _t(w):
-    return w.t if isinstance(w, PackedW) else w
+    return w.t if isinstance(w, (PackedW, PackedS)) else w
 
 
 def pack_shared_exp(codes_kn, banks):
@@ -526,11 +592,12 @@ def pack_shared_exp(codes_kn, banks):
     return data.view(np.uint32).reshape(-1, 256)
 
 
-def weights_for_device(device, codes_kn, scales_gn=None, cache=None, shared_exp=None):
-    """codes [K, N] in {-1,0,1}, scales [K/128, N] -> (w bfp2, s fp32) DRAM width-sharded, bank-shuffled.
-    codes_kn may instead be a callable returning (codes, scales); it is only called on a cache miss,
-    so a warm load never decodes the GGUF. cache: path prefix for the host .tensorbin files (written
-    once, never rewritten: other worktrees hardlink them)."""
+def weights_for_device(device, codes_kn, scales_gn=None, cache=None, shared_exp=None, kn=None, workers_per_bank=4):
+    """codes [K, N] in {-1,0,1}, scales [K/128, N] -> (codes, PackedS scales) in DRAM.
+    codes_kn may instead be a callable returning (codes, scales), only called on a cache miss (a warm
+    load never decodes the GGUF); then kn=(K, N) must be given. cache: path prefix for the host
+    .tensorbin files (written once, never rewritten: other worktrees hardlink them).
+    Codes are PackedW 256 B tiles (A2b) by default, or a Bfp2_b tensor with BONSAI_A2B=0."""
     import os
 
     import numpy as np
@@ -539,6 +606,7 @@ def weights_for_device(device, codes_kn, scales_gn=None, cache=None, shared_exp=
     if shared_exp is None:  # A2b 256 B code tiles by default; BONSAI_A2B=0 for the 320 B Bfp2_b tiles
         shared_exp = os.environ.get("BONSAI_A2B", "1") == "1"
     banks = device.dram_grid_size().x
+    k, n = kn if kn is not None else codes_kn.shape
     rows = {}
 
     def get():
@@ -556,32 +624,32 @@ def weights_for_device(device, codes_kn, scales_gn=None, cache=None, shared_exp=
             ttnn.dump_tensor(path, t)
         return t
 
+    def banked(t):
+        """uint32 [banks * r, 256] row-major -> DRAM, each bank's rows contiguous in that bank."""
+        mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM,
+                                ttnn.ShardSpec(ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0),
+                                                                                 ttnn.CoreCoord(banks - 1, 0))}),
+                                               [t.shape[-2] // banks, 256], ttnn.ShardOrientation.ROW_MAJOR))
+        return ttnn.to_device(t, device, memory_config=mem)
+
+    num_g = k // 32 // 32
+    tail_t = tail_group(num_g, n // 32 // banks // workers_per_bank)
+    if os.environ.get("BONSAI_SCALE_TAILS", "1") == "0":  # one tail tile per column (the pre-tail byte count)
+        tail_t = 1
+    s2 = host(f"s2t{tail_t}", lambda: torch.from_numpy(
+        pack_scales(np.asarray(get()[1], dtype=np.float32), banks, tail_t).view(np.int32)), ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT)
+    s_dev = PackedS(banked(s2), tail_t, num_g // 4, num_g % 4, n // 32 // banks)
+    if shared_exp:
+        p = host("w256", lambda: torch.from_numpy(pack_shared_exp(np.asarray(get()[0]), banks).view(np.int32)),
+                 ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        return PackedW(banked(p), k, n, banks), s_dev
+
     def build_w():
         c = torch.as_tensor(get()[0], dtype=torch.float32)
         return shuffle_for_banks(c.reshape(1, 1, *c.shape), banks)
 
-    def build_s():
-        sr = scale_rows(torch.as_tensor(get()[1], dtype=torch.float32))
-        return shuffle_for_banks(sr.reshape(1, 1, *sr.shape), banks)
-
-    s = host("s", build_s, ttnn.float32)
-    n = s.shape[-1]
-    s_dev = ttnn.to_device(s, device, memory_config=weight_mem(device, s.shape[-2], n))
-    if shared_exp:
-        def build_p():
-            c = get()[0]
-            return torch.from_numpy(pack_shared_exp(np.asarray(c), banks).view(np.int32))
-
-        p = host("w256", build_p, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        rows = p.shape[-2] // banks
-        mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM,
-                                ttnn.ShardSpec(ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0),
-                                                                                 ttnn.CoreCoord(banks - 1, 0))}),
-                                               [rows, 256], ttnn.ShardOrientation.ROW_MAJOR))
-        k = rows * banks * 1024 // PackedW.TILE_BYTES * 32 * 32 // n  # tiles * 1024 values / N
-        return PackedW(ttnn.to_device(p, device, memory_config=mem), k, n, banks), s_dev
     w = host("w", build_w, ttnn.DataType.BFLOAT2_B)
-    k = w.shape[-2]
     return ttnn.to_device(w, device, memory_config=weight_mem(device, k, n)), s_dev
 
 
@@ -591,3 +659,93 @@ def interleave_cols(a, b):
 
     r, n = a.shape
     return np.stack([a.reshape(r, n // 32, 32), b.reshape(r, n // 32, 32)], axis=2).reshape(r, 2 * n)
+
+
+# ---------------------------------------------------------------------------------------------
+# Fused decode RMSNorm + prep at the 5120 sites (kernels/rmsprep_kernel.cpp).
+
+KERNEL_RMSPREP = "models/demos/blackhole/bonsai2/native/a3/kernels/rmsprep_kernel.cpp"
+
+
+def norm_gamma(device, w):
+    """(1 + w) for rmsprep: one fp32 32x32 tile per 1024-block (row t = K-tile t), [K/32, 32] in DRAM."""
+    import torch
+
+    g = (1.0 + torch.as_tensor(w, dtype=torch.float32)).reshape(-1, 32)
+    return ttnn.from_torch(g, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
+                           memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
+    """x: residual [.., 32, K] bf16 32x32 tiles (row 0 live), L1 or DRAM; g: norm_gamma; m: hadamard_tensor(K).
+    Writes x8 = mask(H(D (rmsnorm(x) * g))) on every A3 worker, like rmsnorm -> prep.
+    y_out: optional L1-interleaved [.., 32, K] bf16 tensor that also gets rmsnorm(x) * g (row 0, rest zero)."""
+    import struct
+
+    device = x.device()
+    k = x.shape[-1]
+    nb = k // 1024
+    units = [(b, r) for b in range(nb) for r in range(8)]
+    excl = {(c.x, c.y) for c, _, _ in workers}
+    grid_sz = device.compute_with_storage_grid_size()
+    cores = [ttnn.CoreCoord(i % grid_sz.x, i // grid_sz.x) for i in range(grid_sz.x * grid_sz.y)]
+    cores = [c for c in cores if (c.x, c.y) not in excl][:len(units)]
+    assert len(cores) == len(units), "one unit per core"
+    grid = core_set(cores)
+    m_page = m.get_tile().get_tile_size(m.dtype)
+    upb = len(units) // device.dram_grid_size().x
+    vxy = lambda c: (lambda v: (v.x << 16) | v.y)(device.worker_core_from_logical_core(c))  # noqa: E731
+    wxy = [vxy(c) for c, _, _ in workers]
+    cxy = [vxy(c) for c in cores]
+    fbits = lambda f: struct.unpack("<I", struct.pack("<f", f))[0]  # noqa: E731
+
+    def cb(idx, fmt, tile, ntiles):
+        size = tile.get_tile_size(fmt)
+        return ttnn.CBDescriptor(total_size=ntiles * size, core_ranges=grid, format_descriptors=[ttnn.CBFormatDescriptor(
+            buffer_index=idx, data_format=fmt, page_size=size, tile=ttnn.TileDescriptor(tile))])
+
+    t1, t32 = ttnn.Tile([1, 32]), ttnn.Tile([32, 32])
+    cbs = [cb(0, ttnn.bfloat16, t32, 1), cb(1, m.dtype, t32, 64), cb(2, ttnn.bfloat16, t1, 4),
+           cb(3, ttnn.bfloat16, ttnn.Tile([8, 32]), 1), cb(7, ttnn.float32, t32, 1), cb(8, ttnn.float32, t1, 1),
+           cb(9, ttnn.float32, t1, 1), cb(10, ttnn.bfloat16, t1, 32), cb(11, ttnn.float32, t32, 1),
+           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1), cb(14, ttnn.bfloat16, t32, 1)]
+    emit = y_out is not None
+    if emit:
+        assert y_out.memory_config().buffer_type == ttnn.BufferType.L1 and not y_out.is_sharded()
+    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=0) for i in (0, 1)]
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
+                                       math_approx_mode=False, dst_full_sync_en=True)
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    modes[7] = ttnn.UnpackToDestMode.UnpackToDestFp32  # g = 1 + w can need more mantissa than tf32
+    cfg.unpack_to_dest_mode = modes
+    x_is_dram = x.memory_config().buffer_type == ttnn.BufferType.DRAM
+    # rstd for the MATH thread: a per-call L1 shard at the same address on every prep core
+    rb = ttnn.allocate_tensor_on_device(ttnn.TensorSpec(
+        ttnn.Shape([len(cores), 32]), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                          ttnn.ShardSpec(grid, [1, 32], ttnn.ShardOrientation.ROW_MAJOR))), device)
+    brisc = []
+    for i, (c, (b, r)) in enumerate(zip(cores, units)):
+        a = [x8.buffer_address(), b, r, rb.buffer_address(), cxy[0], int(i == 0), len(cores), nb, fbits(1.0 / k), fbits(eps), len(wxy)] + wxy
+        brisc.append((c, a + (cxy if i == 0 else [])))
+    uk = UnifiedKernelDescriptor(
+        kernel_source=KERNEL_RMSPREP,
+        core_ranges=grid,
+        ncrisc_named_compile_time_args=[("rp_x_is_dram", int(x_is_dram)), ("rp_m_page", m_page),
+                                        ("rp_units_per_bank", upb), ("rp_emit", int(emit))],
+        brisc_named_compile_time_args=[("rp_debug", debug), ("rp_emit", int(emit))],
+        trisc_named_compile_time_args=[("rp_tdebug", tdebug), ("rp_emit", int(emit))],
+        # full-sync DST: the SFPU steps address DST slots absolutely (half-sync alternates halves per acquire)
+        trisc_compute_config=cfg,
+        per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+            ncrisc_args=[(c, [x.buffer_address(), m.buffer_address(), g.buffer_address(), b, r]
+                          + ([y_out.buffer_address()] if emit else []))
+                         for c, (b, r) in zip(cores, units)],
+            brisc_args=brisc,
+            trisc_args=[(c, [rb.buffer_address()]) for c in cores],
+        ),
+    )
+    prog = ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=sems, cbs=cbs)
+    ttnn.generic_op([x, g, m, rb] + ([y_out] if emit else []) + [x8], prog)
+    ttnn.deallocate(rb)
+    return x8

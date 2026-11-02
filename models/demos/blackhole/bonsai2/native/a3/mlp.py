@@ -60,16 +60,25 @@ class TernaryMLP:
             d = read_ternary(shared.gguf, f"blk.{layer}.ffn_down.weight")
             return d.codes.T.astype(np.float32), d.scales.T.astype(np.float32)
 
-        self.w_gu, self.s_gu = a3.weights_for_device(dev, gu, cache=cache("gu"))
-        self.w_d, self.s_d = a3.weights_for_device(dev, down, cache=cache("down"))
+        self.w_gu, self.s_gu = a3.weights_for_device(dev, gu, cache=cache("gu"), kn=(5120, 2 * 17408))
+        self.w_d, self.s_d = a3.weights_for_device(dev, down, cache=cache("down"), kn=(17408, 5120))
 
     def forward(self, x):
-        sh = self.sh
         assert x.dtype == ttnn.bfloat16, "prep reads bf16 rows"
         # The masked inputs are per-call L1 allocations: anything resident in L1 is reserved on
         # every core and clashes with the model's large-CB ops (the final norm on core (0, 0)).
-        x8 = a3.masked_input_buffer(sh.device, sh.workers, 5120)
-        a3.prep(x, sh.m[5120], x8, sh.workers, src_tile32=True)
+        x8 = a3.masked_input_buffer(self.sh.device, self.sh.workers, 5120)
+        a3.prep(x, self.sh.m[5120], x8, self.sh.workers, src_tile32=True)
+        return self._from_x8(x8, x.shape)
+
+    def forward_residual(self, h, gamma, eps):
+        """The decode RMSNorm fused in: h is the residual stream (pre-norm), gamma = a3.norm_gamma(1 + w)."""
+        x8 = a3.masked_input_buffer(self.sh.device, self.sh.workers, 5120)
+        a3.rmsprep(h, gamma, self.sh.m[5120], x8, self.sh.workers, eps)
+        return self._from_x8(x8, h.shape)
+
+    def _from_x8(self, x8, shape):
+        sh = self.sh
         # h per call in L1 (a persistent L1 buffer would clash; DRAM made the next prep 20 -> 30 us)
         h = ttnn.allocate_tensor_on_device(ttnn.TensorSpec(ttnn.Shape([1, 1, 1, 17408]), ttnn.bfloat16,
                                                            ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.Tile([1, 32])),
@@ -79,7 +88,7 @@ class TernaryMLP:
         x8 = a3.masked_input_buffer(sh.device, sh.workers, 17408)
         a3.prep(h, sh.m[17408], x8, sh.workers, src_tile32=False)
         ttnn.deallocate(h)
-        out = ttnn.allocate_tensor_on_device(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT,  # residual-stream logical shape
+        out = ttnn.allocate_tensor_on_device(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT,  # residual-stream logical shape
                                              sh.device, ttnn.L1_MEMORY_CONFIG)
         a3.ternary_linear(x8, self.w_d, self.s_d, out, sh.workers, gu=False, cache=False)
         ttnn.deallocate(x8)

@@ -16,6 +16,7 @@
 //
 // Runtime args, per core:
 //   NCRISC: w_addr, bank, vc     BRISC: s_addr, out_addr, out_tile0 (first output tile of this core),
+//           [3] out_tiles, [4] bank, [5] out2_addr, [6] n_split (second output from this tile on),
 //                                       out_tiles (real output tiles; the rest are padding columns), bank
 // Bank and vc are runtime, not per-core compile-time: per-core CT args split the program into
 // one kernel binary per (bank, vc) group, and the extra dispatch cost ate the GDN out-proj gain.
@@ -45,6 +46,12 @@ constexpr uint32_t cb_s = 2;
 constexpr uint32_t cb_out = 4;
 constexpr uint32_t num_g = get_named_compile_time_arg_val("tm_num_g");  // super-groups (8 groups each)
 constexpr uint32_t s_tiles = (num_g + 3) / 4;
+// Scale tiles per column: s_full full tiles (4 super-groups each) plus, when num_g % 4 = rem > 0, a
+// tail. tail_t consecutive columns share one tail tile in DRAM (column ti's rem super-groups at rows
+// (ti * rem + r) * 8); BRISC reads it once per group and copies it into each column's slot.
+constexpr uint32_t s_full = num_g / 4;
+constexpr uint32_t rem = num_g % 4;
+constexpr uint32_t tail_t = get_named_compile_time_arg_val("tm_tail_t");
 constexpr uint32_t pcn = get_named_compile_time_arg_val("tm_per_core_n");  // output tiles per core
 constexpr bool gu = get_named_compile_time_arg_val("tm_gu") == 1;
 constexpr uint32_t cols = gu ? 2 : 1;                                   // weight columns per output tile
@@ -67,10 +74,12 @@ inline void force_shared_exp() {
 // face's even columns, unit 2q+1 the same rows' odd columns, so units 4p..4p+3 = rows 8p..8p+7.
 constexpr uint32_t U = 32;
 
-template <uint32_t G, uint32_t ACC, uint32_t SBASE>
+template <uint32_t G, uint32_t ACC, uint32_t SBASE, uint32_t TI = 0>
 inline void scale_acc() {
-    constexpr uint32_t b = (G % 4) * 8;
-    constexpr uint32_t s0 = (SBASE + G / 4) * U + (b < 16 ? b / 2 : 16 + (b - 16) / 2);
+    // full tiles: super-group G at rows (G%4)*8 of tile G/4; tail: rows (TI*rem + G-4*s_full)*8 of tile s_full
+    constexpr bool tail = G >= 4 * s_full;
+    constexpr uint32_t b = tail ? (TI * rem + G - 4 * s_full) * 8 : (G % 4) * 8;
+    constexpr uint32_t s0 = (SBASE + (tail ? s_full : G / 4)) * U + (b < 16 ? b / 2 : 16 + (b - 16) / 2);
 #pragma GCC unroll 4
     for (uint32_t i = 0; i < 4; ++i) {
         sfpi::dst_reg[ACC * U + i] = sfpi::dst_reg[ACC * U + i] + sfpi::dst_reg[i] * sfpi::dst_reg[s0 + i];
@@ -106,20 +115,35 @@ inline void sfpu_section(F f) {
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
-template <uint32_t G, uint32_t ACC, uint32_t SBASE>
+// super-groups [G0, G0 + N) of one column
+template <uint32_t G0, uint32_t N, uint32_t ACC, uint32_t SBASE, uint32_t TI>
 struct Groups {
     static inline void run() {
-        Groups<G - 1, ACC, SBASE>::run();
+        Groups<G0, N - 1, ACC, SBASE, TI>::run();
         cb_wait_front(cb_in1, 32);
-        custom_mm_block<CustomMmDestLayout::Default, false>(cb_in0, cb_in1, (G - 1) * 32, 0, 0, 32);
+        custom_mm_block<CustomMmDestLayout::Default, false>(cb_in0, cb_in1, (G0 + N - 1) * 32, 0, 0, 32);
         cb_pop_front(cb_in1, 32);
-        MATH((sfpu_section([] { scale_acc<G - 1, ACC, SBASE>(); })));
+        MATH((sfpu_section([] { scale_acc<G0 + N - 1, ACC, SBASE, TI>(); })));
     }
 };
-template <uint32_t ACC, uint32_t SBASE>
-struct Groups<0, ACC, SBASE> {
+template <uint32_t G0, uint32_t ACC, uint32_t SBASE, uint32_t TI>
+struct Groups<G0, 0, ACC, SBASE, TI> {
     static inline void run() {}
 };
+
+// one column: the full-tile super-groups, then the tail ones at this column's slot ti of the shared tail
+template <uint32_t ACC, uint32_t SBASE>
+inline void column(uint32_t ti) {
+    Groups<0, 4 * s_full, ACC, SBASE, 0>::run();
+    if constexpr (rem > 0) {
+        switch (ti) {
+            case 0: Groups<4 * s_full, rem, ACC, SBASE, 0>::run(); break;
+            case 1: if constexpr (tail_t > 1) { Groups<4 * s_full, rem, ACC, SBASE, 1>::run(); } break;
+            case 2: if constexpr (tail_t > 2) { Groups<4 * s_full, rem, ACC, SBASE, 2>::run(); } break;
+            default: if constexpr (tail_t > 3) { Groups<4 * s_full, rem, ACC, SBASE, 3>::run(); } break;
+        }
+    }
+}
 #endif
 
 void kernel_main() {
@@ -171,13 +195,15 @@ void kernel_main() {
     if constexpr (is_active) {
         constexpr bool out_tile32 = get_named_compile_time_arg_val("tm_out_tile32") == 1;
         const uint32_t bank = get_arg_val<uint32_t>(4);
-        constexpr uint32_t s_bytes = cols * s_tiles * 4096;  // fp32 32x32 scale tiles per output tile
         constexpr uint32_t out_page = out_tile32 ? 2048 : 64;
         uint32_t s_addr = get_arg_val<uint32_t>(0);
         constexpr bool out_is_dram = get_named_compile_time_arg_val("tm_out_is_dram") == 1;
         const InterleavedAddrGen<out_is_dram> og{.bank_base_address = get_arg_val<uint32_t>(1), .page_size = out_page};
         const uint32_t out_tile0 = get_arg_val<uint32_t>(2);
         const uint32_t out_tiles = get_arg_val<uint32_t>(3);  // tiles past this are padding columns
+        // optional second output: tiles from n_split on go to out2 (page t - n_split), e.g. GDN [qkv | z]
+        const InterleavedAddrGen<out_is_dram> og2{.bank_base_address = get_arg_val<uint32_t>(5), .page_size = out_page};
+        const uint32_t n_split = get_arg_val<uint32_t>(6);
         // out_tile32: a zeroed 2 KB staging tile; each output overwrites row 0 (face 0/1 row 0) only
         constexpr uint32_t cb_stage = 5;
         uint32_t stage = 0;
@@ -196,6 +222,8 @@ void kernel_main() {
                 return;
             }
             const uint32_t src = get_read_ptr(cb_out);
+            const uint32_t t = out_tile0 + n;
+            const uint64_t dst = t < n_split ? get_noc_addr(t, og) : get_noc_addr(t - n_split, og2);
             if constexpr (out_tile32) {
                 volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
                 volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
@@ -203,17 +231,40 @@ void kernel_main() {
                     d[i] = s[i];          // face 0 row 0
                     d[128 + i] = s[8 + i];  // face 1 row 0 (+512 B)
                 }
-                noc_async_write(stage, get_noc_addr(out_tile0 + n, og), 2048);
+                noc_async_write(stage, dst, 2048);
             } else {
-                noc_async_write(src, get_noc_addr(out_tile0 + n, og), 64);
+                noc_async_write(src, dst, 64);
             }
             noc_async_write_barrier();
             cb_pop_front(cb_out, 1);
         };
+        // per group of tail_t columns in DRAM: [tail][main c0][main c1]...; the tail goes to scratch once
+        constexpr uint32_t cb_tail = 6;
+        uint32_t tail_l1 = 0;
+        if constexpr (rem > 0) {
+            cb_reserve_back(cb_tail, 1);
+            tail_l1 = get_write_ptr(cb_tail);
+        }
         for (uint32_t n = 0; n < pcn; ++n) {
             cb_reserve_back(cb_s, cols * s_tiles);
-            noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr), get_write_ptr(cb_s), s_bytes);
-            s_addr += s_bytes;
+            uint32_t l1 = get_write_ptr(cb_s);
+            for (uint32_t j = 0; j < cols; ++j) {
+                if constexpr (rem > 0) {
+                    if ((n * cols + j) % tail_t == 0) {
+                        noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr), tail_l1, 4096);
+                        s_addr += 4096;
+                        noc_async_read_barrier();
+                    }
+                }
+                if constexpr (s_full > 0) {
+                    noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr), l1, s_full * 4096);
+                    s_addr += s_full * 4096;
+                }
+                if constexpr (rem > 0) {
+                    noc_async_read(get_noc_addr(tail_l1), l1 + s_full * 4096, 4096);  // local copy
+                }
+                l1 += s_tiles * 4096;
+            }
             noc_async_read_barrier();
             cb_push_back(cb_s, cols * s_tiles);
             if (n > 0) {
@@ -241,9 +292,9 @@ void kernel_main() {
             custom_mm_block_init_short<false, CustomMmDestLayout::Default>(cb_in0, cb_in1, cb_out);
             force_shared_exp();
             MATH((sfpu_section([] { zero_slots(3); })));
-            Groups<num_g, 1, 3>::run();
+            column<1, 3>((n * cols) % tail_t);
             if constexpr (gu) {
-                Groups<num_g, 2, 3 + s_tiles>::run();
+                column<2, 3 + s_tiles>((n * cols + 1) % tail_t);
             }
             sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
             sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(1);
