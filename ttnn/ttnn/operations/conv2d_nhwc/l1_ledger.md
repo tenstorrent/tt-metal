@@ -2,7 +2,7 @@
 
 Block axes (from `op_design.md` → Blocking Model): `m` (bm = `block_m_tiles`), `n` (bn = `block_n_tiles`), `k` (bk = `block_k_tiles`), `g` (`block_groups` = 1). The window is the m-block's footprint and is not a separate axis.
 
-`T` = tile bytes of the activation compute format. `T_w` = weight tile bytes. `T_acc` = accumulator tile bytes. Phase 0 (fp32, `fp32_dest_acc_en = True`): `T = T_w = T_acc = 4096`.
+`T` = tile bytes of the activation compute format. `T_w` = weight tile bytes. `T_acc` = accumulator tile bytes. Phase 0 (fp32, `fp32_dest_acc_en = True`): `T = T_w = T_acc = 4096`. Refinement 2: CB formats follow the tensors — activation-side CBs (`cb_act_window`, `cb_act_rm`, `cb_act_tiles`, `cb_act_send`, `cb_out_rm`, `cb_out_shard`) use the input dtype (bf16: `T = 2048`, `tap_width` granule 8), `cb_weight_tiles` / `cb_bias_tiles` the weight dtype (bf8b: `T_w = 1088`), and `cb_partials` / `cb_biased` follow `fp32_dest_acc_en` from `compute_policy(dtype, weight_dtype)` (currently on for fp32 and bf16 inputs, so `T_acc = 4096`). The "Float32" column entries below are the fp32-input instance.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|

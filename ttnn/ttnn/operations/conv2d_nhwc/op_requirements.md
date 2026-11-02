@@ -50,7 +50,7 @@
 
 **Done when**: every golden BLOCK_SHARDED and WIDTH_SHARDED cell that is otherwise inside SUPPORTED (fp32, tile-aligned, dense, unit dilation, activation none) passes, with the output in the input's TensorMemoryLayout. The interleaved cells stay green. `verify_supported` shows 0 in every loud category.
 
-### [ ] Refinement 2 — Numerical configurability (bf16 activations, bf16 / bf8b weights, mixed precision) + fused ReLU
+### [x] Refinement 2 — Numerical configurability (bf16 activations, bf16 / bf8b weights, mixed precision) + fused ReLU
 
 **Goal**:
 - Add `ttnn.bfloat16` to `SUPPORTED["dtype"]`, and `ttnn.bfloat16` and `ttnn.bfloat8_b` to `SUPPORTED["weight_dtype"]`.

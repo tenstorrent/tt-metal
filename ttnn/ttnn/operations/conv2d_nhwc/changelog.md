@@ -62,3 +62,33 @@
 - **Tests added**:
   - `tests/ttnn/unit_tests/operations/conv2d_nhwc/test_conv2d_nhwc_sharded.py`: 15 cases (BLOCK and WIDTH, ragged rows, uneven C_out over slices, a WIDTH group spanning two grid rows with a ragged tail, strided, 1×1, pinned 10×10).
   - `test_conv2d_nhwc_perf_probe.py`: profiling probes.
+
+## Refinement 2 — Numerical configurability (bf16 activations, bf16 / bf8b weights, mixed precision) + fused ReLU
+- Date: 2026-11-02
+- What was done:
+  - `SUPPORTED["dtype"] = [fp32, bf16]`, `SUPPORTED["weight_dtype"] = [fp32, bf16, bf8b]` (every pair, mixed precision included), `SUPPORTED["activation"] = ["none", "relu"]`. No EXCLUSIONS were needed. bf8b activations stay with Refinement 7 (TILE).
+  - Compute policy: `COMPUTE_POLICY` / `compute_policy(dtype, weight_dtype)` in the program descriptor is the single source for `math_fidelity`, `fp32_dest_acc_en`, the DEST tile count (subblock rule) and the partials page format (`cb_partials` / `cb_biased`). This replaces the module constants. Policy: fp32 → HiFi4 + fp32 DEST (unchanged); bf16 → HiFi2 + fp32 DEST.
+  - Formats and geometry: the activation / output CBs already followed the tensor dtype, and the kernels were already parametric in `elem_bytes`, so no kernel change was needed. `prepare_*` and `validate` share `conv_geometry` with `elem_bytes` (bf16: granule 8, so `tap_width` / `band_tiles` change).
+  - Fused ReLU (technique 4): `pack_relu_config(ReluConfig::zero())` wraps only the final output pack (the bias pack, or the untilize pack when there is no bias). It is reset to `none()` right after, so the next block's tilize and L1-accumulated partial packs never see it. It is a compile-time arg, so there is no cost when off. This covers the interleaved and BLOCK/WIDTH paths.
+  - BLOCK_SHARDED with COL_MAJOR shard orientation (transposed grid) is now built. Bringing bf16 into SUPPORTED exposed 3 translated `test_conv_bs_grid_pre_sharded` cells that used it. The fix: `_block_core` maps (slice, row) to a core; K-exchange groups use `McastCoreOrder.ColumnMajor` and weight multicast uses `RowMajor`; halo sources move along x; the output keeps the input's orientation. WIDTH + COL_MAJOR is a typed refusal.
+  - The descriptor's L1-fit and placement refusals (window exceeds L1 / R10 not built, sharded blocks do not fit, non-rectangular grids, shard width granule) now raise the typed `UnsupportedAxisValue` instead of a bare `NotImplementedError`.
+  - Reused: every CB, helper call and descriptor branch. Added: the policy function, one compute CT arg (`fuse_relu`) with 4 `pack_relu_config` calls, and the COL_MAJOR coordinate mapping.
+- Fidelity / accumulation policy (measured, bf16 activations; the gate is PCC ≥ 0.995 and rel-RMS ≤ 0.05):
+  - SDXL level-1 3×3 BLOCK 10×10, bf16 × bf8b, rel-RMS: HiFi4/fp32acc 0.0080, HiFi2/fp32acc 0.0089, LoFi/fp32acc 0.0202, HiFi2/bf16acc 0.0139, LoFi/bf16acc 0.0220. PCC ≥ 0.9997 in every config.
+  - Same shape, max per-core kernel time: HiFi2/fp32acc 884k cycles (~655 µs @1.35 GHz), LoFi/fp32acc 879k, HiFi2/bf16acc 630k (~467 µs), LoFi/bf16acc 624k. Fidelity is not on the critical path (the shape is dataflow-bound). fp32 DEST costs about 1.4× through half the DEST tiles (smaller subblocks) and double the partials bytes.
+  - Full golden INPUTS sweep at HiFi2 with bf16 DEST (bf16 and bf8b weights, 174 cells): worst rel-RMS 0.044 (14×14×256→512 k3 p0, bf16 weights), 0.039 (bf8b). That is too close to the 0.05 gate, because bf16 packer-L1 accumulation rounds the partials every K-block. With fp32 DEST the same worst cells measure 0.0048 (bf16 weights) and 0.0091 (bf8b).
+  - Chosen: bf16 → HiFi2 + fp32 DEST (precision first). Finding for Refinement 3: a bf16-DEST variant is ~29% faster on the perf shape and passes there (rel-RMS 0.014). It would need a gate on accumulation depth / shape class, not a blanket switch.
+- Accuracy achieved:
+  - bf16 activations: PCC ≥ 0.9995, rel-RMS ≤ 0.0091 on every probed cell (golden INPUTS worst cells, SDXL L1/L2 BLOCK, ResNet layer4 BLOCK, 32×32×1920→1280 BLOCK).
+  - fp32 activations: unchanged (PCC ≥ 0.999, rel-RMS ≤ 0.02, including fp32 × bf8b).
+- Golden test progress (slices run):
+  - Interleaved + BLOCK + WIDTH ROW_MAJOR cells for every dtype pair: 156 passed. Relu cells (interleaved + BLOCK): 24 passed.
+  - Loose BLOCK cases: 10 passed, including the SDXL level-1 3×3 perf case and the bf16 `_MODEL_PLACEMENT_CASES` with 40/240-channel slices and 10/20 out tiles. conv_out C_out = 4 stays xfail (`c_out_unaligned`).
+  - Translated + regression suites: every group run, 0 failures after the fixes above. The bf16 `ttnn_pytorch_sweep` alone: 614 passed.
+- Issues encountered:
+  - Newly reachable bf16 translated cells exposed two pre-existing gaps.
+    - COL_MAJOR BLOCK orientation: now built (see above).
+    - `test_conv2d_with_fold` (C_in = 320, k = s = 16/32, 224–672 wide): even a single output row's input window is several MB. These need R10 DRAM slicing (a direct DRAM im2col gather), which is not built; they are now typed refusals (lenient xfail). Finding: R10 has no refinement in the queue yet.
+- Tests added:
+  - `test_conv2d_nhwc_sharded.py`: `run_sharded` takes dtype / weight_dtype / activation / orientation. Added `test_conv2d_nhwc_mixed_precision` (interleaved, BLOCK, WIDTH-tail × {bf16×bf16, bf16×bf8b, bf16×fp32, fp32×bf8b} × {none, relu}), `test_conv2d_nhwc_relu_no_bias_block`, and `test_conv2d_nhwc_block_col_major` (s1, s2 ragged).
+  - `test_conv2d_nhwc_perf_probe.py`: `test_perf_probe_block_sdxl_l1_bf16_bf8b`, the perf-1 contract config.

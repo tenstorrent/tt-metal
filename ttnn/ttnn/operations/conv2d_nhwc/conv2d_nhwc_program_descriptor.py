@@ -22,6 +22,8 @@ from pathlib import Path
 
 import ttnn
 
+# Placement / L1-fit refusals are typed support refusals (a regime not built yet, e.g. R10 DRAM
+# slicing), never a generic error: the harness reads them as deliberate refusals.
 from ttnn.operations._op_contract import UnsupportedAxisValue
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
@@ -146,7 +148,7 @@ def conv_geometry(*, C_in, kH, kW, groups, elem_bytes, slices=None):
     else:
         S, tap_width = slices
         if tap_width % granule != 0:
-            raise NotImplementedError(f"conv2d_nhwc: shard width {tap_width} is not L1-granule aligned")
+            raise UnsupportedAxisValue(f"conv2d_nhwc: shard width {tap_width} is not L1-granule aligned")
         if _div_up(C_in, tap_width) != S:
             raise ValueError(f"conv2d_nhwc: {S} channel shards of width {tap_width} do not tile C_in={C_in}")
     band_tiles = _div_up(kW * tap_width, TILE)
@@ -281,7 +283,7 @@ def select_blocking(
     # cannot block under it falls back to the hard per-core L1 cap.
     choice = walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
     if choice is None:
-        raise NotImplementedError("conv2d_nhwc: input window exceeds L1 — DRAM-slicing regime R10 not built")
+        raise UnsupportedAxisValue("conv2d_nhwc: input window exceeds L1 — DRAM-slicing regime R10 not built")
     bm, bk, bn, window_sticks_max = choice
 
     sb_w = max(d for d in _divisors(bn) if d <= dst_tiles)
@@ -452,7 +454,7 @@ def select_blocking_sharded(
         or walk(l1_cap_bytes)
     )
     if not choice:
-        raise NotImplementedError("conv2d_nhwc: sharded K-exchange blocks do not fit L1")
+        raise UnsupportedAxisValue("conv2d_nhwc: sharded K-exchange blocks do not fit L1")
     bm, bk, halo, own_prefetch = choice
     bn = nt_s
     sb_w = max(d for d in _divisors(bn) if d <= dst_tiles)
@@ -610,11 +612,11 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         real = [c for c, _, _ in core_map]
         if p["memory_layout"] == _ML.WIDTH_SHARDED and len(rect) > len(real):
             if [(c.x, c.y) for c in rect[: len(real)]] != [(c.x, c.y) for c in real]:
-                raise NotImplementedError("conv2d_nhwc: WIDTH shard cores must be a row-major prefix of their grid")
+                raise UnsupportedAxisValue("conv2d_nhwc: WIDTH shard cores must be a row-major prefix of their grid")
             sink_cores = rect[len(real) :]
             mcast_cores = _core_range_set(rect)
         elif len(rect) != len(real):
-            raise NotImplementedError("conv2d_nhwc: BLOCK shard grid must be a rectangle")
+            raise UnsupportedAxisValue("conv2d_nhwc: BLOCK shard grid must be a rectangle")
 
     # ---- Circular buffers (sizes derive from the knobs) ----
     tap_bytes = p["tap_width"] * eb
