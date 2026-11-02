@@ -29,6 +29,8 @@ struct AddressPatches {
         uint16_t src;
     };
     std::vector<Arg> args;  // grouped by source
+    // [begin, end) of each source's args: a hit reads one arg a source, never walks a source that did not move
+    std::vector<std::pair<uint32_t, uint32_t>> groups;
 };
 
 // The address arguments of desc by source. sources[i]: source i's buffer (nullptr: absent). A buffer that is two

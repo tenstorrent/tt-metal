@@ -2721,6 +2721,14 @@ ProgramDescriptor ChipProgram::build(HeadPatches* patches) {
     if (patches) {
         std::stable_sort(
             patches->args.begin(), patches->args.end(), [](const auto& a, const auto& b) { return a.src < b.src; });
+        for (uint32_t i = 0; i < patches->args.size();) {
+            uint32_t j = i + 1;
+            while (j < patches->args.size() && patches->args[j].src == patches->args[i].src) {
+                ++j;
+            }
+            patches->groups.emplace_back(i, j);
+            i = j;
+        }
         for (uint32_t i = 0; i < desc.cbs.size(); ++i) {
             if (desc.cbs[i].buffer != nullptr) {
                 patches->arena_cbs.push_back({i, desc.cbs[i].address_offset});
@@ -2801,12 +2809,8 @@ void patch_head_program(
     tt::tt_metal::Program& program, const HeadPatches& patches, const HeadBuffers& buffers, HeadLastAddresses& last) {
     // (grouped by source; a source's args only when its address differs from the one this program last got)
     const auto& args = patches.args;
-    for (size_t i = 0; i < args.size();) {
+    for (const auto& [i, j] : patches.groups) {
         const uint16_t src = args[i].src;
-        size_t j = i;
-        while (j < args.size() && args[j].src == src) {
-            ++j;
-        }
         const uint32_t addr = buffers.addresses[src];
         auto value = [&](const HeadPatches::Arg& a) -> uint32_t& {
             auto& data = a.common ? tt::tt_metal::GetCommonRuntimeArgs(program, a.kernel)
@@ -2826,7 +2830,6 @@ void patch_head_program(
                 }
             }
         }
-        i = j;
     }
 }
 

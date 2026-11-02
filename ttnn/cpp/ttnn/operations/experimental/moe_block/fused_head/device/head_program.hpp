@@ -135,6 +135,9 @@ struct HeadPatches {
         uint32_t offset;
     };
     std::vector<Arg> args;  // grouped by source
+    // [begin, end) of each source's args (one entry a source present): a hit compares one address a source, never
+    // walks the args of a source that did not move
+    std::vector<std::pair<uint32_t, uint32_t>> groups;
     std::vector<Cb> arena_cbs;
 };
 

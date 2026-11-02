@@ -39,6 +39,14 @@ AddressPatches take_address_patches(
         }
     }
     std::stable_sort(p.args.begin(), p.args.end(), [](const auto& a, const auto& b) { return a.src < b.src; });
+    for (uint32_t i = 0; i < p.args.size();) {
+        uint32_t j = i + 1;
+        while (j < p.args.size() && p.args[j].src == p.args[i].src) {
+            ++j;
+        }
+        p.groups.emplace_back(i, j);
+        i = j;
+    }
     return p;
 }
 
@@ -50,12 +58,8 @@ void apply_address_patches(
                               : tt::tt_metal::GetRuntimeArgs(program, a.kernel, a.core);
         return data[a.index];
     };
-    for (size_t i = 0; i < args.size();) {
+    for (const auto& [i, j] : patches.groups) {
         const uint16_t src = args[i].src;
-        size_t j = i + 1;
-        while (j < args.size() && args[j].src == src) {
-            ++j;
-        }
         const auto* buffer = sources[src];
         TT_FATAL(buffer != nullptr, "moe_block: source {} is absent on a cache hit but was bound at build", src);
         const auto addr = static_cast<uint32_t>(buffer->address());
@@ -64,7 +68,6 @@ void apply_address_patches(
                 value(args[k]) = addr;
             }
         }
-        i = j;
     }
 }
 
