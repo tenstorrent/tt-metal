@@ -10,7 +10,6 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_align.hpp>
 
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_program_factory.hpp"
