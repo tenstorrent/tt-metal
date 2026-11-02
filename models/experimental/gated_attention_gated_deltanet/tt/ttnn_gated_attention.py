@@ -57,6 +57,10 @@ def apply_rotary_pos_emb_ttnn(q, k, cos, sin):
 # +-1 matmul is exact, so the result is bit-identical (test_attn_lean.py).
 _ROPE_P = {}
 _ROPE_FULL = {}
+# QWEN36_1C_ATTN_NR (with LEAN + QGVIEW, pre-offset norm weights): q/k RMSNorm + RoPE as one op
+# (bonsai2/tp1/ops/attn_nr), writing q [1,1,H,D] to DRAM for SDPA and k [1,1,Hk,D] straight into the height-sharded
+# L1 layout paged_update_cache takes. Its two outputs are persistent and shared by the attention layers.
+_ATTN_NR_OUT = {}
 
 
 def _rope_rotate_matrix(device, rotary_dim, head_dim):
@@ -347,26 +351,54 @@ def gated_attention_forward_ttnn(
         ttnn.deallocate(qg)
         gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
 
+    attn_nr = (
+        lean
+        and qkv_fused is not None
+        and norm_weights_pre_offset
+        and len(query_states.shape) == 3
+        and _os.environ.get("QWEN36_1C_ATTN_NR") == "1"
+    )
+    if attn_nr:
+        from models.demos.blackhole.bonsai2.tp1.ops.attn_nr.op import alloc_outputs, attn_nr as _attn_nr_op
+
+        _key = (id(device), num_attention_heads, num_key_value_heads, head_dim)
+        if _key not in _ATTN_NR_OUT:
+            _kmc = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                    [32, head_dim],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            _ATTN_NR_OUT[_key] = alloc_outputs(device, num_attention_heads, num_key_value_heads, head_dim, _kmc)
+        query_states, key_states = _attn_nr_op(
+            query_states, _k, q_norm_weight, k_norm_weight, cos, sin, *_ATTN_NR_OUT[_key], norm_eps, cos.shape[-1]
+        )
     # Q norm + transpose to [B, H_q, T, D]
-    if norm_weights_pre_offset:
+    elif norm_weights_pre_offset:
         query_states = ttnn.rms_norm(query_states, weight=q_norm_weight, epsilon=norm_eps)
     else:
         query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
     if not lean:
         query_states = ttnn.transpose(query_states, 1, 2)
-    elif len(query_states.shape) == 3:  # QGVIEW: [H, 1, D] -> [1, 1, H, D]
+    elif len(query_states.shape) == 3 and not attn_nr:  # QGVIEW: [H, 1, D] -> [1, 1, H, D]
         query_states = ttnn.reshape(ttnn.permute(query_states, (1, 0, 2)), [1, 1, num_attention_heads, head_dim])
 
     # K projection + norm + transpose to [B, H_kv, T, D]
-    if qkv_fused is None:
+    if attn_nr:
+        pass  # key_states is attn_nr's normed, rotated k
+    elif qkv_fused is None:
         key_states = ttnn.linear(hidden_states, k_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
     else:
         key_states = _k
-    key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
-    if norm_weights_pre_offset:
-        key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
-    else:
-        key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
+    if not attn_nr:
+        key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
+        if norm_weights_pre_offset:
+            key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
+        else:
+            key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
     if not lean:
         key_states = ttnn.transpose(key_states, 1, 2)
 
@@ -380,7 +412,9 @@ def gated_attention_forward_ttnn(
         value_states = ttnn.transpose(value_states, 1, 2)
 
     # RoPE — for decode (T==1), use reshape (metadata-only) instead of unsqueeze (data movement)
-    if lean:
+    if attn_nr:
+        pass
+    elif lean:
         cos_full, sin_full = _rope_full(cos, sin, head_dim)
         P = _rope_rotate_matrix(device, cos.shape[-1], head_dim)
         # q goes to paged SDPA decode, which wants it in DRAM when interleaved.
@@ -452,13 +486,13 @@ def gated_attention_forward_ttnn(
         # paged_update_cache with page_table expects input [1, B, num_kv_heads, head_dim],
         # where page_table.shape[0] == input.shape[1] == B.
         # This is different from the non-paged path which uses [1, B*num_kv_heads, T, head_dim].
-        k_for_paged = ttnn.reshape(key_states, [1, B, num_key_value_heads, head_dim])
+        k_for_paged = None if attn_nr else ttnn.reshape(key_states, [1, B, num_key_value_heads, head_dim])
         v_for_paged = ttnn.reshape(value_states, [1, B, num_key_value_heads, head_dim])
         # Shard to L1 (HEIGHT_SHARDED on B cores) for paged_update_cache
         _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(B - 1, 0))})
         _shard_spec = ttnn.ShardSpec(_shard_grid, [32, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
         _sharded_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec)
-        k_sharded = ttnn.to_memory_config(k_for_paged, _sharded_mc)
+        k_sharded = key_states if attn_nr else ttnn.to_memory_config(k_for_paged, _sharded_mc)
         v_sharded = ttnn.to_memory_config(v_for_paged, _sharded_mc)
         # Write K/V into paged cache via page_table
         ttnn.experimental.paged_update_cache(
@@ -665,7 +699,8 @@ def gated_attention_forward_ttnn(
             program_config=_get_sdpa_program_config(device, S_total, q_seq_len=T),
             compute_kernel_config=_get_sdpa_compute_kernel_config(),
         )
-    ttnn.deallocate(query_states)
+    if not attn_nr:  # attn_nr's q is a persistent buffer
+        ttnn.deallocate(query_states)
 
     # Convert from [B, H, T, D] back to [B, T, H*D]
     attn_tail = lean and _os.environ.get("QWEN36_1C_ATTN_TAIL") == "1"

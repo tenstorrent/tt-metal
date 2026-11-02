@@ -312,7 +312,7 @@ void kernel_main() {
             st[64 + r * 8 + i] = row[8 + i];
         }
         cb_pop_front(cb_o, 1);
-        for (uint32_t w = 0; w < nw; ++w) {
+        for (uint32_t w = 0; w < (dbg & 4 ? 0 : nw); ++w) {  // dbg 4: no scatter (timing only: what a free scatter buys)
             const uint32_t xy = get_arg_val<uint32_t>(11 + w);
             noc_async_write(stage, get_noc_addr(xy >> 16, xy & 0xffff, x8_addr + k * 512), 512);
         }

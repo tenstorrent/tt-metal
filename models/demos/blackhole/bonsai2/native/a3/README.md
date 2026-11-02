@@ -8,6 +8,21 @@ of `mlp, gdn_in, gdn_out, attn_qkv, attn_o, lm_head`); decode only (M = 1). Defa
 tiles with a forced exponent (`BONSAI_A2B=0` for 320 B Bfp2_b) and the 32 A3 workers as two
 rectangles (`BONSAI_A3_RECT=0` for the scattered set).
 
+## Run it
+
+From the pq2_0 worktree (`agentA/pq2_0`), one chip of a p300c:
+
+```
+source ./env.sh && export TT_VISIBLE_DEVICES=1
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto  # required for one chip
+export HF_MODEL=$HOME/avan/models/bonsai2-dense/Qwen3.8-27B QWEN36_SPEC=0 BONSAI_NATIVE=pq2_0
+export QWEN36_TP1_GDN=1 QWEN36_1C_SHARDED_NORM=1 QWEN36_1C_UNPAD_LOGITS=1 QWEN36_1C_DOWN_PCFG=1 QWEN36_1C_FUSED_QKV=1 QWEN36_1C_OPROJ_1D=1
+pytest models/demos/blackhole/bonsai2/tp1/test_decode_e2e.py -s   # needs tests/reference_outputs/Qwen3.8-27B.refpt -> ~/avan/bench/refs/bonsai.refpt
+```
+
+Checked from a fresh shell 2026-11-02 04:04: 25.69 ms/token at 95.70/100 (counted headline 25.73). See shared/RESULTS.md
+for the counted numbers and what `BONSAI_NATIVE=pq2_0` turns on.
+
 ## Data path per projection
 
 1. **prep** (`kernels/prep_hadamard_kernel.cpp`, ~10-40 cores): x' = H(D x) per 1024-block as
@@ -40,9 +55,11 @@ once, never rewritten), `linear.TernaryLinear` (one projection), `mlp.TernaryMLP
 | + norm sites ffnorm, attnnorm, lmnorm (rmsprep; same count) | 34.97 | 96.09 / 100.00 |
 | + glue ops removed at the GDN/attention sites (count 20:17, vs 34.76 same session) | 33.92 | 96.09 / 100.00 |
 | + B's attention flags ATTN_LEAN/QGVIEW/TAIL (count 22:04, vs 33.92 same session) | 32.74 | 96.09 / 100.00 |
-| + fp16 scale tiles, BONSAI_SCALE16 (count 22:26, vs 32.75 same session) -- current default | 31.94 | 96.09 / 100.00 |
+| + fp16 scale tiles, BONSAI_SCALE16 (count 22:26, vs 32.75 same session) | 31.94 | 96.09 / 100.00 |
+| + gate|up silu on row 0 only (count 22:58, vs 31.86 same session) | 31.11 | 96.09 / 100.00 |
+| ... + B's GDN ops (GB, FCONV, L2, VSPLIT), SCALE16 with C's prefill fix: end-to-end headline (count 03:16) | 25.73 | 95.70 / 100.00 |
 
-Against the six-flag control: 2.48x (12.6 -> 31.3 tok/s). Q2_0 runs number for number as PQ2_0
+Against the six-flag control: 3.07x (12.6 -> 38.9 tok/s), with the demo text coherent (shared/RESULTS.md). Q2_0 runs number for number as PQ2_0
 (bit-identical codes, deduplicated scales; the cost of finer groups was not measured).
 
 Op level (device us, real weights, PCC >= 0.99999 vs float64 cpu_ref): MLP 240 per layer (dense
@@ -68,5 +85,8 @@ the normalized rows (the GDN a|b matmul reads them), `add`/`h_out` fuses the res
   after freeing a tensor its CBs were built on.
 - An sfpi DST unit is 4 rows of even or odd columns.
 - Stock ttnn ops reject 1x32 tiles; narrow-N stock matmuls on auto configs are ~9x slow.
+- copy_init does not set srcA's data format: a compute kernel that alternates fp32 and bf16 CBs needs
+  reconfig_data_format_srca(cb) before each copy (B's GATE op read bf16 w as fp32: right shape, ~0.25x magnitude).
+  Debug such ops stage by stage, printing magnitude per tile next to the error (PCC is scale-invariant).
 - The decode tails around the 6144-wide sites are dispatch-bound: removing one 2.4 us op (a typecast)
   saved 0.5 ms/token. Count ops, not just kernel time.
