@@ -138,3 +138,14 @@ def test_moreh_nll_loss_unreduced_backward(shape, none_weight, fp32_dest_acc_en,
     run_moreh_nll_loss_unreduced_backward_test(
         shape, device, none_weight=none_weight, fp32_dest_acc_en=fp32_dest_acc_en
     )
+
+
+def test_moreh_nll_loss_none_rejects_output_dtype_other_than_input(device, expect_error):
+    # With reduction "none" the output is written in the input's format and size.
+    x = ttnn.from_torch(torch.randn(32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y = ttnn.from_torch(
+        torch.randint(0, 64, (1, 32), dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    out = ttnn.from_torch(torch.zeros(1, 32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must match the input dtype"):
+        ttnn.moreh_nll_loss(x, y, "none", output_tensor=out)
