@@ -43,6 +43,33 @@ PCC 0.99999 vs float64, against 0.99986 on the bfp8 scratch path.
 
 At S=2048 the rotation kernel against the stock rotator, ms: K=17408 0.87 vs 3.26; 5120 0.75 vs 0.99.
 
+## TTFT by stage (traced_4k, 2642 tokens; chip 3, 2026-11-02, bd0694ce6dd = A's pq2_0 0aebbadcf94)
+
+Wall times, from test_prefill_profile.py with one traced prefill per process and no profiler:
+
+| Prompt | What runs | Wall |
+|---|---|---|
+| 640 | one traced 2048-row chunk replay (masked) + logits | 1.129 s (chip 1, A 05:37) |
+| 2642 | the same replay + the eager 594-token tail | 2.809 s (chip 3, 09:44; 2.802 s on chip 1; cs5 TTFT 2.805 s) |
+
+So the eager tail costs **~1.68 s of the 2.81 s TTFT**, against ~1.13 s for the 2048-row chunk.
+
+Device kernel time by stage comes from one tracy run (`agentC/profiles/pf2642_1102-0953c`, `agentC/pf_segments.py`). The device profiler buffer filled during the warmup prefill, so the CSV covers that pass only. It is eager and layer-outer: each GDN layer runs a 2048-row chunk and then a 608-row chunk, and the 12 attention layers run 2656 rows at once. Those are the same kernels and program configs as the traced path, except attention, which the traced path runs paged, per chunk.
+
+| Device ms | 2048-row chunk (36 GDN layers + MLPs) | 608-row tail (36 GDN layers + MLPs) | Attention layers + MLPs, 2656 rows (12) |
+|---|---|---|---|
+| Projection matmuls (bfp8 dequantized weights) | 544.7 | 158.6 | 227.6 |
+| Ternary dequant to the bfp8 scratch | 77.0 | 76.6 | 24.0 |
+| Rotation (KRotator kernel / stock 1024x1024 bmm) + all transposes | 45.3 + 25.8 | 7.7 + 28.9 + 14.6 | 18.6 + 14.4 |
+| GDN core (ChunkGdn + conv1d) / SDPA | 38.5 | 15.0 | 29.1 |
+| Everything else (eltwise, norms, reshapes, slices, tilize) | 177.7 | 39.8 | 121.2 (71.8 of it ReshapeView in the non-paged path) |
+| **Total** | **909.0** | **341.2** | **434.9** |
+
+Recommendation, largest lever first:
+1. **Trace the tail.** The 608-row tail runs ~0.34 s of GDN-layer device work, plus its share of attention (~0.1 s), but costs ~1.68 s of wall. That leaves **~1.2 s of host dispatch for ~2,800 eager ops**, about 0.4 ms per op. A second captured trace for the tail bucket (e.g. 640 rows, or a few tail buckets) should take traced_4k TTFT from ~2.8 s to ~1.6 s. This is model-level, not ternary-specific, so the dense stacks gain the same.
+2. **Ternary dequant costs the same at 608 rows as at 2048 (~77 ms per pass).** It's bound by weight size, not S. For the tail that's 22% of its device time. A matmul that dequantizes in1 into L1 (pmm, generalized past S=128 with 2D multicast) removes it, plus the tail's stock-rotation bmm (~29 ms): up to ~0.1 s.
+3. The projection matmuls (~0.93 s of device time per prefill) run near the stock-op limits for bfp8 weights. They aren't a lever without a new matmul.
+
 ## Checks and tools
 
 - `check_prefill.py` (MLP), `check_linear.py` (every site), `pmm.py` and `rot.py` (self-checks): PCC against float64 and against the A3 decode op on row 0, plus wall ms.
