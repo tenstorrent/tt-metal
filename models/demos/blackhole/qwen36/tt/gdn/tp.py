@@ -3779,7 +3779,13 @@ class TPGatedDeltaNet:
                 ("narrow_gr2", T),
                 "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_GR2=1: one gate read per face (bit-identical)",
             )
-        if os.environ.get("QWEN36_SPEC_STEP_ROWS_SFPU", "0").strip() == "1" and extra.get("kernel_opts", 0):
+        # x12: not under K4 -- NARROW_SRC + ROWS_SFPU + ROWS_NORM overflow the K4 + SFPU-gate program's 70656 B kernel
+        # config buffer by 288 B (ttsim); NARROW_SRC (+EARLY_SRC) is the K4 win (ttsim -2.8 us of 66 us), ROWS ~-0.6 us
+        if (
+            os.environ.get("QWEN36_SPEC_STEP_ROWS_SFPU", "0").strip() == "1"
+            and extra.get("kernel_opts", 0)
+            and not extra["kernel_opts"] & SPEC_STEP_OPT_LAZY
+        ):
             extra["kernel_opts"] |= SPEC_STEP_OPT_ROWS_SFPU
             _log_spec_step_once(
                 ("rows_sfpu", T),
