@@ -39,6 +39,7 @@ CB_OUTPUT_TILES = 2
 CB_BIAS_ONES_TILE = 3
 
 W_MCAST_PREFIX = "wmc"
+X_MCAST_PREFIX = "xmc"
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,7 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
                 rows,
                 n_tile_start,
                 num_n_blocks,
+                row,
             ]
             writer_rt[col][row] = [
                 output.buffer_address(),
@@ -219,5 +221,15 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
         ttnn.McastCoreOrder.ColumnMajor,
     )
     w_mcast.attach(descriptor, W_MCAST_PREFIX, [reader], 0)
+    # R2: x row-blocks are shared by a grid row; one group per row, the sender rotates with the row-block.
+    x_mcast = ttnn.Mcast(
+        device,
+        ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True),
+        cores,
+        blocking.active_cols,
+        ttnn.McastRotatingSenderConfig(),
+        ttnn.McastCoreOrder.RowMajor,
+    )
+    x_mcast.attach(descriptor, X_MCAST_PREFIX, [reader], w_mcast.next_semaphore_id())
     descriptor.kernels = [reader, writer, compute]
     return descriptor

@@ -3,11 +3,12 @@
 
 // linear_gelu reader (NCRISC, NoC0).
 // load_activation_block: x row-block (rows x K tiles) plus the ones tile at K position k_tiles of every row,
-//   one barrier per row-block, nominal block_h * k_ext_tiles pages pushed.
+//   read by the round's sender of the grid row (one barrier) and multicast along the row (regime R2);
+//   nominal block_h * k_ext_tiles pages pushed.
 // deliver_weight_block: the column's row-0 core reads W rows 0..k_tiles-1 and the bias tile row for block_w
 //   columns into cb_weight_resident chunk j ([j][k][w]), zeroes the bias tiles' padding rows (they multiply the
 //   ones tile's zero columns) and multicasts the chunk down the column; receivers wait for it. Never popped.
-// Order: x row-block 0, W chunk 0, x row-block 1, W chunks 1.., remaining row-blocks.
+// Order: x row-block 0, W chunks 0.., remaining row-blocks.
 
 #include <cstdint>
 
@@ -32,6 +33,8 @@ void kernel_main() {
     constexpr auto bias_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto w_mcast = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("wmc_ct_offset"), get_named_compile_time_arg_val("wmc_rt_offset")>();
+    constexpr auto x_mcast = dataflow_kernel_lib::
+        McastArgs<get_named_compile_time_arg_val("xmc_ct_offset"), get_named_compile_time_arg_val("xmc_rt_offset")>();
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t w_addr = get_arg_val<uint32_t>(1);
@@ -40,6 +43,9 @@ void kernel_main() {
     const uint32_t core_rows = get_arg_val<uint32_t>(4);
     const uint32_t n_tile_start = get_arg_val<uint32_t>(5);
     const uint32_t num_n_blocks = get_arg_val<uint32_t>(6);
+    // Added to the x round so grid rows rotate senders out of phase (diagonal), spreading read responses over
+    // the columns' NoC links instead of funnelling them all into one column.
+    const uint32_t x_round_offset = get_arg_val<uint32_t>(7);
 
     static_assert(k_ext_tiles == k_tiles + 1, "one bias K tile");
     constexpr uint32_t act_block_tiles = block_h * k_ext_tiles;
@@ -71,24 +77,34 @@ void kernel_main() {
 
     const uint32_t num_row_blocks = (core_rows + block_h - 1) / block_h;
 
+    // R2: one core of the grid row reads x row-block i (round = row offset + i, rotating sender) and multicasts the
+    // whole slot, ones tiles included, into the same cb_activation_block slot on the rest of the row. Every core of a
+    // row has the same rows, so all walk the same slot sequence.
+    auto x_sender = x_mcast.optional_sender(noc);
+    auto x_receiver = x_mcast.optional_receiver(noc);
     auto load_activation_block = [&](uint32_t row_block_idx) {
         const uint32_t first_row = row_block_idx * block_h;
         const uint32_t rows = (core_rows - first_row) < block_h ? (core_rows - first_row) : block_h;
         cb_reserve_back(cb_activation_block, act_block_tiles);
         const uint32_t slot_addr = get_write_ptr(cb_activation_block);
-        for (uint32_t row = 0; row < rows; ++row) {
-            const uint32_t x_page = (row_start + first_row + row) * k_tiles;
-            const uint32_t row_addr = slot_addr + row * k_ext_tiles * tile_bytes;
-            for (uint32_t k = 0; k < k_tiles; ++k) {
-                noc_async_read_page(x_page + k, x_accessor, row_addr + k * tile_bytes);
+        if (x_mcast.should_send(x_round_offset + row_block_idx)) {
+            for (uint32_t row = 0; row < rows; ++row) {
+                const uint32_t x_page = (row_start + first_row + row) * k_tiles;
+                const uint32_t row_addr = slot_addr + row * k_ext_tiles * tile_bytes;
+                for (uint32_t k = 0; k < k_tiles; ++k) {
+                    noc_async_read_page(x_page + k, x_accessor, row_addr + k * tile_bytes);
+                }
             }
+            dataflow_kernel_lib::set_read_state<tile_bytes>(noc, ones_addr);
+            for (uint32_t row = 0; row < rows; ++row) {
+                dataflow_kernel_lib::read_with_state<tile_bytes>(
+                    noc, slot_addr + (row * k_ext_tiles + k_tiles) * tile_bytes, ones_addr);
+            }
+            noc_async_read_barrier();
+            x_sender->send(slot_addr, slot_addr, rows * k_ext_tiles * tile_bytes);
+        } else {
+            x_receiver->receive(x_round_offset + row_block_idx);
         }
-        dataflow_kernel_lib::set_read_state<tile_bytes>(noc, ones_addr);
-        for (uint32_t row = 0; row < rows; ++row) {
-            dataflow_kernel_lib::read_with_state<tile_bytes>(
-                noc, slot_addr + (row * k_ext_tiles + k_tiles) * tile_bytes, ones_addr);
-        }
-        noc_async_read_barrier();
         // Nominal quantum keeps the ring aligned on the tail; rows past `rows` are never consumed.
         cb_push_back(cb_activation_block, act_block_tiles);
     };
@@ -129,14 +145,13 @@ void kernel_main() {
         weight_cb.push_back(w_chunk_tiles);
     };
 
-    load_activation_block(0);
-    for (uint32_t n_block_idx = 0; n_block_idx < num_n_blocks; ++n_block_idx) {
-        deliver_weight_block(n_block_idx);
-        if (n_block_idx == 0 && num_row_blocks > 1) {
-            load_activation_block(1);
-        }
-    }
-    for (uint32_t row_block_idx = 2; row_block_idx < num_row_blocks; ++row_block_idx) {
+    // Row-block 0 computes each W chunk as it lands; row-block 1 is not needed until all of them are consumed.
+    for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks; ++row_block_idx) {
         load_activation_block(row_block_idx);
+        if (row_block_idx == 0) {
+            for (uint32_t n_block_idx = 0; n_block_idx < num_n_blocks; ++n_block_idx) {
+                deliver_weight_block(n_block_idx);
+            }
+        }
     }
 }
