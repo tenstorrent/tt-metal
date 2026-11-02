@@ -20,6 +20,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+import ttnn
+
 from models.experimental.mimo_v2_6_flash.reference.mtp import MtpProgramMirror
 from models.experimental.mimo_v2_6_flash.reference.sample_verify import control_words, verify_pass
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
@@ -168,6 +170,14 @@ class FakeLane:
 
     def decode_read_rows(self, handle):
         return torch.nn.functional.one_hot(torch.tensor(handle["next_tokens"][: self.max_batch]), VOCAB).float()
+
+
+@pytest.fixture(autouse=True)
+def host_events(monkeypatch):
+    """The fake lanes have no command queue: a deferred verify's events (MiMoV2ForCausalLM.verify) record and wait as
+    no-ops."""
+    monkeypatch.setattr(ttnn, "record_event", lambda *args, **kwargs: object(), raising=False)
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda event: None, raising=False)
 
 
 @pytest.fixture
