@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <variant>
 
 #include <tt-metalium/constants.hpp>
@@ -152,6 +153,12 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         "k_chunk_size must be a positive multiple of the {}-token block, got {}",
         block_size,
         args.get_k_chunk_size());
+    // The kernels bake the scale into constants (the lazy-rescale threshold 0.5 / scale, the pooled bias
+    // ln(len) / scale) and mask entries with a large negative bias that only a positive scale keeps negative.
+    TT_FATAL(
+        !args.scale.has_value() || (std::isfinite(*args.scale) && *args.scale > 0.0f),
+        "SparseRingSDPA: scale must be finite and positive, got {}",
+        args.scale.value_or(0.0f));
     TT_FATAL(
         !get_fp32_dest_acc_en(args.compute_kernel_config),
         "SparseRingSDPA requires streaming compute; set fp32_dest_acc_en=false");
