@@ -86,6 +86,7 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TensorShape& tensor
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
  * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
  * @tparam unpack_to_dest: When true, record MOVD2B reads from dest followed by MOVB2D broadcast writes in the replay buffer.
+ *         The reads cover exactly the rows @ref _llk_unpack_unary_broadcast_operands_to_dest_mop_config_ placed.
  * @param tensor_shape: Tile shape for loop counts and row dimensions
  */
 template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest>
@@ -95,6 +96,9 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
 
     if constexpr (unpack_to_dest)
     {
+        // Every row is read and written on both DEST planes (hi16 via DEST_NORM, lo16 via DEST_32B_LOW).
+        static_assert(EN_32BIT_DEST, "Unary broadcast from DEST (unpack_to_dest) requires the 32-bit DEST mode");
+
         constexpr std::uint32_t MOVS_PER_FACE = FACE_R_DIM / ELTWISE_MATH_ROWS;
         // Row/scalar broadcast caches eight source rows, independently of the FPU width.
         constexpr std::uint32_t SOURCE_ROWS = 8;
@@ -241,9 +245,11 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
  *
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
  * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
- * @tparam unpack_to_dest: UNP path wrote to dest
+ * @tparam unpack_to_dest: UNP path wrote to dest; requires EN_32BIT_DEST
  * @param tensor_shape: Passed to addrmod / MOP setup
- * @note On the unpack thread, pair with @ref _llk_unpack_unary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE/unpack_to_dest.
+ * @note On the unpack thread, pair with @ref _llk_unpack_unary_broadcast_operands_init_ (T0, SrcB) or, when
+ *       unpack_to_dest, @ref _llk_unpack_unary_broadcast_operands_to_dest_init_ (T0), with matching BROADCAST_TYPE.
+ * @note When unpack_to_dest, call @ref _configure_mov_ops_explicit_alu_data_format_state_ before this function.
  * @note @ref _llk_math_eltwise_unary_broadcast_ runs the configured op with matching template args.
  */
 template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest>
@@ -262,9 +268,11 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_sha
 /**
  * @brief Run one tile of unary broadcast math: set dest write addr
  *
- * @tparam unpack_to_dest: When true, UNP_A unpacks to the Dest register
+ * @tparam unpack_to_dest: When true, the broadcast source rows were unpacked into DEST tile tile_idx
  * @param tile_idx: Destination tile index within current dest bank (SyncHalf)
  * @note Call @ref _llk_math_eltwise_unary_broadcast_init_ with matching template args before this function.
+ * @note When unpack_to_dest, the unpack thread sets a dummy SrcB dvalid per tile (@ref _llk_unpack_set_srcB_dummy_valid_),
+ *       since the MOVD2B reads here stall on SrcB validity.
  */
 template <bool unpack_to_dest>
 inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx)
