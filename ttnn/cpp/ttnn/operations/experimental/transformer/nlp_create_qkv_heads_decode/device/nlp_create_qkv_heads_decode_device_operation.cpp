@@ -81,6 +81,9 @@ void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
 
     } else {
         TT_FATAL(operation_attributes.overlap_qk_coregrid, "Overlap_qk_coregrid must be true for non-sharded input");
+        TT_FATAL(
+            !batch_offset.has_value() && !operation_attributes.slice_size.has_value(),
+            "batch_offset and slice_size require a sharded input; the interleaved path reads every user from row 0");
     }
 
     // output
