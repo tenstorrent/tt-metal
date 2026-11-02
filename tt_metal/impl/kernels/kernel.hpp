@@ -231,6 +231,15 @@ struct ResolvedBufRw {
     bool opaque = false;  // an un-analyzable (raw) access was seen -> a detector must keep the barrier
 };
 
+// Enforced ceiling on the combined (unique + common) runtime-arg count for a Tensix kernel. Args above
+// max_runtime_args are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, which sends a single core's
+// payload inline in one prefetcher command. The smallest dispatch prefetch command size is the ethernet
+// dispatcher's 32 KB (~8176 words), and the dispatch core type is not known when validate_runtime_args_size
+// runs (SetRuntimeArgs time), so this cap is dispatch-core-independent and set conservatively below that limit
+// (with margin so several cores' commands still fit the ethernet cmddat queue). The actual L1 fit is still
+// enforced at program finalize. (Metal 2.0 spec validation also checks a KernelSpec's declared args against it.)
+constexpr uint32_t max_runtime_args_tensix = 4096;
+
 class Kernel : public JitBuildSettings {
 public:
     using Config = std::variant<
@@ -370,6 +379,10 @@ public:
     void set_compile_time_vararg_count(uint32_t count) { compile_time_vararg_count_ = count; }
     const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
     const std::vector<std::string>& get_common_runtime_arg_names() const override { return common_runtime_arg_names_; }
+    // Metal 2.0: array arguments (set post-construction, before compile: they are part of the kernel
+    // cache key and of kernel_args_generated.h).
+    const KernelArrayArgs& get_array_args() const override { return array_args_; }
+    void set_array_args(KernelArrayArgs array_args) { array_args_ = std::move(array_args); }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
     KernelRtaLayout get_rta_layout() const override { return rta_layout_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
@@ -490,6 +503,8 @@ protected:
     std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
     uint32_t compile_time_vararg_count_{0};
+    // Metal 2.0: array arguments (set post-construction, like scratchpads).
+    KernelArrayArgs array_args_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};

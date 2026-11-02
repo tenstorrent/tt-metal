@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// End-to-end kernel arguments on WH/BH silicon: named args, varargs, TT_KERNEL shims and CRTA sections.
+// End-to-end kernel arguments on WH/BH silicon: named args, array args, varargs, TT_KERNEL shims and CRTA sections.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -648,6 +648,167 @@ void kernel_main() {
     EXPECT_EQ(u[2], io_word0) << "tensor-binding base slot was clobbered by the named/vararg partial update";
     EXPECT_EQ(u[6], kExpectedPageSize) << "tensor-binding page-size slot was clobbered by the partial update";
     EXPECT_EQ(u[3], scratch_base) << "scratchpad slot was clobbered by the named/vararg partial update";
+}
+
+// ============================================================================
+// Array args: readback from a DM and a compute kernel — set + partial update
+// ============================================================================
+//
+// A DM kernel and a compute kernel on one node each copy every array element, in order, into their own
+// L1 report region, next to a scalar and a vararg of each runtime kind:
+//     [ x0 x1 x2 | d0 d1 | p0 p1 p2 | count | vararg0 | common vararg0 ]
+// x is an RTA array, d a CRTA array and p a CTA array. Every value is a distinct sentinel, so an offset
+// error on either the host or the device side shows up as one slot reading another's value.
+//
+// Two phases:
+//   SET    — SetProgramRunArgs installs everything; every slot must read its own value.
+//   UPDATE — UpdateProgramRunArgs replaces x and d whole; the new values must land and the scalars and
+//            varargs around them must be untouched.
+
+constexpr const char* kArrayArgsReadbackSource = R"(
+#include "experimental/kernel_args.h"
+void kernel_main() {
+#if !defined(COMPILE_FOR_TRISC) || defined(TRISC_PACK)
+    auto* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::report_addr));
+    uint32_t i = 0;
+    auto x = get_arg(args::x);
+    for (uint32_t k = 0; k < x.size(); ++k) {
+        report[i++] = x[k];
+    }
+    for (uint32_t d : get_arg(args::d)) {
+        report[i++] = d;
+    }
+    for (uint32_t p : get_arg(args::p)) {
+        report[i++] = p;
+    }
+    report[i++] = get_arg(args::count);
+    report[i++] = get_vararg(0);
+    report[i++] = get_common_vararg(0);
+#endif
+}
+)";
+
+TEST_F(ProgramSpecHWTest, ArrayArgsReadbackSetAndPartialUpdate) {
+    auto mesh_device = devices_.at(0);
+    const NodeCoord node{0, 0};
+    constexpr uint32_t kReportWords = 11;
+    const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+
+    // Same schema on both kernels; `tag` makes every value distinct per kernel.
+    auto declare = [](KernelSpec& kernel, uint32_t tag) {
+        kernel.source = KernelSpec::SourceCode{kArrayArgsReadbackSource};
+        kernel.compile_time_array_args = {{"p", {tag + 0x700, tag + 0x701, tag + 0x702}}};
+        kernel.runtime_arg_schema = {
+            .runtime_arg_names = {"report_addr", "count"},
+            .runtime_array_args = {{.name = "x", .size = 3}},
+            .common_runtime_array_args = {{.name = "d", .size = 2}},
+        };
+        kernel.advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 1, .num_common_runtime_varargs = 1};
+    };
+    struct Reader {
+        const char* name;
+        uint32_t tag;
+        uint32_t report_addr;
+    };
+    const Reader readers[] = {
+        {.name = "dm", .tag = 0xD0000000u, .report_addr = l1_base},
+        {.name = "compute", .tag = 0xC0000000u, .report_addr = l1_base + 64},
+    };
+
+    auto dm = MakeMinimalGen1DMKernel("dm", DataMovementProcessor::RISCV_0);
+    declare(dm, readers[0].tag);
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    declare(compute, readers[1].tag);
+
+    ProgramSpec spec;
+    spec.name = "array_args_readback";
+    spec.kernels = {dm, compute};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"dm", "compute"})};
+
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, MakeProgramFromSpec(*mesh_device, spec));
+    Program& program = workload.get_programs().at(device_range);
+
+    // Clear both report regions, then launch, blocking.
+    auto launch = [&]() {
+        for (const Reader& reader : readers) {
+            std::vector<uint32_t> zeros(kReportWords, 0u);
+            slow_dispatch::WriteToL1(*mesh_device, node, reader.report_addr, zeros);
+        }
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+    };
+    auto read_report = [&](const Reader& reader) {
+        std::vector<uint32_t> report;
+        slow_dispatch::ReadFromL1(*mesh_device, node, reader.report_addr, kReportWords * sizeof(uint32_t), report);
+        return report;
+    };
+
+    // ---- SET phase ----
+    ProgramRunArgs set_params;
+    for (const Reader& reader : readers) {
+        ProgramRunArgs::KernelRunArgs args{
+            .kernel = KernelSpecName{reader.name},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                node, {{"report_addr", reader.report_addr}, {"count", reader.tag + 0x800}}),
+        };
+        args.runtime_array_arg_values["x"][node] = {reader.tag + 0x100, reader.tag + 0x101, reader.tag + 0x102};
+        args.common_runtime_array_arg_values["d"] = {reader.tag + 0x200, reader.tag + 0x201};
+        args.advanced_options = AdvancedKernelRunArgs{
+            .runtime_varargs = {{node, {reader.tag + 0x900}}},
+            .common_runtime_varargs = {reader.tag + 0xA00},
+        };
+        set_params.kernel_run_args.push_back(std::move(args));
+    }
+    SetProgramRunArgs(program, set_params);
+    launch();
+    for (const Reader& reader : readers) {
+        const uint32_t t = reader.tag;
+        EXPECT_THAT(
+            read_report(reader),
+            ::testing::ElementsAre(
+                t + 0x100,
+                t + 0x101,
+                t + 0x102,  // x
+                t + 0x200,
+                t + 0x201,  // d
+                t + 0x700,
+                t + 0x701,
+                t + 0x702,   // p
+                t + 0x800,   // count
+                t + 0x900,   // vararg 0
+                t + 0xA00))  // common vararg 0
+            << "SET phase, " << reader.name << " kernel";
+    }
+
+    // ---- UPDATE phase: replace x and d whole ----
+    ProgramRunArgs upd_params;
+    for (const Reader& reader : readers) {
+        ProgramRunArgs::KernelRunArgs args{.kernel = KernelSpecName{reader.name}};
+        args.runtime_array_arg_values["x"][node] = {reader.tag + 0x110, reader.tag + 0x111, reader.tag + 0x112};
+        args.common_runtime_array_arg_values["d"] = {reader.tag + 0x210, reader.tag + 0x211};
+        upd_params.kernel_run_args.push_back(std::move(args));
+    }
+    UpdateProgramRunArgs(program, upd_params);
+    launch();
+    for (const Reader& reader : readers) {
+        const uint32_t t = reader.tag;
+        EXPECT_THAT(
+            read_report(reader),
+            ::testing::ElementsAre(
+                t + 0x110,
+                t + 0x111,
+                t + 0x112,  // x, updated
+                t + 0x210,
+                t + 0x211,  // d, updated
+                t + 0x700,
+                t + 0x701,
+                t + 0x702,   // p
+                t + 0x800,   // count, retained
+                t + 0x900,   // vararg 0, retained
+                t + 0xA00))  // common vararg 0, retained
+            << "UPDATE phase, " << reader.name << " kernel";
+    }
 }
 
 }  // namespace

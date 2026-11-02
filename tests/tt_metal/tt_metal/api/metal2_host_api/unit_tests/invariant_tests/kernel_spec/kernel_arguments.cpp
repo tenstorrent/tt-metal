@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Local invariants of KernelSpec::compile_time_args and KernelSpec::RuntimeArgSchema (kernel_spec.hpp):
-// names are C++ identifiers and do not repeat across CTAs, RTAs and CRTAs of one kernel.
+// Local invariants of KernelSpec::compile_time_args, KernelSpec::compile_time_array_args and
+// KernelSpec::RuntimeArgSchema (kernel_spec.hpp): names are C++ identifiers and do not repeat across CTAs,
+// RTAs and CRTAs of one kernel, scalar or array; arrays are non-empty; the named runtime args fit the
+// per-kernel args capacity.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -98,6 +100,85 @@ TEST_F(ProgramSpecTestQuasar, CPU_RuntimeArgsSchemaSucceeds) {
     spec.kernels[0].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 3, .num_common_runtime_varargs = 2};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// ============================================================================
+// Array arguments
+// ============================================================================
+
+TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgsOfEveryKindSucceed) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"count"};
+    spec.kernels[0].runtime_arg_schema.runtime_array_args = {{.name = "addrs", .size = 4}};
+    spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "dims", .size = 2}};
+    spec.kernels[0].compile_time_array_args = {{"page_sizes", {64, 128, 256}}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_InvalidArrayArgIdentifierFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_array_args = {{.name = "has-dash", .size = 2}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("RTA array name 'has-dash' is not a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgScalarCollisionFails) {
+    // Arrays share the args:: namespace with the scalars.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"addrs"};
+    spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "addrs", .size = 2}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("naming collision: 'addrs' is declared as both a named RTA and a CRTA array")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgCtaArrayCollisionFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_array_args = {{.name = "sizes", .size = 2}};
+    spec.kernels[0].compile_time_array_args = {{"sizes", {1, 2}}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("naming collision: 'sizes' is declared as both a RTA array and a CTA array")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ZeroSizeArrayArgFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "dims", .size = 0}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CRTA array 'dims' has size 0")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_EmptyCtaArrayFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].compile_time_array_args = {{"page_sizes", ArrayArgValue{}}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CTA array 'page_sizes' is empty")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgsOverRuntimeArgsCapacityFail) {
+    // The scalar names count too: 2 scalars + 4095 array words is one word over.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"a"};
+    spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"b"};
+    spec.kernels[0].runtime_arg_schema.runtime_array_args = {{.name = "x", .size = 4000}};
+    spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "y", .size = 95}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("declares 4097 words of named runtime args")));
 }
 
 }  // namespace
