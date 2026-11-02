@@ -82,7 +82,7 @@ FORCE_INLINE void zero_w_tail_of_tile(const Noc& noc, const CircularBuffer& cb, 
 
 // Perf ablation hooks (perf probes only; never set by the op): RMS_ABLATE_EMPTY returns at once (fixed-cost
 // floor of the same program on the same Tensix cores); RMS_ABLATE_DM drops the interleaved TILE x / out NoC
-// payload but keeps every CB handshake and barrier.
+// payload (and the ROW_MAJOR sharded stick staging) but keeps every CB handshake and barrier.
 #ifdef RMS_ABLATE_DM
 constexpr bool ablate_dm = true;
 #else
@@ -157,7 +157,9 @@ void kernel_main() {
                 cb_reserve_back(cb_x_rm, rm_chunk_w_tiles);
                 const uint32_t l1 = get_write_ptr(cb_x_rm);
                 const uint32_t src = x_addr + s0 * x_page_bytes + c0 * elem_bytes;
-                if (x_page_bytes == chunk_row_bytes && bytes == chunk_row_bytes) {
+                if (ablate_dm) {
+                    // probe only: staging NoC payload dropped, CB handshakes kept
+                } else if (x_page_bytes == chunk_row_bytes && bytes == chunk_row_bytes) {
                     noc_async_read(get_noc_addr(src), l1, nsticks * chunk_row_bytes);
                 } else {
                     noc_async_read_one_packet_set_state(get_noc_addr(src), bytes);

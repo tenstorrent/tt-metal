@@ -709,7 +709,9 @@ void kernel_main() {
                 cb_wait_front(cb_out_rm, rm_chunk_w_tiles);
                 const uint32_t l1 = get_read_ptr(cb_out_rm);
                 const uint32_t dst = out_addr + s0 * out_page_bytes + c0 * elem_bytes;
-                if (out_page_bytes == chunk_row_bytes && bytes == chunk_row_bytes) {
+                if (ablate_dm) {
+                    // probe only: write-back NoC payload dropped, CB handshakes kept
+                } else if (out_page_bytes == chunk_row_bytes && bytes == chunk_row_bytes) {
                     // Shard pitch == staging pitch: the tile-row's sticks are one contiguous run.
                     noc_async_write(l1, get_noc_addr(dst), nsticks * chunk_row_bytes);
                 } else {
