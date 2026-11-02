@@ -2137,10 +2137,11 @@
 # The same 93 layers as 8 stages of [4,4], SP on mesh axis 1: two ranks per galaxy, one per tray half,
 # 12 layers each (9 on the last), chained along the hosts' cabled ring. run_multirank_pcc.sh checks the
 # 4x4 weight cache (kimi_k3_bh_16dev/4x4_sp1) on every host, then tt-run discovery binds the ranks: it
-# finds the ring order from the cabling, so the hosts can come in any order. A 4x4 stage keeps the
-# SP-only MLA KV cache (ring_mla's TP dedup needs SP on axis 0), so each MLA layer holds 4x the 8x4
-# stage's KV per chip on half the layers: 16 slots instead of 83 at the same 1M window. Chunks are
-# 2560 tokens, half the 8x4 leg's, so each chip still prefills 640 per chunk. Eager, like the 8x4 leg.
+# finds the ring order from the cabling, so the hosts can come in any order. Chunks are 2560 tokens,
+# half the 8x4 leg's, so each chip still prefills 640 per chunk. KV is deduped over SP*TP and the leg is
+# traced, both from the kimi_k3 manifest like the 8x4 leg. 124 slots at the 1M window: every trunk stage
+# fit 124 traced in the per-stage capacity probe (two stages per Galaxy via PREFILL_PP_LAYER_OFFSET, a
+# full 1M request at each N), and stage 1, the tightest, ran out of memory at 130 (PR #61481).
 - name: "(Kimi-K3-2.8T) disaggregated prefill 8x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
@@ -2149,7 +2150,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    export PREFILL_NUM_USERS=16
+    export PREFILL_NUM_USERS=124
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc4_4x4
   test_type: k3_prefill_runner_93l_4x4
   test_tags: [kimi_k3, runner, kv_cache]
