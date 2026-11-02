@@ -10,7 +10,8 @@
 //   w_round_offset + j. The owner issues its DRAM read at kernel start for j < w_prefetch_rounds, else in round j,
 //   zeroes the bias tiles' padding rows (they multiply the ones tile's zero columns) and multicasts it along the
 //   column; the rest receive. Never popped.
-// Order: owned W reads of rounds < w_prefetch_rounds, x row-block 0, W chunks 0.., remaining row-blocks.
+// Order: owned W reads of rounds < w_prefetch_rounds, x row-block 0 reads issued (sender), W chunks
+// < w_chunks_before_x, x row-block 0 multicast, remaining W chunks, remaining row-blocks.
 
 #include <cstdint>
 
@@ -31,7 +32,9 @@ void kernel_main() {
     constexpr uint32_t n_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(8);
     constexpr uint32_t w_prefetch_rounds = get_compile_time_arg_val(9);
-    constexpr auto x_args = TensorAccessorArgs<10>();
+    // W chunks delivered before x row-block 0's multicast (0 = x first).
+    constexpr uint32_t w_chunks_before_x = get_compile_time_arg_val(10);
+    constexpr auto x_args = TensorAccessorArgs<11>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto w_mcast = dataflow_kernel_lib::
@@ -87,12 +90,14 @@ void kernel_main() {
     // row has the same rows, so all walk the same slot sequence.
     auto x_sender = x_mcast.optional_sender(noc);
     auto x_receiver = x_mcast.optional_receiver(noc);
-    auto load_activation_block = [&](uint32_t row_block_idx) {
+    // issue_activation_reads reserves row-block i's slot and, on the round's sender, issues its reads (no barrier);
+    // finish_activation_block completes the round. Split so row-block 0's reads overlap W chunk 0's delivery.
+    auto issue_activation_reads = [&](uint32_t row_block_idx) {
         const uint32_t first_row = row_block_idx * block_h;
         const uint32_t rows = (core_rows - first_row) < block_h ? (core_rows - first_row) : block_h;
         cb_reserve_back(cb_activation_block, act_block_tiles);
-        const uint32_t slot_addr = get_write_ptr(cb_activation_block);
         if (x_mcast.should_send(x_round_offset + row_block_idx)) {
+            const uint32_t slot_addr = get_write_ptr(cb_activation_block);
             for (uint32_t row = 0; row < rows; ++row) {
                 const uint32_t x_page = (row_start + first_row + row) * k_tiles;
                 const uint32_t row_addr = slot_addr + row * k_ext_tiles * tile_bytes;
@@ -105,6 +110,13 @@ void kernel_main() {
                 dataflow_kernel_lib::read_with_state<tile_bytes>(
                     noc, slot_addr + (row * k_ext_tiles + k_tiles) * tile_bytes, ones_addr);
             }
+        }
+    };
+    auto finish_activation_block = [&](uint32_t row_block_idx) {
+        const uint32_t first_row = row_block_idx * block_h;
+        const uint32_t rows = (core_rows - first_row) < block_h ? (core_rows - first_row) : block_h;
+        const uint32_t slot_addr = get_write_ptr(cb_activation_block);
+        if (x_mcast.should_send(x_round_offset + row_block_idx)) {
             noc_async_read_barrier();
             x_sender->send(slot_addr, slot_addr, rows * k_ext_tiles * tile_bytes);
         } else {
@@ -165,11 +177,19 @@ void kernel_main() {
     for (uint32_t n_block_idx = 0; n_block_idx < w_prefetch_rounds; ++n_block_idx) {
         issue_owned_chunk_read(n_block_idx);
     }
-    // Row-block 0 computes each W chunk as it lands; row-block 1 is not needed until all of them are consumed.
+    // Fill: the first w_chunks_before_x W chunks are delivered while the x round-0 sender's reads are in flight.
+    // Row-block 0 computes each W chunk as it lands; row-block 1 is not needed until all are consumed.
+    const uint32_t num_w_first = num_n_blocks < w_chunks_before_x ? num_n_blocks : w_chunks_before_x;
     for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks; ++row_block_idx) {
-        load_activation_block(row_block_idx);
+        issue_activation_reads(row_block_idx);
         if (row_block_idx == 0) {
-            for (uint32_t n_block_idx = 0; n_block_idx < num_n_blocks; ++n_block_idx) {
+            for (uint32_t n_block_idx = 0; n_block_idx < num_w_first; ++n_block_idx) {
+                deliver_weight_block(n_block_idx);
+            }
+        }
+        finish_activation_block(row_block_idx);
+        if (row_block_idx == 0) {
+            for (uint32_t n_block_idx = num_w_first; n_block_idx < num_n_blocks; ++n_block_idx) {
                 deliver_weight_block(n_block_idx);
             }
         }

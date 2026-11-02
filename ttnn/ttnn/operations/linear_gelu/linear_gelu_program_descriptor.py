@@ -40,10 +40,19 @@ W_ROUND_SHIFT = 1
 # own round. 1 measured best (2x512 44.0 -> 42.4 us); 2 and 3 lose: W reads are DRAM-bandwidth-bound, so more in
 # flight only delays the chunk compute needs first.
 W_PREFETCH_ROUNDS = 1
+# W chunks multicast before x row-block 0, by x's buffer type; the x round-0 sender's reads are issued first and land
+# meanwhile. Either order serializes the two first multicasts (each channel's handshake waits for the other), so this
+# only pays where x's reads are slow: DRAM x 8x512 143.4 -> 141.0 us at 1; L1 x flat at 8x512, +0.6 us at 2x512.
+W_CHUNKS_BEFORE_X = {ttnn.BufferType.L1: 0, ttnn.BufferType.DRAM: 1}
 ACT_DEPTH = 2
-# cb_output_tiles depth in (block_h x block_w) n-blocks. At BLOCK_W = 1 the writer needs 6 (24 pages at block_h = 4,
-# as at block_w 3 x depth 2) to ride out DRAM write latency: depth 2 measured 143..146 us at 8x512 DRAM out vs 138.7.
-OUT_DEPTH = 6
+# Upper bound on block_h (x row-block rows). Row-block 0 is the fill transfer in front of all compute, and the packer
+# GELU binds the steady state, so a shorter block wins until per-call overhead shows: 8x512 4 -> 137.2, 3 -> 135.7,
+# 2 -> 140.6 us. The L1 solve may still pick fewer.
+BLOCK_H_MAX = 3
+# Minimum cb_output_tiles ring in pages; the depth in (block_h x block_w) n-blocks derives from it, so the ring stays a
+# whole number of blocks. The writer needs about 24 pages to ride out DRAM write latency: 8 measured 143..146 us at
+# 8x512 DRAM out vs 138.7, and block_h 3 at 18 pages 138.6 vs 137.5 at 24.
+OUT_RING_PAGES = 24
 CB_BUDGET_BYTES = 900 * 1024
 # Same tanh GELU either way: 0 = 0.5x(1 + tanh(u)) with the FP32 accurate tanh, 1 = x / (1 + exp(-2u)) (exact
 # identity, ~22 vs ~38 SFPU ops). 1 measured PCC / rel RMS identical to 0 on golden inputs; the SFPU GELU binds the op.
@@ -77,10 +86,15 @@ def _div_up(a, b):
     return -(-a // b)
 
 
+def _out_depth(block_h, block_w):
+    return max(2, _div_up(OUT_RING_PAGES, block_h * block_w))
+
+
 def _footprint_bytes(block_h, core_n_tiles_max, block_w, tile_bytes):
     fixed = (K_EXT_TILES * core_n_tiles_max + 1) * tile_bytes
-    per_row = (ACT_DEPTH * K_EXT_TILES + OUT_DEPTH * block_w) * tile_bytes
-    return fixed + block_h * per_row
+    act = ACT_DEPTH * block_h * K_EXT_TILES * tile_bytes
+    out = _out_depth(block_h, block_w) * block_h * block_w * tile_bytes
+    return fixed + act + out
 
 
 def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes):
@@ -89,10 +103,12 @@ def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes):
     core_n_blocks = _div_up(n_blocks, n_slots)
     core_n_tiles_max = block_w * core_n_blocks
     core_m_tiles = _div_up(tensor_m_tiles, m_slots)
-    fixed = _footprint_bytes(0, core_n_tiles_max, block_w, tile_bytes)
-    per_row = _footprint_bytes(1, core_n_tiles_max, block_w, tile_bytes) - fixed
-    max_block_h = (CB_BUDGET_BYTES - fixed) // per_row
-    if max_block_h < 1:
+    fits = [
+        h
+        for h in range(1, min(core_m_tiles, BLOCK_H_MAX) + 1)
+        if _footprint_bytes(h, core_n_tiles_max, block_w, tile_bytes) <= CB_BUDGET_BYTES
+    ]
+    if not fits:
         return None
     return dict(
         core_m_tiles=core_m_tiles,
@@ -100,7 +116,7 @@ def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes):
         core_n_blocks=core_n_blocks,
         core_n_tiles_max=core_n_tiles_max,
         active_cols=_div_up(n_blocks, core_n_blocks),
-        block_h=min(core_m_tiles, max_block_h),
+        block_h=max(fits),
         block_w=block_w,
     )
 
@@ -183,6 +199,7 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
         N_TILES,
         tile_bytes,
         W_PREFETCH_ROUNDS,
+        W_CHUNKS_BEFORE_X[input_tensor.memory_config().buffer_type],
     ]
     for tensor in (input_tensor, weight, bias):
         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
@@ -233,7 +250,7 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
     cbs = [
         _cb(CB_ACTIVATION_BLOCK, ACT_DEPTH * block_h * K_EXT_TILES, tile_bytes, cores),
         _cb(CB_WEIGHT_RESIDENT, K_EXT_TILES * blocking.core_n_tiles_max, tile_bytes, cores),
-        _cb(CB_OUTPUT_TILES, OUT_DEPTH * block_h * block_w, tile_bytes, cores),
+        _cb(CB_OUTPUT_TILES, _out_depth(block_h, block_w) * block_h * block_w, tile_bytes, cores),
         _cb(CB_BIAS_ONES_TILE, 1, tile_bytes, cores),
     ]
 

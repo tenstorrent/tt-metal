@@ -126,7 +126,7 @@ Stage-data re-check. The scheme's only internal datum is the fp32 `z` subblock i
 |----|------------|---------------|---------------------|
 | `cb_activation_block` | `ACT_DEPTH` | 2 | The reader fills row-block i+1 (192 KB at block_h=4) during row-block i's compute (about 24 us), so the x read never stalls the FPU. |
 | `cb_weight_resident` | none (resident) | 1 copy of the core's whole W slice | Resident: W crosses DRAM once and is reused by every row-block. Depth is not a knob, because the buffer is never recycled. |
-| `cb_output_tiles` | `OUT_DEPTH` | 2 (x one compute call's block_h x block_w tiles) | The writer drains call j's subblocks while compute packs call j+1. |
+| `cb_output_tiles` | `OUT_RING_PAGES` (Refinement 4; was `OUT_DEPTH`) | 24 pages minimum, depth `max(2, ceil(24 / (block_h * block_w)))` whole blocks | The writer drains call j's subblocks while compute packs later calls; about 24 pages ride out DRAM write latency. |
 | `cb_bias_ones_tile` | none | 1 page, constant | - |
 
 ### Mechanism caps
@@ -213,7 +213,7 @@ for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks_this_core; ++row
 | L3 W sender spread | one fixed sender per column (row 0, a row line, which `noc_placement` favours for DRAM) reads 450 KB serially on its NCRISC. The sibling op measured the single W sender as the small-M binder. | `McastRotatingSenderConfig` within each column (chunk j sent by row `j mod active_rows`, so chunks are read in parallel); and the W path on the writer RISC / NoC1 (sibling: NoC1 W reads slower, measure) |
 | L4 x bank stagger | the 11 cores of a grid row read the same x tiles in the same k order at the same time, hitting one L1 bank at a time (`bank_stagger` catalog: 1.32x on BH) | start each core's k walk at `(c * stride) mod 24` and wrap. Activation CB page positions are unchanged, only the issue order. |
 | L5 bias as a DEST seed instead of a K tile | the 25th K tile is 1/25 of the FPU work (about 3 us at 8x512). Free if the SFPU binds (L1), not free if L1 is taken. | seed DEST with the row-broadcast bias (`unary_bcast<ROW>` unpack to DEST) before the K loop. Needs a matmul block operation that accumulates onto a pre-loaded DEST, which `matmul_block` does not expose (it acquires DEST internally per subblock, `.inl` subblock loop). |
-| L6 overlap: `block_h` | `block_h = 4` (solve at the budget edge) vs 3: a taller block cuts W re-unpack per row but leaves a 1-row tail (13 = 4+4+4+1) | `block_h` in {3, 4} (3 gives 3,3,3,3,1 and frees about 114 KB L1 for `ACT_DEPTH = 3`) |
+| L6 overlap: `block_h` | `block_h = 4` (solve at the budget edge) vs 3: a taller block cuts W re-unpack per row but leaves a 1-row tail (13 = 4+4+4+1) | `block_h` in {3, 4} (3 gives 3,3,3,3,1 and frees about 114 KB L1 for `ACT_DEPTH = 3`). Refinement 4: `BLOCK_H_MAX = 3` adopted (shorter x round-0 fill; 8x512 137.2 -> 135.8 us); `ACT_DEPTH = 3` does not fit at block_h 3 with the 24-page output ring. |
 | L7 grid synchronization: small M | at tensor_m_tiles = 32, R1 uses 88 cores (8 rows x 11), 36 tiles each, and the W prologue is a larger share | `grid_y`-limited variants (fewer columns with larger `core_n_tiles`) vs R6. Measure 2x512 / 4x256. |
 
 ### Catalog evidence

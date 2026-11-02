@@ -17,11 +17,11 @@ FORCED = [(1, False)]
 
 @pytest.mark.parametrize("out_dram", [True, False])
 @pytest.mark.parametrize("stagger", [True])
-@pytest.mark.parametrize("out_depth", [2, 6, 12])
+@pytest.mark.parametrize("out_ring_pages", [8, 24, 48])
 @pytest.mark.parametrize("block_w, transposed", FORCED)
 @pytest.mark.parametrize("batch, seq", [(8, 512)])
-def test_forced(device, batch, seq, block_w, transposed, stagger, out_dram, out_depth, monkeypatch):
-    monkeypatch.setattr(pd, "OUT_DEPTH", out_depth)
+def test_forced(device, batch, seq, block_w, transposed, stagger, out_dram, out_ring_pages, monkeypatch):
+    monkeypatch.setattr(pd, "OUT_RING_PAGES", out_ring_pages)
     monkeypatch.setattr(pd, "W_SENDER_STAGGER", stagger)
     monkeypatch.setattr(pd, "BLOCK_W", block_w)
     orig = pd._candidate
@@ -46,4 +46,6 @@ def test_forced(device, batch, seq, block_w, transposed, stagger, out_dram, out_
     act = ttnn.to_torch(out).reshape(batch, seq, 3072).double()
     pcc = torch.corrcoef(torch.stack([act.flatten(), ref.flatten()]))[0, 1].item()
     assert pcc > 0.9999
-    print(f"CASE {batch}x{seq} bw={block_w} T={transposed} stagger={stagger} out_dram={out_dram} out_depth={out_depth}")
+    print(
+        f"CASE {batch}x{seq} bw={block_w} T={transposed} stagger={stagger} out_dram={out_dram} out_ring_pages={out_ring_pages}"
+    )

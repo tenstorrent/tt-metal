@@ -78,6 +78,7 @@ VARIANTS = {
     "now_only": ["now"],
     "nox_only": ["nox"],
     "nowrite_only": ["nowrite"],
+    "gelu_only": ["skipmm"],
 }
 
 
