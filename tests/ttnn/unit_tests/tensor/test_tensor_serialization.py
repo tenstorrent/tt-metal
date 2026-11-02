@@ -26,6 +26,7 @@ pytestmark = pytest.mark.use_module_device
         ttnn.bfloat16,
         ttnn.bfloat8_b,
         ttnn.bfloat4_b,
+        ttnn.bfloat2_b,
     ],
 )
 def test_serialization(tmp_path, shape, tt_dtype):
@@ -33,7 +34,10 @@ def test_serialization(tmp_path, shape, tt_dtype):
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-    if dtype in TORCH_INTEGER_DTYPES:
+    if tt_dtype == ttnn.bfloat2_b:
+        # BFLOAT2_B holds {-1, 0, +1} times a power of two exactly.
+        torch_tensor = torch.randint(-1, 2, shape).to(dtype)
+    elif dtype in TORCH_INTEGER_DTYPES:
         torch_tensor = torch.randint(0, 1024, shape, dtype=dtype)
     else:
         torch_tensor = torch.rand(shape, dtype=dtype)
