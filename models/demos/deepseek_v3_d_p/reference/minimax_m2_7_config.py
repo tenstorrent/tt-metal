@@ -26,6 +26,12 @@ class MiniMaxM27Config:
     # what it trades. Held at 8 where the larger models take 16: measured 8x4, going to 16 costs this
     # model 4.8% on hot_expert traffic to save only 20 -> 10 MB a chip.
     COMBINE_FWD_REDUCTION = 8
+    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
+    # region on both traffic shapes, at -1.3% balanced and +0.2% hot_expert.
+    DISPATCH_FWD_VC_PAGES = 32
     NUM_SHARED_EXPERTS = 0  # shared_intermediate_size = 0
     # MiniMax routes with a single expert group -> gate collapses to plain top-k.
     NUM_EXPERT_GROUPS = 1

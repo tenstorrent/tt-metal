@@ -8,11 +8,10 @@ from helpers.llk_params import (
     PERF_RUN_TYPES_QUASAR,
     EltwiseBinaryReuseDestType,
 )
-from helpers.param_config import parametrize, runtime
+from helpers.param_config import parametrize, quasar_dest_sync_modes, runtime
 from quasar.test_eltwise_binary_reuse_dest_quasar import (
     BASELINE_TILE_DIMENSIONS,
     REUSE_DEST_FORMATS,
-    reuse_dest_dest_sync_modes,
     reuse_dest_input_dimensions,
     reuse_dest_mathops,
 )
@@ -34,7 +33,7 @@ from quasar.test_eltwise_binary_reuse_dest_quasar import (
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    dest_sync_mode=lambda: reuse_dest_dest_sync_modes(is_perf=True),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
     # Perf compares against the 32x32 baseline only; the correctness module owns the shape sweep.
     tile_dimensions=runtime(lambda: [BASELINE_TILE_DIMENSIONS]),
     input_dimensions=runtime(reuse_dest_input_dimensions),

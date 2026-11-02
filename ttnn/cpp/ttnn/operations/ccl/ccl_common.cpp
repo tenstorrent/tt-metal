@@ -1349,8 +1349,13 @@ void fabric_mux_connection_ct_args(
     std::vector<uint32_t>& worker_ct_args) {
     worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel 0
     worker_ct_args.push_back(
-        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes 1
-    worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address 2
+        mux_kernel_config.get_buffer_size_bytes(channel_type));  // fabric_mux_channel_buffer_size_bytes 1
+    // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place of the
+    // status word; every other mux address is then an offset from that address.
+    worker_ct_args.push_back(
+        mux_kernel_config.is_in_program_local_l1()
+            ? mux_kernel_config.get_l1_base_semaphore_id()
+            : mux_kernel_config.get_status_address());  // fabric_mux_status_address or l1_base_semaphore_id 2
     worker_ct_args.push_back(
         mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address 3
     worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients 4

@@ -39,6 +39,8 @@ Fidelity caveats (deliberate, documented, all visible in the generated data)
   (``<WormholeComputeKernelConfig object at 0x…>``) — its fields are NOT in the
   capture, so the kwarg is dropped and the op's default is used. This can move
   PCC (math fidelity / fp32 accumulation) but not shapes or program structure.
+  Where the model passes one fixed config to an op, ``MODEL_COMPUTE_KERNEL_CONFIG``
+  restores it.
 * Tensor *values* are not captured; inputs are random. Index-like tensors
   (page tables, cur_pos, update_idxs, embedding ids) would fault the device with
   random values, so they get semantic values from ``INDEX_VALUES`` below.
@@ -51,6 +53,17 @@ Fidelity caveats (deliberate, documented, all visible in the generated data)
   ``_PROGRAM_CONFIG_FIELDS`` / ``_MUST_BE_NULL``.
 * Mesh placement is replicated onto the (1, 1) mesh the capture ran on.
 
+Adapting a Wormhole capture to Quasar
+-------------------------------------
+The capture is an N150 (8x8) run. These adaptations change how a case runs on a
+smaller device or on Quasar, never a model dimension:
+
+* ``QUASAR_EXPERIMENTAL_OPS``: base ops not yet ported to Quasar run their
+  ``ttnn.experimental.quasar`` port;
+* ``_fit_program_config``: a captured matmul grid larger than the device is fitted
+  to it;
+* ``QUASAR_MAX_TOKENS``: prefill SDPA runs on fewer tokens.
+
 Set ``TTNN_GRAPH_OPS_NO_GOLDEN=1`` to reduce every case to
 "runs + right shape/dtype + finite" (useful while a golden reference is under
 suspicion, or on an emulator where PCC of a bfloat8_b path is not the point).
@@ -58,6 +71,8 @@ suspicion, or on an emulator where PCC of a bfloat8_b path is not the point).
 
 from __future__ import annotations
 
+import copy
+import functools
 import math
 import os
 from typing import Any
@@ -356,6 +371,41 @@ def build_program_config(spec):
         pytest.skip(f"{kind}(**{sorted(kwargs)}) rejected by this ttnn build: {exc}")
 
 
+def _largest_divisor(n, at_most):
+    return next(d for d in range(min(n, at_most), 0, -1) if n % d == 0)
+
+
+def _fit_program_config(cfg, spec, mesh_device, case):
+    """Fit a captured 2D-mcast matmul grid that is larger than this device (the 8x8 vision QKV / WO configs on
+    an 8x4 Quasar) to the device grid: the same matmul on fewer cores, each computing a bigger output block. The
+    op would otherwise reject the grid ("must fit within device grid")."""
+    if spec is None or spec["kind"] != "MatmulMultiCoreReuseMultiCastProgramConfig":
+        return cfg
+    grid = mesh_device.compute_with_storage_grid_size()
+    captured = cfg.compute_with_storage_grid_size
+    if captured.x <= grid.x and captured.y <= grid.y:
+        return cfg
+    nx, ny = min(captured.x, grid.x), min(captured.y, grid.y)
+    act, weight = case["args"][0]["shape"], case["args"][1]["shape"]
+    m = math.prod(act[:-1]) if cfg.fuse_batch else act[-2]
+    per_core_M = math.ceil(math.ceil(m / 32) / ny)
+    per_core_N = math.ceil(math.ceil(weight[-1] / 32) / nx)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(nx, ny),
+        in0_block_w=1,  # fewer cores hold bigger output blocks; the smallest K block keeps the CBs in L1
+        out_subblock_h=1,  # 1x1 subblocks always divide the rescaled per-core blocks
+        out_subblock_w=1,
+        # Output computed in blocks so a few cores holding the whole N still fit their CBs in L1.
+        out_block_h=_largest_divisor(per_core_M, 8),
+        out_block_w=_largest_divisor(per_core_N, 32),
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=cfg.transpose_mcast,
+        fused_activation=cfg.fused_activation,
+        fuse_batch=cfg.fuse_batch,
+    )
+
+
 # =============================================================================
 # Input tensors
 # =============================================================================
@@ -497,7 +547,7 @@ def _build_value(spec, mesh_device, case, op_name, key, torch_sink):
     if kind == "mem":
         return build_memory_config(spec, mesh_device)
     if kind == "cfg":
-        return build_program_config(spec)
+        return _fit_program_config(build_program_config(spec), spec, mesh_device, case)
     if kind == "dtype":
         return DTYPE[spec["v"]]
     if kind == "layout":
@@ -542,7 +592,9 @@ def _ref_identity(inputs, kwargs, case):
 
 
 def _ref_matmul(inputs, kwargs, case):
-    return inputs["0"].float() @ inputs["1"].float()
+    ref = inputs["0"].float() @ inputs["1"].float()
+    bias = inputs.get("bias")  # ttnn.linear(..., bias=[N]) broadcasts over the rows
+    return ref if bias is None else ref + bias.float()
 
 
 def _second_operand(inputs, case):
@@ -725,14 +777,15 @@ def _ref_concat_heads_decode(inputs, kwargs, case):
 
     The captured output is padded up to a tile row, so the reference covers only the
     real batch; ``assert_pcc`` compares it against the leading elements, which is
-    where row-major puts those users.
+    where row-major puts those users. The input's heads dim is padded to a tile row and
+    the op concatenates only the first ``num_heads`` of them, so slice those.
     """
     x = inputs["0"].float()
     n_heads = case["kwargs"].get("num_heads", {}).get("v")
-    if x.dim() != 4 or n_heads is None or x.shape[2] != n_heads:
+    if x.dim() != 4 or n_heads is None or x.shape[2] < n_heads:
         return None
     batch, head_dim = x.shape[1], x.shape[3]
-    return x.reshape(1, 1, batch, n_heads * head_dim)
+    return x[:, :, :n_heads, :].reshape(1, 1, batch, n_heads * head_dim)
 
 
 def _ref_layer_norm(inputs, kwargs, case):
@@ -1050,6 +1103,17 @@ def _input_elements(case):
     return total
 
 
+# Ops whose inputs include padding the op never reads, so _input_elements overstates the leading
+# region it writes. nlp_concat_heads_decode's input pads the heads dim to a tile row and the op
+# writes only num_heads heads per user; with fewer than 32 heads, the rest of the output's first
+# rows stays unwritten.
+_WRITTEN_ELEMENTS = {
+    "ttnn.experimental.nlp_concat_heads_decode": lambda case: (
+        case["args"][0]["shape"][1] * case["kwargs"]["num_heads"]["v"] * case["args"][0]["shape"][3]
+    ),
+}
+
+
 def _check_finite(host, case, op_name, index):
     """Assert the region the op can actually define is finite.
 
@@ -1070,7 +1134,7 @@ def _check_finite(host, case, op_name, index):
     if n_finite == n_total:
         return
 
-    budget = _input_elements(case)
+    budget = _WRITTEN_ELEMENTS.get(op_name, _input_elements)(case)
     if n_total > budget:
         head = finite.reshape(-1)[:budget]
         bad = int(head.numel() - head.sum())
@@ -1215,6 +1279,54 @@ def _is_quasar(mesh_device=None):
         return False
 
 
+# Base ops that still build Gen1 DataMovementKernels, which Quasar rejects. On Quasar these cases run the
+# stop-gap ``ttnn.experimental.quasar`` port with the same arguments, as the SDPA tests do (#59015).
+# ``case["op"]`` keeps the captured name, so the GOLDEN and INDEX_VALUES lookups are unchanged.
+QUASAR_EXPERIMENTAL_OPS = {
+    "ttnn.add": "add",
+    "ttnn.multiply": "multiply",
+}
+
+# Prefill SDPA work grows with the square of the token count: on craq-sim 8x4 the vision tower's 12288-token
+# call would take ~80 min (2048 tokens: 137 s, 4096: 527 s). On Quasar its q/k/v token dim is capped at the
+# text prefill's 4096, which every captured chunk size divides.
+QUASAR_MAX_TOKENS = {"ttnn.transformer.scaled_dot_product_attention": 4096}
+
+# The compute kernel config the model passes, for ops where it passes one fixed config (see the module
+# docstring). Every captured layer_norm is the vision LayerNorm's interleaved path (qwen3_vl/tt/
+# vision_layernorm.py): HiFi4 with bf16 accumulation. The op's own default accumulates in fp32, which on Quasar
+# puts the [2752, 4096] deepstack norm at PCC 0.998996.
+MODEL_COMPUTE_KERNEL_CONFIG = {
+    "ttnn.layer_norm": dict(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+    ),
+}
+
+
+def _cap_tokens(case, op_name):
+    """``case`` with the token dim of its q/k/v (args 0-2) and output cut to ``QUASAR_MAX_TOKENS[op_name]``."""
+    cap = QUASAR_MAX_TOKENS.get(op_name)
+    if cap is None or case["args"][0]["shape"][-2] <= cap:
+        return case
+    case = copy.deepcopy(case)
+    for spec in case["args"][:3] + [out for out in case.get("outs") or [] if out]:
+        spec["shape"][-2] = min(spec["shape"][-2], cap)
+    return case
+
+
+def _adapt_case(op, case, op_name, mesh_device):
+    """The callable and case to run on this device: the tables above applied to the captured call."""
+    if _is_quasar(mesh_device):
+        case = _cap_tokens(case, op_name)
+        if op_name in QUASAR_EXPERIMENTAL_OPS:
+            op = getattr(ttnn.experimental.quasar, QUASAR_EXPERIMENTAL_OPS[op_name])
+    compute = MODEL_COMPUTE_KERNEL_CONFIG.get(op_name)
+    if compute is not None and "program_config" not in case["kwargs"]:  # the interleaved path's config, see the table
+        config = ttnn.init_device_compute_kernel_config(mesh_device.arch(), **compute)
+        op = functools.partial(op, compute_kernel_config=config)
+    return op, case
+
+
 _BFP_DTYPES = ("BFLOAT8_B", "BFLOAT4_B")
 
 
@@ -1237,6 +1349,40 @@ def _bfp_specs(case):
     return found
 
 
+# Ops that put one unit of work on each of a fixed number of cores, derived from the call rather than
+# from a memory config the harness could shrink. nlp_concat_heads_decode width-shards its output one
+# head per core, so it needs num_heads cores (from sub_core_grids when given, else the device grid);
+# a smaller grid FATALs in the op's num_cores_to_corerangeset.
+_REQUIRED_CORES = {
+    "ttnn.experimental.nlp_concat_heads_decode": lambda case: case["kwargs"]["num_heads"]["v"],
+}
+
+
+def _available_cores(case, mesh_device):
+    sub = case["kwargs"].get("sub_core_grids", {}).get("v")
+    if sub:
+        try:
+            return sum((x1 - x0 + 1) * (y1 - y0 + 1) for x0, y0, x1, y1 in sub)
+        except (TypeError, ValueError):
+            pass  # not a [[x0, y0, x1, y1], ...] list; fall back to the device grid
+    grid = mesh_device.compute_with_storage_grid_size()
+    return grid.x * grid.y
+
+
+def build_inputs_for_case(case, mesh_device, *, op_name=None):
+    """Materialize one captured call's inputs: (device args, device kwargs, torch inputs keyed by arg position/name)."""
+    op_name = op_name or case["op"]
+    torch_inputs: dict[str, torch.Tensor] = {}
+    args = [_build_value(spec, mesh_device, case, op_name, str(i), torch_inputs) for i, spec in enumerate(case["args"])]
+    kwargs = {}
+    for name, spec in case["kwargs"].items():
+        alias = _aliased_arg(name, spec, case, args)
+        kwargs[name] = (
+            alias if alias is not None else _build_value(spec, mesh_device, case, op_name, name, torch_inputs)
+        )
+    return args, kwargs, torch_inputs
+
+
 def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     """Materialize one captured call, run it, and check the result.
 
@@ -1244,6 +1390,7 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
     """
     op_name = op_name or case["op"]
+    op, case = _adapt_case(op, case, op_name, mesh_device)
 
     # Quasar has no Bfp formats (bfloat8_b / bfloat4_b): skip such a capture pre-flight rather than fail it,
     # unless TTNN_GRAPH_OPS_BF8_AS_BF16=1 runs it as bfloat16 (see DTYPE above).
@@ -1255,15 +1402,13 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
                 "(TTNN_GRAPH_OPS_BF8_AS_BF16=1 runs it as bfloat16)"
             )
 
-    torch_inputs: dict[str, torch.Tensor] = {}
+    required = _REQUIRED_CORES.get(op_name)
+    if required is not None:
+        needed, available = required(case), _available_cores(case, mesh_device)
+        if needed > available:
+            pytest.skip(f"{op_name} needs {needed} cores, one per unit of work; this device has {available}")
 
-    args = [_build_value(spec, mesh_device, case, op_name, str(i), torch_inputs) for i, spec in enumerate(case["args"])]
-    kwargs = {}
-    for name, spec in case["kwargs"].items():
-        alias = _aliased_arg(name, spec, case, args)
-        kwargs[name] = (
-            alias if alias is not None else _build_value(spec, mesh_device, case, op_name, name, torch_inputs)
-        )
+    args, kwargs, torch_inputs = build_inputs_for_case(case, mesh_device, op_name=op_name)
 
     out = op(*args, **kwargs)
 
