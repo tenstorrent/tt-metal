@@ -78,6 +78,7 @@ bool supported_execution_controls(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 // Perf-only, routing-only: true for in-scope cases where codegen is correct but does not beat native.
-bool is_demoted(const Tensor& input, const TilizeCodegenPlan& plan);
+bool is_demoted(
+    const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config, tt::tt_metal::DataType output_dtype);
 
 }  // namespace ttnn::operations::data_movement::tilize_codegen

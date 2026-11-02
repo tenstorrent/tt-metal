@@ -235,7 +235,7 @@ ttnn::Tensor tilize(
         if (ttnn::operations::data_movement::codegen_supported_on_arch(normalized_input) && controls_ok &&
             supported_by_codegen(normalized_input, output_mem_config, dtype)) {
             if (const auto plan = plan_codegen(normalized_input, output_mem_config, dtype);
-                plan.has_value() && !is_demoted(normalized_input, *plan)) {
+                plan.has_value() && !is_demoted(normalized_input, output_mem_config, dtype)) {
                 return ttnn::prim::tilize_codegen(
                     normalized_input,
                     output_mem_config,

@@ -5,10 +5,14 @@
 #include "tilize_codegen_supported.hpp"
 
 #include <algorithm>
+#include <array>
+#include <optional>
+#include <span>
 #include <string_view>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -41,6 +45,10 @@ constexpr uint32_t kSingleBuffered = 1;
 // A column split needs at least this many tiles per row to amortize its extra reader geometry.
 constexpr uint32_t kColumn2DMinWt = 3;
 constexpr uint32_t kMinColumnBlocks = 2;
+constexpr uint32_t kMinCoreColBytes = 1024;
+constexpr uint32_t kMinFragmentBytes = 256;
+constexpr uint32_t kTargetCores = 24;
+constexpr uint32_t kMinSplitCores = 5;
 
 std::optional<uint32_t> row_major_element_size(DataType dtype) {
     switch (dtype) {
@@ -75,6 +83,23 @@ uint32_t column_blocks(uint32_t wt, uint32_t max_blocks) {
         }
     }
     return 1;
+}
+
+// Most column blocks worth cutting a tile row into. Narrow DRAM fragments read inefficiently, so a few-row
+// tensor gets wide blocks on few cores. A cut that would use fewer than kMinSplitCores keeps the full grid.
+uint32_t max_column_blocks(const TilizeGeometry& g, uint32_t elem_size, uint32_t grid_cores) {
+    const uint32_t grid_blocks = grid_cores / g.tile_rows;
+    const uint32_t fragment_bytes = tt::constants::TILE_WIDTH * elem_size;
+    const uint32_t align_tiles = std::max(1u, tt::tt_metal::hal::get_dram_alignment() / fragment_bytes);
+    const uint32_t col_units = tt::div_up(g.wt, align_tiles);
+    const uint32_t min_units = std::max(1u, tt::div_up(kMinCoreColBytes / fragment_bytes, align_tiles));
+    const uint32_t wide_blocks = std::max(1u, col_units / min_units);
+    const uint32_t row_bytes = g.wt * fragment_bytes;
+    const uint32_t fragment_blocks =
+        std::min(col_units, std::max(1u, row_bytes / std::max(kMinFragmentBytes, align_tiles * fragment_bytes)));
+    const uint32_t few_row_blocks = std::min(fragment_blocks, tt::div_up(kTargetCores, g.tile_rows));
+    const uint32_t capped = std::min(grid_blocks, std::max(wide_blocks, few_row_blocks));
+    return g.tile_rows * capped < kMinSplitCores ? grid_blocks : capped;
 }
 
 // Everything about a case that does not depend on how much L1 is free.
@@ -202,7 +227,7 @@ TilizeGeometry tilize_geometry(const Tensor& input, DataType output_dtype) {
     g.convert = output_dtype != input.dtype();
     g.bfloat16_input = input.dtype() == DataType::BFLOAT16;
     if (g.tile_rows < grid_cores && g.wt >= kColumn2DMinWt) {
-        const uint32_t blocks = column_blocks(g.wt, grid_cores / g.tile_rows);
+        const uint32_t blocks = column_blocks(g.wt, max_column_blocks(g, input.element_size(), grid_cores));
         if (blocks >= kMinColumnBlocks) {
             g.route = TilizeRoute::Column2D;
             g.num_col_blocks = blocks;
@@ -261,8 +286,74 @@ bool supported_execution_controls(
     return !unsupported_execution_control(use_multicore, use_low_perf, tile, sub_core_grids).has_value();
 }
 
-// Perf-demote ledger: empty, so nothing is demoted. A perf-only entry must come from device kernel
-// durations, never from end-to-end timing.
-bool is_demoted(const Tensor&, const TilizeCodegenPlan&) { return false; }
+namespace {
+
+using tt::tt_metal::BufferType;
+
+constexpr std::array kBf16 = {DataType::BFLOAT16};
+constexpr std::array kF32 = {DataType::FLOAT32};
+constexpr std::array kInts = {DataType::INT32, DataType::UINT16, DataType::UINT32};
+constexpr std::array kBf16Ints = {DataType::BFLOAT16, DataType::INT32, DataType::UINT16, DataType::UINT32};
+
+constexpr std::optional<BufferType> kAny = std::nullopt;
+constexpr std::optional<BufferType> kDram = BufferType::DRAM;
+constexpr std::optional<BufferType> kL1 = BufferType::L1;
+
+struct DemotedCase {
+    // Zero-padded past the rank; a real dim is never zero because empty tensors are not supported.
+    std::array<uint32_t, 4> dims;
+    std::span<const DataType> dtypes;
+    std::optional<BufferType> input;
+    std::optional<BufferType> output;
+};
+
+// Unsettled: native was faster or the margin was not established, so these route to native for now.
+// Same-dtype cases only; nullopt matches any buffer type.
+const auto kUnsettled = std::to_array<DemotedCase>({
+    {{1, 1, 64, 64}, kInts, kAny, kAny},   {{1, 10, 64, 96}, kBf16, kDram, kAny}, {{1, 12, 32, 96}, kBf16, kDram, kAny},
+    {{1, 160, 192}, kBf16, kDram, kAny},   {{1, 3, 64, 64}, kF32, kAny, kAny},    {{1, 32, 64}, kInts, kAny, kAny},
+    {{1, 4, 96, 32}, kBf16, kAny, kDram},  {{1, 96, 64}, kF32, kAny, kAny},       {{12, 32, 160}, kBf16, kDram, kAny},
+    {{160, 192}, kBf16, kDram, kAny},      {{192, 160}, kBf16, kDram, kAny},      {{192, 192}, kBf16, kDram, kAny},
+    {{192, 224}, kBf16, kDram, kAny},      {{2, 1, 96, 32}, kInts, kAny, kAny},   {{2, 192, 224}, kBf16, kDram, kAny},
+    {{2, 32, 32}, kInts, kAny, kAny},      {{2, 4, 64, 96}, kF32, kDram, kAny},   {{2, 96, 32}, kF32, kAny, kAny},
+    {{224, 128}, kBf16, kDram, kAny},      {{224, 32}, kBf16, kAny, kAny},        {{3, 2, 128, 32}, kF32, kAny, kAny},
+    {{3, 2, 64, 32}, kF32, kAny, kAny},    {{3, 2, 96, 32}, kF32, kAny, kAny},    {{3, 8, 96, 32}, kBf16, kL1, kAny},
+    {{3, 96, 32}, kF32, kAny, kAny},       {{32, 32}, kInts, kAny, kAny},         {{32, 64}, kInts, kAny, kAny},
+    {{4, 12, 96, 96}, kBf16, kDram, kAny}, {{4, 4, 32, 64}, kF32, kL1, kDram},    {{4, 4, 64, 64}, kF32, kAny, kAny},
+    {{4, 6, 96, 32}, kBf16, kL1, kAny},    {{4, 9, 64, 32}, kBf16, kL1, kAny},    {{5, 128, 32}, kBf16, kL1, kAny},
+    {{5, 3, 64, 32}, kBf16, kL1, kAny},    {{5, 3, 64, 32}, kBf16, kDram, kL1},   {{5, 8, 64, 64}, kBf16, kL1, kAny},
+    {{6, 10, 32, 64}, kBf16, kL1, kDram},  {{6, 4, 96, 64}, kBf16, kL1, kAny},    {{64, 32}, kBf16Ints, kAny, kAny},
+    {{64, 64}, kInts, kAny, kAny},         {{7, 96, 160}, kBf16, kDram, kAny},    {{8, 32, 160}, kBf16, kDram, kAny},
+    {{9, 128, 32}, kBf16, kL1, kL1},
+});
+
+bool shape_matches(const auto& shape, const std::array<uint32_t, 4>& dims) {
+    for (size_t i = 0; i < dims.size(); ++i) {
+        const uint32_t dim = i < shape.rank() ? shape[i] : 0;
+        if (dim != dims[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool buffer_matches(const std::optional<BufferType>& wanted, BufferType actual) {
+    return !wanted.has_value() || *wanted == actual;
+}
+
+}  // namespace
+
+// Perf-only and routing-only. Entries must come from device kernel durations, never end-to-end timing.
+bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config, DataType output_dtype) {
+    if (output_dtype != input.dtype()) {
+        return false;
+    }
+    return std::any_of(kUnsettled.begin(), kUnsettled.end(), [&](const DemotedCase& c) {
+        return std::find(c.dtypes.begin(), c.dtypes.end(), output_dtype) != c.dtypes.end() &&
+               buffer_matches(c.input, input.memory_config().buffer_type()) &&
+               buffer_matches(c.output, output_mem_config.buffer_type()) &&
+               shape_matches(input.logical_shape(), c.dims);
+    });
+}
 
 }  // namespace ttnn::operations::data_movement::tilize_codegen
