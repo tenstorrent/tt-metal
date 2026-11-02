@@ -9,3 +9,4 @@
 {"event":"test_run","status":"pass","tests":"unit 25/25 + golden test_golden+test_regression 210/210","perf_8x512_ns":268150,"ts":"2026-11-02T13:58:46+00:00"}
 {"event":"test_run","status":"pass","test":"test_qkv_proj_heads_rope.py","detail":"25 passed after table prefetch + dual-NoC output stores; 8x512 123.5->107.0 us","ts":"2026-11-02T14:38:19+00:00"}
 {"event":"test_run","status":"pass","test":"unit dir 40/40, golden slice 83/83, regression 10/10","detail":"epilogue init hoist (InitReconfigOwner::Caller); 8x512 ~105.6 us median","ts":"2026-11-02T14:42:58+00:00"}
+{"event":"fix_applied","detail":"table CB sized to min(block_m, St) rows indexed by row % St; whole-block table had cut block_m 13->11 at 4096x1, unequal M-group block counts disabled R2 W multicast (4960->8286 us). Now 4489 us.","ts":"2026-11-02T14:50:40+00:00"}

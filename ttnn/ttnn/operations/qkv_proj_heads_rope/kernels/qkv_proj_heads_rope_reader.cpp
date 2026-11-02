@@ -5,8 +5,9 @@
 // cb_activation_block, then per valid row the rotary table tiles [cos_lo, -sin_lo, sin_hi, cos_hi].
 // R3: one core of the M-group reads each x K-block and multicasts it into the same cb_activation_block
 // slot on the rest of the group (sender choice is host-side; should_send() covers fixed and rotating).
-// Table rows are read in chunks between x rounds (cb_rotary_table holds a whole block's rows), so the
-// reads and the sign flip run in the slack while compute works through the K-loop.
+// Table rows are read in chunks between x rounds (cb_rotary_table holds one row per distinct sequence
+// position of a block), so the reads and the sign flip run in the slack while compute works through the
+// K-loop.
 // After the K-loop the reader stores every out_write_nocs-th output row from cb_out_tiles_noc0 on NoC0
 // (rows 1, 1 + out_write_nocs, ...); the writer stores the rest on NoC1.
 // The ones tile and the sin sign flip are tile-content transforms no dataflow helper provides.
@@ -142,7 +143,8 @@ void kernel_main() {
         x_sender.send(block_addr, block_addr, rows * k_block * tile_bytes);
     };
 
-    // Table rows [first, last) of the block starting at tile-row first_row: one reserve, one barrier.
+    // Table slots [first, last) of the block starting at tile-row first_row; slot j holds sequence
+    // position (first_row + j) % seq_tiles (compute reads block row r from slot r % seq_tiles).
     auto read_table_rows = [&](uint32_t first_row, uint32_t first, uint32_t last) {
         if (first == last) {
             return;
@@ -175,8 +177,10 @@ void kernel_main() {
         const uint32_t first_row = row_start + block_row;
 
         // Nominal block quantum keeps the ring aligned; rows past `rows` stay stale and are never consumed.
-        // A block's table rows (one cb_rotary_table fill: capacity is block_m rows) are spread over the
-        // K-blocks, each chunk read right after that K-block's x slot is pushed.
+        // A block's table slots (one cb_rotary_table fill: every block but a core's last fills it exactly,
+        // so the slots are contiguous) are spread over the K-blocks, each chunk read right after that
+        // K-block's x slot is pushed.
+        const uint32_t table_rows = rows < seq_tiles ? rows : seq_tiles;
         uint32_t table_rows_done = 0;
         for (uint32_t k_blk = 0; k_blk < num_k_blocks; ++k_blk, ++round) {
             cb_reserve_back(cb_activation_block, act_block_tiles);
@@ -187,7 +191,7 @@ void kernel_main() {
             }
             cb_push_back(cb_activation_block, act_block_tiles);
             if (is_rotary) {
-                const uint32_t table_rows_next = (k_blk + 1) * rows / num_k_blocks;
+                const uint32_t table_rows_next = (k_blk + 1) * table_rows / num_k_blocks;
                 read_table_rows(first_row, table_rows_done, table_rows_next);
                 table_rows_done = table_rows_next;
             }

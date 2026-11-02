@@ -79,14 +79,19 @@ class Blocking:
         return TILES_PER_HEAD * self.heads_per_core
 
 
-def _cb_pages(block_m, n_tiles, k_block):
-    """Page count per CB: the single source for the L1 footprint and the allocation (l1_ledger.md).
-    cb_rotary_table holds a whole block's rows so the reader can fetch them during the K-loop."""
+def _table_rows(block_m, seq_tiles):
+    """Rows resident in cb_rotary_table: one per distinct sequence position of a block (tile-row r of a
+    block uses slot r % seq_tiles), so the reader fetches them all during the K-loop."""
+    return min(block_m, seq_tiles)
+
+
+def _cb_pages(block_m, n_tiles, k_block, seq_tiles):
+    """Page count per CB: the single source for the L1 footprint and the allocation (l1_ledger.md)."""
     pages = {
         CB_ACTIVATION_BLOCK: ACT_DEPTH * block_m * k_block,
         CB_WEIGHT_BLOCK: WEIGHT_DEPTH * k_block * n_tiles,
         CB_MATMUL_PARTIALS: block_m * n_tiles,
-        CB_ROTARY_TABLE: block_m * TABLE_TILES_PER_ROW,
+        CB_ROTARY_TABLE: _table_rows(block_m, seq_tiles) * TABLE_TILES_PER_ROW,
         CB_OUT_TILES: OUT_DEPTH * n_tiles,
     }
     if OUT_WRITE_NOCS == 2:
@@ -104,15 +109,20 @@ CB_FORMATS = {
 }
 
 
-def _footprint(block_m, n_tiles, k_block):
-    return sum(pages * CB_FORMATS[cb][0] for cb, pages in _cb_pages(block_m, n_tiles, k_block).items())
+def _footprint(block_m, n_tiles, k_block, seq_tiles):
+    return sum(pages * CB_FORMATS[cb][0] for cb, pages in _cb_pages(block_m, n_tiles, k_block, seq_tiles).items())
 
 
-def block_m_cap(n_tiles, k_block=K_BLOCK):
-    """Largest block_m whose CB footprint fits CB_BUDGET_BYTES (ledger formula, derived from _cb_pages)."""
-    fixed = _footprint(0, n_tiles, k_block)
-    per_row = _footprint(1, n_tiles, k_block) - fixed
-    return (CB_BUDGET_BYTES - fixed) // per_row
+def block_m_cap(n_tiles, seq_tiles, k_block=K_BLOCK):
+    """Largest block_m whose CB footprint fits CB_BUDGET_BYTES (ledger formula, derived from _cb_pages).
+    The footprint is linear in block_m up to seq_tiles (table rows) and linear past it."""
+    fixed = _footprint(0, n_tiles, k_block, seq_tiles)
+    per_row = _footprint(1, n_tiles, k_block, seq_tiles) - fixed
+    cap = (CB_BUDGET_BYTES - fixed) // per_row
+    if cap <= seq_tiles:
+        return cap
+    table_bytes = seq_tiles * TABLE_TILES_PER_ROW * CB_FORMATS[CB_ROTARY_TABLE][0]
+    return (CB_BUDGET_BYTES - fixed - table_bytes) // (per_row - TABLE_TILES_PER_ROW * CB_FORMATS[CB_ROTARY_TABLE][0])
 
 
 def _dest_tiles(compute_kernel_config):
@@ -148,7 +158,7 @@ def select_blocking(device, batch, seq, compute_kernel_config):
         if grid_m == 0:
             continue
         n_tiles = TILES_PER_HEAD * heads_per_core
-        cap = block_m_cap(n_tiles)
+        cap = block_m_cap(n_tiles, seq_tiles)
         if cap < 1:
             continue
         rows_max = _div_up(mt, grid_m)
@@ -321,7 +331,9 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
 
     assignment, w_multicast = _core_assignment(device, blocking)
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, *_ in assignment])
-    cbs = [_cb(index, pages, cores) for index, pages in _cb_pages(block_m, n_tiles, k_block).items()]
+    cbs = [
+        _cb(index, pages, cores) for index, pages in _cb_pages(block_m, n_tiles, k_block, blocking.seq_tiles).items()
+    ]
 
     last_valid_rows = input_tensor.shape[-2] % TILE
     reader_ct_args = [
@@ -382,6 +394,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         blocking.sb_w,
         OUT_WRITE_NOCS,
         CB_OUT_TILES_NOC0,
+        blocking.seq_tiles,
     ]
 
     reader_rt = {}

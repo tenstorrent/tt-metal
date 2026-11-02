@@ -38,6 +38,7 @@ void kernel_main() {
     constexpr uint32_t sb_w = get_compile_time_arg_val(11);
     constexpr uint32_t out_write_nocs = get_compile_time_arg_val(12);
     constexpr uint32_t cb_out_tiles_noc0 = get_compile_time_arg_val(13);
+    constexpr uint32_t seq_tiles = get_compile_time_arg_val(14);
 
     const uint32_t core_rows = get_arg_val<uint32_t>(0);
     const bool is_rotary = get_arg_val<uint32_t>(1) != 0;
@@ -63,7 +64,7 @@ void kernel_main() {
     constexpr auto shape = MatmulBlockShape::of(block_m / sb_h, n_tiles / sb_w, sb_h, sb_w, k_block, num_k_blocks);
 
     // rotate_block: walk grid(2 out tiles, 2 terms). A = partials of one head (Row: base + term),
-    // B = table row [cos_lo, -sin_lo, sin_hi, cos_hi] (Block: 2*out + term), products summed in DEST.
+    // B = the row's table slot [cos_lo, -sin_lo, sin_hi, cos_hi] (Block: base + 2*out + term), summed in DEST.
     using RotaryMulAcc = BinaryFpu<
         BinaryFpuOp::Mul,
         input(
@@ -74,7 +75,12 @@ void kernel_main() {
             DataFormatReconfig::Disabled,
             TileAddressing::Offset),
         input(
-            cb_rotary_table, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block, DataFormatReconfig::Disabled),
+            cb_rotary_table,
+            WaitPolicy::None,
+            PopPolicy::None,
+            InputTileMapping::Block,
+            DataFormatReconfig::Disabled,
+            TileAddressing::Offset),
         Dst::D0,
         DestAccumulation::PerRow>;
     using RotaryPack = PackTile<output(
@@ -108,14 +114,13 @@ void kernel_main() {
     auto epilogue_row = [&](uint32_t row, auto rotary_pack, auto convert_pack) {
         const uint32_t row_base = row * n_tiles;
         if (is_rotary) {
-            cb_wait_front(cb_rotary_table, table_tiles_per_row);
+            const uint32_t table_base = (row % seq_tiles) * table_tiles_per_row;
             for (uint32_t head = 0; head < heads_per_core; ++head) {
                 eltwise_chain<InitReconfigOwner::Caller>(
                     IterationShape::grid(tiles_per_head, 2),
-                    RotaryMulAcc{partials_dfb, table_dfb, row_base + head * tiles_per_head},
+                    RotaryMulAcc{partials_dfb, table_dfb, row_base + head * tiles_per_head, table_base},
                     rotary_pack);
             }
-            cb_pop_front(cb_rotary_table, table_tiles_per_row);
         } else {
             eltwise_chain<InitReconfigOwner::Caller>(
                 IterationShape::tiles(n_tiles), ConvertCopy{partials_dfb, row_base}, convert_pack);
@@ -157,6 +162,11 @@ void kernel_main() {
         }
         pack_reconfig_data_format(cb_out_tiles);
 
+        // Table slot j holds the block's sequence position (block start + j) % seq_tiles.
+        const uint32_t table_tiles = (rows < seq_tiles ? rows : seq_tiles) * table_tiles_per_row;
+        if (is_rotary) {
+            cb_wait_front(cb_rotary_table, table_tiles);
+        }
         partials.wait_front(partials_tiles);
         for (uint32_t row = 0; row < rows; ++row) {
             if constexpr (out_write_nocs == 2) {
@@ -169,5 +179,8 @@ void kernel_main() {
             epilogue_row(row, RotaryPack{out_dfb}, ConvertPack{out_dfb});
         }
         partials.pop_front(partials_tiles);
+        if (is_rotary) {
+            cb_pop_front(cb_rotary_table, table_tiles);
+        }
     }
 }
