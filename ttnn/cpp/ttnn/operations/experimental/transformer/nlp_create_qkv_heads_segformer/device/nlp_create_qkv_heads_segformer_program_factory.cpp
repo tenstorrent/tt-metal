@@ -60,7 +60,7 @@ NlpCreateHeadsSegformerDeviceOperation::NlpCreateQkvHeadsSegformerProgramFactory
     ////////////////////////////////////////////////////////////////////////////
     ttnn::Tensor& q = std::get<0>(output);
 
-    TT_ASSERT(q.buffer() != nullptr, "Output q buffer should be allocated on device!");
+    TT_ASSERT(q.is_allocated(), "Output q buffer should be allocated on device!");
 
     // The Metal 2.0 binding layer works with the Metalium tensor type; extract once.
     const auto& input_mesh_tensor = a.mesh_tensor();

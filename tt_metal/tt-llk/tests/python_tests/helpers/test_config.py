@@ -18,6 +18,7 @@ from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, ClassVar, List
+from uuid import uuid4
 
 import numpy as np
 import pytest
@@ -26,7 +27,10 @@ from ttexalens.tt_exalens_lib import (
     TTException,
     load_elf,
     parse_elf,
+    read_from_device,
     read_word_from_device,
+    write_to_device,
+    write_words_to_device,
 )
 
 from . import device as device_module
@@ -51,7 +55,6 @@ from .device import (
     set_tensix_soft_reset,
     wait_brisc_boot_ready,
 )
-from .device_io import read_from_device, write_to_device, write_words_to_device
 from .device_print import aux_size_for
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -384,8 +387,20 @@ class TestConfig:
 
     @staticmethod
     def resolve_artefacts_path() -> Path:
-        """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
+        """Resolve the build root, isolating hardware-free sessions from device builds."""
         runner_temp = os.environ.get("RUNNER_TEMP")
+        if os.environ.get("LLK_HARDWARE_FREE") == "1":
+            # Inherit one private tree across xdist workers, outside the normal build tree.
+            run_id = os.environ.get("LLK_HARDWARE_FREE_RUN_ID")
+            if not run_id:
+                run_id = uuid4().hex
+                os.environ["LLK_HARDWARE_FREE_RUN_ID"] = run_id
+            base = (
+                Path(runner_temp)
+                if runner_temp
+                else TestConfig.DEFAULT_ARTEFACTS_PATH.parent
+            )
+            return base / f"tt-llk-hardware-free-{run_id}"
         if runner_temp:
             return Path(runner_temp) / "tt-llk-build"
         return TestConfig.DEFAULT_ARTEFACTS_PATH
@@ -737,14 +752,19 @@ class TestConfig:
 
         For a ``tt_llk_quasar`` tree, prepend the selected variant's header root
         and expose the tree root for qualified includes of the base headers.
+        The in-tree Quasar tree has no ``common/inc/sfpu``: its eltwise SFPU kernels are in
+        ``llk_sfpu`` and its experimental ones under ``common/inc/experimental``. A Quasar tree
+        that still ships the directory keeps it as a root.
         """
         root = Path(arch_root)
         roots = [
             root / "llk_lib",
             root / "llk_lib" / "hal",
             root / "common" / "inc",
-            root / "common" / "inc" / "sfpu",
         ]
+        sfpu = root / "common" / "inc" / "sfpu"
+        if root.name != "tt_llk_quasar" or sfpu.is_dir():
+            roots.append(sfpu)
         if root.name == "tt_llk_quasar":
             roots.append(root)
             variant = quasar_variant()

@@ -30,12 +30,12 @@ void reduce_scatter_common_validates(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
+        input_tensor.is_allocated(),
         "Operands to reduce_scatter_minimal_async need to be allocated in buffers on device!");
     TT_FATAL(num_links > 0, "Error, num_links should be more than 0 but has {}", num_links);
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "input_tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "input_tensor must have a buffer");
+    TT_FATAL(input_tensor.is_allocated(), "input_tensor must have a buffer");
 
     const auto& rank = input_tensor.logical_shape().rank();
 
