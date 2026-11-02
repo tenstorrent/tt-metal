@@ -143,6 +143,25 @@ bool can_use_sharded_optimized_factories(
 }
 }  // namespace
 
+bool tilize_needs_typecast(DataType input_dtype, DataType output_dtype) {
+    if (input_dtype == output_dtype) {
+        return false;
+    }
+    const bool input_float = is_floating_point(input_dtype);
+    const bool output_float = is_floating_point(output_dtype);
+    if (input_float && output_float) {
+        return false;
+    }
+    // Integer pairs whose bit patterns the packer carries over unchanged: int32 <-> uint32 share
+    // a 32-bit encoding, and uint8 is widened by zero-extension.
+    const bool output_32bit_int = output_dtype == DataType::INT32 || output_dtype == DataType::UINT32;
+    if (output_32bit_int &&
+        (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8)) {
+        return false;
+    }
+    return true;
+}
+
 constexpr uint32_t WIDE_ROW_TILE_THRESHOLD = 32;
 
 void TilizeDeviceOperation::validate_on_program_cache_miss(
@@ -224,6 +243,13 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             width,
             tile_width);
     }
+
+    TT_FATAL(
+        !tilize_needs_typecast(input_tensor_a.dtype(), operation_attributes.output_dtype),
+        "tilize cannot convert {} to {}: the datacopy path only converts between float formats; "
+        "use ttnn::tilize (which composes ttnn::typecast) or call ttnn::typecast",
+        input_tensor_a.dtype(),
+        operation_attributes.output_dtype);
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
 

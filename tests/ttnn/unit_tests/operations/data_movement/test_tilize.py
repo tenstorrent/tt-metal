@@ -1286,3 +1286,74 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
 
     assert entries == 1, "tilize should build exactly one program for a fixed config"
     device.disable_and_clear_program_cache()
+
+
+# Packer format conversion never turns a float into an integer or back, so these pairs must match
+# ttnn.typecast semantics: float -> int truncates toward zero, int -> float rounds to nearest.
+_TORCH_DTYPE = {
+    ttnn.bfloat16: torch.bfloat16,
+    ttnn.float32: torch.float32,
+    ttnn.int32: torch.int32,
+}
+
+
+def _int_float_input(shape, in_dtype):
+    torch.manual_seed(0)
+    if in_dtype in (ttnn.bfloat16, ttnn.float32):
+        # Fractions of both signs exercise truncation; magnitudes stay inside every target range.
+        values = torch.empty(shape, dtype=torch.float32).uniform_(-1000.0, 1000.0)
+        return values.to(_TORCH_DTYPE[in_dtype])
+    # Exact in bfloat16 (8 significant bits), so int -> float has a single correct answer.
+    return torch.randint(-256, 256, shape, dtype=torch.int32).to(_TORCH_DTYPE[in_dtype])
+
+
+@pytest.mark.parametrize(
+    "in_dtype, out_dtype",
+    [
+        (ttnn.bfloat16, ttnn.int32),
+        (ttnn.float32, ttnn.int32),
+        (ttnn.int32, ttnn.bfloat16),
+        (ttnn.int32, ttnn.float32),
+    ],
+    ids=["bf16_to_int32", "fp32_to_int32", "int32_to_bf16", "int32_to_fp32"],
+)
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32), (1, 2, 64, 96)], ids=["one_tile", "multi_tile"])
+@pytest.mark.parametrize("via_to_layout", [False, True], ids=["tilize", "to_layout"])
+def test_tilize_int_float_dtype_conversion(device, shape, in_dtype, out_dtype, via_to_layout):
+    torch_input = _int_float_input(shape, in_dtype)
+    tt_input = ttnn.from_torch(torch_input, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    if via_to_layout:
+        tt_output = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT, dtype=out_dtype)
+    else:
+        tt_output = ttnn.tilize(tt_input, dtype=out_dtype)
+    assert tt_output.layout == ttnn.TILE_LAYOUT and tt_output.dtype == out_dtype
+    golden = torch_input.to(_TORCH_DTYPE[out_dtype])
+    assert torch.equal(ttnn.to_torch(tt_output).to(golden.dtype), golden)
+
+
+def test_tilize_bf16_to_int32_sharded(device):
+    torch.manual_seed(0)
+    shape = [1, 1, 128, 64]
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+    shard_spec = ttnn.ShardSpec(grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    torch_input = torch.empty(shape, dtype=torch.float32).uniform_(-1000.0, 1000.0).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    tt_output = ttnn.tilize(tt_input, memory_config=mem_cfg, dtype=ttnn.int32)
+    assert tt_output.dtype == ttnn.int32 and tt_output.memory_config().is_sharded()
+    assert torch.equal(ttnn.to_torch(tt_output), torch_input.to(torch.int32))
+
+
+# Out-of-range and infinite inputs saturate to the int32 limits, as ttnn.typecast does. NaN is left
+# out: its result follows the sign bit, which torch does not define.
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_tilize_float_to_int32_saturates(device, in_dtype):
+    int32_max, int32_min = torch.iinfo(torch.int32).max, torch.iinfo(torch.int32).min
+    row = [float("inf"), float("-inf"), 3e9, -3e9, 2147483648.0, -2147483648.0, 0.99, -0.99]
+    expected_row = [int32_max, int32_min, int32_max, int32_min, int32_max, int32_min, 0, 0]
+    torch_input = torch.tensor([row * 4] * 32, dtype=torch.float32)
+    tt_input = ttnn.from_torch(torch_input, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize(tt_input, dtype=ttnn.int32)
+    assert torch.equal(ttnn.to_torch(tt_output), torch.tensor([expected_row * 4] * 32, dtype=torch.int32))

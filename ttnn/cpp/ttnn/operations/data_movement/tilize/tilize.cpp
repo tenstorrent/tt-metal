@@ -5,6 +5,7 @@
 #include "tilize.hpp"
 
 #include "device/tilize_device_operation.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -61,6 +62,16 @@ ttnn::Tensor tilize(
                 PageConfig(Layout::TILE, tile),
                 memory_config.value_or(input_tensor.memory_config())));
         return create_device_tensor(spec, input_tensor.device());
+    }
+
+    // fp8 has no TILE form to stage through; the device op rejects fp8 -> integer itself.
+    if (output_dtype.has_value() && input_tensor.dtype() != DataType::FP8_E4M3 &&
+        ttnn::prim::tilize_needs_typecast(input_tensor.dtype(), output_dtype.value())) {
+        const ttnn::Tensor tiled =
+            ttnn::tilize(input_tensor, memory_config, std::nullopt, use_multicore, use_low_perf, tile, sub_core_grids);
+        // The intermediate's memory config, not the requested one: the legacy sharded factories
+        // substitute the input shard spec, and the cast must not reshard.
+        return ttnn::typecast(tiled, output_dtype.value(), tiled.memory_config(), std::nullopt, sub_core_grids);
     }
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
