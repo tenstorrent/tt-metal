@@ -38,7 +38,7 @@ TILE = 32
 # CB indices — must match kernels/rms_norm_common.hpp.
 CB_X_RM = 0  # RM: raw stick pieces (tile-sized pages) -> tilize
 CB_X = 1  # resident x block (ping)
-CB_GAMMA = 2  # gamma slice (faces 0/1 pages, row-broadcast by compute), program lifetime
+CB_GAMMA = 2  # gamma slice (compact interleaved row-0 pages, row-broadcast by compute), program lifetime
 CB_SUMSQ = 3  # per tile-row DEST-accumulated sum of x^2 (pass-1 output)
 CB_PARTIAL = 4  # k > 1: this member's per-row partial (column 0)
 CB_GATHERED = 5  # k > 1: k partials per row, all-gathered over the NoC
@@ -209,11 +209,50 @@ def acc_dtype(fp32_dest_acc_en: bool):
     return ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
 
 
-def _gamma_page_bytes(gamma_dtype) -> int:
-    """cb_gamma page bytes: the bfp exponent section (if any) + faces 0/1 (half the datum area) of a gamma tile."""
+# Compact cb_gamma (Perf 2, perf_experiments/compact_gamma). The row-broadcast unpack (llk_unpack_A<ROW, acc_to_dest,
+# DEST_TO_SRCA>) addresses page j at rd_ptr + j * page_size and its face 1 at + face_bytes (the unpacker's Z stride
+# — fixed by the data format, not by the CB page size); the ELWMUL SRCB_BCAST_ROW reads srcB row 0 only. So a page
+# only needs [exp section +] face 0 row 0 and face 1 row 0 — the page STRIDE can be far smaller than the 2-face
+# extent as long as no page's written bytes land on another page's row 0 / exponents. The stride is the smallest
+# multiple of GAMMA_READ_ALIGN (64 B: DRAM reads keep their source offset mod 64 B, and every gamma tile / RM slice
+# starts 64 B-aligned) whose per-page write footprint [0, exp + 64) u [exp + F, exp + F + 64) is disjoint across
+# pages: 192 B for bf16 / fp32 / bfloat8_b (vs 1024 / 2048 / 576 B). The last page's unpacker read runs
+# exp + 2F - S bytes past its stride: GAMMA tail pages (owned, never written) keep that read inside the slice /
+# streamed chunk's own reservation.
+GAMMA_READ_ALIGN = 64
+
+
+def _gamma_full_page_bytes(gamma_dtype):
+    """(exp_section_bytes, face_bytes, exp + 2 faces) of one gamma tile's faces 0/1 [+ bfp exponent section]."""
     elem = 1 if gamma_dtype == ttnn.bfloat8_b else ttnn.tile_size(gamma_dtype) // (TILE * TILE)
     exp = ttnn.tile_size(gamma_dtype) - TILE * TILE * elem
-    return exp + (TILE * TILE * elem) // 2
+    face = (TILE * TILE * elem) // 4
+    return exp, face, exp + 2 * face
+
+
+def _gamma_page_layout(gamma_dtype):
+    """(cb_gamma page stride bytes, tail pages) — see "Compact cb_gamma" above."""
+    exp, face, full = _gamma_full_page_bytes(gamma_dtype)
+    foot = [(0, exp + GAMMA_READ_ALIGN), (exp + face, GAMMA_READ_ALIGN)]  # bytes one page's loader may write
+
+    def disjoint(s):
+        for j in range(1, full // s + 2):
+            for o1, l1 in foot:
+                for o2, l2 in foot:
+                    a, b = o2 + j * s, o2 + j * s + l2
+                    if a < o1 + l1 and o1 < b:
+                        return False
+        return True
+
+    for s in range(GAMMA_READ_ALIGN, full, GAMMA_READ_ALIGN):
+        if disjoint(s):
+            return s, _div_up(full - s, s)
+    return full, 0
+
+
+def _gamma_page_bytes(gamma_dtype) -> int:
+    """cb_gamma page stride (bytes) — see "Compact cb_gamma" above."""
+    return _gamma_page_layout(gamma_dtype)[0]
 
 
 class _Sizes:
@@ -222,7 +261,7 @@ class _Sizes:
         self.T_out = self.T_in
         # cb_gamma page: [bfp exponent section +] faces 0/1 of a gamma tile — compute reads gamma ROW-broadcast
         # (row 0 of faces 0/1 only), so faces 2/3 are never stored.
-        self.T_g = _gamma_page_bytes(gamma_dtype) if has_gamma else 0
+        self.T_g, self.g_tail = _gamma_page_layout(gamma_dtype) if has_gamma else (0, 0)
         self.T_acc = ttnn.tile_size(acc_dtype(fp32_dest_acc_en))
         self.is_rm = is_rm
         self.has_gamma = has_gamma
@@ -278,7 +317,9 @@ def cb_plan(sz: _Sizes, k: int, slice_w: int, b: int, d: int, opts: PlanOpts = P
         if d == 2:
             plan[CB_X_ALT] = (b * pitch, sz.T_in)  # second half of the depth-2 x budget
     if sz.has_gamma:
-        plan[CB_GAMMA] = (GAMMA_STREAM_DEPTH * opts.gamma_chunk if opts.gamma_chunk else pitch, sz.T_g)
+        # compact pages: every resident slice / streamed chunk owns g_tail extra pages (its last page's read extent)
+        g_unit = (opts.gamma_chunk if opts.gamma_chunk else pitch) + sz.g_tail
+        plan[CB_GAMMA] = (GAMMA_STREAM_DEPTH * g_unit if opts.gamma_chunk else g_unit, sz.T_g)
     if k > 1:
         pipe = 2 if opts.pipe_nb else 1  # combine pipeline: front(t+1) precedes send(t); two-round exchange window
         plan[CB_PARTIAL] = (pipe * b, sz.T_acc)
@@ -404,16 +445,20 @@ def _sharded_plan_candidates(sz: _Sizes, slice_w: int, opts: PlanOpts):
             for g in range(min(GAMMA_STREAM_FORCE_CHUNK or GAMMA_STREAM_CHUNK_CAP, slice_w), 0, -1):
                 yield replace(opts, gamma_chunk=g)
         return
+    caps = []
     cap = RM_CHUNK_CAP
-    while True:
-        o = replace(opts, rm_chunk_cap=cap)
-        if not force:
-            yield o
-        if sz.has_gamma:
-            yield replace(o, gamma_chunk=_rm_chunk(slice_w, cap)[0])
-        if cap == 1:
-            return
+    while cap >= 1:
+        caps.append(cap)
         cap //= 2
+    # Resident gamma at ANY chunk cap before streamed gamma at any cap (Perf 2, compact_gamma): streamed RM gamma
+    # re-reads the one-bank RM gamma page per block — measured slower than a halved chunk cap (fp32 RM x, bf16 RM
+    # gamma, W = 8192: 111.5 -> 107.3 us).
+    if not force:
+        for cap in caps:
+            yield replace(opts, rm_chunk_cap=cap)
+    if sz.has_gamma:
+        for cap in caps:
+            yield replace(opts, rm_chunk_cap=cap, gamma_chunk=_rm_chunk(slice_w, cap)[0])
 
 
 def _solve_rows_sharded(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: int, opts: PlanOpts):
@@ -887,6 +932,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         defines.append(("RMS_RM", "1"))
     if has_gamma:
         defines.append(("RMS_HAS_GAMMA", "1"))
+        defines.append(("RMS_GAMMA_TAIL_PAGES", str(sz.g_tail)))
     if sharded:
         defines.append(("RMS_SHARDED", "1"))
     if opts.mask_tail:

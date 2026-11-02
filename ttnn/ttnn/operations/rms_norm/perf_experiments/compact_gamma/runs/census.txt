@@ -1,0 +1,22 @@
+census: 2211 distinct sharded gamma plans; op streams/nofit 21; compact streams/nofit 5
+[1, 1, 32, 4096] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=32 cg=res
+[1, 1, 32, 8192] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=8 cg=res
+[1, 1, 32, 8192] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.BFLOAT16 pin=None: op=G=8 cg=G=16
+[1, 1, 32, 8192] DataType.BFLOAT16 Layout.TILE TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=16 cg=res
+[1, 1, 32, 8192] DataType.BFLOAT16 Layout.TILE TensorMemoryLayout.HEIGHT_SHARDED fp32=False g=DataType.FLOAT32 pin=None: op=G=16 cg=res
+[1, 1, 128, 4096] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=32 cg=res
+[2, 1, 64, 4096] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=32 cg=res
+[1, 32, 4096] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=32 cg=res
+[1, 32, 8192] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=8 cg=res
+[1, 32, 8192] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.BFLOAT16 pin=None: op=G=8 cg=G=16
+[1, 32, 8192] DataType.BFLOAT16 Layout.TILE TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=16 cg=res
+[1, 32, 8192] DataType.BFLOAT16 Layout.TILE TensorMemoryLayout.HEIGHT_SHARDED fp32=False g=DataType.FLOAT32 pin=None: op=G=16 cg=res
+[32, 4096] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=32 cg=res
+[128, 8192] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=8 cg=res
+[128, 8192] DataType.FLOAT32 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.BFLOAT16 pin=None: op=G=8 cg=G=16
+[128, 8192] DataType.BFLOAT16 Layout.TILE TensorMemoryLayout.HEIGHT_SHARDED fp32=True g=DataType.FLOAT32 pin=None: op=G=16 cg=res
+[128, 8192] DataType.BFLOAT16 Layout.TILE TensorMemoryLayout.HEIGHT_SHARDED fp32=False g=DataType.FLOAT32 pin=None: op=G=16 cg=res
+[1, 1, 160, 11008] DataType.BFLOAT16 Layout.TILE TensorMemoryLayout.HEIGHT_SHARDED fp32=False g=DataType.BFLOAT16 pin=None: op=G=16 cg=G=16
+[1, 1, 160, 11008] DataType.BFLOAT16 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=False g=DataType.BFLOAT16 pin=None: op=G=32 cg=res
+[1, 224, 11008] DataType.BFLOAT16 Layout.TILE TensorMemoryLayout.HEIGHT_SHARDED fp32=False g=DataType.BFLOAT16 pin=None: op=G=16 cg=G=16
+[1, 224, 11008] DataType.BFLOAT16 Layout.ROW_MAJOR TensorMemoryLayout.HEIGHT_SHARDED fp32=False g=DataType.BFLOAT16 pin=None: op=G=32 cg=res

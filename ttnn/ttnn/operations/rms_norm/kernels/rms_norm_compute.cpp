@@ -229,6 +229,9 @@ ALWI void combine_partials_block(uint32_t rows, FinalizeInvRms finalize) {
 // (srcB) is ROW-broadcast: llk_unpack_A<ROW, acc_to_dest, DEST_TO_SRCA> unpacks faces 0,1,0,1 of the gamma page into
 // srcB, llk_math_eltwise_binary<ELWMUL, ROW, ..., DEST_TO_SRCA> issues ELWMUL with SRCB_BCAST_ROW on each DEST face
 // moved to srcA. Only row 0 of faces 0/1 of a gamma page is read. Same FPU/unpack work per tile as the NONE path.
+// The unpacker reads full faces (x_end = 256 datums) from page base and base + face bytes (format Z stride), page j
+// at rd_ptr + j * page_size: with the compact cb_gamma stride (192 B < 2 faces) rows 1..15 of srcB carry other
+// pages' bytes, which SRCB_BCAST_ROW never reads (bench proof: NaN-filled unwritten bytes, output bit-identical).
 // Inherits every chain trait (waits, srcB reconfig fold, tile addressing) from DestReuseBinary; init/exec replaced.
 template <InputSpec In>
 struct MulGammaRowBcast : DestReuseBinary<BinaryFpuOp::Mul, In, DestReuseType::DEST_TO_SRCA> {
@@ -416,7 +419,7 @@ ALWI void apply_back(
 #if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
     {
         MaybeDeviceZoneScope("cmp_wait_gamma");  // resident gamma slice (writer load / multicast)
-        cb_wait_front(cb_gamma, gamma_tiles);
+        cb_wait_front(cb_gamma, gamma_tiles + RMS_GAMMA_TAIL_PAGES);  // + tail pages (compact cb_gamma)
     }
 #endif
     // occupancy: pass 2 (+ RM untilize) incl. back-pressure from the writer on cb_out / cb_out_rm and, when
@@ -427,9 +430,9 @@ ALWI void apply_back(
 #if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
         // Streamed gamma: one C-tile chunk per chunk window (the writer streams G == C tiles per chunk).
         static_assert(RMS_GAMMA_CHUNK == rm_chunk_w_tiles, "RM streamed gamma chunk must equal the RM chunk");
-        cb_wait_front(cb_gamma, rm_chunk_w_tiles);
+        cb_wait_front(cb_gamma, rm_chunk_w_tiles + RMS_GAMMA_TAIL_PAGES);
         normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles, 0);
-        cb_pop_front(cb_gamma, rm_chunk_w_tiles);
+        cb_pop_front(cb_gamma, rm_chunk_w_tiles + RMS_GAMMA_TAIL_PAGES);
 #else
         normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles, c * rm_chunk_w_tiles);
 #endif
@@ -448,13 +451,13 @@ ALWI void apply_back(
     }
     for (uint32_t c0 = 0; c0 < norm_w; c0 += G) {
         const uint32_t n = (norm_w - c0) < G ? (norm_w - c0) : G;
-        cb_wait_front(cb_gamma, G);
+        cb_wait_front(cb_gamma, G + RMS_GAMMA_TAIL_PAGES);
         if (strided_out) {
             normalize_window<cb_x_blk, true>(rows, c0, n, 0);
         } else {
             normalize_window<cb_x_blk>(rows, c0, n, 0);
         }
-        cb_pop_front(cb_gamma, G);
+        cb_pop_front(cb_gamma, G + RMS_GAMMA_TAIL_PAGES);
     }
     if (strided_out) {
         cb_push_back(cb_out, rows * x_row_pitch);
@@ -569,7 +572,7 @@ void kernel_main() {
 #endif
 
 #if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
-    cb_pop_front(cb_gamma, gamma_tiles);
+    cb_pop_front(cb_gamma, gamma_tiles + RMS_GAMMA_TAIL_PAGES);
 #endif
 #ifdef RMS_MASK_TAIL
     if (owns_tail) {

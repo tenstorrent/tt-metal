@@ -5,8 +5,11 @@
 // Per block (k > 1): exchange_send -> exchange_recv_partials -> [block 0: finish the gamma load] -> exchange_recv_inv.
 //
 // GammaSliceLoad — this member's W slice of gamma into cb_gamma. Compute multiplies by gamma ROW-broadcast
-//   (MulGammaRowBcast), so a cb_gamma page only needs row 0 of faces 0/1 = gamma[32j .. 32j+31]: pages are
-//   [bfp exponent section +] faces 0/1 (half a tile), nothing is expanded. Loaded here, not on the reader,
+//   (MulGammaRowBcast), so a cb_gamma page only needs row 0 of faces 0/1 = gamma[32j .. 32j+31]: page j holds
+//   [bfp exponent section + face 0 row 0] at +0 and face 1 row 0 at +exp+F (F = face bytes), nothing is expanded.
+//   Compact pages: the page STRIDE (gamma_l1_page_bytes, 192 B) is smaller than that 2-face extent — pages
+//   interleave, no page's written bytes touch another page's row 0 (host-checked), and the slice / chunk owns
+//   RMS_GAMMA_TAIL_PAGES extra pages covering the last page's unpacker read. Loaded here, not on the reader,
 //   so the x stream starts at once on every Tensix core; compute waits for it only before its first pass 2.
 //   RM gamma  : 64 B-aligned slice (lead == 0): per tile ONE DRAM read of the 32-datum row into face 0 rows
 //               0..1, then one local L1 copy of its upper half (face 0 row 1) into face 1 row 0 (a DRAM read keeps
@@ -118,12 +121,24 @@ constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
 
 #ifdef RMS_HAS_GAMMA
-// L1 stride of one cb_gamma page: [exponent section +] faces 0/1 (the row-broadcast unpack reads nothing else).
+// L1 stride of one cb_gamma page. Compact (perf_experiments/compact_gamma): the stride S is smaller than the page's
+// 2-face extent [exp +] 2F — the row-broadcast unpack finds face 1 at +F (format Z stride) and the FPU reads only
+// srcB row 0, so a page needs only [exp + face 0 row 0] at +0 and face 1 row 0 at +exp+F; the host picks S (a
+// multiple of 64 B) so that these write footprints ([0, exp+64) u [exp+F, exp+F+64)) never overlap across pages.
+// The slice / chunk owns RMS_GAMMA_TAIL_PAGES extra pages so the last page's unpacker read stays inside it.
 constexpr uint32_t g_tile_bytes = gamma_l1_page_bytes;
-static_assert(
-    gamma_l1_page_bytes == gamma_exp_bytes + 2 * FACE_DIM * FACE_DIM * gamma_elem_bytes, "cb_gamma page = faces 0/1");
-
 constexpr uint32_t GAMMA_READ_ALIGN = 64;  // BH DRAM read alignment (also >= one 16-datum face row)
+constexpr uint32_t g_face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
+constexpr uint32_t g_full_page_bytes = gamma_exp_bytes + 2 * g_face_bytes;
+constexpr bool gamma_compact = gamma_l1_page_bytes < g_full_page_bytes;
+constexpr uint32_t gamma_tail_pages = RMS_GAMMA_TAIL_PAGES;
+static_assert(
+    gamma_l1_page_bytes == g_full_page_bytes || gamma_l1_page_bytes % GAMMA_READ_ALIGN == 0, "compact stride");
+// Bytes of a slice of n pages that carry data (the multicast span): up to the last page's face 1 row-0 read.
+FORCE_INLINE uint32_t gamma_span_bytes(uint32_t n) {
+    constexpr uint32_t last = gamma_compact ? gamma_exp_bytes + g_face_bytes + GAMMA_READ_ALIGN : g_tile_bytes;
+    return (n - 1) * g_tile_bytes + last;
+}
 
 // RM gamma row placement. An RM gamma is ONE DRAM page (one bank). Direct: one 64 B-aligned DRAM read per tile
 // straight into the face rows + one local copy — only when the reading Tensix core is the slice's single reader
@@ -136,6 +151,11 @@ constexpr bool gamma_rm_direct = true;
 #else
 constexpr bool gamma_rm_direct = false;
 #endif
+// Compact RM direct: a one-read 2-row temp (face 0 rows 0..1 = up to 2 x 64 B for fp32) would overlap another page's
+// face-1 row 0 at the 192 B stride, so a face-row half that is itself 64 B-aligned in DRAM (fp32: 64 B) is read
+// straight into face 0 / face 1 row 0 (2 reads, no local copy). bf16 (32 B half) keeps read + local copy: its 64 B
+// temp is exactly the [0, 64) footprint.
+constexpr bool gamma_rm_two_reads = gamma_compact && (FACE_DIM * gamma_elem_bytes) % GAMMA_READ_ALIGN == 0;
 
 // RM gamma: bytes of lead-in below the 64 B-aligned read start of the slice.
 FORCE_INLINE uint32_t gamma_rm_lead(uint32_t gamma_col0) {
@@ -165,9 +185,19 @@ FORCE_INLINE void issue_gamma_reads(
         const uint32_t byte0 = gamma_col0 * gamma_elem_bytes;
         const uint32_t lead = gamma_rm_lead(gamma_col0);
         if (gamma_rm_direct && lead == 0) {
+            constexpr uint32_t row_bytes = TILE_DIM * gamma_elem_bytes;
+            if constexpr (gamma_rm_two_reads) {
+                // compact, face-row half a multiple of 64 B (fp32): both halves straight to face 0 / face 1 row 0
+                constexpr uint32_t half = FACE_DIM * gamma_elem_bytes;
+                for (uint32_t j = 0; j < core_w_tiles; ++j) {
+                    const uint32_t tile = base + j * g_tile_bytes;
+                    noc_async_read(g_acc.get_noc_addr(0, byte0 + j * row_bytes), tile, half);
+                    noc_async_read(g_acc.get_noc_addr(0, byte0 + j * row_bytes + half), tile + g_face_bytes, half);
+                }
+                return;
+            }
             // one DRAM read of tile j's 32-datum row into face 0 rows 0..1 (finish moves the face-1 half). The last
             // tile may read past W: its padding columns are don't-care output.
-            constexpr uint32_t row_bytes = TILE_DIM * gamma_elem_bytes;
             for (uint32_t j = 0; j < core_w_tiles; ++j) {
                 noc_async_read(g_acc.get_noc_addr(0, byte0 + j * row_bytes), base + j * g_tile_bytes, row_bytes);
             }
@@ -186,6 +216,9 @@ FORCE_INLINE void finish_gamma_slice(uint32_t base, uint32_t core_w_tiles, uint3
         constexpr uint32_t frow = FACE_DIM * gamma_elem_bytes;
         const uint32_t lead = gamma_rm_lead(gamma_col0);
         if (gamma_rm_direct && lead == 0) {
+            if constexpr (gamma_rm_two_reads) {
+                return;
+            }
             for (uint32_t j = 0; j < core_w_tiles; ++j) {  // face 0 row 1 (the face-1 half of row 0) -> face 1 row 0
                 const uint32_t tile = base + j * g_tile_bytes;
                 noc_async_read(get_noc_addr(tile + frow), tile + face_bytes, frow);
@@ -268,7 +301,7 @@ struct GammaSliceLoad {
 
     FORCE_INLINE void begin() {
         MaybeDeviceZoneScope("wr_gamma_issue");
-        cb_reserve_back(cb_gamma, push_tiles);
+        cb_reserve_back(cb_gamma, push_tiles + gamma_tail_pages);
         base = get_write_ptr(cb_gamma);
         if (reads_dram()) {
             issue_gamma_reads(g_acc, base, w_tile_start, core_w_tiles, col0, cols);
@@ -282,14 +315,14 @@ struct GammaSliceLoad {
         // optional_*: a W slice owned by a single Tensix core (one row-group) has a sender and no receivers.
         if (auto sender = gamma_mcast.optional_sender(noc)) {
             finish_gamma_slice(base, core_w_tiles, col0);
-            sender->send(base, base, core_w_tiles * g_tile_bytes);  // zero fan-out: src == dst, no transfer
+            sender->send(base, base, gamma_span_bytes(core_w_tiles));  // zero fan-out: src == dst, no transfer
         } else if (auto receiver = gamma_mcast.optional_receiver(noc)) {
             receiver->receive();
         }
 #else
         finish_gamma_slice(base, core_w_tiles, col0);
 #endif
-        cb_push_back(cb_gamma, push_tiles);
+        cb_push_back(cb_gamma, push_tiles + gamma_tail_pages);
     }
 };
 #endif
@@ -307,14 +340,14 @@ FORCE_INLINE void stream_gamma_chunk(
     uint32_t valid_cols,
     uint32_t c0) {
     constexpr uint32_t G = RMS_GAMMA_CHUNK;
-    cb_reserve_back(cb_gamma, G);
+    cb_reserve_back(cb_gamma, G + gamma_tail_pages);
     if (c0 < core_w_tiles) {
         const uint32_t valid = (core_w_tiles - c0) < G ? (core_w_tiles - c0) : G;
         const uint32_t cols =
             (valid_cols - c0 * TILE_DIM) < valid * TILE_DIM ? (valid_cols - c0 * TILE_DIM) : valid * TILE_DIM;
         fill_gamma_slice(g_acc, get_write_ptr(cb_gamma), w_tile_start + c0, valid, col0 + c0 * TILE_DIM, cols);
     }
-    cb_push_back(cb_gamma, G);
+    cb_push_back(cb_gamma, G + gamma_tail_pages);
 }
 #endif
 

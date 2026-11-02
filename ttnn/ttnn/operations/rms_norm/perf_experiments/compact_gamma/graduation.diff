@@ -1,0 +1,314 @@
+--- a/rms_norm_program_descriptor.py	2026-11-01 21:44:47.810870334 +0000
++++ b/rms_norm_program_descriptor.py	2026-11-02 00:37:06.203051121 +0000
+@@ -38,7 +38,7 @@
+ # CB indices — must match kernels/rms_norm_common.hpp.
+ CB_X_RM = 0  # RM: raw stick pieces (tile-sized pages) -> tilize
+ CB_X = 1  # resident x block (ping)
+-CB_GAMMA = 2  # gamma slice (faces 0/1 pages, row-broadcast by compute), program lifetime
++CB_GAMMA = 2  # gamma slice (compact interleaved row-0 pages, row-broadcast by compute), program lifetime
+ CB_SUMSQ = 3  # per tile-row DEST-accumulated sum of x^2 (pass-1 output)
+ CB_PARTIAL = 4  # k > 1: this member's per-row partial (column 0)
+ CB_GATHERED = 5  # k > 1: k partials per row, all-gathered over the NoC
+@@ -209,11 +209,51 @@
+     return ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+
+
+-def _gamma_page_bytes(gamma_dtype) -> int:
+-    """cb_gamma page bytes: the bfp exponent section (if any) + faces 0/1 (half the datum area) of a gamma tile."""
++# Compact cb_gamma (Perf 2, perf_experiments/compact_gamma). The row-broadcast unpack (llk_unpack_A<ROW, acc_to_dest,
++# DEST_TO_SRCA>) addresses page j at rd_ptr + j * page_size and its face 1 at + face_bytes (the unpacker's Z stride
++# — fixed by the data format, not by the CB page size); the ELWMUL SRCB_BCAST_ROW reads srcB row 0 only. So a page
++# only needs [exp section +] face 0 row 0 and face 1 row 0 — the page STRIDE can be far smaller than the 2-face
++# extent as long as no page's written bytes land on another page's row 0 / exponents. The stride is the smallest
++# multiple of GAMMA_READ_ALIGN (64 B: DRAM reads keep their source offset mod 64 B, and every gamma tile / RM slice
++# starts 64 B-aligned) whose per-page write footprint [0, exp + 64) u [exp + F, exp + F + 64) is disjoint across
++# pages: 192 B for bf16 / fp32 / bfloat8_b (vs 1024 / 2048 / 576 B). The last page's unpacker read runs
++# exp + 2F - S bytes past its stride: GAMMA tail pages (owned, never written) keep that read inside the slice /
++# streamed chunk's own reservation.
++GAMMA_RESIDENT_FIRST = True  # RM sharded plan order: resident gamma at every chunk cap before any streamed gamma
++GAMMA_READ_ALIGN = 64
++
++
++def _gamma_full_page_bytes(gamma_dtype):
++    """(exp_section_bytes, face_bytes, exp + 2 faces) of one gamma tile's faces 0/1 [+ bfp exponent section]."""
+     elem = 1 if gamma_dtype == ttnn.bfloat8_b else ttnn.tile_size(gamma_dtype) // (TILE * TILE)
+     exp = ttnn.tile_size(gamma_dtype) - TILE * TILE * elem
+-    return exp + (TILE * TILE * elem) // 2
++    face = (TILE * TILE * elem) // 4
++    return exp, face, exp + 2 * face
++
++
++def _gamma_page_layout(gamma_dtype):
++    """(cb_gamma page stride bytes, tail pages) — see "Compact cb_gamma" above."""
++    exp, face, full = _gamma_full_page_bytes(gamma_dtype)
++    foot = [(0, exp + GAMMA_READ_ALIGN), (exp + face, GAMMA_READ_ALIGN)]  # bytes one page's loader may write
++
++    def disjoint(s):
++        for j in range(1, full // s + 2):
++            for o1, l1 in foot:
++                for o2, l2 in foot:
++                    a, b = o2 + j * s, o2 + j * s + l2
++                    if a < o1 + l1 and o1 < b:
++                        return False
++        return True
++
++    for s in range(GAMMA_READ_ALIGN, full, GAMMA_READ_ALIGN):
++        if disjoint(s):
++            return s, _div_up(full - s, s)
++    return full, 0
++
++
++def _gamma_page_bytes(gamma_dtype) -> int:
++    """cb_gamma page stride (bytes) — see "Compact cb_gamma" above."""
++    return _gamma_page_layout(gamma_dtype)[0]
+
+
+ class _Sizes:
+@@ -222,7 +262,7 @@
+         self.T_out = self.T_in
+         # cb_gamma page: [bfp exponent section +] faces 0/1 of a gamma tile — compute reads gamma ROW-broadcast
+         # (row 0 of faces 0/1 only), so faces 2/3 are never stored.
+-        self.T_g = _gamma_page_bytes(gamma_dtype) if has_gamma else 0
++        self.T_g, self.g_tail = _gamma_page_layout(gamma_dtype) if has_gamma else (0, 0)
+         self.T_acc = ttnn.tile_size(acc_dtype(fp32_dest_acc_en))
+         self.is_rm = is_rm
+         self.has_gamma = has_gamma
+@@ -278,7 +318,9 @@
+         if d == 2:
+             plan[CB_X_ALT] = (b * pitch, sz.T_in)  # second half of the depth-2 x budget
+     if sz.has_gamma:
+-        plan[CB_GAMMA] = (GAMMA_STREAM_DEPTH * opts.gamma_chunk if opts.gamma_chunk else pitch, sz.T_g)
++        # compact pages: every resident slice / streamed chunk owns g_tail extra pages (its last page's read extent)
++        g_unit = (opts.gamma_chunk if opts.gamma_chunk else pitch) + sz.g_tail
++        plan[CB_GAMMA] = (GAMMA_STREAM_DEPTH * g_unit if opts.gamma_chunk else g_unit, sz.T_g)
+     if k > 1:
+         pipe = 2 if opts.pipe_nb else 1  # combine pipeline: front(t+1) precedes send(t); two-round exchange window
+         plan[CB_PARTIAL] = (pipe * b, sz.T_acc)
+@@ -404,16 +446,27 @@
+             for g in range(min(GAMMA_STREAM_FORCE_CHUNK or GAMMA_STREAM_CHUNK_CAP, slice_w), 0, -1):
+                 yield replace(opts, gamma_chunk=g)
+         return
++    caps = []
+     cap = RM_CHUNK_CAP
+-    while True:
++    while cap >= 1:
++        caps.append(cap)
++        cap //= 2
++    if GAMMA_RESIDENT_FIRST:
++        # compact_gamma: resident gamma at ANY chunk cap before streamed gamma at any cap — streamed RM gamma re-reads
++        # the one-bank RM gamma page per block (measured slower than a halved chunk cap, see test_cg_bench)
++        if not force:
++            for cap in caps:
++                yield replace(opts, rm_chunk_cap=cap)
++        if sz.has_gamma:
++            for cap in caps:
++                yield replace(opts, rm_chunk_cap=cap, gamma_chunk=_rm_chunk(slice_w, cap)[0])
++        return
++    for cap in caps:
+         o = replace(opts, rm_chunk_cap=cap)
+         if not force:
+             yield o
+         if sz.has_gamma:
+             yield replace(o, gamma_chunk=_rm_chunk(slice_w, cap)[0])
+-        if cap == 1:
+-            return
+-        cap //= 2
+
+
+ def _solve_rows_sharded(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: int, opts: PlanOpts):
+@@ -887,6 +940,7 @@
+         defines.append(("RMS_RM", "1"))
+     if has_gamma:
+         defines.append(("RMS_HAS_GAMMA", "1"))
++        defines.append(("RMS_GAMMA_TAIL_PAGES", str(sz.g_tail)))
+     if sharded:
+         defines.append(("RMS_SHARDED", "1"))
+     if opts.mask_tail:
+--- a/kernels/rms_norm_writer.cpp	2026-11-01 23:18:04.046698603 +0000
++++ b/kernels/rms_norm_writer.cpp	2026-11-02 00:37:06.203051121 +0000
+@@ -5,8 +5,11 @@
+ // Per block (k > 1): exchange_send -> exchange_recv_partials -> [block 0: finish the gamma load] -> exchange_recv_inv.
+ //
+ // GammaSliceLoad — this member's W slice of gamma into cb_gamma. Compute multiplies by gamma ROW-broadcast
+-//   (MulGammaRowBcast), so a cb_gamma page only needs row 0 of faces 0/1 = gamma[32j .. 32j+31]: pages are
+-//   [bfp exponent section +] faces 0/1 (half a tile), nothing is expanded. Loaded here, not on the reader,
++//   (MulGammaRowBcast), so a cb_gamma page only needs row 0 of faces 0/1 = gamma[32j .. 32j+31]: page j holds
++//   [bfp exponent section + face 0 row 0] at +0 and face 1 row 0 at +exp+F (F = face bytes), nothing is expanded.
++//   Compact pages: the page STRIDE (gamma_l1_page_bytes, 192 B) is smaller than that 2-face extent — pages
++//   interleave, no page's written bytes touch another page's row 0 (host-checked), and the slice / chunk owns
++//   RMS_GAMMA_TAIL_PAGES extra pages covering the last page's unpacker read. Loaded here, not on the reader,
+ //   so the x stream starts at once on every Tensix core; compute waits for it only before its first pass 2.
+ //   RM gamma  : 64 B-aligned slice (lead == 0): per tile ONE DRAM read of the 32-datum row into face 0 rows
+ //               0..1, then one local L1 copy of its upper half (face 0 row 1) into face 1 row 0 (a DRAM read keeps
+@@ -118,12 +121,23 @@
+ constexpr uint32_t FACE_DIM = 16;
+
+ #ifdef RMS_HAS_GAMMA
+-// L1 stride of one cb_gamma page: [exponent section +] faces 0/1 (the row-broadcast unpack reads nothing else).
++// L1 stride of one cb_gamma page. Compact (perf_experiments/compact_gamma): the stride S is smaller than the page's
++// 2-face extent [exp +] 2F — the row-broadcast unpack finds face 1 at +F (format Z stride) and the FPU reads only
++// srcB row 0, so a page needs only [exp + face 0 row 0] at +0 and face 1 row 0 at +exp+F; the host picks S (a
++// multiple of 64 B) so that these write footprints ([0, exp+64) u [exp+F, exp+F+64)) never overlap across pages.
++// The slice / chunk owns RMS_GAMMA_TAIL_PAGES extra pages so the last page's unpacker read stays inside it.
+ constexpr uint32_t g_tile_bytes = gamma_l1_page_bytes;
+-static_assert(
+-    gamma_l1_page_bytes == gamma_exp_bytes + 2 * FACE_DIM * FACE_DIM * gamma_elem_bytes, "cb_gamma page = faces 0/1");
+-
+ constexpr uint32_t GAMMA_READ_ALIGN = 64;  // BH DRAM read alignment (also >= one 16-datum face row)
++constexpr uint32_t g_face_bytes = FACE_DIM * FACE_DIM * gamma_elem_bytes;
++constexpr uint32_t g_full_page_bytes = gamma_exp_bytes + 2 * g_face_bytes;
++constexpr bool gamma_compact = gamma_l1_page_bytes < g_full_page_bytes;
++constexpr uint32_t gamma_tail_pages = RMS_GAMMA_TAIL_PAGES;
++static_assert(gamma_l1_page_bytes == g_full_page_bytes || gamma_l1_page_bytes % GAMMA_READ_ALIGN == 0, "compact stride");
++// Bytes of a slice of n pages that carry data (the multicast span): up to the last page's face 1 row-0 read.
++FORCE_INLINE uint32_t gamma_span_bytes(uint32_t n) {
++    constexpr uint32_t last = gamma_compact ? gamma_exp_bytes + g_face_bytes + GAMMA_READ_ALIGN : g_tile_bytes;
++    return (n - 1) * g_tile_bytes + last;
++}
+
+ // RM gamma row placement. An RM gamma is ONE DRAM page (one bank). Direct: one 64 B-aligned DRAM read per tile
+ // straight into the face rows + one local copy — only when the reading Tensix core is the slice's single reader
+@@ -136,6 +150,11 @@
+ #else
+ constexpr bool gamma_rm_direct = false;
+ #endif
++// Compact RM direct: a one-read 2-row temp (face 0 rows 0..1 = up to 2 x 64 B for fp32) would overlap another page's
++// face-1 row 0 at the 192 B stride, so a face-row half that is itself 64 B-aligned in DRAM (fp32: 64 B) is read
++// straight into face 0 / face 1 row 0 (2 reads, no local copy). bf16 (32 B half) keeps read + local copy: its 64 B
++// temp is exactly the [0, 64) footprint.
++constexpr bool gamma_rm_two_reads = gamma_compact && (FACE_DIM * gamma_elem_bytes) % GAMMA_READ_ALIGN == 0;
+
+ // RM gamma: bytes of lead-in below the 64 B-aligned read start of the slice.
+ FORCE_INLINE uint32_t gamma_rm_lead(uint32_t gamma_col0) {
+@@ -165,9 +184,19 @@
+         const uint32_t byte0 = gamma_col0 * gamma_elem_bytes;
+         const uint32_t lead = gamma_rm_lead(gamma_col0);
+         if (gamma_rm_direct && lead == 0) {
++            constexpr uint32_t row_bytes = TILE_DIM * gamma_elem_bytes;
++            if constexpr (gamma_rm_two_reads) {
++                // compact, face-row half a multiple of 64 B (fp32): both halves straight to face 0 / face 1 row 0
++                constexpr uint32_t half = FACE_DIM * gamma_elem_bytes;
++                for (uint32_t j = 0; j < core_w_tiles; ++j) {
++                    const uint32_t tile = base + j * g_tile_bytes;
++                    noc_async_read(g_acc.get_noc_addr(0, byte0 + j * row_bytes), tile, half);
++                    noc_async_read(g_acc.get_noc_addr(0, byte0 + j * row_bytes + half), tile + g_face_bytes, half);
++                }
++                return;
++            }
+             // one DRAM read of tile j's 32-datum row into face 0 rows 0..1 (finish moves the face-1 half). The last
+             // tile may read past W: its padding columns are don't-care output.
+-            constexpr uint32_t row_bytes = TILE_DIM * gamma_elem_bytes;
+             for (uint32_t j = 0; j < core_w_tiles; ++j) {
+                 noc_async_read(g_acc.get_noc_addr(0, byte0 + j * row_bytes), base + j * g_tile_bytes, row_bytes);
+             }
+@@ -186,6 +215,9 @@
+         constexpr uint32_t frow = FACE_DIM * gamma_elem_bytes;
+         const uint32_t lead = gamma_rm_lead(gamma_col0);
+         if (gamma_rm_direct && lead == 0) {
++            if constexpr (gamma_rm_two_reads) {
++                return;
++            }
+             for (uint32_t j = 0; j < core_w_tiles; ++j) {  // face 0 row 1 (the face-1 half of row 0) -> face 1 row 0
+                 const uint32_t tile = base + j * g_tile_bytes;
+                 noc_async_read(get_noc_addr(tile + frow), tile + face_bytes, frow);
+@@ -268,7 +300,7 @@
+
+     FORCE_INLINE void begin() {
+         MaybeDeviceZoneScope("wr_gamma_issue");
+-        cb_reserve_back(cb_gamma, push_tiles);
++        cb_reserve_back(cb_gamma, push_tiles + gamma_tail_pages);
+         base = get_write_ptr(cb_gamma);
+         if (reads_dram()) {
+             issue_gamma_reads(g_acc, base, w_tile_start, core_w_tiles, col0, cols);
+@@ -282,14 +314,14 @@
+         // optional_*: a W slice owned by a single Tensix core (one row-group) has a sender and no receivers.
+         if (auto sender = gamma_mcast.optional_sender(noc)) {
+             finish_gamma_slice(base, core_w_tiles, col0);
+-            sender->send(base, base, core_w_tiles * g_tile_bytes);  // zero fan-out: src == dst, no transfer
++            sender->send(base, base, gamma_span_bytes(core_w_tiles));  // zero fan-out: src == dst, no transfer
+         } else if (auto receiver = gamma_mcast.optional_receiver(noc)) {
+             receiver->receive();
+         }
+ #else
+         finish_gamma_slice(base, core_w_tiles, col0);
+ #endif
+-        cb_push_back(cb_gamma, push_tiles);
++        cb_push_back(cb_gamma, push_tiles + gamma_tail_pages);
+     }
+ };
+ #endif
+@@ -307,14 +339,14 @@
+     uint32_t valid_cols,
+     uint32_t c0) {
+     constexpr uint32_t G = RMS_GAMMA_CHUNK;
+-    cb_reserve_back(cb_gamma, G);
++    cb_reserve_back(cb_gamma, G + gamma_tail_pages);
+     if (c0 < core_w_tiles) {
+         const uint32_t valid = (core_w_tiles - c0) < G ? (core_w_tiles - c0) : G;
+         const uint32_t cols =
+             (valid_cols - c0 * TILE_DIM) < valid * TILE_DIM ? (valid_cols - c0 * TILE_DIM) : valid * TILE_DIM;
+         fill_gamma_slice(g_acc, get_write_ptr(cb_gamma), w_tile_start + c0, valid, col0 + c0 * TILE_DIM, cols);
+     }
+-    cb_push_back(cb_gamma, G);
++    cb_push_back(cb_gamma, G + gamma_tail_pages);
+ }
+ #endif
+
+--- a/kernels/rms_norm_compute.cpp	2026-11-01 21:41:22.724257710 +0000
++++ b/kernels/rms_norm_compute.cpp	2026-11-02 00:36:55.562915508 +0000
+@@ -229,6 +229,9 @@
+ // (srcB) is ROW-broadcast: llk_unpack_A<ROW, acc_to_dest, DEST_TO_SRCA> unpacks faces 0,1,0,1 of the gamma page into
+ // srcB, llk_math_eltwise_binary<ELWMUL, ROW, ..., DEST_TO_SRCA> issues ELWMUL with SRCB_BCAST_ROW on each DEST face
+ // moved to srcA. Only row 0 of faces 0/1 of a gamma page is read. Same FPU/unpack work per tile as the NONE path.
++// The unpacker reads full faces (x_end = 256 datums) from page base and base + face bytes (format Z stride), page j
++// at rd_ptr + j * page_size: with the compact cb_gamma stride (192 B < 2 faces) rows 1..15 of srcB carry other
++// pages' bytes, which SRCB_BCAST_ROW never reads (bench proof: NaN-filled unwritten bytes, output bit-identical).
+ // Inherits every chain trait (waits, srcB reconfig fold, tile addressing) from DestReuseBinary; init/exec replaced.
+ template <InputSpec In>
+ struct MulGammaRowBcast : DestReuseBinary<BinaryFpuOp::Mul, In, DestReuseType::DEST_TO_SRCA> {
+@@ -416,7 +419,7 @@
+ #if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
+     {
+         MaybeDeviceZoneScope("cmp_wait_gamma");  // resident gamma slice (writer load / multicast)
+-        cb_wait_front(cb_gamma, gamma_tiles);
++        cb_wait_front(cb_gamma, gamma_tiles + RMS_GAMMA_TAIL_PAGES);  // + tail pages (compact cb_gamma)
+     }
+ #endif
+     // occupancy: pass 2 (+ RM untilize) incl. back-pressure from the writer on cb_out / cb_out_rm and, when
+@@ -427,9 +430,9 @@
+ #if defined(RMS_HAS_GAMMA) && defined(RMS_GAMMA_CHUNK)
+         // Streamed gamma: one C-tile chunk per chunk window (the writer streams G == C tiles per chunk).
+         static_assert(RMS_GAMMA_CHUNK == rm_chunk_w_tiles, "RM streamed gamma chunk must equal the RM chunk");
+-        cb_wait_front(cb_gamma, rm_chunk_w_tiles);
++        cb_wait_front(cb_gamma, rm_chunk_w_tiles + RMS_GAMMA_TAIL_PAGES);
+         normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles, 0);
+-        cb_pop_front(cb_gamma, rm_chunk_w_tiles);
++        cb_pop_front(cb_gamma, rm_chunk_w_tiles + RMS_GAMMA_TAIL_PAGES);
+ #else
+         normalize_window<cb_x_blk>(rows, c * rm_chunk_w_tiles, rm_chunk_w_tiles, c * rm_chunk_w_tiles);
+ #endif
+@@ -448,13 +451,13 @@
+     }
+     for (uint32_t c0 = 0; c0 < norm_w; c0 += G) {
+         const uint32_t n = (norm_w - c0) < G ? (norm_w - c0) : G;
+-        cb_wait_front(cb_gamma, G);
++        cb_wait_front(cb_gamma, G + RMS_GAMMA_TAIL_PAGES);
+         if (strided_out) {
+             normalize_window<cb_x_blk, true>(rows, c0, n, 0);
+         } else {
+             normalize_window<cb_x_blk>(rows, c0, n, 0);
+         }
+-        cb_pop_front(cb_gamma, G);
++        cb_pop_front(cb_gamma, G + RMS_GAMMA_TAIL_PAGES);
+     }
+     if (strided_out) {
+         cb_push_back(cb_out, rows * x_row_pitch);
+@@ -569,7 +572,7 @@
+ #endif
+
+ #if defined(RMS_HAS_GAMMA) && !defined(RMS_GAMMA_CHUNK)
+-    cb_pop_front(cb_gamma, gamma_tiles);
++    cb_pop_front(cb_gamma, gamma_tiles + RMS_GAMMA_TAIL_PAGES);
+ #endif
+ #ifdef RMS_MASK_TAIL
+     if (owns_tail) {
