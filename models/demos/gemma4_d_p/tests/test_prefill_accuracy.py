@@ -8,8 +8,8 @@ dataset's token prefix is prefilled chunk by chunk; then every KV head is compar
 while the final hidden states' next-token likelihoods are scored against its final-layer stream.
 
 A dataset is a prepared GPU trace (see ``prepare_gpu_reference.py``) whose source capture also kept the
-final decoder layer's output. Select datasets with ``GEMMA4_ACCURACY_DATASETS=name,...`` (default: all), and
-read them from another copy with ``GEMMA4_GPU_TRACE_ROOT``.
+final decoder layer's output. ``prompt_type`` selects the datasets, and ``GEMMA4_GPU_TRACE_ROOT`` reads them
+from another copy.
 """
 
 import json
@@ -49,35 +49,35 @@ GPU_TRACES = Path(os.getenv("GEMMA4_GPU_TRACE_ROOT", "/mnt/models/huggingface/gp
 
 
 @dataclass(frozen=True)
-class Limits:
+class Thresholds:
     min_per_head_pcc: float
     min_overall_pcc: float
     max_overall_rrmse: float
     # Per depth bin, keyed by its first position: minimum top-1 agreement, maximum mean ΔNLL and maximum
-    # mean top-20 KL against the GPU reference. Text of another kind needs its own measured limits.
+    # mean top-20 KL against the GPU reference. Text of another kind needs its own measured thresholds.
     likelihood: dict
 
 
 @dataclass(frozen=True)
 class Dataset:
     trace_dir: Path
-    # Prefix runs get their own limits, because their scores come from a different set of positions: KV PCC uses
+    # Prefix runs get their own thresholds, because their scores come from a different set of positions: KV PCC uses
     # every position in the run, and the likelihood check uses every 16th position plus the whole last chunk.
-    full_limits: Limits
-    prefix_limits: Limits
+    full_thresholds: Thresholds
+    prefix_thresholds: Thresholds
 
 
 DATASETS = {
     "gutenberg": Dataset(
         trace_dir=GPU_TRACES / "gutenberg-135",
         # Set from main's worst values over chunks 2048 / 4096 / 8192 at 8K, 16K, 128K and 256K, with margin.
-        full_limits=Limits(
+        full_thresholds=Thresholds(
             min_per_head_pcc=0.928,
             min_overall_pcc=0.978,
             max_overall_rrmse=0.208,
             likelihood={0: (0.87, 0.36, 0.18), 8192: (0.86, 0.39, 0.24), 65536: (0.87, 0.39, 0.19)},
         ),
-        prefix_limits=Limits(
+        prefix_thresholds=Thresholds(
             min_per_head_pcc=0.905,
             min_overall_pcc=0.978,
             max_overall_rrmse=0.208,
@@ -87,13 +87,13 @@ DATASETS = {
     "code_run": Dataset(
         trace_dir=GPU_TRACES / "hf-gemma4-31b-coding-example-transformed",
         # Set from main's worst values over chunks 2048 / 4096 / 8192 at 8K, 16K and full length, with margin.
-        full_limits=Limits(
+        full_thresholds=Thresholds(
             min_per_head_pcc=0.885,
             min_overall_pcc=0.97,
             max_overall_rrmse=0.23,
             likelihood={0: (0.94, 0.03, 0.05), 8192: (0.95, 0.04, 0.04), 65536: (0.95, 0.04, 0.04)},
         ),
-        prefix_limits=Limits(
+        prefix_thresholds=Thresholds(
             min_per_head_pcc=0.83,
             min_overall_pcc=0.96,
             max_overall_rrmse=0.27,
@@ -103,11 +103,7 @@ DATASETS = {
 }
 
 
-def selected_datasets():
-    names = [name for name in os.getenv("GEMMA4_ACCURACY_DATASETS", ",".join(DATASETS)).split(",") if name]
-    if unknown := set(names) - set(DATASETS):
-        raise ValueError(f"Unknown datasets {sorted(unknown)}; known: {sorted(DATASETS)}")
-    return {name: DATASETS[name] for name in names}
+PROMPT_TYPES = {"text": ("gutenberg",), "code": ("code_run",), "all": tuple(DATASETS)}
 
 
 def load_token_ids(adapter, dataset, context_len):
@@ -183,22 +179,27 @@ def compare_kv(kv_cache, context_len, trace_dir, output_dir):
     return json.loads((output_dir / "gemma4_slot0.json").read_text())
 
 
-def kv_criteria(report, limits):
+def kv_criteria(report, thresholds):
     """(name, required, achieved, passed) rows, in the form ``check_limits`` returns."""
     overall, worst = report["error_metrics"]["overall"], report["worst_head"]
     return [
         (
             "Minimum per-head PCC",
-            f">= {limits.min_per_head_pcc:.6f}",
+            f">= {thresholds.min_per_head_pcc:.6f}",
             worst["pcc"],
-            worst["pcc"] >= limits.min_per_head_pcc,
+            worst["pcc"] >= thresholds.min_per_head_pcc,
         ),
-        ("Overall PCC", f">= {limits.min_overall_pcc:.6f}", overall["pcc"], overall["pcc"] >= limits.min_overall_pcc),
+        (
+            "Overall PCC",
+            f">= {thresholds.min_overall_pcc:.6f}",
+            overall["pcc"],
+            overall["pcc"] >= thresholds.min_overall_pcc,
+        ),
         (
             "Overall RRMSE",
-            f"< {limits.max_overall_rrmse:.6f}",
+            f"< {thresholds.max_overall_rrmse:.6f}",
             overall["relative_rmse"],
-            overall["relative_rmse"] < limits.max_overall_rrmse,
+            overall["relative_rmse"] < thresholds.max_overall_rrmse,
         ),
     ]
 
@@ -252,8 +253,8 @@ def check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, outp
     print(f"Worst head: layer={worst['layer']} head={worst['head']} type={worst['cache_type']} PCC={worst['pcc']:.6f}")
     print(f"\nNext-token likelihood vs GPU reference\n{format_report(likelihood)}", flush=True)
 
-    limits = dataset.full_limits if context_len == len(token_ids) else dataset.prefix_limits
-    return print_criteria(name, kv_criteria(kv, limits) + check_limits(likelihood, limits.likelihood))
+    thresholds = dataset.full_thresholds if context_len == len(token_ids) else dataset.prefix_thresholds
+    return print_criteria(name, kv_criteria(kv, thresholds) + check_limits(likelihood, thresholds.likelihood))
 
 
 @torch.no_grad()
@@ -263,7 +264,8 @@ def check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, outp
 )
 # "full" runs each dataset at its own length; a fixed length runs every dataset that holds that many tokens.
 @pytest.mark.parametrize("context_len", [8192, 16384, 131072, None], ids=["8k", "16k", "128k", "full"])
-def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypatch):
+@pytest.mark.parametrize("prompt_type", list(PROMPT_TYPES))
+def test_prefill_accuracy(mesh_device, context_len, prompt_type, tmp_path, request, monkeypatch):
     adapter = Gemma4PrefillAdapter()
     hf_config = adapter.load_hf_config()
     cache = adapter.weight_cache_path(Gemma4ServiceConfig.MESH_SHAPE)
@@ -276,9 +278,9 @@ def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypat
     assert weight_cache_is_complete(cache, **identity), f"Missing or incompatible TT weight cache: {cache}"
     # Check every dataset before the model is built, so a bad one fails in seconds, not minutes.
     datasets = {
-        name: (dataset, *loaded)
-        for name, dataset in selected_datasets().items()
-        if (loaded := load_token_ids(adapter, dataset, context_len)) is not None
+        name: (DATASETS[name], *loaded)
+        for name in PROMPT_TYPES[prompt_type]
+        if (loaded := load_token_ids(adapter, DATASETS[name], context_len)) is not None
     }
     if not datasets:
         pytest.skip(f"No selected dataset holds {context_len or 'full'} tokens")
