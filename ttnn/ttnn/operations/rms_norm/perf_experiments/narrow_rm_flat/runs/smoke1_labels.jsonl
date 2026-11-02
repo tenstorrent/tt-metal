@@ -1,0 +1,12 @@
+{"cell": "wid_rm_2048x256", "variant": "base", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0}
+{"cell": "wid_rm_2048x256", "variant": "cmp", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "k": 32, "sw": 8, "sh": 2048, "F": 16, "F_full": 16, "tail": 0, "R": 8, "U": 2, "o_max": 1, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_2048x256", "variant": "bc", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "k": 32, "sw": 8, "sh": 2048, "F": 16, "F_full": 16, "tail": 0, "R": 1, "U": 16, "o_max": 1, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_small_64x250", "variant": "base", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0}
+{"cell": "wid_rm_small_64x250", "variant": "cmp", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "k": 32, "sw": 8, "sh": 64, "F": 1, "F_full": 0, "tail": 512, "R": 8, "U": 1, "o_max": 1, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_small_64x250", "variant": "bc", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "k": 32, "sw": 8, "sh": 64, "F": 1, "F_full": 0, "tail": 512, "R": 1, "U": 1, "o_max": 1, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_2048x256", "variant": "base", "ok": true, "pcc": 0.9999984502792358, "max_abs_vs_torch": 0.0625}
+{"cell": "wid_rm_2048x256", "variant": "cmp", "ok": true, "pcc": 0.9999986886978149, "max_abs_vs_torch": 0.0625, "flat": true, "k": 32, "sw": 8, "sh": 2048, "F": 16, "F_full": 16, "tail": 0, "R": 8, "U": 2, "o_max": 1, "pcc_vs_base": 0.9999995827674866, "max_abs_vs_base": 0.0625}
+{"cell": "wid_rm_2048x256", "variant": "bc", "ok": true, "pcc": 0.9999984502792358, "max_abs_vs_torch": 0.0625, "flat": true, "k": 32, "sw": 8, "sh": 2048, "F": 16, "F_full": 16, "tail": 0, "R": 1, "U": 16, "o_max": 1, "pcc_vs_base": 1.0, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_small_64x250", "variant": "base", "ok": true, "pcc": 0.9999893307685852, "max_abs_vs_torch": 0.0625}
+{"cell": "wid_rm_small_64x250", "variant": "cmp", "ok": true, "pcc": 0.99998939037323, "max_abs_vs_torch": 0.0625, "flat": true, "k": 32, "sw": 8, "sh": 64, "F": 1, "F_full": 0, "tail": 512, "R": 8, "U": 1, "o_max": 1, "pcc_vs_base": 0.9999953508377075, "max_abs_vs_base": 0.0625}
+{"cell": "wid_rm_small_64x250", "variant": "bc", "ok": true, "pcc": 0.9999893307685852, "max_abs_vs_torch": 0.0625, "flat": true, "k": 32, "sw": 8, "sh": 64, "F": 1, "F_full": 0, "tail": 512, "R": 1, "U": 1, "o_max": 1, "pcc_vs_base": 0.9999999403953552, "max_abs_vs_base": 0.0}

@@ -1329,8 +1329,16 @@ def flat_preferred(plan) -> bool:
 
 def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
     """Flat HEIGHT RM regime when expressible + fits L1 + (cost model prefers it); else the tilized program. If the
-    tilized plan does not fit L1 but the flat one does, the flat path runs."""
+    tilized plan does not fit L1 but the flat one does, the flat path runs.
+
+    ROW_MAJOR WIDTH / BLOCK_SHARDED shards whose width divides a 16-datum face row take the narrow-flat regime
+    (rms_norm_narrow_flat_program_descriptor.py); it returns None where it is inexpressible or does not fit L1."""
     kw = dict(epsilon=epsilon, compute_kernel_config=compute_kernel_config)
+    from .rms_norm_narrow_flat_program_descriptor import create_narrow_flat_program_descriptor  # lazy: import cycle
+
+    desc = create_narrow_flat_program_descriptor(input_tensor, gamma, output_tensor, **kw)
+    if desc is not None:
+        return desc
     flat_ok = False
     if flat_expressible(input_tensor, gamma):
         plan = flat_plan(input_tensor, gamma, bool(compute_kernel_config.fp32_dest_acc_en))

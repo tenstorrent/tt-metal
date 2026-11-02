@@ -1,0 +1,1821 @@
+
+dump_configuration.py:
+Scope,Name,Value
+environment,TT_DEVICE_TIMING_LOG,/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/.device_timing.jsonl
+environment,TT_METAL_CACHE,/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built
+environment,TT_METAL_CCACHE_KERNEL_SUPPORT,1
+environment,TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,python3 /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tools/tt-triage.py --disable-progress --skip-version-check --llm-output --llm-output-path=/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/tt-triage/triage.txt > /tmp/safe-pytest-triage-166173.log 2>&1
+environment,TT_METAL_ENV,dev
+environment,TT_METAL_HOME,/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal
+environment,TT_METAL_JIT_PREPROCESS,1
+environment,TT_METAL_JIT_SERVER_ENDPOINT,bgdepyc04:12345
+environment,TT_METAL_JIT_SERVER_KEEPALIVE,1
+environment,TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS,1
+environment,TT_METAL_LLK_ASSERTS,1
+environment,TT_METAL_OPERATION_TIMEOUT_SECONDS,5
+environment,TT_METAL_WATCHER,1
+environment,TT_METAL_WATCHER_DISABLE_ASSERT,1
+environment,TT_METAL_WATCHER_DISABLE_DISPATCH,1
+environment,TT_METAL_WATCHER_NOINLINE,1
+rtOptions,arc_debug_buffer_size,0
+rtOptions,arch_name,
+rtOptions,build_map_enabled,false
+rtOptions,cache_dir,/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache
+rtOptions,clear_dram,false
+rtOptions,clear_l1,false
+rtOptions,compile_hash_string,0010001000111_0nulloptnulloptnulloptnulloptnulloptnullopt_false_false_false_true_false_false__0_false_false_false_0
+rtOptions,core_grid_override_todeprecate,(unset)
+rtOptions,custom_fabric_mesh_graph_desc_path,
+rtOptions,disable_dma_ops,true
+rtOptions,disable_fabric_2_erisc_mode,false
+rtOptions,disable_precompiled_fw,false
+rtOptions,disable_sfploadmacro,false
+rtOptions,dispatch_core_config_type,WORKER
+rtOptions,dispatch_data_collection_enabled,false
+rtOptions,dispatch_progress_update_ms,100
+rtOptions,dispatch_timeout_command_to_execute,python3 /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tools/tt-triage.py --disable-progress --skip-version-check --llm-output --llm-output-path=/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/tt-triage/triage.txt > /tmp/safe-pytest-triage-166173.log 2>&1
+rtOptions,dram_backed_cq,false
+rtOptions,dump_build_commands,false
+rtOptions,enable_2_erisc_mode,true
+rtOptions,enable_channel_trimming_capture,false
+rtOptions,enable_fabric_bw_telemetry,false
+rtOptions,enable_fabric_code_profiling_rx_ch_fwd,false
+rtOptions,enable_fabric_mesh_pass_through,false
+rtOptions,enable_fabric_telemetry,false
+rtOptions,enable_fabric_vc2,false
+rtOptions,erisc_iram_enabled,false
+rtOptions,experimental_noc_debug_dump_enabled,false
+rtOptions,fabric_kernel_opt_level,(unset)
+rtOptions,fabric_router_sync_timeout_ms,(unset)
+rtOptions,fabric_telemetry_channels_monitor_all,true
+rtOptions,fabric_telemetry_chips_monitor_all,true
+rtOptions,fabric_telemetry_enabled,false
+rtOptions,fabric_telemetry_eriscs_monitor_all,true
+rtOptions,fabric_telemetry_stats_mask,15
+rtOptions,fabric_trimming_override_path,
+rtOptions,fabric_trimming_profile_path,
+rtOptions,fast_dispatch,true
+rtOptions,feature_ATOMIC_DEBUG_DELAY_all_chips,true
+rtOptions,feature_ATOMIC_DEBUG_DELAY_enabled,false
+rtOptions,feature_ATOMIC_DEBUG_DELAY_file_name,
+rtOptions,feature_ATOMIC_DEBUG_DELAY_one_file_per_risc,false
+rtOptions,feature_ATOMIC_DEBUG_DELAY_prepend_device_core_risc,true
+rtOptions,feature_DPRINT_all_chips,true
+rtOptions,feature_DPRINT_enabled,false
+rtOptions,feature_DPRINT_file_name,
+rtOptions,feature_DPRINT_one_file_per_risc,false
+rtOptions,feature_DPRINT_prepend_device_core_risc,true
+rtOptions,feature_ENABLE_L1_DATA_CACHE_all_chips,true
+rtOptions,feature_ENABLE_L1_DATA_CACHE_enabled,false
+rtOptions,feature_ENABLE_L1_DATA_CACHE_file_name,
+rtOptions,feature_ENABLE_L1_DATA_CACHE_one_file_per_risc,false
+rtOptions,feature_ENABLE_L1_DATA_CACHE_prepend_device_core_risc,true
+rtOptions,feature_READ_DEBUG_DELAY_all_chips,true
+rtOptions,feature_READ_DEBUG_DELAY_enabled,false
+rtOptions,feature_READ_DEBUG_DELAY_file_name,
+rtOptions,feature_READ_DEBUG_DELAY_one_file_per_risc,false
+rtOptions,feature_READ_DEBUG_DELAY_prepend_device_core_risc,true
+rtOptions,feature_WRITE_DEBUG_DELAY_all_chips,true
+rtOptions,feature_WRITE_DEBUG_DELAY_enabled,false
+rtOptions,feature_WRITE_DEBUG_DELAY_file_name,
+rtOptions,feature_WRITE_DEBUG_DELAY_one_file_per_risc,false
+rtOptions,feature_WRITE_DEBUG_DELAY_prepend_device_core_risc,true
+rtOptions,force_context_reinit,false
+rtOptions,force_jit_compile,false
+rtOptions,gathering_enabled,false
+rtOptions,hw_cache_invalidation_enabled,false
+rtOptions,inspector_capture_tensor_specs,true
+rtOptions,inspector_enabled,true
+rtOptions,inspector_initialization_is_important,false
+rtOptions,inspector_log_mesh_buffers,false
+rtOptions,inspector_log_mesh_sockets,false
+rtOptions,inspector_log_path,/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/inspector
+rtOptions,inspector_log_runtime_entries,false
+rtOptions,inspector_rpc_server_enabled,true
+rtOptions,inspector_rpc_server_host,localhost
+rtOptions,inspector_rpc_server_port,50051
+rtOptions,inspector_warn_on_write_exceptions,true
+rtOptions,jit_analytics_enabled,false
+rtOptions,kernel_dir,(unset)
+rtOptions,kernels_early_return,false
+rtOptions,kernels_nullified,false
+rtOptions,lightweight_kernel_asserts,true
+rtOptions,llk_asserts,true
+rtOptions,log_kernels_compilation_commands,false
+rtOptions,logs_dir,/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/
+rtOptions,mock_cluster_desc_path,
+rtOptions,mock_enabled,false
+rtOptions,num_hw_cqs,1
+rtOptions,numa_based_affinity,false
+rtOptions,profiler_buffer_usage_enabled,false
+rtOptions,profiler_cpp_post_process,false
+rtOptions,profiler_disable_dump_to_files,false
+rtOptions,profiler_disable_push_to_tracy,false
+rtOptions,profiler_do_dispatch_cores,false
+rtOptions,profiler_enabled,false
+rtOptions,profiler_mid_run_dump,false
+rtOptions,profiler_noc_events_enabled,false
+rtOptions,profiler_noc_events_report_path,
+rtOptions,profiler_perf_counter_mode,0
+rtOptions,profiler_program_support_count,1000
+rtOptions,profiler_sum,false
+rtOptions,profiler_sync_enabled,false
+rtOptions,profiler_trace_only,false
+rtOptions,profiler_trace_tracking,false
+rtOptions,record_noc_transfers,false
+rtOptions,relaxed_memory_ordering_disabled,false
+rtOptions,reliability_mode,(unset)
+rtOptions,riscv_debug_info_enabled,true
+rtOptions,root_dir,/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/
+rtOptions,serialize_inspector_on_dispatch_timeout,true
+rtOptions,simulator_enabled,false
+rtOptions,simulator_path,
+rtOptions,simulator_serve_over_sockets,true
+rtOptions,skip_eth_cores_with_retrain,false
+rtOptions,skip_loading_fw,false
+rtOptions,system_kernel_dir,/usr/share/tenstorrent/kernels/
+rtOptions,target_device,0
+rtOptions,test_mode_enabled,false
+rtOptions,timeout_duration_for_operations,5s
+rtOptions,tracy_mid_run_push,false
+rtOptions,use_mesh_graph_descriptor_2_0,false
+rtOptions,validate_kernel_binaries,false
+rtOptions,visible_devices,
+rtOptions,watcher_append,false
+rtOptions,watcher_auto_unpause,false
+rtOptions,watcher_debug_delay,0
+rtOptions,watcher_disabled_features,"ASSERT, DISPATCH"
+rtOptions,watcher_dump_all,false
+rtOptions,watcher_enabled,true
+rtOptions,watcher_hash,0010001000111
+rtOptions,watcher_interval,1000
+rtOptions,watcher_noc_sanitize_linked_transaction,false
+rtOptions,watcher_noinline,true
+rtOptions,watcher_phys_coords,false
+rtOptions,watcher_skip_logging,false
+rtOptions,watcher_text_start,false
+ttnnConfig,cache_path,/home/adamjanovic/.cache/ttnn
+ttnnConfig,comparison_mode_pcc,0.9999
+ttnnConfig,comparison_mode_should_raise_exception,false
+ttnnConfig,enable_comparison_mode,false
+ttnnConfig,enable_detailed_buffer_report,false
+ttnnConfig,enable_detailed_tensor_report,false
+ttnnConfig,enable_fast_runtime_mode,true
+ttnnConfig,enable_graph_python_stack_traces,false
+ttnnConfig,enable_graph_report,false
+ttnnConfig,enable_logging,false
+ttnnConfig,enable_model_cache,false
+ttnnConfig,model_cache_path,/home/adamjanovic/.cache/ttnn/models
+ttnnConfig,report_name,std::nullopt
+ttnnConfig,root_report_path,generated/ttnn/reports
+ttnnConfig,throw_exception_on_fallback,false
+ttnnConfig,tmp_dir,/tmp/ttnn
+ttnnConfig,validate_program_args,false
+
+check_cb_inactive.py:
+  pass
+
+check_dram_health.py:
+Dev,GDDR Inst,DDR Bank,Corrected Reads,Corrected Writes,Uncorrected Reads,Uncorrected Writes,Train,BIST,Endpoints,Temp Top,Temp Bot,Speed MT/s
+0,0,0,0,0,0,0,SUCCESS,n/a,"0-0 (d0,0), 0-1 (d0,1), 0-11 (d0,2)",30,42,16000
+0,1,1,0,0,0,0,SUCCESS,n/a,"0-2 (d1,0), 0-10 (d1,1), 0-3 (d1,2)",42,50,16000
+0,2,2,0,0,0,0,SUCCESS,n/a,"0-9 (d2,0), 0-4 (d2,1), 0-8 (d2,2)",36,42,16000
+0,3,3,0,0,0,0,SUCCESS,n/a,"0-5 (d3,0), 0-7 (d3,1), 0-6 (d3,2)",34,44,16000
+0,4,4,0,0,0,0,SUCCESS,n/a,"9-0 (d4,0), 9-1 (d4,1), 9-11 (d4,2)",34,46,16000
+0,5,5,0,0,0,0,SUCCESS,n/a,"9-2 (d5,0), 9-10 (d5,1), 9-3 (d5,2)",42,52,16000
+0,6,6,0,0,0,0,SUCCESS,n/a,"9-9 (d6,0), 9-4 (d6,1), 9-8 (d6,2)",36,46,16000
+0,7,7,0,0,0,0,SUCCESS,n/a,"9-5 (d7,0), 9-7 (d7,1), 9-6 (d7,2)",32,44,16000
+
+check_eth_status.py:
+  pass
+
+check_l1_status.py:
+  pass
+
+check_noc_locations.py:
+  pass
+
+device_info.py:
+Dev,Tray/Board,Chip,ASIC,Arch,Board,Bus ID,PCI BDF,Unique ID,ARC FW,Postcode
+0,Board 0x4123191a1b7,0,0,blackhole,p150,0x61,0000:61:00.0,0x55f8a5b02e79ed81,18.12.1,N/A
+
+device_telemetry.py:
+Dev,AI Clk,ARC Clk,ASIC Temp,Board Temp,ETH Live,DDR Status,DDR Speed,ARC Uptime
+0,800 MHz,800 MHz,41.7 C,0.0 C,0x0000 (0 live),0x5555,16000 MT/s,0:02:22
+
+dump_op_mesh.py:
+R\C,C0
+0,(Device 0)\n1: GenericOpDeviceOperation
+
+dump_op_window.py:
+Op Id,Status,Op Name,Devices
+1,RUNNING,GenericOpDeviceOperation,0
+
+dump_running_operations.py:
+Op Id,Op Name,Op Params,Prev Op Id,Prev Op Name,Prev Op Params,Device Cnt,Core Cnt,Devices,Cores
+1,GenericOpDeviceOperation,"Tensor[0]\n  logical_shape: [99991, 64]\n  dtype: BFLOAT16\n  config: RowMajorPageConfig()\n  memory_layout: BLOCK_SHARDED\n  buffer_type: L1\n  shard_spec: GRID_2D""},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0\n  alignment: Alignment([8]\n\nTensor[1]\n  logical_shape: [1, 1, 1, 64]\n  dtype: BFLOAT16\n  config: RowMajorPageConfig()\n  memory_layout: INTERLEAVED\n  buffer_type: DRAM\n  shard_spec: none\n  nd_shard_spec: none\n  created_with_nd_shard_spec: 0\n  per_core_allocation: 0\n  range_lockstep_allocation: 0\n  alignment: [1]\n\nTensor[2]\n  logical_shape: [99991, 64]\n  dtype: BFLOAT16\n  config: RowMajorPageConfig()\n  memory_layout: BLOCK_SHARDED\n  buffer_type: L1\n  shard_spec: GRID_2D""},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0\n  alignment: Alignment([8]\n\nTensor[3]\n  logical_shape: [99991, 64]\n  dtype: BFLOAT16\n  config: RowMajorPageConfig()\n  memory_layout: BLOCK_SHARDED\n  buffer_type: L1\n  shard_spec: GRID_2D""},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0\n  alignment: Alignment([8]",N/A,N/A,N/A,1,80,0,"0:1-10 (0,8)\n0:1-11 (0,9)\n0:1-2 (0,0)\n0:1-3 (0,1)\n0:1-4 (0,2)\n..."
+
+check_binary_integrity.py:
+  pass
+
+check_core_magic.py:
+  pass
+
+check_noc_status.py:
+  fail
+    Device 0: eth [11-1 (e0,9)]: Mismatched state: \nerisc1 NOC0:     NIU_MST_RD_RESP_RECEIVED noc_reads_num_issued 36915 0\n    NIU_MST_NONPOSTED_WR_REQ_SENT noc_nonposted_writes_num_issued 588 0\n    NIU_MST_WR_ACK_RECEIVED noc_nonposted_writes_acked 588 0\n    NIU_MST_POSTED_WR_REQ_SENT noc_posted_writes_num_issued 2 0\n\nEither the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung.
+    Device 0: eth [6-1 (e0,8)]: Mismatched state: \nerisc1 NOC0:     NIU_MST_RD_RESP_RECEIVED noc_reads_num_issued 36905 0\n    NIU_MST_NONPOSTED_WR_REQ_SENT noc_nonposted_writes_num_issued 434 0\n    NIU_MST_WR_ACK_RECEIVED noc_nonposted_writes_acked 434 0\n\nEither the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung.
+    Device 0: eth [12-1 (e0,7)]: Mismatched state: \nerisc1 NOC0:     NIU_MST_RD_RESP_RECEIVED noc_reads_num_issued 36907 0\n    NIU_MST_NONPOSTED_WR_REQ_SENT noc_nonposted_writes_num_issued 588 0\n    NIU_MST_WR_ACK_RECEIVED noc_nonposted_writes_acked 588 0\n    NIU_MST_POSTED_WR_REQ_SENT noc_posted_writes_num_issued 2 0\n\nEither the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung.
+    Device 0: eth [7-1 (e0,10)]: Mismatched state: \nerisc1 NOC0:     NIU_MST_RD_RESP_RECEIVED noc_reads_num_issued 36905 0\n    NIU_MST_NONPOSTED_WR_REQ_SENT noc_nonposted_writes_num_issued 434 0\n    NIU_MST_WR_ACK_RECEIVED noc_nonposted_writes_acked 434 0\n\nEither the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung.
+    Device 0: eth [4-1 (e0,5)]: Mismatched state: \nerisc1 NOC0:     NIU_MST_RD_RESP_RECEIVED noc_reads_num_issued 36905 0\n    NIU_MST_NONPOSTED_WR_REQ_SENT noc_nonposted_writes_num_issued 434 0\n    NIU_MST_WR_ACK_RECEIVED noc_nonposted_writes_acked 434 0\n\nEither the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung.
+    Device 0: eth [3-1 (e0,4)]: Mismatched state: \nerisc1 NOC0:     NIU_MST_RD_RESP_RECEIVED noc_reads_num_issued 36907 0\n    NIU_MST_NONPOSTED_WR_REQ_SENT noc_nonposted_writes_num_issued 588 0\n    NIU_MST_WR_ACK_RECEIVED noc_nonposted_writes_acked 588 0\n    NIU_MST_POSTED_WR_REQ_SENT noc_posted_writes_num_issued 2 0\n\nEither the device is not idle and is currently processing transactions, the kernel has incorrectly modified the NOC transaction counters, or the NoC is hung.
+
+dump_callstacks.py:
+Dev,Loc,RiscV,NEO,Kernel ID,Kernel Name,Subdevice,Go Message,Preload,Waypoint,PC,Kernel Callstack
+0,"1-2 (0,0)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-2 (0,0)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-2 (0,0)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-2 (0,0)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-2 (0,0)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-2 (1,0)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-2 (1,0)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-2 (1,0)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-2 (1,0)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-2 (1,0)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-2 (2,0)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-2 (2,0)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-2 (2,0)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-2 (2,0)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-2 (2,0)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-2 (3,0)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-2 (3,0)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-2 (3,0)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-2 (3,0)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-2 (3,0)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbea0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-2 (4,0)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-2 (4,0)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-2 (4,0)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-2 (4,0)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-2 (4,0)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-2 (5,0)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-2 (5,0)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-2 (5,0)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-2 (5,0)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-2 (5,0)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-2 (6,0)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-2 (6,0)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-2 (6,0)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-2 (6,0)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-2 (6,0)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-2 (7,0)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-2 (7,0)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-2 (7,0)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-2 (7,0)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-2 (7,0)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"16-2 (13,0)",brisc,N/A,1,cq_prefetch,0,GO,False,R,0x11098,"\n#0 0x00011098 in process_stall () at ./tt_metal/impl/dispatch/kernels/cq_prefetch.cpp 1903:39\n#1 process_cmd<false, false> () at ./tt_metal/impl/dispatch/kernels/cq_prefetch.cpp 2621:35\n#2 kernel_main_hd () at ./tt_metal/impl/dispatch/kernels/cq_prefetch.cpp 3272:41"
+0,"1-3 (0,1)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-3 (0,1)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-3 (0,1)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-3 (0,1)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-3 (0,1)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-3 (1,1)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-3 (1,1)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-3 (1,1)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-3 (1,1)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-3 (1,1)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-3 (2,1)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-3 (2,1)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-3 (2,1)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-3 (2,1)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-3 (2,1)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-3 (3,1)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-3 (3,1)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-3 (3,1)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-3 (3,1)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-3 (3,1)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-3 (4,1)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-3 (4,1)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-3 (4,1)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-3 (4,1)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-3 (4,1)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-3 (5,1)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-3 (5,1)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-3 (5,1)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-3 (5,1)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-3 (5,1)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-3 (6,1)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-3 (6,1)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-3 (6,1)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-3 (6,1)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-3 (6,1)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-3 (7,1)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-3 (7,1)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-3 (7,1)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-3 (7,1)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-3 (7,1)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"16-3 (13,1)",brisc,N/A,2,cq_dispatch,0,GO,False,R,0xba34,\n#0 0x0000BA34 in stream_wrap_ge () at ./tt_metal/impl/dispatch/kernels/cq_dispatch.cpp 1074:5\n#1 process_wait () at ./tt_metal/impl/dispatch/kernels/cq_dispatch.cpp 1128:33\n#2 process_cmd_d () at ./tt_metal/impl/dispatch/kernels/cq_dispatch.cpp 1347:25\n#3 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch.cpp 1675:44
+0,"16-3 (13,1)",trisc0,N/A,4,cq_dispatch_subordinate_compute,0,GO,False,K,0xe1cc,\n#0 0x0000E1CC in dispatch_subordinate_realtime_profiler () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler_dispatch_subordinate.hpp 60:29\n#1 dispatch_subordinate_realtime_profiler () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler_dispatch_subordinate.hpp 29:7\n#2 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp 16:43\n#3 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#4 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 92:15
+0,"16-3 (13,1)",trisc1,N/A,4,cq_dispatch_subordinate_compute,0,GO,False,K,0xe9ac,\n#0 0x0000E9AC in dispatch_subordinate_telemetry () at ./tt_metal/impl/dispatch/kernels/cq_telemetry_dispatch_subordinate.hpp 143:9\n#1 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp 18:35\n#2 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#3 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 92:15
+0,"16-3 (13,1)",trisc2,N/A,4,cq_dispatch_subordinate_compute,0,GO,False,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"16-3 (13,1)",ncrisc,N/A,3,cq_dispatch_subordinate,0,GO,False,R,0xd6e0,"\n#0 0x0000D6E0 in wrap_gt () at ./tt_metal/impl/dispatch/kernels/cq_common.hpp 62:19\n#1 cb_acquire_pages_dispatch_s<208, 1> () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp 529:19\n#2 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp 869:70\n#3 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 73:16"
+0,"1-4 (0,2)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-4 (0,2)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-4 (0,2)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-4 (0,2)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-4 (0,2)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-4 (1,2)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-4 (1,2)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-4 (1,2)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-4 (1,2)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-4 (1,2)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-4 (2,2)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-4 (2,2)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-4 (2,2)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-4 (2,2)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-4 (2,2)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-4 (3,2)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-4 (3,2)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-4 (3,2)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-4 (3,2)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-4 (3,2)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-4 (4,2)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-4 (4,2)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-4 (4,2)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-4 (4,2)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-4 (4,2)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-4 (5,2)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-4 (5,2)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-4 (5,2)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-4 (5,2)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-4 (5,2)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-4 (6,2)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-4 (6,2)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-4 (6,2)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-4 (6,2)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-4 (6,2)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbea0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-4 (7,2)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-4 (7,2)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-4 (7,2)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-4 (7,2)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-4 (7,2)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-5 (0,3)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-5 (0,3)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb94,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-5 (0,3)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-5 (0,3)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-5 (0,3)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-5 (1,3)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-5 (1,3)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-5 (1,3)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-5 (1,3)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-5 (1,3)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-5 (2,3)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-5 (2,3)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-5 (2,3)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-5 (2,3)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-5 (2,3)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-5 (3,3)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-5 (3,3)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-5 (3,3)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-5 (3,3)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-5 (3,3)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-5 (4,3)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-5 (4,3)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-5 (4,3)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-5 (4,3)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-5 (4,3)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-5 (5,3)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-5 (5,3)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-5 (5,3)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-5 (5,3)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-5 (5,3)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-5 (6,3)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-5 (6,3)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-5 (6,3)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-5 (6,3)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-5 (6,3)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-5 (7,3)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-5 (7,3)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-5 (7,3)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-5 (7,3)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-5 (7,3)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-6 (0,4)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-6 (0,4)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-6 (0,4)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-6 (0,4)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-6 (0,4)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-6 (1,4)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-6 (1,4)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-6 (1,4)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-6 (1,4)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-6 (1,4)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-6 (2,4)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-6 (2,4)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-6 (2,4)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-6 (2,4)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-6 (2,4)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-6 (3,4)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-6 (3,4)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-6 (3,4)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-6 (3,4)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-6 (3,4)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-6 (4,4)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-6 (4,4)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb94,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-6 (4,4)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-6 (4,4)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-6 (4,4)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-6 (5,4)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-6 (5,4)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-6 (5,4)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-6 (5,4)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-6 (5,4)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-6 (6,4)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-6 (6,4)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-6 (6,4)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-6 (6,4)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-6 (6,4)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-6 (7,4)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-6 (7,4)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-6 (7,4)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-6 (7,4)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-6 (7,4)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-7 (0,5)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-7 (0,5)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb94,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-7 (0,5)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-7 (0,5)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-7 (0,5)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbea0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-7 (1,5)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-7 (1,5)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-7 (1,5)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-7 (1,5)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-7 (1,5)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-7 (2,5)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-7 (2,5)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-7 (2,5)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-7 (2,5)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-7 (2,5)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbea0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-7 (3,5)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-7 (3,5)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-7 (3,5)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-7 (3,5)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-7 (3,5)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-7 (4,5)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-7 (4,5)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-7 (4,5)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-7 (4,5)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-7 (4,5)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-7 (5,5)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-7 (5,5)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-7 (5,5)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-7 (5,5)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-7 (5,5)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-7 (6,5)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-7 (6,5)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-7 (6,5)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-7 (6,5)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-7 (6,5)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-7 (7,5)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-7 (7,5)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-7 (7,5)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-7 (7,5)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-7 (7,5)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-8 (0,6)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-8 (0,6)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-8 (0,6)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-8 (0,6)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-8 (0,6)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-8 (1,6)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-8 (1,6)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-8 (1,6)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-8 (1,6)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-8 (1,6)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-8 (2,6)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-8 (2,6)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-8 (2,6)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-8 (2,6)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-8 (2,6)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-8 (3,6)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-8 (3,6)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-8 (3,6)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-8 (3,6)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-8 (3,6)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-8 (4,6)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-8 (4,6)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-8 (4,6)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-8 (4,6)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-8 (4,6)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-8 (5,6)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-8 (5,6)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-8 (5,6)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-8 (5,6)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-8 (5,6)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-8 (6,6)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-8 (6,6)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-8 (6,6)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-8 (6,6)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-8 (6,6)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-8 (7,6)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-8 (7,6)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-8 (7,6)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-8 (7,6)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-8 (7,6)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-9 (0,7)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-9 (0,7)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-9 (0,7)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-9 (0,7)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-9 (0,7)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-9 (1,7)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-9 (1,7)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-9 (1,7)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-9 (1,7)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-9 (1,7)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-9 (2,7)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-9 (2,7)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-9 (2,7)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-9 (2,7)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-9 (2,7)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-9 (3,7)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-9 (3,7)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-9 (3,7)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-9 (3,7)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-9 (3,7)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-9 (4,7)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-9 (4,7)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-9 (4,7)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-9 (4,7)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-9 (4,7)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-9 (5,7)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-9 (5,7)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-9 (5,7)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-9 (5,7)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-9 (5,7)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-9 (6,7)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-9 (6,7)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-9 (6,7)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-9 (6,7)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-9 (6,7)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-9 (7,7)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-9 (7,7)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-9 (7,7)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-9 (7,7)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-9 (7,7)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-10 (0,8)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-10 (0,8)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-10 (0,8)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-10 (0,8)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-10 (0,8)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-10 (1,8)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-10 (1,8)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-10 (1,8)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-10 (1,8)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-10 (1,8)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-10 (2,8)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-10 (2,8)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-10 (2,8)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-10 (2,8)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-10 (2,8)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-10 (3,8)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-10 (3,8)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-10 (3,8)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-10 (3,8)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-10 (3,8)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-10 (4,8)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-10 (4,8)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb94,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-10 (4,8)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-10 (4,8)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-10 (4,8)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-10 (5,8)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-10 (5,8)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb8c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-10 (5,8)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-10 (5,8)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-10 (5,8)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-10 (6,8)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-10 (6,8)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-10 (6,8)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-10 (6,8)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-10 (6,8)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbea0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-10 (7,8)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaa9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-10 (7,8)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-10 (7,8)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-10 (7,8)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-10 (7,8)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-11 (0,9)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-11 (0,9)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-11 (0,9)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-11 (0,9)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"1-11 (0,9)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-11 (1,9)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-11 (1,9)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-11 (1,9)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-11 (1,9)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"2-11 (1,9)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbea0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-11 (2,9)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-11 (2,9)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-11 (2,9)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-11 (2,9)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"3-11 (2,9)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-11 (3,9)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-11 (3,9)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-11 (3,9)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-11 (3,9)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"4-11 (3,9)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-11 (4,9)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-11 (4,9)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-11 (4,9)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-11 (4,9)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"5-11 (4,9)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-11 (5,9)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-11 (5,9)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-11 (5,9)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-11 (5,9)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"6-11 (5,9)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-11 (6,9)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-11 (6,9)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb90,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-11 (6,9)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-11 (6,9)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"7-11 (6,9)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-11 (7,9)",brisc,N/A,8,N/A,0,GO,True,NSMW,0xaaa0,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-11 (7,9)",trisc0,N/A,9,N/A,0,GO,True,UPAD,0xfb98,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-11 (7,9)",trisc1,N/A,9,N/A,0,GO,True,MWDD,0x114d4,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-11 (7,9)",trisc2,N/A,9,N/A,0,GO,True,K,0x13a10,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"10-11 (7,9)",ncrisc,N/A,7,N/A,0,GO,True,CWFW,0xbe9c,PC was not in range of any provided ELF files.\nProgram cache is disabled on MeshDevice(s) [5] containing this device. Enable program cache to see the callstack.
+0,"16-11 (13,9)",brisc,N/A,5,cq_realtime_profiler,0,GO,False,K,0xabe0,\n#0 0x0000ABE0 in realtime_profiler_drain_records () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp 134:38
+0,"16-11 (13,9)",ncrisc,N/A,6,cq_realtime_profiler_push,0,GO,False,K,0xaf94,\n#0 0x0000AF94 in kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp 154:29\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 73:16
+
+dump_circular_buffers.py:
+Dev,Loc,CB,Kind,Address,Size,Page Size,Size (pages),Pushed,Popped,Occupancy
+0,"1-2 (0,0)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"1-2 (0,0)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"1-2 (0,0)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"1-2 (0,0)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"1-2 (0,0)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"1-2 (0,0)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"1-2 (0,0)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"1-2 (0,0)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"1-2 (0,0)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"1-2 (0,0)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"1-2 (0,0)",11,local,0x20480,16384,2048,8,8,0,8
+0,"1-2 (0,0)",12,local,0x24480,1456,16,91,0,0,0
+0,"2-2 (1,0)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"2-2 (1,0)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"2-2 (1,0)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"2-2 (1,0)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"2-2 (1,0)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"2-2 (1,0)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"2-2 (1,0)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"2-2 (1,0)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"2-2 (1,0)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"2-2 (1,0)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"2-2 (1,0)",11,local,0x20480,16384,2048,8,8,0,8
+0,"2-2 (1,0)",12,local,0x24480,1456,16,91,0,0,0
+0,"3-2 (2,0)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"3-2 (2,0)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"3-2 (2,0)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"3-2 (2,0)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"3-2 (2,0)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"3-2 (2,0)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"3-2 (2,0)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"3-2 (2,0)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"3-2 (2,0)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"3-2 (2,0)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"3-2 (2,0)",11,local,0x20480,16384,2048,8,8,0,8
+0,"3-2 (2,0)",12,local,0x24480,1456,16,91,0,0,0
+0,"4-2 (3,0)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"4-2 (3,0)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"4-2 (3,0)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"4-2 (3,0)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"4-2 (3,0)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"4-2 (3,0)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"4-2 (3,0)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"4-2 (3,0)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"4-2 (3,0)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"4-2 (3,0)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"4-2 (3,0)",11,local,0x20480,16384,2048,8,8,0,8
+0,"4-2 (3,0)",12,local,0x24480,1456,16,91,0,0,0
+0,"5-2 (4,0)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"5-2 (4,0)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"5-2 (4,0)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"5-2 (4,0)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"5-2 (4,0)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"5-2 (4,0)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"5-2 (4,0)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"5-2 (4,0)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"5-2 (4,0)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"5-2 (4,0)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"5-2 (4,0)",11,local,0x20480,16384,2048,8,8,0,8
+0,"5-2 (4,0)",12,local,0x24480,1456,16,91,0,0,0
+0,"6-2 (5,0)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"6-2 (5,0)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"6-2 (5,0)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"6-2 (5,0)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"6-2 (5,0)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"6-2 (5,0)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"6-2 (5,0)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"6-2 (5,0)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"6-2 (5,0)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"6-2 (5,0)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"6-2 (5,0)",11,local,0x20480,16384,2048,8,8,0,8
+0,"6-2 (5,0)",12,local,0x24480,1456,16,91,0,0,0
+0,"7-2 (6,0)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"7-2 (6,0)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"7-2 (6,0)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"7-2 (6,0)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"7-2 (6,0)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"7-2 (6,0)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"7-2 (6,0)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"7-2 (6,0)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"7-2 (6,0)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"7-2 (6,0)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"7-2 (6,0)",11,local,0x20480,16384,2048,8,8,0,8
+0,"7-2 (6,0)",12,local,0x24480,1456,16,91,0,0,0
+0,"10-2 (7,0)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"10-2 (7,0)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"10-2 (7,0)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"10-2 (7,0)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"10-2 (7,0)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"10-2 (7,0)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"10-2 (7,0)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"10-2 (7,0)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"10-2 (7,0)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"10-2 (7,0)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"10-2 (7,0)",11,local,0x20480,16384,2048,8,8,0,8
+0,"10-2 (7,0)",12,local,0x24480,1456,16,91,0,0,0
+0,"1-3 (0,1)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"1-3 (0,1)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"1-3 (0,1)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"1-3 (0,1)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"1-3 (0,1)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"1-3 (0,1)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"1-3 (0,1)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"1-3 (0,1)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"1-3 (0,1)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"1-3 (0,1)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"1-3 (0,1)",11,local,0x20480,16384,2048,8,8,0,8
+0,"1-3 (0,1)",12,local,0x24480,1456,16,91,0,0,0
+0,"2-3 (1,1)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"2-3 (1,1)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"2-3 (1,1)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"2-3 (1,1)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"2-3 (1,1)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"2-3 (1,1)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"2-3 (1,1)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"2-3 (1,1)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"2-3 (1,1)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"2-3 (1,1)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"2-3 (1,1)",11,local,0x20480,16384,2048,8,8,0,8
+0,"2-3 (1,1)",12,local,0x24480,1456,16,91,0,0,0
+0,"3-3 (2,1)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"3-3 (2,1)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"3-3 (2,1)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"3-3 (2,1)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"3-3 (2,1)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"3-3 (2,1)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"3-3 (2,1)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"3-3 (2,1)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"3-3 (2,1)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"3-3 (2,1)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"3-3 (2,1)",11,local,0x20480,16384,2048,8,8,0,8
+0,"3-3 (2,1)",12,local,0x24480,1456,16,91,0,0,0
+0,"4-3 (3,1)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"4-3 (3,1)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"4-3 (3,1)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"4-3 (3,1)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"4-3 (3,1)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"4-3 (3,1)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"4-3 (3,1)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"4-3 (3,1)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"4-3 (3,1)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"4-3 (3,1)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"4-3 (3,1)",11,local,0x20480,16384,2048,8,8,0,8
+0,"4-3 (3,1)",12,local,0x24480,1456,16,91,0,0,0
+0,"5-3 (4,1)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"5-3 (4,1)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"5-3 (4,1)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"5-3 (4,1)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"5-3 (4,1)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"5-3 (4,1)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"5-3 (4,1)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"5-3 (4,1)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"5-3 (4,1)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"5-3 (4,1)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"5-3 (4,1)",11,local,0x20480,16384,2048,8,8,0,8
+0,"5-3 (4,1)",12,local,0x24480,1456,16,91,0,0,0
+0,"6-3 (5,1)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"6-3 (5,1)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"6-3 (5,1)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"6-3 (5,1)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"6-3 (5,1)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"6-3 (5,1)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"6-3 (5,1)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"6-3 (5,1)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"6-3 (5,1)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"6-3 (5,1)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"6-3 (5,1)",11,local,0x20480,16384,2048,8,8,0,8
+0,"6-3 (5,1)",12,local,0x24480,1456,16,91,0,0,0
+0,"7-3 (6,1)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"7-3 (6,1)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"7-3 (6,1)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"7-3 (6,1)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"7-3 (6,1)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"7-3 (6,1)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"7-3 (6,1)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"7-3 (6,1)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"7-3 (6,1)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"7-3 (6,1)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"7-3 (6,1)",11,local,0x20480,16384,2048,8,8,0,8
+0,"7-3 (6,1)",12,local,0x24480,1456,16,91,0,0,0
+0,"10-3 (7,1)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"10-3 (7,1)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"10-3 (7,1)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"10-3 (7,1)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"10-3 (7,1)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"10-3 (7,1)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"10-3 (7,1)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"10-3 (7,1)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"10-3 (7,1)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"10-3 (7,1)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"10-3 (7,1)",11,local,0x20480,16384,2048,8,8,0,8
+0,"10-3 (7,1)",12,local,0x24480,1456,16,91,0,0,0
+0,"1-4 (0,2)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"1-4 (0,2)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"1-4 (0,2)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"1-4 (0,2)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"1-4 (0,2)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"1-4 (0,2)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"1-4 (0,2)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"1-4 (0,2)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"1-4 (0,2)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"1-4 (0,2)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"1-4 (0,2)",11,local,0x20480,16384,2048,8,8,0,8
+0,"1-4 (0,2)",12,local,0x24480,1456,16,91,0,0,0
+0,"2-4 (1,2)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"2-4 (1,2)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"2-4 (1,2)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"2-4 (1,2)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"2-4 (1,2)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"2-4 (1,2)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"2-4 (1,2)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"2-4 (1,2)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"2-4 (1,2)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"2-4 (1,2)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"2-4 (1,2)",11,local,0x20480,16384,2048,8,8,0,8
+0,"2-4 (1,2)",12,local,0x24480,1456,16,91,0,0,0
+0,"3-4 (2,2)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"3-4 (2,2)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"3-4 (2,2)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"3-4 (2,2)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"3-4 (2,2)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"3-4 (2,2)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"3-4 (2,2)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"3-4 (2,2)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"3-4 (2,2)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"3-4 (2,2)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"3-4 (2,2)",11,local,0x20480,16384,2048,8,8,0,8
+0,"3-4 (2,2)",12,local,0x24480,1456,16,91,0,0,0
+0,"4-4 (3,2)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"4-4 (3,2)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"4-4 (3,2)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"4-4 (3,2)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"4-4 (3,2)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"4-4 (3,2)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"4-4 (3,2)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"4-4 (3,2)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"4-4 (3,2)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"4-4 (3,2)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"4-4 (3,2)",11,local,0x20480,16384,2048,8,8,0,8
+0,"4-4 (3,2)",12,local,0x24480,1456,16,91,0,0,0
+0,"5-4 (4,2)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"5-4 (4,2)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"5-4 (4,2)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"5-4 (4,2)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"5-4 (4,2)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"5-4 (4,2)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"5-4 (4,2)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"5-4 (4,2)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"5-4 (4,2)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"5-4 (4,2)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"5-4 (4,2)",11,local,0x20480,16384,2048,8,8,0,8
+0,"5-4 (4,2)",12,local,0x24480,1456,16,91,0,0,0
+0,"6-4 (5,2)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"6-4 (5,2)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"6-4 (5,2)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"6-4 (5,2)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"6-4 (5,2)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"6-4 (5,2)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"6-4 (5,2)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"6-4 (5,2)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"6-4 (5,2)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"6-4 (5,2)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"6-4 (5,2)",11,local,0x20480,16384,2048,8,8,0,8
+0,"6-4 (5,2)",12,local,0x24480,1456,16,91,0,0,0
+0,"7-4 (6,2)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"7-4 (6,2)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"7-4 (6,2)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"7-4 (6,2)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"7-4 (6,2)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"7-4 (6,2)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"7-4 (6,2)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"7-4 (6,2)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"7-4 (6,2)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"7-4 (6,2)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"7-4 (6,2)",11,local,0x20480,16384,2048,8,8,0,8
+0,"7-4 (6,2)",12,local,0x24480,1456,16,91,0,0,0
+0,"10-4 (7,2)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"10-4 (7,2)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"10-4 (7,2)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"10-4 (7,2)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"10-4 (7,2)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"10-4 (7,2)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"10-4 (7,2)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"10-4 (7,2)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"10-4 (7,2)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"10-4 (7,2)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"10-4 (7,2)",11,local,0x20480,16384,2048,8,8,0,8
+0,"10-4 (7,2)",12,local,0x24480,1456,16,91,0,0,0
+0,"1-5 (0,3)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"1-5 (0,3)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"1-5 (0,3)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"1-5 (0,3)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"1-5 (0,3)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"1-5 (0,3)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"1-5 (0,3)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"1-5 (0,3)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"1-5 (0,3)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"1-5 (0,3)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"1-5 (0,3)",11,local,0x20480,16384,2048,8,8,0,8
+0,"1-5 (0,3)",12,local,0x24480,1456,16,91,0,0,0
+0,"2-5 (1,3)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"2-5 (1,3)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"2-5 (1,3)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"2-5 (1,3)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"2-5 (1,3)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"2-5 (1,3)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"2-5 (1,3)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"2-5 (1,3)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"2-5 (1,3)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"2-5 (1,3)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"2-5 (1,3)",11,local,0x20480,16384,2048,8,8,0,8
+0,"2-5 (1,3)",12,local,0x24480,1456,16,91,0,0,0
+0,"3-5 (2,3)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"3-5 (2,3)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"3-5 (2,3)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"3-5 (2,3)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"3-5 (2,3)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"3-5 (2,3)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"3-5 (2,3)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"3-5 (2,3)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"3-5 (2,3)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"3-5 (2,3)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"3-5 (2,3)",11,local,0x20480,16384,2048,8,8,0,8
+0,"3-5 (2,3)",12,local,0x24480,1456,16,91,0,0,0
+0,"4-5 (3,3)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"4-5 (3,3)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"4-5 (3,3)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"4-5 (3,3)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"4-5 (3,3)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"4-5 (3,3)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"4-5 (3,3)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"4-5 (3,3)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"4-5 (3,3)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"4-5 (3,3)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"4-5 (3,3)",11,local,0x20480,16384,2048,8,8,0,8
+0,"4-5 (3,3)",12,local,0x24480,1456,16,91,0,0,0
+0,"5-5 (4,3)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"5-5 (4,3)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"5-5 (4,3)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"5-5 (4,3)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"5-5 (4,3)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"5-5 (4,3)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"5-5 (4,3)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"5-5 (4,3)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"5-5 (4,3)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"5-5 (4,3)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"5-5 (4,3)",11,local,0x20480,16384,2048,8,8,0,8
+0,"5-5 (4,3)",12,local,0x24480,1456,16,91,0,0,0
+0,"6-5 (5,3)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"6-5 (5,3)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"6-5 (5,3)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"6-5 (5,3)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"6-5 (5,3)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"6-5 (5,3)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"6-5 (5,3)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"6-5 (5,3)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"6-5 (5,3)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"6-5 (5,3)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"6-5 (5,3)",11,local,0x20480,16384,2048,8,8,0,8
+0,"6-5 (5,3)",12,local,0x24480,1456,16,91,0,0,0
+0,"7-5 (6,3)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"7-5 (6,3)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"7-5 (6,3)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"7-5 (6,3)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"7-5 (6,3)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"7-5 (6,3)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"7-5 (6,3)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"7-5 (6,3)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"7-5 (6,3)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"7-5 (6,3)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"7-5 (6,3)",11,local,0x20480,16384,2048,8,8,0,8
+0,"7-5 (6,3)",12,local,0x24480,1456,16,91,0,0,0
+0,"10-5 (7,3)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"10-5 (7,3)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"10-5 (7,3)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"10-5 (7,3)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"10-5 (7,3)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"10-5 (7,3)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"10-5 (7,3)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"10-5 (7,3)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"10-5 (7,3)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"10-5 (7,3)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"10-5 (7,3)",11,local,0x20480,16384,2048,8,8,0,8
+0,"10-5 (7,3)",12,local,0x24480,1456,16,91,0,0,0
+0,"1-6 (0,4)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"1-6 (0,4)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"1-6 (0,4)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"1-6 (0,4)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"1-6 (0,4)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"1-6 (0,4)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"1-6 (0,4)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"1-6 (0,4)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"1-6 (0,4)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"1-6 (0,4)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"1-6 (0,4)",11,local,0x20480,16384,2048,8,8,0,8
+0,"1-6 (0,4)",12,local,0x24480,1456,16,91,0,0,0
+0,"2-6 (1,4)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"2-6 (1,4)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"2-6 (1,4)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"2-6 (1,4)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"2-6 (1,4)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"2-6 (1,4)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"2-6 (1,4)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"2-6 (1,4)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"2-6 (1,4)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"2-6 (1,4)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"2-6 (1,4)",11,local,0x20480,16384,2048,8,8,0,8
+0,"2-6 (1,4)",12,local,0x24480,1456,16,91,0,0,0
+0,"3-6 (2,4)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"3-6 (2,4)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"3-6 (2,4)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"3-6 (2,4)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"3-6 (2,4)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"3-6 (2,4)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"3-6 (2,4)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"3-6 (2,4)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"3-6 (2,4)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"3-6 (2,4)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"3-6 (2,4)",11,local,0x20480,16384,2048,8,8,0,8
+0,"3-6 (2,4)",12,local,0x24480,1456,16,91,0,0,0
+0,"4-6 (3,4)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"4-6 (3,4)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"4-6 (3,4)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"4-6 (3,4)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"4-6 (3,4)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"4-6 (3,4)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"4-6 (3,4)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"4-6 (3,4)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"4-6 (3,4)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"4-6 (3,4)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"4-6 (3,4)",11,local,0x20480,16384,2048,8,8,0,8
+0,"4-6 (3,4)",12,local,0x24480,1456,16,91,0,0,0
+0,"5-6 (4,4)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"5-6 (4,4)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"5-6 (4,4)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"5-6 (4,4)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"5-6 (4,4)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"5-6 (4,4)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"5-6 (4,4)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"5-6 (4,4)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"5-6 (4,4)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"5-6 (4,4)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"5-6 (4,4)",11,local,0x20480,16384,2048,8,8,0,8
+0,"5-6 (4,4)",12,local,0x24480,1456,16,91,0,0,0
+0,"6-6 (5,4)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"6-6 (5,4)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"6-6 (5,4)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"6-6 (5,4)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"6-6 (5,4)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"6-6 (5,4)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"6-6 (5,4)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"6-6 (5,4)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"6-6 (5,4)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"6-6 (5,4)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"6-6 (5,4)",11,local,0x20480,16384,2048,8,8,0,8
+0,"6-6 (5,4)",12,local,0x24480,1456,16,91,0,0,0
+0,"7-6 (6,4)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"7-6 (6,4)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"7-6 (6,4)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"7-6 (6,4)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"7-6 (6,4)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"7-6 (6,4)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"7-6 (6,4)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"7-6 (6,4)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"7-6 (6,4)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"7-6 (6,4)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"7-6 (6,4)",11,local,0x20480,16384,2048,8,8,0,8
+0,"7-6 (6,4)",12,local,0x24480,1456,16,91,0,0,0
+0,"10-6 (7,4)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"10-6 (7,4)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"10-6 (7,4)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"10-6 (7,4)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"10-6 (7,4)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"10-6 (7,4)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"10-6 (7,4)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"10-6 (7,4)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"10-6 (7,4)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"10-6 (7,4)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"10-6 (7,4)",11,local,0x20480,16384,2048,8,8,0,8
+0,"10-6 (7,4)",12,local,0x24480,1456,16,91,0,0,0
+0,"1-7 (0,5)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"1-7 (0,5)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"1-7 (0,5)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"1-7 (0,5)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"1-7 (0,5)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"1-7 (0,5)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"1-7 (0,5)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"1-7 (0,5)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"1-7 (0,5)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"1-7 (0,5)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"1-7 (0,5)",11,local,0x20480,16384,2048,8,8,0,8
+0,"1-7 (0,5)",12,local,0x24480,1456,16,91,0,0,0
+0,"2-7 (1,5)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"2-7 (1,5)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"2-7 (1,5)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"2-7 (1,5)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"2-7 (1,5)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"2-7 (1,5)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"2-7 (1,5)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"2-7 (1,5)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"2-7 (1,5)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"2-7 (1,5)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"2-7 (1,5)",11,local,0x20480,16384,2048,8,8,0,8
+0,"2-7 (1,5)",12,local,0x24480,1456,16,91,0,0,0
+0,"3-7 (2,5)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"3-7 (2,5)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"3-7 (2,5)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"3-7 (2,5)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"3-7 (2,5)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"3-7 (2,5)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"3-7 (2,5)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"3-7 (2,5)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"3-7 (2,5)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"3-7 (2,5)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"3-7 (2,5)",11,local,0x20480,16384,2048,8,8,0,8
+0,"3-7 (2,5)",12,local,0x24480,1456,16,91,0,0,0
+0,"4-7 (3,5)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"4-7 (3,5)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"4-7 (3,5)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"4-7 (3,5)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"4-7 (3,5)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"4-7 (3,5)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"4-7 (3,5)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"4-7 (3,5)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"4-7 (3,5)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"4-7 (3,5)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"4-7 (3,5)",11,local,0x20480,16384,2048,8,8,0,8
+0,"4-7 (3,5)",12,local,0x24480,1456,16,91,0,0,0
+0,"5-7 (4,5)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"5-7 (4,5)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"5-7 (4,5)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"5-7 (4,5)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"5-7 (4,5)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"5-7 (4,5)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"5-7 (4,5)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"5-7 (4,5)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"5-7 (4,5)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"5-7 (4,5)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"5-7 (4,5)",11,local,0x20480,16384,2048,8,8,0,8
+0,"5-7 (4,5)",12,local,0x24480,1456,16,91,0,0,0
+0,"6-7 (5,5)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"6-7 (5,5)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"6-7 (5,5)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"6-7 (5,5)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"6-7 (5,5)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"6-7 (5,5)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"6-7 (5,5)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"6-7 (5,5)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"6-7 (5,5)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"6-7 (5,5)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"6-7 (5,5)",11,local,0x20480,16384,2048,8,8,0,8
+0,"6-7 (5,5)",12,local,0x24480,1456,16,91,0,0,0
+0,"7-7 (6,5)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"7-7 (6,5)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"7-7 (6,5)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"7-7 (6,5)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"7-7 (6,5)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"7-7 (6,5)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"7-7 (6,5)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"7-7 (6,5)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"7-7 (6,5)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"7-7 (6,5)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"7-7 (6,5)",11,local,0x20480,16384,2048,8,8,0,8
+0,"7-7 (6,5)",12,local,0x24480,1456,16,91,0,0,0
+0,"10-7 (7,5)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"10-7 (7,5)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"10-7 (7,5)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"10-7 (7,5)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"10-7 (7,5)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"10-7 (7,5)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"10-7 (7,5)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"10-7 (7,5)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"10-7 (7,5)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"10-7 (7,5)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"10-7 (7,5)",11,local,0x20480,16384,2048,8,8,0,8
+0,"10-7 (7,5)",12,local,0x24480,1456,16,91,0,0,0
+0,"1-8 (0,6)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"1-8 (0,6)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"1-8 (0,6)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"1-8 (0,6)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"1-8 (0,6)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"1-8 (0,6)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"1-8 (0,6)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"1-8 (0,6)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"1-8 (0,6)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"1-8 (0,6)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"1-8 (0,6)",11,local,0x20480,16384,2048,8,8,0,8
+0,"1-8 (0,6)",12,local,0x24480,1456,16,91,0,0,0
+0,"2-8 (1,6)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"2-8 (1,6)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"2-8 (1,6)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"2-8 (1,6)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"2-8 (1,6)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"2-8 (1,6)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"2-8 (1,6)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"2-8 (1,6)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"2-8 (1,6)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"2-8 (1,6)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"2-8 (1,6)",11,local,0x20480,16384,2048,8,8,0,8
+0,"2-8 (1,6)",12,local,0x24480,1456,16,91,0,0,0
+0,"3-8 (2,6)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"3-8 (2,6)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"3-8 (2,6)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"3-8 (2,6)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"3-8 (2,6)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"3-8 (2,6)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"3-8 (2,6)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"3-8 (2,6)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"3-8 (2,6)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"3-8 (2,6)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"3-8 (2,6)",11,local,0x20480,16384,2048,8,8,0,8
+0,"3-8 (2,6)",12,local,0x24480,1456,16,91,0,0,0
+0,"4-8 (3,6)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"4-8 (3,6)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"4-8 (3,6)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"4-8 (3,6)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"4-8 (3,6)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"4-8 (3,6)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"4-8 (3,6)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"4-8 (3,6)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"4-8 (3,6)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"4-8 (3,6)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"4-8 (3,6)",11,local,0x20480,16384,2048,8,8,0,8
+0,"4-8 (3,6)",12,local,0x24480,1456,16,91,0,0,0
+0,"5-8 (4,6)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"5-8 (4,6)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"5-8 (4,6)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"5-8 (4,6)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"5-8 (4,6)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"5-8 (4,6)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"5-8 (4,6)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"5-8 (4,6)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"5-8 (4,6)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"5-8 (4,6)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"5-8 (4,6)",11,local,0x20480,16384,2048,8,8,0,8
+0,"5-8 (4,6)",12,local,0x24480,1456,16,91,0,0,0
+0,"6-8 (5,6)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"6-8 (5,6)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"6-8 (5,6)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"6-8 (5,6)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"6-8 (5,6)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"6-8 (5,6)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"6-8 (5,6)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"6-8 (5,6)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"6-8 (5,6)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"6-8 (5,6)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"6-8 (5,6)",11,local,0x20480,16384,2048,8,8,0,8
+0,"6-8 (5,6)",12,local,0x24480,1456,16,91,0,0,0
+0,"7-8 (6,6)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"7-8 (6,6)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"7-8 (6,6)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"7-8 (6,6)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"7-8 (6,6)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"7-8 (6,6)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"7-8 (6,6)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"7-8 (6,6)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"7-8 (6,6)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"7-8 (6,6)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"7-8 (6,6)",11,local,0x20480,16384,2048,8,8,0,8
+0,"7-8 (6,6)",12,local,0x24480,1456,16,91,0,0,0
+0,"10-8 (7,6)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"10-8 (7,6)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"10-8 (7,6)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"10-8 (7,6)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"10-8 (7,6)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"10-8 (7,6)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"10-8 (7,6)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"10-8 (7,6)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"10-8 (7,6)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"10-8 (7,6)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"10-8 (7,6)",11,local,0x20480,16384,2048,8,8,0,8
+0,"10-8 (7,6)",12,local,0x24480,1456,16,91,0,0,0
+0,"1-9 (0,7)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"1-9 (0,7)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"1-9 (0,7)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"1-9 (0,7)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"1-9 (0,7)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"1-9 (0,7)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"1-9 (0,7)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"1-9 (0,7)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"1-9 (0,7)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"1-9 (0,7)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"1-9 (0,7)",11,local,0x20480,16384,2048,8,8,0,8
+0,"1-9 (0,7)",12,local,0x24480,1456,16,91,0,0,0
+0,"2-9 (1,7)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"2-9 (1,7)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"2-9 (1,7)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"2-9 (1,7)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"2-9 (1,7)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"2-9 (1,7)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"2-9 (1,7)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"2-9 (1,7)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"2-9 (1,7)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"2-9 (1,7)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"2-9 (1,7)",11,local,0x20480,16384,2048,8,8,0,8
+0,"2-9 (1,7)",12,local,0x24480,1456,16,91,0,0,0
+0,"3-9 (2,7)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"3-9 (2,7)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"3-9 (2,7)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"3-9 (2,7)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"3-9 (2,7)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"3-9 (2,7)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"3-9 (2,7)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"3-9 (2,7)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"3-9 (2,7)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"3-9 (2,7)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"3-9 (2,7)",11,local,0x20480,16384,2048,8,8,0,8
+0,"3-9 (2,7)",12,local,0x24480,1456,16,91,0,0,0
+0,"4-9 (3,7)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"4-9 (3,7)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"4-9 (3,7)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"4-9 (3,7)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"4-9 (3,7)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"4-9 (3,7)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"4-9 (3,7)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"4-9 (3,7)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"4-9 (3,7)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"4-9 (3,7)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"4-9 (3,7)",11,local,0x20480,16384,2048,8,8,0,8
+0,"4-9 (3,7)",12,local,0x24480,1456,16,91,0,0,0
+0,"5-9 (4,7)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"5-9 (4,7)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"5-9 (4,7)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"5-9 (4,7)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"5-9 (4,7)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"5-9 (4,7)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"5-9 (4,7)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"5-9 (4,7)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"5-9 (4,7)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"5-9 (4,7)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"5-9 (4,7)",11,local,0x20480,16384,2048,8,8,0,8
+0,"5-9 (4,7)",12,local,0x24480,1456,16,91,0,0,0
+0,"6-9 (5,7)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"6-9 (5,7)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"6-9 (5,7)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"6-9 (5,7)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"6-9 (5,7)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"6-9 (5,7)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"6-9 (5,7)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"6-9 (5,7)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"6-9 (5,7)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"6-9 (5,7)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"6-9 (5,7)",11,local,0x20480,16384,2048,8,8,0,8
+0,"6-9 (5,7)",12,local,0x24480,1456,16,91,0,0,0
+0,"7-9 (6,7)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"7-9 (6,7)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"7-9 (6,7)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"7-9 (6,7)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"7-9 (6,7)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"7-9 (6,7)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"7-9 (6,7)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"7-9 (6,7)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"7-9 (6,7)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"7-9 (6,7)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"7-9 (6,7)",11,local,0x20480,16384,2048,8,8,0,8
+0,"7-9 (6,7)",12,local,0x24480,1456,16,91,0,0,0
+0,"10-9 (7,7)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"10-9 (7,7)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"10-9 (7,7)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"10-9 (7,7)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"10-9 (7,7)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"10-9 (7,7)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"10-9 (7,7)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"10-9 (7,7)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"10-9 (7,7)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"10-9 (7,7)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"10-9 (7,7)",11,local,0x20480,16384,2048,8,8,0,8
+0,"10-9 (7,7)",12,local,0x24480,1456,16,91,0,0,0
+0,"1-10 (0,8)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"1-10 (0,8)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"1-10 (0,8)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"1-10 (0,8)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"1-10 (0,8)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"1-10 (0,8)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"1-10 (0,8)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"1-10 (0,8)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"1-10 (0,8)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"1-10 (0,8)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"1-10 (0,8)",11,local,0x20480,16384,2048,8,8,0,8
+0,"1-10 (0,8)",12,local,0x24480,1456,16,91,0,0,0
+0,"2-10 (1,8)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"2-10 (1,8)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"2-10 (1,8)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"2-10 (1,8)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"2-10 (1,8)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"2-10 (1,8)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"2-10 (1,8)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"2-10 (1,8)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"2-10 (1,8)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"2-10 (1,8)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"2-10 (1,8)",11,local,0x20480,16384,2048,8,8,0,8
+0,"2-10 (1,8)",12,local,0x24480,1456,16,91,0,0,0
+0,"3-10 (2,8)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"3-10 (2,8)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"3-10 (2,8)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"3-10 (2,8)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"3-10 (2,8)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"3-10 (2,8)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"3-10 (2,8)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"3-10 (2,8)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"3-10 (2,8)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"3-10 (2,8)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"3-10 (2,8)",11,local,0x20480,16384,2048,8,8,0,8
+0,"3-10 (2,8)",12,local,0x24480,1456,16,91,0,0,0
+0,"4-10 (3,8)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"4-10 (3,8)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"4-10 (3,8)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"4-10 (3,8)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"4-10 (3,8)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"4-10 (3,8)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"4-10 (3,8)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"4-10 (3,8)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"4-10 (3,8)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"4-10 (3,8)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"4-10 (3,8)",11,local,0x20480,16384,2048,8,8,0,8
+0,"4-10 (3,8)",12,local,0x24480,1456,16,91,0,0,0
+0,"5-10 (4,8)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"5-10 (4,8)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"5-10 (4,8)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"5-10 (4,8)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"5-10 (4,8)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"5-10 (4,8)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"5-10 (4,8)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"5-10 (4,8)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"5-10 (4,8)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"5-10 (4,8)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"5-10 (4,8)",11,local,0x20480,16384,2048,8,8,0,8
+0,"5-10 (4,8)",12,local,0x24480,1456,16,91,0,0,0
+0,"6-10 (5,8)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"6-10 (5,8)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"6-10 (5,8)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"6-10 (5,8)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"6-10 (5,8)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"6-10 (5,8)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"6-10 (5,8)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"6-10 (5,8)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"6-10 (5,8)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"6-10 (5,8)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"6-10 (5,8)",11,local,0x20480,16384,2048,8,8,0,8
+0,"6-10 (5,8)",12,local,0x24480,1456,16,91,0,0,0
+0,"7-10 (6,8)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"7-10 (6,8)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"7-10 (6,8)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"7-10 (6,8)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"7-10 (6,8)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"7-10 (6,8)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"7-10 (6,8)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"7-10 (6,8)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"7-10 (6,8)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"7-10 (6,8)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"7-10 (6,8)",11,local,0x20480,16384,2048,8,8,0,8
+0,"7-10 (6,8)",12,local,0x24480,1456,16,91,0,0,0
+0,"10-10 (7,8)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"10-10 (7,8)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"10-10 (7,8)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"10-10 (7,8)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"10-10 (7,8)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"10-10 (7,8)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"10-10 (7,8)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"10-10 (7,8)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"10-10 (7,8)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"10-10 (7,8)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"10-10 (7,8)",11,local,0x20480,16384,2048,8,8,0,8
+0,"10-10 (7,8)",12,local,0x24480,1456,16,91,0,0,0
+0,"1-11 (0,9)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"1-11 (0,9)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"1-11 (0,9)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"1-11 (0,9)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"1-11 (0,9)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"1-11 (0,9)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"1-11 (0,9)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"1-11 (0,9)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"1-11 (0,9)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"1-11 (0,9)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"1-11 (0,9)",11,local,0x20480,16384,2048,8,8,0,8
+0,"1-11 (0,9)",12,local,0x24480,1456,16,91,0,0,0
+0,"2-11 (1,9)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"2-11 (1,9)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"2-11 (1,9)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"2-11 (1,9)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"2-11 (1,9)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"2-11 (1,9)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"2-11 (1,9)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"2-11 (1,9)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"2-11 (1,9)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"2-11 (1,9)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"2-11 (1,9)",11,local,0x20480,16384,2048,8,8,0,8
+0,"2-11 (1,9)",12,local,0x24480,1456,16,91,0,0,0
+0,"3-11 (2,9)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"3-11 (2,9)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"3-11 (2,9)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"3-11 (2,9)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"3-11 (2,9)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"3-11 (2,9)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"3-11 (2,9)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"3-11 (2,9)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"3-11 (2,9)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"3-11 (2,9)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"3-11 (2,9)",11,local,0x20480,16384,2048,8,8,0,8
+0,"3-11 (2,9)",12,local,0x24480,1456,16,91,0,0,0
+0,"4-11 (3,9)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"4-11 (3,9)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"4-11 (3,9)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"4-11 (3,9)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"4-11 (3,9)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"4-11 (3,9)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"4-11 (3,9)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"4-11 (3,9)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"4-11 (3,9)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"4-11 (3,9)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"4-11 (3,9)",11,local,0x20480,16384,2048,8,8,0,8
+0,"4-11 (3,9)",12,local,0x24480,1456,16,91,0,0,0
+0,"5-11 (4,9)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"5-11 (4,9)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"5-11 (4,9)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"5-11 (4,9)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"5-11 (4,9)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"5-11 (4,9)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"5-11 (4,9)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"5-11 (4,9)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"5-11 (4,9)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"5-11 (4,9)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"5-11 (4,9)",11,local,0x20480,16384,2048,8,8,0,8
+0,"5-11 (4,9)",12,local,0x24480,1456,16,91,0,0,0
+0,"6-11 (5,9)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"6-11 (5,9)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"6-11 (5,9)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"6-11 (5,9)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"6-11 (5,9)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"6-11 (5,9)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"6-11 (5,9)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"6-11 (5,9)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"6-11 (5,9)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"6-11 (5,9)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"6-11 (5,9)",11,local,0x20480,16384,2048,8,8,0,8
+0,"6-11 (5,9)",12,local,0x24480,1456,16,91,0,0,0
+0,"7-11 (6,9)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"7-11 (6,9)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"7-11 (6,9)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"7-11 (6,9)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"7-11 (6,9)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"7-11 (6,9)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"7-11 (6,9)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"7-11 (6,9)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"7-11 (6,9)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"7-11 (6,9)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"7-11 (6,9)",11,local,0x20480,16384,2048,8,8,0,8
+0,"7-11 (6,9)",12,local,0x24480,1456,16,91,0,0,0
+0,"10-11 (7,9)",0,local,0x158f00,159744,2048,78,78,0,78
+0,"10-11 (7,9)",1,local,0x1b480,2048,2048,1,1,0,1
+0,"10-11 (7,9)",3,local,0x1c480,16384,2048,8,8,0,8
+0,"10-11 (7,9)",4,local,0x24a40,32768,2048,16,79,79,0
+0,"10-11 (7,9)",5,local,0x2ca40,20480,2048,10,10,7,3
+0,"10-11 (7,9)",6,local,0x31a40,20480,2048,10,7,6,1
+0,"10-11 (7,9)",7,local,0x36a40,4096,2048,2,6,6,0
+0,"10-11 (7,9)",8,local,0x37a40,20480,2048,10,0,0,0
+0,"10-11 (7,9)",9,local,0x131e00,159744,2048,78,0,0,0
+0,"10-11 (7,9)",10,local,0x1bc80,2048,2048,1,0,0,0
+0,"10-11 (7,9)",11,local,0x20480,16384,2048,8,8,0,8
+0,"10-11 (7,9)",12,local,0x24480,1456,16,91,0,0,0
+
+dump_fabric_stream_regs.py:
+  pass
+
+dump_fast_dispatch.py:
+Dev,Loc,RiscV,NEO,Kernel Name,worker_type,cq_id,servicing_device_id
+0,"16-2 (13,0)",brisc,N/A,cq_prefetch,PREFETCH_HD,0,0
+0,"16-3 (13,1)",brisc,N/A,cq_dispatch,DISPATCH_HD,0,0
+
+dump_lightweight_asserts.py:
+  pass
+
+dump_mesh_sockets.py:
+  pass
+
+dump_semaphores.py:
+Dev,Loc,Kind,Id,Address,Value,Initial
+0,"16-2 (13,0)",program,0,0xa090,3328,128
+0,"16-2 (13,0)",program,1,0xa0a0,1,0
+0,"16-2 (13,0)",program,2,0xa0b0,131,128
+0,"16-3 (13,1)",program,0,0xa090,3244,0
+0,"16-3 (13,1)",program,1,0xa0a0,3,0
+0,"16-3 (13,1)",program,2,0xa0b0,0,0
+
+dump_watcher_ringbuffer.py:
+  pass
+    Device 0: functional_workers [1-2 (0,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-2 (1,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-2 (2,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-2 (3,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-2 (4,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-2 (5,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-2 (6,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [10-2 (7,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-2 (8,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-2 (9,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-2 (10,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-2 (11,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-2 (12,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-2 (13,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-3 (0,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-3 (1,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-3 (2,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-3 (3,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-3 (4,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-3 (5,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-3 (6,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [10-3 (7,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-3 (8,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-3 (9,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-3 (10,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-3 (11,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-3 (12,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-3 (13,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-4 (0,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-4 (1,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-4 (2,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-4 (3,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-4 (4,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-4 (5,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-4 (6,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [10-4 (7,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-4 (8,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-4 (9,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-4 (10,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-4 (11,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-4 (12,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-4 (13,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-5 (0,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-5 (1,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-5 (2,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-5 (3,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-5 (4,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-5 (5,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-5 (6,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [10-5 (7,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-5 (8,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-5 (9,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-5 (10,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-5 (11,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-5 (12,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-5 (13,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-6 (0,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-6 (1,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-6 (2,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-6 (3,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-6 (4,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-6 (5,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-6 (6,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [10-6 (7,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-6 (8,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-6 (9,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-6 (10,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-6 (11,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-6 (12,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-6 (13,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-7 (0,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-7 (1,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-7 (2,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-7 (3,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-7 (4,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-7 (5,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-7 (6,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [10-7 (7,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-7 (8,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-7 (9,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-7 (10,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-7 (11,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-7 (12,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-7 (13,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-8 (0,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-8 (1,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-8 (2,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-8 (3,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-8 (4,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-8 (5,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-8 (6,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [10-8 (7,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-8 (8,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-8 (9,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-8 (10,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-8 (11,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-8 (12,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-8 (13,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-9 (0,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-9 (1,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-9 (2,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-9 (3,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-9 (4,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-9 (5,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-9 (6,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [10-9 (7,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-9 (8,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-9 (9,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-9 (10,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-9 (11,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-9 (12,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-9 (13,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-10 (0,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-10 (1,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-10 (2,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-10 (3,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-10 (4,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-10 (5,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-10 (6,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [10-10 (7,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-10 (8,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-10 (9,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-10 (10,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-10 (11,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-10 (12,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-10 (13,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-11 (0,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-11 (1,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-11 (2,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-11 (3,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-11 (4,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-11 (5,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-11 (6,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [10-11 (7,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-11 (8,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-11 (9,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-11 (10,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-11 (11,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-11 (12,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-11 (13,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [10-1 (e0,11)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [11-1 (e0,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [6-1 (e0,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [12-1 (e0,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [13-1 (e0,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [7-1 (e0,10)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [4-1 (e0,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [3-1 (e0,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [15-1 (e0,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [2-1 (e0,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [16-1 (e0,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [1-1 (e0,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+
+firmware_versions.py:
+Dev,ETH FW,DM App FW,DM BL FW,Flash Bundle,CM FW
+0,0.0.0,0.15.1.0,0.0.0.0,18.12.1.0,0.21.1.0
+
+system_info.py:
+OS,Version,Kernel,Machine,KMD,UMD,tt-exalens
+Linux,22.04,5.15.0-191-generic,x86_64,2.9.0,0.9.12,0.4.1
+
+check_arc.py:
+Dev,Loc,Postcode,Up time,Clock MHz,Heartbeats/s
+0,"8-0 (a0,0)",N/A,0:02:24,800,9.995860748874593
+
+check_broken_components.py:
+  Device 0: eth [10-1 (e0,11)]: erisc1: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: eth [2-1 (e0,2)]: erisc1: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [4-2 (3,0)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [5-2 (4,0)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [5-3 (4,1)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [7-3 (6,1)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [15-3 (12,1)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [2-6 (1,4)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [3-6 (2,4)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [4-6 (3,4)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [5-6 (4,4)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [12-6 (9,4)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [1-7 (0,5)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [3-7 (2,5)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [10-7 (7,5)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [16-8 (13,6)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [6-9 (5,7)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [1-10 (0,8)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [4-10 (3,8)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [5-10 (4,8)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [10-10 (7,8)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [12-11 (9,9)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+Device,Broken Cores
+0,"brisc: 10-7 (7,5), 12-11 (9,9), 1-7 (0,5), 7-3 (6,1), 15-3 (12,1), 10-10 (7,8), 16-8 (13,6), 5-10 (4,8), 5-6 (4,4), 2-6 (1,4), 3-6 (2,4), 4-2 (3,0), 5-2 (4,0), 3-7 (2,5), 4-10 (3,8), 12-6 (9,4), 6-9 (5,7), 4-6 (3,4), 5-3 (4,1), 1-10 (0,8)\nerisc1: 2-1 (e0,2), 10-1 (e0,11)"

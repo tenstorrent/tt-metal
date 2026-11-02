@@ -1,0 +1,42 @@
+{"cell": "wid_rm_5x3x928x544", "variant": "base", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0}
+{"cell": "wid_rm_5x3x928x544", "variant": "grad", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_5x3x928x544", "variant": "grad_uc", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_13x777x1023", "variant": "base", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0}
+{"cell": "wid_rm_13x777x1023", "variant": "grad", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_13x777x1023", "variant": "grad_uc", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_1024x1024", "variant": "base", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0}
+{"cell": "wid_rm_1024x1024", "variant": "grad", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_1024x1024", "variant": "grad_uc", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "blk_rm_99991x64", "variant": "base", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0}
+{"cell": "blk_rm_99991x64", "variant": "grad", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "blk_rm_99991x64", "variant": "grad_uc", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_ragged_2000x249", "variant": "base", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0}
+{"cell": "wid_rm_ragged_2000x249", "variant": "grad", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_ragged_2000x249", "variant": "grad_uc", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "blk_rm_k1_4096x8", "variant": "base", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0}
+{"cell": "blk_rm_k1_4096x8", "variant": "grad", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "blk_rm_k1_4096x8", "variant": "grad_uc", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_w7_2048x7", "variant": "base", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0}
+{"cell": "wid_rm_w7_2048x7", "variant": "grad", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_w7_2048x7", "variant": "grad_uc", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "pcc_vs_base": NaN, "max_abs_vs_base": 0.0}
+{"cell": "wid_rm_5x3x928x544", "variant": "base", "ok": true, "pcc": 0.9998984336853027, "max_abs_vs_torch": 0.125}
+{"cell": "wid_rm_5x3x928x544", "variant": "grad", "ok": true, "pcc": 0.9999151825904846, "max_abs_vs_torch": 0.125, "flat": true, "pcc_vs_base": 0.9998923540115356, "max_abs_vs_base": 0.1875}
+{"cell": "wid_rm_5x3x928x544", "variant": "grad_uc", "ok": true, "pcc": 0.9999151825904846, "max_abs_vs_torch": 0.125, "flat": true, "pcc_vs_base": 0.9998923540115356, "max_abs_vs_base": 0.1875}
+{"cell": "wid_rm_13x777x1023", "variant": "base", "ok": true, "pcc": 0.9999129176139832, "max_abs_vs_torch": 0.1875}
+{"cell": "wid_rm_13x777x1023", "variant": "grad", "ok": true, "pcc": 0.9999268651008606, "max_abs_vs_torch": 0.125, "flat": true, "pcc_vs_base": 0.9999057054519653, "max_abs_vs_base": 0.25}
+{"cell": "wid_rm_13x777x1023", "variant": "grad_uc", "ok": true, "pcc": 0.9999268651008606, "max_abs_vs_torch": 0.125, "flat": true, "pcc_vs_base": 0.9999057054519653, "max_abs_vs_base": 0.25}
+{"cell": "wid_rm_1024x1024", "variant": "base", "ok": true, "pcc": 1.0, "max_abs_vs_torch": 0.0625}
+{"cell": "wid_rm_1024x1024", "variant": "grad", "ok": true, "pcc": 1.0, "max_abs_vs_torch": 0.0625, "flat": true, "pcc_vs_base": 1.0, "max_abs_vs_base": 0.0625}
+{"cell": "wid_rm_1024x1024", "variant": "grad_uc", "ok": true, "pcc": 1.0, "max_abs_vs_torch": 0.0625, "flat": true, "pcc_vs_base": 1.0, "max_abs_vs_base": 0.0625}
+{"cell": "blk_rm_99991x64", "variant": "base", "ok": true, "pcc": 0.9999238848686218, "max_abs_vs_torch": 0.125}
+{"cell": "blk_rm_99991x64", "variant": "grad", "ok": true, "pcc": 0.9999229311943054, "max_abs_vs_torch": 0.125, "flat": true, "pcc_vs_base": 0.9999236464500427, "max_abs_vs_base": 0.125}
+{"cell": "blk_rm_99991x64", "variant": "grad_uc", "ok": true, "pcc": 0.9999229311943054, "max_abs_vs_torch": 0.125, "flat": true, "pcc_vs_base": 0.9999236464500427, "max_abs_vs_base": 0.125}
+{"cell": "wid_rm_ragged_2000x249", "variant": "base", "ok": true, "pcc": 0.9999939799308777, "max_abs_vs_torch": 0.09375}
+{"cell": "wid_rm_ragged_2000x249", "variant": "grad", "ok": true, "pcc": 0.999997079372406, "max_abs_vs_torch": 0.125, "flat": true, "pcc_vs_base": 0.9999894499778748, "max_abs_vs_base": 0.125}
+{"cell": "wid_rm_ragged_2000x249", "variant": "grad_uc", "ok": true, "pcc": 0.999997079372406, "max_abs_vs_torch": 0.125, "flat": true, "pcc_vs_base": 0.9999894499778748, "max_abs_vs_base": 0.125}
+{"cell": "blk_rm_k1_4096x8", "variant": "base", "ok": true, "pcc": 0.9999905228614807, "max_abs_vs_torch": 0.0625}
+{"cell": "blk_rm_k1_4096x8", "variant": "grad", "ok": true, "pcc": 0.9999902844429016, "max_abs_vs_torch": 0.046875, "flat": true, "pcc_vs_base": 0.9999890327453613, "max_abs_vs_base": 0.0625}
+{"cell": "blk_rm_k1_4096x8", "variant": "grad_uc", "ok": true, "pcc": 0.9999902844429016, "max_abs_vs_torch": 0.046875, "flat": true, "pcc_vs_base": 0.9999890327453613, "max_abs_vs_base": 0.0625}
+{"cell": "wid_rm_w7_2048x7", "variant": "base", "ok": true, "pcc": 0.9999915361404419, "max_abs_vs_torch": 0.015625}
+{"cell": "wid_rm_w7_2048x7", "variant": "grad", "ok": true, "pcc": 0.9999912977218628, "max_abs_vs_torch": 0.03125, "flat": true, "pcc_vs_base": 0.9999911189079285, "max_abs_vs_base": 0.03125}
+{"cell": "wid_rm_w7_2048x7", "variant": "grad_uc", "ok": true, "pcc": 0.9999912977218628, "max_abs_vs_torch": 0.03125, "flat": true, "pcc_vs_base": 0.9999911189079285, "max_abs_vs_base": 0.03125}

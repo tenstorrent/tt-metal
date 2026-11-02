@@ -1,0 +1,1 @@
+{"cell": "blk_rm_99991x64", "variant": "cmp_q8", "ok": true, "pcc": NaN, "max_abs_vs_torch": 0.0, "flat": true, "k": 8, "sw": 8, "sh": 10000, "F": 79, "F_full": 78, "tail": 128, "R": 8, "U": 10, "Q": 8, "V": 80, "o_max": 10, "lag": 4, "rects": 1, "ret": 2}
