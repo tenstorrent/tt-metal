@@ -13,10 +13,10 @@ from pydantic import BaseModel
 
 from models.common.llama_models import sample_top_p
 from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
-from models.tt_transformers.tt.common import ImageMedia, InterleavedTextMedia, Role
-from models.tt_transformers.tt.generator import create_submeshes
+from models.ttt_compat.tt.common import ImageMedia, InterleavedTextMedia, Role
+from models.ttt_compat.tt.generator import create_submeshes
 
-IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
+IMG_PATH = Path("models/ttt_compat/demo/sample_prompts/llama_models").resolve()
 
 import os
 import time
@@ -31,8 +31,8 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import hf_multimodal_encode
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.ttt_compat.tt.common import hf_multimodal_encode
+from models.ttt_compat.tt.model_config import DecodersPrecision
 
 
 class UserMessage(BaseModel):
@@ -122,15 +122,18 @@ def create_multimodal_model(
             checkpoint = tt_model_args.load_state_dict()
             loaded_real_weights = bool(checkpoint) and not tt_model_args.dummy_weights
 
-    model = TtGemmaModel(
-        mesh_device=mesh_device,
-        state_dict=checkpoint,
-        weight_cache_path=tt_model_args.weight_cache_path(cache_dtype),
-        dtype=cache_dtype,
-        args=tt_model_args,
-        use_paged_kv_cache=use_paged_kv_cache,
-        paged_attention_config=paged_attention_config,
-    )
+    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable cache
+    # file rather than rebuild it from the placeholder.
+    with ttnn.as_tensor_cache_repair(not getattr(checkpoint, "is_placeholder", False)):
+        model = TtGemmaModel(
+            mesh_device=mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(cache_dtype),
+            dtype=cache_dtype,
+            args=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+            paged_attention_config=paged_attention_config,
+        )
 
     if loaded_real_weights and num_layers is None:
         mark_weight_cache_complete(cache_dir, checkpoint, is_host_weight=is_gemma3_host_weight, **cache_identity)

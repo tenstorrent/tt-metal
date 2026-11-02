@@ -19,6 +19,7 @@ file(
     clone/device/kernels/*.cpp
     concat/device/kernels/*.cpp
     concat/device/kernels/*.hpp
+    concat/codegen/kernels/*.cpp
     common/kernels/*.hpp
     common/kernels/codegen/*.cpp
     common/kernels/codegen/*.h
