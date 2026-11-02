@@ -373,16 +373,18 @@ struct DFBAdvancedOptions {
     // Placement override
     ////////////////////////////////////////////////////////////////////////////////
 
-    // Replace placement inferred from the endpoint kernels. Must be non-empty and within
+    // Replace backing-memory placement inferred from the endpoint kernels. Must be non-empty and within
     // the logical worker grid; may omit endpoint nodes. Every reserved node must have both endpoint roles.
     // Placement is fixed for the Program lifetime; per-node size and kernel placement are unchanged.
     // Existing endpoint configuration and allow_instance_multi_binding restrictions still apply.
     // Cannot be combined with borrowed_from or prefetcher_pipe_relays.
+    // Device configuration and slot reuse follow inferred endpoint placement, as when this field is unset.
     // DFBs sharing a device slot on a kernel's nodes must have compatible format, tile, and unpack metadata.
-    // On Quasar, assigned device slots must be contiguous from zero on every reserved node.
+    // On Quasar, assigned device slots must be contiguous from zero on every configured node.
     //
-    // CAUTION: Access outside this set is undefined behavior. Kernel code must guard
-    // such accesses; the framework adds no device-side checks. Unset preserves inferred placement.
+    // Kernels can start on omitted nodes, but any DFB interaction there is undefined behavior.
+    // Kernel code must guard such interactions; the framework adds no device-side checks.
+    // Unset preserves inferred placement.
     std::optional<CoreRangeSet> override_placement = std::nullopt;
 };
 

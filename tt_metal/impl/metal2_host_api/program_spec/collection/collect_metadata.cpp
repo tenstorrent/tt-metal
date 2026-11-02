@@ -209,14 +209,16 @@ void DeriveNodeSets(const ProgramSpec& spec, CollectedSpecData& collected) {
             kernel.unique_id);
     }
 
-    // dfb_placements: explicit placement, or the union of endpoint kernels' node sets.
+    // dfb_placements: configuration follows endpoint kernels; allocation uses explicit placement when set.
     // Collected, but unvalidated. Semantic integrity checks for DFB take place in ValidateProgramSpec.
     for (const auto& dfb : spec.dataflow_buffers) {
-        NodeRangeSet placement =
-            dfb.advanced_options.override_placement
-                ? dfb.advanced_options.override_placement->merge_ranges()
-                : InferDFBPlacement(collected.dfb_endpoints.at(dfb.unique_id), collected.kernel_node_set);
-        collected.dfb_placements[dfb.unique_id] = {.configuration = placement, .allocation = std::move(placement)};
+        NodeRangeSet configuration =
+            InferDFBPlacement(collected.dfb_endpoints.at(dfb.unique_id), collected.kernel_node_set);
+        NodeRangeSet allocation = dfb.advanced_options.override_placement
+                                      ? dfb.advanced_options.override_placement->merge_ranges()
+                                      : configuration;
+        collected.dfb_placements[dfb.unique_id] = {
+            .configuration = std::move(configuration), .allocation = std::move(allocation)};
     }
 }
 

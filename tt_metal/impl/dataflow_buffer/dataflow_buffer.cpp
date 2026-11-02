@@ -1825,8 +1825,8 @@ uint32_t DataflowBufferImpl::serialized_size() const {
 }
 
 void DataflowBufferImpl::set_configured_address(uint32_t alloc_addr) {
-    // Fill alloc_addr per core in each group.  All cores of a DFB get the same alloc_addr so the L1 buffer is at a
-    // uniform absolute address on every physical core.
+    // Fill alloc_addr per core in each group. All configured cores get the same address,
+    // including cores on which the DFB does not reserve backing memory.
     if (core_lookup_.empty() || uniform_alloc_addr() != alloc_addr) {
         ++config_generation_;
     }

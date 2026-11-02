@@ -101,16 +101,15 @@ struct CollectedSpecData {
 
     // Node sets used to configure a DFB and reserve its backing memory.
     struct DFBPlacement {
-        // Invariant: Configuration and allocation cover the same nodes.
         NodeRangeSet configuration;
         NodeRangeSet allocation;
     };
 
-    // dfb_placements: effective placement of each DFB.
+    // dfb_placements: configuration and backing-memory placement of each DFB.
     //   - For each DFBSpecName, the node sets could be empty.
     //   - Every key of dfb_by_name has an entry.
-    //   - Both node sets are override_placement when set; otherwise they are the union of the
-    //     producer and consumer kernels' node sets.
+    //   - Configuration is the union of the producer and consumer kernels' node sets.
+    //   - Allocation is override_placement when set; otherwise it matches configuration.
     std::unordered_map<DFBSpecName, DFBPlacement> dfb_placements;
 
     // Semaphore binder census (derived from kernel semaphore bindings and kernel_node_set): which

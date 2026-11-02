@@ -12,7 +12,7 @@
 
 namespace tt::tt_metal {
 
-// Device slots are allocated per core (two DFBs may share a slot iff their node sets are
+// Device slots are allocated per core (two DFBs may share a slot iff their configuration node sets are
 // disjoint), so the arch limit is on how many DFBs land on any single node — not on
 // ProgramSpec::dataflow_buffers.size(). Gen1 lowers each slot to a circular buffer; Gen2
 // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on

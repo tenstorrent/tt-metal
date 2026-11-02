@@ -600,8 +600,8 @@ void ValidateDFBEndpointCoverage(const DataflowBufferSpec& dfb, const CollectedS
         TT_FATAL(
             false,
             "Local DFB '{}' is malformed at node {}: {} producer instance(s) ({}) and {} consumer "
-            "instance(s) ({}). A local DFB lives in shared SRAM on each node, so every node it is "
-            "instantiated on must run exactly one producer and one consumer kernel instance. {}",
+            "instance(s) ({}). A local DFB lives in shared SRAM on each node, so every node where it "
+            "reserves memory must run exactly one producer and one consumer kernel instance. {}",
             dfb.unique_id,
             node.str(),
             num_producers,
@@ -808,7 +808,7 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
                 total_size_a,
                 total_size_b);
 
-            // Rule 3: same node coverage.
+            // Rule 3: same backing-memory node coverage.
             const auto& nodes_b = collected.dfb_placements.at(alias_name).allocation;
             TT_FATAL(
                 nodes_a == nodes_b,
