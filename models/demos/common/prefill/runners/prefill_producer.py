@@ -578,7 +578,8 @@ class _ChunkRetireClock:
     """Producer-clock span of each chunk: the drain seeing its first layer ack to seeing its last.
 
     Every stamp is time.perf_counter() on this process, so chunk time and retire cadence need no cross-host clock
-    and no per-chunk device sync. One CHUNK_RETIRE line per chunk feeds the summarizer.
+    and no per-chunk device sync. One CHUNK_RETIRE line per chunk feeds the summarizer; its layers= field
+    (layer span @ ms after the first ack) feeds the pipeline gantt.
     """
 
     def __init__(self):
@@ -586,6 +587,7 @@ class _ChunkRetireClock:
         self._pushed = {}
         self._first_ack = {}
         self._acks = {}
+        self._layer_acks = {}
         self.warmup = False
 
     def on_push(self, key: tuple) -> None:
@@ -595,8 +597,10 @@ class _ChunkRetireClock:
     def on_ack(self, c) -> None:
         key = chunk_key(c)
         with self._lock:
-            self._first_ack.setdefault(key, time.perf_counter())
+            now = time.perf_counter()
+            self._first_ack.setdefault(key, now)
             self._acks[key] = self._acks.get(key, 0) + 1
+            self._layer_acks.setdefault(key, []).append((c.layer_start, c.layer_end, now))
 
     def on_retire(self, key: tuple, retire_ts: float) -> None:
         with self._lock:
@@ -606,13 +610,15 @@ class _ChunkRetireClock:
                 del self._pushed[key]
             first_ts = self._first_ack.pop(key, None)
             acks = self._acks.pop(key, 0)
+            layer_acks = self._layer_acks.pop(key, [])
         if warmup is None or first_ts is None:
             logger.warning(f"[producer] CHUNK_RETIRE for unpushed chunk {key}")
             return
         slot_id, pos_start, pos_end = key
         logger.info(
             f"[producer] CHUNK_RETIRE slot={slot_id} start={pos_start} end={pos_end} first={first_ts:.6f} "
-            f"retire={retire_ts:.6f} warmup={int(warmup)} acks={acks}"
+            f"retire={retire_ts:.6f} warmup={int(warmup)} acks={acks} "
+            f"layers={','.join(f'{a}-{b}@{(t - first_ts) * 1000.0:.1f}' for a, b, t in layer_acks)}"
         )
 
 

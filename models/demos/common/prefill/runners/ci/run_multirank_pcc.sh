@@ -287,6 +287,29 @@ cleanup() {
       tail -n 40 "$f" 2>/dev/null || true
     done
     emit_summary
+    if [ "${EXPECTED_RANKS:-1}" -ge 2 ]; then
+      GANTT_DIR="${PREFILL_SUMMARIES}/plots"
+      mkdir -p "${GANTT_DIR}"
+      GANTT_PY=python3
+      GANTT_TMP=""
+      if ! python3 -c "import matplotlib" 2>/dev/null; then
+        GANTT_TMP=$(mktemp -d)
+        if UV_CACHE_DIR="${GANTT_TMP}/uvcache" timeout 120 uv venv --quiet "${GANTT_TMP}/venv" \
+           && UV_CACHE_DIR="${GANTT_TMP}/uvcache" timeout 180 uv pip install --quiet \
+                --python "${GANTT_TMP}/venv/bin/python" matplotlib; then
+          GANTT_PY="${GANTT_TMP}/venv/bin/python"
+        else
+          echo "matplotlib install failed (gantt skipped, non-fatal)"
+        fi
+      fi
+      "${GANTT_PY}" "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
+        --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
+        -o "${GANTT_DIR}/${RUN_NAME}_pipeline_gantt.png" \
+        || echo "gantt render failed (non-fatal)"
+      if [ -n "${GANTT_TMP}" ]; then
+        rm -rf "${GANTT_TMP}"
+      fi
+    fi
   fi
   # Last in the log, after the rank-log tails, so a failed gate is what a tail reader sees.
   echo "==================== gate verdicts ===================="
