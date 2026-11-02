@@ -58,7 +58,7 @@ void kernel_main() {
     cm.wait_front(TPC);
     cf.wait_front(TPC);
     reconfig_data_format(CB_MID, CB_FOLD);
-    add_tiles_init(CB_MID, CB_FOLD);
+    add_init(CB_MID, CB_FOLD);
     for (uint32_t j = 0; j < TPC; ++j) {
         tile_regs_acquire();
         add_tiles(CB_MID, CB_FOLD, j, j, 0);
