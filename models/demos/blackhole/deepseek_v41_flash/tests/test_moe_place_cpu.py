@@ -74,7 +74,9 @@ def test_validate_and_tag(tmp_path, monkeypatch):
     monkeypatch.delenv("DSV41_MOE_PLACE")
     assert not m.enabled() and m.assignment(3) is None and m.cache_suffix(3) == ""
     monkeypatch.setenv("DSV41_MOE_PLACE", str(p))
-    assert raises(RuntimeError, m.check_prefill_compat, [3], True)
+    m.check_prefill_compat([3], True)  # relabel on (default): the unified prefill ranks permuted gate columns, compatible
+    monkeypatch.setenv("DSV41_MOE_PLACE_PF_RELABEL", "0")
+    assert raises(RuntimeError, m.check_prefill_compat, [3], True)  # relabel off: the in-place prefill would read the wrong experts
     m.check_prefill_compat([4, 9], True)
     m.check_prefill_compat([3], False)
 
