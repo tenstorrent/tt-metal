@@ -157,9 +157,10 @@ def _poisoned_scaler_slots(tile_shape, scaler_shape, scaler_value):
 
     The stimuli writer lays out B in data-tile-sized slots, so the scaler takes as many slots as it
     needs plus one more, leaving poison past its end whatever its size. Only the first row of each
-    scaler face holds the scaler: that row is all the math thread reads. The other scaler rows and
-    everything past the scaler tile hold SCALER_POISON, so an unpacker that reads more rows, more
-    faces, or the wrong faces of the scaler corrupts the result.
+    scaler face holds the scaler. The other scaler rows and everything past the scaler tile hold
+    SCALER_POISON, so an unpacker that reads past the scaler or the wrong scaler faces corrupts the
+    result. SUM/AVG REDUCE_ROW reads full-height scaler faces whole; their poisoned rows reach only
+    dest columns the packer drops.
 
     Returns the slots and how many there are.
     """
