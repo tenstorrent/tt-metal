@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 #include "api/numeric/bfloat16.h"
 
 #include <cstdint>

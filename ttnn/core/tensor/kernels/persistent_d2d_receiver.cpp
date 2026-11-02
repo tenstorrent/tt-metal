@@ -39,6 +39,7 @@
 // ttnn/core/tensor/d2d_stream_service.cpp).
 constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
 constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(1);
+constexpr uint32_t terminate_value = get_named_compile_time_arg_val("terminate_value");
 constexpr uint32_t socket_page_size = get_compile_time_arg_val(2);
 constexpr uint32_t num_socket_pages = get_compile_time_arg_val(3);
 constexpr uint32_t pages_per_chunk = get_compile_time_arg_val(4);
@@ -77,6 +78,45 @@ constexpr uint32_t num_lanes = get_compile_time_arg_val(21);
 // unchanged otherwise), but the receiver no longer reads/writes the tensor itself —
 // the sender writes it directly over fabric — so no accessor is built.
 constexpr auto output_tensor_accessor_args = TensorAccessorArgs<22>();
+// Stage gate. num_stage_gates == 0 compiles it out.
+constexpr uint32_t num_stage_gates = get_named_compile_time_arg_val("num_stage_gates");
+constexpr uint32_t stage_gate_addr = get_named_compile_time_arg_val("stage_gate_addr");
+constexpr uint32_t stage_gate_stride = get_named_compile_time_arg_val("stage_gate_stride");
+constexpr uint32_t stage_gate_slot_word = get_named_compile_time_arg_val("stage_gate_slot_offset") / sizeof(uint32_t);
+constexpr uint32_t stage_gate_mode_word = get_named_compile_time_arg_val("stage_gate_mode_offset") / sizeof(uint32_t);
+// Gate word and mode values, from the host's d2d_stream::GateState / GateMode.
+constexpr uint32_t gate_open_value = get_named_compile_time_arg_val("gate_open_value");
+constexpr uint32_t gate_closed_value = get_named_compile_time_arg_val("gate_closed_value");
+constexpr uint32_t gate_close_on_transit_mode = get_named_compile_time_arg_val("gate_close_on_transit_mode");
+
+// Wait until the gate selected by the transfer's metadata is open, then close it if the
+// transfer's mode is CloseOnTransit. Returns false if terminated while waiting.
+FORCE_INLINE bool pass_stage_gate(uint32_t metadata_addr) {
+    invalidate_l1_cache();
+    volatile tt_l1_ptr uint32_t* md = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_addr);
+    const uint32_t slot = md[stage_gate_slot_word];
+    const uint32_t mode = md[stage_gate_mode_word];
+    if (slot >= num_stage_gates) {
+        return true;
+    }
+    volatile tt_l1_ptr uint32_t* termination_semaphore =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* gate =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_gate_addr + slot * stage_gate_stride);
+    while (true) {
+        invalidate_l1_cache();
+        if (termination_semaphore[0] == terminate_value) {
+            return false;
+        }
+        if (*gate == gate_open_value) {
+            break;
+        }
+    }
+    if (mode == gate_close_on_transit_mode) {
+        *gate = gate_closed_value;
+    }
+    return true;
+}
 
 void kernel_main() {
     size_t rt_args_idx = 0;
@@ -153,7 +193,7 @@ void kernel_main() {
             bool granted = false;
             while (!granted) {
                 invalidate_l1_cache();
-                if (termination_semaphore[0] == 1) {
+                if (termination_semaphore[0] == terminate_value) {
                     terminated = true;
                     break;
                 }
@@ -176,7 +216,7 @@ void kernel_main() {
         bool got_data = false;
         while (!got_data) {
             invalidate_l1_cache();
-            if (termination_semaphore[0] == 1) {
+            if (termination_semaphore[0] == terminate_value) {
                 terminated = true;
                 break;
             }
@@ -187,6 +227,14 @@ void kernel_main() {
         }
         if (terminated) {
             break;
+        }
+
+        // 1b. Optional stage gate.
+        if constexpr (num_stage_gates > 0) {
+            if (!pass_stage_gate(receiver_socket.read_ptr)) {
+                terminated = true;
+                break;
+            }
         }
 
         // 2. Optional inline-metadata: the sender staged the blob in our vestigial
@@ -220,7 +268,7 @@ void kernel_main() {
             //    workers are running, e.g. a host-driven transfer with no consumer op).
             while (true) {
                 invalidate_l1_cache();
-                if (termination_semaphore[0] == 1) {
+                if (termination_semaphore[0] == terminate_value) {
                     terminated = true;
                     break;
                 }

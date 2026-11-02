@@ -89,6 +89,9 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     fused_concat_ka=None,
     pass_counter_buffers=True,
     counter_row_slots=None,
+    alias_addcmul=False,
+    replace_counters_on_hit=False,
+    check_program_cache=False,
 ):
     torch.manual_seed(0)
 
@@ -183,7 +186,11 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     if addcmul_scalar is not None:
         rs_N = N // num_devices
         torch_addcmul_a = torch.randn([1, 1, M, rs_N], dtype=torch.float32)
-        if broadcast_gate:
+        if alias_addcmul:
+            if broadcast_gate:
+                raise ValueError("alias_addcmul requires a full-shape addcmul gate")
+            torch_addcmul_b = torch_addcmul_a
+        elif broadcast_gate:
             torch_addcmul_b = torch.randn([1, 1, 1, rs_N], dtype=torch.float32)
         else:
             torch_addcmul_b = torch.randn([1, 1, M, rs_N], dtype=torch.float32)
@@ -195,13 +202,17 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             memory_config=mem_config_input,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        tt_addcmul_b = ttnn.from_torch(
-            torch_addcmul_b,
-            device=mesh_device,
-            layout=layout,
-            dtype=input_dtype,
-            memory_config=mem_config_input,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        tt_addcmul_b = (
+            tt_addcmul_a
+            if alias_addcmul
+            else ttnn.from_torch(
+                torch_addcmul_b,
+                device=mesh_device,
+                layout=layout,
+                dtype=input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
         )
 
     # For non-aligned virtual concat: compute per-device padded K and build zero-padded weight.
@@ -434,7 +445,15 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         signpost("stop")
         logger.info("Done executing trace")
     else:
+        if check_program_cache:
+            mesh_device.enable_program_cache()
+            mesh_device.clear_program_cache()
+        cache_entries_after_miss = None
         for i in range(num_iters):
+            if replace_counters_on_hit and i > 0:
+                mm_progress_counters = _allocate_counter_array()
+                if mm_credit_counters is not None:
+                    mm_credit_counters = _allocate_counter_array()
             ttnn.synchronize_device(mesh_device)
             tt_mm_out, tt_rs_out = run_op(i)
             tt_mm_out_tensor_list.append(tt_mm_out)
@@ -443,6 +462,14 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             logger.info(f"Waiting for op")
             ttnn.synchronize_device(mesh_device)
             logger.info(f"Done iteration {i}")
+            if check_program_cache:
+                if i == 0:
+                    cache_entries_after_miss = mesh_device.num_program_cache_entries()
+                else:
+                    assert mesh_device.num_program_cache_entries() == cache_entries_after_miss, (
+                        f"cache hit allocated a new program: {mesh_device.num_program_cache_entries()} vs "
+                        f"{cache_entries_after_miss}"
+                    )
 
     ##### Verify results #####
     if not check_correctness:
@@ -454,12 +481,26 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     for i in range(num_iters):
         golden_idx = i if not enable_trace else 0
 
+        # Output TensorTopologies. The weight is ShardTensor2dMesh with dim 0 on the cluster axis and the input is
+        # replicated, so the matmul output takes the union-default label Shard(0) on the cluster axis, Replicate on
+        # the other (the composer below stacks the per-device results along dim 0). The reduce_scatter of that matmul
+        # along the cluster axis is Shard(dim) there, Replicate on the other axis -- the layout the RS composer below
+        # uses.
+        expected_mm = ["PlacementReplicate()", "PlacementReplicate()"]
+        expected_mm[cluster_axis] = "PlacementShard(0)"
+        expected_rs = ["PlacementReplicate()", "PlacementReplicate()"]
+        expected_rs[cluster_axis] = f"PlacementShard({dim})"
+        assert [repr(p) for p in tt_mm_out_tensor_list[i].tensor_topology().placements()] == expected_mm
+        assert [repr(p) for p in tt_rs_out_tensor_list[i].tensor_topology().placements()] == expected_rs
+        assert tuple(int(d) for d in tt_rs_out_tensor_list[i].tensor_topology().distribution_shape()) == tuple(
+            mesh_device.shape
+        )
+
         # Check MM output (each device has different output since weights differ)
         # Setup concatenation dimension per axis
         concat_dims = [0, 0]
-        concat_dims[
-            1 - cluster_axis
-        ] = 1  # Dimensions have to be unique. Set to anything but the concatenation dimension.
+        # Dimensions have to be unique. Set to anything but the concatenation dimension.
+        concat_dims[1 - cluster_axis] = 1
         tt_mm_out_torch = ttnn.to_torch(
             tt_mm_out_tensor_list[i],
             mesh_composer=ttnn.create_mesh_composer(
@@ -798,6 +839,51 @@ def test_minimal_matmul_strided_reduce_scatter_addcmul(mesh_device, broadcast_ga
         cluster_axis=1,
         addcmul_scalar=1.0,
         broadcast_gate=broadcast_gate,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True, ids=["1x8"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+@skip_for_blackhole("t3000 tests are wormhole_b0 only")
+def test_minimal_matmul_strided_reduce_scatter_aliased_addcmul_counter_cache_hit(mesh_device, topology):
+    """Cache hit with aliased full-shape addcmul inputs and a replacement counter allocation."""
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_minimal_matmul_strided_reduce_scatter_impl(
+        mesh_device,
+        M=512,
+        K=256,
+        N=512,
+        dim=3,
+        num_links=1,
+        input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=mem_config,
+        mem_config_mm=mem_config,
+        mem_config_rs=mem_config,
+        topology=topology,
+        mm_block_m=64,
+        mm_block_k=64,
+        mm_block_n=64,
+        subblock_h=1,
+        subblock_w=1,
+        mm_core_grid=ttnn.CoreCoord(8, 2),
+        chunk_width_in_mm_blocks=1,
+        rs_mode="fused",
+        cluster_axis=1,
+        num_iters=2,
+        addcmul_scalar=1.0,
+        broadcast_gate=False,
+        alias_addcmul=True,
+        mm_window_blocks=2,
+        replace_counters_on_hit=True,
+        check_program_cache=True,
     )
 
 

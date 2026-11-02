@@ -59,6 +59,26 @@ void kernel_main() {
     constexpr uint32_t dfb_mask_in = dfb::q_in;  // placeholder; not read on the no-mask path
 #endif
 
+    DataflowBuffer q_in(dfb::q_in);
+    DataflowBuffer k_in(dfb::k_in);
+    DataflowBuffer v_in(dfb::v_in);
+#ifdef USE_JOINT_MASK
+    DataflowBuffer mask_in(dfb_mask_in);
+#else
+    auto& mask_in = q_in;
+#endif
+    DataflowBuffer col_identity(dfb::col_identity);
+    DataflowBuffer out_im_A(dfb::out_im_A);
+    DataflowBuffer out_im_B(dfb::out_im_B);
+    DataflowBuffer max_A(dfb::max_A);
+    DataflowBuffer max_B(dfb::max_B);
+    DataflowBuffer sum_A(dfb::sum_A);
+    DataflowBuffer sum_B(dfb::sum_B);
+    DataflowBuffer exp_max_diff(dfb::exp_max_diff);
+    DataflowBuffer out(dfb::out);
+    DataflowBuffer qk_im(dfb::qk_im);
+    DataflowBuffer identity_scale_in(dfb::identity_scale_in);
+
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::q_in, dfb::k_in, dfb::qk_im);
     matmul_init(dfb::q_in, dfb::k_in);
     // Reset the Quasar pack-operand tracker (see pack_reconfig_out). No-op on WH/BH.
@@ -89,19 +109,26 @@ void kernel_main() {
                 out_chunk_tiles,
                 mask_chunk_0,
                 mask_chunk_1,
-                dfb::q_in,
-                dfb::k_in,
-                dfb::v_in,
-                dfb_mask_in,
-                dfb::col_identity,
-                dfb::out_im_A,
-                dfb::out_im_B,
-                dfb::max_A,
-                dfb::max_B,
-                dfb::sum_A,
-                dfb::sum_B,
-                dfb::exp_max_diff,
-                dfb::out);
+                q_in,
+                k_in,
+                v_in,
+                mask_in,
+                col_identity,
+                out_im_A,
+                out_im_B,
+                max_A,
+                max_B,
+                sum_A,
+                sum_B,
+                exp_max_diff,
+                out,
+                qk_im,
+                identity_scale_in);
         }
     }
+
+    // The writer pushes the identity scale and column identity tiles once; compute reads them by index for
+    // the whole kernel and never pops them. Release them so the buffers are left balanced.
+    release_writer_constant(identity_scale_in, 1);
+    release_writer_constant(col_identity, 1);
 }

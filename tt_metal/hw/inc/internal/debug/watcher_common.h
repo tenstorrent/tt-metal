@@ -35,8 +35,20 @@ inline void clear_previous_launch_message_entry_for_watcher() {
     launch_msg->kernel_config.brisc_noc_id = 0;
 }
 #define CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER() clear_previous_launch_message_entry_for_watcher()
+
+#if !defined(WATCHER_DISABLE_NOC_SANITIZE)
+// Kernels that share a dedicated NOC record the command buffers they use (debug/sanitize.h); a launch starts
+// with none recorded. One word covers both NOCs and both data movement RISCs.
+inline void clear_noc_cmd_buf_usage_for_watcher() {
+    *reinterpret_cast<volatile uint32_t tt_l1_ptr*>(GET_MAILBOX_ADDRESS_DEV(watcher.noc_cmd_buf_usage)) = 0;
+}
+#define CLEAR_NOC_CMD_BUF_USAGE_FOR_WATCHER() clear_noc_cmd_buf_usage_for_watcher()
+#else
+#define CLEAR_NOC_CMD_BUF_USAGE_FOR_WATCHER()
+#endif
 #else  // !WATCHER_ENABLED
 
 #define CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER()
+#define CLEAR_NOC_CMD_BUF_USAGE_FOR_WATCHER()
 
 #endif  // WATCHER_ENABLED

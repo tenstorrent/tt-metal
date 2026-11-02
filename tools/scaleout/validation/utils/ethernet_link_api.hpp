@@ -11,8 +11,8 @@
 
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::scaleout_tools {

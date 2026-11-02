@@ -57,7 +57,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
 
     MeshDevice* device = a.device();
     Buffer* src0_buffer = a.buffer();
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t tensor_height = a.physical_volume() / tensor_width;
@@ -216,9 +216,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
 
     // Compute kernel(s) — full + cliff (cliff only for interleaved input).
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
     auto make_compute = [&](const KernelSpecName& id) {
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {

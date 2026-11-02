@@ -10,6 +10,17 @@ OMPI_PREFIX="${INSTALL_DIR}/openmpi-${OMPI_VERSION}-ulfm"
 
 echo "Building OpenMPI ${OMPI_VERSION} (from git) with ULFM to ${OMPI_PREFIX}..."
 
+# Passed in by Dockerfile.tools, which builds UCX into this prefix before calling us.
+# Required, not defaulted: guessing it is how you end up with an MPI that configured
+# without UCX and silently runs over TCP.
+UCX_PREFIX="${UCX_PREFIX:?UCX_PREFIX must be set (path UCX was installed to)}"
+
+if [ ! -e "${UCX_PREFIX}/include/ucp/api/ucp.h" ]; then
+    echo "[ERROR] no UCX at ${UCX_PREFIX} (missing include/ucp/api/ucp.h)." >&2
+    echo "[ERROR] Check UCX_PREFIX matches where install-ucx.sh installed." >&2
+    exit 1
+fi
+
 WORKDIR="/tmp/ompi-src"
 rm -rf "${WORKDIR}"
 mkdir -p "${WORKDIR}"
@@ -42,6 +53,9 @@ echo "Running autogen.pl..."
 # CFLAGS: force C17 (-std=gnu17). GCC 14 auto-selects C23 (gnu23) which promotes
 # certain OpenMPI _Bool->volatile void* assignments to hard errors. GCC uses the
 # last -std flag on the command line, so this overrides the gnu23 embedded in CC.
+# --disable-oshmem: OpenSHMEM is auto-enabled once UCX is found, but tt-metal does
+# not use it and oshmem/mca/sshmem fails under GCC 14 (-Wint-conversion is an error:
+# "initialization of 'void *' from 'long unsigned int'"). Without UCX it was never built.
 CFLAGS="-std=gnu17" ./configure \
     --prefix="${OMPI_PREFIX}" \
     --with-ft=ulfm \
@@ -49,6 +63,8 @@ CFLAGS="-std=gnu17" ./configure \
     --enable-mpirun-prefix-by-default \
     --disable-mca-dso \
     --disable-dlopen \
+    --with-ucx="${UCX_PREFIX}" \
+    --disable-oshmem \
     --enable-static \
     --with-slurm=/opt/slurm \
     --without-munge \
@@ -81,6 +97,51 @@ if ldd "${OMPI_PREFIX}/lib/libmpi.so" 2>/dev/null | grep -q munge; then
     exit 1
 fi
 echo "==> Verified: libmpi.so has no munge runtime dependency"
+
+# Guard: UCX must be built in for both one-sided (osc/ucx) and point-to-point (pml/ucx).
+# Which PML is used is a runtime choice: pml/ucx only outranks ob1 when
+# opal_common_ucx_devices matches the RDMA driver (default "mlx*"; "bnxt*" on Broadcom),
+# and ULFM users pin OMPI_MCA_pml=ob1 since fault tolerance is not supported over UCX.
+# Components are static here (--disable-mca-dso --disable-dlopen), so what ompi_info
+# reports is what got compiled in.
+if ! OMPI_INFO_OUT="$(LD_LIBRARY_PATH="${OMPI_PREFIX}/lib:${LD_LIBRARY_PATH:-}" \
+        "${OMPI_PREFIX}/bin/ompi_info" --parsable 2>&1)"; then
+    echo "[ERROR] ompi_info failed to run; cannot verify UCX components:" >&2
+    echo "${OMPI_INFO_OUT}" >&2
+    exit 1
+fi
+
+if ! grep -q '^mca:osc:ucx:' <<<"${OMPI_INFO_OUT}"; then
+    echo "[ERROR] osc/ucx was NOT built -- MPI RMA would fall back off UCX." >&2
+    grep -E '^mca:(osc|pml):' <<<"${OMPI_INFO_OUT}" >&2 || true
+    exit 1
+fi
+echo "==> Verified: osc/ucx present"
+
+if ! grep -q '^mca:pml:ucx:' <<<"${OMPI_INFO_OUT}"; then
+    echo "[ERROR] pml/ucx was NOT built -- two-sided MPI would fall back off UCX." >&2
+    grep -E '^mca:(osc|pml):' <<<"${OMPI_INFO_OUT}" >&2 || true
+    exit 1
+fi
+echo "==> Verified: pml/ucx present"
+
+# Default the PML to ob1 (TCP / shared memory) in the installed MCA params file.
+# pml/ucx stays compiled in but is opt-in (OMPI_MCA_pml=ucx or --mca pml ucx):
+# ULFM fault tolerance is only supported on ob1 and forcing pml/ucx under
+# "mpirun --with-ft ulfm" segfaults, so existing ULFM launch paths keep the
+# behaviour they had before UCX was added. One-sided (osc/ucx) is unaffected.
+MCA_PARAMS_CONF="${OMPI_PREFIX}/etc/openmpi-mca-params.conf"
+cat >> "${MCA_PARAMS_CONF}" <<'MCA_EOF'
+
+# tt-metal defaults (dockerfile/scripts/install-openmpi.sh):
+# UCX is opt-in for point-to-point; override with OMPI_MCA_pml=ucx / --mca pml ucx.
+pml = ob1
+MCA_EOF
+if ! grep -qx 'pml = ob1' "${MCA_PARAMS_CONF}"; then
+    echo "[ERROR] failed to set default pml = ob1 in ${MCA_PARAMS_CONF}" >&2
+    exit 1
+fi
+echo "==> Verified: default pml = ob1 set in ${MCA_PARAMS_CONF} (pml/ucx is opt-in)"
 
 echo "OpenMPI ${OMPI_VERSION} installed to ${OMPI_PREFIX}"
 if [ -x "${OMPI_PREFIX}/bin/mpicc" ]; then

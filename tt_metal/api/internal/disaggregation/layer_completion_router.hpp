@@ -2,56 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// LayerCompletionRouter — one per host in a pipelined-prefill MPI job.
-// Owns the host-local LayerCompletionQueue (the prefill runner connects
-// and pushes into it) and runs a background listener thread:
-//
-//   * Subordinate host (rank != master_rank): drain the ring, MPI-send
-//     each completion to the master rank.
-//   * Master host (rank == master_rank): drain the local ring AND poll
-//     MPI for completions from every subordinate, feed all of them
-//     through a LayerCompletionReorderBuffer, and inject(1) into the
-//     scheduler-facing InterProcessCounterChannel (which this router
-//     owns) for each completion that becomes contiguous-in-order.
-//
-// world_size == 1 ⇒ master path uses no MPI (local ring only).
-//
-// Coordinated teardown: at stop(), each subordinate drains its ring and then
-// sends one end-of-stream SENTINEL (see layer_completion_message.hpp). The
-// master does NOT cancel mid-stream — it keeps receiving until it has seen a
-// sentinel from every subordinate (and its own ring is drained), so no
-// blocking subordinate send is ever left without a receiver and no
-// already-arrived completion is dropped by a cancel. A teardown_timeout_ms
-// safety net bounds the wait if a rank crashed without sending its sentinel.
+// LayerCompletionRouter: one per host in a pipelined-prefill MPI job. Owns the host-local ring the runner pushes
+// into and runs a listener thread. Subordinates send every message to the master over MPI; the master forwards
+// its own and theirs, as they arrive, into the scheduler-facing ring it owns. world_size == 1 needs no MPI.
+// Teardown: each subordinate drains its ring and sends one sentinel; the master keeps receiving until every
+// sentinel is in and its ring is empty, bounded by teardown_timeout_ms.
 
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <exception>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
-namespace tt::tt_metal::distributed {
-class InterProcessCounterChannel;  // fwd — defined in api/internal/service/inter_process_counter_channel.hpp
-}  // namespace tt::tt_metal::distributed
-
 namespace tt::tt_metal::internal {
 
-using tt::tt_metal::distributed::InterProcessCounterChannel;  // api/internal/service/
-
-class LayerCompletionQueue;  // fwd — defined in layer_completion_queue.hpp
+class LayerCompletionQueue;
 
 struct LayerCompletionRouterConfig {
     int rank = 0;
     int world_size = 1;
     int master_rank = 0;
     std::string ring_shm_name;
-    std::string scheduler_channel_shm_name;  // master-only
+    // Master only: the scheduler-facing ring.
+    std::string scheduler_shm_name;
+    // Published in the header of every ring this router creates.
+    uint32_t completions_per_chunk = 0;
     int poll_idle_us = 100;
-    // Master-only safety net: max time to wait at teardown for outstanding subordinate sentinels
-    // before giving up and cancelling (so a crashed/stalled rank can't hang the listener join
-    // forever). The clean path returns as soon as all sentinels arrive, well under this.
+    // Master only: how long after stop() to wait for subordinate sentinels and for the scheduler to drain.
     int teardown_timeout_ms = 5000;
 };
 
@@ -63,21 +45,31 @@ public:
     LayerCompletionRouter(const LayerCompletionRouter&) = delete;
     LayerCompletionRouter& operator=(const LayerCompletionRouter&) = delete;
 
-    void stop();  // idempotent; signals + joins the listener thread
+    // Idempotent: stop and join the listener, release the segments, rethrow a listener failure once.
+    void stop();
+
     uint64_t processed() const noexcept { return processed_.load(std::memory_order_relaxed); }
     bool is_master() const noexcept { return cfg_.rank == cfg_.master_rank; }
 
 private:
+    void listen();
     void run_master();
+    // Master fan-in: local ring and subordinates into `forward`, then the sentinel-coordinated teardown.
+    template <typename Forward>
+    void fan_in(const Forward& forward);
     void run_subordinate();
+    void join();
 
     LayerCompletionRouterConfig cfg_;
-    std::unique_ptr<LayerCompletionQueue> queue_;          // owner of the host-local ring
-    std::unique_ptr<InterProcessCounterChannel> counter_;  // master-only
+    std::unique_ptr<LayerCompletionQueue> ring_;
+    std::unique_ptr<LayerCompletionQueue> scheduler_;  // master only
     std::thread listener_;
     std::atomic<bool> stop_{false};
+    std::chrono::steady_clock::time_point stopped_at_;
     std::atomic<bool> stopped_{false};
     std::atomic<uint64_t> processed_{0};
+    std::mutex error_mutex_;
+    std::exception_ptr error_;
 };
 
 }  // namespace tt::tt_metal::internal

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
 
 #include <cstdint>
 
@@ -39,7 +39,7 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32
     DataflowBuffer t_inv(dfb::t_inv);
     Noc noc;
 
-    auto drain = [&](DataflowBuffer& buffer, const auto& accessor, uint32_t tiles, uint32_t base) {
+    auto drain = [&](auto& buffer, const auto& accessor, uint32_t tiles, uint32_t base) {
         buffer.wait_front(tiles);
         for (uint32_t tile = 0; tile < tiles; ++tile) {
             noc.async_write(

@@ -46,6 +46,9 @@ ALLOWED_UMD_HEADERS = {
     # PhysicalSystemDescriptor holds a tt::umd::SemVer by value. semver.hpp already reached the
     # API through cluster_descriptor_types.hpp; it is listed so the header can include it directly.
     "tt-umd/utils/semver.hpp",
+    # SemVer is defined here; tt-umd/utils/semver.hpp only wraps it. Included directly so
+    # misc-include-cleaner is satisfied.
+    "tt-umd-utils/semver.hpp",
 }
 
 ALLOWED_PREFIXES = {
@@ -54,6 +57,7 @@ ALLOWED_PREFIXES = {
     "tt-metalium",
     "tt_stl",
     "tt-umd",
+    "tt-umd-utils",
     "fmt",
     "enchantum",
     "nlohmann",
@@ -387,7 +391,7 @@ class Include(NamedTuple):
 
     def check_for_umd_header(self) -> Optional[str]:
         """Error if a UMD include is not in the frozen allowlist."""
-        if self.prefix == "tt-umd" and self.path not in ALLOWED_UMD_HEADERS:
+        if self.prefix in {"tt-umd", "tt-umd-utils"} and self.path not in ALLOWED_UMD_HEADERS:
             return (
                 f"{self.source_file}:{self.line_num}: "
                 f"New UMD include not allowed in public API: <{self.path}> "

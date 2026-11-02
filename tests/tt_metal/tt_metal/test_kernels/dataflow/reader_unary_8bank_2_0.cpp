@@ -11,7 +11,8 @@
 #include "experimental/kernel_args.h"
 
 #if GENERATE_BCAST_SCALER
-void generate_bcast_scaler(DataflowBuffer& dfb1) {
+template <typename DFB>
+void generate_bcast_scaler(DFB& dfb1) {
     std::uint32_t scaler = get_arg(args::scaler);
     union {
         float f;

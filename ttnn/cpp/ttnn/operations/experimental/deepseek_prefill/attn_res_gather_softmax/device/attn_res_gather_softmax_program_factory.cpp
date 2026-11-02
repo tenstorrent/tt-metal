@@ -81,34 +81,25 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     const AttnResGatherSoftmaxInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     ttnn::MeshDevice* mesh_device = tensor_args.partial.device();
-    auto* const target_device = mesh_device->get_device(mesh_coord);
     const auto mesh_view = mesh_device->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "attn_res_gather_softmax requires a 2D mesh to resolve the cluster axis");
 
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t cluster_axis = operation_attributes.cluster_axis;
 
-    const std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
-                                                              : mesh_view.get_devices_on_row(mesh_coord[0]);
     const auto fabric_node_ids = (cluster_axis == 0) ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
                                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
     TT_FATAL(
-        devices.size() == ring_size,
+        fabric_node_ids.size() == ring_size,
         "ring_size {} does not match the {} devices on cluster axis {}",
         ring_size,
-        devices.size(),
+        fabric_node_ids.size(),
         cluster_axis);
 
     // This chip's rank names the slot of the statistics tensor it fills. It says nothing
     // about which way a peer lies: the routing tables answer that, and on an axis that
     // wraps they disagree with rank order.
-    uint32_t my_rank = 0;
-    for (uint32_t i = 0; i < ring_size; ++i) {
-        if (devices.at(i) == target_device) {
-            my_rank = i;
-            break;
-        }
-    }
+    const uint32_t my_rank = mesh_coord[cluster_axis];
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -166,13 +157,13 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         max_payload);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(target_device->arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(mesh_device->arch(), operation_attributes.compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                            Core Assignment
     ////////////////////////////////////////////////////////////////////////////
     tt::tt_metal::Program program{};
-    const auto grid = target_device->compute_with_storage_grid_size();
+    const auto grid = mesh_device->compute_with_storage_grid_size();
 
     // Two splits, because the two passes carry different amounts of parallelism. A
     // row's statistics reduce along the whole of its width, so the core that reduces a
@@ -264,11 +255,11 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
                                  packed_tiles * scalar_tile_size  // the packed statistics
                                  + 2 * output_tile_size;
     TT_FATAL(
-        l1_per_core <= target_device->l1_size_per_core(),
+        l1_per_core <= mesh_device->l1_size_per_core(),
         "attn_res_gather_softmax needs {} B of L1 per core at Wt {} but the core has {} B",
         l1_per_core,
         Wt,
-        target_device->l1_size_per_core());
+        mesh_device->l1_size_per_core());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Circular Buffers and Semaphores
@@ -499,7 +490,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         if (!used_directions.insert(direction.value()).second) {
             continue;
         }
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, peer_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh_device, src_fabric_node_id, peer_node);
         TT_FATAL(
             !links.empty(),
             "No forwarding links from attn_res_gather_softmax source {} to peer {}",

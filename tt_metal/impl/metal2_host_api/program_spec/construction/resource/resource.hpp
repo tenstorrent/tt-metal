@@ -59,6 +59,9 @@ struct ResolvedTensorParameter {
     // distinguish them with a boolean.
     bool runtime_field_is_page_size = false;
 
+    // Per-node allocated tensor (see TensorBindingHandle::is_per_node).
+    bool is_per_node = false;
+
     // Compile-time LLK metadata derived from the TensorParameter's spec, baked onto the binding token.
     // Always present: a tensor has a dtype and a tile.
     LLKMetadata llk_metadata;
@@ -75,17 +78,20 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
 //  - The full CRTA buffer layout (named CRTAs + binding section + vararg-section start),
 //    precomputed here so consumers (headergen, runtime) don't have to re-derive section
 //    boundaries by walking handles. See KernelCrtaLayout in jit_build_settings.hpp.
+//  - The per-node RTA buffer layout (named RTAs + per-node binding section + vararg-section start).
 struct TensorBindingsForKernel {
     std::vector<TensorBindingHandle> handles;
     // Binding-only CTA payload; appended after the user CTA-vararg positional prefix.
     std::vector<uint32_t> cta_words;
     KernelCrtaLayout crta_layout;
+    KernelRtaLayout rta_layout;
 };
 
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
     size_t base_named_crta_count,
+    size_t base_named_rta_count,
     uint32_t base_cta_offset);
 
 // ----------------------------------------------------------------------------
@@ -97,6 +103,13 @@ using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 // DFB name -> device slot map. The slot is what a kernel sees (the dfb::<name> accessor value) and
 // what indexes the per-core config table, so it is what device-facing lowering must use.
 using DFBNameToSlotMap = std::unordered_map<DFBSpecName, uint32_t>;
+// Both sides' access patterns for one DFB, in the device's dfb::AccessPattern numbering
+// (STRIDED 0, ALL 1, BLOCKED 2). Baked into each binding's DFBBindingToken at compile time.
+struct DFBSidePatterns {
+    uint8_t pap = 0;
+    uint8_t cap = 0;
+};
+using DFBNameToPatternsMap = std::unordered_map<DFBSpecName, DFBSidePatterns>;
 
 // Per-DFB handles produced by RegisterDataflowBuffers (relay_pipe_id is filled by RecordRelayPipeIds).
 struct DataflowBufferHandles {
@@ -104,6 +117,7 @@ struct DataflowBufferHandles {
     DFBNameToSlotMap slot;
     std::unordered_map<DFBSpecName, bool> is_relay;
     std::unordered_map<DFBSpecName, uint8_t> relay_pipe_id;
+    DFBNameToPatternsMap patterns;
 };
 
 // Register DFBs with the Program
@@ -122,7 +136,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
     const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
-    const DFBNameToIdMap& dfb_name_to_id);
+    const DFBNameToIdMap& dfb_name_to_id,
+    const DFBNameToPatternsMap& dfb_name_to_patterns);
 
 // ----------------------------------------------------------------------------
 // PrefetcherPipes (prefetcher_pipe.cpp)

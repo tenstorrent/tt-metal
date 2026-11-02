@@ -7,7 +7,6 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
-    MathOperation,
     PerfRunType,
     ReducePool,
 )
@@ -21,22 +20,20 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+from test_sfpu_reduce import get_supported_reduce_axioms
 
 
 @pytest.mark.perf
 @parametrize(
-    # Float32 and Int32 are the formats ttnn routes to the SFPU row reduce (Int32 always, Float32 with
-    # accurate fp32 mode). Float32 MAX runs the compare-and-swap horizontal_reduce_max (MIN differs only
-    # by the SFPCONFIG direction bit) and SUM the add-based horizontal_reduce, for both formats. Int32 MAX
-    # takes the separate signed compare-and-swap path (horizontal_reduce_max_int32), which shares the
-    # MOV-free rotate butterfly with the float/unsigned body but not its compare-and-swap.
+    # Float32 and Int32 are the formats ttnn routes to the SFPU reduce.
     formats=input_output_formats(
         [DataFormat.Float32, DataFormat.Int32],
         same=True,
     ),
     dest_acc=[DestAccumulation.Yes],
-    mathop=[MathOperation.ReduceRow],
-    reduce_pool=[ReducePool.Max, ReducePool.Sum],
+    reduce_pool=[ReducePool.Max, ReducePool.Sum, ReducePool.Average],
+    # The same axes as the correctness sweep: integer row AVG is not supported (integer AVG is column-only).
+    mathop=get_supported_reduce_axioms,
     loop_factor=list(range(10, 201, 10)),
 )
 def test_perf_sfpu_reduce(
