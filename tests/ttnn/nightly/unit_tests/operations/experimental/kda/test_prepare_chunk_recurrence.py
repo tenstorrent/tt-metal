@@ -438,6 +438,61 @@ def test_prepare_chunk_recurrence_t_inv_is_stable_for_correlated_keys(device: tt
         ttnn.deallocate(output)
 
 
+# A BF16 gate whose anchor G_last/2 = -32.015625 is not TF32-representable: TF32(G_last) = -64.0 (truncated, or a tie
+# to even) moves the anchor by 2^-6, which scales exp(G_last/2) -- and with it kd, q_decay and k_dec_t -- by
+# exp(2^-6) - 1 = 1.6e-2. The tolerance, half that term, sits above the TF32 operand roundings of the multiplies
+# that form these outputs (a few 1e-3, biased low).
+_ANCHOR_GATE_FIRST = -2.03125
+_ANCHOR_GATE_REST = -2.0
+_ANCHOR_RELATIVE_TOLERANCE = 8e-3
+
+
+def test_prepare_chunk_recurrence_decay_exponents_are_exact(device: ttnn.Device) -> None:
+    """Each decay output's ratio to its input is exp(G_i), exp(G_last - G_i) or expm1(G_last), to below the TF32 term."""
+    key_dim, value_dim = 32, 64
+    ones = torch.ones(1, CHUNK_SIZE, key_dim)
+    g = torch.full((1, CHUNK_SIZE, key_dim), _ANCHOR_GATE_REST)
+    g[:, 0, :] = _ANCHOR_GATE_FIRST
+    # Constant q = k rows normalize to exactly 1/32 (q, with the 1/sqrt(K) scale) and 1/sqrt(32) (k); a beta logit of
+    # 20 activates to 1 in FP32.
+    host_inputs = (ones, ones, torch.zeros(1, CHUNK_SIZE, value_dim), g, torch.full((1, CHUNK_SIZE, 1), 20.0))
+    inputs = _device_inputs(host_inputs, device)
+    start = make_actual_start(device, 0)
+    with ttnn.manage_config("throw_exception_on_fallback", True):
+        outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
+            *inputs,
+            1,
+            actual_start=start,
+            gate_scale=1.0,
+            output_bf16_mask=0,
+            compute_kernel_config=_production_compute_config(device),
+        )
+    _, kd, q_decay, _, k_dec_t, final_decay, _ = (ttnn.to_torch(output).double()[0, 0] for output in outputs)
+
+    cumulative_g = torch.cumsum(g[0, :, 0].double(), dim=0)  # [C], equal across channels
+    final_g = cumulative_g[-1]
+    key_norm = key_dim**-0.5
+    expected = {
+        "kd": (key_norm * torch.exp(cumulative_g)).unsqueeze(1).expand(CHUNK_SIZE, key_dim),
+        "q_decay": (key_norm * key_norm * torch.exp(cumulative_g)).unsqueeze(1).expand(CHUNK_SIZE, key_dim),
+        "k_dec_t": (key_norm * torch.exp(final_g - cumulative_g)).unsqueeze(0).expand(key_dim, CHUNK_SIZE),
+        "final_decay": torch.expm1(final_g).expand(key_dim, 1),
+    }
+    actual = {"kd": kd, "q_decay": q_decay, "k_dec_t": k_dec_t, "final_decay": final_decay}
+    failures = []
+    for name, reference in expected.items():
+        relative = (actual[name] - reference) / reference.abs()
+        logger.info(
+            f"decay exponent {name}: max |rel| {relative.abs().max():.3e}, mean rel {relative.mean():+.3e}, "
+            f"min rel {relative.min():+.3e}, max rel {relative.max():+.3e}"
+        )
+        if relative.abs().max() > _ANCHOR_RELATIVE_TOLERANCE:
+            failures.append(f"{name} max |rel| {relative.abs().max():.3e}")
+    for tensor in (*outputs, *inputs, start):
+        ttnn.deallocate(tensor)
+    assert not failures, f"relative error above {_ANCHOR_RELATIVE_TOLERANCE:.0e}: {failures}"
+
+
 @pytest.mark.parametrize("output_bf16_mask", [0, 0x26])
 def test_prepare_chunk_recurrence_unbounded_legacy_call_matches_explicit_bounds(device, output_bf16_mask):
     case = _UNIT_TEST_CASE

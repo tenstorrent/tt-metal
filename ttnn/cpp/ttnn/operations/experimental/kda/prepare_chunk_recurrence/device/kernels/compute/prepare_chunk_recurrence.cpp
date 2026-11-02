@@ -8,7 +8,7 @@
 //   qd=q*exp(G), kl=k*exp(G), kr=k*exp(-G)
 //   Akk=strictly_lower((beta*kl)@kr^T), Aqk=tril(qd@kr^T)
 //   kd=beta*kl, k_dec_t=(k*exp(G_last-G))^T, dl=expm1(G_last)=exp(G_last)-1 (complement-form decay).
-// G-a = (gate_tril - gate_ones/2)@g, exponentiated in DST.
+// G-a = (gate_tril - gate_ones/2)@g, the anchor a = (gate_ones/2)@g and G_last = gate_ones@g, exponentiated in DST.
 // dl is logically [K,1]: only its column 0 is defined, and consumers broadcast that column.
 // T_inv uses a face-blocked polynomial inverse so large gate magnitudes remain stable.
 
@@ -184,67 +184,6 @@ void square_tiles(DFB0& in, DFB1& o, uint32_t n) {
     o.push_back(n);
 }
 
-// Mode and Iterations restrict the exponential to a row vector for row-replicated inputs: VectorMode::R visits faces 0
-// and 1, and two of a face's eight SFPU iterations span its first rows, row 0 included. The rest of each output tile
-// is then unspecified.
-template <VectorMode Mode = VectorMode::RC, int Iterations = 8, typename DFB0, typename DFB1>
-void exponential_tiles(DFB0& in, DFB1& o, uint32_t n) {
-    const uint32_t in_id = in.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(n);
-    reconfig_data_format_srca(in_id);  // unary: in_id->srcA
-    copy_init(in_id);
-    exp_tile_init();
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            copy_tile(in_id, block_start + tile, tile);
-            exp_tile<false, false, InputClamping::ClampToNegative, Iterations>(tile, Mode);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    o.push_back(n);
-}
-
-// Complement-form decay: dl carries expm1(G_last) = exp(G_last) - 1. For long-memory channels exp(G_last) lies so
-// close to 1 that BF16 keeps almost none of the forgotten fraction 1 - exp(G_last) (exactly none within 2^-9); the
-// complement keeps its relative precision. recurrent_chunk_scan applies S + (dl * S + update). Mode and Iterations
-// select the rows computed, as in exponential_tiles.
-template <VectorMode Mode, int Iterations, typename DFB0, typename DFB1>
-void expm1_tiles(DFB0& in, DFB1& o, uint32_t n) {
-    const uint32_t in_id = in.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(n);
-    reconfig_data_format_srca(in_id);  // unary: in_id->srcA
-    copy_init(in_id);
-    expm1_tile_init<false>();
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            copy_tile(in_id, block_start + tile, tile);
-            expm1_tile<false, DST_ACCUM_MODE, Iterations>(tile, Mode);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    o.push_back(n);
-}
-
 template <typename DFB0, typename DFB1>
 void multiply_by_half(DFB0& in, DFB1& o, uint32_t n) {
     constexpr uint32_t fp32_half_bits = __builtin_bit_cast(uint32_t, 0.5F);
@@ -273,15 +212,35 @@ void multiply_by_half(DFB0& in, DFB1& o, uint32_t n) {
     o.push_back(n);
 }
 
-// o[Ct,Kt] = exp(mask @ g), with the product kept in DST (FP32) through the exponential, so the exponent never
-// passes through a source register.
-template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
+enum class MaskProductEpilogue { Exp, Expm1 };
+
+// o[Ct,Kt] = f(mask @ g) for f = exp or expm1, with the product kept in DST (FP32) through f, so the exponent never
+// passes through a source register. Mode and Iterations restrict f to a row vector for row-replicated products (a mask
+// with equal rows): VectorMode::R visits faces 0 and 1, and two of a face's eight SFPU iterations span its first rows,
+// row 0 included (one leaves part of row 0 unwritten). The rest of each output tile is then unspecified.
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    MaskProductEpilogue Epilogue = MaskProductEpilogue::Exp,
+    VectorMode Mode = VectorMode::RC,
+    int Iterations = 8,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2>
 void exponential_of_mask_products(DFB0& mask, DFB1& g, DFB2& o) {
     matmul_blocks<Ct, Ct, Kt, false>(mask, g, o, [](uint32_t tiles) {
-        exp_tile_init();
+        if constexpr (Epilogue == MaskProductEpilogue::Exp) {
+            exp_tile_init();
 #pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < tiles; ++tile) {
-            exp_tile<false, false, InputClamping::ClampToNegative>(tile);
+            for (uint32_t tile = 0; tile < tiles; ++tile) {
+                exp_tile<false, false, InputClamping::ClampToNegative, Iterations>(tile, Mode);
+            }
+        } else {
+            expm1_tile_init<false>();
+#pragma GCC unroll 1
+            for (uint32_t tile = 0; tile < tiles; ++tile) {
+                expm1_tile<false, DST_ACCUM_MODE, Iterations>(tile, Mode);
+            }
         }
     });
 }
@@ -563,20 +522,14 @@ template <
     typename DFB2,
     typename DFB3,
     typename DFB4,
-    typename DFB5,
-    typename DFB6,
-    typename DFB7>
+    typename DFB5>
 void prepare_gate_factors(
     DFB0& g,
     DFB1& centered_mask,
-    DFB2& sum_broadcast_matrix,
+    DFB2& half_mask,
     DFB3& centered_decay,
     DFB4& centered_inverse_decay,
-    DFB5& g_last,
-    DFB6& anchor_decay,
-
-    // intermediate
-    DFB7& anchor_g) {
+    DFB5& anchor_decay) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
     // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
@@ -585,25 +538,12 @@ void prepare_gate_factors(
     exponential_of_mask_products<Ct, Kt>(centered_mask, g, centered_decay);  // exp(G - anchor)
     centered_decay.wait_front(chunk_key_tiles);
 
-    matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, g_last);  // replicated G_last
-    g_last.wait_front(chunk_key_tiles);
-    g.pop_front(chunk_key_tiles);
-
-    // The anchor's exponent G_last/2 is still read from a TF32 source register (copy_tile to SrcA), so exp(anchor)
-    // and the outputs it scales (kd, q_decay, k_dec_t) carry up to one TF32 ulp of |G_last|/2 in their exponent;
-    // exp(G - anchor) above does not. expm1(G_last) for dl likewise reads g_last through SrcA.
-    multiply_by_half(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
-    anchor_g.wait_front(chunk_key_tiles);
-
     reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
     centered_inverse_decay.wait_front(chunk_key_tiles);
 
-    // exp(G_last/2) is row-replicated and the broadcasts read only row 0, so only the face rows holding it are
-    // computed. That takes two SFPU iterations: one leaves part of row 0 unwritten, and kd, q_decay and k_dec_t come
-    // out wrong.
-    exponential_tiles<VectorMode::R, 2>(anchor_g, anchor_decay, chunk_key_tiles);
+    // exp(G_last/2) is row-replicated and the broadcasts read only row 0.
+    exponential_of_mask_products<Ct, Kt, MaskProductEpilogue::Exp, VectorMode::R, 2>(half_mask, g, anchor_decay);
     anchor_decay.wait_front(chunk_key_tiles);
-    anchor_g.pop_front(chunk_key_tiles);
 }
 
 template <
@@ -652,14 +592,17 @@ void prepare_scan_and_pairwise_inputs(
     pack_reconfig_data_format(kd.get_id(), k_beta_pairwise.get_id());
 }
 
-// expm1(G_last) from the replicated G_last rows, of which the transpose to dl reads row 0, so only the face rows
-// holding it are computed (two SFPU iterations, as for exp(G_last/2)).
-template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1>
-void prepare_final_decay_rows(DFB0& g_last, DFB1& final_decay_rows) {
+// Complement-form decay: dl carries expm1(G_last) = exp(G_last) - 1. For long-memory channels exp(G_last) lies so
+// close to 1 that BF16 keeps almost none of the forgotten fraction 1 - exp(G_last) (exactly none within 2^-9); the
+// complement keeps its relative precision. recurrent_chunk_scan applies S + (dl * S + update). The rows of
+// expm1(gate_ones @ g) are replicated and the transpose to dl reads row 0. g's last consumer.
+template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
+void prepare_final_decay_rows(DFB0& g, DFB1& sum_broadcast_matrix, DFB2& final_decay_rows) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
-    expm1_tiles<VectorMode::R, 2>(g_last, final_decay_rows, chunk_key_tiles);
+    exponential_of_mask_products<Ct, Kt, MaskProductEpilogue::Expm1, VectorMode::R, 2>(
+        sum_broadcast_matrix, g, final_decay_rows);
     final_decay_rows.wait_front(chunk_key_tiles);
-    g_last.pop_front(chunk_key_tiles);
+    g.pop_front(chunk_key_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
@@ -816,6 +759,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer centered_inverse_decay(dfb::centered_inverse_decay);
     DataflowBuffer anchor_decay(dfb::anchor_decay);
     DataflowBuffer gate_centered(dfb::gate_centered);
+    DataflowBuffer gate_half(dfb::gate_half);
     DataflowBuffer normalized_q(dfb::normalized_q);
     DataflowBuffer normalized_k(dfb::normalized_k);
     DataflowBuffer tile_workspace_0(dfb::tile_workspace_0);
@@ -837,13 +781,13 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     ones.wait_front(chunk_matrix_tiles);
     gate_tril.wait_front(chunk_matrix_tiles);
     gate_ones.wait_front(chunk_matrix_tiles);
-    // The gate-scaled centered mask (gate_tril - gate_ones / 2, exact in FP32) forms G - G_last/2; held for the whole
-    // kernel. PACK is in the FP32 workspace format from the startup.
-    multiply_by_half(gate_ones, tile_workspace_0, chunk_matrix_tiles);
-    tile_workspace_0.wait_front(chunk_matrix_tiles);
-    elementwise_binary<ElementwiseBinaryOp::Subtract>(gate_tril, tile_workspace_0, gate_centered, chunk_matrix_tiles);
+    // The gate-scaled half mask (gate_ones / 2) forms the anchor G_last/2 and the centered mask
+    // (gate_tril - gate_ones / 2) forms G - G_last/2; both are exact in FP32 and held for the whole kernel. PACK is in
+    // the FP32 workspace format from the startup.
+    multiply_by_half(gate_ones, gate_half, chunk_matrix_tiles);
+    gate_half.wait_front(chunk_matrix_tiles);
+    elementwise_binary<ElementwiseBinaryOp::Subtract>(gate_tril, gate_half, gate_centered, chunk_matrix_tiles);
     gate_centered.wait_front(chunk_matrix_tiles);
-    tile_workspace_0.pop_front(chunk_matrix_tiles);
 
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
         if ((work_item_start + work_item) % num_chunks >= valid_chunks) {
@@ -879,16 +823,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         pack_reconfig_data_format(v_beta.get_id(), workspace_0.get_id());
 
         auto& centered_decay = workspace_0;
-        auto& g_last = workspace_3;
-        prepare_gate_factors<Ct, Kt>(
-            g,
-            gate_centered,
-            gate_ones,
-            centered_decay,
-            centered_inverse_decay,
-            g_last,
-            anchor_decay,
-            /*anchor_g=*/workspace_2);
+        prepare_gate_factors<Ct, Kt>(g, gate_centered, gate_half, centered_decay, centered_inverse_decay, anchor_decay);
 
         auto& k_beta_pairwise = workspace_1;
         auto& q_pairwise = workspace_2;
@@ -896,7 +831,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             normalized_q, normalized_k, beta, anchor_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
 
         auto& final_decay_rows = workspace_0;
-        prepare_final_decay_rows<Ct, Kt>(g_last, final_decay_rows);
+        prepare_final_decay_rows<Ct, Kt>(g, gate_ones, final_decay_rows);
 
         auto& k_pairwise = workspace_3;
         prepare_k_pairwise<Ct, Kt>(normalized_k, centered_inverse_decay, k_pairwise);
