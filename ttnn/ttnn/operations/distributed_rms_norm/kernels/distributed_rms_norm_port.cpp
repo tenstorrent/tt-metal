@@ -30,9 +30,11 @@
 // group on a torus fabric, whose table routes a 2-hop destination over the wrap where this op has no port). Arrival
 // counters are indexed by SLOT on the host. With several destination chips the ready fence / bounded-landing credits
 // count one per destination chip (n_ready_wait). Measured (perf_experiments/direct_exchange): 640x1792 18.97/20.47 ->
-// 18.81/19.78 us fastest/slowest; fabric line multicast (hop range >= 2) hangs on FABRIC_2D_TORUS_XY 1x4 (BLOCKED).
-// Raw fabric API: the measured transport this op cites is this raw sender (op_design.md -> Helpers considered and
-// rejected: the kernel_lib CCL helper is unmeasured and has no relay-with-arrival-counter item model).
+// 18.81/19.78 us fastest/slowest. The host's exchange_mode also picks the balanced relay (own item + relays, one hop)
+// or mcast hemispheres (one own item per port as a fabric line multicast over a hop range; 1D fabrics only, since a 2D
+// line multicast over the bent 1x4 torus mock hangs). Raw fabric API: the measured transport this op cites is this raw
+// sender (op_design.md -> Helpers considered and rejected: the kernel_lib CCL helper is unmeasured and has no
+// relay-with-arrival-counter item model).
 
 #include <cstdint>
 
@@ -58,21 +60,46 @@ using namespace tt::tt_fabric;
 namespace {
 
 // Route a header to (chip, mesh) — `hops` away along this port's direction: 2D fabrics route by destination fabric
-// node, 1D fabrics by hop count (ROUTING_MODE from the build).
-inline void route_to(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id, uint16_t hops) {
+// node, 1D fabrics by hop count (ROUTING_MODE from the build). mcast != 0: a line multicast along this port's
+// direction, (eth direction + 1) << 8 | hop range (2D: E/W/N/S = eth_chan_directions 0..3; 1D: the direction is the
+// port's connection, start one hop away).
+inline void route_to(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id, uint16_t hops, uint32_t mcast) {
 #if (defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)) || defined(EMULE_FABRIC_2D)
     (void)hops;
+    if (mcast != 0) {
+        const uint32_t dir = (mcast >> 8) - 1;
+        const uint16_t range = static_cast<uint16_t>(mcast & 0xFF);
+        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hdr);
+        for (uint32_t i = 0; i < sizeof(PACKET_HEADER_TYPE) / 4; ++i) {
+            w[i] = 0;
+        }
+        fabric_set_mcast_route(
+            hdr,
+            chip_id,
+            mesh_id,
+            dir == 0 ? range : 0,
+            dir == 1 ? range : 0,
+            dir == 2 ? range : 0,
+            dir == 3 ? range : 0);
+        return;
+    }
     (void)fabric_set_unicast_route(hdr, chip_id, mesh_id);
 #else
     (void)chip_id;
     (void)mesh_id;
-    (void)fabric_set_unicast_route<false>(reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(hdr), hops);
+    auto* ll = reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(hdr);
+    if (mcast != 0) {
+        ll->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast & 0xFF)});
+        return;
+    }
+    (void)fabric_set_unicast_route<false>(ll, hops);
 #endif
 }
 
 // RT records (host: port args). One packet header per distinct destination chip, routed once at setup (a 2D route
 // lookup per packet sits on every relay / send latency chain).
-constexpr uint32_t DEST_WORDS = 3;  // chip id, mesh id, hops
+constexpr uint32_t DEST_WORDS = 4;  // chip id, mesh id, hops, mcast (0 = unicast)
 constexpr uint32_t SEND_WORDS =
     4;  // slot q, destination header, destination arrival address, wait (0 own, j+1 relay j)
 constexpr uint32_t READY_WORDS = 3;  // destination header, target port x, target port y
@@ -199,7 +226,8 @@ void kernel_main() {
                 hdrs[k],
                 static_cast<uint16_t>(get_arg_val<uint32_t>(t)),
                 static_cast<uint16_t>(get_arg_val<uint32_t>(t + 1)),
-                static_cast<uint16_t>(get_arg_val<uint32_t>(t + 2)));
+                static_cast<uint16_t>(get_arg_val<uint32_t>(t + 2)),
+                get_arg_val<uint32_t>(t + 3));
         }
         conn.open();
         // A header is rewritten (command fields only; the route stays) once the NoC has read its previous packet.

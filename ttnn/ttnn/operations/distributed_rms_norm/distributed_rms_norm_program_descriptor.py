@@ -257,7 +257,23 @@ def usable_links(mesh, groups, ring):
 # traversal after its source published: 640x1792 18.97/20.47 -> 18.81/19.78 us, 2048x1280 40.06/42.99 -> 39.76/41.72.
 # Carve-out (inexpressible): when the fabric routes a destination off this op's ports (a Linear group on a torus fabric,
 # whose table takes the wrap), the store-and-forward RELAY schedule, which only ever uses one-hop neighbours.
-# Fabric line multicast (hop range >= 2) hangs on FABRIC_2D_TORUS_XY 1x4 and is not used.
+#
+# EXCHANGE_MODE selects the schedule (the op's `exchange_mode=` argument overrides it; env DRMS_EXCHANGE_MODE):
+#   "direct"  the default above: every own record is a multi-hop unicast to one destination chip.
+#   "relay"   balanced store-and-forward: G//2 slots forward and G-1-G//2 backward on a ring (every chip downstream on a
+#             line), each hop relaying the upstream entry once it landed. One-hop sends only.
+#   "mcast"   hemispheres: every port sends only its own record, as ONE fabric line multicast along its direction over
+#             the chips it serves (ring: the relay split, G//2 forward, G-1-G//2 backward; line: every chip downstream);
+#             readies go back as one header-only multicast per receiving port. 1D fabrics only: on the 1x4 torus mock
+#             of a QuietBox 2 the ring bends, and a 2D line multicast with hop range >= 2 hangs (Perf 2).
+EXCHANGE_MODES = ("direct", "relay", "mcast")
+EXCHANGE_MODE = os.environ.get("DRMS_EXCHANGE_MODE", "") or "direct"
+
+
+def is_2d_fabric(cfg=None) -> bool:
+    """True for the 2D fabric configs (routing by destination node); False for the 1D ones (routing by hop count)."""
+    cfg = ttnn.get_fabric_config() if cfg is None else cfg
+    return "2D" in str(cfg)
 
 
 def _eth_dir(mesh, a, b):
@@ -276,22 +292,31 @@ def esw_offsets(plan):
     return [sum(1 for b in bounds if i >= b) for i in range(n)]
 
 
-def exchange_plan(groups, ring, mesh):
-    """Per chip coord: {p, G, next, prev, sends[d], dests[d], entries[d], ready_out[d], n_wait[d], items[d]}.
+def exchange_plan(groups, ring, mesh, mode=None):
+    """Per chip coord: {p, G, next, prev, sends[d], dests[d], entries[d], ready_out[d], n_wait[d], items[d], mode}.
     sends[d]     items port d sends per wave, in order: (slot q, header index, wait); wait 0 = own slot, j + 1 = relay of
-                 entry j of port d (relay fallback only)
-    dests[d]     destination chip coords of port d's packet headers (one header each)
+                 entry j of port d (relay only)
+    dests[d]     port d's packet headers, one each: (destination coord, mcast code, hops). mcast code 0 = unicast to the
+                 coord; else (eth direction + 1) << 8 | hop range, a line multicast along the port's direction. hops is
+                 the hop count along the port's direction (what a 1D fabric routes by; a 2D fabric routes by node)
     entries[d]   slots landing on port d, in notify order; every slot has its own arrival counter (arrival_addrs[q],
                  the same on every chip)
     ready_out[d] readies (and bounded-landing credits) port d sends: (source coord, source port direction, header)
-    n_wait[d]    destination chips of port d's sends (one ready / one credit per wave from each)"""
-    try:
-        return _exchange_plan(groups, ring, mesh, direct=True)
-    except NotImplementedError:
-        return _exchange_plan(groups, ring, mesh, direct=False)
+    n_wait[d]    destination chips of port d's sends (one ready / one credit per wave from each)
+    mode         the schedule built: `mode` as asked, except "direct" falls back to "relay" where the fabric routes a
+                 destination off this op's ports"""
+    mode = mode or EXCHANGE_MODE
+    if mode not in EXCHANGE_MODES:
+        raise ValueError(f"distributed_rms_norm: exchange_mode must be one of {EXCHANGE_MODES}, got {mode!r}")
+    if mode == "direct":
+        try:
+            return _exchange_plan(groups, ring, mesh, kind="direct")
+        except NotImplementedError:
+            return _exchange_plan(groups, ring, mesh, kind="relay")
+    return _exchange_plan(groups, ring, mesh, kind=mode)
 
 
-def _exchange_plan(groups, ring, mesh, direct):
+def _exchange_plan(groups, ring, mesh, kind):
     chips = {}
     for grp in groups:
         G = len(grp)
@@ -310,11 +335,12 @@ def _exchange_plan(groups, ring, mesh, direct):
                 n_wait={FWD: 0, BWD: 0},
             )
 
-        def hdr(coord, d, dst):
+        def hdr(coord, d, key):
+            """Header index on chip `coord`'s port d for key = (destination coord, mcast code, hops)."""
             lst = chips[coord]["dests"][d]
-            if dst not in lst:
-                lst.append(dst)
-            return lst.index(dst)
+            if key not in lst:
+                lst.append(key)
+            return lst.index(key)
 
         def first_hop(s, t):
             """Port of chip s whose neighbour carries the fabric's first hop s -> t (unicast routing by table)."""
@@ -324,9 +350,23 @@ def _exchange_plan(groups, ring, mesh, direct):
                     return d
             raise NotImplementedError(f"direct exchange: route {grp[s]} -> {grp[t]} leaves through no port")
 
+        def mcast_code(s, d, rng):
+            nb = nxt_of(s) if d == FWD else prv_of(s)
+            dirn = _eth_dir(mesh, grp[s], nb) if is_2d_fabric() else 0  # a 1D port multicasts along its connection
+            return nb, ((dirn + 1) << 8) | rng
+
         hop = lambda s, t, d: ((t - s) % G) if d == FWD else ((s - t) % G)
-        targets = {}  # (s, d) -> destination positions
-        if not direct:
+        targets = {}  # (s, d) -> destination positions of port d of chip s
+
+        def hemispheres(s):
+            """{FWD: [...], BWD: [...]} destination positions of chip s: ring G//2 forward, the rest backward; line
+            every chip downstream."""
+            if ring:
+                kf = G // 2
+                return {FWD: [(s + i) % G for i in range(1, kf + 1)], BWD: [(s - i) % G for i in range(1, G - kf)]}
+            return {FWD: list(range(s + 1, G)), BWD: list(range(s - 1, -1, -1))}
+
+        if kind == "relay":
             for p in range(G):
                 if ring:
                     kf = G // 2
@@ -339,11 +379,11 @@ def _exchange_plan(groups, ring, mesh, direct):
                 for d, lst, peer in ((FWD, fwd, nxt_of(p)), (BWD, bwd, prv_of(p))):
                     if not lst:
                         continue
-                    h = hdr(grp[p], d, peer)
+                    h = hdr(grp[p], d, (peer, 0, 1))
                     chips[grp[p]]["sends"][d] = [(q, h, 0 if i == 0 else i) for i, q in enumerate(lst)]
                     chips[peer]["entries"][d] = list(lst)
                     targets[(p, d)] = [grp.index(peer)]
-        else:
+        elif kind == "direct":
             for s in range(G):
                 for d in (FWD, BWD):
                     targets[(s, d)] = []
@@ -363,26 +403,50 @@ def _exchange_plan(groups, ring, mesh, direct):
                         targets[(s, d)] = ts
                 for d in (FWD, BWD):
                     order = sorted(targets[(s, d)], key=lambda t: hop(s, t, d), reverse=True)  # farthest first
-                    chips[grp[s]]["sends"][d] = [(s, hdr(grp[s], d, grp[t]), 0) for t in order]
+                    chips[grp[s]]["sends"][d] = [(s, hdr(grp[s], d, (grp[t], 0, hop(s, t, d))), 0) for t in order]
+        else:  # mcast
+            for s in range(G):
+                for d, ts in hemispheres(s).items():
+                    targets[(s, d)] = ts
+                    if ts:
+                        nb, code = mcast_code(s, d, len(ts))
+                        chips[grp[s]]["sends"][d] = [(s, hdr(grp[s], d, (nb, code, 1)), 0)]
+        if kind != "relay":
             for t in range(G):
                 for d in (FWD, BWD):
-                    srcs = [s for s in range(G) if s != t and t in targets[(s, d)]]
+                    srcs = [s for s in range(G) if s != t and t in targets.get((s, d), [])]
                     chips[grp[t]]["entries"][d] = sorted(srcs, key=lambda s: hop(s, t, d))
         for (s, d), ts in targets.items():
-            if not ts:
-                continue
-            chips[grp[s]]["n_wait"][d] = len(ts)
-            for t in ts:
-                if not direct:
+            if ts:
+                chips[grp[s]]["n_wait"][d] = len(ts)
+        if kind == "mcast":
+            # Readies as ONE header-only multicast per receiving port, back along the line over the hop range of the
+            # sources that write into it. Every source's sending port is the same logical core, so the atomic inc
+            # lands on each source's ready counter.
+            for t in range(G):
+                for d in (FWD, BWD):
+                    srcs = chips[grp[t]]["entries"][d]
+                    if not srcs:
+                        continue
                     back = _OPP[d]
-                else:
-                    back = first_hop(t, s)
-                    if not ring and back != _OPP[d]:
-                        raise NotImplementedError(f"direct exchange (line): ready {grp[t]} -> {grp[s]} off the line")
-                h = hdr(grp[t], back, grp[s])
-                chips[grp[t]]["ready_out"][back].append((grp[s], d, h))
+                    nb, code = mcast_code(t, back, max(hop(s, t, d) for s in srcs))
+                    chips[grp[t]]["ready_out"][back].append((grp[srcs[0]], d, hdr(grp[t], back, (nb, code, 1))))
+        else:
+            for (s, d), ts in targets.items():
+                for t in ts:
+                    if kind == "relay":
+                        back = _OPP[d]
+                    else:
+                        back = first_hop(t, s)
+                        if not ring and back != _OPP[d]:
+                            raise NotImplementedError(
+                                f"direct exchange (line): ready {grp[t]} -> {grp[s]} off the line"
+                            )
+                    h = hdr(grp[t], back, (grp[s], 0, hop(t, s, back)))
+                    chips[grp[t]]["ready_out"][back].append((grp[s], d, h))
     for ch in chips.values():
         ch["items"] = {d: [q for q, _, _ in ch["sends"][d]] for d in (FWD, BWD)}
+        ch["mode"] = kind
     return chips
 
 
@@ -985,10 +1049,17 @@ def create_mesh_program_descriptor(
     G,
     num_links,
     ring,
+    exchange_mode=None,
 ):
     mesh = input_tensor.device()
     mesh_shape = tuple(mesh.shape)
     fp32_acc = bool(compute_kernel_config.fp32_dest_acc_en)
+    exchange_mode = exchange_mode or EXCHANGE_MODE
+    if exchange_mode == "mcast" and is_2d_fabric():
+        raise NotImplementedError(
+            "distributed_rms_norm: exchange_mode='mcast' needs a 1D fabric (FABRIC_1D / FABRIC_1D_RING); on a 2D fabric "
+            "a line multicast over a bent ring hangs"
+        )
     L = num_links
     grid = mesh.compute_with_storage_grid_size()
 
@@ -1107,7 +1178,9 @@ def create_mesh_program_descriptor(
         raise NotImplementedError("distributed_rms_norm: the CBs do not fit next to the exchange landing in L1")
 
     groups = build_groups(mesh_shape, cluster_axis)
-    chips = exchange_plan(groups, ring, mesh)
+    chips = exchange_plan(groups, ring, mesh, exchange_mode)
+    built_mode = next(iter(chips.values()))["mode"]
+    LAST_EXCHANGE_LAYOUT.update(exchange_mode=built_mode)  # test hook: the schedule actually built
     payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
 
     compute_cores = [w.core for w in plan.work]
@@ -1232,7 +1305,7 @@ def create_mesh_program_descriptor(
         str(v)
         for v in (
             "distributed_rms_norm",
-            "direct_exchange",
+            f"exchange={built_mode}",
             list(input_tensor.shape),
             input_tensor.dtype,
             in_mc,
@@ -1417,9 +1490,9 @@ def create_mesh_program_descriptor(
                 n_credit_in = credit_waves * n_wait if (items and credit_waves > 0) else 0
                 args += [n_credit_out, credit_thr, relay_done_to, n_credit_in]
                 args += [arrival_addrs[q] for q in entries]  # slot-indexed arrival counters
-                for dst in dests:
+                for dst, code, hops in dests:
                     dn = _node(mesh, dst)
-                    args += [int(dn.chip_id), int(dn.mesh_id), 1]
+                    args += [int(dn.chip_id), int(dn.mesh_id), hops, code]
                 for q, h, wt in sends:
                     args += [q, h, arrival_addrs[q], wt]
                 for tgt, td, h in ready_out:

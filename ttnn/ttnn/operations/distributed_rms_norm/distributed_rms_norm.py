@@ -25,6 +25,9 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 from ttnn.operations.ccl import Topology
 
 from .distributed_rms_norm_program_descriptor import (
+    EXCHANGE_MODE,
+    EXCHANGE_MODES,
+    is_2d_fabric,
     build_groups,
     create_mesh_program_descriptor,
     usable_links,
@@ -195,9 +198,12 @@ def validate(
     num_links=None,
     compute_kernel_config=None,
     memory_config=None,
+    exchange_mode=None,
 ):
     """Hard validation (ValueError), then the registry gate (UnsupportedAxisValue / ExcludedCell), then the regime
     refusals (NotImplementedError). Returns (cfg, G, L, ring)."""
+    if exchange_mode is not None and exchange_mode not in EXCHANGE_MODES:
+        raise ValueError(f"distributed_rms_norm: exchange_mode must be one of {EXCHANGE_MODES}, got {exchange_mode!r}")
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     G, L_usable, ring = _hard_validate(input_tensor, cluster_axis, gamma, topology, num_links)
     L = L_usable if num_links is None else num_links
@@ -222,6 +228,13 @@ def validate(
         and memory_config.shard_spec is None
     ):
         raise NotImplementedError("distributed_rms_norm: a sharded output memory_config must carry a shard spec")
+    # Exchange schedule: not a registry axis (every mode computes the same result). mcast hemispheres are a 1D-fabric
+    # schedule: a 2D line multicast over the 1x4 torus mock's bent ring hangs (Perf 2), so it is refused there.
+    if (exchange_mode or EXCHANGE_MODE) == "mcast" and is_2d_fabric():
+        raise NotImplementedError(
+            "distributed_rms_norm: exchange_mode='mcast' needs a 1D fabric (FABRIC_1D / FABRIC_1D_RING), "
+            f"active: {ttnn.get_fabric_config()}"
+        )
     return cfg, G, L, ring
 
 
@@ -240,7 +253,11 @@ def distributed_rms_norm(
     num_links: Optional[int] = None,
     compute_kernel_config: Optional[ttnn.ComputeConfigDescriptor] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
+    exchange_mode: Optional[str] = None,
 ) -> ttnn.Tensor:
+    """`exchange_mode`: the cross-device schedule of the Σx² records, "direct" (multi-hop unicast per destination,
+    the default), "relay" (balanced store-and-forward) or "mcast" (line multicast hemispheres; 1D fabrics only).
+    None takes the module default (`EXCHANGE_MODE`, env DRMS_EXCHANGE_MODE). Every mode gives the same output."""
     cfg, G, L, ring = validate(
         input_tensor,
         cluster_axis=cluster_axis,
@@ -249,6 +266,7 @@ def distributed_rms_norm(
         num_links=num_links,
         compute_kernel_config=compute_kernel_config,
         memory_config=memory_config,
+        exchange_mode=exchange_mode,
     )
     mesh = input_tensor.device()
     in_mc = input_tensor.memory_config()
@@ -274,6 +292,7 @@ def distributed_rms_norm(
         G=G,
         num_links=L,
         ring=ring,
+        exchange_mode=exchange_mode,
     )
     io_tensors = [input_tensor] + ([gamma] if gamma is not None else []) + [landing, output_tensor]
     # Output tensor must be last.

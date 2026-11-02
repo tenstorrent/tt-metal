@@ -618,3 +618,29 @@ was not graduated (decode's slowest chip regressed).
 - The op is 1.22 µs faster on the focus case (fastest chip; −1.89 µs slowest) and 6.09 µs faster on 2048×1280.
 - Decode is flat on the fastest chip and −0.95 µs on the slowest.
 - Golden is green, with no regression beyond the one recorded Linear trade-off.
+
+## Exchange modes (manual change, 2026-11-02)
+- **What was done.** The Σx² exchange schedule is now selectable: `distributed_rms_norm(..., exchange_mode=...)`, else
+  the module default `EXCHANGE_MODE` (env `DRMS_EXCHANGE_MODE`), default `"direct"`. It is not a registry axis: every
+  mode gives a bit-identical output (the fold order is fixed by slot).
+  - `"direct"`: Perf 2's schedule, unchanged (multi-hop unicast per destination chip, farthest first; the relay fallback
+    where the fabric routes a destination off the op's ports).
+  - `"relay"`: the balanced store-and-forward schedule (ring: G//2 slots forward, G-1-G//2 backward; one-hop sends).
+  - `"mcast"`: hemispheres. Every port sends only its own record as one fabric line multicast over the chips it serves
+    (ring: G//2 forward, G-1-G//2 backward; line: every chip downstream), and every receiving port returns its readies
+    (and bounded-landing credits) as one header-only multicast over its sources' hop range. 1D fabrics only:
+    `validate()` refuses it on a 2D fabric (a 2D line multicast over the bent 1x4 torus mock hangs, Perf 2).
+- **Fix found on the way.** Packet headers carried `hops = 1` for every destination, so on a 1D fabric (routing by
+  hop count) the direct schedule's 2-hop sends stopped one hop short. Headers now carry the real hop count along the
+  port's direction (2D fabrics route by node and ignore it).
+- **Code.** Host: `exchange_plan(groups, ring, mesh, mode)` builds the three schedules; port headers are
+  `(destination, mcast code, hops)` (4 RT words); the built mode is in the program hash and in
+  `LAST_EXCHANGE_LAYOUT["exchange_mode"]`. Port kernel: `route_to` takes the mcast word (2D:
+  `fabric_set_mcast_route`; 1D: `to_chip_multicast`).
+- **Measured** (`perf_measure.py`, 2 experiments, 640x1792, FABRIC_2D_TORUS_XY, fastest / slowest µs): direct
+  17.76 / 18.60 (unchanged), relay 18.37 / 19.19. mcast runs on 1D fabrics only, where the harness does not run yet.
+- **Tests.** New `test_distributed_rms_norm_exchange_modes.py` (21 cases): torus2d Ring (direct, relay; mcast refused),
+  FABRIC_1D_RING Ring and FABRIC_1D Linear (all three), shapes 640x1792 / 32x1792 / 2048x1280 at 1 and 2 links plus a
+  forced bounded landing, each call twice, every mode bit-identical to direct: 21 passed. Regression: acceptance
+  111/111, debug 6/6, knobs 34/34, precision 20 passed / 4 skipped; golden test_golden.py 10,623 passed (INTERLEAVED
+  3,603, HEIGHT_SHARDED 3,420, WIDTH_SHARDED 3,600), translated + regression + ring mock 315 passed / 51 skipped.
