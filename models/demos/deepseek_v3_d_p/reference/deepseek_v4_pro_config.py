@@ -83,6 +83,10 @@ class DeepSeekV4ProConfig:
     # Other
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 2.5
+    # Router-logit precision the device gate matches (TtMoEGateConfig.router_logits_dtype): fp32 gate matmul,
+    # TP all-reduce and correction bias, never rounded to bf16, so moe_grouped_topk unpacks the logits straight
+    # to DEST and sorts on full fp32 keys -- as the reference router (DeepseekV4TopKRouter at fp32) routes.
+    GATE_ROUTER_LOGITS_DTYPE = "float32"
     ROPE_THETA = 10000
     ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
     SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"

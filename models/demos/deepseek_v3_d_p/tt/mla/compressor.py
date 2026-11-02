@@ -413,6 +413,15 @@ class TtHCACompressor(TtCompressorBase):
         self.compress_rate = int(compress_rate)
         self.rope_head_dim = int(rope_head_dim)
         self.rms_norm_eps = float(rms_norm_eps)
+        # The gate softmax pools compress_rate (128) tokens into one entry, and the reference runs it in fp32:
+        # exact exp and fp32 accumulation. One entry per 128 tokens, so the cost is nil.
+        self._softmax_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
         self._init_compression_weights(
             kv_proj_weight=kv_proj_weight,
@@ -467,7 +476,9 @@ class TtHCACompressor(TtCompressorBase):
         )
         gate = ttnn.reshape(gate, [batch, n_windows, self.compress_rate, self.head_dim])
         gate = ttnn.add(gate, self.position_bias)
-        weights = ttnn.softmax(gate, dim=2, numeric_stable=True)
+        weights = ttnn.softmax(
+            gate, dim=2, numeric_stable=True, compute_kernel_config=self._softmax_compute_kernel_config
+        )
 
         kv = ttnn.reshape(kv, [batch, n_windows, self.compress_rate, self.head_dim])
         pooled = ttnn.sum(ttnn.multiply(kv, weights), dim=2)

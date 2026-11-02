@@ -226,6 +226,7 @@ class TtMoe(LightweightModule):
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         routed_expert_hybrid_token_threshold=None,
         routed_expert_weights_dram_nd_sharded: Optional[bool] = None,
+        routed_expert_weights_tile_transposed: bool = False,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation: str = ACTIVATION_SILU,
@@ -233,6 +234,7 @@ class TtMoe(LightweightModule):
         shared_expert_situ_linear_beta: float | None = None,
         shared_expert_clamped_silu_glu_limit: float | None = None,
         gate_score_func: str | None = None,
+        gate_router_logits_dtype: str | None = None,
         gate_hash_table: torch.Tensor | None = None,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
@@ -288,6 +290,8 @@ class TtMoe(LightweightModule):
             shared_expert_clamped_silu_glu_limit: clamp limit, required when
                 shared_expert_activation == "clamped_silu_glu".
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
+            gate_router_logits_dtype: vLLM-aligned router-logit precision ("bfloat16" or "float32"), see
+                TtMoEGateConfig.router_logits_dtype. None keeps the legacy gate. Only DeepSeek-V4 sets it.
             gate_score_func: Router affinity applied to the raw logits. None keeps
                 TtMoEGateConfig's default. Read by the grouped-topk gate and by both hash gates.
             gate_hash_table: tid2eid table, (vocab_size, num_experts_per_tok). Required by the
@@ -332,6 +336,9 @@ class TtMoe(LightweightModule):
                 both routed-expert ops read a per-core weight slice as one NoC transaction per
                 K-row; interleaved elsewhere. Passed straight through; the cache is placement-
                 agnostic, so this never invalidates one.
+            routed_expert_weights_tile_transposed: store each routed-expert weight tile with its 32x32
+                contents transposed, so bfloat4_b exponents run along K (see TtRoutedExpert). Not
+                combinable with overlap_routed_expert_with_combine.
             overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
                 (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
                 written. Blackhole only. Off by default (False): only models that opt in with
@@ -444,6 +451,9 @@ class TtMoe(LightweightModule):
         gate_config.ccl_config["TOPOLOGY"] = self.col_topology
         if gate_score_func is not None:
             gate_config.score_func = gate_score_func
+        if gate_router_logits_dtype is not None:
+            assert gate_router_logits_dtype in ("bfloat16", "float32"), gate_router_logits_dtype
+            gate_config.router_logits_dtype = gate_router_logits_dtype
 
         # Cache-only case (gate_weights=None): no tensors, so the gate loads from weight_cache_path and refuses
         # a missing centred bias instead of caching a placeholder under its name.
@@ -646,6 +656,8 @@ class TtMoe(LightweightModule):
             ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         )
         overlap_fits = is_blackhole() and ring_axis_wraps and fabric_payload >= overlap_payload
+        # The overlap runs hybrid_routed_expert_moe, which has no transposed-tile path.
+        overlap_fits = overlap_fits and not routed_expert_weights_tile_transposed
         if overlap_routed_expert_with_combine is None:
             overlap_routed_expert_with_combine = overlap_fits
         elif overlap_routed_expert_with_combine and not overlap_fits:
@@ -715,6 +727,7 @@ class TtMoe(LightweightModule):
             activation=routed_expert_activation,
             hybrid_token_threshold=routed_expert_hybrid_token_threshold,
             weights_dram_nd_sharded=routed_expert_weights_dram_nd_sharded,
+            weights_tile_transposed=routed_expert_weights_tile_transposed,
         )
 
         # Initialize shared expert (col axis: axis 1)
