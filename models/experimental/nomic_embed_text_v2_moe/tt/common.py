@@ -309,6 +309,16 @@ def norm_output_memory_config(shape: ttnn.Shape | tuple[int, ...]) -> ttnn.Memor
     return activation_memory_config(shape)
 
 
+def compute_config_descriptor(config: ttnn.DeviceComputeKernelConfig) -> ttnn.ComputeConfigDescriptor:
+    """The generic_op form of a compute kernel config, for the generated ops (packer_l1_acc has no field there)."""
+    return ttnn.ComputeConfigDescriptor(
+        math_fidelity=config.math_fidelity,
+        fp32_dest_acc_en=config.fp32_dest_acc_en,
+        math_approx_mode=config.math_approx_mode,
+        dst_full_sync_en=config.dst_full_sync_en,
+    )
+
+
 # The generated single-dispatch layer norm (ttnn/ttnn/operations/layer_norm_tile) is 32-36% faster than
 # ttnn.layer_norm on every placement the 8x512 forward uses. NOMIC_LN_IMPL=stock selects ttnn.layer_norm.
 LAYER_NORM_IMPL = os.environ.get("NOMIC_LN_IMPL", "generated")
@@ -345,12 +355,7 @@ def layer_norm(
         bias,
         residual,
         epsilon=epsilon,
-        compute_kernel_config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=compute_kernel_config.math_fidelity,
-            fp32_dest_acc_en=compute_kernel_config.fp32_dest_acc_en,
-            math_approx_mode=compute_kernel_config.math_approx_mode,
-            dst_full_sync_en=compute_kernel_config.dst_full_sync_en,
-        ),
+        compute_kernel_config=compute_config_descriptor(compute_kernel_config),
         memory_config=memory_config,
     )
 

@@ -17,15 +17,30 @@ S, and building them per block would repeat the same host work 12 times.
 
 from __future__ import annotations
 
+import os
 from functools import cache
 from typing import Optional
 
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device, transpose_linear_weight
+from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    compute_config_descriptor,
+    to_device,
+    transpose_linear_weight,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import dense_linear
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
+
+# The generated qkv_proj_heads_rope (ttnn/ttnn/operations/qkv_proj_heads_rope) does the QKV projection, the head
+# split and both rotary calls in one dispatch. NOMIC_QKV_IMPL=stock selects the four-op sequence.
+QKV_IMPL = os.environ.get("NOMIC_QKV_IMPL", "fused")
+if QKV_IMPL not in ("fused", "stock"):
+    raise ValueError(f"NOMIC_QKV_IMPL must be 'fused' or 'stock', got {QKV_IMPL!r}")
+# The op's contract: S up to the tokenizer's 512 and at most 4096 tokens a batch. Longer inputs take the
+# four-op sequence.
+FUSED_QKV_MAX_SEQLEN = 512
+FUSED_QKV_MAX_TOKENS = 4096
 
 # The largest fp32 score block, in tiles, that fit L1 beside the rest of SDPA's buffers.
 _FP32_SCORE_TILES = 144
@@ -246,6 +261,46 @@ class TtNomicBertAttention(LightweightModule):
         )
         return rotated if batch == 1 else ttnn.reshape(rotated, (batch, heads, seqlen, head_dim))
 
+    def _project_heads(
+        self, x: ttnn.Tensor, rot_mats: tuple[ttnn.Tensor, ttnn.Tensor], heads_memory: ttnn.MemoryConfig
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Rotated q, rotated k and v, each (B, A, S, D) on heads_memory."""
+        cos, sin = rot_mats
+        batch, seqlen = x.shape[0], x.shape[-2]
+        if QKV_IMPL == "fused" and seqlen <= FUSED_QKV_MAX_SEQLEN and batch * seqlen <= FUSED_QKV_MAX_TOKENS:
+            from ttnn.operations.qkv_proj_heads_rope import qkv_proj_heads_rope
+
+            return qkv_proj_heads_rope(
+                x,
+                self.qkv_weight,
+                self.qkv_bias,
+                cos,
+                sin,
+                num_heads=self.num_heads,
+                compute_kernel_config=compute_config_descriptor(self.tt_config.compute_kernel_config(OpGroup.QKV)),
+                memory_config=heads_memory,
+            )
+
+        qkv = dense_linear(x, self.qkv_weight, self.qkv_bias, OpGroup.QKV, self.tt_config)
+        # Three-major, heads contiguous inside each of q, k and v. transpose_k_heads stays False
+        # because SDPA wants K as (B, A, S, D), not pre-transposed. qkv may sit in L1
+        # (dense_linear); the heads are placed explicitly rather than inherit that.
+        query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_heads,
+            transpose_k_heads=False,
+            memory_config=heads_memory,
+        )
+        ttnn.deallocate(qkv)
+        rotated_query = self._rotate(query, cos, sin, heads_memory)
+        rotated_key = self._rotate(key, cos, sin, heads_memory)
+        # Freed here rather than inside _rotate: the reshape there aliases this buffer, so the
+        # pre-rotation tensor is the one thing that owns it.
+        ttnn.deallocate(query)
+        ttnn.deallocate(key)
+        return rotated_query, rotated_key, value
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -263,8 +318,6 @@ class TtNomicBertAttention(LightweightModule):
         Returns:
             ttnn.Tensor: (B, 1, S, H).
         """
-        qkv = dense_linear(x, self.qkv_weight, self.qkv_bias, OpGroup.QKV, self.tt_config)
-
         compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.SDPA)
         batch, seqlen = x.shape[0], x.shape[-2]
         program_config = sdpa_program_config(
@@ -289,25 +342,7 @@ class TtNomicBertAttention(LightweightModule):
                 self.tt_config.l1_banks,
             )
 
-        # Three-major, heads contiguous inside each of q, k and v. transpose_k_heads stays False
-        # because SDPA wants K as (B, A, S, D), not pre-transposed. qkv may sit in L1
-        # (dense_linear); the heads are placed explicitly rather than inherit that.
-        query, key, value = ttnn.experimental.nlp_create_qkv_heads(
-            qkv,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_heads,
-            transpose_k_heads=False,
-            memory_config=heads_memory,
-        )
-        ttnn.deallocate(qkv)
-
-        cos, sin = rot_mats
-        rotated_query = self._rotate(query, cos, sin, heads_memory)
-        rotated_key = self._rotate(key, cos, sin, heads_memory)
-        # Freed here rather than inside _rotate: the reshape there aliases this buffer, so the
-        # pre-rotation tensor is the one thing that owns it.
-        ttnn.deallocate(query)
-        ttnn.deallocate(key)
+        rotated_query, rotated_key, value = self._project_heads(x, rot_mats, heads_memory)
 
         context = ttnn.transformer.scaled_dot_product_attention(
             rotated_query,
