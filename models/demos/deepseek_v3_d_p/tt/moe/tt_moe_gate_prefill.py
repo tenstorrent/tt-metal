@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM2
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer, mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
@@ -822,21 +822,8 @@ class TtMoEGatePrefill(LightweightModule):
 
     def _compose_logits_to_host(self, logits: ttnn.Tensor) -> torch.Tensor:
         """Compose SP-sharded logits (TP-replicated after all_reduce) to host."""
-        return ttnn.to_torch(
-            logits,
-            mesh_composer=ttnn.create_mesh_composer(
-                self.mesh_device,
-                # Concat the SP shards on tensor dim 0 and collapse the TP replicas.
-                config=ttnn.MeshComposerConfig(
-                    dims=(0, -1) if self.sp_axis == 0 else (-1, 0),
-                    mesh_shape_override=(
-                        ttnn.MeshShape(self.mesh_device.shape[0], 1)
-                        if self.sp_axis == 0
-                        else ttnn.MeshShape(1, self.mesh_device.shape[1])
-                    ),
-                ),
-            ),
-        )
+        # Concat the SP shards on tensor dim 0 and collapse the TP replicas.
+        return ttnn.to_torch(logits, mesh_composer=get_sp_mesh_composer(self.mesh_device, self.sp_axis))
 
     def _host_logits_to_device(self, host_logits: torch.Tensor) -> ttnn.Tensor:
         """Shard host logits (tokens, n_experts) back to device: SP-sharded, TP-replicated."""
