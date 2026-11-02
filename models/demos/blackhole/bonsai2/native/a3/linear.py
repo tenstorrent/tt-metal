@@ -47,7 +47,7 @@ class TernaryLinear:
             return codes, scales
 
         cache = os.path.join(cache_dir, name) if cache_dir else None
-        self.w, self.s = a3.weights_for_device(shared.device, build, cache=cache)
+        self.w, self.s = a3.weights_for_device(shared.device, build, cache=cache, kn=(k, n_pad))
 
     def forward(self, x, out_mem=None):
         sh = self.sh
