@@ -38,6 +38,10 @@ def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimize
     if name == "AdamW":
         cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
         return ttml.optimizers.AdamW(params, cfg)
+    if name == "AdamW+fp32":
+        # fp32 master weights: the trainable parameters are stored in fp32, and fused AdamW keeps fp32 moments.
+        ttml.core.store_trainable_parameters_as(params, ttnn.DataType.FLOAT32)
+        return _make_optimizer("AdamW", params)
     if name == "MuonComposite":
         cfg = ttml.optimizers.MuonConfig.make(lr=1e-3, momentum=0.95, ns_steps=5)
         return ttml.optimizers.MuonComposite(params, cfg)
@@ -110,7 +114,7 @@ def _scalars(opt) -> dict:
 
 
 @pytest.mark.requires_device
-@pytest.mark.parametrize("optimizer_name", ["AdamW", "MuonComposite", "MuonWithAdamW"])
+@pytest.mark.parametrize("optimizer_name", ["AdamW", "AdamW+fp32", "MuonComposite", "MuonWithAdamW"])
 def test_save_load_roundtrip(tmp_path, optimizer_name):
     """Save a trained model+optimizer to disk, restore into a fresh pair, and verify exact recovery."""
     ctx = ttml.autograd.AutoContext.get_instance()

@@ -36,7 +36,7 @@ class CheckpointShapeError(ValueError):
 
     Invariant guarded: every optimizer state tensor keyed by a parameter name (AdamW ``exp_avg`` /
     ``exp_avg_sq`` / ``max_exp_avg_sq``, SGD ``theta``, Muon's momentum buffer, ...)
-    is created as ``zeros_like(param)`` or ``typecast(param)`` and therefore gathers to the same full shape as
+    is created as ``zeros_like(param)`` and therefore gathers to the same full shape as
     its parameter. Only shapes are compared -- never dtype.
 
     ``save_checkpoint`` gathers each tensor by its own topology label, so a label that does not describe the

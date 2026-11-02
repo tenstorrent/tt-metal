@@ -225,11 +225,12 @@ class TestTP:
             mismatches
         )
 
-    def test_checkpoint_round_trips_at_full_shape(self, tp_mesh, tmp_path):
-        params, opt = _trained_tp("AdamW")
-        path = str(tmp_path / "tp_adamw.ckpt")
+    @pytest.mark.parametrize("opt_name", ["AdamW", "AdamW+fp32"])
+    def test_checkpoint_round_trips_at_full_shape(self, tp_mesh, tmp_path, opt_name):
+        params, opt = _trained_tp(opt_name)
+        path = str(tmp_path / "tp.ckpt")
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
-        _assert_checkpoint_round_trips(path, params, opt, fresh=lambda: _fresh_tp("AdamW")[1:])
+        _assert_checkpoint_round_trips(path, params, opt, fresh=lambda: _fresh_tp(opt_name)[1:])
 
     @pytest.mark.parametrize("param_label", ["nd", "collapsed_1d"])
     @pytest.mark.parametrize("opt_name", ALL_OPTIMIZERS)
@@ -390,20 +391,21 @@ class TestFSDP:
             mismatches
         )
 
+    @pytest.mark.parametrize("opt_name", ["AdamW", "AdamW+fp32"])
     @pytest.mark.parametrize("init", ["eager", "lazy"])
-    def test_checkpoint_round_trips_at_full_shape(self, fsdp_mesh, tmp_path, init):
+    def test_checkpoint_round_trips_at_full_shape(self, fsdp_mesh, tmp_path, init, opt_name):
         model = _build_fsdp_model(init)
         params = model.parameters()
-        opt = _make_optimizer("AdamW", params)
+        opt = _make_optimizer(opt_name, params)
         train_step(model, opt, DIM, input_scale=FSDP_INPUT_SCALE)
         _assert_fsdp_layout(model, fsdp_mesh)  # steady state: the parameters are the shards again
 
-        path = str(tmp_path / f"fsdp_adamw_{init}.ckpt")
+        path = str(tmp_path / f"fsdp_{init}.ckpt")
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
 
         def fresh():
             fresh_params = _build_fsdp_model(init).parameters()
-            return fresh_params, _make_optimizer("AdamW", fresh_params)
+            return fresh_params, _make_optimizer(opt_name, fresh_params)
 
         _assert_checkpoint_round_trips(path, params, opt, fresh)
 

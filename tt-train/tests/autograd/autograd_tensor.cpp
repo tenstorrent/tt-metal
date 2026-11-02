@@ -99,6 +99,7 @@ void expect_full_view_tracks_fused_step(const Config& config) {
 // Their bf16 views must follow. AdamW creates its state at construction, so one step checks every tensor.
 void expect_half_views_track_fused_adamw_step_on_fp32_parameter(const optimizers::AdamWConfig& config) {
     auto [theta, grad] = make_parameter(ttnn::DataType::FLOAT32);
+    ASSERT_EQ(theta->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32);
     theta->set_grad(grad);
     optimizers::AdamW optimizer(serialization::NamedParameters{{"theta", theta}}, config);
     auto tensors = state_tensors(optimizer);
@@ -365,17 +366,6 @@ TEST_F(AutogradTensorTest, FullViewTracksFusedSGDStepWithMomentum) {
     config.lr = 1e-1F;
     config.momentum = 0.9F;
     expect_full_view_tracks_fused_step<optimizers::SGD>(config);
-}
-
-TEST_F(AutogradTensorTest, NativeValueTracksFusedAdamWStepOnFp32Parameter) {
-    auto [theta, grad] = make_parameter(ttnn::DataType::FLOAT32);
-    ASSERT_EQ(theta->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32);
-    theta->set_grad(grad);
-    optimizers::AdamWConfig config;
-    config.lr = 1e-2F;
-    optimizers::AdamW optimizer(serialization::NamedParameters{{"theta", theta}}, config);
-    // A forward pass reads the bf16 compute copy before the step.
-    expect_views_track({{"theta", theta}}, autograd::PreferredPrecision::HALF, [&] { optimizer.step(); });
 }
 
 TEST_F(AutogradTensorTest, HalfViewTracksFusedAdamWStateOnFp32Parameter) {
