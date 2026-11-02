@@ -192,8 +192,8 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             run_args.emplace_back(range, nb::cast<const ProgramRunArgs&>(program_run_args));
             tensors.append(nb::getattr(program_run_args, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
         }
+        ttnn::program_spec::set_tensor_owners(self.h, tensors);
         self.p->programs = std::move(run_args);
-        nb::setattr(self.h, TENSOR_ARGS_ATTRIBUTE, tensors);
     };
     nb::class_<MeshProgramRunArgs>(
         mod,
@@ -228,7 +228,7 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
                 for (std::size_t i = 0; i < self.p->programs.size(); ++i) {
                     const auto& [range, run_args] = self.p->programs[i];
                     nb::object run_args_copy = nb::cast(run_args, nb::rv_policy::copy);
-                    nb::setattr(run_args_copy, TENSOR_ARGS_ATTRIBUTE, tensors[i].attr("copy")());
+                    ttnn::program_spec::set_tensor_owners(run_args_copy, tensors[i].attr("copy")());
                     programs.append(nb::make_tuple(range, run_args_copy));
                 }
                 return programs;
