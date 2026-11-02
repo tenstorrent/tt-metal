@@ -62,15 +62,20 @@ class TernaryLinear:
         self._pending = ((y if emit else h).buffer_address(), x8)
         return y
 
-    def forward(self, x, out_mem=None):
+    def forward(self, x, out_mem=None, split=0):
+        """split: also cut the output at column split, returning (out[..., :split], out[..., split:])."""
         sh = self.sh
+        mem = out_mem or self.out_mem
+        alloc = lambda n: ttnn.allocate_tensor_on_device(ttnn.Shape(list(x.shape)[:-1] + [n]), ttnn.bfloat16,  # noqa: E731
+                                                         ttnn.TILE_LAYOUT, sh.device, mem)
+        assert split % 32 == 0, "the split falls on a tile column"
+        out, out2 = (alloc(split), alloc(self.n - split)) if split else (alloc(self.n), None)
         pending, self._pending = getattr(self, "_pending", None), None
         if pending is not None and pending[0] == x.buffer_address():  # normed by norm(): x8 is ready
-            out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(x.shape)[:-1] + [self.n]), ttnn.bfloat16,
-                                                 ttnn.TILE_LAYOUT, sh.device, out_mem or self.out_mem)
-            a3.ternary_linear(pending[1], self.w, self.s, out, sh.workers, cache=False, n_real=self.n)
+            a3.ternary_linear(pending[1], self.w, self.s, out, sh.workers, cache=False, n_real=self.n,
+                              out2=out2, n_split=split)
             ttnn.deallocate(pending[1])
-            return out
+            return (out, out2) if split else out
         assert pending is None, "norm() was called but forward got another tensor (a copy of the residual?)"
         x_in = x
         if x.dtype != ttnn.bfloat16:  # prep reads bf16 rows; the GDN out-proj input is fp32
@@ -79,13 +84,11 @@ class TernaryLinear:
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         x8 = a3.masked_input_buffer(sh.device, sh.workers, self.k)
         a3.prep(x, sh.m[self.k], x8, sh.workers, src_tile32=True)
-        out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(x.shape)[:-1] + [self.n]), ttnn.bfloat16,
-                                             ttnn.TILE_LAYOUT, sh.device, out_mem or self.out_mem)
-        a3.ternary_linear(x8, self.w, self.s, out, sh.workers, cache=False, n_real=self.n)
+        a3.ternary_linear(x8, self.w, self.s, out, sh.workers, cache=False, n_real=self.n, out2=out2, n_split=split)
         ttnn.deallocate(x8)
         if x is not x_in:
             ttnn.deallocate(x)
-        return out
+        return (out, out2) if split else out
 
 
 # Sites that passed their e2e gate; each joins in its own commit.

@@ -16,6 +16,7 @@
 //
 // Runtime args, per core:
 //   NCRISC: w_addr, bank, vc     BRISC: s_addr, out_addr, out_tile0 (first output tile of this core),
+//           [3] out_tiles, [4] bank, [5] out2_addr, [6] n_split (second output from this tile on),
 //                                       out_tiles (real output tiles; the rest are padding columns), bank
 // Bank and vc are runtime, not per-core compile-time: per-core CT args split the program into
 // one kernel binary per (bank, vc) group, and the extra dispatch cost ate the GDN out-proj gain.
@@ -200,6 +201,9 @@ void kernel_main() {
         const InterleavedAddrGen<out_is_dram> og{.bank_base_address = get_arg_val<uint32_t>(1), .page_size = out_page};
         const uint32_t out_tile0 = get_arg_val<uint32_t>(2);
         const uint32_t out_tiles = get_arg_val<uint32_t>(3);  // tiles past this are padding columns
+        // optional second output: tiles from n_split on go to out2 (page t - n_split), e.g. GDN [qkv | z]
+        const InterleavedAddrGen<out_is_dram> og2{.bank_base_address = get_arg_val<uint32_t>(5), .page_size = out_page};
+        const uint32_t n_split = get_arg_val<uint32_t>(6);
         // out_tile32: a zeroed 2 KB staging tile; each output overwrites row 0 (face 0/1 row 0) only
         constexpr uint32_t cb_stage = 5;
         uint32_t stage = 0;
@@ -218,6 +222,8 @@ void kernel_main() {
                 return;
             }
             const uint32_t src = get_read_ptr(cb_out);
+            const uint32_t t = out_tile0 + n;
+            const uint64_t dst = t < n_split ? get_noc_addr(t, og) : get_noc_addr(t - n_split, og2);
             if constexpr (out_tile32) {
                 volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
                 volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
@@ -225,9 +231,9 @@ void kernel_main() {
                     d[i] = s[i];          // face 0 row 0
                     d[128 + i] = s[8 + i];  // face 1 row 0 (+512 B)
                 }
-                noc_async_write(stage, get_noc_addr(out_tile0 + n, og), 2048);
+                noc_async_write(stage, dst, 2048);
             } else {
-                noc_async_write(src, get_noc_addr(out_tile0 + n, og), 64);
+                noc_async_write(src, dst, 64);
             }
             noc_async_write_barrier();
             cb_pop_front(cb_out, 1);
