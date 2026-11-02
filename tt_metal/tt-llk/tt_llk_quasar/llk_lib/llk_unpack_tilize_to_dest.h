@@ -65,38 +65,34 @@ inline void _llk_unpack_tilize_to_dest_mop_config_(const std::uint32_t buf_desc_
 }
 
 /**
- * @brief MOP for unpack-tilize of 1x32 .. 8x32 tiles into DEST: two UNPACR_DEST_STRIDE per tile, one per face, num_tiles
- *        tiles per run.
+ * @brief MOP for unpack-tilize of one 1x32 .. 8x32 tile into DEST: two UNPACR_DEST_STRIDE, one per face.
  *
  * The descriptor is strided (y_dim = 1), so a tile index is one 16-datum row on both sides. Each STRIDE reads the rows
- * of one face at the tensor's row pitch (UNPACK_STRIDE_OFFSET_0) and steps the L1 index to the next face. The DEST Y
- * counter advances UNPACR_STRIDE_MAX_ROWS after face 0 and resets after face 1, so the faces take the 8-row slots the
- * pack side reads, and the loop then steps the DEST tile index one tile (@ref _llk_unpack_to_dest_tile_rows_). No dvalid.
+ * of one face at the tensor's row pitch (UNPACK_STRIDE_OFFSET_0) and steps the L1 index to the next face. The DEST row
+ * (Y) counter advances UNPACR_STRIDE_MAX_ROWS after each face, so the faces take the 8-row slots the pack side reads and
+ * consecutive tiles follow each other; UNPACR_DEST_STRIDE addresses DEST through that row counter only (the tile and
+ * face counters do not move it). One tile per run: @ref _llk_unpack_tilize_to_dest_small_faces_ sets the L1 tile index
+ * and the DEST row per tile. No dvalid.
  *
  * @param buf_desc_id: Buffer descriptor id, allocated from the unpack TRISC partition at op-init time (llk_bfd_alloc.h)
- * @param num_tiles: Tiles per MOP run
- * @param tensor_shape: Tile shape, @ref _llk_unpack_tilize_to_dest_is_small_faces_
  */
-inline void _llk_unpack_tilize_to_dest_small_faces_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
+inline void _llk_unpack_tilize_to_dest_small_faces_mop_config_(const std::uint32_t buf_desc_id)
 {
-    LLK_ASSERT(num_tiles <= MOP_LOOP_LEN_MAX, "num_tiles exceeds the MOP loop length");
-
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
-    const std::uint32_t MOP_INNER_LOOP     = num_tiles;
+    constexpr std::uint32_t MOP_INNER_LOOP = 1;
     constexpr std::uint32_t replay_buf_len = 2;
 
     load_replay_buf<0, replay_buf_len>(
         [buf_desc_id]
         {
+            // Y increments after each STRIDE (a 0 would reset it): face 1 lands 8 rows below face 0, the next tile 16 below.
             TT_UNPACR_DEST_STRIDE(
                 ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 0, 0, buf_desc_id, 0 /*no dvalid*/);
-            TT_UNPACR_DEST_STRIDE(0 /*Src_Reg_Y_Cntr_Incr: reset*/, 0 /*inc by 1*/, 1 /*set to inc*/, 0, 0, buf_desc_id, 0 /*no dvalid*/);
+            TT_UNPACR_DEST_STRIDE(
+                ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 0, 0, buf_desc_id, 0 /*no dvalid*/);
         });
 
-    const std::uint32_t next_dest_tile_instrn =
-        TT_OP_INC_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, _llk_unpack_to_dest_tile_rows_(tensor_shape));
-
-    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), next_dest_tile_instrn);
+    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
     temp.program_bank0_sw_cntl(instrn_buffer);
 }
 
@@ -132,7 +128,7 @@ inline void _llk_unpack_tilize_to_dest_init_(
     {
         cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, full_ct_dim * tensor_shape.num_faces_c_dim); // next row within the same tile
-        _llk_unpack_tilize_to_dest_small_faces_mop_config_(buf_desc_id, block_ct_dim, tensor_shape);
+        _llk_unpack_tilize_to_dest_small_faces_mop_config_(buf_desc_id);
         return;
     }
 
@@ -223,15 +219,22 @@ inline void _llk_unpack_tilize_to_dest_(const std::uint32_t l1_tile_idx, const s
  * @param dst_tile_idx: DEST tile index of the first tile, relative to the section base. dst_tile_idx + block_ct_dim must
  *        not exceed the section capacity for the shape (@ref _llk_unpack_to_dest_tile_rows_). Pack reads the tiles back
  *        from the same indices.
+ * @param block_ct_dim: Tiles in the run, consecutive in L1 and in DEST; one MOP run each
  * @note Leaves the UNP_A DEST tile, face and row index at 0 on return (see @ref _llk_unpack_tilize_to_dest_).
  */
-inline void _llk_unpack_tilize_to_dest_small_faces_(const TensorShape& tensor_shape, const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx)
+inline void _llk_unpack_tilize_to_dest_small_faces_(
+    const TensorShape& tensor_shape, const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx, const std::uint32_t block_ct_dim = 1)
 {
-    // A tile index is one 16-datum row on both sides: the first face row of the tile in L1, and in DEST the bank base
-    // plus the tile's slot (the SEC base registers do not move UNPACR_DEST).
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx * tensor_shape.num_faces_c_dim);
-    TT_SET_DST_TILE_FACE_ROW_IDX(
-        p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, _get_dest_buffer_base_() + dst_tile_idx * _llk_unpack_to_dest_tile_rows_(tensor_shape));
-    ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    const std::uint32_t tile_rows = _llk_unpack_to_dest_tile_rows_(tensor_shape);
+    for (std::uint32_t t = 0; t < block_ct_dim; t++)
+    {
+        // The strided descriptor indexes 16-datum rows on both sides. UNPACR_DEST_STRIDE addresses DEST through the row
+        // (Y) counter, so the bank base (in rows) and the tile's slot are set as the DEST row; the tile and face counters
+        // are zeroed (STRIDE ignores them; the SEC base registers do not move UNPACR_DEST either).
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, (l1_tile_idx + t) * tensor_shape.num_faces_c_dim);
+        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_unpacr::UNP_A, 0);
+        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::ROW_SEL, p_unpacr::UNP_A, _get_dest_buffer_base_() + (dst_tile_idx + t) * tile_rows);
+        ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    }
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_unpacr::UNP_A, 0 /*Value*/);
 }
