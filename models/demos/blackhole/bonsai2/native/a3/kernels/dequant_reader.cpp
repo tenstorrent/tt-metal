@@ -12,6 +12,7 @@
 // (column fastest, so a core's consecutive units hit different DRAM banks).
 
 #include "api/dataflow/dataflow_api.h"
+#include "scale_loc.h"
 
 void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(0);
@@ -23,6 +24,8 @@ void kernel_main() {
     constexpr uint32_t cpb = get_compile_time_arg_val(2);      // weight columns per DRAM bank
     constexpr uint32_t wtb = get_compile_time_arg_val(3);      // bytes per code tile
     constexpr uint32_t ncols = get_compile_time_arg_val(4);    // real weight columns
+    constexpr uint32_t pk = get_compile_time_arg_val(5), tail_t = get_compile_time_arg_val(6);
+    constexpr uint32_t s_full = get_compile_time_arg_val(7), rem = get_compile_time_arg_val(8);
     constexpr uint32_t cb_w = 0, cb_s = 1;
     constexpr uint32_t kt = ng * 32;
 
@@ -30,7 +33,8 @@ void kernel_main() {
         const uint32_t c = u % ncols, G = u / ncols;
         const uint32_t bank = c / cpb, j = c % cpb;
         cb_reserve_back(cb_s, 1);
-        noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr + (j * s_tiles + G / 4) * 4096),
+        const ScaleLoc loc = scale_loc<pk, s_tiles, tail_t, s_full, rem>(j, G);
+        noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr + loc.tile * 4096),
                        get_write_ptr(cb_s), 4096);
         cb_reserve_back(cb_w, 32);
         noc_async_read(get_noc_addr_from_bank_id<true>(bank, w_addr + (j * kt + G * 32) * wtb), get_write_ptr(cb_w),

@@ -15,6 +15,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "scale_loc.h"
 #include "api/compute/compute_kernel_api.h"
 
 // A2b (PackedW): code tiles are 256 B with no exponent section; unpacker 0 (SrcA) forces exponent 127.
@@ -26,16 +27,21 @@ inline void force_shared_exp() {
 
 void kernel_main() {
     const uint32_t nc = get_arg_val<uint32_t>(0);
+    const uint32_t c0 = get_arg_val<uint32_t>(1);
     constexpr uint32_t ng = get_compile_time_arg_val(0);
     constexpr uint32_t MT = get_compile_time_arg_val(1);
     constexpr uint32_t dbg = get_compile_time_arg_val(2);  // 1: drop the partial reload (debug)
     constexpr bool sx = get_compile_time_arg_val(3) == 1;
+    constexpr uint32_t cpb = get_compile_time_arg_val(4), pk = get_compile_time_arg_val(5);
+    constexpr uint32_t s_tiles = get_compile_time_arg_val(6), tail_t = get_compile_time_arg_val(7);
+    constexpr uint32_t s_full = get_compile_time_arg_val(8), rem = get_compile_time_arg_val(9);
     constexpr uint32_t cb_x = 0, cb_c = 1, cb_s = 2, cb_w = 3, cb_p = 4, cb_out = 16;
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
     for (uint32_t G = 0; G < ng; ++G) {
         cb_wait_front(cb_x, MT * 32);
         for (uint32_t c = 0; c < nc; ++c) {
             // dequant
+            const uint32_t row0 = scale_loc<pk, s_tiles, tail_t, s_full, rem>((c0 + c) % cpb, G).row;
             cb_wait_front(cb_s, 1);
             cb_wait_front(cb_c, 32);
             reconfig_data_format(cb_c, cb_s);  // srcA codes, srcB scales
@@ -49,7 +55,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t t = 0; t < 4; ++t) {
                     const uint32_t i = q * 4 + t;
-                    mul_tiles_bcast_rows(cb_c, cb_s, i, 0, t, (G % 4) * 8 + i / 4);
+                    mul_tiles_bcast_rows(cb_c, cb_s, i, 0, t, row0 + i / 4);
                 }
                 tile_regs_commit();
                 tile_regs_wait();

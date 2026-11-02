@@ -8,6 +8,7 @@
 // Runtime args: x_addr, w_addr, s_addr, c0, nc.
 
 #include "api/dataflow/dataflow_api.h"
+#include "scale_loc.h"
 #include "api/debug/dprint.h"
 
 // Bounded semaphore wait (debug safety): never hangs the chip; on timeout the caller reports and continues.
@@ -36,6 +37,8 @@ void kernel_main() {
     constexpr uint32_t xtb = get_compile_time_arg_val(6);
     constexpr uint32_t cb_x = 0, cb_c = 1, cb_s = 2;
     const InterleavedAddrGen<true> xg{.bank_base_address = x_addr, .page_size = xtb};
+    constexpr uint32_t pk = get_compile_time_arg_val(12), tail_t = get_compile_time_arg_val(13);
+    constexpr uint32_t s_full = get_compile_time_arg_val(14), rem = get_compile_time_arg_val(15);
     constexpr uint32_t mc = get_compile_time_arg_val(7);  // 1: x' arrives by multicast from the sender core
     constexpr uint32_t snd_x = get_compile_time_arg_val(8), snd_y = get_compile_time_arg_val(9);
     constexpr uint32_t sem_ready_id = get_compile_time_arg_val(10), sem_valid_id = get_compile_time_arg_val(11);
@@ -45,7 +48,8 @@ void kernel_main() {
         for (uint32_t c = c0; c < c0 + nc; ++c) {
             const uint32_t bank = c / cpb, j = c % cpb;
             cb_reserve_back(cb_s, 1);
-            noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr + (j * s_tiles + G / 4) * 4096),
+            const ScaleLoc loc = scale_loc<pk, s_tiles, tail_t, s_full, rem>(j, G);
+            noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr + loc.tile * 4096),
                            get_write_ptr(cb_s), 4096);
             cb_reserve_back(cb_c, 32);
             noc_async_read(get_noc_addr_from_bank_id<true>(bank, w_addr + (j * kt + G * 32) * wtb),

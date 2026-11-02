@@ -11,6 +11,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/pack.h"
 #include "api/compute/reg_api.h"
+#include "scale_loc.h"
 #include "api/compute/compute_kernel_api.h"
 
 // A2b (PackedW): code tiles are 256 B with no exponent section; unpacker 0 (SrcA) forces exponent 127.
@@ -26,6 +27,9 @@ void kernel_main() {
     constexpr uint32_t ng = get_compile_time_arg_val(0);
     constexpr uint32_t ncols = get_compile_time_arg_val(2);
     constexpr bool sx = get_compile_time_arg_val(3) == 1;
+    constexpr uint32_t cpb = get_compile_time_arg_val(4), pk = get_compile_time_arg_val(5);
+    constexpr uint32_t s_tiles = get_compile_time_arg_val(6), tail_t = get_compile_time_arg_val(7);
+    constexpr uint32_t s_full = get_compile_time_arg_val(8), rem = get_compile_time_arg_val(9);
     constexpr uint32_t dt = get_compile_time_arg_val(1);  // tiles per DST half: 8 (bf16 DST) or 4 (fp32)
     constexpr uint32_t cb_w = 0, cb_s = 1, cb_out = 16;
 
@@ -36,13 +40,14 @@ void kernel_main() {
     }
     for (uint32_t u = u0; u < u0 + nu; ++u) {
         const uint32_t G = u / ncols;
+        const uint32_t row0 = scale_loc<pk, s_tiles, tail_t, s_full, rem>((u % ncols) % cpb, G).row;
         cb_wait_front(cb_s, 1);
         cb_wait_front(cb_w, 32);
         for (uint32_t q = 0; q < 32 / dt; ++q) {
             tile_regs_acquire();
             for (uint32_t t = 0; t < dt; ++t) {
                 const uint32_t i = q * dt + t;
-                mul_tiles_bcast_rows(cb_w, cb_s, i, 0, t, (G % 4) * 8 + i / 4);
+                mul_tiles_bcast_rows(cb_w, cb_s, i, 0, t, row0 + i / 4);
             }
             tile_regs_commit();
             cb_reserve_back(cb_out, dt);

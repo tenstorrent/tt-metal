@@ -43,12 +43,21 @@ def codes_view(w):
     return w, w.get_tile().get_tile_size(w.dtype), w.memory_config().shard_spec.shape[1] // 32, 0
 
 
+def scales_view(s, s_tiles: int):
+    """(ttnn tensor, layout args [pk, tail_t, s_full, rem]) for A3 scales: scale_rows tiles, or A's PackedS
+    (shared tails). The kernels locate a super-group's rows with kernels/scale_loc.h."""
+    if isinstance(s, a3.PackedS):
+        return s.t, [1, s.tail_t, s.s_full, s.rem]
+    return s, [0, 1, 0, 0]
+
+
 def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b, fidelity=None):
     """w, s: a3.weights_for_device output for codes [K, N_pad] (gu: (gate, up) column pairs).
     n: real output columns (gu: per half). Returns [1, 1, K, n] DRAM tensor(s) (gu: (gate, up))."""
     wt, wtb, cpb, sx = codes_view(w)
     device = wt.device()
     kt = k // 32
+    st, sl = scales_view(s, ((kt // 32) + 3) // 4)
     assert kt % 32 == 0 and n % 32 == 0
     ng = kt // 32
     s_tiles = (ng + 3) // 4
@@ -80,14 +89,14 @@ def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b, fideli
         compile_time_args=ct, runtime_args=rt, config=cfg)
     prog = ttnn.ProgramDescriptor(
         kernels=[
-            kd("dequant_reader.cpp", [ng, s_tiles, cpb, wtb, ncols], rd, ttnn.ReaderConfigDescriptor()),
+            kd("dequant_reader.cpp", [ng, s_tiles, cpb, wtb, ncols] + sl, rd, ttnn.ReaderConfigDescriptor()),
             kd("dequant_writer.cpp", [ng, n // 32, int(gu), otb, int(os.environ.get("BONSAI_DQ_SKIPW", "0")), ncols], wr, ttnn.WriterConfigDescriptor()),
-            kd("dequant_compute.cpp", [ng, 4 if _FP32_DEST else 8, ncols, sx], cp, ttnn.ComputeConfigDescriptor(
+            kd("dequant_compute.cpp", [ng, 4 if _FP32_DEST else 8, ncols, sx, cpb, sl[0], s_tiles] + sl[1:], cp, ttnn.ComputeConfigDescriptor(
                 math_fidelity=fidelity or _DQ_FID, fp32_dest_acc_en=_FP32_DEST, math_approx_mode=False)),
         ],
         semaphores=[],
         cbs=[cb(0, ttnn.DataType.BFLOAT2_B, wtb, 64), cb(1, ttnn.float32, 4096, 2), cb(16, dtype, otb, 64)])
-    ttnn.generic_op([wt, s] + outs, prog)
+    ttnn.generic_op([wt, st] + outs, prog)
     return tuple(outs) if gu else outs[0]
 
 

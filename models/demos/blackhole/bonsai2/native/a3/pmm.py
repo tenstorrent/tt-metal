@@ -32,10 +32,11 @@ def _one(core, args):
 def pmm(x, w, s, k: int, n: int, gu: bool = False):
     """x: [1, 1, M, K] bf16 DRAM interleaved (rotated). w, s: a3.weights_for_device tensors.
     n: real output columns (gu: per half). Returns [1, 1, M, n] bf16 DRAM (gu: (gate, up))."""
-    from .prefill import codes_view
+    from .prefill import codes_view, scales_view
 
     wt, wtb, cpb, sx = codes_view(w)
     device = x.device()
+    st, sl = scales_view(s, ((k // 1024) + 3) // 4)
     m = x.shape[-2]
     assert m % 32 == 0 and m <= MAX_ROWS and k % 1024 == 0
     mt, kt = m // 32, k // 32
@@ -79,7 +80,7 @@ def pmm(x, w, s, k: int, n: int, gu: bool = False):
         c0 = min(i * per, ncols)
         nc = max(0, min(per, ncols - c0))
         rd[c.x][c.y] = [x.buffer_address(), wt.buffer_address(), s.buffer_address(), c0, nc]
-        cp[c.x][c.y] = [nc]
+        cp[c.x][c.y] = [nc, c0]
         wr[c.x][c.y] = [outs[0].buffer_address(), outs[-1].buffer_address(), c0, nc]
 
     def cb(idx, fmt, page, nt):
@@ -95,10 +96,10 @@ def pmm(x, w, s, k: int, n: int, gu: bool = False):
                                        math_approx_mode=False)
     cfg.unpack_to_dest_mode = modes
     kernels = [
-            kd("pmm_reader.cpp", [ng, mt, kt, cpb, wtb, s_tiles, xtb, int(mc), ps.x if mc else 0, ps.y if mc else 0, 0, 1],
+            kd("pmm_reader.cpp", [ng, mt, kt, cpb, wtb, s_tiles, xtb, int(mc), ps.x if mc else 0, ps.y if mc else 0, 0, 1] + sl,
                rd, ttnn.ReaderConfigDescriptor()),
             kd("pmm_writer.cpp", [mt, n // 32, int(gu), xtb], wr, ttnn.WriterConfigDescriptor()),
-            kd("pmm_compute.cpp", [ng, mt, int(os.environ.get("BONSAI_PMM_DBG", "0")), sx], cp, cfg),
+            kd("pmm_compute.cpp", [ng, mt, int(os.environ.get("BONSAI_PMM_DBG", "0")), sx, cpb, sl[0], s_tiles] + sl[1:], cp, cfg),
     ]
     if mc:
         kernels.append(ttnn.KernelDescriptor(
@@ -113,7 +114,7 @@ def pmm(x, w, s, k: int, n: int, gu: bool = False):
         cbs=[cb(0, ttnn.bfloat16, xtb, 2 * mt * 32), cb(1, ttnn.DataType.BFLOAT2_B, wtb, max(64, 2 * per * 32)),
              cb(2, ttnn.float32, 4096, max(2, 2 * per)),
              cb(3, ttnn.bfloat16, xtb, 32), cb(4, ttnn.float32, 4096, per * mt), cb(16, ttnn.bfloat16, xtb, 2 * mt)])
-    ttnn.generic_op([x, wt, s] + outs, prog)
+    ttnn.generic_op([x, wt, st] + outs, prog)
     return tuple(outs) if gu else outs[0]
 
 
