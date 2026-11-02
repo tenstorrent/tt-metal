@@ -6373,6 +6373,7 @@ _CONV_LEVER = (("conv-prep", "structural-conv"), "PERF_MCP_MAX_CONV_ATTEMPTS")
 _SPLIT_LEVER = (("split", "structural-split"), "PERF_MCP_MAX_SPLIT_ATTEMPTS")
 _STOCK_LEVER = (("stock", "structural-stock"), "PERF_MCP_MAX_STOCK_ATTEMPTS")
 _LAYOUT_LEVER = (("layout-prep", "structural-layout"), "PERF_MCP_MAX_LAYOUT_ATTEMPTS")
+_CHAIN_LEVER = (("chain-fuse", "structural-chain"), "PERF_MCP_MAX_CHAIN_ATTEMPTS")
 # THE FUSION LADDER: what a group of ops repeated within a layer is offered, in order, each rung only
 # once the one before it is spent without a win. The fold used to be the whole of it -- three tries
 # and the group closed, so a group the fold could not help never reached the step that could:
@@ -6393,6 +6394,7 @@ _GATE_LEVERS = (
     _ORDER_LEVER,
     _CONV_LEVER,
     _LAYOUT_LEVER,
+    _CHAIN_LEVER,
     _SPLIT_LEVER,
     _STOCK_LEVER,
     _SHARE_LEVER,
@@ -7616,6 +7618,102 @@ def _layout_gate(prof: dict, attempts: list) -> dict | None:
             "note='none: <evidence>'."
         )
         % (_codes or "datamove", gap),
+    }
+
+
+def _chain_gate(prof: dict, attempts: list) -> dict | None:
+    """Adjacent ops whose intermediates transit DRAM between them -- fuse to keep data in L1.
+
+    THE FOLD GATE FINDS REPEATS; THIS FINDS CHAINS. The fold gate detects the same op fingerprint
+    evaluated several times within one layer (high count relative to the per-layer baseline). This
+    gate detects DIFFERENT ops that are adjacent in the execution trace and whose intermediates
+    transit DRAM between them. Both are structural waste; they need different treatments: fold
+    concatenates repeats into one wider call, chain fuses adjacent ops into one kernel.
+
+    ADJACENCY IS REAL DATA from the capture, not a guess. tracy_tool._neighbours records the most
+    common op either side of each fingerprint in execution order, so 'this reduction feeds a
+    transpose' is an observation about what ran. The gate reads prev_op / next_op on the open_ops
+    the profile already carries -- the same fields _order_gate reads for a different purpose (swap
+    order vs fuse).
+
+    Same three-part structure as every other gate:
+      1. APPLICABILITY FIRST. No adjacent pair with material combined gap -> return None.
+      2. MEASUREMENT-GATED EXIT. Clears on a MEASURED win, never on 'attempted'.
+      3. CAPPED. PERF_MCP_MAX_CHAIN_ATTEMPTS real tries.
+    """
+    ops = [o for o in (prof.get("open_ops") or []) if isinstance(o, dict)]
+    if len(ops) < 2:
+        return None
+    by_code = {}
+    for o in ops:
+        code = str(o.get("op_code") or "").strip()
+        if code:
+            by_code.setdefault(code, []).append(o)
+    pairs = []
+    seen = set()
+    for a in ops:
+        a_gap = float(a.get("gap_ms") or 0)
+        if a_gap <= 0:
+            continue
+        a_code = str(a.get("op_code") or "").strip()
+        next_code = str(a.get("next_op") or "").strip()
+        if not next_code or next_code not in by_code:
+            continue
+        pair_key = (a_code, next_code)
+        if pair_key in seen:
+            continue
+        candidates = [o for o in by_code[next_code] if o is not a]
+        if not candidates:
+            continue
+        b = max(candidates, key=lambda o: float(o.get("gap_ms") or 0))
+        b_gap = float(b.get("gap_ms") or 0)
+        if b_gap <= 0:
+            continue
+        seen.add(pair_key)
+        pairs.append((a_gap + b_gap, a, b))
+    if not pairs:
+        return None
+    pairs.sort(key=lambda p: -p[0])
+    _, best_a, best_b = pairs[0]
+    if not _per_request_reader(prof).material_sum([best_a, best_b]):
+        return None
+    if _gate_retired(_CHAIN_LEVER, attempts):
+        return None
+    a_code = str(best_a.get("op_code") or "")
+    b_code = str(best_b.get("op_code") or "")
+    a_gap = float(best_a.get("gap_ms") or 0)
+    b_gap = float(best_b.get("gap_ms") or 0)
+    gap_total = sum(p[0] for p in pairs)
+    chain_name = "%s -> %s" % (a_code, b_code) if a_code and b_code else "adjacent_chain"
+    return {
+        "op": chain_name,
+        "op_class": str(best_a.get("bucket") or ""),
+        "gap_ms": round(gap_total, 4),
+        "bound_by": "memory",
+        "grid": None,
+        "weight_dtype": None,
+        "next_rung": "structural-chain",
+        "reason": (
+            "CHAIN FUSION -- a lever SEPARATE from the fold/repeat rungs. Adjacent ops %r "
+            "(%.3fms) and %r (%.3fms) execute in sequence and their intermediate transits DRAM "
+            "between them; %d chain pair(s) total carrying %.3fms of gap. Fusing adjacent ops "
+            "into a single kernel keeps intermediates in L1 and eliminates the DRAM round-trip.\n"
+            "APPROACH (in order):\n"
+            "  1. CHECK if ttnn already has a fused form for this pattern. Read the model source "
+            "to find the Python calls that produce these two ops, then check the ttnn API for a "
+            "composite op that combines them.\n"
+            "  2. RESTRUCTURE if one op in the chain is the internal decomposition of a "
+            "higher-level call (e.g. a reduction on a non-last dim decomposes into "
+            "transpose+reduce+transpose; replacing the call with an equivalent that works "
+            "on the last dim, or with a matmul against a constant, avoids the decomposition).\n"
+            "  3. FUSE-CPP: if no built-in form and no restructure, write a fused C++ kernel "
+            "via ttnn.generic_op that does both operations in one pass.\n"
+            "Then record_kernel_attempt(op=%r,'chain-fuse',measured_ms,beat_baseline). "
+            "If the pair is provably unfusable (cross-device collective boundary, incompatible "
+            "tensor layouts that require a DRAM round-trip by construction), record with "
+            "note='none: <evidence>' and the cap will release it."
+        )
+        % (a_code, a_gap, b_code, b_gap, len(pairs), gap_total, chain_name),
     }
 
 
@@ -9119,6 +9217,9 @@ def termination_check() -> dict:
         layout_block = _layout_gate(_gate_prof, attempts)
         if layout_block:
             blocking.append(layout_block)
+        chain_block = _chain_gate(_gate_prof, attempts)
+        if chain_block:
+            blocking.append(chain_block)
         fold_block = _fold_gate(_gate_prof, attempts)
         if fold_block:
             blocking.append(fold_block)
