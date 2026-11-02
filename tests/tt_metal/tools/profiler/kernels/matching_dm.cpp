@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// One call per argument shape the matching table in test_streaming_profiler_semantics.cpp covers, each named by its
+// One call per argument shape the matching table in test_streaming_profiler_records.cpp covers, each named by its
 // metadata, N_ITERS times.
 #include <array>
 #include <cstdint>

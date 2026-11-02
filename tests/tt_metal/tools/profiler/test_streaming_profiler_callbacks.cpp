@@ -21,7 +21,7 @@
 #include <fmt/format.h>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -29,7 +29,7 @@
 
 using namespace tt::tt_metal;
 using namespace records_test;
-namespace api = tt::tt_metal::experimental::streaming_profiler;
+namespace api = tt::tt_metal::experimental::device_observability;
 
 namespace {
 
@@ -100,7 +100,7 @@ void capture(
 
 int main() {
     // Small enough for the last capture to overrun while its callback waits.
-    setenv("TT_METAL_STREAMING_PROFILER_FIFO_MB", "1", 1);
+    setenv("TT_METAL_DEVICE_OBSERVABILITY_FIFO_MB", "1", 1);
 
     expect(
         throws(

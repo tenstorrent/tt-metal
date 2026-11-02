@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#if defined(PROFILE_STREAMING)
+#if defined(DEVICE_OBSERVABILITY)
 #include "internal/profiler/kernel_profiler_streaming.hpp"
 #else
 

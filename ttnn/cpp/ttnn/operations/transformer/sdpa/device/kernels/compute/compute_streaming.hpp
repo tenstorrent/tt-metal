@@ -54,7 +54,8 @@ constexpr bool sdpa_compute_lofi = true;
 constexpr bool sdpa_compute_lofi = false;
 #endif
 
-ALWI void sdpa_mm_init(uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
+ALWI void sdpa_mm_init(
+    uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
     if constexpr (sdpa_matmul_fidelity_set) {
         mm_no_mop_init_short_fidelity<sdpa_matmul_fidelity>(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
     } else {
@@ -117,7 +118,7 @@ constexpr bool sliding_local_first = false;
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
-#if defined(PROFILE_STREAMING)
+#if defined(DEVICE_OBSERVABILITY)
 // Not supported by the streaming profiler: these template-gated zones use the DRAM profiler's hash ids.
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #elif defined(PROFILE_KERNEL)

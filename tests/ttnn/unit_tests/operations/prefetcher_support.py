@@ -21,8 +21,9 @@ def require_tensor_prefetcher(device):
     if not ttnn.experimental.is_tensor_prefetcher_supported(device):
         pytest.skip(
             "tensor prefetcher unsupported here: either programmable DRAM cores are unavailable "
-            "(need Blackhole and firmware >= 19.12.0.0), or TT_METAL_STREAMING_PROFILER=1 is set and its "
-            "relay holds the DRISCs the prefetcher needs"
+            "(need Blackhole and firmware >= 19.12.0.0), or device observability is on "
+            "(TT_METAL_DEVICE_OBSERVABILITY=1 or TT_METAL_STREAMING_PROFILER=1) and its relay holds the DRISCs the "
+            "prefetcher needs"
         )
 
 

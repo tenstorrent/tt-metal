@@ -8,8 +8,9 @@
 //
 // Everything the streaming backend adds on top of the DRAM profiler's hostdev/profiler_common.h lives here,
 // so that header stays byte-for-byte the DRAM profiler's own. The two backends are mutually exclusive at run
-// time (TT_METAL_DEVICE_PROFILER vs TT_METAL_STREAMING_PROFILER, see llrt/rtoptions.cpp), and the device
-// producer for this backend is DevicePublish's ring, internal/debug/device_publish_ring.h, under -DPROFILE_STREAMING.
+// time (TT_METAL_DEVICE_PROFILER vs TT_METAL_DEVICE_OBSERVABILITY, see llrt/rtoptions.cpp), and the device
+// producer for this backend is DevicePublish's ring, internal/debug/device_publish_ring.h, under
+// -DDEVICE_OBSERVABILITY.
 
 #include <cstdint>
 
@@ -48,7 +49,7 @@ struct NocXy {
 // the other backend moved this one's flow-control words.
 //
 // Overlaying the same physical words is safe because the two backends are mutually exclusive: a process
-// runs either the DRAM profiler (TT_METAL_DEVICE_PROFILER) or the streaming one (TT_METAL_STREAMING_PROFILER),
+// runs either the DRAM profiler (TT_METAL_DEVICE_PROFILER) or the streaming one (TT_METAL_DEVICE_OBSERVABILITY),
 // never both (rtoptions TT_FATALs on the pair).
 //
 // Sized for the widest processor count -- including Quasar's 24 -- so the layout is arch-uniform and the

@@ -1,47 +1,21 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// One DevicePublish call that breaks one rule for each RECORD_ERROR value. The records test builds each one and checks
-// that the build, or the load, fails with that rule's message.
+// One DevicePublish call that breaks one rule for each RECORD_ERROR value. test_streaming_profiler_records --errors
+// builds each one and checks that the build, or the load, fails with that rule's message.
 #include <array>
 #include <cstdint>
 #include "api/debug/device_publish.h"
 #include "../records_types.hpp"
 
 using namespace records_test;
+using namespace errors_test;
 
-struct WithConstructor {
-    WithConstructor() = default;
-    WithConstructor(uint32_t v) : v(v) {}
-    uint32_t v = 0;
-};
 struct HoldsWithConstructor {
     WithConstructor w;
 };
-template <int N>
-struct Templated {
-    uint32_t v;
-};
-struct ConstMember {
-    const uint32_t v;
-};
-enum Unfixed { kUnfixed };
-struct UnfixedField {
-    Unfixed v;
-};
 struct PointerField {
     uint32_t* p;
-};
-struct CopiedByHand {
-    CopiedByHand() = default;
-    CopiedByHand(const CopiedByHand&) {}
-};
-struct HoldsCopiedByHand {
-    CopiedByHand c;
-};
-union Word {
-    uint32_t raw;
-    float f;
 };
 struct HoldsWord {
     Word w;
@@ -108,7 +82,7 @@ void kernel_main() {
 #elif RECORD_ERROR == 22
     DevicePublish<Name{"error"_s}>("text"_s);
 #elif RECORD_ERROR == 23
-    DevicePublish<tt::tt_metal::experimental::streaming_profiler::kNoInline, Name{"error"_s}>();
+    DevicePublish<tt::tt_metal::experimental::device_observability::kNoInline, Name{"error"_s}>();
 #elif RECORD_ERROR == 24
     DevicePublish<5u>();
 #elif RECORD_ERROR == 25
@@ -116,5 +90,7 @@ void kernel_main() {
         Name{"error"_s},
         tt::tt_metal::experimental::device_observability::kPublishBatched,
         tt::tt_metal::experimental::device_observability::kSendToExternalProcess>(1u);
+#elif RECORD_ERROR == 26
+    DevicePublish<Name{"error"_s}>(std::array<NoFields, 2>{});
 #endif
 }

@@ -9,18 +9,19 @@
 
 #include <stdint.h>
 
+#include <hostdevcommon/device_observability_types.hpp>
 #include <hostdevcommon/streaming_profiler_types.hpp>
 
 // A String constant: "..."_s on the device, the text itself on the host.
 #ifdef TT_DEVICE_COMPILE
 #define META_SILICON_STRING(text) text##_s
 #else
-#define META_SILICON_STRING(text) ::tt::tt_metal::experimental::streaming_profiler::String(text)
+#define META_SILICON_STRING(text) ::tt::tt_metal::experimental::device_observability::String(text)
 #endif
 
 namespace observability_event_meta_silicon {
 
-using tt::tt_metal::experimental::streaming_profiler::String;
+using tt::tt_metal::experimental::device_observability::String;
 
 enum class Level : int8_t { Low = -3, High = 9 };
 enum Wide : uint64_t { kWideMax = 0xFFFFFFFFFFFFFFFFull };

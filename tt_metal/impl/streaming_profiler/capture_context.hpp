@@ -14,19 +14,20 @@
 #include <span>
 #include <vector>
 
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 
 #include "hostdev/streaming_profiler_common.h"
 
 namespace tt::tt_metal::streaming_profiler {
 
-inline constexpr size_t kProcessorCount = static_cast<size_t>(experimental::streaming_profiler::Processor::ERISC1) + 1;
+inline constexpr size_t kProcessorCount =
+    static_cast<size_t>(experimental::device_observability::Processor::ERISC1) + 1;
 inline constexpr std::array<const char*, kProcessorCount> kProcessorNames = {
     "BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2", "ERISC_0", "ERISC_1"};
 
-constexpr bool is_ethernet(experimental::streaming_profiler::Processor processor) {
-    return processor == experimental::streaming_profiler::Processor::ERISC0 ||
-           processor == experimental::streaming_profiler::Processor::ERISC1;
+constexpr bool is_ethernet(experimental::device_observability::Processor processor) {
+    return processor == experimental::device_observability::Processor::ERISC0 ||
+           processor == experimental::device_observability::Processor::ERISC1;
 }
 
 // Maps NoC coordinates to core indices. 64x64 covers every supported grid, and find() returns kNone outside it.
@@ -56,7 +57,7 @@ struct CaptureContext {
     struct Device {
         // Holds kernel_profiler::PROFILER_SPSC_TENSIX_RISC lanes for each tile, ordered by tile and then by RISC. An
         // eth tile has two RISCs and fills its other lanes with ERISC1.
-        std::vector<experimental::streaming_profiler::Core> lanes;
+        std::vector<experimental::device_observability::Core> lanes;
         // Each tile's clock offset, by core index. It is the wall clock of the chip's wall-clock core minus the tile's
         // at the same instant, so adding it puts the tile's timestamps on the wall-clock core's clock, which the clock
         // sync maps to the root chip's refclk. Every tile's wall clock counts the same AICLK, so the offset stays fixed
@@ -100,7 +101,7 @@ std::vector<bool> reached_from_root(std::span<const CaptureContext::Link> links,
 
 }  // namespace tt::tt_metal::streaming_profiler
 
-namespace tt::tt_metal::experimental::streaming_profiler::detail {
+namespace tt::tt_metal::experimental::device_observability::detail {
 
 // A capture's lanes, by device, whose records name the call sites of the Metal process that runs them. Its receiver
 // holds a reference, as does every kept copy of their records (retain, release), and the last to let go deletes them,
@@ -124,16 +125,16 @@ private:
     mutable std::atomic<uint32_t> references_{1};
 };
 
-}  // namespace tt::tt_metal::experimental::streaming_profiler::detail
+}  // namespace tt::tt_metal::experimental::device_observability::detail
 
 namespace tt::tt_metal::streaming_profiler {
 
 // One reference on a capture's lanes, which it lets go when it goes.
 struct ReleaseLanes {
-    void operator()(const experimental::streaming_profiler::detail::CaptureLanes* lanes) const {
-        experimental::streaming_profiler::detail::release(*lanes);
+    void operator()(const experimental::device_observability::detail::CaptureLanes* lanes) const {
+        experimental::device_observability::detail::release(*lanes);
     }
 };
-using LanesReference = std::unique_ptr<const experimental::streaming_profiler::detail::CaptureLanes, ReleaseLanes>;
+using LanesReference = std::unique_ptr<const experimental::device_observability::detail::CaptureLanes, ReleaseLanes>;
 
 }  // namespace tt::tt_metal::streaming_profiler

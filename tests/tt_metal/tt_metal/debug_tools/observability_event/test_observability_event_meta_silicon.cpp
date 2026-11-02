@@ -4,7 +4,7 @@
 //
 // Metadata on silicon: test_kernels/misc/observability_event_meta_silicon.cpp publishes one record per metadata shape
 // on every RISC of one core, DevicePublish's descriptors carry each call site's metadata in its ELF, and this test
-// reads every record's metadata() through the public streaming profiler API and compares it with the constants the
+// reads every record's metadata() through the public device observability API and compares it with the constants the
 // kernel was built from (observability_event_meta_silicon.h).
 //
 // Needs a Blackhole device and TT_METAL_STREAMING_PROFILER=1 in the environment before the process starts; skips
@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -32,18 +33,19 @@
 namespace observability_event_meta_silicon_test {
 
 using namespace tt::tt_metal;
+namespace api = tt::tt_metal::experimental::device_observability;
 namespace sp = tt::tt_metal::experimental::streaming_profiler;
 namespace m = observability_event_meta_silicon;
 
 constexpr const char* kKernel = "tests/tt_metal/tt_metal/test_kernels/misc/observability_event_meta_silicon.cpp";
 constexpr int kRiscs = 5;
 
-using Nested = sp::Record<void, m::NestedMeta>;
-using Deep = sp::Record<void, m::DeepMeta>;
-using AllWidths = sp::Record<void, m::AllWidthsMeta>;
-using Defaulted = sp::Record<void, m::DefaultedMeta>;
-using TwoStrings = sp::Record<void, m::TwoStringsMeta>;
-using Templated = sp::Record<void, m::TemplatedMeta>;
+using Nested = api::Record<void, m::NestedMeta>;
+using Deep = api::Record<void, m::DeepMeta>;
+using AllWidths = api::Record<void, m::AllWidthsMeta>;
+using Defaulted = api::Record<void, m::DefaultedMeta>;
+using TwoStrings = api::Record<void, m::TwoStringsMeta>;
+using Templated = api::Record<void, m::TemplatedMeta>;
 
 // Each metadata type's fields, leaves in order, so two values compare field by field.
 auto fields(const m::NestedMeta& v) { return std::tuple(v.name, v.style.color, v.style.verbosity, v.flags); }
@@ -87,8 +89,8 @@ TEST(ObservabilityEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
     std::mutex mu;
     std::vector<Seen> all;
     std::multiset<std::pair<int, uint32_t>> templated_values;
-    sp::Callback callback = sp::RegisterCallback(
-        [&](const sp::Batch<sp::Zone, Nested, Deep, AllWidths, Defaulted, TwoStrings, Templated>& batch) {
+    api::Callback callback = api::RegisterCallback(
+        [&](const api::Batch<sp::Zone, Nested, Deep, AllWidths, Defaulted, TwoStrings, Templated>& batch) {
             std::lock_guard lock(mu);
             for (const sp::Zone& zone : batch.records<sp::Zone>()) {
                 const sp::ZoneMetadata& meta = zone.metadata();

@@ -1912,15 +1912,16 @@ void MeshDeviceImpl::init_streaming_profiler(const std::shared_ptr<MeshDevice>& 
     if (streaming_profiler_) {
         return;
     }
-    // TT_METAL_STREAMING_PROFILER=1 boots the DRISC relays and the host receiver. Exclusive with
+    // TT_METAL_DEVICE_OBSERVABILITY=1 (or TT_METAL_STREAMING_PROFILER=1) boots the DRISC relays and the host receiver.
+    // Exclusive with
     // TT_METAL_DEVICE_PROFILER (rtoptions TT_FATALs on the pair); the real-time profiler stands down while it is on.
     const auto& rtoptions = metal_env().get_rtoptions();
-    if (!rtoptions.get_streaming_profiler_enabled()) {
+    if (!rtoptions.get_device_observability_enabled()) {
         return;
     }
     TT_FATAL(
         metal_env().get_hal().get_arch() != tt::ARCH::QUASAR,
-        "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC drainer, "
+        "TT_METAL_DEVICE_OBSERVABILITY is not supported on Quasar: device observability needs a DRISC drainer, "
         "which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
     streaming_profiler_ = streaming_profiler::Receiver::create(mesh_device);
 }

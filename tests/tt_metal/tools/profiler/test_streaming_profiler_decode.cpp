@@ -23,7 +23,7 @@
 #include "llrt/call_sites.hpp"
 
 using namespace tt::tt_metal;
-namespace api = experimental::streaming_profiler;
+namespace api = experimental::device_observability;
 
 constexpr uint64_t kEpoch = 1ull << 32;  // a wall-clock time is its high word * kEpoch + its low word
 constexpr uint32_t kNear = 0xfffffff0u;  // a low word just below the wrap

@@ -47,7 +47,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+#if defined(DEVICE_OBSERVABILITY) && defined(ARCH_BLACKHOLE)
 #include "tt_metal/impl/streaming_profiler/kernels/link_sync.hpp"
 #endif
 
@@ -558,7 +558,8 @@ FORCE_INLINE bool can_forward_packet_completely(
         deliver_locally_only =
             (cached_routing_fields.value & LowLatencyFields::FIELD_MASK) == LowLatencyFields::WRITE_ONLY;
     }
-    return deliver_locally_only || downstream_edm_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
+    return deliver_locally_only ||
+           downstream_edm_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
 // Map downstream direction to compact array index [0-3], excluding my_direction.
@@ -964,7 +965,8 @@ FORCE_INLINE void record_2d_forwarded_slots(uint8_t forwarded_slot_mask) {
 template <typename EdmChannelWorkerIFs>
 FORCE_INLINE void establish_edm_connection(
     EdmChannelWorkerIFs& local_sender_channel_worker_interface, uint32_t stream_id) {
-    local_sender_channel_worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
+    local_sender_channel_worker_interface
+        .template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
 }
 
 bool any_sender_channels_active(
@@ -1267,7 +1269,8 @@ FORCE_INLINE
 
     // Process COMPLETIONs from receiver
     int32_t completions_since_last_check =
-        sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        sender_channel_from_receiver_credits
+            .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
@@ -1285,7 +1288,8 @@ FORCE_INLINE
     // ACKs are processed second to avoid any sort of races. If we process acks second,
     // we are guaranteed to see equal to or greater the number of acks than completions
     if constexpr (enable_first_level_ack) {
-        auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        auto acks_since_last_check = sender_channel_from_receiver_credits
+                                         .template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
         if (acks_since_last_check > 0) {
             sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
             send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
@@ -1419,7 +1423,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     }
 
     // Code profiling timer for receiver channel forward
-    NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;
+    NamedProfiler<
+        CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        receiver_forward_timer;
     receiver_forward_timer.set_should_dump(unwritten_packets);
     receiver_forward_timer.open();
 
@@ -1684,11 +1692,13 @@ FORCE_INLINE void configure_outbound_to_receiver_channel_pointers(
 
 // Input State(s): PAUSED
 // Output State(s): PAUSED
-void run_retrain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+void run_retrain_step(
+    tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     // Placeholder
     state_manager_l1->state = RouterState::RETRAINING;
     run_routing_without_noc_sync();
-    while (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::RETRAIN && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+    while (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::RETRAIN &&
+           !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         // Wait for confirmation from host to avoid the WAW hazard:
         // Host issues retrain
         // Router enters retrain state
@@ -1710,23 +1720,26 @@ void run_retrain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile t
 
 // Input State(s): PAUSED
 // Output State(s): DRAINING
-void run_drain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+void run_drain_step(
+    tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     state_manager_l1->state = RouterState::DRAINING;
     ASSERT(false); // not implemented
-    while (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::DRAIN && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+    while (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::DRAIN &&
+           !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
     }
 
     ASSERT(reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::PAUSE);
 };
 
-__attribute__((noinline))
-void execute_pause_command(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+__attribute__((noinline)) void execute_pause_command(
+    tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (MY_ERISC_ID == 0) {
         // Master erisc will handle the pause command but we need to make sure the other erisc is in its wait loop
         // before we proceed. This coordination is not implemented yet. When mainlined, it will be integrated here.
 
         bool keep_running_pause = true;
-        while (keep_running_pause && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+        while (keep_running_pause &&
+               !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
             state_manager_l1->state = RouterState::PAUSED;
             switch (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command) {
                 case RouterCommand::RUN:
@@ -1754,7 +1767,8 @@ void execute_pause_command(tt_l1_ptr RouterStateManager* state_manager_l1, volat
 };
 
 template <bool RISC_CPU_DATA_CACHE_ENABLED>
-FORCE_INLINE bool continue_running_main_run_loop(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr, tt_l1_ptr RouterStateManager* state_manager_l1) {
+FORCE_INLINE bool continue_running_main_run_loop(
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr, tt_l1_ptr RouterStateManager* state_manager_l1) {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         if constexpr (!IS_RETRAIN_SYNC_MASTER()) {
             return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr);
@@ -1763,7 +1777,8 @@ FORCE_INLINE bool continue_running_main_run_loop(volatile tt::tt_fabric::Termina
                    !state_manager_l1->is_non_run_command_pending /*<ENABLE_RISC_CPU_DATA_CACHE>*/ ();
         }
     } else {
-        return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending();
+        return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) &&
+               !state_manager_l1->is_non_run_command_pending();
     }
 }
 
@@ -2287,7 +2302,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             }
-#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+#if defined(DEVICE_OBSERVABILITY) && defined(ARCH_BLACKHOLE)
             link_sync::RouterHook::step(fabric_heartbeat_counter);
 #endif
         }

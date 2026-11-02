@@ -17,7 +17,7 @@
 #include <thread>
 #include <vector>
 
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 #include <tt_stl/tt_pause.hpp>
 
 namespace tt::llrt {
@@ -61,7 +61,7 @@ struct IdleBackoff {
     }
 };
 
-using BatchCallback = std::function<void(const experimental::streaming_profiler::detail::BatchData&)>;
+using BatchCallback = std::function<void(const experimental::device_observability::detail::BatchData&)>;
 
 class Service {
 public:
@@ -70,12 +70,12 @@ public:
     Service& operator=(const Service&) = delete;
 
     // Adds a consumer that receives the records of the types `record_types` through `callback`, and returns its id.
-    experimental::streaming_profiler::detail::CallbackId add_consumer(
+    experimental::device_observability::detail::CallbackId add_consumer(
         std::string name,
-        std::vector<experimental::streaming_profiler::detail::RecordTypeDescriptor> record_types,
+        std::vector<experimental::device_observability::detail::RecordTypeDescriptor> record_types,
         BatchCallback callback);
     // Removes the consumer. It returns once the callback can no longer run, or at once if the callback removes itself.
-    void remove_consumer(experimental::streaming_profiler::detail::CallbackId id);
+    void remove_consumer(experimental::device_observability::detail::CallbackId id);
 
     // Attaches the receiver's streams to every consumer, and returns once each one reads them, so nothing published
     // afterwards is missed.
@@ -125,7 +125,7 @@ private:
     std::vector<Receiver*> receivers_;
     std::vector<std::function<void()>> file_sinks_;
     std::unique_ptr<SteadyClock> steady_;
-    std::vector<experimental::streaming_profiler::Callback> builtin_callbacks_;
+    std::vector<experimental::device_observability::Callback> builtin_callbacks_;
     uint32_t next_id_ = 1;
     std::once_flag builtins_once_;
 };

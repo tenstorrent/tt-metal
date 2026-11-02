@@ -43,7 +43,7 @@ constexpr uint32_t kProcessorColors[kProcessorCount] = {
 
 // Each processor's row on the timeline, in the lane id space Tracy keeps apart from host threads. It uses the physical
 // coordinate, because an eth core's logical coordinate can equal a Tensix core's, and the low 3 bits are the processor.
-uint32_t lane_thread(const experimental::streaming_profiler::Core& core) {
+uint32_t lane_thread(const experimental::device_observability::Core& core) {
     return tracy::TTDeviceMarker::LANE_ID_FLAG | (static_cast<uint32_t>(core.chip_id) << 16) |
            (static_cast<uint32_t>(core.physical.y) << 11) | (static_cast<uint32_t>(core.physical.x) << 3) |
            static_cast<uint32_t>(core.processor);
@@ -54,8 +54,8 @@ uint32_t lane_thread(const experimental::streaming_profiler::Core& core) {
 TracyConsumer::TracyConsumer() : anchor_tracy_(tracy::Profiler::GetTime()), srcloc_table_(kSrclocTableInitial) {}
 
 void TracyConsumer::operator()(const Batch& batch) {
+    using experimental::device_observability::Stall;
     using experimental::streaming_profiler::Event;
-    using experimental::streaming_profiler::Stall;
     using experimental::streaming_profiler::TimestampedData;
     using experimental::streaming_profiler::Zone;
     // A row's zones and stalls go in the order its processor emitted them, so a stall sits between the zones around it.

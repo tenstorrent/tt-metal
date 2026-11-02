@@ -64,16 +64,13 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
-#if defined(PROFILE_KERNEL)
+#if defined(PROFILE_KERNEL) && !defined(DEVICE_OBSERVABILITY)
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
-// Only the DRAM profiler uses these.
-#if !defined(PROFILE_STREAMING)
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 uint32_t traceCount __attribute__((used));
-#endif
 }  // namespace kernel_profiler
 #endif
 
@@ -295,8 +292,8 @@ int __attribute__((noinline)) main(void) {
             DeviceZoneScopedMainN("ERISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
-#if defined(PROFILE_STREAMING)
-            // The streaming profiler publishes this launch's zones only after this call validates the launch.
+#if defined(DEVICE_OBSERVABILITY)
+            // Device observability publishes this launch's records only after this call validates the launch.
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
 #endif
 

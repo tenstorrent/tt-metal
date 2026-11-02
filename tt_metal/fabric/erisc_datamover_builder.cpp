@@ -372,7 +372,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
 
     // Channel Allocations
     this->max_l1_loading_size = erisc_l1_unreserved_size + erisc_l1_unreserved_base;
-    if (rtoptions.get_streaming_profiler_enabled()) {
+    if (rtoptions.get_device_observability_enabled()) {
         this->max_l1_loading_size =
             tt::tt_metal::streaming_profiler::link_sync::router_l1_limit(fabric_context, this->max_l1_loading_size);
     }
@@ -1078,7 +1078,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_usable && vc0_trim_fast_path_info_->terminal_or_source_only;
     const bool base_enable_deadlock_avoidance =
-        !this->is_inter_mesh && fabric_context.need_deadlock_avoidance_support(control_plane, this->local_fabric_node_id, this->direction_);
+        !this->is_inter_mesh &&
+        fabric_context.need_deadlock_avoidance_support(control_plane, this->local_fabric_node_id, this->direction_);
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
@@ -1242,7 +1243,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // --- Structural per-RISC role flags (untrimmed — do NOT gate on trimming) ---
     // Used for role obligations (e.g. TXQ1 init) where "which RISC" is a structural property of the
     // 2-erisc split, not a workload property that trimming may change.
-    named_args["RISC_SERVICES_SENDER_CHANNELS"] = static_cast<uint32_t>(should_risc_service_sender_channels(config.arch, config.num_riscv_cores, risc_id));
+    named_args["RISC_SERVICES_SENDER_CHANNELS"] =
+        static_cast<uint32_t>(should_risc_service_sender_channels(config.arch, config.num_riscv_cores, risc_id));
     named_args["RISC_SERVICES_RECEIVER_CHANNELS"] =
         static_cast<uint32_t>(should_risc_service_receiver_channels(config.arch, config.num_riscv_cores, risc_id));
 
@@ -1354,7 +1356,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // --- Telemetry ---
     get_telemetry_compile_time_args(risc_id, named_args);
 
-    if (this->fabric_context_.get_rtoptions().get_streaming_profiler_enabled()) {
+    if (this->fabric_context_.get_rtoptions().get_device_observability_enabled()) {
         tt::tt_metal::streaming_profiler::link_sync::add_router_compile_args(
             this->fabric_context_, risc_id, this->local_fabric_node_id, this->my_eth_core_logical, named_args);
     }
@@ -1769,7 +1771,12 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     auto* adapter_ptr = this->receiver_channel_to_downstream_adapter.get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
     adapter_ptr->add_downstream_connection(
-        adapter_spec, upstream_vc_idx, absolute_channel_id, ds_dir, tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
+        adapter_spec,
+        upstream_vc_idx,
+        absolute_channel_id,
+        ds_dir,
+        tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y),
+        is_2D_routing);
 }
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }

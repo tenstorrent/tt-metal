@@ -175,7 +175,7 @@ public:
     uint64_t live_head(uint32_t stream) const;
     const ClockMap& clock_map() const { return clock_solver_.map(); }
     // The capture's lanes, which its records point at, and the call sites those name.
-    const experimental::streaming_profiler::detail::CaptureLanes& lanes() const { return *lanes_; }
+    const experimental::device_observability::detail::CaptureLanes& lanes() const { return *lanes_; }
 
 private:
     Receiver(tt::Cluster& cluster, std::unique_ptr<DevicePrograms> programs);

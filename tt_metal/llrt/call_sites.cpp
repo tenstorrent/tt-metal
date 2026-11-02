@@ -5,17 +5,15 @@
 #include "call_sites.hpp"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cstring>
 #include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -32,7 +30,7 @@ namespace tt::llrt {
 
 namespace {
 
-namespace api = tt::tt_metal::experimental::streaming_profiler;
+namespace api = tt::tt_metal::experimental::device_observability;
 
 // Kernels and the host show the same struct by name, so every showing of a name must have the same fields. A long,
 // unsigned long or size_t field is 32 bits on the device and 64 on the host, which neither compiler can tell from a
@@ -62,11 +60,13 @@ HostTypes& host_types() {
     static ttsl::Indestructible<HostTypes> instance;
     return instance.get();
 }
-std::optional<std::vector<uint16_t>> host_codes(std::string_view name) {
+// Checks a type's fields against those of the host type a callback reads under its name, if any.
+void check_host_fields(std::string_view name, std::span<const uint16_t> codes) {
     HostTypes& host = host_types();
     const std::lock_guard lock(host.mutex);
-    const auto found = host.codes.find(name);
-    return found == host.codes.end() ? std::nullopt : std::optional(found->second);
+    if (const auto found = host.codes.find(name); found != host.codes.end()) {
+        check_same_fields(name, codes, found->second);
+    }
 }
 
 // The stall call site, kernel_profiler::write_pending_stall(), which every image shares and none describes, since it
@@ -96,17 +96,10 @@ CallSite make_stall_site() {
         .timestamps_as_deltas = true};
 }
 
-// Hashes a std::string and a std::string_view alike, so a lookup by view builds no string.
-struct TextHash {
-    using is_transparent = void;
-    size_t operator()(std::string_view text) const { return std::hash<std::string_view>{}(text); }
-};
-
 // Stores `text` for the life of the process and returns a view of the stored copy, the same one for the same text. Each
 // string sits in a node of its own, which inserting others never moves, so the views stay valid.
 std::string_view store_string(std::string_view text) {
-    static ttsl::Indestructible<std::pair<std::mutex, std::unordered_set<std::string, TextHash, std::equal_to<>>>>
-        store;
+    static ttsl::Indestructible<std::pair<std::mutex, std::set<std::string, std::less<>>>> store;
     auto& [mutex, texts] = store.get();
     const std::lock_guard lock(mutex);
     if (const auto stored = texts.find(text); stored != texts.end()) {
@@ -317,11 +310,12 @@ std::vector<FieldBits> find_payload_bits(
     return bits;
 }
 
-std::vector<std::pair<uint32_t, CallSite>> read_call_sites(const std::string& elf_path, const ll_api::ElfFile& elf) {
+// Adds an image's call sites to the process's, by the ids its load gave them. Their strings point into the image, which
+// CallSites::add stores before the image goes.
+void add_call_sites(const std::string& elf_path, const ll_api::ElfFile& elf) {
     const Section descriptors(elf, ".device_publish_descriptors"), contents(elf, ".device_publish_descriptor_contents"),
         string_entries(elf, ".device_publish_strings");
     const ImageStrings strings(contents, string_entries, elf_path);
-    std::vector<std::pair<uint32_t, CallSite>> sites;
     for (const api::detail::CallSiteDescriptor& descriptor : descriptors.read_table<api::detail::CallSiteDescriptor>(
              descriptors.vma, descriptors.bytes.size() / sizeof(api::detail::CallSiteDescriptor))) {
         CallSite site{
@@ -360,9 +354,8 @@ std::vector<std::pair<uint32_t, CallSite>> read_call_sites(const std::string& el
                      layout.timestamp_width,
                      contents.read_table<api::detail::ArgumentSlice>(layout.slices, layout.slice_count))});
         }
-        sites.emplace_back(descriptor.id, std::move(site));
+        process_call_sites().add(descriptor.id, std::move(site));
     }
-    return sites;
 }
 
 }  // namespace
@@ -390,11 +383,7 @@ void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf) {
     }
     elf.RebaseDevicePublishDescriptorIds(base);
 
-    // The sites' strings point into the image, which add() stores before the image goes.
-    std::vector<std::pair<uint32_t, CallSite>> sites = read_call_sites(elf_path, elf);
-    for (auto& [id, site] : sites) {
-        process_call_sites().add(id, std::move(site));
-    }
+    add_call_sites(elf_path, elf);
     log_debug(
         tt::LogLLRuntime,
         "streaming profiler: '{}' -> DevicePublish descriptor ids [{}, {})",
@@ -425,7 +414,7 @@ void add_host_type(std::string_view name, std::span<const uint16_t> codes) {
 
 }  // namespace tt::llrt
 
-namespace tt::tt_metal::experimental::streaming_profiler::detail {
+namespace tt::tt_metal::experimental::device_observability::detail {
 
 namespace llrt = tt::llrt;
 
@@ -445,9 +434,7 @@ struct CallSites::State {
         } else if (!std::ranges::equal(shown->second.codes, codes) || !std::ranges::equal(shown->second.bits, bits)) {
             TT_THROW("streaming profiler: two kernels send different types named {}; give each its own name", name);
         }
-        if (const std::optional<std::vector<uint16_t>> host = llrt::host_codes(name)) {
-            llrt::check_same_fields(name, codes, *host);
-        }
+        llrt::check_host_fields(name, codes);
     }
 };
 
@@ -505,4 +492,4 @@ void CallSites::check_host_type(std::string_view name, std::span<const uint16_t>
     }
 }
 
-}  // namespace tt::tt_metal::experimental::streaming_profiler::detail
+}  // namespace tt::tt_metal::experimental::device_observability::detail

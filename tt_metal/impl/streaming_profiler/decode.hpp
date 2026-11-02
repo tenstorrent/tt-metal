@@ -4,11 +4,9 @@
 
 #pragma once
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <deque>
 #include <memory>
 #include <memory_resource>
@@ -18,7 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 
 #include "hostdev/record_site.h"
 #include "impl/streaming_profiler/spsc_marker_decode.hpp"
@@ -31,7 +29,7 @@ struct CallSite;
 
 namespace tt::tt_metal::streaming_profiler {
 
-using experimental::streaming_profiler::detail::field_value;
+using experimental::device_observability::detail::field_value;
 
 // A wall-clock read that tore comes out this many ticks high.
 inline constexpr uint64_t kEpoch = uint64_t{1} << 32;
@@ -90,7 +88,7 @@ struct SpscLane {
 };
 
 struct PublishedRecord {
-    experimental::streaming_profiler::detail::RecordOrigin origin;
+    experimental::device_observability::detail::RecordOrigin origin;
     uint64_t ticks = 0, clock_offset = 0;
     uint32_t byte_count = 0, packet_words = 0;
     const std::byte* bytes = nullptr;
@@ -98,18 +96,19 @@ struct PublishedRecord {
 static_assert(sizeof(PublishedRecord) == profiler::kSpscPublishedBytes);
 static_assert(std::is_trivially_copyable_v<PublishedRecord>);
 // The decoder writes each record's head, its origin and time, where Record lays them out.
-static_assert(sizeof(experimental::streaming_profiler::detail::RecordOrigin) == 16);
-static_assert(sizeof(experimental::streaming_profiler::Record<void, void>) == profiler::kSpscHeadBytes);
+static_assert(sizeof(experimental::device_observability::detail::RecordOrigin) == 16);
+static_assert(sizeof(experimental::device_observability::Record<void, void>) == profiler::kSpscHeadBytes);
+
+inline constexpr uint32_t kMaxTypes = experimental::device_observability::detail::kMaxRecordTypes;
+static_assert(kMaxTypes <= 64, "a type mask is a uint64_t");
 
 // A consumer's record types, and how the decoder lays out their records.
 class RecordTypes {
 public:
-    static constexpr uint32_t kMaxTypes = experimental::streaming_profiler::detail::kMaxRecordTypes;
-    static_assert(kMaxTypes <= 64, "a type mask is a uint64_t");
-    explicit RecordTypes(std::vector<experimental::streaming_profiler::detail::RecordTypeDescriptor> record_types);
+    explicit RecordTypes(std::vector<experimental::device_observability::detail::RecordTypeDescriptor> record_types);
 
     size_t type_count() const { return record_types_.size(); }
-    const experimental::streaming_profiler::detail::RecordTypeDescriptor& record_type(uint32_t type) const {
+    const experimental::device_observability::detail::RecordTypeDescriptor& record_type(uint32_t type) const {
         return record_types_[type];
     }
     // Whether a type's records are PublishedRecords until its batch builds them.
@@ -121,7 +120,7 @@ private:
     friend class RecordRoutes;
     friend class StreamDecoder;
 
-    std::vector<experimental::streaming_profiler::detail::RecordTypeDescriptor> record_types_;
+    std::vector<experimental::device_observability::detail::RecordTypeDescriptor> record_types_;
     std::array<uint32_t, kMaxTypes> strides_{};
     // The types the decoder writes directly, and each one's payload fields' and Timestamps' byte offsets in a record.
     uint64_t direct_types_ = 0;
@@ -133,11 +132,10 @@ private:
 // meets the site.
 class RecordRoutes {
 public:
-    static constexpr uint32_t kMaxTypes = RecordTypes::kMaxTypes;
     struct Route {
         uint64_t types = 0;  // a bit per type of the consumer's the call site sends
         uint16_t bits16_packet_words = 0,
-                 bits64_packet_words = 0;  // its short and full forms' body lengths, 0 for a form it lacks
+                 bits64_packet_words = 0;  // its short and full forms' packet words, 0 for a form it lacks
         bool resolved = false;             // set when set_route() takes it
         // For its direct types, null when they take its payload as it is.
         const PayloadToRecordByWidth* payload_to_record = nullptr;
@@ -149,7 +147,7 @@ public:
         const PayloadToRecord* payload_to_record;
     };
     // `types` and `call_sites` must outlive the routes.
-    RecordRoutes(const RecordTypes& types, const experimental::streaming_profiler::detail::CallSites& call_sites);
+    RecordRoutes(const RecordTypes& types, const experimental::device_observability::detail::CallSites& call_sites);
 
     Route resolve(uint32_t id);
     void set_route(uint32_t id, Route route) {
@@ -158,7 +156,7 @@ public:
         short_run_types_[id] = short_run_type(route);
     }
     const RecordTypes& types() const { return types_; }
-    const experimental::streaming_profiler::detail::CallSites& call_sites() const { return call_sites_; }
+    const experimental::device_observability::detail::CallSites& call_sites() const { return call_sites_; }
     // For each value call site `id` passes, which of built type `type`'s alternatives it is.
     std::span<const uint8_t> alternatives(uint32_t id, uint32_t type) const;
 
@@ -171,7 +169,7 @@ private:
     uint64_t short_run_type(const Route& route);
 
     const RecordTypes& types_;
-    const experimental::streaming_profiler::detail::CallSites& call_sites_;
+    const experimental::device_observability::detail::CallSites& call_sites_;
     std::vector<Route> routes_;
     std::vector<uint64_t> short_run_types_;
     std::deque<PayloadToRecordByWidth> payload_to_record_by_width_;
@@ -186,7 +184,7 @@ struct RecordCopies {
     uint64_t seq = 0;
     uint32_t count = 0;
     uint32_t direct_count = 0;  // of the copies, the first direct_count are of direct types
-    std::array<uint8_t*, RecordRoutes::kMaxTypes> time_slots{};
+    std::array<uint8_t*, kMaxTypes> time_slots{};
 };
 
 class StreamDecoder {
@@ -200,7 +198,7 @@ public:
     };
     struct Produced {
         uint32_t values;
-        std::array<uint32_t, RecordRoutes::kMaxTypes> type_bytes;
+        std::array<uint32_t, kMaxTypes> type_bytes;
         uint32_t order_entries;
         // The latest timestamp among the last records of the lanes this call advanced, or INT64_MIN if none of them has
         // a record yet. It counts wall ticks of the chip's wall-clock core, whose clock the clock sync maps to host
@@ -213,7 +211,7 @@ public:
     // `dev`, `lanes` (the device's, which its records point at) and `routes` must outlive the decoder.
     StreamDecoder(
         const CaptureContext::Device& dev,
-        std::span<const experimental::streaming_profiler::detail::RecordLane> lanes,
+        std::span<const experimental::device_observability::detail::RecordLane> lanes,
         RecordRoutes& routes);
     // Decodes the frames into `out` and returns what it produced. ConsumerBatches sizes `out`. `undelivered` is how
     // many of the earlier outputs the caller still holds, which it delivers oldest first. A call may repair a lane's
@@ -257,9 +255,9 @@ private:
     const RecordRoutes::Route* site_routes_;
     const uint64_t* short_run_types_;
     uint64_t direct_types_;
-    std::array<uint32_t, RecordRoutes::kMaxTypes> strides_;
-    std::array<uint8_t*, RecordRoutes::kMaxTypes> types_out_{};
-    std::array<uint32_t, RecordRoutes::kMaxTypes> type_bytes_{};
+    std::array<uint32_t, kMaxTypes> strides_;
+    std::array<uint8_t*, kMaxTypes> types_out_{};
+    std::array<uint32_t, kMaxTypes> type_bytes_{};
     bool writes_order_;
 };
 
@@ -280,7 +278,8 @@ struct DecodedFrames {
 
 class ConsumerBatches {
 public:
-    explicit ConsumerBatches(std::vector<experimental::streaming_profiler::detail::RecordTypeDescriptor> record_types);
+    explicit ConsumerBatches(
+        std::vector<experimental::device_observability::detail::RecordTypeDescriptor> record_types);
 
     const RecordTypes& types() const { return types_; }
     // Decodes the frames with `decoder` into a buffer, reusing the most recently released one, which is still in cache
@@ -289,7 +288,7 @@ public:
         StreamDecoder& decoder, size_t undelivered, const uint32_t* frames, std::span<const uint32_t> frame_words);
     // Builds the batch of `frames`, which the receiver `routes` resolves call sites for decoded, placing its records on
     // host time in place, so it runs once per frames. The batch is good until the next call.
-    const experimental::streaming_profiler::detail::BatchData& build_batch(
+    const experimental::device_observability::detail::BatchData& build_batch(
         DecodedFrames& frames,
         const RecordRoutes& routes,
         const ClockMap& map,
@@ -311,9 +310,9 @@ private:
         uint32_t dev);
 
     RecordTypes types_;
-    std::array<uint8_t*, RecordRoutes::kMaxTypes> type_out_{};
+    std::array<uint8_t*, kMaxTypes> type_out_{};
     std::vector<std::unique_ptr<uint8_t[]>> free_buffers_;
-    experimental::streaming_profiler::detail::BatchData batch_;
+    experimental::device_observability::detail::BatchData batch_;
     std::vector<const std::byte*> records_;
     std::vector<std::size_t> counts_;
     std::unique_ptr<std::byte[]> arena_buf_;

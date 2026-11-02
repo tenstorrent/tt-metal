@@ -13,7 +13,10 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-namespace api = experimental::streaming_profiler;
+namespace api = experimental::device_observability;
+using experimental::streaming_profiler::Event;
+using experimental::streaming_profiler::TimestampedData;
+using experimental::streaming_profiler::Zone;
 
 namespace {
 
@@ -74,9 +77,9 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
     dropped_ += batch.dropped_bytes();
     // A stall is a zone named PROFILER-STALL in the CSV, in the order its processor emitted it.
     batch.visit([&]<typename R>(const R& z) {
-        if constexpr (std::is_same_v<R, api::Zone> || std::is_same_v<R, api::Stall>) {
+        if constexpr (std::is_same_v<R, Zone> || std::is_same_v<R, api::Stall>) {
             std::string_view name = "PROFILER-STALL";
-            if constexpr (std::is_same_v<R, api::Zone>) {
+            if constexpr (std::is_same_v<R, Zone>) {
                 name = z.metadata().name;
             }
             const api::Interval& interval = z.payload();
@@ -95,7 +98,7 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
             }
         }
     });
-    for (const api::TimestampedData& d : batch.records<api::TimestampedData>()) {
+    for (const TimestampedData& d : batch.records<TimestampedData>()) {
         const uint32_t legacy = sync_legacy_id(d.metadata().name);
         Row& r = rows_.emplace_back(row_for(d.core()));
         r.timer_id = legacy != 0 ? legacy : name_hash(d.metadata().name);
@@ -108,7 +111,7 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
         }
         r.type = "TS_DATA";
     }
-    for (const api::Event& e : batch.records<api::Event>()) {
+    for (const Event& e : batch.records<Event>()) {
         Row& r = rows_.emplace_back(row_for(e.core()));
         r.timer_id = name_hash(e.metadata().name);
         r.timestamp = e.published_at().device_cycles();

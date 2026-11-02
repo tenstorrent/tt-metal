@@ -11,6 +11,8 @@
 #include <string_view>
 #include <vector>
 
+#include <tt-metalium/experimental/streaming_profiler.hpp>
+
 #include "impl/streaming_profiler/capture_context.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -18,9 +20,9 @@ namespace tt::tt_metal::streaming_profiler {
 // Writes zones, timestamped data and events as CSV rows.
 class ZoneCsvConsumer {
 public:
-    using Batch = experimental::streaming_profiler::Batch<
+    using Batch = experimental::device_observability::Batch<
         experimental::streaming_profiler::Zone,
-        experimental::streaming_profiler::Stall,
+        experimental::device_observability::Stall,
         experimental::streaming_profiler::TimestampedData,
         experimental::streaming_profiler::Event>;
     explicit ZoneCsvConsumer(const std::string& path);
@@ -42,7 +44,7 @@ private:
         const char* type = "";       // ZONE_START | ZONE_END | TS_DATA | TS_EVENT
     };
 
-    static Row row_for(const experimental::streaming_profiler::Core& core);
+    static Row row_for(const experimental::device_observability::Core& core);
 
     std::string path_;
     std::unique_ptr<FILE, FileClose> file_;

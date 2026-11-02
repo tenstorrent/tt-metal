@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 
 #include <algorithm>
 #include <array>
@@ -11,9 +11,7 @@
 #include <cstring>
 #include <functional>
 #include <memory_resource>
-#include <mutex>
 #include <optional>
-#include <ranges>
 #include <span>
 #include <string>
 #include <utility>
@@ -29,7 +27,7 @@
 #include "impl/streaming_profiler/sync/clock_map.hpp"
 #include "llrt/call_sites.hpp"
 
-namespace api = tt::tt_metal::experimental::streaming_profiler;
+namespace api = tt::tt_metal::experimental::device_observability;
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -398,7 +396,7 @@ const std::byte* build_records(
 
 }  // namespace tt::tt_metal::streaming_profiler
 
-namespace tt::tt_metal::experimental::streaming_profiler {
+namespace tt::tt_metal::experimental::device_observability {
 
 namespace internal = tt::tt_metal::streaming_profiler;
 
@@ -430,7 +428,7 @@ void detail::visit_chunks(
         visit(0, 0, batch.counts[0]);
         return;
     }
-    std::array<uint32_t, internal::RecordRoutes::kMaxTypes> visited{};
+    std::array<uint32_t, internal::kMaxTypes> visited{};
     uint32_t type = 0, count = 0;
     const auto visit_chunk = [&] {
         if (count != 0) {
@@ -526,4 +524,4 @@ std::chrono::steady_clock::time_point Timestamp::refill_tsc_to_steady_line(int64
     return tsc_to_steady_line_.at(tsc);
 }
 
-}  // namespace tt::tt_metal::experimental::streaming_profiler
+}  // namespace tt::tt_metal::experimental::device_observability
