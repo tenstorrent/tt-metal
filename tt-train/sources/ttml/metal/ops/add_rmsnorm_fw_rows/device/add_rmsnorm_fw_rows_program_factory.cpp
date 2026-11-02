@@ -22,7 +22,8 @@ constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/add_rmsnorm_fw_rows/device/kernels/compute/add_rmsnorm_fw_rows_kernel.cpp";
 
 constexpr uint32_t kBlockTiles = 4U;  // pass-2 output block
-constexpr uint32_t kGroupTiles = 2U;  // pass-1 group: residual / delta streamed two tiles at a time (fp32 DEST holds 4)
+constexpr uint32_t kGroupTiles =
+    4U;  // pass-1 group: residual / delta streamed four tiles at a time (fp32 DEST holds 4)
 constexpr uint32_t kMaxSlices = 8U;
 
 constexpr uint32_t kReaderResidualIdx = 0U;
@@ -89,6 +90,7 @@ AddRMSNormForwardRowsProgramFactory::cached_program_t AddRMSNormForwardRowsProgr
 
     if (args.delta_transposed) {
         defines["DELTA_TRANSPOSED"] = "1";  // the reader fetches delta's tile (c, r), the compute transposes it in DEST
+        create_circular_buffer(program, all_cores, cb::delta_t, bf16, bf16_tile, 2U * kGroupTiles);
     }
     const uint32_t Ht = padded[2] / tt::constants::TILE_HEIGHT;  // delta^T's tile-row stride
     std::vector<uint32_t> reader_ct_args{Wt, S, St, block, exchange_sem, Ht};

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // add_rmsnorm_fw_rows reader (one item (row r, slice s)): constants, the resident gamma slice, the residual and
-// delta slices streamed in groups of two tiles; then the row's S partial tiles once the row's cores have written
+// delta slices streamed in groups of four tiles; then the row's S partial tiles once the row's cores have written
 // them (semaphore == S).
 
 #include "api/dataflow/dataflow_api.h"
@@ -16,7 +16,7 @@ constexpr uint32_t Wt = get_compile_time_arg_val(0);
 constexpr uint32_t S = get_compile_time_arg_val(1);
 constexpr uint32_t St = get_compile_time_arg_val(2);
 constexpr uint32_t block = get_compile_time_arg_val(3);
-constexpr uint32_t group = 2U;  // tiles per pass-1 group (CBs hold two groups)
+constexpr uint32_t group = 4U;  // tiles per pass-1 group (CBs hold two groups; one fp32 DEST acquire)
 constexpr uint32_t exchange_sem_id = get_compile_time_arg_val(4);
 constexpr uint32_t Ht = get_compile_time_arg_val(5);  // tile rows of the residual: delta^T's tile-row stride
 constexpr auto residual_args = TensorAccessorArgs<6>();

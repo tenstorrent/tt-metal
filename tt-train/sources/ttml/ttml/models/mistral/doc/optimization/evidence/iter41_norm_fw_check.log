@@ -1,0 +1,10 @@
+=== norm forward before (iteration 40 build) 2026-11-02T15:33:44Z
+before  reference matmul [1024, 5184] x [5184, 8192]   median   1073 us  min    974
+before  add_rmsnorm_fw_allcore, token-major delta      median    150 us  min    141  sum rel 2.7e-03  out rel 7.5e-03  out PCC 0.9999972
+before  add_rmsnorm_fw_allcore, transposed delta       median    150 us  min    142  sum rel 2.7e-03  out rel 7.5e-03  out PCC 0.9999972
+=== done 2026-11-02T15:33:48Z
+=== norm forward after (passes on the FPU) 2026-11-02T15:35:32Z
+after   reference matmul [1024, 5184] x [5184, 8192]   median   1019 us  min    967
+after   add_rmsnorm_fw_allcore, token-major delta      median    135 us  min    130  sum rel 3.0e-03  out rel 7.8e-03  out PCC 0.9999957
+after   add_rmsnorm_fw_allcore, transposed delta       median    137 us  min    131  sum rel 3.0e-03  out rel 7.8e-03  out PCC 0.9999957
+=== done 2026-11-02T15:35:37Z

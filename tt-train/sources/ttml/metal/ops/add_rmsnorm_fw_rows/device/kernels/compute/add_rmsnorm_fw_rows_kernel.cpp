@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // add_rmsnorm_fw_rows compute (one item (row r, slice s); residual / delta streamed, gamma and the sum resident):
-//   pass 1: sum_j = residual_j + delta_j (fp32 DEST, packed to bf16 cb::sum); partial = sum over the slice of
-//           sum_j^2 (fp32, from the fp32 sum before its bf16 rounding)  -> exchanged between the row's cores
+//   pass 1: sum_j = residual_j + delta_j (FPU add, fp32 DEST, packed to bf16 cb::sum); partial = sum over the
+//           slice of (bf16 sum_j)^2 (FPU products accumulated onto one fp32 DEST register)  -> exchanged between
+//           the row's cores
 //   rms = sqrt(rowsum(sum_s partial_s) / C + eps), inv = 1 / rms
-//   pass 2: out_j = sum_j (bf16) * gamma_j * inv
-// The same arithmetic, in the same order, as the two-phase add_rmsnorm_fw_allcore.
+//   pass 2: out_j = (sum_j * gamma_j) * inv   (FPU row broadcast, then the inv scale through reuse_dest)
+// Iteration 41 (iteration 29's move for the backward): the SFPU per-tile chains (five ops per tile in pass 1,
+// four in pass 2, one tile per acquire) go to the FPU, four tiles per DEST acquire; the squares are taken from the
+// bf16-rounded sums (the ones written out) and fp32 operands enter the FPU through 19-bit source registers.
 
 #include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
@@ -55,23 +58,65 @@ void kernel_main() {
     const uint32_t s = get_arg_val<uint32_t>(1);
     const uint32_t col0 = s * St;
     const uint32_t ncols = (col0 + St <= Wt) ? St : (Wt - col0);
-    // Pass-1 groups: fp32 DEST holds four tiles per acquire (half-sync double buffering), so a group is the
-    // running sum (0), two sums (1, 2) and the scratch (3), as in the two-phase op's phase A.
-    constexpr uint32_t group = 2U;
-    constexpr uint32_t scratch = group + 1U;
+    constexpr uint32_t group = 4U;  // pass-1 group: the fp32 DEST's four tiles (the reader's push size)
 
     compute_kernel_hw_startup(cb::residual, cb::delta, cb::sum);
     cb_wait_front(cb::zero, 1);
     cb_wait_front(cb::ones, 1);
     cb_wait_front(cb::gamma, St);
 
-    // pass 1: sums (bf16, into cb::sum) and the slice's sum of squares (fp32 DEST register 0, round-tripped through
-    // cb::acc between groups of `block` tiles since DEST does not persist across a pack).
+    // pass 1: sums (FPU, packed bf16 into the resident cb::sum) and the slice's sum of squares (FPU products of the
+    // bf16 sums accumulated onto fp32 DEST register 0, round-tripped through cb::acc between groups since DEST does
+    // not persist across a pack).
     for (uint32_t c = 0; c < ncols; c += group) {
         const uint32_t n = (c + group <= ncols) ? group : (ncols - c);
         const bool last = c + n >= ncols;
         cb_wait_front(cb::residual, group);
         cb_wait_front(cb::delta, group);
+#ifdef DELTA_TRANSPOSED
+        // delta's tiles are the transposes of the residual's: through DEST transposed (exact) into cb::delta_t
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb::delta);
+        transpose_init(cb::delta);
+        for (uint32_t i = 0; i < n; ++i) {
+            transpose_tile(cb::delta, i, i);
+        }
+        tile_regs_commit();
+        cb_reserve_back(cb::delta_t, group);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb::delta_t);
+        for (uint32_t i = 0; i < group; ++i) {
+            pack_tile(i < n ? i : 0U, cb::delta_t);
+        }
+        tile_regs_release();
+        cb_push_back(cb::delta_t, group);
+        cb_wait_front(cb::delta_t, group);
+        constexpr uint32_t cb_d = cb::delta_t;
+#else
+        constexpr uint32_t cb_d = cb::delta;
+#endif
+        tile_regs_acquire();
+        reconfig_data_format(cb::residual, cb_d);
+        add_init(cb::residual, cb_d);
+        for (uint32_t i = 0; i < n; ++i) {
+            add_tiles(cb::residual, cb_d, i, i, i);
+        }
+        tile_regs_commit();
+        cb_reserve_back(cb::sum, n);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb::sum);
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, cb::sum);
+        }
+        tile_regs_release();
+        cb_push_back(cb::sum, n);
+        cb_pop_front(cb::residual, group);
+        cb_pop_front(cb::delta, group);
+#ifdef DELTA_TRANSPOSED
+        cb_pop_front(cb::delta_t, group);
+#endif
+
+        cb_wait_front(cb::sum, c + n);
         tile_regs_acquire();
         if (c == 0) {
             load_tile(cb::zero, 0, 0);
@@ -80,41 +125,13 @@ void kernel_main() {
             load_tile(cb::acc, 0, 0);
             cb_pop_front(cb::acc, 1);
         }
+        reconfig_data_format(cb::sum, cb::sum);
+        mul_init(cb::sum, cb::sum, /*acc_to_dest=*/true);
         for (uint32_t i = 0; i < n; ++i) {
-            // SFPU add in fp32 DEST (bit-exact with the two-phase op; the FPU add_tiles path is ~5 % faster but its
-            // fp32 sums differ at ~2^-11 relative, iter19_build_check3.log), then the square from the fp32 sum.
-            load_tile(cb::residual, i, 1U + i);
-#ifdef DELTA_TRANSPOSED
-            // delta's tile is the transpose of the residual's: transposed on the way into DEST (exact)
-            reconfig_data_format_srca(cb::delta);
-            transpose_init(cb::delta);
-            transpose_tile(cb::delta, i, scratch);
-#else
-            load_tile(cb::delta, i, scratch);
-#endif
-            add_binary_tile_init();
-            add_binary_tile(1U + i, scratch, 1U + i);
-            mul_binary_tile_init();
-            mul_binary_tile(1U + i, 1U + i, scratch);
-            add_binary_tile_init();
-            add_binary_tile(0, scratch, 0);
+            mul_tiles(cb::sum, cb::sum, c + i, c + i, 0);  // DEST[0] += sum_j * sum_j
         }
         tile_regs_commit();
-        const uint32_t cb_acc_out = last ? cb::partial_out : cb::acc;
-        cb_reserve_back(cb::sum, n);
-        cb_reserve_back(cb_acc_out, 1);
-        tile_regs_wait();
-        pack_reconfig_data_format(cb::sum);
-        for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(1U + i, cb::sum);
-        }
-        pack_reconfig_data_format(cb_acc_out);
-        pack_tile(0, cb_acc_out);
-        tile_regs_release();
-        cb_push_back(cb::sum, n);
-        cb_push_back(cb_acc_out, 1);
-        cb_pop_front(cb::residual, group);
-        cb_pop_front(cb::delta, group);
+        pack_and_push(0, last ? cb::partial_out : cb::acc);
     }
 
     // row_acc = sum of the row's partials (slot order = slice order on every core: the same summation everywhere)
@@ -164,27 +181,31 @@ void kernel_main() {
     cb_pop_front(cb::rms_tmp, 1);
     cb_wait_front(cb::inv, 1);
 
-    // pass 2: out = (sum * gamma) * inv from the resident bf16 sum, in full blocks for the writer
+    // pass 2: out = (sum * gamma) * inv from the resident bf16 sum, four tiles per DEST acquire on the FPU (the row
+    // broadcast writes DEST, the inv scale takes the tile from DEST), in full blocks for the writer
     cb_wait_front(cb::sum, ncols);
     for (uint32_t c = 0; c < ncols; c += block) {
         const uint32_t n = (c + block <= ncols) ? block : (ncols - c);
+        tile_regs_acquire();
+        reconfig_data_format(cb::sum, cb::gamma);
+        mul_bcast_rows_init(cb::sum, cb::gamma);
         for (uint32_t i = 0; i < n; ++i) {
-            tile_regs_acquire();
-            load_tile(cb::zero, 0, 0);  // the row-broadcast multiply accumulates into DEST
-            reconfig_data_format(cb::sum, cb::gamma);
-            mul_bcast_rows_init(cb::sum, cb::gamma);
-            mul_tiles_bcast_rows(cb::sum, cb::gamma, c + i, c + i, 0);
-            load_tile(cb::inv, 0, 1);
-            mul_binary_tile_init();
-            mul_binary_tile(0, 1, 0);
-            tile_regs_commit();
-            pack_and_push(0, cb::out);
+            mul_tiles_bcast_rows(cb::sum, cb::gamma, c + i, c + i, i);
         }
-        for (uint32_t i = n; i < block; ++i) {  // tail padding (unused tiles)
-            tile_regs_acquire();
-            tile_regs_commit();
-            pack_and_push(0, cb::out);
+        reconfig_data_format_srcb(cb::inv);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb::inv);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb::inv, 0, i);
         }
+        tile_regs_commit();
+        cb_reserve_back(cb::out, block);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb::out);
+        for (uint32_t i = 0; i < block; ++i) {  // a shorter tail pads the block with unused tiles
+            pack_tile(i < n ? i : 0U, cb::out);
+        }
+        tile_regs_release();
+        cb_push_back(cb::out, block);
     }
     cb_pop_front(cb::inv, 1);
     cb_pop_front(cb::sum, ncols);

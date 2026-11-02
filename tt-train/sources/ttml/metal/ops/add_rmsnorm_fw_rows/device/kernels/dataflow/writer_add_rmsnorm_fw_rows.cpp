@@ -44,8 +44,8 @@ void kernel_main() {
     // the compute pops it at the very end).
     {
         uint32_t l1 = get_read_ptr(cb::sum);
-        for (uint32_t c = 0; c < ncols; c += 2U) {
-            const uint32_t n = (c + 2U <= ncols) ? 2U : (ncols - c);
+        for (uint32_t c = 0; c < ncols; c += block) {  // the pass-1 group is the output block (4 tiles)
+            const uint32_t n = (c + block <= ncols) ? block : (ncols - c);
             cb_wait_front(cb::sum, c + n);
             for (uint32_t j = 0; j < n; ++j) {
                 noc_async_write_page(page + c + j, sum_acc, l1);
