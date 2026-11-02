@@ -22,19 +22,18 @@
  * load stays correct under both a 16-bit and a 32-bit DEST.
  */
 template <std::uint32_t I, std::uint32_t J>
-sfpi_inline void _ema_load_current_input_()
-{
-    constexpr std::uint32_t tile_offset    = 0; // offset for tile 0 in dst
+sfpi_inline void _ema_load_current_input_() {
+    constexpr std::uint32_t tile_offset = 0;  // offset for tile 0 in dst
     constexpr std::uint32_t dst_reg_offset = tile_offset + (I * 32) + (4 * J);
-    constexpr std::uint32_t offset0        = dst_reg_offset;
-    constexpr std::uint32_t offset1        = dst_reg_offset + 2;
-    constexpr std::uint32_t offset2        = dst_reg_offset + 16;
-    constexpr std::uint32_t offset3        = dst_reg_offset + 18;
+    constexpr std::uint32_t offset0 = dst_reg_offset;
+    constexpr std::uint32_t offset1 = dst_reg_offset + 2;
+    constexpr std::uint32_t offset2 = dst_reg_offset + 16;
+    constexpr std::uint32_t offset3 = dst_reg_offset + 18;
 
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset0); // row0
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset1); // row1
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset2); // row2
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset3); // row3
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset0);  // row0
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset1);  // row1
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset2);  // row2
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset3);  // row3
 }
 
 /**
@@ -49,19 +48,18 @@ sfpi_inline void _ema_load_current_input_()
  * round trip stays self-consistent under both a 16-bit and a 32-bit DEST.
  */
 template <std::uint32_t I, std::uint32_t J>
-sfpi_inline void _ema_store_current_input_()
-{
-    constexpr std::uint32_t tile_offset    = 64; // offset for tile 1 in dst
+sfpi_inline void _ema_store_current_input_() {
+    constexpr std::uint32_t tile_offset = 64;  // offset for tile 1 in dst
     constexpr std::uint32_t dst_reg_offset = tile_offset + (I * 32) + (4 * J);
-    constexpr std::uint32_t offset0        = dst_reg_offset;
-    constexpr std::uint32_t offset1        = dst_reg_offset + 2;
-    constexpr std::uint32_t offset2        = dst_reg_offset + 16;
-    constexpr std::uint32_t offset3        = dst_reg_offset + 18;
+    constexpr std::uint32_t offset0 = dst_reg_offset;
+    constexpr std::uint32_t offset1 = dst_reg_offset + 2;
+    constexpr std::uint32_t offset2 = dst_reg_offset + 16;
+    constexpr std::uint32_t offset3 = dst_reg_offset + 18;
 
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset0); // row0
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset1); // row1
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset2); // row2
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset3); // row3
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset0);  // row0
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset1);  // row1
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset2);  // row2
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset3);  // row3
 }
 
 /*
@@ -96,13 +94,12 @@ sfpi_inline void _ema_store_current_input_()
 // up to [0, 29), so a caller interleaving EMA with either must not rely on slot 0
 // surviving across the call.
 constexpr std::uint32_t EMA_MATH_REPLAY_SLOT = 0;
-constexpr std::uint32_t EMA_MATH_REPLAY_LEN  = 16;
+constexpr std::uint32_t EMA_MATH_REPLAY_LEN = 16;
 
 // The recorded part: exactly the 8 SFPMAD + 8 SFPNOP pairs. The two SFPTRANSPs and the
 // SFPMOV that bracket them are issued inline by _compute_ema_math_() instead, to hold the
 // record to 16 slots.
-sfpi_inline void _compute_ema_math_body_()
-{
+sfpi_inline void _compute_ema_math_body_() {
     // EMA equation: EMA_new = alpha * EMA_old + beta * input
     // Registers: LREG0-3 = the 4 input rows, updated in place to become the 4 outputs;
     //            LREG4 = EMA_old carried in (and the new carry out); LREG5 = alpha;
@@ -124,42 +121,42 @@ sfpi_inline void _compute_ema_math_body_()
     // Step 1(in0): Calculate α * EMA_old in LREG7
     // LREG7 = LREG5 * LREG4 (α * EMA_old)
     TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
-    TTI_SFPNOP; // Next cycle cannot read from LREG7 (2-cycle operation)
+    TTI_SFPNOP;  // Next cycle cannot read from LREG7 (2-cycle operation)
 
     // Step 2(in0): Calculate final EMA = β * in0 + α * EMA_old
     // LREG0 = (LREG6 * LREG0) + LREG7
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG0, 0);
-    TTI_SFPNOP; // Next cycle cannot read from LREG0 (2-cycle operation)
+    TTI_SFPNOP;  // Next cycle cannot read from LREG0 (2-cycle operation)
 
     // Step 1(in1): Calculate α * EMA_old in LREG7
     // LREG7 = LREG5 * LREG0 (α * EMA_old)
     TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
-    TTI_SFPNOP; // Next cycle cannot read from LREG7 (2-cycle operation)
+    TTI_SFPNOP;  // Next cycle cannot read from LREG7 (2-cycle operation)
 
     // Step 2(in1): Calculate final EMA = β * in1 + α * EMA_old
     // LREG1 = (LREG6 * LREG1) + LREG7
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG1, 0);
-    TTI_SFPNOP; // Next cycle cannot read from LREG1 (2-cycle operation)
+    TTI_SFPNOP;  // Next cycle cannot read from LREG1 (2-cycle operation)
 
     // Step 1(in2): Calculate α * EMA_old in LREG7
     // LREG7 = LREG5 * LREG1 (α * EMA_old)
     TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
-    TTI_SFPNOP; // Next cycle cannot read from LREG7 (2-cycle operation)
+    TTI_SFPNOP;  // Next cycle cannot read from LREG7 (2-cycle operation)
 
     // Step 2(in2): Calculate final EMA = β * in2 + α * EMA_old
     // LREG2 = (LREG6 * LREG2) + LREG7
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG2, 0);
-    TTI_SFPNOP; // Next cycle cannot read from LREG2 (2-cycle operation)
+    TTI_SFPNOP;  // Next cycle cannot read from LREG2 (2-cycle operation)
 
     // Step 1(in3): Calculate α * EMA_old in LREG7
     // LREG7 = LREG5 * LREG2 (α * EMA_old)
     TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
-    TTI_SFPNOP; // Next cycle cannot read from LREG7 (2-cycle operation)
+    TTI_SFPNOP;  // Next cycle cannot read from LREG7 (2-cycle operation)
 
     // Step 2(in3): Calculate final EMA = β * in3 + α * EMA_old
     // LREG3 = (LREG6 * LREG3) + LREG7
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG3, 0);
-    TTI_SFPNOP; // Next cycle cannot read from LREG3 (2-cycle operation)
+    TTI_SFPNOP;  // Next cycle cannot read from LREG3 (2-cycle operation)
 }
 
 /**
@@ -192,21 +189,17 @@ sfpi_inline void _compute_ema_math_body_()
  *       to the SFPU half of the buffer essentially free.
  */
 template <bool RECORD>
-sfpi_inline void _compute_ema_math_()
-{
+sfpi_inline void _compute_ema_math_() {
     // Transpose the input data to the correct order. Inline, not recorded -- see
     // EMA_MATH_REPLAY_LEN for why the record stops at 16.
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    if constexpr (RECORD)
-    {
+    if constexpr (RECORD) {
         // lltt::Exec so the first block both records and executes; the recorded copy is
         // what the remaining seven replay.
         lltt::record<lltt::Exec>(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
         _compute_ema_math_body_();
-    }
-    else
-    {
+    } else {
         lltt::replay(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
     }
 
@@ -227,17 +220,14 @@ sfpi_inline void _compute_ema_math_()
  * load inputs, compute EMA, and store results.
  */
 template <std::uint32_t I, std::uint32_t J, bool RECORD = false>
-sfpi_inline void _process_ema_block_()
-{
+sfpi_inline void _process_ema_block_() {
     _ema_load_current_input_<I, J>();
     _compute_ema_math_<RECORD>();
     _ema_store_current_input_<I, J>();
 }
 
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 /**
  * @brief Loads the alpha and beta values into the corresponding SFPU registers.
  *
@@ -249,8 +239,7 @@ namespace sfpu
  * These values are loaded into the LREG5 (α) and LREG6 (β) registers.
  * The 32 bit values are expected to be the float32 representation of the alpha and beta values.
  */
-sfpi_inline void _load_alpha_beta_(std::uint32_t alpha, std::uint32_t beta)
-{
+sfpi_inline void _load_alpha_beta_(std::uint32_t alpha, std::uint32_t beta) {
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, alpha >> 16);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, alpha & 0xFFFF);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, beta >> 16);
@@ -264,10 +253,7 @@ sfpi_inline void _load_alpha_beta_(std::uint32_t alpha, std::uint32_t beta)
  * preparing for a new calculation cycle. Typically invoked at the beginning of the
  * calculation for a new EMA sequence.
  */
-sfpi_inline void _clear_previous_output_()
-{
-    TTI_SFPLOADI(ckernel::p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-}
+sfpi_inline void _clear_previous_output_() { TTI_SFPLOADI(ckernel::p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0); }
 
 /**
  * @brief Calculates the Exponential Moving Average (EMA) for the input tile in dst 0.
@@ -279,8 +265,7 @@ sfpi_inline void _clear_previous_output_()
  * The output is stored in the corresponding position in tile 1. The last output for all 32
  * columns is also held in LREG4 for use by the next tile.
  */
-sfpi_inline void _calculate_ema_tile_()
-{
+sfpi_inline void _calculate_ema_tile_() {
     // Transpose the input data to the correct order
     TTI_SFPTRANSP(0, 0, 0, 0);
 
@@ -303,5 +288,5 @@ sfpi_inline void _calculate_ema_tile_()
     // Transpose the output data to the correct order
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
-} // namespace sfpu
-} // namespace ckernel
+}  // namespace sfpu
+}  // namespace ckernel

@@ -19,17 +19,17 @@
  * respectively from the current tile in dst 0.
  * The element format is taken from the configured DEST format rather than fixed here, so the
  * load stays correct under both a 16-bit and a 32-bit DEST.
- * Loads and stores use ADDR_MOD_7, which the EMA init programs with zero increments, so a preceding FPU init cannot skew DEST.
+ * Loads and stores use ADDR_MOD_7, which the EMA init programs with zero increments, so a preceding FPU init cannot
+ * skew DEST.
  */
 template <std::uint32_t I, std::uint32_t J>
-sfpi_inline void _ema_load_current_input_()
-{
-    constexpr std::uint32_t tile_offset    = 0; // offset for tile 0 in dst
+sfpi_inline void _ema_load_current_input_() {
+    constexpr std::uint32_t tile_offset = 0;  // offset for tile 0 in dst
     constexpr std::uint32_t dst_reg_offset = tile_offset + (I * 32) + (4 * J);
-    constexpr std::uint32_t offset0        = dst_reg_offset;
-    constexpr std::uint32_t offset1        = dst_reg_offset + 2;
-    constexpr std::uint32_t offset2        = dst_reg_offset + 16;
-    constexpr std::uint32_t offset3        = dst_reg_offset + 18;
+    constexpr std::uint32_t offset0 = dst_reg_offset;
+    constexpr std::uint32_t offset1 = dst_reg_offset + 2;
+    constexpr std::uint32_t offset2 = dst_reg_offset + 16;
+    constexpr std::uint32_t offset3 = dst_reg_offset + 18;
 
     TTI_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset0);
     TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset1);
@@ -49,14 +49,13 @@ sfpi_inline void _ema_load_current_input_()
  * round trip stays self-consistent under both a 16-bit and a 32-bit DEST.
  */
 template <std::uint32_t I, std::uint32_t J>
-sfpi_inline void _ema_store_current_input_()
-{
-    constexpr std::uint32_t tile_offset    = 64; // offset for tile 1 in dst
+sfpi_inline void _ema_store_current_input_() {
+    constexpr std::uint32_t tile_offset = 64;  // offset for tile 1 in dst
     constexpr std::uint32_t dst_reg_offset = tile_offset + (I * 32) + (4 * J);
-    constexpr std::uint32_t offset0        = dst_reg_offset;
-    constexpr std::uint32_t offset1        = dst_reg_offset + 2;
-    constexpr std::uint32_t offset2        = dst_reg_offset + 16;
-    constexpr std::uint32_t offset3        = dst_reg_offset + 18;
+    constexpr std::uint32_t offset0 = dst_reg_offset;
+    constexpr std::uint32_t offset1 = dst_reg_offset + 2;
+    constexpr std::uint32_t offset2 = dst_reg_offset + 16;
+    constexpr std::uint32_t offset3 = dst_reg_offset + 18;
 
     TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset0);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset1);
@@ -72,8 +71,7 @@ sfpi_inline void _ema_store_current_input_()
  * alpha and beta parameters. It takes the previous EMA value from LREG4 for all 32 columns.
  * The output is stored in the LREG0-3 registers.
  */
-sfpi_inline void _compute_ema_math_()
-{
+sfpi_inline void _compute_ema_math_() {
     // Transpose the input data to the correct order
     TTI_SFPTRANSP(0, 0, 0, 0);
 
@@ -132,17 +130,14 @@ sfpi_inline void _compute_ema_math_()
  * load inputs, compute EMA, and store results.
  */
 template <std::uint32_t I, std::uint32_t J>
-sfpi_inline void _process_ema_block_()
-{
+sfpi_inline void _process_ema_block_() {
     _ema_load_current_input_<I, J>();
     _compute_ema_math_();
     _ema_store_current_input_<I, J>();
 }
 
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 /**
  * @brief Loads the alpha and beta values into the corresponding SFPU registers.
  *
@@ -154,8 +149,7 @@ namespace sfpu
  * These values are loaded into the LREG5 (α) and LREG6 (β) registers.
  * The 32 bit values are expected to be the float32 representation of the alpha and beta values.
  */
-sfpi_inline void _load_alpha_beta_(std::uint32_t alpha, std::uint32_t beta)
-{
+sfpi_inline void _load_alpha_beta_(std::uint32_t alpha, std::uint32_t beta) {
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, alpha >> 16);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, alpha & 0xFFFF);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, beta >> 16);
@@ -169,10 +163,7 @@ sfpi_inline void _load_alpha_beta_(std::uint32_t alpha, std::uint32_t beta)
  * preparing for a new calculation cycle. Typically invoked at the beginning of the
  * calculation for a new EMA sequence.
  */
-sfpi_inline void _clear_previous_output_()
-{
-    TTI_SFPLOADI(ckernel::p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-}
+sfpi_inline void _clear_previous_output_() { TTI_SFPLOADI(ckernel::p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0); }
 
 /**
  * @brief Calculates the Exponential Moving Average (EMA) for the input tile in dst 0.
@@ -184,8 +175,7 @@ sfpi_inline void _clear_previous_output_()
  * The output is stored in the corresponding position in tile 1. The last output for all 32
  * columns is also held in LREG4 for use by the next tile.
  */
-sfpi_inline void _calculate_ema_tile_()
-{
+sfpi_inline void _calculate_ema_tile_() {
     // Transpose the input data to the correct order
     TTI_SFPTRANSP(0, 0, 0, 0);
 
@@ -208,5 +198,5 @@ sfpi_inline void _calculate_ema_tile_()
     // Transpose the output data to the correct order
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
-} // namespace sfpu
-} // namespace ckernel
+}  // namespace sfpu
+}  // namespace ckernel
