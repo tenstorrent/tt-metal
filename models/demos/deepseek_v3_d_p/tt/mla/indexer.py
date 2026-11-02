@@ -1307,6 +1307,26 @@ class TtCsaIndexer(TtIndexerBase):
         self.tp_shard_kv = False
         self.default_compute_kernel_config = default_compute_kernel_config
         self.hifi4_fp32_compute_kernel_config = hifi4_fp32_compute_kernel_config
+        # q_b_proj accumulates in fp32, the reference's precision, at the default HiFi2: the full HiFi4 that the
+        # tiny Hadamard and weights_proj matmuls take would cost real time on this one (N = 8192, replicated).
+        self.q_b_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        # The score op defaults to LoFi when q and the key cache are both bf8, and in its matmul the keys sit in
+        # SrcA, which LoFi cuts to 1 + 4 mantissa bits; HiFi2 reads all of bf8's. These scores are the top-k sort
+        # keys. q stays bf8: SrcB holds 1 + 6 bits at either fidelity, all a bf8 q has. The op honours only
+        # math_fidelity and requires fp32_dest_acc_en / dst_full_sync_en off.
+        self.score_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
         self.weight_cache_path = weight_cache_path
         self.layer_idx = layer_idx
         self.layer_num = layer_num
@@ -1457,14 +1477,15 @@ class TtCsaIndexer(TtIndexerBase):
             self._index_hadamard,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.default_compute_kernel_config,
+            # K = 128: full fidelity and fp32 accumulation cost nothing here.
+            compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
         )
 
     def _q_stem(self, qr: ttnn.Tensor) -> ttnn.Tensor:
         q = ttnn.linear(
             qr,
             self._idx_wq_b,
-            compute_kernel_config=self.default_compute_kernel_config,
+            compute_kernel_config=self.q_b_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
@@ -1481,7 +1502,8 @@ class TtCsaIndexer(TtIndexerBase):
         weights = ttnn.linear(
             hidden_states,
             self._idx_wproj,
-            compute_kernel_config=self.default_compute_kernel_config,
+            # N = index_n_heads (64): full fidelity and fp32 accumulation cost nothing here.
+            compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return self._tp_reduce_scatter_sequence(weights)
@@ -1586,6 +1608,7 @@ class TtCsaIndexer(TtIndexerBase):
             num_links=self.ccl_num_links,
             chunk_start_idx=start_pos,
             program_config=program_config,
+            compute_kernel_config=self.score_compute_kernel_config,
             seq_subshard_axis=self.tp_axis if self.tp_factor > 1 else None,
             cache_batch_idx=cache_batch_idx,
             block_cyclic_sp_axis=self.sp_axis,

@@ -100,6 +100,11 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t min_active_tokens = 0;
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
 
+    // Each weight tile's 32x32 contents are stored transposed (tile positions unchanged), and the
+    // matmul unpack transposes them back. Block-float exponents then run along K instead of N.
+    // A compile-time define in the compute kernel, so it belongs to the program-cache key.
+    bool weights_tile_transposed = false;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -107,10 +112,18 @@ struct UnifiedRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "min_active_tokens",
-        "max_active_tokens");
+        "max_active_tokens",
+        "weights_tile_transposed");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            min_active_tokens,
+            max_active_tokens,
+            weights_tile_transposed);
     }
 };
 

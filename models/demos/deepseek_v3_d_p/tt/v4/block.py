@@ -91,6 +91,7 @@ class TtV4Block(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
         slot_num: int = 1,
+        routed_expert_weights_tile_transposed: bool = True,
     ):
         """``seq_len`` is the padded per-chunk length; ``max_seq_len`` the full per-user length the
         attention state must span, defaulting to one chunk. ``attn_reference`` is the torch attention
@@ -182,6 +183,9 @@ class TtV4Block(LightweightModule):
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
             overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+            # V4's routed experts are MXFP4 in the checkpoint, scaled per 32 inputs. Transposed tiles
+            # put bfloat4_b's shared exponents along the same axis (see TtRoutedExpert).
+            routed_expert_weights_tile_transposed=routed_expert_weights_tile_transposed,
         )
 
         assert mhc_weights is not None and set(mhc_weights) >= {

@@ -481,6 +481,7 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores=False,
         is_balanced=False,
         overlap_shared_expert_with_dispatch=True,
+        routed_expert_weights_tile_transposed=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -537,6 +538,7 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_weights=state_dict.get("shared_expert_weights"),  # None if cache exists
             routed_expert_activations_dtype=routed_expert_activations_dtype,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
+            routed_expert_weights_tile_transposed=routed_expert_weights_tile_transposed,
             # Kimi-K3 is the only config that names one; everything else defaults to SiLU.
             routed_expert_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[
                 getattr(model_cfg, "ROUTED_EXPERT_ACTIVATION", "silu")
@@ -551,6 +553,8 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
             # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
             gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
+            # Only DeepSeek-V4 names one; None keeps the legacy gate.
+            gate_router_logits_dtype=getattr(model_cfg, "GATE_ROUTER_LOGITS_DTYPE", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_bias_centered=gate_bias_centered(model_cfg),
             # DeepSeek-V4 hash layers route via a frozen tid2eid[input_ids] table; None elsewhere.
