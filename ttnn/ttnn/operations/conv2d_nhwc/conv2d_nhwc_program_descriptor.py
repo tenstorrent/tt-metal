@@ -48,12 +48,24 @@ ACT_RECV_DEPTH = 2  # R4/R5 cb_act_tiles depth, in received (bm x bk) K-blocks (
 OWN_PREFETCH = True
 WEIGHT_MCAST = True  # R4: read each weight K-block once per grid column and multicast it down the column
 BK_FLOOR = 4  # bk >= min(K_t, BK_FLOOR) on the first walk (perf lamp L7)
-# Compute config: one source for the descriptor, the DEST capacity used by the
-# subblock rule and the accumulator page format.
-MATH_FIDELITY = ttnn.MathFidelity.HiFi4
-FP32_DEST_ACC_EN = True
-DST_TILES = 4 if FP32_DEST_ACC_EN else 8  # half-sync DEST capacity in tiles
-ACC_DTYPE = ttnn.float32 if FP32_DEST_ACC_EN else ttnn.bfloat16
+# Compute config policy, per (activation dtype, weight dtype): the single source for the
+# descriptor's ComputeConfigDescriptor, the DEST capacity used by the subblock rule and the
+# accumulator (partials) page format. The public signature takes no compute_kernel_config,
+# so the op owns this policy (Refinement 2; measured PCC in changelog.md).
+COMPUTE_POLICY = {
+    # dtype: (math_fidelity, fp32_dest_acc_en) — weight dtype keyed below when it matters.
+    ttnn.float32: (ttnn.MathFidelity.HiFi4, True),
+    ttnn.bfloat16: (ttnn.MathFidelity.HiFi2, True),
+}
+
+
+def compute_policy(dtype, weight_dtype):
+    """(math_fidelity, fp32_dest_acc_en, dst_tiles, acc_dtype) for a dtype pair."""
+    fidelity, fp32_acc = COMPUTE_POLICY[dtype]
+    dst_tiles = 4 if fp32_acc else 8  # half-sync DEST capacity in tiles
+    acc_dtype = ttnn.float32 if fp32_acc else ttnn.bfloat16  # partials page follows DEST width
+    return fidelity, fp32_acc, dst_tiles, acc_dtype
+
 
 # ---- CB indices (semantic names) ----
 CB_ACT_WINDOW = 0
@@ -177,7 +189,11 @@ def select_blocking(
     num_cores,
     has_bias,
     l1_cap_bytes,
+    dtype,
+    weight_dtype,
+    activation="none",
 ):
+    _, _, dst_tiles, acc_dtype = compute_policy(dtype, weight_dtype)
     geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=elem_bytes)
     tap_width, band_tiles, K_t = geo["tap_width"], geo["band_tiles"], geo["K_t"]
     H_out = (H + 2 * padding - dilation * (kH - 1) - 1) // stride + 1
@@ -195,7 +211,7 @@ def select_blocking(
 
     T = TILE * TILE * elem_bytes  # act / out tile bytes
     T_w = weight_tile_bytes  # weight / bias tile bytes (weight_dtype)
-    T_acc = tile_bytes(ACC_DTYPE)  # accumulator page = DEST width
+    T_acc = tile_bytes(acc_dtype)  # accumulator page = DEST width
     win_kw = dict(H=H, W=W, H_out=H_out, W_out=W_out, kH=kH, kW=kW, padding=padding, stride=stride, dilation=dilation)
 
     def window_max(bm):
@@ -252,8 +268,8 @@ def select_blocking(
         raise NotImplementedError("conv2d_nhwc: input window exceeds L1 — DRAM-slicing regime R10 not built")
     bm, bk, bn, window_sticks_max = choice
 
-    sb_w = max(d for d in _divisors(bn) if d <= DST_TILES)
-    sb_h = max(d for d in _divisors(bm) if d * sb_w <= DST_TILES)
+    sb_w = max(d for d in _divisors(bn) if d <= dst_tiles)
+    sb_h = max(d for d in _divisors(bm) if d * sb_w <= dst_tiles)
 
     return {
         **geo,
@@ -274,6 +290,9 @@ def select_blocking(
         "dilation": dilation,
         "elem_bytes": elem_bytes,
         "has_bias": has_bias,
+        "dtype": dtype,
+        "weight_dtype": weight_dtype,
+        "activation": activation,
         "core_m_tiles": core_m_tiles,
         "g_m": g_m,
         "core_n_tiles": core_n_tiles,
@@ -328,6 +347,9 @@ def select_blocking_sharded(
     shard_h,
     rows_in,
     l1_cap_bytes,
+    dtype,
+    weight_dtype,
+    activation="none",
 ):
     """Regimes R4 (BLOCK) / R5 (WIDTH): the shard pins the core split.
 
@@ -336,6 +358,7 @@ def select_blocking_sharded(
     `ceil(N_t/S)` each (trailing tiles zero, technique 5); bn = the whole slice (the output
     shard row). k: own-slice K-blocks of bk tiles (a divisor of the slice's kH*band_tiles);
     the largest that fits — every K-block is one multicast handshake (technique 8)."""
+    _, _, dst_tiles, acc_dtype = compute_policy(dtype, weight_dtype)
     S, cw = slices
     geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=elem_bytes, slices=slices)
     tap_width, band_tiles, K_t = geo["tap_width"], geo["band_tiles"], geo["K_t"]
@@ -358,7 +381,7 @@ def select_blocking_sharded(
 
     T = TILE * TILE * elem_bytes
     T_w = weight_tile_bytes
-    T_acc = tile_bytes(ACC_DTYPE)
+    T_acc = tile_bytes(acc_dtype)
     win_kw = dict(H=H, W=W, H_out=H_out, W_out=W_out, kH=kH, kW=kW, padding=padding, stride=stride, dilation=dilation)
 
     def halo_max(bm):
@@ -416,8 +439,8 @@ def select_blocking_sharded(
         raise NotImplementedError("conv2d_nhwc: sharded K-exchange blocks do not fit L1")
     bm, bk, halo, own_prefetch = choice
     bn = nt_s
-    sb_w = max(d for d in _divisors(bn) if d <= DST_TILES)
-    sb_h = max(d for d in _divisors(bm) if d * sb_w <= DST_TILES)
+    sb_w = max(d for d in _divisors(bn) if d <= dst_tiles)
+    sb_h = max(d for d in _divisors(bm) if d * sb_w <= dst_tiles)
     kbps = slice_k_tiles // bk
     return {
         **geo,
@@ -451,6 +474,9 @@ def select_blocking_sharded(
         "dilation": dilation,
         "elem_bytes": elem_bytes,
         "has_bias": has_bias,
+        "dtype": dtype,
+        "weight_dtype": weight_dtype,
+        "activation": activation,
         "core_m_tiles": core_m_tiles,
         "g_m": g_m,
         "core_n_tiles": nt_s,
@@ -547,6 +573,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     act_dtype = input_tensor.dtype
     w_dtype = weight_tensor.dtype
     eb = p["elem_bytes"]
+    math_fidelity, fp32_acc, _, acc_dtype = compute_policy(p["dtype"], p["weight_dtype"])
 
     # ---- Core map: (core, n-slice index, m-row index) ----
     if kx:
@@ -598,12 +625,12 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             cbs.append(_cb(CB_OUT_RM, output_tensor.dtype, p["T"], bn, cores))
     else:
         cbs.append(_cb(CB_OUT_RM, output_tensor.dtype, p["T"], OUT_RM_DEPTH * bn, cores))
-    partial_formats = [ttnn.CBFormatDescriptor(buffer_index=CB_PARTIALS, data_format=ACC_DTYPE, page_size=p["T_acc"])]
+    partial_formats = [ttnn.CBFormatDescriptor(buffer_index=CB_PARTIALS, data_format=acc_dtype, page_size=p["T_acc"])]
     if has_bias:
         cbs.append(_cb(CB_BIAS_TILES, bias_tensor.dtype, p["T_w"], p["core_n_tiles"], cores))
         # cb_biased aliases cb_partials: one allocation, two FIFOs (in-place bias add).
         partial_formats.append(
-            ttnn.CBFormatDescriptor(buffer_index=CB_BIASED, data_format=ACC_DTYPE, page_size=p["T_acc"])
+            ttnn.CBFormatDescriptor(buffer_index=CB_BIASED, data_format=acc_dtype, page_size=p["T_acc"])
         )
     cbs.append(
         ttnn.CBDescriptor(total_size=bm * bn * p["T_acc"], core_ranges=cores, format_descriptors=partial_formats)
@@ -694,6 +721,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         1 if p.get("out_tail", False) else 0,
         1 if act_mcast else 0,
         1 if p.get("own_prefetch", False) else 0,
+        1 if p["activation"] == "relu" else 0,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -758,7 +786,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         core_ranges=cores,
         compile_time_args=compute_ct,
         runtime_args=compute_rt,
-        config=ttnn.ComputeConfigDescriptor(math_fidelity=MATH_FIDELITY, fp32_dest_acc_en=FP32_DEST_ACC_EN),
+        config=ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=fp32_acc),
     )
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
     if act_mcast:

@@ -12,6 +12,7 @@
 //                               tilize overlaps the row's matmul of the previous block); the
 //                               writer multicasts cb_act_send into every row core's cb_act_tiles.
 //   bias_block        : add_bias_bcast_rows in place (cb_partials -> cb_biased alias).
+//   (relu)            : pack_relu_config(zero) around the final output pack, none() after.
 //   untilize_store    : untilize<bn> (bm tile-rows) into cb_out_rm for the writer (R0), or
 //                       straight into the output shard (R4/R5, zero-copy); a WIDTH shard's
 //                       partial last tile-row goes to the cb_out_rm tail for the writer.
@@ -21,6 +22,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/pack.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -51,6 +53,10 @@ constexpr bool act_mcast = get_compile_time_arg_val(21) != 0;  // R4/R5 with > 1
 // R4/R5: tilize ALL own-slice K-blocks at the m-block's first K-block (cb_act_send holds the
 // whole own slice), so every core's gather runs concurrently instead of in owner turn order.
 constexpr bool own_prefetch = get_compile_time_arg_val(22) != 0;
+// Fused ReLU (technique 4): packer ReLU on the final output pack only — the bias pack, or the
+// untilize pack when there is no bias — and cleared right after, so the next block's tilize
+// and partial (L1-accumulated) packs never see it.
+constexpr bool fuse_relu = get_compile_time_arg_val(23) != 0;
 
 constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
 constexpr uint32_t in1_num_subblocks = block_n_tiles / out_subblock_w;
@@ -112,6 +118,9 @@ template <bool with_bias>
 ALWI void bias_and_untilize(
     CircularBuffer& partials, CircularBuffer& bias, CircularBuffer& biased, uint32_t n_block, bool last_block) {
     if constexpr (with_bias) {
+        if constexpr (fuse_relu) {
+            pack_relu_config(ReluConfig::zero());
+        }
         add_bias_bcast_rows<BiasBroadcast::RowBroadcast, OutputCBLayout::TileRowMajor>(
             partials,
             bias,
@@ -119,9 +128,18 @@ ALWI void bias_and_untilize(
             BiasAddShape::of(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_n_tiles),
             {},
             n_block * block_n_tiles);
+        if constexpr (fuse_relu) {
+            pack_relu_config(ReluConfig::none());
+        }
         untilize_store<cb_biased>(last_block);
     } else {
+        if constexpr (fuse_relu) {
+            pack_relu_config(ReluConfig::zero());
+        }
         untilize_store<cb_partials>(last_block);
+        if constexpr (fuse_relu) {
+            pack_relu_config(ReluConfig::none());
+        }
     }
 }
 

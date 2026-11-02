@@ -94,11 +94,11 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32],
-    "weight_dtype": [ttnn.float32],
+    "dtype": [ttnn.float32, ttnn.bfloat16],  # bf8b activations: TILE refinement (Refinement 7)
+    "weight_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],  # mixed precision piped through the matmul
     "layout": [ttnn.ROW_MAJOR_LAYOUT],
     "bias_mode": ["with_bias", "no_bias"],
-    "activation": ["none"],
+    "activation": ["none", "relu"],  # relu: packer ReLU on the final output pack (technique 4)
     "channel_alignment": ["tile_aligned"],
     "stride_mode": ["unit", "strided"],  # gather/window bounds are stride-parametric (verifier probe)
     "groups_mode": ["dense"],
@@ -387,6 +387,9 @@ def conv2d_nhwc(
         weight_tile_bytes=tile_bytes(weight_tensor.dtype),
         has_bias=bias is not None,
         l1_cap_bytes=l1_cap_bytes(),
+        dtype=input_tensor.dtype,
+        weight_dtype=weight_tensor.dtype,
+        activation=_canon_activation(activation),
     )
     if slices is not None:
         shard_h = int(in_mc.shard_spec.shape[0])
