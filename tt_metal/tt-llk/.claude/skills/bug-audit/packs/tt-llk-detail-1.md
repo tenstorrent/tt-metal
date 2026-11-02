@@ -1213,7 +1213,7 @@ Code that is right on one arch or boot path is silently wrong on another, becaus
 **Candidate sites** (unverified leads)
 
 - tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h:685: load_replay_buf brackets the record window with disable/enable_gathering only under the ENABLE_GATHERING build macro, and many BH replay records bypass this helper entirely
-- tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_where.h:34: direct lltt::record(0, 6) outside load_replay_buf, so it is unprotected when gathering is enabled
+- tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_where.h:34: direct lltt::record(0, 6) outside load_replay_buf, so it is unprotected when gathering is enabled
 - tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bcast.h:202: direct lltt::record outside the gathering bracket
 - tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_transpose_dest.h:283: direct record in transpose_dest, the same kernel family already shown to wedge under gathering
 - tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_math_reduce_custom.h:149: three direct lltt::record calls (also at 178 and 217) outside load_replay_buf; the same pattern appears in llk_math_reduce_runtime_custom.h:171

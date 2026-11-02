@@ -9,7 +9,7 @@
 #ifdef ARCH_QUASAR
 #include "ckernel_sfpu_rounding_ops.h"
 #else
-#include "sfpu/ckernel_sfpu_rounding_ops.h"
+#include "ckernel_sfpu_rounding_ops.h"
 #endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif

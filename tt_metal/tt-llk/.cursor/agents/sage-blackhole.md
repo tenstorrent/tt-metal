@@ -25,7 +25,7 @@ Blackhole uses letter-based naming (same as Wormhole):
 - Unpack: `llk_unpack_A.h` (single operand), `llk_unpack_AB.h` (dual operand), `llk_unpack_AB_matmul.h`, `llk_unpack_AB_reduce.h`
 - Math: `llk_math_eltwise_binary_sfpu.h`, `llk_math_eltwise_unary_sfpu.h`, `llk_math_matmul.h`, `llk_math_reduce.h`
 - Pack: `llk_pack.h`, `llk_pack_untilize.h`, `llk_pack_rows.h`
-- SFPU: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` (tt-llk's `common/inc/sfpu/` keeps shared SFPU helpers and the few kernels not moved yet)
+- SFPU: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` (tt-llk's `common/inc/sfpu/` keeps only shared SFPU helpers)
 
 ## Source Priority
 
