@@ -1291,3 +1291,9 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
 - Side finding: index keys scored as bfloat4_b miss more top-k than the reference's fp4 (0.168 / 0.152 vs 0.108 / 0.086 at L02 / L08), cheap at the layer outputs (0.018).
 - Overseer: renamed the detail heading to match DS41-196 (the gate's one problem for review). The agent's knowledge report had one malformed entry (DS41-150), ignored.
 - Discussed with owner: fp4 storage + in-op decode to bfp8 is too slow on Blackhole (~+30-100 ms a chunk, estimate); bfloat4_b + extra scales cannot be exact (3 linear magnitude bits vs e2m1's 0.5..6 in one block). Next candidate: device A/B EXPERTS_IMPL=bfp8 (needs MOE_IMPL=block to accept bfp8 weights), awaiting the owner's word. Leak 253 GiB: reboot before any device job.
+- 2026-11-02: OWNER: bfp8 routed experts behind a switch, measured before / after. Queued P.27 EXPERTS_BFP8 (perf pick, deps FIX.21,
+  before X.3): EXPERTS_IMPL=bfp8 under MOE_IMPL=block, default stays bfp4 (F241); A/B ladder rung last + contract tests +
+  positions 51200 / 512000 / 1039360; new test_dram.py records allocator DRAM per chip at 1M for one slot (load and peak during
+  a chunk, per group), recorded not gated. Estimate before measuring: ~20-21 GiB a chip today, ~28-29 GiB with bfp8 (budget 27.2).
+  KV per user at 1M (served caches, all bf16): window 40 GiB + compressed 2.5 + index keys 0.63 = 43.1 GiB, 1.41 GiB a chip on 8x4.
+  Not started: host leak ~253 GiB, reboot first.
