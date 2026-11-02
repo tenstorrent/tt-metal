@@ -31,9 +31,15 @@ K_EXT_TILES = K_TILES + 1
 # 3x sooner than at 3, which is the fill latency in front of all compute, and the finest n split also fills the grid
 # best. The 4-tile fp32 DEST is still filled by a 4x1 subblock.
 BLOCK_W = 1
-# W sender of logical column g is row g mod active_rows (diagonal) instead of row 0, so the DRAM read streams of
-# the senders do not share one grid line's NoC links.
+# W chunk j of logical column g is read and multicast by row (j + g + W_ROUND_SHIFT) mod active_rows (rotating
+# sender offset by the column), so no grid line's NoC links carry every column's chunk. The shift of 1 keeps a
+# column's chunk-0 owner off its row's x round-0 sender (x round offset = row), so the two first reads overlap.
 W_SENDER_STAGGER = True
+W_ROUND_SHIFT = 1
+# Chunks of the first W_PREFETCH_ROUNDS rounds are read at kernel start, before x row-block 0; later chunks in their
+# own round. 1 measured best (2x512 44.0 -> 42.4 us); 2 and 3 lose: W reads are DRAM-bandwidth-bound, so more in
+# flight only delays the chunk compute needs first.
+W_PREFETCH_ROUNDS = 1
 ACT_DEPTH = 2
 # cb_output_tiles depth in (block_h x block_w) n-blocks. At BLOCK_W = 1 the writer needs 6 (24 pages at block_h = 4,
 # as at block_w 3 x depth 2) to ride out DRAM write latency: depth 2 measured 143..146 us at 8x512 DRAM out vs 138.7.
@@ -176,6 +182,7 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
         K_EXT_TILES,
         N_TILES,
         tile_bytes,
+        W_PREFETCH_ROUNDS,
     ]
     for tensor in (input_tensor, weight, bias):
         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
@@ -209,6 +216,7 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
                 n_tile_start,
                 num_n_blocks,
                 row,
+                col + W_ROUND_SHIFT if W_SENDER_STAGGER else 0,
             ]
             writer_rt[x][y] = [
                 output.buffer_address(),
@@ -252,16 +260,14 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
     )
 
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
-    # One group per logical column (group = its active rows).
+    # One group per logical column (group = its active rows); the sender rotates with the W chunk.
     w_mcast = ttnn.Mcast(
         device,
         ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True),
         cores,
         blocking.active_rows,
-        ttnn.McastFixedSenderConfig(
-            sender_index=0,
-            placement=ttnn.McastSenderPlacement.Staggered if W_SENDER_STAGGER else ttnn.McastSenderPlacement.Uniform,
-        ),
+        # A one-row column has no other sender to rotate to (should_send is then always true on it).
+        ttnn.McastRotatingSenderConfig() if blocking.active_rows > 1 else ttnn.McastFixedSenderConfig(sender_index=0),
         col_order,
     )
     w_mcast.attach(descriptor, W_MCAST_PREFIX, [reader], 0)

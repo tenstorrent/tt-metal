@@ -5,10 +5,12 @@
 // load_activation_block: x row-block (rows x K tiles) plus the ones tile at K position k_tiles of every row,
 //   read by the round's sender of the grid row (one barrier) and multicast along the row (regime R2);
 //   nominal block_h * k_ext_tiles pages pushed.
-// deliver_weight_block: the column's row-0 core reads W rows 0..k_tiles-1 and the bias tile row for block_w
-//   columns into cb_weight_resident chunk j ([j][k][w]), zeroes the bias tiles' padding rows (they multiply the
-//   ones tile's zero columns) and multicasts the chunk down the column; receivers wait for it. Never popped.
-// Order: x row-block 0, W chunks 0.., remaining row-blocks.
+// deliver_weight_block: chunk j of the column's W slice (W rows 0..k_tiles-1 plus the bias tile row, block_w
+//   columns, laid out [j][k][w] in cb_weight_resident) is owned by the column's core of rotating round
+//   w_round_offset + j. The owner issues its DRAM read at kernel start for j < w_prefetch_rounds, else in round j,
+//   zeroes the bias tiles' padding rows (they multiply the ones tile's zero columns) and multicasts it along the
+//   column; the rest receive. Never popped.
+// Order: owned W reads of rounds < w_prefetch_rounds, x row-block 0, W chunks 0.., remaining row-blocks.
 
 #include <cstdint>
 
@@ -28,7 +30,8 @@ void kernel_main() {
     constexpr uint32_t k_ext_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t n_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(8);
-    constexpr auto x_args = TensorAccessorArgs<9>();
+    constexpr uint32_t w_prefetch_rounds = get_compile_time_arg_val(9);
+    constexpr auto x_args = TensorAccessorArgs<10>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto w_mcast = dataflow_kernel_lib::
@@ -46,6 +49,8 @@ void kernel_main() {
     // Added to the x round so grid rows rotate senders out of phase (diagonal), spreading read responses over
     // the columns' NoC links instead of funnelling them all into one column.
     const uint32_t x_round_offset = get_arg_val<uint32_t>(7);
+    // Same for the W rounds of a column (chunk owner = round % column rows); see W_ROUND_SHIFT on the host.
+    const uint32_t w_round_offset = get_arg_val<uint32_t>(8);
 
     static_assert(k_ext_tiles == k_tiles + 1, "one bias K tile");
     constexpr uint32_t act_block_tiles = block_h * k_ext_tiles;
@@ -112,20 +117,32 @@ void kernel_main() {
     // Built once: the pipes carry per-round state. A one-row column has no receivers, so either may be absent.
     auto w_sender = w_mcast.optional_sender(noc);
     auto w_receiver = w_mcast.optional_receiver(noc);
+    // The slice is never popped and the CB holds all of it, so a chunk's slot is free before its reserve_back.
+    const uint32_t weight_base = weight_cb.get_write_ptr();
+    auto read_weight_chunk = [&](uint32_t n_block_idx) {
+        const uint32_t chunk_addr = weight_base + n_block_idx * w_chunk_tiles * tile_bytes;
+        const uint32_t n_first = n_tile_start + n_block_idx * block_w;
+        for (uint32_t k = 0; k < k_tiles; ++k) {
+            for (uint32_t w = 0; w < block_w; ++w) {
+                noc_async_read_page(k * n_tiles + n_first + w, w_accessor, chunk_addr + (k * block_w + w) * tile_bytes);
+            }
+        }
+        for (uint32_t w = 0; w < block_w; ++w) {
+            noc_async_read_page(n_first + w, bias_accessor, chunk_addr + (k_tiles * block_w + w) * tile_bytes);
+        }
+    };
+    auto issue_owned_chunk_read = [&](uint32_t n_block_idx) {
+        if (n_block_idx < num_n_blocks && w_mcast.should_send(w_round_offset + n_block_idx)) {
+            read_weight_chunk(n_block_idx);
+        }
+    };
     auto deliver_weight_block = [&](uint32_t n_block_idx) {
+        if (n_block_idx >= w_prefetch_rounds) {
+            issue_owned_chunk_read(n_block_idx);
+        }
         weight_cb.reserve_back(w_chunk_tiles);
         const uint32_t chunk_addr = weight_cb.get_write_ptr();
-        if (w_sender) {
-            const uint32_t n_first = n_tile_start + n_block_idx * block_w;
-            for (uint32_t k = 0; k < k_tiles; ++k) {
-                for (uint32_t w = 0; w < block_w; ++w) {
-                    noc_async_read_page(
-                        k * n_tiles + n_first + w, w_accessor, chunk_addr + (k * block_w + w) * tile_bytes);
-                }
-            }
-            for (uint32_t w = 0; w < block_w; ++w) {
-                noc_async_read_page(n_first + w, bias_accessor, chunk_addr + (k_tiles * block_w + w) * tile_bytes);
-            }
+        if (w_mcast.should_send(w_round_offset + n_block_idx)) {
             noc_async_read_barrier();
             // Bias tile rows 1..31 are padding: zero them so 0 * padding cannot inject NaN. Offsets are relative
             // to the CB write pointer, which is chunk_addr until the push.
@@ -140,11 +157,14 @@ void kernel_main() {
             noc.write_zeros_l1_barrier();
             w_sender->send(chunk_addr, chunk_addr, w_chunk_tiles * tile_bytes);
         } else {
-            w_receiver->receive(n_block_idx);
+            w_receiver->receive(w_round_offset + n_block_idx);
         }
         weight_cb.push_back(w_chunk_tiles);
     };
 
+    for (uint32_t n_block_idx = 0; n_block_idx < w_prefetch_rounds; ++n_block_idx) {
+        issue_owned_chunk_read(n_block_idx);
+    }
     // Row-block 0 computes each W chunk as it lands; row-block 1 is not needed until all of them are consumed.
     for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks; ++row_block_idx) {
         load_activation_block(row_block_idx);

@@ -1,3 +1,4 @@
 {"event":"test_run","status":"pass","tests":"unit 35/35, regression 6/6, golden non_aligned|DRAM 73/73, perf 8x512 L1/L1 195.4us DRAM-x 199.4 DRAM-out 196.2 8x500 195.5","ts":"2026-11-02T21:45:01+00:00"}
 {"event":"test_run","status":"fail","detail":"GELU split math/pack (GELU_MATH_TILES=1) -> pcc nan; =2 passes but 157us. SFPU shared between threads, concurrent streams race on LREGs. Reverted.","ts":"2026-11-02T21:53:40+00:00"}
 {"event":"test_run","status":"pass","tests":"test_linear_gelu.py + perf","detail":"BLOCK_W=1, transposed grid at short m, staggered W sender, OUT_DEPTH=6: 2x512 56.8->43.9, 4x512 85.8->75.9, 8x512 143.5->138.6 us","ts":"2026-11-02T22:12:18+00:00"}
+{"event":"test_run","status":"pass","detail":"rotating W sender + round shift 1 + first-chunk prefetch: 2x512 43.9->42.4, 4x512 75.9->74.8, 8x512 138.6->137.1; prefetch depth 2/3 lose (DRAM-bound W)","ts":"2026-11-02T22:21:07+00:00"}

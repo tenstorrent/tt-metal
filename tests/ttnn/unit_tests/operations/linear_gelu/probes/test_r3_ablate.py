@@ -25,10 +25,50 @@ EDITS = {
         ("reader", "noc_async_read_page(n_first + w", "if (false) noc_async_read_page(n_first + w"),
     ],
     "nox": [("reader", "noc_async_read_page(x_page + k", "if (false) noc_async_read_page(x_page + k")],
+    "fillzone": [
+        ("compute", "#include <cstdint>", "#include <cstdint>\n#include <api/debug/kernel_profiler.hpp>"),
+        (
+            "compute",
+            "    const uint32_t num_row_blocks = (core_rows + block_h - 1) / block_h;",
+            '    {\n        DeviceZoneScopedN("FILL");\n        act_buf.wait_front(act_block_tiles);\n'
+            "        weight_buf.wait_front(w_chunk_tiles);\n    }\n"
+            "    const uint32_t num_row_blocks = (core_rows + block_h - 1) / block_h;",
+        ),
+    ],
+    "readerzones": [
+        ("reader", "#include <cstdint>", '#include <cstdint>\n#include "api/debug/kernel_profiler.hpp"'),
+        (
+            "reader",
+            "        if (x_mcast.should_send(x_round_offset + row_block_idx)) {\n",
+            '        if (x_mcast.should_send(x_round_offset + row_block_idx)) {\n            DeviceZoneScopedN("XSEND");\n',
+        ),
+        (
+            "reader",
+            "            x_receiver->receive(x_round_offset + row_block_idx);",
+            '            DeviceZoneScopedN("XRECV");\n            x_receiver->receive(x_round_offset + row_block_idx);',
+        ),
+        (
+            "reader",
+            "            noc_async_read_barrier();\n            // Bias",
+            '            {DeviceZoneScopedN("WBAR"); noc_async_read_barrier();}\n            // Bias',
+        ),
+        (
+            "reader",
+            "            w_sender->send(chunk_addr, chunk_addr, w_chunk_tiles * tile_bytes);",
+            '            {DeviceZoneScopedN("WSEND"); w_sender->send(chunk_addr, chunk_addr, w_chunk_tiles * tile_bytes);}',
+        ),
+        (
+            "reader",
+            "            w_receiver->receive(w_round_offset + n_block_idx);",
+            '            if (n_block_idx == 0) {DeviceZoneScopedN("WRECV0"); w_receiver->receive(w_round_offset + n_block_idx);} else w_receiver->receive(w_round_offset + n_block_idx);',
+        ),
+    ],
     "nowrite": [("writer", "noc_async_write_page(page_row + c", "if (false) noc_async_write_page(page_row + c")],
 }
 
 VARIANTS = {
+    "fill": ["fillzone"],
+    "rz": ["readerzones"],
     "full": [],
     "nogelu": ["nogelu"],
     "nocompute": ["nogelu", "skipmm"],
@@ -36,6 +76,8 @@ VARIANTS = {
     "nocompute_now_nox": ["nogelu", "skipmm", "now", "nox"],
     "syncfloor": ["nogelu", "skipmm", "now", "nox", "nowrite"],
     "now_only": ["now"],
+    "nox_only": ["nox"],
+    "nowrite_only": ["nowrite"],
 }
 
 
@@ -54,7 +96,7 @@ def _make(variant):
 
 
 @pytest.mark.parametrize("variant", list(VARIANTS))
-@pytest.mark.parametrize("batch, seq", [(2, 512), (4, 512), (8, 512)])
+@pytest.mark.parametrize("batch, seq", [(2, 512)])
 def test_ablate(device, batch, seq, variant, monkeypatch):
     monkeypatch.setattr(pd, "KERNEL_DIR", _make(variant))
     device.disable_and_clear_program_cache()
