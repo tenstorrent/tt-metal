@@ -1185,6 +1185,15 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     emit_math_scalar_descriptors(out, desc);
     out << "#endif\n\n";
 
+    // The matmul unpack picks its row form by fidelity (unpack_AB_matmul_hoist_rows)
+    out << "#if defined(UCK_CHLKC_UNPACK)\n"
+           "#include \"llk_defs.h\"\n";
+    fmt::format_to(
+        std::ostreambuf_iterator<char>(out),
+        "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>({});\n",
+        static_cast<std::uint32_t>(desc.get_hlk_math_fidelity()));
+    out << "#endif\n\n";
+
     out << "#if !defined(UCK_CHLKC_PACK)\n";
     emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_dfbs);
     emit_unpack_tile_dims(out, desc, max_dfbs);

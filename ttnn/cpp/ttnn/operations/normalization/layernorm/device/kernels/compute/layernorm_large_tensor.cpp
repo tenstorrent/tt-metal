@@ -285,7 +285,7 @@ void kernel_main() {
                     binop_with_scalar_tile_init();
                     mul_unary_tile(dst0, generic::bit_cast<uint32_t>(1.0f / W));
                 }
-                reduce_uninit();
+                reduce_uninit<PoolType::SUM, ReduceDim::REDUCE_ROW>();
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_obj.reserve_back(onetile);
@@ -372,7 +372,7 @@ void kernel_main() {
                 mul_unary_tile(dst0, generic::bit_cast<uint32_t>(1.0f / W));
             }
 
-            reduce_uninit();
+            reduce_uninit<PoolType::SUM, ReduceDim::REDUCE_ROW>();
             tile_regs_commit();
             tile_regs_wait();
 

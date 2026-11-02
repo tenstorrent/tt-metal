@@ -23,6 +23,65 @@
 
 namespace ckernel {
 
+// SUM and AVG with a power of two scaler (1.0 included) give the same bits at fewer fidelity phases: on Blackhole the
+// REDUCE_ROW scaler is in SrcA, read by phases 0 and 2, the COL and SCALAR scaler in SrcB, read by phases 0 and 1.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool pow2_scaler>
+constexpr MathFidelity reduce_math_fidelity(MathFidelity kernel_fidelity) {
+#ifdef ARCH_BLACKHOLE
+    if constexpr (pow2_scaler && reduce_type != PoolType::MAX) {
+        constexpr MathFidelity exact = reduce_dim == ReduceDim::REDUCE_ROW ? MathFidelity::HiFi3 : MathFidelity::HiFi2;
+        return static_cast<std::uint8_t>(kernel_fidelity) > static_cast<std::uint8_t>(exact) ? exact : kernel_fidelity;
+    }
+#endif
+    return kernel_fidelity;
+}
+
+// reduce_init and the reduce helpers unpack a COL SUM/AVG tile's face row into one SrcA bank (not at LoFi) and the math
+// thread follows. Other inits (tilizeA_B_reduce_init, sampling) leave it off and keep one face per bank.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool pow2_scaler>
+constexpr bool reduce_col_pair() {
+#ifdef ARCH_BLACKHOLE
+    return reduce_dim == ReduceDim::REDUCE_COL && reduce_type != PoolType::MAX &&
+           reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY) != MathFidelity::LoFi;
+#else
+    return false;
+#endif
+}
+
+#ifdef ARCH_BLACKHOLE
+// The early context poll pays where the unpack call binds a tile call (LoFi and max); BFP columns and HiFi sums do not gain.
+// SCALAR polls early in the LLK itself.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool pow2_scaler>
+ALWI bool reduce_early_context_poll(std::uint32_t icb) {
+#if defined(TRISC_UNPACK)
+    constexpr bool lofi_or_max =
+        reduce_type == PoolType::MAX ||
+        reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY) == MathFidelity::LoFi;
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR || !lofi_or_max) {
+        return false;
+    } else if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
+        return true;
+    } else {
+        return !IS_BFP_FORMAT(unpack_src_format[get_operand_id(icb)]);
+    }
+#else
+    return false;
+#endif
+}
+
+template <PoolType reduce_type, ReduceDim reduce_dim, bool pow2_scaler>
+ALWI void reduce_unpack_tile(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler) {
+#if defined(TRISC_UNPACK)
+    if (reduce_early_context_poll<reduce_type, reduce_dim, pow2_scaler>(icb)) {
+        llk_unpack_AB_reduce<reduce_type, reduce_dim, true>(icb, icb_scaler, itile, itile_scaler);
+    } else {
+        llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler);
+    }
+#endif
+}
+#endif
+
 // clang-format off
 /**
  * Performs the necessary hardware and software initialization for reduce operation for provided circular buffer identifiers (CB IDs). In order for reduce
@@ -60,9 +119,16 @@ namespace ckernel {
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
  * | Function   | icb_scaler                | CB holding scaling factors (see above)                                                  | uint32_t  | 0 to 31                                        | True     |
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
+ *
+ * pow2_scaler (template, default false): every scaler is a power of two; Blackhole SUM and AVG then run at fewer
+ * fidelity phases with the same bits. Pass the same value to reduce_tile and reduce_block.
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool pow2_scaler = false>
 ALWI void reduce_init(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
@@ -77,8 +143,23 @@ ALWI void reduce_init(
 #else
     state_configure(icb, icb_scaler, ocb, call_line);
 #endif
+#ifdef ARCH_BLACKHOLE
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, reduce_col_pair<reduce_type, reduce_dim, pow2_scaler>()>(
+        icb, icb_scaler)));
+    MATH((llk_math_reduce_init<
+          reduce_type,
+          reduce_dim,
+          is_fp32_dest_acc_en,
+          reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY),
+          reduce_col_pair<reduce_type, reduce_dim, pow2_scaler>()>(icb, icb_scaler)));
+#else
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<
+          reduce_type,
+          reduce_dim,
+          is_fp32_dest_acc_en,
+          reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(icb, icb_scaler)));
+#endif
     PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(ocb)));
 }
 
@@ -95,8 +176,12 @@ ALWI void reduce_init(
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A (same as reduce_init)   | uint32_t  | 0 to 31                                        | False    |
+ *
+ * On Blackhole pass the reduce's type and dim when known: only a ROW MAX leaves state to restore, and the default
+ * (MAX, ROW) restores it.
  */
 // clang-format on
+template <PoolType reduce_type = PoolType::MAX, ReduceDim reduce_dim = ReduceDim::REDUCE_ROW>
 ALWI void reduce_uninit(std::uint32_t icb = 0) {
 #ifdef ARCH_QUASAR
     // (Quasar) A column reduce over an MxFp4 operand with an MxFp4 scaler overrides both operands' unpacker
@@ -108,7 +193,7 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
     UNPACK((llk_unpack_AB_reduce_uninit(icb)));
     MATH((llk_math_reduce_uninit(icb)));
 #elif defined(ARCH_BLACKHOLE)
-    MATH((llk_math_reduce_uninit()));
+    MATH((llk_math_reduce_uninit<reduce_type, reduce_dim>()));
 #else
     // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
     // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
@@ -152,30 +237,76 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool pow2_scaler = false>
 ALWI void reduce_tile(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
 #ifndef ARCH_QUASAR
-    MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler, idst)));
+#ifdef ARCH_BLACKHOLE
+    // The init opted in, so the math thread need not read the pair state
+    MATH((llk_math_reduce<
+          reduce_type,
+          reduce_dim,
+          is_fp32_dest_acc_en,
+          reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY),
+          false,
+          reduce_col_pair<reduce_type, reduce_dim, pow2_scaler>() ? 1 : -1>(icb, icb_scaler, idst)));
+    reduce_unpack_tile<reduce_type, reduce_dim, pow2_scaler>(icb, icb_scaler, itile, itile_scaler);
+#else
+    MATH((llk_math_reduce<
+          reduce_type,
+          reduce_dim,
+          is_fp32_dest_acc_en,
+          reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
+#endif
 #else
     MATH((llk_math_reduce<reduce_type, reduce_dim>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce(icb, icb_scaler, itile, itile_scaler)));
 #endif
 }
 
+#ifdef ARCH_BLACKHOLE
+// Unpack and math must take the same path, so both decide from compile-time constants. A BFP tile starts with its
+// exponent section, so the block call cannot step the data unpacker from tile to tile. Holding a row sum's scaler costs
+// time where the math binds (from HiFi3) and for fp32 data.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool pow2_scaler>
+ALWI bool reduce_block_tile_by_tile(std::uint32_t icb) {
+#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
+    const std::uint32_t data_format = unpack_src_format[get_operand_id(icb)];
+    if (IS_BFP_FORMAT(data_format)) {
+        return true;
+    }
+    if constexpr (reduce_dim == ReduceDim::REDUCE_ROW && reduce_type != PoolType::MAX) {
+        constexpr std::uint32_t phases =
+            static_cast<std::uint32_t>(reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY));
+        return phases >= static_cast<std::uint32_t>(MathFidelity::HiFi3) ||
+               masked_data_format(data_format) == static_cast<std::uint32_t>(DataFormat::Float32);
+    }
+    return false;
+#else
+    return true;
+#endif
+}
+#endif
+
 // clang-format off
 /**
- * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing each
- * partial result to a consecutive DST register slot. This is the uniform block entry point for the reduce op
- * group: its body is a simple loop over `reduce_tile`, so it inherits `reduce_tile`'s semantics and requires the
- * same initialization (`reduce_init`) to have been called first. The scaling-factor tile (`itile_scaler`) is reused
- * for every tile in the block. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing the
+ * result of tile i to DST register slot `start_idst + i * idst_stride`. This is the uniform block entry point for the
+ * reduce op group and requires the same initialization (`reduce_init`) to have been called first. The scaling-factor
+ * tile (`itile_scaler`) is reused for every tile in the block. The `ntiles` tiles must not wrap around the end of the
+ * CB. The DST register buffer must be in acquired state via *acquire_dst* call.
  *
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
  * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
  * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
  * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47478.
+ * NOTE: On Blackhole a block of bfp tiles overwrites the unpacker scratch register a tilize init sets: call that init
+ * again.
  * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer
  * state to default.
  *
@@ -190,20 +321,54 @@ ALWI void reduce_tile(
  * | Function   | start_itile  | The index of the first tile within the first CB                  | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | itile_scaler | The index of the tile within the scaling factor CB               | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | start_idst   | The index of the first tile in DST REG for the result            | uint32_t  | Must be less than the acquired size of DST REG | True     |
- * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + ntiles <= acquired DST REG size   | True     |
+ * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + (ntiles - 1) * idst_stride < acquired DST REG size | True     |
+ * | Function   | idst_stride  | DST REG slot step between consecutive tiles (0 accumulates)      | uint32_t  | 0 or more (default 1)                          | False    |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool pow2_scaler = false>
 ALWI void reduce_block(
     std::uint32_t icb,
     std::uint32_t icb_scaler,
     std::uint32_t start_itile,
     std::uint32_t itile_scaler,
     std::uint32_t start_idst,
-    std::uint32_t ntiles) {
+    std::uint32_t ntiles,
+    std::uint32_t idst_stride = 1) {
+#ifdef ARCH_BLACKHOLE
+    if (!reduce_block_tile_by_tile<reduce_type, reduce_dim, pow2_scaler>(icb)) {
+        // A SCALAR SUM/AVG block is unpacked and pooled in tile pairs, accumulated or as independent outputs
+        const bool scalar_pair = reduce_dim == ReduceDim::REDUCE_SCALAR && reduce_type != PoolType::MAX;
+        MATH((llk_math_reduce_block<
+              reduce_type,
+              reduce_dim,
+              is_fp32_dest_acc_en,
+              reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(
+            icb, icb_scaler, start_idst, ntiles, idst_stride, scalar_pair)));
+        UNPACK((llk_unpack_AB_reduce_block<reduce_type, reduce_dim>(
+            icb, icb_scaler, start_itile, itile_scaler, ntiles, scalar_pair)));
+        return;
+    }
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
+        // The math block does not depend on the data format; only the unpacker steps a BFP block tile by tile.
+        MATH((llk_math_reduce_block<
+              reduce_type,
+              reduce_dim,
+              is_fp32_dest_acc_en,
+              reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(
+            icb, icb_scaler, start_idst, ntiles, idst_stride)));
+        for (std::uint32_t i = 0; i < ntiles; ++i) {
+            reduce_unpack_tile<reduce_type, reduce_dim, pow2_scaler>(icb, icb_scaler, start_itile + i, itile_scaler);
+        }
+        return;
+    }
+#endif
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en>(
-            icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
+        reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en, pow2_scaler>(
+            icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i * idst_stride);
     }
 }
 

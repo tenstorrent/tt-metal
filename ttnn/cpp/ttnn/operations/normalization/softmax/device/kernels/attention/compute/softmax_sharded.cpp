@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Resident rows: on Blackhole the helper sums a row of at least 4 tiles with one block call at LoFi
+#define REDUCE_ROW_SUM_BLOCK
+
 #include <cstdint>
 
 #include "api/compute/eltwise_binary.h"
