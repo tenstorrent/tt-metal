@@ -12,15 +12,23 @@ from models.demos.common.prefill.chunk_layout import rotated_chunk_positions
 from models.demos.common.prefill.media import (
     MediaItem,
     MediaRows,
+    StubEmbeddingSource,
     build_injection,
     chunk_row_range,
     items_overlapping,
     media_rows_for_chunk,
-    stub_embeddings,
-    stub_row_source,
 )
 
 HIDDEN = 16
+STUB = StubEmbeddingSource(HIDDEN)
+
+
+class Table:
+    def __init__(self, embs):
+        self.embs = embs
+
+    def rows(self, m, lo, hi):
+        return self.embs[m.media_id][lo:hi]
 
 
 def item(start, n, fill):
@@ -28,15 +36,15 @@ def item(start, n, fill):
 
 
 def embeddings_for(items):
-    return {m.hash: stub_embeddings(m.hash, m.num_tokens, HIDDEN) for m in items}
+    return {m.media_id: STUB.rows(m, 0, m.num_tokens) for m in items}
 
 
 def slices(items, embs, start, end):
-    return media_rows_for_chunk(items, start, end, lambda m, lo, hi: embs[m.hash][lo:hi])
+    return media_rows_for_chunk(items, start, end, Table(embs))
 
 
 def whole(items, embs):
-    return [MediaRows(m, 0, embs[m.hash]) for m in items]
+    return [MediaRows(m, 0, embs[m.media_id]) for m in items]
 
 
 def scatter_back(rows, mask, chunk_start, sp, chunk_local, seq_len):
@@ -69,7 +77,7 @@ def test_chunks_inject_each_image_row_exactly_once(sp, chunk_local, layout):
     expected = torch.zeros(seq_len, HIDDEN, dtype=torch.bfloat16)
     expected_hit = torch.zeros(seq_len, dtype=torch.bool)
     for m in items:
-        expected[m.start_position : m.end_position] = embs[m.hash]
+        expected[m.start_position : m.end_position] = embs[m.media_id]
         expected_hit[m.start_position : m.end_position] = True
 
     got = torch.zeros_like(expected)
@@ -122,26 +130,25 @@ def test_chunk_row_range_rejects_no_overlap(expect_error):
 def test_source_is_asked_only_for_the_chunks_rows():
     items = [item(40, 50, 1)]
     asked = []
-    source = stub_row_source(HIDDEN)
 
-    def recording(m, lo, hi):
-        asked.append((lo, hi))
-        return source(m, lo, hi)
+    class Recording:
+        def rows(self, m, lo, hi):
+            asked.append((lo, hi))
+            return STUB.rows(m, lo, hi)
 
     for start in (0, 64):
-        media_rows_for_chunk(items, start, start + 64, recording)
+        media_rows_for_chunk(items, start, start + 64, Recording())
     assert asked == [(0, 24), (24, 50)]
 
 
 def test_stub_rows_do_not_depend_on_the_range():
     m = item(0, 30, 9)
-    source = stub_row_source(HIDDEN)
-    assert torch.equal(torch.cat([source(m, 0, 12), source(m, 12, 30)]), stub_embeddings(m.hash, 30, HIDDEN))
+    assert torch.equal(torch.cat([STUB.rows(m, 0, 12), STUB.rows(m, 12, 30)]), STUB.rows(m, 0, 30))
 
 
 def test_missing_row_names_the_item(expect_error):
     items = [item(10, 40, 3)]
-    short = MediaRows(items[0], 0, embeddings_for(items)[items[0].hash][:39])
+    short = MediaRows(items[0], 0, embeddings_for(items)[items[0].media_id][:39])
     with expect_error(AssertionError, re.escape("rows [0,39) for MediaItem(start_position=10")):
         build_injection([short], 0, 64, 1, 64)
 
@@ -161,16 +168,16 @@ def test_rotated_resume_start():
     )
     out, hit = scatter_back(rows, mask, start, sp, chunk_local, 400)
     assert torch.equal(hit.nonzero().flatten(), torch.arange(100, 150))
-    assert torch.equal(out[100:150], embs[items[0].hash])
+    assert torch.equal(out[100:150], embs[items[0].media_id])
 
 
 def test_resume_mid_image_needs_only_the_tail():
     items = [item(50, 100, 5)]
     embs = embeddings_for(items)
-    tail = MediaRows(items[0], 30, embs[items[0].hash][30:])
+    tail = MediaRows(items[0], 30, embs[items[0].media_id][30:])
     rows, mask = build_injection([tail], 80, 208, 1, 128)
     assert mask[0, :70].all() and not mask[0, 70:].any()
-    assert torch.equal(rows[0, :70], embs[items[0].hash][30:])
+    assert torch.equal(rows[0, :70], embs[items[0].media_id][30:])
 
 
 def test_rows_past_actual_end_are_not_injected():
@@ -183,7 +190,7 @@ def test_rows_past_actual_end_are_not_injected():
 def test_text_only_chunk_returns_none():
     assert build_injection([], 0, 128, 1, 128) is None
     items = [item(500, 10, 1)]
-    assert media_rows_for_chunk(items, 0, 128, stub_row_source(HIDDEN)) == []
+    assert media_rows_for_chunk(items, 0, 128, STUB) == []
 
 
 def test_items_overlapping_is_half_open():
@@ -193,12 +200,7 @@ def test_items_overlapping_is_half_open():
     assert items_overlapping([b, a], 128, 256) == []
 
 
-def test_media_item_rejects_bad_hash(expect_error):
-    with expect_error(AssertionError, "media hash is 31 bytes"):
-        MediaItem(0, 4, b"\x00" * 31)
-
-
-def test_stub_is_deterministic_per_hash():
-    h1, h2 = b"\x01" * 32, b"\x02" * 32
-    assert torch.equal(stub_embeddings(h1, 8, HIDDEN), stub_embeddings(h1, 8, HIDDEN))
-    assert not torch.equal(stub_embeddings(h1, 8, HIDDEN), stub_embeddings(h2, 8, HIDDEN))
+def test_stub_is_deterministic_per_media_id():
+    a, b = item(0, 8, 1), item(0, 8, 2)
+    assert torch.equal(STUB.rows(a, 0, 8), StubEmbeddingSource(HIDDEN).rows(a, 0, 8))
+    assert not torch.equal(STUB.rows(a, 0, 8), STUB.rows(b, 0, 8))

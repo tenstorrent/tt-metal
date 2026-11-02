@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.demos.common.prefill.media import MediaItem, build_injection, media_rows_for_chunk, stub_embeddings
+from models.demos.common.prefill.media import MediaItem, StubEmbeddingSource, build_injection, media_rows_for_chunk
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.media_injection import inject_media_embeddings
@@ -30,7 +30,15 @@ def item(start, n, seed):
     return MediaItem(start, n, bytes([seed]) * 32)
 
 
-def inject_chunks(mesh_device, table, tokens, items, rows_of, emb_tp_sharded, first_chunk_start):
+class Table:
+    def __init__(self, embs):
+        self.embs = embs
+
+    def rows(self, m, lo, hi):
+        return self.embs[m.media_id][lo:hi]
+
+
+def inject_chunks(mesh_device, table, tokens, items, source, emb_tp_sharded, first_chunk_start):
     """Embeddings of tokens[first_chunk_start:] after injection, prefilled CHUNK tokens at a time."""
     mesh_shape = tuple(mesh_device.shape)
     emb = TtParallelEmbedding(
@@ -60,7 +68,7 @@ def inject_chunks(mesh_device, table, tokens, items, rows_of, emb_tp_sharded, fi
         )
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
-        media_rows = build_injection(media_rows_for_chunk(items, start, end, rows_of), start, end, 1, CHUNK)
+        media_rows = build_injection(media_rows_for_chunk(items, start, end, source), start, end, 1, CHUNK)
         if media_rows is not None:
             x = inject_media_embeddings(
                 mesh_device,
@@ -101,14 +109,12 @@ def test_post_injection_embeddings(mesh_device, device_params, emb_tp_sharded, s
     table = torch.randn(VOCAB, HIDDEN, dtype=torch.bfloat16)
     tokens = torch.randint(0, VOCAB, (seq_len,), dtype=torch.int32)
     items = [item(s, n, i + 1) for i, (s, n) in enumerate(layout)]
-    embs = {m.hash: stub_embeddings(m.hash, m.num_tokens, HIDDEN) for m in items}
+    stub = StubEmbeddingSource(HIDDEN)
     ref = F.embedding(tokens.long(), table)
     for m in items:
-        ref[m.start_position : m.end_position] = embs[m.hash]
+        ref[m.start_position : m.end_position] = stub.rows(m, 0, m.num_tokens)
 
-    got = inject_chunks(
-        mesh_device, table, tokens, items, lambda m, lo, hi: embs[m.hash][lo:hi], emb_tp_sharded, first_chunk_start
-    )
+    got = inject_chunks(mesh_device, table, tokens, items, stub, emb_tp_sharded, first_chunk_start)
 
     want = ref[first_chunk_start:]
     is_image = image_mask(items, first_chunk_start, seq_len)
@@ -196,13 +202,13 @@ def test_post_injection_vs_hf(mesh_device, device_params, monkeypatch, emb_tp_sh
         mask, _ = model.get_placeholder_mask(ids[None], embeds, image_features=all_features)
         ref = (embeds.masked_scatter(mask, all_features) if features else embeds)[0]
 
-    rows = dict(zip((m.hash for m in items), features))
+    rows = Table(dict(zip((m.media_id for m in items), features)))
     got = inject_chunks(
         mesh_device,
         model.get_input_embeddings().weight.detach(),
         ids.to(torch.int32),
         items,
-        lambda m, lo, hi: rows[m.hash][lo:hi],
+        rows,
         emb_tp_sharded,
         first_chunk_start,
     )

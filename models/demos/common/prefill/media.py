@@ -4,23 +4,20 @@
 """Which image embedding rows a prefill chunk injects at its image positions, laid out like the chunk's tokens."""
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Optional, Protocol
 
 import torch
 
 from models.demos.common.prefill.chunk_layout import rotated_chunk_positions
-
-MEDIA_HASH_BYTES = 32
 
 
 @dataclass(frozen=True)
 class MediaItem:
     start_position: int
     num_tokens: int
-    hash: bytes
+    media_id: bytes
 
     def __post_init__(self):
-        assert len(self.hash) == MEDIA_HASH_BYTES, f"media hash is {len(self.hash)} bytes, want {MEDIA_HASH_BYTES}"
         assert self.num_tokens > 0, "media item with no tokens"
 
     @property
@@ -47,8 +44,21 @@ class MediaRows:
         return self.row_start + self.rows.shape[0]
 
 
-# Rows [lo, hi) of an item's embeddings, as a [hi - lo, hidden] tensor.
-RowSource = Callable[[MediaItem, int, int], torch.Tensor]
+class EmbeddingSource(Protocol):
+    def rows(self, item: MediaItem, lo: int, hi: int) -> torch.Tensor:
+        """Rows [lo, hi) of the item's [num_tokens, hidden] embeddings."""
+
+
+class StubEmbeddingSource(EmbeddingSource):
+    """Stands in for the encoder service: deterministic embeddings seeded from the media ID."""
+
+    def __init__(self, hidden: int, dtype=torch.bfloat16):
+        self.hidden = hidden
+        self.dtype = dtype
+
+    def rows(self, item: MediaItem, lo: int, hi: int) -> torch.Tensor:
+        gen = torch.Generator().manual_seed(int.from_bytes(item.media_id[:8], "little"))
+        return (torch.randn(item.num_tokens, self.hidden, generator=gen) * 0.02).to(self.dtype)[lo:hi]
 
 
 def items_overlapping(items: list[MediaItem], start: int, end: int) -> list[MediaItem]:
@@ -67,12 +77,12 @@ def chunk_row_range(item: MediaItem, chunk_start: int, actual_end: int) -> tuple
 
 
 def media_rows_for_chunk(
-    items: list[MediaItem], chunk_start: int, actual_end: int, source: RowSource
+    items: list[MediaItem], chunk_start: int, actual_end: int, source: EmbeddingSource
 ) -> list[MediaRows]:
     out = []
     for item in items_overlapping(items, chunk_start, actual_end):
         lo, hi = chunk_row_range(item, chunk_start, actual_end)
-        out.append(MediaRows(item, lo, source(item, lo, hi)))
+        out.append(MediaRows(item, lo, source.rows(item, lo, hi)))
     return out
 
 
@@ -105,13 +115,3 @@ def build_injection(
         rows[sel] = s.rows[positions[sel] - item.start_position - s.row_start]
         mask |= sel
     return rows, mask
-
-
-def stub_embeddings(media_hash: bytes, num_tokens: int, hidden: int, dtype=torch.bfloat16) -> torch.Tensor:
-    """Deterministic placeholder embeddings seeded from the media hash, until a real embedding source exists."""
-    gen = torch.Generator().manual_seed(int.from_bytes(media_hash[:8], "little"))
-    return (torch.randn(num_tokens, hidden, generator=gen) * 0.02).to(dtype)
-
-
-def stub_row_source(hidden: int, dtype=torch.bfloat16) -> RowSource:
-    return lambda item, lo, hi: stub_embeddings(item.hash, item.num_tokens, hidden, dtype)[lo:hi]
