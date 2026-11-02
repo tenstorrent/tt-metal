@@ -761,10 +761,13 @@ class TPGatedDeltaNet:
         _proj_mc = out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
         _nat = getattr(self, "_native_in", None)
         if _nat is not None and S <= tpc.TILE_SIZE:  # BONSAI_NATIVE=pq2_0 decode
-            qkvz = _nat.forward(x, out_mem=ttnn.L1_MEMORY_CONFIG)
-            qkv = ttnn.slice(qkvz, (0, 0, 0), (1, S, qz), memory_config=_proj_mc)
-            z = ttnn.slice(qkvz, (0, 0, qz), (1, S, az), memory_config=_proj_mc)
-            ttnn.deallocate(qkvz)
+            if os.environ.get("BONSAI_GDN_IN_SPLIT", "1") == "1" and x.shape[-2] == S:  # the A3 writes qkv and z itself
+                qkv, z = _nat.forward(x, out_mem=_proj_mc, split=qz)
+            else:
+                qkvz = _nat.forward(x, out_mem=ttnn.L1_MEMORY_CONFIG)
+                qkv = ttnn.slice(qkvz, (0, 0, 0), (1, S, qz), memory_config=_proj_mc)
+                z = ttnn.slice(qkvz, (0, 0, qz), (1, S, az), memory_config=_proj_mc)
+                ttnn.deallocate(qkvz)
             # a|b is N = 3 tiles: ttnn's auto config takes 113 us on 3 cores; in0_block_w=40 takes 12.8 (bench/a3_ab.py)
             ab = ttnn.linear(
                 x,
