@@ -7,6 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import ttnn  # noqa: E402
 from test_conv2d_nhwc_sharded import ML, run_sharded  # noqa: E402
 
 
@@ -22,3 +23,21 @@ def test_perf_probe_block_sdxl_l1(device):
 
 def test_perf_probe_interleaved_sdxl_l1(device):
     run_sharded(device, (1, 64, 64, 640), 640, 3, 1, 1, ML.INTERLEAVED, True)
+
+
+def test_perf_probe_block_sdxl_l1_bf16_bf8b(device):
+    """The perf-1 contract config: bf16 activations x bf8b weights, bias, pinned 10x10 BLOCK."""
+    run_sharded(
+        device,
+        (1, 64, 64, 640),
+        640,
+        3,
+        1,
+        1,
+        ML.BLOCK_SHARDED,
+        True,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        shard_shape=(410, 64),
+        core_grid=(10, 10),
+    )

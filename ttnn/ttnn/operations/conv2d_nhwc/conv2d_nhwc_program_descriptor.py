@@ -22,6 +22,8 @@ from pathlib import Path
 
 import ttnn
 
+from ttnn.operations._op_contract import UnsupportedAxisValue
+
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE = 32
@@ -97,20 +99,34 @@ def _divisors(n):
     return [d for d in range(1, n + 1) if n % d == 0]
 
 
+def _block_col_major(memory_config):
+    """BLOCK with COL_MAJOR orientation: shard rows run along grid x, channel slices along y."""
+    return (
+        memory_config.memory_layout == _ML.BLOCK_SHARDED
+        and memory_config.shard_spec.orientation == ttnn.ShardOrientation.COL_MAJOR
+    )
+
+
+def _block_core(start, s, r, col_major):
+    """Logical core of BLOCK shard (channel slice s, shard row r)."""
+    return ttnn.CoreCoord(start.x + r, start.y + s) if col_major else ttnn.CoreCoord(start.x + s, start.y + r)
+
+
 def channel_slices(memory_config):
     """(S, slice_width) of a WIDTH/BLOCK-sharded input's channel split, else None.
 
     The single source prepare_conv2d_weights, validate() and the program agree on:
-    S = shard columns (BLOCK, ROW_MAJOR orientation: grid x) or shard cores (WIDTH),
-    slice_width = shard width in channels."""
+    S = shard columns (BLOCK: grid x for ROW_MAJOR orientation, grid y for COL_MAJOR — the
+    transposed grid) or shard cores (WIDTH), slice_width = shard width in channels."""
     if memory_config.memory_layout not in K_EXCHANGE_LAYOUTS:
         return None
     spec = memory_config.shard_spec
-    if spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
-        raise NotImplementedError("conv2d_nhwc: only ROW_MAJOR shard orientation is built")
+    col_major = _block_col_major(memory_config)
+    if memory_config.memory_layout == _ML.WIDTH_SHARDED and spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
+        raise UnsupportedAxisValue("conv2d_nhwc: WIDTH_SHARDED input needs ROW_MAJOR shard orientation")
     if memory_config.memory_layout == _ML.BLOCK_SHARDED:
         bb = spec.grid.bounding_box()
-        S = bb.end.x - bb.start.x + 1
+        S = (bb.end.y - bb.start.y + 1) if col_major else (bb.end.x - bb.start.x + 1)
     else:
         S = spec.grid.num_cores()
     return S, int(spec.shape[1])
@@ -507,16 +523,13 @@ def output_memory_config(plan, input_memory_config):
     width = p["core_n_tiles"] * TILE
     if p["memory_layout"] == _ML.BLOCK_SHARDED:
         start = spec.grid.bounding_box().start
-        grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(start, ttnn.CoreCoord(start.x + p["g_n"] - 1, start.y + p["g_m"] - 1))]
-        )
+        end = _block_core(start, p["g_n"] - 1, p["g_m"] - 1, _block_col_major(input_memory_config))
+        grid = ttnn.CoreRangeSet([ttnn.CoreRange(start, end)])
         shape = [p["core_m_tiles"] * TILE, width]
     else:
         grid = spec.grid
         shape = [p["M"], width]
-    return ttnn.MemoryConfig(
-        p["memory_layout"], ttnn.BufferType.L1, ttnn.ShardSpec(grid, shape, ttnn.ShardOrientation.ROW_MAJOR)
-    )
+    return ttnn.MemoryConfig(p["memory_layout"], ttnn.BufferType.L1, ttnn.ShardSpec(grid, shape, spec.orientation))
 
 
 def _sharded_core_map(plan, input_memory_config):
@@ -526,7 +539,8 @@ def _sharded_core_map(plan, input_memory_config):
     spec = input_memory_config.shard_spec
     if p["memory_layout"] == _ML.BLOCK_SHARDED:
         start = spec.grid.bounding_box().start
-        return [(ttnn.CoreCoord(start.x + s, start.y + r), s, r) for r in range(p["g_m"]) for s in range(p["g_n"])]
+        cm = _block_col_major(input_memory_config)
+        return [(_block_core(start, s, r, cm), s, r) for r in range(p["g_m"]) for s in range(p["g_n"])]
     cores = sorted(ttnn.corerange_to_cores(spec.grid), key=lambda c: (c.y, c.x))
     return [(c, s, 0) for s, c in enumerate(cores[: p["g_n"]])]
 
@@ -573,6 +587,11 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     act_dtype = input_tensor.dtype
     w_dtype = weight_tensor.dtype
     eb = p["elem_bytes"]
+    # BLOCK COL_MAJOR: the transposed grid — a K-exchange group (one shard row) is a grid
+    # column and a weight-multicast group (one channel slice) is a grid row.
+    col_major = kx and _block_col_major(input_tensor.memory_config())
+    act_order = ttnn.McastCoreOrder.ColumnMajor if col_major else ttnn.McastCoreOrder.RowMajor
+    weight_order = ttnn.McastCoreOrder.RowMajor if col_major else ttnn.McastCoreOrder.ColumnMajor
     math_fidelity, fp32_acc, _, acc_dtype = compute_policy(p["dtype"], p["weight_dtype"])
 
     # ---- Core map: (core, n-slice index, m-row index) ----
@@ -744,7 +763,8 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
                 own_lo, own_hi, col = 0, NHW, [xy]
             else:
                 own_lo, own_hi = mi * p["shard_h"], min(NHW, (mi + 1) * p["shard_h"])
-                col = [ttnn.CoreCoord(xy.x, xy.y - mi + r) for r in range(rows_in)]
+                start = input_tensor.memory_config().shard_spec.grid.bounding_box().start
+                col = [_block_core(start, ni, r, col_major) for r in range(rows_in)]
             reader_args += [own_lo, own_hi]
             for c in col:
                 v = device.worker_core_from_logical_core(c)
@@ -799,7 +819,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             mcast_cores,
             mcast_cores.num_cores() if sink_cores else p["g_n"],
             ttnn.McastRotatingSenderConfig(),
-            ttnn.McastCoreOrder.RowMajor,
+            act_order,
         )
         mcast.attach(descriptor, "act_mcast", [writer], 0)
         next_sem = mcast.next_semaphore_id()
@@ -814,7 +834,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             cores,
             p["g_m"],
             ttnn.McastFixedSenderConfig(sender_index=0),
-            ttnn.McastCoreOrder.ColumnMajor,
+            weight_order,
         )
         w_mcast.attach(descriptor, "w_mcast", [writer], next_sem)
     else:
