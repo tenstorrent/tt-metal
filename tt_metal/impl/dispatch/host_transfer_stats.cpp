@@ -5,6 +5,7 @@
 #include "host_transfer_stats.hpp"
 
 #include <algorithm>
+#include <ratio>
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -37,27 +38,28 @@ constexpr auto kCategories = std::to_array<CategoryInfo>({
 static_assert(kCategories.size() == kNumHostTransferCategories);
 
 std::string format_bytes(uint64_t bytes) {
-    const auto b = static_cast<double>(bytes);
-    if (b >= 1e9) {
-        return fmt::format("{:.2f} GB", b / 1e9);
-    }
-    if (b >= 1e6) {
-        return fmt::format("{:.2f} MB", b / 1e6);
-    }
-    if (b >= 1e3) {
-        return fmt::format("{:.2f} KB", b / 1e3);
+    constexpr std::array<std::pair<uint64_t, const char*>, 3> kUnits{{
+        {std::giga::num, "GB"},
+        {std::mega::num, "MB"},
+        {std::kilo::num, "KB"},
+    }};
+    for (const auto& [scale, unit] : kUnits) {
+        if (bytes >= scale) {
+            return fmt::format("{:.2f} {}", static_cast<double>(bytes) / scale, unit);
+        }
     }
     return fmt::format("{} B", bytes);
 }
 
-std::string format_seconds(double seconds) {
-    if (seconds >= 1) {
-        return fmt::format("{:.3f} s", seconds);
+std::string format_duration(HostTransferStats::Clock::duration d) {
+    using namespace std::chrono_literals;
+    if (d >= 1s) {
+        return fmt::format("{:.3f} s", std::chrono::duration<double>(d).count());
     }
-    if (seconds >= 1e-3) {
-        return fmt::format("{:.3f} ms", seconds * 1e3);
+    if (d >= 1ms) {
+        return fmt::format("{:.3f} ms", std::chrono::duration<double, std::milli>(d).count());
     }
-    return fmt::format("{:.3f} us", seconds * 1e6);
+    return fmt::format("{:.3f} us", std::chrono::duration<double, std::micro>(d).count());
 }
 
 }  // namespace
@@ -123,8 +125,8 @@ std::vector<std::pair<std::string, std::string>> HostTransferStats::summary_rows
             value = fmt::format(
                 "{} in {} ({:.2f} GB/s), {}",
                 format_bytes(t.bytes),
-                format_seconds(seconds),
-                static_cast<double>(t.bytes) / 1e9 / seconds,
+                format_duration(t.busy),
+                static_cast<double>(t.bytes) / std::giga::num / seconds,
                 count);
         } else {
             value = fmt::format("{}, {}", format_bytes(t.bytes), count);
