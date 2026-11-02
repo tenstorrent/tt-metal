@@ -73,11 +73,15 @@ static bool is_native_L1_sharding(
     if (c.is_sharded() && c.shard_spec().has_value()) {
         const auto& out_grid = c.shard_spec()->grid;
         if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value() &&
-            a.memory_config().shard_spec()->grid != out_grid) {
+            (a.memory_config().shard_spec()->grid != out_grid ||
+             !(*a.memory_config().shard_spec() == *c.shard_spec()) ||
+             a.memory_config().memory_layout() != c.memory_layout())) {
             return false;
         }
         if (b.memory_config().is_sharded() && b.memory_config().shard_spec().has_value() &&
-            b.memory_config().shard_spec()->grid != out_grid) {
+            (b.memory_config().shard_spec()->grid != out_grid ||
+             !(*b.memory_config().shard_spec() == *c.shard_spec()) ||
+             b.memory_config().memory_layout() != c.memory_layout())) {
             return false;
         }
     }
@@ -130,7 +134,9 @@ bool is_native_L1_sharding(
             const auto& out_grid = output_memory_config.shard_spec()->grid;
             if (predicate_spec.memory_config().is_sharded() &&
                 predicate_spec.memory_config().shard_spec().has_value() &&
-                predicate_spec.memory_config().shard_spec()->grid != out_grid) {
+                (predicate_spec.memory_config().shard_spec()->grid != out_grid ||
+                 !(*predicate_spec.memory_config().shard_spec() == *output_memory_config.shard_spec()) ||
+                 predicate_spec.memory_config().memory_layout() != output_memory_config.memory_layout())) {
                 return false;
             }
             if (true_spec->memory_config().is_sharded() && true_spec->memory_config().shard_spec().has_value() &&
