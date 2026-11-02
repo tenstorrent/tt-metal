@@ -34,7 +34,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
-from helpers.tilize_untilize import tilize, untilize
+from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import matmul_acc_atol, passed_test
 from ttexalens.tt_exalens_lib import write_to_device
@@ -334,9 +334,11 @@ def encode_tile_meta(assignment, ct):
 
 def pack_bfp_tile(tile, code, tile_dim, face_dim=FACE_C_DIM):
     num_faces = (tile_dim // face_dim) ** 2
-    faces = tilize(
-        tile.reshape(-1), tile_dimensions=[tile_dim, tile_dim]
-    )  # row-major -> face-major
+    faces = tilize_block(
+        tile,
+        dimensions=[tile_dim, tile_dim],
+        tile_dimensions=[tile_dim, tile_dim],
+    ).flatten()
     if code == FMT_CODE["bfp8"]:
         return bytes(pack_bfp8_b(faces, num_faces=num_faces))
     if code == FMT_CODE["bfp4"]:
@@ -360,8 +362,10 @@ def unpack_bfp_tile(tile, code, tile_dim, face_dim=FACE_C_DIM):
         faces = unpack_bfp2_b(tile, num_faces=num_faces)
     else:
         raise ValueError(f"Unsupported format {code}")
-    return untilize(faces, tile_dimensions=[tile_dim, tile_dim]).reshape(
-        tile_dim, tile_dim
+    return untilize_block(
+        faces,
+        dimensions=[tile_dim, tile_dim],
+        tile_dimensions=[tile_dim, tile_dim],
     )  # face-major -> row-major
 
 
