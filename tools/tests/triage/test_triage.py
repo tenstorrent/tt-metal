@@ -33,9 +33,11 @@ sys.path.insert(0, triage_home)
 import triage
 from triage import CheckType, run_script, ScriptArguments
 from triage_hw_utils import device_has_firmware
+from serializers import strip_rich_markup
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.tt_exalens_lib import parse_elf
 
 
 triage.progress_disabled = True  # Disable progress bars for tests
@@ -48,6 +50,7 @@ def logged_errors() -> list[str]:
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
+HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT = f"{HANG_APP_ADD_2_INTEGERS} with lightweight asserts"
 HANG_APP_TTNN_ADD_INTEGERS = (
     "tools/tests/triage/hang_apps/ttnn_add_integers_hang/triage_hang_app_ttnn_add_integers_hang"
 )
@@ -65,7 +68,7 @@ HANG_APP_EXPECTED_RESULTS = {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
-            "first_callstack_line": 40,
+            "first_callstack_line": 46,
         },
         "callstacks": {
             "device_to_check": 0,
@@ -73,15 +76,15 @@ HANG_APP_EXPECTED_RESULTS = {
             "cores_to_check": {
                 "trisc0": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc1": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc2": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
             },
         },
@@ -91,7 +94,7 @@ HANG_APP_EXPECTED_RESULTS = {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
-            "first_callstack_line": 40,
+            "first_callstack_line": 46,
         },
         "callstacks": {
             "device_to_check": 0,
@@ -99,15 +102,15 @@ HANG_APP_EXPECTED_RESULTS = {
             "cores_to_check": {
                 "trisc0": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc1": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc2": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
             },
         },
@@ -116,25 +119,65 @@ HANG_APP_EXPECTED_RESULTS = {
             "assert_no_na": True,
         },
     },
+    HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT: {
+        "lightweight_asserts": {
+            "kernel_name": "add_2_tiles_hang",
+            "compute_cores_hang": True,
+            "assert_code": "ASSERT(magic == n)",
+        },
+        "callstacks": {
+            "device_to_check": 0,
+            "location_to_check": "0,0",
+            "cores_to_check": {
+                "trisc0": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+                "trisc1": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+                "trisc2": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+            },
+        },
+    },
 }
 
 
 class AppOutput:
     RETAINED_LINES = 20000
 
-    def __init__(self, proc: subprocess.Popen):
+    def __init__(self, proc: subprocess.Popen, ready_line: str | None = None):
         self._lock = threading.Lock()
         self._chunks: deque[str] = deque(maxlen=self.RETAINED_LINES)
-        for stream in (proc.stdout, proc.stderr):
+        self._ready_line = ready_line
+        self.ready_line_seen = False
+        # Set when ready_line arrives or both streams close (the app exited), so the fixture can sleep on it.
+        self.stop_waiting = threading.Event()
+        streams = (proc.stdout, proc.stderr)
+        self._open_streams = len(streams)
+        for stream in streams:
             threading.Thread(target=self._drain, args=(stream,), daemon=True).start()
 
     def _drain(self, stream) -> None:
         try:
             for line in iter(stream.readline, b""):
+                text = line.decode("utf-8", errors="replace")
                 with self._lock:
-                    self._chunks.append(line.decode("utf-8", errors="replace"))
+                    self._chunks.append(text)
+                if self._ready_line is not None and self._ready_line in text:
+                    self.ready_line_seen = True
+                    self.stop_waiting.set()
         except (ValueError, OSError):
             pass  # the pipe was closed under us while the app was being torn down
+        finally:
+            with self._lock:
+                self._open_streams -= 1
+                if self._open_streams == 0:
+                    self.stop_waiting.set()
 
     def text(self) -> str:
         with self._lock:
@@ -229,23 +272,34 @@ def cause_hang_with_app(request):
         cmd = [sys.executable, os.path.join(metal_home, app)]
     else:
         cmd = [os.path.join(metal_home, "build", app)]
+    # Pull TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS out of the outside env, so only configurations that set it get it.
+    env = {key: value for key, value in os.environ.items() if key != "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS"}
     proc = subprocess.Popen(
         cmd + args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, **app_configuration.get("env", {})},
+        env={**env, **app_configuration.get("env", {})},
     )
 
-    output = AppOutput(proc)
+    output = AppOutput(proc, "Device timeout detected as expected.")
     try:
         expected_results = app_configuration.get("expected_results", {})
         if on_simulator:
             request.cls.exalens_context = wait_for_simulated_hang(proc, output, app, expected_results)
         else:
             auto_timeout = app_configuration.get("auto_timeout", False)
-            # auto_timeout apps exit 0 once they detect their own hang; expect_running ones stay wedged.
+            # auto_timeout apps print a line once they detect their own hang and then stay alive; expect_running ones
+            # stay wedged.
             expect_running = app_configuration.get("expect_running", False)
-            if auto_timeout or expect_running:
+            if auto_timeout:
+                # Sleep until the application reports its own hang, exits, or the timeout runs out
+                output.stop_waiting.wait(timeout)
+                if not output.ready_line_seen:
+                    # Print process output for debugging
+                    print("The application did not hang as expected.")
+                    output.print()
+                    raise RuntimeError("The application did not hang as expected.")
+            elif expect_running:
                 # Wait for the application to hang itself
                 try:
                     proc.wait(timeout=timeout)
@@ -253,7 +307,7 @@ def cause_hang_with_app(request):
                     pass
 
                 # Check if the process has exited
-                if proc.returncode != (None if expect_running else 0):
+                if proc.returncode is not None:
                     # Print process output for debugging
                     print("The application did not hang as expected.")
                     output.print()
@@ -263,9 +317,6 @@ def cause_hang_with_app(request):
 
         request.cls.app_configuration = app_configuration
         request.cls.expected_results = expected_results
-        if app_configuration.get("env", {}).get("TT_METAL_LOGS_PATH"):
-            metal_logs_path = app_configuration["env"]["TT_METAL_LOGS_PATH"]
-            os.environ["TT_METAL_LOGS_PATH"] = metal_logs_path
 
         yield
     finally:
@@ -283,37 +334,31 @@ def cause_hang_with_app(request):
     "cause_hang_with_app",
     [
         (
-            # Manual hang detection with timeout from outside
-            HANG_APP_ADD_2_INTEGERS,
-            [],
-            {
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
-            },
-            10,
-        ),
-        (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch
+            # Automatic hang detection with timeout inside the app, fast dispatch
+            # with lightweight asserts on
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
+                    "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS": "1",
+                    "TT_METAL_WATCHER_DISABLE_ASSERT": "1",
                 },
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT],
             },
             60,
         ),
         (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, slow dispatch
+            # Automatic hang detection with timeout inside the app, slow dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
@@ -328,7 +373,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test-ttnn",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
             },
@@ -342,7 +387,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector-ttnn",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
@@ -486,7 +531,31 @@ class TestTriage:
         self.assert_no_errors_or_none_in_result(result)
 
     def test_check_binary_integrity(self):
-        self.run_triage_script("check_binary_integrity.py")
+        self.run_triage_script("check_binary_integrity.py", argv=["--dump-mismatch"])
+
+    def test_check_binary_integrity_reports_mismatch(self):
+        # Corrupt 4 bytes of the first RISC's firmware in L1 and check that the report shows them
+        location = OnChipCoordinate.create("0,0", self.exalens_context.devices[0])
+        risc_location = location.noc_block.all_riscs[0].risc_location
+        dispatcher_data = self.run_triage_script("dispatcher_data.py", assert_failure_checks=False)
+        core_data = dispatcher_data.get_cached_core_data(risc_location)
+        text = parse_elf(core_data.firmware_path, self.exalens_context).get_section_by_name(".text")
+        address = text.address + 16
+        expected = bytes(text.data[16:20])
+        corrupted = bytes(b ^ 0xFF for b in expected)
+        l1 = dispatcher_data.l1_memory_access(location)
+        try:
+            l1.write(address, corrupted)
+            self.run_triage_script("check_binary_integrity.py", argv=["--dump-mismatch"], assert_failure_checks=False)
+        finally:
+            l1.write(address, expected)
+
+        errors = [check for check in triage.CHECKS if check.type is CheckType.ERROR]
+        assert len(errors) == 1, logged_errors()
+        assert errors[0].location == location and errors[0].risc_name == risc_location.risc_name
+        message = "".join(errors[0].message.split())
+        for info in (f"4/{len(text.data)}", f"{address:08x}", f"expected:{expected.hex()}", f"found:{corrupted.hex()}"):
+            assert info in message, errors[0].message
 
     def test_check_cb_inactive(self):
         self.run_triage_script("check_cb_inactive.py")
@@ -596,6 +665,14 @@ class TestTriage:
                 assert (
                     first_entry.file_info.line == expected_line
                 ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.file_info.line}"
+
+            # Verify the quoted ASSERT if specified
+            expected_assert_code = expected.get("assert_code")
+            if expected_assert_code:
+                code = strip_rich_markup(check.result.kernel_callstack_with_message.code_line)
+                assert (
+                    code == expected_assert_code
+                ), f"{check.risc_name}: Expected {expected_assert_code!r}, got {code!r}"
 
     def test_dump_configuration(self):
         result = self.run_triage_script("dump_configuration.py")
