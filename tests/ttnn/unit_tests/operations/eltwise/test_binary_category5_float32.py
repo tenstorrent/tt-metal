@@ -35,8 +35,9 @@ Category 5: division family + power
 |   |                                   |                      | is below abs(b)                                   |
 | 4 | ttnn.div_no_nan                   | a / b, 0 where b = 0 | ULP ≤ 1                                           |
 | 5 | ttnn.floor_div                    | floor(a / b)         | floor of a quotient within 1 ULP                  |
-| 6 | ttnn.pow                          | a ** exponent        | ULP ≤ 2, more where the error grows with          |
-|   |                                   |                      | abs(y * log2(a)) (#59761)                         |
+| 6 | ttnn.pow                          | a ** exponent        | scalar exponent: ULP ≤ 2; tensor exponent: more   |
+|   |                                   |                      | where the error grows with abs(y * log2(a))       |
+|   |                                   |                      | (#59761)                                          |
 
 Plain divide (rounding_mode=None) is test_divide in the category 1 float32
 file. Here it only appears as the quotient the other ops are built on, plus
@@ -92,10 +93,7 @@ _DIV_SCALAR_VALUES = [-5.1, 0.0, 10.9, 0.1, 3.0]
 _POW_INT_EXPONENTS = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
 _POW_FLOAT_EXPONENTS = [-2.75, -1.5, -0.5, 0.5, 1.5, 2.5, 7.25, 0.3]
 
-# Exponents with a short mantissa stay within 2 ULP. 0.3 uses all 24 bits, and
-# the kernel's single-precision y * log2(x) loses the rest (#59761).
-_POW_SCALAR_ULP = {0.3: 17}
-_POW_SCALAR_DEFAULT_ULP = 2
+POW_SCALAR_ULP = 2
 
 # pow(tensor, tensor), banded on abs(y * log2(x)) (#59761).
 POW_SMALL_PRODUCT = 1.0
@@ -131,8 +129,15 @@ def _assert_rounded_quotient(round_fn, quotient, result, desc):
     _float32_result(result, desc)
     up = torch.nextafter(quotient, torch.full_like(quotient, float("inf")))
     down = torch.nextafter(quotient, torch.full_like(quotient, -float("inf")))
+    # The neighbors of 0 floor to -1 and the neighbor of inf is finite, so zero
+    # and infinite quotients must round exactly.
+    neighbors = torch.isfinite(quotient) & (quotient != 0)
     both_nan = torch.isnan(quotient) & torch.isnan(result)
-    allowed = (result == round_fn(quotient)) | (result == round_fn(up)) | (result == round_fn(down)) | both_nan
+    allowed = (
+        (result == round_fn(quotient))
+        | (neighbors & ((result == round_fn(up)) | (result == round_fn(down))))
+        | both_nan
+    )
     if not allowed.all():
         first = tuple((~allowed).nonzero()[0].tolist())
         raise AssertionError(
@@ -254,7 +259,7 @@ def test_divide_rounding_modes(device, rounding_mode, round_fn):
 
     _assert_rounded_quotient(round_fn, _quotient(input_a, input_b), result, f"divide {rounding_mode}")
     plain = ttnn.to_torch(ttnn.divide(tt_a, tt_b))
-    assert_equal(round_fn(plain), result)
+    assert torch.equal(round_fn(plain).view(torch.int32), result.view(torch.int32))
 
 
 def _divide_tile_inputs(device):
@@ -586,7 +591,8 @@ def test_floor_div_scalar(device, scalar):
 def _pow_scalar_run(device, exponent):
     input_a = binary_grid_values(dtype=torch.float32).reshape(-1, 32)
     result = ttnn.to_torch(ttnn.pow(to_float32_tt_tensor(input_a, device), exponent))
-    reference = torch.pow(input_a.double(), exponent)
+    # The scalar overload takes a C++ float: 0.3 reaches the device as float32(0.3).
+    reference = torch.pow(input_a.double(), float(torch.tensor(exponent, dtype=torch.float32)))
     return input_a, reference, _float32_result(result, f"pow(tensor, {exponent})")
 
 
@@ -596,9 +602,8 @@ def test_pow_scalar_exponent(device, exponent):
 
     | Case                      | float32 behavior                     | Check                  |
     |---------------------------|--------------------------------------|------------------------|
-    | integer or k/4 exponent   | ≤ 2 ULP                              | ULP ≤ 2                |
-    | exponent 0.3              | y * log2(x) loses the low bits of a  | ULP ≤ 17 (#59761)      |
-    |                           | 24-bit exponent                      |                        |
+    | finite result             | ≤ 2 ULP; 0.3 measured 1 against      | ULP ≤ 2                |
+    |                           | x ** float32(0.3)                    |                        |
     | negative base, non-int y  | NaN                                  | NaN positions match    |
     | overflow                  | ±inf                                 | class and sign match   |
     | float64 result < 2^-126   | 0, or NaN for some exponents         | not here: test_pow_    |
@@ -621,7 +626,7 @@ def test_pow_scalar_exponent(device, exponent):
     assert_with_ulp(
         expected_result=golden[finite],
         actual_result=result[finite],
-        ulp_threshold=_POW_SCALAR_ULP.get(exponent, _POW_SCALAR_DEFAULT_ULP),
+        ulp_threshold=POW_SCALAR_ULP,
     )
 
 
