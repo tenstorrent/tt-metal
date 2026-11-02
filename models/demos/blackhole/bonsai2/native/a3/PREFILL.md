@@ -16,6 +16,7 @@ is loaded and no extra cache is written. Every `TernaryLinear` site and the fuse
 Hooks: `qwen36/tt/mlp.py` (rows > 32), `gdn/tp.py` (`_project_qkvzab`, `_row_proj`),
 `ttnn_gated_attention.py` (fused qkv, o_proj) and `attention/prefill.py`, which passes the ternary fused qkv.
 The LM head prefill uses the dense head; only the last row is read.
+`drop_dense()` (prefill.py, called from layer.py) frees the dense weights each ternary site replaced: 176 tensors, 8.32 GiB of DRAM.
 
 ## Numbers (chip 3, text_demo, 5-run medians, three arms interleaved, commit 28e517fe401, A's defaults at 97a1ccf4495)
 
@@ -33,10 +34,10 @@ Op level, S=128, ms: pmm vs dequant+matmul:
 
 | Site | pmm | dequant+matmul |
 |---|---|---|
-| gate+up | 0.91 | 1.74 |
-| down | 0.82 | 1.24 |
-| gdn_in | 0.58 | 1.02 |
-| gdn_out | 0.41 | 0.72 |
+| gate+up | 0.61 | 1.74 |
+| down | 0.54 | 1.24 |
+| gdn_in | 0.51 | 1.02 |
+| gdn_out | 0.39 | 0.72 |
 
 PCC 0.99999 vs float64, against 0.99986 on the bfp8 scratch path.
 
