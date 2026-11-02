@@ -121,8 +121,10 @@ class Flux2Pipeline:
 
         logger.info("creating TT-NN transformer...")
 
-        head_dim = 128
-        num_heads = 48
+        transformer_config = self._torch_transformer.config
+        head_dim = transformer_config.attention_head_dim
+        num_heads = transformer_config.num_attention_heads
+        self._guidance_embeds = transformer_config.guidance_embeds
         self._num_channels_latents = 32
         self._patch_size = 2
         self._vae_scale_factor = 8
@@ -137,19 +139,20 @@ class Flux2Pipeline:
             padding_config = None
 
         self.transformer = Flux2Transformer(
-            in_channels=128,
-            num_layers=8,
-            num_single_layers=48,
+            in_channels=transformer_config.in_channels,
+            num_layers=transformer_config.num_layers,
+            num_single_layers=transformer_config.num_single_layers,
             attention_head_dim=head_dim,
             num_attention_heads=num_heads,
-            joint_attention_dim=15360,
-            out_channels=128,
+            joint_attention_dim=transformer_config.joint_attention_dim,
+            out_channels=self._torch_transformer.out_channels,
             device=mesh_device,
             ccl_manager=self._ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
             is_fsdp=self.is_fsdp,
             shard_prompt=self._shard_prompt,
+            guidance_embeds=self._guidance_embeds,
         )
 
         self._pos_embed = self._torch_transformer.pos_embed
@@ -409,7 +412,8 @@ class Flux2Pipeline:
         latents = self._patchify(torch.randn(shape).permute(0, 2, 3, 1))
 
         self.ts._tt_latents_step.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
-        self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
+        if self._guidance_embeds:
+            self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
 
         logger.info("denoising...")
         self._prepare_transformer()
@@ -515,7 +519,7 @@ class Flux2Pipeline:
         spatial: ttnn.Tensor,
         embedded_prompt: ttnn.Tensor,
         timestep: ttnn.Tensor,
-        guidance: ttnn.Tensor,
+        guidance: ttnn.Tensor | None,
         sigma_difference: ttnn.Tensor,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],

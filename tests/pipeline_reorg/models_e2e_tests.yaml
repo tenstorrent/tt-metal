@@ -1167,7 +1167,7 @@
     pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
       -k "bh_qb and 1024x1024" || exit $?
     # smoke test only.
-    pytest --timeout 1800 -rs models/tt_dit/tests/models/flux2/test_pipeline_flux2.py -k 2x2 || exit $?
+    pytest --timeout 1800 -rs models/tt_dit/tests/models/flux2/test_pipeline_flux2.py -k "2x2 and not klein" || exit $?
   model: flux.2-dev
   model_family: Flux
   skus:
