@@ -58,7 +58,6 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import (
-    MX_SUPPORTED_TILE_SIZES,
     SUPPORTED_TILE_SIZES,
     is_mx_unsupported_tile_dims,
 )
@@ -134,11 +133,6 @@ def generate_unpack_unary_operand_combinations(
                         for tile_dims in tile_sizes:
                             if is_mx_unsupported_tile_dims(
                                 in_fmt, fmt.output_format, tile_dims
-                            ):
-                                continue
-                            if (
-                                unpacker_sel == UnpackerEngine.UnpDest
-                                and tile_dims not in MX_SUPPORTED_TILE_SIZES
                             ):
                                 continue
                             tile_shape = construct_tile_shape(tile_dims)
