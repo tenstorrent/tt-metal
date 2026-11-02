@@ -821,7 +821,7 @@ void bind_program_spec(nb::module_& mod) {
             },
             nb::kw_only(),
             nb::arg("target_nodes"),
-            nb::arg("name") = work_unit_defaults.name,
+            nb::arg("name"),
             nb::arg("kernels") = work_unit_defaults.kernels)
         .def_rw("name", &m2::WorkUnitSpec::name)
         .def_rw("kernels", &m2::WorkUnitSpec::kernels, COPY)
@@ -854,7 +854,7 @@ void bind_program_spec(nb::module_& mod) {
                     .work_units = std::move(work_units)};
             },
             nb::kw_only(),
-            nb::arg("name") = program_defaults.name,
+            nb::arg("name"),
             nb::arg("kernels") = program_defaults.kernels,
             nb::arg("dataflow_buffers") = program_defaults.dataflow_buffers,
             nb::arg("semaphores") = program_defaults.semaphores,

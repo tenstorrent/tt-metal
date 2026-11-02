@@ -162,8 +162,8 @@ def test_defaults_are_the_header_defaults():
     ).access_pattern == (E.DFBAccessPattern.STRIDED)
     relaxations = E.TensorParameter(unique_id="input", spec=TENSOR_SPEC).relaxations
     assert not (relaxations.match_padded_shape_only or relaxations.dynamic_tensor_shape)
-    assert E.WorkUnitSpec(target_nodes=ttnn.CoreCoord(0, 0)).name == ""
-    assert E.ProgramSpec().kernels == []
+    assert E.WorkUnitSpec(name="unit", target_nodes=ttnn.CoreCoord(0, 0)).kernels == []
+    assert E.ProgramSpec(name="program").kernels == []
 
 
 def test_constructors_take_keywords_and_need_the_required_fields(expect_error):
@@ -175,6 +175,11 @@ def test_constructors_take_keywords_and_need_the_required_fields(expect_error):
         E.DataflowBufferSpec(entry_size=2048)
     with expect_error(TypeError, "incompatible function arguments"):
         E.KernelSpec(unique_id=None, source="reader.cpp", hw_config=E.ComputeHardwareConfig())
+    # Fields without a default in the header are required, the names included.
+    with expect_error(TypeError, "incompatible function arguments"):
+        E.ProgramSpec()
+    with expect_error(TypeError, "incompatible function arguments"):
+        E.WorkUnitSpec(target_nodes=ttnn.CoreCoord(0, 0))
 
 
 def test_names_are_str_and_tables_are_dicts():
@@ -258,7 +263,7 @@ def test_optional_fields_take_none():
 
 
 def test_lists_dicts_and_optional_fields_are_copies():
-    spec = E.ProgramSpec(kernels=[_kernel()])
+    spec = E.ProgramSpec(name="program", kernels=[_kernel()])
     spec.kernels.append(_kernel(unique_id="writer"))
     spec.kernels[0].unique_id = "renamed"
     assert [kernel.unique_id for kernel in spec.kernels] == ["reader"]
