@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // =============================================================================
-// mcast_pipe — `SenderPipe` / `ReceiverPipe`: a NoC-multicast + semaphore-handshake helper.
+// mcast_pipe - `SenderPipe` / `ReceiverPipe`: a NoC-multicast + semaphore-handshake helper.
 // =============================================================================
 //
 // Wraps the recurring dataflow block:
@@ -51,14 +51,14 @@ static_assert(sizeof(RectangleRuntimeArguments) == mcast_wire::RECT_WORDS * size
 namespace detail {
 
 // =============================================================================
-// SenderPipe — the broadcasting face of the channel.
+// SenderPipe - the broadcasting face of the channel.
 // =============================================================================
-//   * NOC_ID                     — compile-time NoC id; must match the `noc` argument.
-//   * DataReadyBinding          — sender-to-receiver data-ready semaphore id.
-//   * PRE_HANDSHAKE              — wait for receiver readiness before sending data or a signal.
-//   * ConsumerReadyBinding      — receiver-to-sender readiness semaphore id; required with PRE_HANDSHAKE.
-//   * DATA_READY_SIGNAL          — Flag (default) or Counter.
-//   * ROTATING_SENDER            — whether this core sends on some rounds and receives on others.
+//   * NOC_ID                     - compile-time NoC id; must match the `noc` argument.
+//   * DataReadyBinding          - sender-to-receiver data-ready semaphore id.
+//   * PRE_HANDSHAKE              - wait for receiver readiness before sending data or a signal.
+//   * ConsumerReadyBinding      - receiver-to-sender readiness semaphore id; required with PRE_HANDSHAKE.
+//   * DATA_READY_SIGNAL          - Flag (default) or Counter.
+//   * ROTATING_SENDER            - whether this core sends on some rounds and receives on others.
 // Semaphore arguments accept either legacy numeric IDs or native SemaphoreBindingToken values.
 // An unused readiness role accepts nullptr; no Semaphore is constructed for that role.
 template <
@@ -125,14 +125,14 @@ private:
 };
 
 // =============================================================================
-// ReceiverPipe — the listening face of the channel.
+// ReceiverPipe - the listening face of the channel.
 // =============================================================================
-//   * DataReadyBinding      — sender-to-receiver data-ready semaphore id.
-//   * PRE_HANDSHAKE          — signal receiver readiness before waiting; must match the SenderPipe's.
-//   * ConsumerReadyBinding  — receiver-to-sender readiness semaphore id; required with PRE_HANDSHAKE.
-//   * DATA_READY_SIGNAL      — must match the SenderPipe's.
-//   * NUM_SENDERS            — number of stored sender coordinate pairs.
-//   * SenderCoordinates      — indexable coordinate view, stored by value (a pointer by default).
+//   * DataReadyBinding      - sender-to-receiver data-ready semaphore id.
+//   * PRE_HANDSHAKE          - signal receiver readiness before waiting; must match the SenderPipe's.
+//   * ConsumerReadyBinding  - receiver-to-sender readiness semaphore id; required with PRE_HANDSHAKE.
+//   * DATA_READY_SIGNAL      - must match the SenderPipe's.
+//   * NUM_SENDERS            - number of stored sender coordinate pairs.
+//   * SenderCoordinates      - indexable coordinate view, stored by value (a pointer by default).
 //
 // With PRE_HANDSHAKE=false, the kernel writer must ensure any prior accesses to
 // the landing region finish before the sender can write it, e.g. through

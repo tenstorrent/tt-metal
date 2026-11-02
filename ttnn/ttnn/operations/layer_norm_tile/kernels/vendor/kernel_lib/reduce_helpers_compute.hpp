@@ -31,7 +31,7 @@
  * IMPORTANT: Requires compute kernel hardware initialization.
  * Call compute_kernel_hw_startup(cb_in, cb_scaler, cb_out) exactly once at the
  * start of your kernel before using. Do NOT re-call it later (and never inside
- * a loop) — re-running mid-kernel can race the compute pipeline and produce
+ * a loop) - re-running mid-kernel can race the compute pipeline and produce
  * undefined behavior.
  *
  * IMPORTANT: The scaler CB must contain the scaling factor tile BEFORE calling reduce().
@@ -99,9 +99,9 @@ enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
  *
  * - BulkWaitBulkPop: Wait for bulk, process all with indexed access, pop bulk.
  *   Bulk size depends on reduce dimension:
- *     REDUCE_SCALAR: Bulk = Ht×Wt tiles → 1 output per batch
- *     REDUCE_ROW:    Bulk = Wt tiles    → 1 output per row
- *     REDUCE_COL:    Bulk = Ht×chunk    → chunk outputs (chunk = min(Wt, DEST_AUTO_LIMIT);
+ *     REDUCE_SCALAR: Bulk = HtxWt tiles -> 1 output per batch
+ *     REDUCE_ROW:    Bulk = Wt tiles    -> 1 output per row
+ *     REDUCE_COL:    Bulk = Htxchunk    -> chunk outputs (chunk = min(Wt, DEST_AUTO_LIMIT);
  *                    the last chunk may be narrower when Wt is not a multiple of DEST_AUTO_LIMIT)
  *
  * - WaitUpfrontNoPop: Wait for all tiles upfront, don't pop (persistent, for tile reuse).
@@ -126,7 +126,7 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
  *   a cost heuristic (reduced tiles-per-output vs reduce dim, DEST width, input policy, ...) will choose
  *   between the paths later. Callers should prefer Auto and let the library decide.
  *
- * - ReduceTile: the standard datapath — FPU matmul-with-ones (reduce_tile) per input tile, or the SFPU
+ * - ReduceTile: the standard datapath - FPU matmul-with-ones (reduce_tile) per input tile, or the SFPU
  *   fold for Int32. Handles EVERY configuration (all pool types, partial / non-tile-aligned reduce dims
  *   via the scaler, cross-call accumulation, all input policies).
  *
@@ -135,16 +135,16 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
  *   scalar-multiply. One DST register per output tile, so it handles an arbitrary block without the
  *   REDUCE_COL DST/chunk limit; it wins for wide reduces (many tiles per output) and is more accurate for
  *   AVG / scalar.
- *   Boots like every reduce — compute_kernel_hw_startup(cb_in, cb_scaler, cb_out) once at kernel start (see the
- *   file-level note); reduce() runs no heavy per-call hw_configure — per call it does only light format reconfig
+ *   Boots like every reduce - compute_kernel_hw_startup(cb_in, cb_scaler, cb_out) once at kernel start (see the
+ *   file-level note); reduce() runs no heavy per-call hw_configure - per call it does only light format reconfig
  *   (per reconfig_mode) + the SFPU-macro load, exactly like ReduceTile relies on boot + light reduce_init.
- *   RESTRICTED — guarded by static_assert / ASSERT in reduce():
+ *   RESTRICTED - guarded by static_assert / ASSERT in reduce():
  *     - SUM, or standalone AVG for a tile-aligned reduction (1/N is derived from tile geometry). For partial,
  *       cross-chunk, sharded, or uneven means use compute_kernel_lib::reduce_mean with an explicit
  *       caller-supplied 1/N. MAX/MIN are not expressible via additive accumulate,
  *     - float only (no Int32),
  *     - BulkWaitBulkPop (resident block, indexed) or WaitAndPopPerTile (streaming: DST is the accumulator,
- *       so only ~2 input tiles resident at a time — contiguous row/scalar, aligned only).
+ *       so only ~2 input tiles resident at a time - contiguous row/scalar, aligned only).
  *   PARTIAL (non-tile-aligned) reduce dims are supported standalone (NoAccumulation), ROW/COL only, under
  *   BulkWaitBulkPop: the last reduce-dim tile is folded in with a masked accumulating broadcast-mul so the
  *   padding contributes 0. The scaler CB is otherwise unused. Direct AVG is rejected for partial tiles; a
@@ -152,8 +152,8 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
  *   Cross-call Accumulate (CB accumulator across reduce() calls) IS supported: the accumulator CB holds the
  *   RAW partial-sum tile (not a reduced tile), each chunk folds it into the pairwise add NATIVELY (no
  *   binary_dest_reuse) via a parity rule, and sfpu_reduce finalizes only on the last chunk (Accumulate::at_last).
- *   Accumulate is BulkWaitBulkPop only. PARTIAL (ROW/COL) composes with Accumulate — the masked last tile
- *   folds into each chunk's sum via fold_partial_last — EXCEPT with the CopySeedZeroPair reload, which needs
+ *   Accumulate is BulkWaitBulkPop only. PARTIAL (ROW/COL) composes with Accumulate - the masked last tile
+ *   folds into each chunk's sum via fold_partial_last - EXCEPT with the CopySeedZeroPair reload, which needs
  *   the scaler CB for its zero tile (asserted). A cross-chunk MEAN is reduce_mean on the last chunk with the
  *   GRAND-TOTAL n_reduced (non-last chunks stay plain reduce<SUM>).
  */
@@ -162,9 +162,9 @@ enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
 /**
  * @brief Whether AccumulateViaAdd runs the WITHIN-TILE collapse at the end of the reduction.
  *
- * CONTRACT — Skip is valid ONLY with `ReduceAlgorithm::AccumulateViaAdd` and `PoolType::SUM`.
+ * CONTRACT - Skip is valid ONLY with `ReduceAlgorithm::AccumulateViaAdd` and `PoolType::SUM`.
  * Both are asserted. Note `ReduceAlgorithm::Auto` resolves to ReduceTile, so `Auto` + `Skip` does NOT
- * compile: request AccumulateViaAdd EXPLICITLY. AVG and MAX are both rejected — see below for AVG; MAX
+ * compile: request AccumulateViaAdd EXPLICITLY. AVG and MAX are both rejected - see below for AVG; MAX
  * because the accumulate datapath's cross-tile step is an add, so "skip the collapse" has no meaning for
  * a max reduction.
  *
@@ -172,18 +172,18 @@ enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
  * add_tiles(acc_to_dest), then (2) collapse the 32 lanes INSIDE that tile with sfpu_reduce. Step (2) is only
  * needed when the inputs carry real data across the reduce axis.
  *
- * Skip is for inputs that are ALREADY collapsed on that axis — the classic case is summing per-core PARTIALS
+ * Skip is for inputs that are ALREADY collapsed on that axis - the classic case is summing per-core PARTIALS
  * that each came out of an earlier reduce<..., REDUCE_ROW> and are therefore column-0-valid. The sum of
  * column-0-valid tiles is column-0-valid, so the sfpu_reduce would be a no-op over 31 garbage lanes. Skipping
  * it removes an SFPU pass per output tile.
  *
  * With Skip, DST holds the raw cross-tile SUM and `post_reduce_op` still runs on it (so a caller 1/N, eps-add
  * or rsqrt composes exactly as before). AVG is rejected: its 1/N is derived from tile geometry, which only
- * means anything once the axis has actually been collapsed — use SUM plus a post_reduce_op, or reduce_mean
+ * means anything once the axis has actually been collapsed - use SUM plus a post_reduce_op, or reduce_mean
  * (which is SUM + a caller-supplied 1/N and DOES take within_tile, so a cross-core mean combine is one call).
  *
  * SFPU STATE: under Skip this helper never touches the SFPU, so an SFPU `post_reduce_op` must run its own
- * <op>_tile_init — the normal contract, but note that under Collapse a post-op can free-ride on the
+ * <op>_tile_init - the normal contract, but note that under Collapse a post-op can free-ride on the
  * finalize's sfpu_reduce init, and under Skip it cannot.
  *
  * PARTIAL IS REJECTED (asserted): `use_partial` means the last tile needs a lane mask along the reduce axis.
@@ -195,13 +195,13 @@ enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
 enum class ReduceWithinTile { Collapse, Skip };
 
 /*
- * SUMMING TILES THAT ARE ALREADY REDUCED (the cross-core combine) — two ways, NEITHER of which
+ * SUMMING TILES THAT ARE ALREADY REDUCED (the cross-core combine) - two ways, NEITHER of which
  * needs a tile of zeros.
  *
  * The situation: each core produced a partial with reduce<SUM, REDUCE_ROW> (so it is column-0-valid),
  * the partials have been gathered, and you now want their sum. It is tempting to reach for a BinaryFpu
  * whose B operand is a zero tile, because BinaryFpu takes TWO CB inputs and you only have one stream.
- * Do not — the zero tile has to be filled, and that fill is never free.
+ * Do not - the zero tile has to be filled, and that fill is never free.
  *
  * (1) THIS HELPER. `reduce<SUM, ..., ReduceAlgorithm::AccumulateViaAdd, ..., ReduceWithinTile::Skip>`
  *     sums the tiles and skips the within-tile collapse they do not need. Prefer this when the shape
@@ -209,7 +209,7 @@ enum class ReduceWithinTile { Collapse, Skip };
  *
  * (2) A RAW PAIRWISE CHAIN, when you want the fold inline in an eltwise_chain. Point BOTH operands at
  *     the SAME CB and offset the second by half the run: step i then computes `x[i] + x[i + N/2]`, and
- *     DestAccumulation sums those N/2 pair-sums into one DEST — the N-way total, in N/2 FPU steps,
+ *     DestAccumulation sums those N/2 pair-sums into one DEST - the N-way total, in N/2 FPU steps,
  *     with no identity operand:
  *
  *         constexpr uint32_t HALF = N / 2;              // N = tiles to sum; N must be EVEN
@@ -229,11 +229,11 @@ enum class ReduceWithinTile { Collapse, Skip };
  *                                       ckl::L1Accumulation::Disabled)>{out});
  *
  *     (`in` / `out` are the kernel's DataflowBuffer objects for cb_in / cb_out.) `0, HALF` are the
- *     A and B operand base offsets — those two bases are the whole trick, and it is
+ *     A and B operand base offsets - those two bases are the whole trick, and it is
  *     the same idiom the `eltwise_l1_vs_dest_accumulate` example measures. `tiles(...)` is one
  *     contiguous shape, so the accumulation scope is WholeShape (PerRow is rejected there); for a 2D
  *     walk use `grid(H, W)` with `TileAddressing::Strided` and a `StridedTileRange{base, row_stride}` per
- *     operand. ODD N does not tile into halves — fall back to (1), or handle the leftover separately.
+ *     operand. ODD N does not tile into halves - fall back to (1), or handle the leftover separately.
  */
 
 /**
@@ -243,11 +243,11 @@ enum class ReduceWithinTile { Collapse, Skip };
  *
  * CONTRACT: FoldViaAdd reads the accumulator CB through SrcA/SrcB, so it is ONLY valid when that CB is
  * UnpackToDestMode::Default. If the accumulator CB is tagged UnpackToDestMode::UnpackToDestFp32 (a lossless
- * fp32 reload — SrcA/B access is disabled for it, see the numeric-formats docs), FoldViaAdd is INCORRECT; use
+ * fp32 reload - SrcA/B access is disabled for it, see the numeric-formats docs), FoldViaAdd is INCORRECT; use
  * a CopySeed* mode (reloads via copy_tile, the only sanctioned access for a to-dest CB).
  *
  * - FoldViaAdd: fold the accumulator as an add_tiles SRCB operand (no dest reload). Fastest; Default-acc only.
- * - CopySeedPairs: reload the accumulator into DST via copy_tile, then add the new tiles — pairwise add_tiles
+ * - CopySeedPairs: reload the accumulator into DST via copy_tile, then add the new tiles - pairwise add_tiles
  *   for the bulk (2 tiles/op) + one DEST-reuse add for an odd leftover. Safe for any accumulator CB.
  * - CopySeedUniform: reload via copy_tile, then add every new tile via a DEST-reuse add (1 tile/op). Safe;
  *   simplest; slower bulk. (Kept mainly for the bake-off; CopySeedPairs dominates it.)
@@ -288,8 +288,8 @@ struct ReduceInputMemoryLayout {
  *
  * Specifies the dimensions of the input tile block to be reduced.
  * The output size depends on the reduction dimension:
- * - REDUCE_ROW: output has (rows × batches) tiles
- * - REDUCE_COL: output has (cols × batches) tiles
+ * - REDUCE_ROW: output has (rows x batches) tiles
+ * - REDUCE_COL: output has (cols x batches) tiles
  * - REDUCE_SCALAR: output has (batches) tiles
  */
 struct ReduceInputBlockShape {
@@ -405,11 +405,11 @@ struct Accumulate {
     AccumulationConfig config;
     // AccumulateViaAdd only: how a later chunk folds the accumulator with its new tiles. Default is the safe
     // CopySeedPairs (correct for any accumulator CB, incl. UnpackToDestFp32). Set FoldViaAdd (via with_reload)
-    // only when the accumulator CB is UnpackToDestMode::Default — it reads the accumulator through SrcA/SrcB.
+    // only when the accumulator CB is UnpackToDestMode::Default - it reads the accumulator through SrcA/SrcB.
     AccumulateReloadMode reload = AccumulateReloadMode::CopySeedPairs;
     std::uint32_t iteration = 0;
     // AccumulateViaAdd only: marks the LAST chunk. The accumulator CB holds the RAW partial-sum tile, so the
-    // within-tile finalize (sfpu_reduce + scaler + post_reduce_op) must run exactly once — on the last chunk,
+    // within-tile finalize (sfpu_reduce + scaler + post_reduce_op) must run exactly once - on the last chunk,
     // writing the finalized result to the output CB. Non-last chunks write the raw partial sum back to the
     // accumulator CB and skip the finalize. The ReduceTile datapath ignores this flag (it finalizes every
     // chunk, so accumulating REDUCED partials is correct there); only AccumulateViaAdd reads it.
@@ -504,7 +504,7 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * IMPORTANT - HARDWARE INITIALIZATION REQUIREMENT:
  * Before calling this function, you MUST initialize the compute kernel hardware by
  * calling compute_kernel_hw_startup() exactly once at the start of your kernel.
- * Do NOT re-call it later (and never inside a loop) — re-running mid-kernel can
+ * Do NOT re-call it later (and never inside a loop) - re-running mid-kernel can
  * race the compute pipeline and produce undefined behavior.
  *
  * IMPORTANT - SCALER CB REQUIREMENT:
@@ -630,7 +630,7 @@ template <
     ReduceAlgorithm algorithm = ReduceAlgorithm::Auto,
     // within_tile sits AHEAD of the two deduced typename parameters on purpose: PostReduceOp is normally a
     // lambda, whose type cannot be named at the call site, so a trailing within_tile would be unreachable for
-    // every caller that passes a post_reduce_op — i.e. exactly the callers Skip is documented for.
+    // every caller that passes a post_reduce_op - i.e. exactly the callers Skip is documented for.
     ReduceWithinTile within_tile = ReduceWithinTile::Collapse,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
@@ -645,7 +645,7 @@ ALWI void reduce(
  * @brief Mean reduction = reduce<SUM> + an explicit, caller-supplied 1/N normalization.
  *
  * The reduce datapath computes a SUM; the divisor N is a logical property of the WHOLE reduction that only
- * the caller knows — it is NOT derived from tile geometry (that only works for a single tile-aligned call
+ * the caller knows - it is NOT derived from tile geometry (that only works for a single tile-aligned call
  * and cannot compose across cross-call accumulate chunks or uneven shards). This wrapper runs
  * reduce<PoolType::SUM, ...> and, on the finalizing chunk, multiplies each output tile by 1/n_reduced.
  *
@@ -653,7 +653,7 @@ ALWI void reduce(
  *   - tile-aligned ROW/COL:  reduce_tiles * 32
  *   - tile-aligned SCALAR:   reduce_tiles * 1024
  *   - partial (non-aligned): (full_tiles * 32) + valid_elems_in_last_tile
- *   - cross-call Accumulate: the GRAND TOTAL across all chunks — pass it on the Accumulate::at_last() call;
+ *   - cross-call Accumulate: the GRAND TOTAL across all chunks - pass it on the Accumulate::at_last() call;
  *                            non-last chunks stay a plain reduce<PoolType::SUM> (no normalization).
  *
  * All other template/runtime parameters mirror reduce() (same policies, reconfig mode, memory layout,

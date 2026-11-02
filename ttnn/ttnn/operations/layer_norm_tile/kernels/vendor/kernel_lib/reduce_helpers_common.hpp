@@ -11,7 +11,7 @@
 /**
  * @brief Float32 reduce precision mode.
  *
- * Fast keeps fp32 on the FPU/GMPOOL path (inputs truncated to tf32 — faster, lossy); Accurate
+ * Fast keeps fp32 on the FPU/GMPOOL path (inputs truncated to tf32 - faster, lossy); Accurate
  * routes fp32 through the SFPU at full fp32. Only affects Float32; Int32 and bf16 MIN use the SFPU
  * regardless of this mode.
  */
@@ -78,7 +78,7 @@ constexpr bool is_sfpu_reduce_path() {
  * @brief Whether the FPU reduce path swaps SrcA/SrcB operands.
  *
  * REDUCE_ROW SUM/AVG uses matmul with scaler in SrcA and data in SrcB (the opposite of the
- * default data→SrcA, scaler→SrcB ordering). This does not apply to MAX (which uses GMPOOL)
+ * default data->SrcA, scaler->SrcB ordering). This does not apply to MAX (which uses GMPOOL)
  * or to the SFPU path (Int32, bf16 MIN, and Accurate fp32), which bypasses matmul entirely.
  */
 template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim, bool is_sfpu>

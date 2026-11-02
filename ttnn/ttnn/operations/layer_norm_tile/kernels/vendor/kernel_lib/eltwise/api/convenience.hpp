@@ -25,7 +25,7 @@
  * ctor is `explicit`): write `op<...>(IterationShape::tiles(n))`, `IterationShape::one_tile()`,
  * or `op<...>(IterationShape::grid(Ht, Wt))` so the iteration shape is always explicit.
  *
- * Like `eltwise_chain`, these emit no engine-wide init — the caller owns
+ * Like `eltwise_chain`, these emit no engine-wide init - the caller owns
  * `compute_kernel_hw_startup(...)` as the first statement of `MAIN()`. Drop to
  * `eltwise_chain` directly for anything outside these shapes (fused multi-op chains,
  * DEST-reuse, fill, etc.).
@@ -38,7 +38,7 @@
 namespace compute_kernel_lib {
 
 // ---------------------------------------------------------------------------
-// FPU binary — BinaryFpu(D0) -> PackTile(D0). Op baked into the name.
+// FPU binary - BinaryFpu(D0) -> PackTile(D0). Op baked into the name.
 // Defaults: no broadcast, both operands per-tile streaming.
 // ---------------------------------------------------------------------------
 
@@ -70,7 +70,7 @@ template <
 ALWI void mul(IterationShape shape, DataflowBufferA& a, DataflowBufferB& b, OutputDataflowBuffer& out);
 
 // ---------------------------------------------------------------------------
-// FPU square — x * x, via BinaryFpu reading the one input buffer for both operands
+// FPU square - x * x, via BinaryFpu reading the one input buffer for both operands
 // (the chain's same-buffer path waits/pops it once). Mirrors mul's knobs minus the ones
 // that don't apply when both operands are the same tile: no broadcast, and a single
 // operand lifecycle / index instead of separate A/B.
@@ -80,18 +80,18 @@ template <InputSpec Input, OutputSpec Output, class InputDataflowBuffer, class O
 ALWI void square(IterationShape shape, InputDataflowBuffer& in, OutputDataflowBuffer& out);
 
 // ---------------------------------------------------------------------------
-// SFPU unary — CopyTile(D0) -> SfpuOp -> PackTile(D0). SfpuOp is the (DEST-only) op type.
+// SFPU unary - CopyTile(D0) -> SfpuOp -> PackTile(D0). SfpuOp is the (DEST-only) op type.
 // ---------------------------------------------------------------------------
 
 template <class SfpuOp, InputSpec Input, OutputSpec Output, class InputDataflowBuffer, class OutputDataflowBuffer>
 ALWI void unary(IterationShape shape, InputDataflowBuffer& in, OutputDataflowBuffer& out);
 
-// Typecast — derives the LLK input/output formats from the bound buffers.
+// Typecast - derives the LLK input/output formats from the bound buffers.
 template <InputSpec Input, OutputSpec Output, class InputDataflowBuffer, class OutputDataflowBuffer>
 ALWI void typecast(IterationShape shape, InputDataflowBuffer& in, OutputDataflowBuffer& out);
 
 // ---------------------------------------------------------------------------
-// SFPU binary — two CopyTile loads (D0, D1) -> SfpuBinOp -> PackTile(D0).
+// SFPU binary - two CopyTile loads (D0, D1) -> SfpuBinOp -> PackTile(D0).
 // SfpuBinOp is a DEST-only SFPU binary op type (e.g. DivBinary<>, BinaryMax<>).
 // ---------------------------------------------------------------------------
 
@@ -106,7 +106,7 @@ template <
 ALWI void binary_sfpu(IterationShape shape, DataflowBufferA& a, DataflowBufferB& b, OutputDataflowBuffer& out);
 
 // ---------------------------------------------------------------------------
-// Pure copy — CopyTile(D0) -> PackTile(D0).
+// Pure copy - CopyTile(D0) -> PackTile(D0).
 // ---------------------------------------------------------------------------
 
 template <InputSpec Input, OutputSpec Output, class InputDataflowBuffer, class OutputDataflowBuffer>

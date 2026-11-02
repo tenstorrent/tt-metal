@@ -5,7 +5,7 @@
 
 /**
  * @file chain.hpp
- * @brief Element-wise compute helper — one chain surface for all eltwise patterns.
+ * @brief Element-wise compute helper - one chain surface for all eltwise patterns.
  *
  * Every element-wise compute pattern (FPU binary, SFPU unary/binary/ternary, dest-reuse, copy,
  * pack, fill, rand, unary broadcast) is expressed as a sequence of chain elements passed to
@@ -25,7 +25,7 @@
  * --------------------
  * The chain never issues engine-wide ("BIG") init. The caller owns `compute_kernel_hw_startup`
  * (plus `compute_kernel_hw_startup` / `mm_init` / `reduce_init` when the kernel mixes those
- * primitives). The chain owns only per-element init — `*_tile_init`, `bcast_init`, `copy_init`,
+ * primitives). The chain owns only per-element init - `*_tile_init`, `bcast_init`, `copy_init`,
  * and the `reconfig_data_format_*` fold and dst-sync lifecycle.
  * Do not add a `*_with_init` wrapper that folds `compute_kernel_hw_startup`
  * into the chain: it is only correct for single-stage kernels and breaks multi-stage / mid-loop
@@ -49,8 +49,8 @@
  * -----------------------
  * Each `input(...)` / `output(...)` spec names a buffer by its compile-time id (what the reconfig
  * fold and the compile-time checks reason about). The element that carries the spec also takes that
- * buffer's `DataflowBuffer` by reference as a leading constructor argument — one per spec, in the
- * order the specs appear in its template arguments — and the chain issues every wait/pop/reserve/push
+ * buffer's `DataflowBuffer` by reference as a leading constructor argument - one per spec, in the
+ * order the specs appear in its template arguments - and the chain issues every wait/pop/reserve/push
  * through it. The chain never constructs a DataflowBuffer itself; construct each one once in the
  * kernel and pass the same object to every chain that uses it:
  *
@@ -69,18 +69,18 @@
  * --------
  *   DataflowBuffer in(dfb::in), a(dfb::a), b(dfb::b), out(dfb::out);   // once, at the top of the kernel
  *
- *   // Streaming unary — Exp(x) -> out
+ *   // Streaming unary - Exp(x) -> out
  *   eltwise_chain(IterationShape::tiles(num_tiles),
  *       CopyTile<input(dfb::in)>{in},
  *       Exp<>{},
  *       PackTile<output(dfb::out)>{out});
  *
- *   // Streaming binary — A + B -> out (BinaryFpu writes DEST; the output buffer lives on PackTile)
+ *   // Streaming binary - A + B -> out (BinaryFpu writes DEST; the output buffer lives on PackTile)
  *   eltwise_chain(IterationShape::tiles(num_tiles),
  *       BinaryFpu<BinaryFpuOp::Add, input(dfb::a), input(dfb::b)>{a, b},
  *       PackTile<output(dfb::out)>{out});
  *
- * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
+ * Not supported: per-iteration (mid-loop) dtype swaps - each element's dtype reconfig point is
  * resolved per element at compile time (fold-driven, emitted once at element entry), so there is
  * no per-loop-iteration reconfig path; and the legacy `acquire_dst/release_dst` macros
  * (modern dst-sync only).
@@ -90,7 +90,7 @@
 
 #include "../../dest_helpers.hpp"
 #include "api/compute/common_globals.h"    // ALWI (used by the public eltwise_chain() declaration)
-#include "api/dataflow/dataflow_buffer.h"  // DataflowBuffer — elements bind the caller's buffers by reference
+#include "api/dataflow/dataflow_buffer.h"  // DataflowBuffer - elements bind the caller's buffers by reference
 // The heavier LLK / compute-API includes are impl-only and live in chain.inl.
 
 namespace compute_kernel_lib {
@@ -103,13 +103,13 @@ namespace compute_kernel_lib {
 // The matching runtime `DataflowBuffer` objects are bound by reference at element construction
 // (see "Binding DataflowBuffers" above).
 
-// (The marker-tag hierarchy — CbReaderTag/CbWriterTag/DestOnlyTag + the per-element
-//  leaf tags — and the is_*_op_v classification predicates are internal pipeline
+// (The marker-tag hierarchy - CbReaderTag/CbWriterTag/DestOnlyTag + the per-element
+//  leaf tags - and the is_*_op_v classification predicates are internal pipeline
 //  scaffolding, defined in chain.inl. Concrete elements declared below inherit
 //  the leaf tags from there.)
 
 // =============================================================================
-// 1a. 2D shape — (Ht, Wt) tile grid for the 2D chain overload
+// 1a. 2D shape - (Ht, Wt) tile grid for the 2D chain overload
 // =============================================================================
 
 /// How a `PerBlockSize` lifecycle synchronizes the partial tail of a blocked walk.
@@ -128,17 +128,17 @@ enum class BlockTailSync : uint8_t {
 /// linear walk); the `Row`/`Col` indexing modes degenerate for 1D usage but remain well-defined.
 ///
 /// Factories establish the iteration extent. Blocking is configured fluently when needed:
-///   - `IterationShape::tiles(n)` — 1D, block size 1
-///   - `IterationShape::tiles(n).block_size(blk)` — 1D + block
+///   - `IterationShape::tiles(n)` - 1D, block size 1
+///   - `IterationShape::tiles(n).block_size(blk)` - 1D + block
 ///   - `IterationShape::tiles(n).block_size(blk, BlockTailSync::FullBlock)`
-///                                                   — 1D fixed-size physical blocks
-///   - `IterationShape::grid(H, W)` — 2D, block size 1
-///   - `IterationShape::grid(H, W).block_size(blk)` — 2D + block
+///                                                   - 1D fixed-size physical blocks
+///   - `IterationShape::grid(H, W)` - 2D, block size 1
+///   - `IterationShape::grid(H, W).block_size(blk)` - 2D + block
 ///   - `IterationShape::grid(H, W).block_size(blk, BlockTailSync::FullBlock)`
-///                                                   — 2D row-blocked fixed-size physical blocks
+///                                                   - 2D row-blocked fixed-size physical blocks
 ///
 /// Construction from a tile count is `explicit`: a bare number is NOT accepted as a
-/// shape — call sites must spell the iteration shape out as `IterationShape::tiles(n)`
+/// shape - call sites must spell the iteration shape out as `IterationShape::tiles(n)`
 /// (or `IterationShape::one_tile()` for one tile). This keeps `eltwise_chain(...)` and the
 /// convenience wrappers from silently treating a stray integer as a tile count.
 ///
@@ -172,7 +172,7 @@ struct IterationShape {
     }
 };
 
-/// Who performs the chain's one-time setup — init + reconfig — the leading template arg to
+/// Who performs the chain's one-time setup - init + reconfig - the leading template arg to
 /// `eltwise_chain`. This is about *ownership*, NOT about whether inits are hoistable: which inits
 /// are hoistable is deduced from the chain's uniformity and is never a manual choice.
 ///
@@ -183,16 +183,16 @@ struct IterationShape {
 ///   for (...) eltwise_chain<InitReconfigOwner::Caller>(IterationShape::one_tile(), elts...);
 ///
 /// InitReconfigOwner::Caller is only valid when the chain's entire setup is boot-hoistable (uniform math
-/// MOP + SFPU init AND homogeneous pack CBs) — i.e. there's a single "once, before the loop" the
+/// MOP + SFPU init AND homogeneous pack CBs) - i.e. there's a single "once, before the loop" the
 /// caller can own. eltwise_chain static_asserts this; a chain that must re-emit setup per tile
 /// (so the caller can't pre-do it once) is a compile error pointing you back to InitReconfigOwner::Chain.
 enum class InitReconfigOwner {
     Chain,   // this eltwise_chain call emits the one-time setup (init + reconfig)
-    Caller,  // the caller emitted it once, outside the loop — the chain emits none of it here
+    Caller,  // the caller emitted it once, outside the loop - the chain emits none of it here
 };
 
 // -----------------------------------------------------------------------------
-// Skip-compute — a performance-debugging BUILD knob, NOT part of the eltwise_chain API.
+// Skip-compute - a performance-debugging BUILD knob, NOT part of the eltwise_chain API.
 //
 // With CKL_ELTWISE_CHAIN_SKIP_COMPUTE=1, every eltwise_chain in the translation unit emits only
 // its CB lifecycle (wait/pop/reserve/push) and tile_regs synchronization. All helper-owned init,
@@ -243,11 +243,11 @@ enum class PushPolicy : uint8_t { None, PerTile, PerBlockSize, AtEnd, PerOuter, 
 
 /// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
 /// Pick the one that matches how your input maps onto the output:
-///   - Block  — a distinct tile every step; the index advances with the walk (full Ht x Wt input).
-///   - Row    — indexed by column only: the same tile-row is re-read for every output row ([1, Wt] input).
-///   - Col    — with a staged lifecycle, indexed by row so the same tile-column is re-read for every
+///   - Block  - a distinct tile every step; the index advances with the walk (full Ht x Wt input).
+///   - Row    - indexed by column only: the same tile-row is re-read for every output row ([1, Wt] input).
+///   - Col    - with a staged lifecycle, indexed by row so the same tile-column is re-read for every
 ///              output column ([Ht, 1] input); with PerTile/PerTile, streamed one tile per row.
-///   - Scalar — contribute index 0 every step, pinning the read to the operand's base tile
+///   - Scalar - contribute index 0 every step, pinning the read to the operand's base tile
 ///              (`TileAddressing::Offset` may make that base nonzero). This is inter-tile indexing, not a
 ///              hardware scalar broadcast; it is independent of `BroadcastDim`.
 /// The size aspect only matters with an upfront-wait policy, where the mapping also sets
@@ -262,12 +262,12 @@ enum class InputTileMapping : uint8_t {
 };
 
 // =============================================================================
-// 1c. TileAddressing — orthogonal tile-index addressing
+// 1c. TileAddressing - orthogonal tile-index addressing
 // =============================================================================
 //
 // Composes with `InputTileMapping`: `tile_id = base + derived_from_mapping(r, c)`, where
 // TileAddressing supplies `base` and InputTileMapping supplies the mapping-derived term.
-//   - `Direct` (default): no base offset, zero overhead — the `+base` term and stored value
+//   - `Direct` (default): no base offset, zero overhead - the `+base` term and stored value
 //     are compile-time-elided.
 //   - `Offset`: base offset present; its value comes from the element's constructor (runtime,
 //     or a compile-time constant that constant-propagates into the address add).
@@ -460,11 +460,11 @@ constexpr OutputSpec output(
     PackRelu relu = PackRelu::Disabled) noexcept;
 
 // =============================================================================
-// 2. DEST slot enum — capped at compile-time DEST capacity
+// 2. DEST slot enum - capped at compile-time DEST capacity
 // =============================================================================
 
 /// Compile-time DEST slot identifier. Cap depends on sync mode + fp32_dest_acc (DEST_AUTO_LIMIT).
-/// Names D0..D15 are nominal — `static_assert` on each slot's use checks
+/// Names D0..D15 are nominal - `static_assert` on each slot's use checks
 /// `(uint32_t)Slot < DEST_AUTO_LIMIT`. Never use a literal `8` to bound DEST slots.
 enum class Dst : uint32_t {
     D0 = 0,
@@ -488,10 +488,10 @@ enum class Dst : uint32_t {
 constexpr uint32_t to_u32(Dst s) noexcept;
 
 // =============================================================================
-// 3. Block size — `IterationShape::block_size` semantics
+// 3. Block size - `IterationShape::block_size` semantics
 // =============================================================================
 //
-// Op-struct template-param enums (Approx) live in op_params.hpp — they
+// Op-struct template-param enums (Approx) live in op_params.hpp - they
 // are an op-helper concern, not part of the chain mechanics, so they are not defined here.
 
 /// Block size. Configured with `IterationShape::tiles(n).block_size(blk)` or
@@ -517,8 +517,8 @@ enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 
 /// DestReuseBinary side selector.
 enum class DestReuseType : uint8_t {
-    DEST_TO_SRCA,  // CB → srcb, DEST → srca
-    DEST_TO_SRCB,  // CB → srca, DEST → srcb
+    DEST_TO_SRCA,  // CB -> srcb, DEST -> srca
+    DEST_TO_SRCB,  // CB -> srca, DEST -> srcb
 };
 
 // =============================================================================
@@ -556,8 +556,8 @@ using CopyTile = detail::CopyTileImpl<
     detail::copy_tile_config_bits(DstSlot, Input),
     DataflowBufferFor<Input.producer_access_pattern, Input.consumer_access_pattern>>;
 
-/// FPU binary of two input tiles into `DstSlot`. Constructor: `{a, b}` — the DataflowBuffers named by
-/// `AInput` and `BInput`, in that order (the same object twice when both name one buffer) — optionally
+/// FPU binary of two input tiles into `DstSlot`. Constructor: `{a, b}` - the DataflowBuffers named by
+/// `AInput` and `BInput`, in that order (the same object twice when both name one buffer) - optionally
 /// followed by per-side tile bases: `{a, b, base_a}`, `{a, b, base_a, base_b}`, or StridedTileRange forms.
 template <
     BinaryFpuOp Op,
@@ -591,10 +591,10 @@ using PackTile = detail::PackTileImpl<
     DataflowBufferFor<Output.producer_access_pattern, Output.consumer_access_pattern>>;
 
 // (Chain-shape trait predicates, the EltwiseChain type-list wrapper, and the INVALID_DFB sentinel
-//  are implementation detail — declared in chain.inl, not on this public surface.)
+//  are implementation detail - declared in chain.inl, not on this public surface.)
 
 // =============================================================================
-// 6. Public API — eltwise_chain
+// 6. Public API - eltwise_chain
 // =============================================================================
 //
 // Caller-init contract (see the @file block): the caller owns engine-wide init
@@ -605,10 +605,10 @@ using PackTile = detail::PackTileImpl<
 /// `IterationShape` covers both walks: `tiles(n)` (1D, Ht=1),
 /// `tiles(n).block_size(blk, BlockTailSync::FullBlock)` for a fixed-block 1D CB contract, or
 /// `grid(H, W).block_size(blk, BlockTailSync::FullBlock)` for a row-blocked 2D contract.
-/// A bare number is not accepted — write `IterationShape::tiles(n)` (or
+/// A bare number is not accepted - write `IterationShape::tiles(n)` (or
 /// `IterationShape::one_tile()` for one tile) so the iteration shape is always explicit.
 ///
-/// Compile-time validation static_asserts on: illegal (Policy × Mapping) cells,
+/// Compile-time validation static_asserts on: illegal (Policy x Mapping) cells,
 /// duplicate upfront CBs across CB-readers, colliding pack writes, and hoist requested on
 /// a non-hoist-safe chain.
 ///

@@ -3,7 +3,7 @@
 
 #pragma once
 
-// Implementation detail of misc.hpp — full op-struct definitions live here. The public
+// Implementation detail of misc.hpp - full op-struct definitions live here. The public
 // header forward-declares these structs and includes this file at its tail.
 
 #include "api/compute/eltwise_unary/negative.h"
@@ -11,8 +11,8 @@
 #include "api/compute/compute_kernel_api.h"  // square_tile; abs_tile/sign_tile are BH/WH-only (see below)
 #include "api/compute/mask.h"
 // identity / copy_dest_values LLKs (ckernel_sfpu_{identity,copy_dest_values}.h) are BH/WH-only and not
-// ported to Quasar; these headers hard-#include the missing LLK under TRISC_MATH, so exclude them — and
-// the ops they back (Identity, CopyDest) — on Quasar.
+// ported to Quasar; these headers hard-#include the missing LLK under TRISC_MATH, so exclude them - and
+// the ops they back (Identity, CopyDest) - on Quasar.
 #ifndef ARCH_QUASAR
 #include "api/compute/eltwise_unary/identity.h"
 // CopyDest (DST -> DST) only calls the copy_dest_values<DataFormat> overload. The header's legacy
@@ -48,7 +48,7 @@ struct Negative : UnaryOp<Negative<Slot>, Slot> {
 };
 
 // abs_tile / sign_tile are guarded #ifndef ARCH_QUASAR in compute_kernel_api.h (Blackhole/Wormhole
-// only — no Quasar SFPU implementation), so these ops cannot be offered on Quasar.
+// only - no Quasar SFPU implementation), so these ops cannot be offered on Quasar.
 #ifndef ARCH_QUASAR
 template <Dst Slot>
 struct Abs : UnaryOp<Abs<Slot>, Slot> {
@@ -69,7 +69,7 @@ struct Square : UnaryOp<Square<Slot>, Slot> {
     static ALWI void exec_impl(uint32_t slot_offset) { square_tile(to_u32(Slot) + slot_offset); }
 };
 
-// CopyDest — copy a tile's values from one DEST slot to another (copy_dest_values).
+// CopyDest - copy a tile's values from one DEST slot to another (copy_dest_values).
 // Two slots (In -> Out), no CB. The LLK's DataFormat-templated overload is
 // required so integer and floating-point DEST values preserve their representation.
 // copy_dest_values LLK is BH/WH-only (ckernel_sfpu_copy_dest_values.h not ported to Quasar).
@@ -85,14 +85,14 @@ struct CopyDest : DestOnlyTag {
 };
 #endif
 
-// Typecast — compile-time in/out dtype encoded as numeric IDs (uint32_t form expected by LLK).
+// Typecast - compile-time in/out dtype encoded as numeric IDs (uint32_t form expected by LLK).
 template <uint32_t InDF, uint32_t OutDF, Dst Slot>
 struct Typecast : UnaryOp<Typecast<InDF, OutDF, Slot>, Slot> {
     static ALWI void init() { typecast_tile_init<InDF, OutDF>(); }
     static ALWI void exec_impl(uint32_t slot_offset) { typecast_tile<InDF, OutDF>(to_u32(Slot) + slot_offset); }
 };
 
-// Mask — bakes the fixed `mask_tile` LLK contract (mask lives at DataSlot+1) into
+// Mask - bakes the fixed `mask_tile` LLK contract (mask lives at DataSlot+1) into
 // the type. Caller pre-loads data into DataSlot and mask into DataSlot+1; the
 // op writes the masked result back into DataSlot. Compile-time `static_assert` rejects
 // `DataSlot == D_LAST` (no slot for the mask tile).
@@ -109,7 +109,7 @@ struct Mask : BinaryOp<Mask<DF, DataSlot>, DataSlot, static_cast<Dst>(to_u32(Dat
     }
 };
 
-// MaskPosInf — same LLK contract as Mask (data at DataSlot, mask at DataSlot+1) but
+// MaskPosInf - same LLK contract as Mask (data at DataSlot, mask at DataSlot+1) but
 // masks each element with +inf instead of 0. Shares mask_tile_init.
 template <Dst DataSlot>
 struct MaskPosInf : BinaryOp<MaskPosInf<DataSlot>, DataSlot, static_cast<Dst>(to_u32(DataSlot) + 1), DataSlot> {

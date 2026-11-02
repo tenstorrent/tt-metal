@@ -5,7 +5,7 @@
 
 /**
  * @file misc.hpp
- * @brief Misc / utility SFPU op structs — Identity, Negative, Typecast, Sign, Abs, Square.
+ * @brief Misc / utility SFPU op structs - Identity, Negative, Typecast, Sign, Abs, Square.
  */
 
 #include "../api/chain.hpp"
@@ -34,7 +34,7 @@ struct Sign;
 template <Dst Slot = Dst::D0>
 struct Square;
 
-// CopyDest — copy a tile's values from one DEST slot to another. The LLK data
+// CopyDest - copy a tile's values from one DEST slot to another. The LLK data
 // format is explicit because format-agnostic copying is deprecated.
 // copy_dest_values LLK is BH/WH-only (ckernel_sfpu_copy_dest_values.h not ported to Quasar).
 #ifndef ARCH_QUASAR
@@ -42,7 +42,7 @@ template <Dst In, Dst Out, DataFormat DF>
 struct CopyDest;
 #endif
 
-// Typecast — compile-time in/out dtype encoded as numeric IDs.
+// Typecast - compile-time in/out dtype encoded as numeric IDs.
 template <uint32_t InDF, uint32_t OutDF, Dst Slot = Dst::D0>
 struct Typecast;
 

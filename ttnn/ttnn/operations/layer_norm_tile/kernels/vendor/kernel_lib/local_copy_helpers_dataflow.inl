@@ -9,12 +9,12 @@
 
 namespace dataflow_kernel_lib {
 
-// ─── local_addr ─────────────────────────────────────────────────────────────
+// --- local_addr -------------------------------------------------------------
 //
 // A self-aimed unicast source. Every helper below routes its source through this, so the
 // per-NoC coordinate rule is enforced in exactly one place.
 //
-// Example — a copy too large for the stateful path, issued directly:
+// Example - a copy too large for the stateful path, issued directly:
 //
 //   #include "local_copy_helpers_dataflow.hpp"
 //   Noc noc;
@@ -33,12 +33,12 @@ FORCE_INLINE noc_traits_t<UnicastEndpoint>::src_args_type local_addr(uint32_t ad
     return noc_traits_t<UnicastEndpoint>::src_args_type{.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = addr};
 }
 
-// ─── set_read_state / read_with_state ───────────────────────────────────────
+// --- set_read_state / read_with_state ---------------------------------------
 //
 // The stateful split exists to amortise NoC config-register setup across a loop: program the
 // source address and the size ONCE, then issue N reads that only rewrite the destination.
 //
-// Example — fill a destination region with N copies of one padding stick:
+// Example - fill a destination region with N copies of one padding stick:
 //
 //   Noc noc;
 //   dataflow_kernel_lib::set_read_state<stick_bytes>(noc, pad_l1_addr);
@@ -49,7 +49,7 @@ FORCE_INLINE noc_traits_t<UnicastEndpoint>::src_args_type local_addr(uint32_t ad
 //   }
 //   noc.async_read_barrier();
 //
-// Example — scatter into a typed destination (DataflowBuffer / CircularBuffer):
+// Example - scatter into a typed destination (DataflowBuffer / CircularBuffer):
 //
 //   dataflow_kernel_lib::set_read_state<row_bytes>(noc, src_l1_base);
 //   for (uint32_t r = 0; r < nrows; ++r) {
@@ -89,13 +89,13 @@ FORCE_INLINE void read_with_state(
 template <typename Dst>
 FORCE_INLINE void read_with_state(Noc noc, const Dst& dst, uint32_t src_addr) {
     UnicastEndpoint ep;
-    // size_bytes = 0 is deliberate — see the dst_args overload above.
+    // size_bytes = 0 is deliberate - see the dst_args overload above.
     noc.async_read_with_state<NocOptions::DEFAULT, 1>(ep, dst, 0, local_addr(src_addr, noc.get_noc_id()), {});
 }
 
-// ─── set_read_trid / async_read_barrier_with_trid ───────────────────────────
+// --- set_read_trid / async_read_barrier_with_trid ---------------------------
 //
-// Example — a two-deep read pipeline that drains batch k while batch k+1 is in flight:
+// Example - a two-deep read pipeline that drains batch k while batch k+1 is in flight:
 //
 //   for (uint32_t issued = 0; issued < n_batches; ++issued) {
 //       if (issued >= N_TRIDS) {
