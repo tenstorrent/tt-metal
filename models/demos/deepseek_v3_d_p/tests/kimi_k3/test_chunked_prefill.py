@@ -53,7 +53,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
-from models.demos.deepseek_v3_d_p.tt.kda.kda import convolution_tail_from_device_layout
+from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_from_device_layout
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer

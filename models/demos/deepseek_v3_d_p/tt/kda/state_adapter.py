@@ -4,7 +4,7 @@
 
 ``ttKDA`` reads and writes its state in the *native* form: ``recurrent`` ``[1, H_local, D, D]`` FP32
 TILE and ``convolution`` ``[1, 3*H_local*D/64, (K-1)*64]`` BF16 ROW_MAJOR (one 64-channel segment per
-row, ``kda.convolution_tail_shape``), both interleaved DRAM, heads sharded across TP and the complete
+row, ``config.convolution_tail_shape``), both interleaved DRAM, heads sharded across TP and the complete
 state replicated across SP. The kernels accept nothing else, so a layer runs on one native scratch
 carry, loaded from and stored back to the *contract* form, which is the carries' only store and what
 migration reads.
@@ -60,7 +60,8 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KDA_CONVOLUTION_SEGMENT_CHANNELS, KdaState, convolution_tail_shape
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_CONVOLUTION_SEGMENT_CHANNELS, convolution_tail_shape
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 
 KDA_RECURRENT_BAND_WIDTH = 32
 KDA_RECURRENT_DTYPE = ttnn.float32
@@ -123,7 +124,7 @@ class KdaContractGeometry:
 
     @property
     def convolution_shape(self) -> tuple[int, int, int]:
-        """The native tail: one 64-channel segment per row (``kda.convolution_tail_shape``)."""
+        """The native tail: one 64-channel segment per row (``config.convolution_tail_shape``)."""
         return convolution_tail_shape(self.conv_history, self.convolution_width)
 
     # --- segments ---

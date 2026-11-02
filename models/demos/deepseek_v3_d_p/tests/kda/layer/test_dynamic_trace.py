@@ -23,7 +23,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 
 @pytest.mark.parametrize(
     # No TP8 case: the compact reference's 96 channels per chip cannot form whole 64-channel segments, the native
-    # convolution tail's page (`kda.convolution_tail_shape`); TP8 runs at the K3 shape in test_production_local_trace.
+    # convolution tail's page (`config.convolution_tail_shape`); TP8 runs at the K3 shape in test_production_local_trace.
     "mesh_device,sp_axis,tp_axis,local_rows",
     [
         ((2, 4), 0, 1, 2560),

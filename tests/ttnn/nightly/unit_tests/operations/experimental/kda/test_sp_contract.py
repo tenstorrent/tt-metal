@@ -11,7 +11,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.kda import convolution_tail_to_device_layout
+from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_to_device_layout
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (

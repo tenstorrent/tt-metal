@@ -8,7 +8,7 @@ from collections.abc import Callable, Sequence
 import torch
 import torch.nn.functional as F
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.kda import convolution_tail_to_device_layout
+from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_to_device_layout
 
 
 def _finiteness(name: str, tensor: torch.Tensor) -> tuple[list[str], str]:

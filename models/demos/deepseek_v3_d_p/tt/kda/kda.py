@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
+    convolution_tail_shape,
     decay_projection_program_config,
     l1_when_it_fits,
     tuned_projection_matmul_configs,
@@ -126,50 +127,6 @@ class _HistoryExchange:
 
 
 _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
-
-
-# The convolution tail (`KdaState.convolution`) is stored per 64-channel segment, the KDA state migration contract's
-# convolution segment: shape `[1, W / 64, (K-1) * 64]` ROW_MAJOR BF16, page `c // 64` holding the `K-1` history rows of
-# channels `[64c, 64c + 64)`, row `r` at element `64 r`. A page is exactly one slab segment, so the engine's per-slot
-# copy is a plain page copy with no relayout. `qkv_causal_conv1d_silu` reads and writes this layout directly.
-KDA_CONVOLUTION_SEGMENT_CHANNELS = 64
-
-
-def convolution_tail_shape(history_rows: int, width: int) -> tuple[int, int, int]:
-    """Device shape of a `[K-1, W]` convolution tail: one 64-channel segment per row."""
-    if width % KDA_CONVOLUTION_SEGMENT_CHANNELS != 0:
-        raise ValueError(f"convolution width {width} is not a multiple of {KDA_CONVOLUTION_SEGMENT_CHANNELS}")
-    return (1, width // KDA_CONVOLUTION_SEGMENT_CHANNELS, history_rows * KDA_CONVOLUTION_SEGMENT_CHANNELS)
-
-
-def convolution_tail_to_device_layout(tail: torch.Tensor) -> torch.Tensor:
-    """`[..., K-1, W]` host rows -> `[..., W/64, (K-1)*64]`, the device layout."""
-    *lead, history_rows, width = tail.shape
-    _, segments, row = convolution_tail_shape(history_rows, width)
-    return (
-        tail.reshape(*lead, history_rows, segments, KDA_CONVOLUTION_SEGMENT_CHANNELS)
-        .transpose(-3, -2)
-        .reshape(*lead, segments, row)
-    )
-
-
-def convolution_tail_from_device_layout(tail: torch.Tensor, history_rows: int) -> torch.Tensor:
-    """`[..., W/64, (K-1)*64]` device layout -> `[..., K-1, W]` host rows, with `history_rows = K-1`.
-
-    Raises unless each page holds `history_rows` rows of one segment, so a `[..., K-1, W]` row tail is refused instead
-    of being decoded into permuted channels.
-    """
-    *lead, segments, row = tail.shape
-    if row != history_rows * KDA_CONVOLUTION_SEGMENT_CHANNELS:
-        raise ValueError(
-            f"page of {row} elements is not {history_rows} rows of a {KDA_CONVOLUTION_SEGMENT_CHANNELS}-channel "
-            "segment; not a device-layout convolution tail"
-        )
-    return (
-        tail.reshape(*lead, segments, history_rows, KDA_CONVOLUTION_SEGMENT_CHANNELS)
-        .transpose(-3, -2)
-        .reshape(*lead, history_rows, segments * KDA_CONVOLUTION_SEGMENT_CHANNELS)
-    )
 
 
 @dataclass(frozen=True)
