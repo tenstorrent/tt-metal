@@ -22,6 +22,12 @@
 // tiles go to `acc_mine`; the writer copies them (exact bytes) into `acc_x` at tile offset s*Vs on every block of the
 // head (ready / valid semaphore handshake, unicast only), so the compute runs the gated RMSNorm on the full Vt row as
 // before and emits its Vs output tiles. The window rows are written by block 0 only. Bit-identical to VB = 1.
+// kernel_opts K4 lazy (GDN_LAZY, kGdnSpecOptLazy): the token loop and the T per-token ring writes are replaced. The
+// reader reads D (ring slot 0) and the previous verify's stash (slot 1 + par: K^T tiles, this block's U tiles); the
+// writer computes the gate scalars and the WY coefficient tiles (coef), reads the stash's decay page, writes S' (dnew)
+// back to slot 0 and this verify's stash (kt_out, u_out, its decay page) to slot 1 + (1 - par); the compute replays the
+// accepted prefix (S' = D decayed + one rank-r update) and runs the T new tokens in WY form from S'. Phases A, B (with
+// the q l2norm row-batched) and D are the original program's.
 #include "ttnn/operations/experimental/kda/gdn_spec_step/device/gdn_spec_step_program_factory.hpp"
 
 #include <algorithm>
@@ -112,14 +118,19 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     const bool FAST = a.fast_mode;
     const bool FP32 = a.fp32_state && a.fast_mode;
     // kernel_opts (bit-identical restructurings, fast_mode + fp32_state only; the device op masks them otherwise)
-    const bool FUSED_DECAY = FP32 && (a.kernel_opts & kGdnSpecOptFusedDecay) != 0;
+    // LAZY (K4, bit 8): chunked WY token phase + lazy rollback (see kGdnSpecOptLazy). It replaces the token loop, so
+    // the token-loop bits (FUSED_DECAY, HOIST_INV) and A3_HALF (code size) are off under it and GATE_SCALARS is on
+    // (GSC_SPLIT still splits the gate math; the device op normalizes kernel_opts the same way, repeated here so the
+    // factory does not depend on that).
+    const bool LAZY = FP32 && (a.kernel_opts & kGdnSpecOptLazy) != 0;
+    const bool FUSED_DECAY = FP32 && !LAZY && (a.kernel_opts & kGdnSpecOptFusedDecay) != 0;
     // GATE_SCALARS: the writer computes the T gate pairs into one small `gsc` entry and the compute fills its scalar
     // tiles in DST (no reader gate math, no 2*T broadcast-tile fills on a data-movement RISC)
-    const bool GSC = FP32 && (a.kernel_opts & kGdnSpecOptGateScalars) != 0;
+    const bool GSC = FP32 && (LAZY || (a.kernel_opts & kGdnSpecOptGateScalars) != 0);
     // EARLY_SRC: the reader pushes src_in + the selectors before building the taps / weight row / masks
     const bool EARLY_SRC = FP32 && (a.kernel_opts & kGdnSpecOptEarlySrc) != 0;
     // HOIST_INV: the token-independent rsqrt(q stats + eps) * scale of the per-token qn once, before the token loop
-    const bool HOIST_INV = FP32 && (a.kernel_opts & kGdnSpecOptHoistInv) != 0;
+    const bool HOIST_INV = FP32 && !LAZY && (a.kernel_opts & kGdnSpecOptHoistInv) != 0;
 
     const auto grid = device.compute_with_storage_grid_size();
     const uint32_t num_cores_avail = grid.x * grid.y;
@@ -135,14 +146,22 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     // bytes) over the NoC into every block's qc / kc, now writer-produced DFBs. Each block reads, rebuilds, convolves
     // and writes back (window) only its own ChA = Qk + Vs chunks.
     const uint32_t Qk = (VSPLIT && (2 * Kt) % VB == 0) ? (2 * Kt) / VB : 0u;
-    const bool QKS = FP32 && Qk != 0 && Kt % Qk == 0 && (a.kernel_opts & kGdnSpecOptQkShare) != 0;
+    // (off under K4 with T > 4: the three-factor WY inverse and the q/k exchange do not fit the kernel config buffer
+    // together -- 96 B over at B = 8, T = 8)
+    const bool QKS =
+        FP32 && Qk != 0 && Kt % Qk == 0 && (a.kernel_opts & kGdnSpecOptQkShare) != 0 && !(LAZY && a.T > 4);
     const uint32_t ChA = QKS ? Qk + Vs : Ch;   // chunks a block reads and rebuilds (src_in / taps / wc / wout)
     const uint32_t ChC = QKS ? Qk + Vs : Chs;  // chunks a block convolves (shift / cv)
     // A3_HALF (bit 5): the conv's SFPU tail on the tile half that holds the user's rows only (kernel-side decision)
-    const bool A3_HALF = FP32 && (a.kernel_opts & kGdnSpecOptA3Half) != 0;
+    // (off under K4: its face-routine copies are ~1.2 KB of the math binary, and the K4 program fills the 70656 B
+    // kernel config buffer)
+    const bool A3_HALF = FP32 && !LAZY && (a.kernel_opts & kGdnSpecOptA3Half) != 0;
     // GSC_SPLIT (bit 6, GATE_SCALARS + VB > 1): the head's blocks split the T gate computations and swap the 64 B
     // per-token slots
-    const bool GSC_SPLIT = GSC && VSPLIT && (a.kernel_opts & kGdnSpecOptGscSplit) != 0;
+    // SFPU_GATE (bit 9, K4 only): the compute evaluates the gate transcendentals on its SFPU (see kGdnSpecOptSfpuGate);
+    // every block computes all T gates, so the gate split / exchange is off
+    const bool SFPU_GATE = LAZY && (a.kernel_opts & kGdnSpecOptSfpuGate) != 0;
+    const bool GSC_SPLIT = GSC && VSPLIT && !SFPU_GATE && (a.kernel_opts & kGdnSpecOptGscSplit) != 0;
     // VS_TAIL (bit 7, VB > 1): each block normalizes / gates only its own Vs output tiles
     const bool VS_TAIL = FP32 && VSPLIT && (a.kernel_opts & kGdnSpecOptVsTail) != 0;
     // one (u, h, s) per core, item = (u*Nv + h)*VB + s: a head's blocks are consecutive cores (VB = 1: the original
@@ -178,12 +197,17 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {"taps", ChA, t16, bf16},        // tile c: tap j in row j (rows >= K zero)
         {"z_in", Vt, t16, bf16},
         {"sel", 3 + K, t16, bf16},  // WO_W, WO_N (window rebuild), SH_j (shifted conv operands), P (placement)
-        {"mask_T", 1, t16, bf16},   // 1.0 at (u*T + t, 0) for t < T (row-batched l2norm mask)
-        {"e_t", T, t16, bf16},      // tile t: 1.0 at (u*T + t, 0)
-        {"w_in", Vt, t16, bf16},    // norm weight in row 0
-        {"scaler", 1, t32, fp32},
-        {"eps_l2", 1, t16, bf16},
-        {"eps_norm", 1, t16, bf16}};
+        {"mask_T", 1, t16, bf16}};  // 1.0 at (u*T + t, 0) for t < T (row-batched l2norm mask)
+    if (!LAZY) {
+        reader_out.push_back({"e_t", T, t16, bf16});  // tile t: 1.0 at (u*T + t, 0) (the token loop's row masks)
+    }
+    for (const auto& d : std::vector<Dfb>{
+             {"w_in", Vt, t16, bf16},  // norm weight in row 0
+             {"scaler", 1, t32, fp32},
+             {"eps_l2", 1, t16, bf16},
+             {"eps_norm", 1, t16, bf16}}) {
+        reader_out.push_back(d);
+    }
     if (!GSC) {
         // dtb_s / nea_s: all-equal fp32 scalar tiles (plain), or the reader's staging tiles for the gate scalars
         // (FAST: reserved, never pushed; the compute does not wait on them). GSC: the writer reads the scalars.
@@ -203,18 +227,49 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         reader_out.push_back({"csel", 2, t16, bf16});  // tile 0: row h all ones; tile 1: row Nv + h (gate column
                                                        // extractors)
     }
-    reader_out.push_back({"state_in", KVs, t32, fp32});
+    reader_out.push_back({"state_in", KVs, t32, fp32});  // LAZY: D (ring slot 0) instead of the ctrl page's block
+    if (LAZY) {
+        // the previous verify's stash (ring slot 1 + par): its K^T tiles (FPU matmul operand) and this block's U tiles
+        // (exact SFPU operand)
+        reader_out.push_back({"ktp_in", Kt, t32, fp32});
+        reader_out.push_back({"up_in", Vs, t32, fp32});
+    }
     // per-block sizes (Vs, KVs, Chs) equal the full-head ones (Vt, KV, Ch) at VB = 1
-    std::vector<Dfb> compute_local = {
-        {"wc", ChA, t16, bf16},        {"shift", ChC * K, t16, bf16}, {"cv", ChC, t32, fp32},
-        {"tmp", tmp_tiles, t32, fp32}, {"stats", 1, t32, fp32},       {"scratch", 1, t32, fp32},
-        {"inv", 1, t32, fp32},         {"qc", Kt, t32, fp32},         {"kc", Kt, t32, fp32},
-        {"vc", Vs, t32, fp32},         {"qn", Kt, t32, fp32},         {"kn", Kt, t32, fp32},
-        {"vm", Vs, t32, fp32},         {"kt", Kt, t32, fp32},         {"eb", 1, t32, fp32},
-        {"hd", KVs, t32, fp32},        {"vread", Vs, t32, fp32},      {"delta", Vs, t32, fp32},
-        {"outer", KVs, t32, fp32},     {"hn", KVs, t32, fp32},        {"gq", Vt, t32, fp32},
-        {"acc_a", Vs, t32, fp32},      {"acc_b", Vs, t32, fp32},      {"on", Vt, t32, fp32},
-        {"zs", Vt, t32, fp32}};
+    std::vector<Dfb> compute_local;
+    if (!LAZY) {
+        compute_local = {
+            {"wc", ChA, t16, bf16},        {"shift", ChC * K, t16, bf16}, {"cv", ChC, t32, fp32},
+            {"tmp", tmp_tiles, t32, fp32}, {"stats", 1, t32, fp32},       {"scratch", 1, t32, fp32},
+            {"inv", 1, t32, fp32},         {"qc", Kt, t32, fp32},         {"kc", Kt, t32, fp32},
+            {"vc", Vs, t32, fp32},         {"qn", Kt, t32, fp32},         {"kn", Kt, t32, fp32},
+            {"vm", Vs, t32, fp32},         {"kt", Kt, t32, fp32},         {"eb", 1, t32, fp32},
+            {"hd", KVs, t32, fp32},        {"vread", Vs, t32, fp32},      {"delta", Vs, t32, fp32},
+            {"outer", KVs, t32, fp32},     {"hn", KVs, t32, fp32},        {"gq", Vt, t32, fp32},
+            {"acc_a", Vs, t32, fp32},      {"acc_b", Vs, t32, fp32},      {"on", Vt, t32, fp32},
+            {"zs", Vt, t32, fp32}};
+    } else {
+        // K4: the prefix (A, B) and the tail (D) DFBs of the original program ([kn | qn] in one DFB, knq), then the WY
+        // token phase's: the replayed state S' (sp), [K S' | Q S'] (ksqs), [K K^T | Q K^T] (kkqk), [-N | Q K^T o G]
+        // (npo), N^2 (N^4), the inverse factors, the RHS, U and the replay's W o U_prev (wu).
+        compute_local = {
+            {"wc", ChA, t16, bf16},        {"shift", ChC * K, t16, bf16}, {"cv", ChC, t32, fp32},
+            {"tmp", tmp_tiles, t32, fp32}, {"stats", 1, t32, fp32},       {"scratch", 1, t32, fp32},
+            {"inv", 1, t32, fp32},         {"qc", Kt, t32, fp32},         {"kc", Kt, t32, fp32},
+            {"vc", Vs, t32, fp32},         {"knq", 2 * Kt, t32, fp32},    {"kt", Kt, t32, fp32},
+            {"gq", Vt, t32, fp32},         {"on", Vt, t32, fp32},         {"zs", Vt, t32, fp32},
+            {"sp", KVs, t32, fp32},        {"ksqs", 2 * Vs, t32, fp32},   {"kkqk", 2, t32, fp32},
+            {"npo", T > 4 ? 4u : 3u, t32, fp32},  // [-N | PO | N^2 (| N^4)]
+            {"aa", T > 4 ? 3u : 2u, t32, fp32},   // [I - N | I + N^2 (| I + N^4)]
+            {"linv", 1, t32, fp32},        {"rhs", Vs, t32, fp32},
+            {"u", Vs, t32, fp32},          {"wu", Vs, t32, fp32}};
+        if (!VSPLIT) {
+            compute_local.push_back({"acc_a", Vs, t32, fp32});  // O for the tail (VSPLIT: acc_mine -> the exchange)
+        }
+        if (T > 4) {
+            // (I + N)^-1 = (I - N)(I + N^2)(I + N^4) for T <= 8
+            compute_local.push_back({"l12", 1, t32, fp32});
+        }
+    }
     if (!FAST) {
         for (const auto& d : std::vector<Dfb>{
                  {"g1", 1 + AB2, t32, fp32},
@@ -225,7 +280,7 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
             compute_local.push_back(d);
         }
     }
-    if (FP32) {
+    if (FP32 && !LAZY) {
         // exact-fp32 copies for the SFPU state update: hd32 = the decayed state (SFPU add operand), hn32 = the new
         // state as the next token's decay operand (hn itself is the FPU matmul operand of o = qn @ S)
         compute_local.push_back({"hd32", KVs, t32, fp32});
@@ -234,20 +289,28 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
             compute_local.push_back({"hn32", KVs, t32, fp32});
         }
     }
-    if (GSC) {
+    if (GSC && !LAZY) {
         // beta_t[t] is filled in DST from the writer's bits and packed here (one token at a time); dec stays in DST
         compute_local.push_back({"beta_t", 1, t32, fp32});
     }
     if (HOIST_INV) {
         compute_local.push_back({"qsc", 1, t32, fp32});  // rsqrt(q stats + eps) * scale, live through the token loop
     }
-    if (VSPLIT) {
+    if (VSPLIT && !LAZY) {
         // the token loop's Vs-tile intermediate (vm - vread): `tmp` (max(Kt, Vt) tiles) takes only Kt / Vt blocks, as
         // in the VB = 1 kernel, since an indexed block must not straddle a DFB's ring end (see the compute header)
         compute_local.push_back({"tmpv", Vs, t32, fp32});
     }
-    std::vector<Dfb> compute_out = {
-        {"hnew", a.hnew_depth * KVs, t32, fp32}, {"out", Vs, tout, out_fmt}, {"wout", ChA, t16, bf16}};
+    std::vector<Dfb> compute_out = {{"out", Vs, tout, out_fmt}, {"wout", ChA, t16, bf16}};
+    if (!LAZY) {
+        compute_out.insert(compute_out.begin(), Dfb{"hnew", a.hnew_depth * KVs, t32, fp32});
+    } else {
+        // K4: the replayed state S' (-> ring slot 0) and this verify's stash (-> ring slot 1 + (1 - par)): K^T tiles
+        // (block 0 only) and this block's U tiles
+        compute_out.push_back({"dnew", KVs, t32, fp32});
+        compute_out.push_back({"kt_out", Kt, t32, fp32});
+        compute_out.push_back({"u_out", Vs, t32, fp32});
+    }
     std::vector<Dfb> writer_local = {{"ctrl_w", 1, ctrl_bytes, u32}, {"bounce", Ch, t16, bf16}};
     // VSPLIT: acc_mine = this block's last-token pre-norm output tiles (compute -> writer); acc_x = the head's full
     // pre-norm row, every block's tiles at offset s*Vs (writer -> compute, filled over the NoC by all VB blocks)
@@ -273,13 +336,27 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         GSC_SPLIT ? T * 64u : std::max<uint32_t>(64u, ((2 * T * 4 + 63) / 64) * 64);
     if (GSC) {
         // writer staging for its gate reads (never pushed): the a|b tile(s), tile 0 of dt_bias and of -exp(A)
-        writer_local.push_back({"ab_w", 1 + AB2, t16, bf16});
+        if (SFPU_GATE) {
+            writer_out.push_back({"ab_w", 1 + AB2, t16, bf16});  // the raw a|b tile(s), to the compute's SFPU gates
+            compute_out.push_back({"gt", 2, t32, fp32});          // dec over a's tile, beta over b's tile (writer reads)
+        } else {
+            writer_local.push_back({"ab_w", 1 + AB2, t16, bf16});
+        }
         writer_local.push_back({"dtb_ws", 1, t32, fp32});
         writer_local.push_back({"nea_ws", 1, t32, fp32});
         writer_out.push_back({"gsc", 1, gsc_bytes, u32});
         if (GSC_SPLIT) {
             writer_local.push_back({"gss", 1, gsc_bytes, u32});  // this block's token slots, sent to every block
         }
+    }
+    if (LAZY) {
+        // the WY coefficient tiles the writer builds from the gate scalars (exact SFPU operands): -beta_t G[t][i]
+        // (i < t), G (i <= t), E (row-broadcast cumulative decay), BETA, -BETA E (row-broadcast), EYE (the users'
+        // diagonal), W (the replay's row-broadcast weights), C (the replay's decay, whole tile); plus the writer's
+        // staging for the previous stash's decay page (read) and this verify's (written)
+        writer_out.push_back({"coef", 8, t32, fp32});
+        writer_local.push_back({"gprev", 1, t32, fp32});
+        writer_local.push_back({"gnew", 1, t32, fp32});
     }
 
     m2::Group<m2::DataflowBufferSpec> dfbs;
@@ -324,6 +401,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     }
     if (QKS) {
         reader.compiler_options.defines.emplace("GDN_QKSHARE", "1");
+    }
+    if (LAZY) {
+        reader.compiler_options.defines.emplace("GDN_LAZY", "1");  // D from ring slot 0, the stash, FRESH window mi
     }
     for (const auto& d : reader_out) {
         reader.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
@@ -372,7 +452,7 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         .unique_id = WRITER,
         .source = std::string(kDir) + "dataflow/writer_gdn_spec_step.cpp",
         .compiler_options = {.opt_level = KernelBuildOptLevel::Os},  // code size (kernel config buffer)
-        .dfb_bindings = {bind("hnew", EP::CONSUMER), bind("out", EP::CONSUMER), bind("wout", EP::CONSUMER)},
+        .dfb_bindings = {},
         .tensor_bindings =
             {m2::TensorBinding{RING, "ring_out"},
              m2::TensorBinding{OUT, "out"},
@@ -394,6 +474,22 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
                   "peer_y3"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
+    if (!LAZY) {
+        writer.dfb_bindings = {bind("hnew", EP::CONSUMER), bind("out", EP::CONSUMER), bind("wout", EP::CONSUMER)};
+    } else {
+        // K4: S' -> ring slot 0, the stash -> ring slot 1 + (1 - par) (no per-token ring stream)
+        writer.dfb_bindings = {
+            bind("out", EP::CONSUMER),
+            bind("wout", EP::CONSUMER),
+            bind("dnew", EP::CONSUMER),
+            bind("kt_out", EP::CONSUMER),
+            bind("u_out", EP::CONSUMER)};
+        writer.compiler_options.defines.emplace("GDN_LAZY", "1");
+        if (SFPU_GATE) {
+            writer.dfb_bindings.push_back(bind("gt", EP::CONSUMER));
+            writer.compiler_options.defines.emplace("GDN_SFPU_GATE", "1");
+        }
+    }
     for (const auto& d : writer_out) {
         writer.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
     }
@@ -411,6 +507,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
             "GDN_NEA_FP32", in.neg_exp_A.dtype() == DataType::FLOAT32 ? "1" : "0");
         if ((a.kernel_opts & kGdnSpecOptNarrowGateReads) != 0) {
             writer.compiler_options.defines.emplace("GDN_NARROW_GR", "1");  // face-row gate reads (bit-identical)
+            if (SFPU_GATE && (a.kernel_opts & kGdnSpecOptEarlyGateReads) != 0) {
+                writer.compiler_options.defines.emplace("GDN_EARLY_GR", "1");  // with the ctrl read (bit-identical)
+            }
         }
     }
     const m2::SemaphoreSpecName READY{"ready"};
@@ -460,7 +559,11 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         if (d.fmt == fp32) {
             const bool to_dest = FP32 && (d.name == "state_in" || d.name == "dec" || d.name == "hd32" ||
                                           d.name == "hn32" || d.name == "outer");
-            unpack_modes[m2::DFBSpecName{d.name}] = to_dest ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc;
+            // K4: every exact-fp32 SFPU operand of the replay / WY phase (the FPU matmul operands stay UnpackToSrc)
+            const bool lazy_dest = LAZY && (d.name == "up_in" || d.name == "coef" || d.name == "ksqs" ||
+                                            d.name == "kkqk" || d.name == "vc");
+            unpack_modes[m2::DFBSpecName{d.name}] =
+                (to_dest || lazy_dest) ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc;
         }
     }
     m2::KernelSpec compute{
@@ -513,6 +616,20 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     }
     if (A3_HALF) {
         compute.compiler_options.defines.emplace("GDN_A3_HALF", "1");
+    }
+    if (LAZY) {
+        // the replay + WY token phase replaces the token loop; its DFBs (sp, ks, ..., dnew, kt_out, u_out, coef) only
+        // exist then, and the token loop's (hd, hd32, hn, hnew, outer, vm, eb, e_t, ...) only without it
+        compute.compiler_options.defines.emplace("GDN_LAZY", "1");
+        if (T > 4) {
+            compute.compiler_options.defines.emplace("GDN_LAZY_WIDE", "1");  // (I - N)(I + N^2)(I + N^4)
+        }
+        if (SFPU_GATE) {
+            compute.compiler_options.defines.emplace("GDN_SFPU_GATE", "1");  // ab_w -> SFPU gates -> gt; C from gsc
+            if ((a.kernel_opts & kGdnSpecOptSfpuGateFace) != 0 && 2 * Nv <= 16 && 16 % T == 0) {
+                compute.compiler_options.defines.emplace("GDN_SFPU_GATE_FACE", "1");  // one face (bit-identical)
+            }
+        }
     }
     if (GSC_SPLIT) {
         compute.compiler_options.defines.emplace("GDN_GSC_SPLIT", "1");  // gsc slot layout

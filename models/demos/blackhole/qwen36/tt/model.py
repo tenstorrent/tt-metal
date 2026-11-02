@@ -3703,7 +3703,13 @@ class Qwen36Model:
             # window parity (the half holding E_prev; the op writes the other half). No HOLD: a row left out of a
             # step is parked on host by the engine (MTPSpecEngine.verify), and padding rows run at mi = 0 over the
             # null block like the composite path's.
-            assert all(0 <= int(mi_prev[u]) < T for u in range(B)), f"mi_prev {list(mi_prev)} out of range [0,{T})"
+            # K4 (QWEN36_SPEC_STEP_LAZY=1): mi = T marks a FRESH row (slot 0 just seeded / restored: no replay)
+            from models.demos.blackhole.qwen36.tt.gdn.tp import gdn_spec_step_lazy_enabled
+
+            _mi_hi = T + 1 if gdn_spec_step_lazy_enabled() else T
+            assert all(
+                0 <= int(mi_prev[u]) < _mi_hi for u in range(B)
+            ), f"mi_prev {list(mi_prev)} out of range [0,{_mi_hi})"
             _pars = {dn._spec_win_par for dn in self._vfy_gdn}
             assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
             if not _hostset:

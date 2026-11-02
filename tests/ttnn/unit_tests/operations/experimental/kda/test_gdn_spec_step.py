@@ -927,3 +927,317 @@ def test_kernel_opts_timing(device, request, B, T):
         f"gdn_spec_step (B={B}, T={T}) us/call: "
         + ", ".join(f"vb{vb}(eff {effs[vb]})/opts{o}={t:.1f}" for (vb, o), t in times.items())
     )
+
+
+# --------------------------------------------------------------------------- #
+# K4: kernel_opts bit 8 (QWEN36_SPEC_STEP_LAZY) -- chunked (WY) token phase + lazy rollback. NOT bit-identical, and a
+# different ring / ctrl contract (models/demos/blackhole/qwen36/tt/gdn/lazy_ref.py): ring slot 0 block (u, h) = D, the
+# state before the previous verify's tokens; slot 1 + par = the previous verify's stash (K^T pages, U pages, decay
+# page), written by that verify into 1 + (1 - its parity); ctrl mi >= T = FRESH (no replay, conv window at mi 0).
+# The truth for every check is the serial recurrence in fp64 from the true committed state.
+# --------------------------------------------------------------------------- #
+LAZY_BIT = 256
+LAZY_OPTS = LAZY_BIT | 250  # the production restructurings + K4 (the op drops 64 / 8 / 1 under K4 itself)
+
+
+def reference_lazy(g, rows, E_prev, mi_win, S_start, taps, dtb, nea, w, B, T, hold=()):
+    """One verify step in fp64 from the committed states S_start [B, Nv, Dk, Dv]: the serial recurrence, plus what the
+    K4 stash must hold. Returns out [B*T, VD], states [T, B, Nv, Dk, Dv], deltas [B, Nv, T, Dv], kn [B, Nv, T, Dk],
+    dec [B, Nv, T] (fp32 values of exp(g)), W_new [B, Lw, C]."""
+    Nv, Nk, KD, VD, C, QKVZ = g.Nv, g.Nk, g.KD, g.VD, g.C, g.QKVZ
+    Lw = K - 1 + T
+    rf = Nv // Nk
+    f64 = torch.float64
+    out = torch.zeros(B * T, VD, dtype=f64)
+    states = torch.zeros(T, B, Nv, Dk, Dv, dtype=f64)
+    deltas = torch.zeros(B, Nv, T, Dv, dtype=f64)
+    kns = torch.zeros(B, Nv, T, Dk, dtype=f64)
+    decs = torch.zeros(B, Nv, T, dtype=f64)
+    Wn_all = torch.zeros(B, Lw, C)
+    for u in range(B):
+        if u in hold:
+            continue
+        m = int(mi_win[u])
+        Wn = torch.cat([E_prev[u, m + 1 : m + K], rows[u * T : (u + 1) * T, :C]], 0)
+        Wn_all[u] = Wn
+        h = S_start[u].to(f64).clone()
+        for t in range(T):
+            x = sum(taps[j].to(f64) * Wn[t + j].to(f64) for j in range(K))
+            conv = torch.nn.functional.silu(x)
+            q = conv[:KD].reshape(Nk, Dk).repeat_interleave(rf, 0)
+            k = conv[KD : 2 * KD].reshape(Nk, Dk).repeat_interleave(rf, 0)
+            v = conv[2 * KD : C].reshape(Nv, Dv)
+            r = rows[u * T + t].to(f64)
+            z = r[C:QKVZ].reshape(Nv, Dv)
+            a = r[QKVZ : QKVZ + Nv]
+            b = r[QKVZ + Nv : QKVZ + 2 * Nv]
+            beta = torch.sigmoid(b)
+            gl = nea.to(f64) * torch.nn.functional.softplus(a + dtb.to(f64), beta=1.0, threshold=20.0)
+            qn = q / torch.sqrt((q * q).sum(-1, keepdim=True) + L2_EPS) * SCALE
+            kn = k / torch.sqrt((k * k).sum(-1, keepdim=True) + L2_EPS)
+            dec = torch.exp(gl)
+            h = h * dec[:, None, None]
+            delta = beta[:, None] * (v - torch.einsum("hk,hkv->hv", kn, h))
+            h = h + torch.einsum("hk,hv->hkv", kn, delta)
+            o = torch.einsum("hk,hkv->hv", qn, h)
+            on = o / torch.sqrt((o * o).mean(-1, keepdim=True) + NORM_EPS) * w.to(f64)[None, :]
+            out[u * T + t] = (on * torch.nn.functional.silu(z)).reshape(-1)
+            states[t, u] = h
+            deltas[u, :, t] = delta
+            kns[u, :, t] = kn
+            decs[u, :, t] = dec
+    return out, states, deltas, kns, decs, Wn_all
+
+
+def _ctrl_lazy(g, B, mi_ctrl, par, hold=()):
+    """K4 ctrl page: words 1 + u = mi_ctrl[u] (>= T: FRESH), the block words carry only HOLD (their value is the
+    engine's (mi*B + u)*Nv + h, as the chain graph builds it, sentinel mi included)."""
+    return ctrl_page(g, B, None, mi_ctrl, par, hold)
+
+
+class LazyCase:
+    """Device state for a K4 verify sequence: ring [T*B*Nv, Dk, Dv] with slot 0 = D, slots 1 / 2 = stash (NaN at the
+    start: a FRESH row must never read it), the window pair, the gate / tap constants."""
+
+    def __init__(self, device, g, B, T, seed, par0=0, out_dtype=ttnn.bfloat16):
+        skip_if_over_grid(device, g, B)
+        torch.manual_seed(seed)
+        Nv, C = g.Nv, g.C
+        self.device, self.g, self.B, self.T, self.par = device, g, B, T, par0
+        self.Lw = K - 1 + T
+        self.L = 32
+        self.out_dtype = out_dtype
+        self.S0 = 0.05 * torch.randn(B, Nv, Dk, Dv)
+        ring = torch.full((T * B * Nv, Dk, Dv), float("nan"))
+        ring[: B * Nv] = self.S0.reshape(B * Nv, Dk, Dv)
+        self.E_prev = (0.5 * torch.randn(B, self.L, C)).bfloat16().float()
+        self.taps = (0.3 * torch.randn(K, C)).bfloat16().float()
+        self.dtb = (0.1 * torch.randn(Nv)).bfloat16().float()
+        self.nea = (-torch.exp(0.2 * torch.randn(Nv))).bfloat16().float()
+        self.w = (1.0 + 0.1 * torch.randn(Dv)).bfloat16().float()
+        dev = lambda t, dt, lay=ttnn.TILE_LAYOUT: ttnn.from_torch(t, dtype=dt, layout=lay, device=device)
+        self.ring = dev(ring, ttnn.float32)
+        wins = [None, None]
+        wins[par0] = dev(self.E_prev, ttnn.bfloat16)
+        wins[1 - par0] = dev((0.5 * torch.randn(B, self.L, C)).bfloat16().float(), ttnn.bfloat16)
+        self.win_a, self.win_b = wins
+        self.taps_d = dev(self.taps.reshape(1, K, C), ttnn.bfloat16)
+        self.dtb_d = dev(self.dtb.reshape(1, 1, Nv), ttnn.float32)
+        self.nea_d = dev(self.nea.reshape(1, 1, Nv), ttnn.float32)
+        self.w_d = dev(self.w.reshape(1, 1, Dv), ttnn.bfloat16)
+
+    def run(self, rows, mi_ctrl, hold=(), kernel_opts=LAZY_OPTS, value_blocks=4):
+        g, B, T = self.g, self.B, self.T
+        dev = lambda t, dt, lay=ttnn.TILE_LAYOUT: ttnn.from_torch(t, dtype=dt, layout=lay, device=self.device)
+        qkv = dev(rows.reshape(1, rows.shape[0], g.W), ttnn.bfloat16)
+        ctrl = dev(_ctrl_lazy(g, B, mi_ctrl, self.par, hold), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.experimental.kda.gdn_spec_step(
+            qkv,
+            self.win_a,
+            self.win_b,
+            self.ring,
+            ctrl,
+            self.taps_d,
+            self.dtb_d,
+            self.nea_d,
+            self.w_d,
+            g.Nv,
+            g.Nk,
+            Dk,
+            Dv,
+            T,
+            B,
+            g.QKVZ,
+            conv_kernel=K,
+            scale=SCALE,
+            hnew_depth=2,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_dtype=self.out_dtype,
+            fast_mode=True,
+            fp32_state=True,
+            value_blocks=value_blocks,
+            kernel_opts=kernel_opts,
+        )
+
+    def ring_host(self):
+        return ttnn.to_torch(self.ring).reshape(self.T, self.B, self.g.Nv, Dk, Dv).float()
+
+    def win_host(self, par):
+        return ttnn.to_torch([self.win_a, self.win_b][par]).float()
+
+
+def _stash_host(ring_slot, B, Nv, T, Kt=Dk // 32, Vt=Dv // 32):
+    """ring_slot [B, Nv, Dk, Dv] -> (kt [B, Nv, T, Dk] (token t = column r0 + t of the K^T pages), u [B, Nv, T, Dv],
+    dec [B, Nv, T]) per the lazy_ref page layout."""
+    kt_all = torch.zeros(B, Nv, T, Dk)
+    u_all = torch.zeros(B, Nv, T, Dv)
+    dec_all = torch.zeros(B, Nv, T)
+    tile = lambda blk, p: blk[(p // Vt) * 32 : (p // Vt + 1) * 32, (p % Vt) * 32 : (p % Vt + 1) * 32]
+    for u in range(B):
+        r0 = (u * T) % 32
+        for h in range(Nv):
+            blk = ring_slot[u, h]
+            kt = torch.cat([tile(blk, j) for j in range(Kt)], 0)  # [Dk, 32]
+            uu = torch.cat([tile(blk, Kt + v) for v in range(Vt)], 1)  # [32, Dv]
+            kt_all[u, h] = kt[:, r0 : r0 + T].T
+            u_all[u, h] = uu[r0 : r0 + T]
+            dec_all[u, h] = tile(blk, Kt + Vt)[r0 : r0 + T, 0]
+    return kt_all, u_all, dec_all
+
+
+@pytest.mark.parametrize("vb", [1, 4])
+@pytest.mark.parametrize("B,T", [(8, 4), (4, 8), (2, 4), (1, 3)])
+def test_lazy_sequence(device, geo, request, B, T, vb):
+    """K4: a 4-step verify sequence (every row FRESH at step 0 over a NaN stash, then random accepted prefixes, window
+    parity flipping) vs the fp64 serial recurrence from the true committed state: outputs (PCC > 0.999), ring slot 0 =
+    the replayed committed state (step 0: torch.equal D, the FRESH copy; later PCC > 0.9999), the stash written into
+    slot 1 + (1 - par) (U, K^T, decay vs the serial deltas / keys / decays), the rebuilt window (torch.equal).
+    GDN_LAZY_SEQ_STEPS (default 4) runs a longer sequence: the device state is never re-synced to the fp64 truth, so
+    the slot-0 error of the last step is the accumulated drift."""
+    g = geo
+    if g.Nv == 24 and T >= 8:
+        pytest.skip("Nv = 24 at T = 8: not a qwen36 geometry")
+    c = LazyCase(device, g, B, T, seed=901 + 10 * B + T)
+    S_true = c.S0.double()
+    E_prev = c.E_prev
+    mi_ctrl = [T] * B  # FRESH
+    gen = torch.Generator().manual_seed(77 + B + T)
+    Nv, C, Lw = g.Nv, g.C, c.Lw
+    Lw_w = (Lw + 1) // 2 * 2
+    for step in range(int(os.environ.get("GDN_LAZY_SEQ_STEPS", "4"))):
+        rows = make_rows(g, round_up32(B * T) if B * T % 32 else B * T)
+        mi_win = [0 if m >= T else m for m in mi_ctrl]
+        out_ref, states, deltas, kns, decs, Wn_ref = reference_lazy(
+            g, rows, E_prev, mi_win, S_true, c.taps, c.dtb, c.nea, c.w, B, T
+        )
+        o = c.run(rows, mi_ctrl, value_blocks=vb)
+        out = ttnn.to_torch(o).reshape(-1, g.VD).float()[: B * T]
+        ttnn.deallocate(o)
+        ring = c.ring_host()
+        win_next = c.win_host(1 - c.par)
+        p_out = pcc(out, out_ref)
+        d_out = (out.double() - out_ref).abs().max().item()
+        assert torch.isfinite(out).all(), f"step {step}: non-finite output"
+        # ring slot 0: the committed state the step replayed to (S_true), exact for a FRESH step
+        if step == 0:
+            assert torch.equal(ring[0], c.S0), "FRESH step: slot 0 must be D copied bit for bit"
+        p_s0 = pcc(ring[0], S_true)
+        d_s0 = (ring[0].double() - S_true).abs().max().item()
+        # the stash this step wrote (slot 1 + (1 - par))
+        kt_d, u_d, dec_d = _stash_host(ring[1 + (1 - c.par)], B, Nv, T)
+        p_u = pcc(u_d, deltas)
+        p_k = pcc(kt_d, kns)
+        d_dec = (dec_d.double() - decs).abs().max().item()
+        # the rebuilt conv window (bit-exact, as the serial kernel's)
+        for u in range(B):
+            assert torch.equal(win_next[u, :Lw], Wn_ref[u]), f"step {step} user {u}: window rows differ"
+            assert torch.equal(win_next[u, Lw:Lw_w], torch.zeros(Lw_w - Lw, C)), f"step {step} user {u}: pad row"
+        print(
+            f"lazy step {step} (B={B},T={T},vb={vb},mi_ctrl={mi_ctrl}): out pcc={p_out:.7f} max|d|={d_out:.3e} | slot0 "
+            f"pcc={p_s0:.8f} max|d|={d_s0:.3e} | stash U pcc={p_u:.8f} K pcc={p_k:.8f} dec max|d|={d_dec:.2e}"
+        )
+        _golden(request, **{f"out_{step}": out, f"ring_{step}": ring})
+        assert p_out > 0.999 and p_s0 > 0.9999 and p_u > 0.9999 and p_k > 0.9999 and d_dec < 1e-5
+        # commit a random accepted prefix; the next step reads the window this one wrote, at the flipped parity
+        mi_next = [int(x) for x in torch.randint(0, T, (B,), generator=gen)]
+        S_true = torch.stack([states[mi_next[u], u] for u in range(B)])
+        E_prev = win_next
+        mi_ctrl = mi_next
+        c.par = 1 - c.par
+
+
+@pytest.mark.parametrize("B,T", [(8, 4), (4, 8)])
+def test_lazy_hold_untouched(device, geo, request, B, T):
+    """K4 HOLD: a held user's ring blocks (slot 0 and both stash slots) are untouched and its window rows are copied
+    through; the other users run normally (outputs vs fp64 serial)."""
+    g = geo
+    skip_if_over_grid(device, g, B)
+    if g.Nv == 24 and T >= 8:
+        pytest.skip("Nv = 24 at T = 8: not a qwen36 geometry")
+    c = LazyCase(device, g, B, T, seed=933 + B)
+    hold = (0, B - 1) if B > 1 else ()
+    rows = make_rows(g, round_up32(B * T) if B * T % 32 else B * T)
+    before = c.ring_host()
+    o = c.run(rows, [T] * B, hold=hold)
+    out = ttnn.to_torch(o).reshape(-1, g.VD).float()[: B * T]
+    ring = c.ring_host()
+    win_next = c.win_host(1 - c.par)
+    out_ref, *_ = reference_lazy(g, rows, c.E_prev, [0] * B, c.S0.double(), c.taps, c.dtb, c.nea, c.w, B, T, hold)
+    live = [u for u in range(B) if u not in hold]
+    rl = sum(([u * T + t for t in range(T)] for u in live), [])
+    for u in hold:
+        assert torch.equal(ring[:, u].nan_to_num(7.0), before[:, u].nan_to_num(7.0)), f"held user {u}: ring changed"
+        assert torch.equal(win_next[u, : c.Lw], c.E_prev[u, : c.Lw]), f"held user {u}: window not copied through"
+    p = pcc(out[rl], out_ref[rl])
+    print(f"lazy hold {sorted(hold)} (B={B},T={T}): live out pcc={p:.7f}; held ring blocks + windows untouched")
+    assert p > 0.999
+
+
+def test_lazy_vs_serial_kernel(device, request):
+    """K4 vs today's serial program (kernel_opts 250) on the same inputs, qwen36 TP=8 (B=8, T=4): a FRESH step (both
+    from the same D) and a second step (serial from its own ring slot mi, K4 from its replay). Report: output PCC /
+    max|d| between the two and vs fp64, and the share of bf16 output elements that differ. Not bit-identical by
+    design."""
+    g, B, T = GEOS[0], 8, 4
+    c = LazyCase(device, g, B, T, seed=4242)
+    # the serial program's own ring: slot 0 = D as well (mi = 0 reads it), the rest garbage
+    dev = lambda t, dt, lay=ttnn.TILE_LAYOUT: ttnn.from_torch(t, dtype=dt, layout=lay, device=device)
+    ring_s = torch.randn(T * B * g.Nv, Dk, Dv)
+    ring_s[: B * g.Nv] = c.S0.reshape(B * g.Nv, Dk, Dv)
+    ring_s = dev(ring_s, ttnn.float32)
+    wins_s = [dev(c.E_prev, ttnn.bfloat16), dev(torch.zeros(B, c.L, g.C), ttnn.bfloat16)]
+    S_true = c.S0.double()
+    E_prev = c.E_prev
+    mi_l = [T] * B
+    mi_s = [0] * B
+    gen = torch.Generator().manual_seed(5)
+    for step in range(2):
+        rows = make_rows(g, B * T)
+        par = c.par
+        out_ref, states, *_ = reference_lazy(
+            g, rows, E_prev, [0 if m >= T else m for m in mi_l], S_true, c.taps, c.dtb, c.nea, c.w, B, T
+        )
+        ol = c.run(rows, mi_l)
+        qkv = dev(rows.reshape(1, B * T, g.W), ttnn.bfloat16)
+        ctrl_s = dev(ctrl_page(g, B, T, mi_s, par), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        os_ = ttnn.experimental.kda.gdn_spec_step(
+            qkv, wins_s[0], wins_s[1], ring_s, ctrl_s, c.taps_d, c.dtb_d, c.nea_d, c.w_d,
+            g.Nv, g.Nk, Dk, Dv, T, B, g.QKVZ, conv_kernel=K, scale=SCALE, hnew_depth=2,
+            memory_config=ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16, fast_mode=True, fp32_state=True,
+            value_blocks=4, kernel_opts=250,
+        )  # fmt: skip
+        out_l = ttnn.to_torch(ol).reshape(-1, g.VD).float()[: B * T]
+        out_s = ttnn.to_torch(os_).reshape(-1, g.VD).float()[: B * T]
+        diff_frac = (out_l != out_s).float().mean().item()
+        print(
+            f"lazy-vs-serial step {step}: pcc(K4, serial)={pcc(out_l, out_s):.7f} "
+            f"max|d|={(out_l - out_s).abs().max():.3e} "
+            f"bf16 elements differing {100 * diff_frac:.1f}% | vs fp64: K4 pcc={pcc(out_l, out_ref):.7f} "
+            f"max|d|={(out_l.double() - out_ref).abs().max():.3e}, serial pcc={pcc(out_s, out_ref):.7f} "
+            f"max|d|={(out_s.double() - out_ref).abs().max():.3e}"
+        )
+        assert pcc(out_l, out_s) > 0.999
+        mi_next = [int(x) for x in torch.randint(0, T, (B,), generator=gen)]
+        S_true = torch.stack([states[mi_next[u], u] for u in range(B)])
+        E_prev = c.win_host(1 - par)
+        mi_l, mi_s = mi_next, mi_next
+        c.par = 1 - par  # both programs read win[par] of their own pair and write win[1 - par]
+
+
+def test_lazy_rejects(device, expect_error):
+    """K4 refuses T < 3 / T > 8 and a mode without fast_mode + fp32_state (it must never be dropped silently)."""
+    g = GEOS[0]
+    c = LazyCase(device, g, 1, 4, seed=3)
+    rows = make_rows(g, 4)
+    with expect_error(RuntimeError, "3 <= T <= 8"):
+        c2 = LazyCase(device, g, 1, 2, seed=3)
+        c2.run(make_rows(g, 2), [2])
+    with expect_error(RuntimeError, "needs fast_mode and fp32_state"):
+        dev = lambda t, dt, lay=ttnn.TILE_LAYOUT: ttnn.from_torch(t, dtype=dt, layout=lay, device=device)
+        ttnn.experimental.kda.gdn_spec_step(
+            dev(rows.reshape(1, 4, g.W), ttnn.bfloat16), c.win_a, c.win_b, c.ring,
+            dev(ctrl_page(g, 1, 4, [4], 0), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            c.taps_d, c.dtb_d, c.nea_d, c.w_d, g.Nv, g.Nk, Dk, Dv, 4, 1, g.QKVZ, conv_kernel=K, scale=SCALE,
+            memory_config=ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16, fast_mode=True, fp32_state=False,
+            kernel_opts=LAZY_BIT,
+        )  # fmt: skip

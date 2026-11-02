@@ -106,6 +106,22 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         "{}: unknown kernel_opts bits {:#x}",
         kOp,
         a.kernel_opts);
+    if ((a.kernel_opts & kGdnSpecOptLazy) != 0) {
+        // K4: ring slots 0 (D) and 1, 2 (the parity-double-buffered stash) per (u, h), the WY inverse up to T = 8, and
+        // the stash pages (Kt K^T tiles, Vt U tiles, one decay page) inside one [Dk, Dv] block
+        const uint32_t kt = a.key_dim / TW, vt = a.value_dim / TW;
+        TT_FATAL(
+            a.T >= 3 && a.T <= 8,
+            "{}: kernel_opts K4 lazy (bit 8) needs 3 <= T <= 8 (ring slots 0..2, WY inverse); got T = {}",
+            kOp,
+            a.T);
+        TT_FATAL(
+            kt + vt + 1 <= kt * vt,
+            "{}: kernel_opts K4 lazy: the stash ({} + {} + 1 tiles) must fit one [Dk, Dv] block",
+            kOp,
+            kt,
+            vt);
+    }
     const uint32_t C = 2 * Nk * Dk + Nv * Dv;
     TT_FATAL(
         a.qkvz_dim == C + Nv * Dv && a.qkvz_dim % TW == 0,
@@ -202,6 +218,24 @@ Tensor gdn_spec_step(
     uint32_t value_blocks,
     uint32_t kernel_opts) {
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
+    // K4 lazy changes the ring / ctrl contract: it must never be dropped silently by the fast_mode + fp32_state mask
+    // below (the caller would then read the ring with the lazy layout under the original program)
+    TT_FATAL(
+        (kernel_opts & kGdnSpecOptLazy) == 0 || (fast_mode && fp32_state),
+        "{}: kernel_opts K4 lazy (bit 8) needs fast_mode and fp32_state",
+        kOp);
+    if ((kernel_opts & kGdnSpecOptLazy) != 0) {
+        // the effective K4 program: gate scalars on (the writer's coefficient tiles build on them); the token-loop
+        // restructurings have no token loop to act on and the half-tile conv tail does not fit the kernel config buffer
+        // next to the WY phase, so they are dropped (one program / hash per effective variant)
+        kernel_opts = (kernel_opts | kGdnSpecOptGateScalars) &
+                      ~static_cast<uint32_t>(kGdnSpecOptFusedDecay | kGdnSpecOptHoistInv | kGdnSpecOptA3Half);
+        if ((kernel_opts & kGdnSpecOptSfpuGate) != 0) {
+            kernel_opts &= ~static_cast<uint32_t>(kGdnSpecOptGscSplit);  // every block evaluates all T gates itself
+        }
+    } else {
+        kernel_opts &= ~static_cast<uint32_t>(kGdnSpecOptSfpuGate);  // K4 only
+    }
     return ttnn::device_operation::launch<GdnSpecStepOperation>(
         GdnSpecStepParams{
             .num_value_heads = num_value_heads,

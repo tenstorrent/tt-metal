@@ -22,6 +22,10 @@
 // the initial state as soon as its read lands. GDN_EARLY_SRC (kernel_opts bit 2): src_in and the selector tiles are
 // pushed right after their reads / build, before the taps, the norm weight row and the row masks (which the compute
 // needs only from phase A3 on), so phase A starts earlier. Both move no value: every tile holds the same bytes.
+// GDN_LAZY (kernel_opts K4 lazy): the initial state is D, ring slot 0 block (u, h), whatever the ctrl page's block word
+// says (that word only carries HOLD), plus the previous verify's stash from ring slot 1 + par: its Kt K^T tiles
+// (ktp_in) and this block's Vs U tiles (up_in), read with the state. A ctrl mi >= T is FRESH (the slot-0 state was just
+// seeded: the compute replays nothing) and rebuilds the conv window at mi 0. No e_t row masks (no token loop).
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
@@ -38,6 +42,9 @@
 #endif
 #ifndef GDN_QKSHARE
 #define GDN_QKSHARE 0  // kernel_opts bit 4 (VB > 1): this block reads only its q/k share + its v chunks
+#endif
+#ifndef GDN_LAZY
+#define GDN_LAZY 0  // kernel_opts bit 8 (K4): D from ring slot 0 + the previous verify's stash
 #endif
 #if GDN_FAST && !GDN_GATE_SCALARS
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_spec_step/device/kernels/dataflow/gdn_step_gate_math.hpp"
@@ -92,7 +99,12 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 #endif
     DataflowBuffer sel(dfb::sel);
     DataflowBuffer mask_T(dfb::mask_T);
+#if GDN_LAZY
+    DataflowBuffer ktp_in(dfb::ktp_in);  // the previous verify's K^T tiles (stash pages 0..Kt-1)
+    DataflowBuffer up_in(dfb::up_in);    // ... and this block's U tiles (stash pages Kt + s*Vs ..)
+#else
     DataflowBuffer e_t(dfb::e_t);
+#endif
 #if GDN_GATE_SCALARS
     // the writer computes the gates; the compute builds beta_t / dec in DST
     (void)b_idx;
@@ -167,12 +179,26 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         ctrl_r.wait_front(1);
         ctrl_r.pop_front(1);
     }
+#if GDN_LAZY
+    // no replay for HOLD or FRESH (the writer's r = 0): zero stash tiles, never the stale stash (the same rule as the
+    // writer's r_rep)
+    const bool lazy_no_replay = (blk == hold_sentinel) || (mi >= T);
+#endif
     if (blk == hold_sentinel) {
         // HOLD: the writer skips this head's ring writes and copies the window through, so any valid block and any
         // mi serve the (discarded) recurrence -- this head's own slot-0 block, mi = 0.
         blk = bh;
         mi = 0;
     }
+#if GDN_LAZY
+    // K4: the state is always D (slot 0); FRESH (mi >= T: a seeded / restored row, nothing to replay) rebuilds the conv
+    // window at mi 0 like any first verify of a row. The stash of the previous verify sits in slot 1 + par.
+    blk = bh;
+    if (mi >= T) {
+        mi = 0;
+    }
+    const uint32_t stash_blk = ((1 + par) * M + u) * Nv + h;
+#endif
     if (mi > T - 1) {
         mi = T - 1;  // ctrl contents are data (not validated by the host): an out-of-range mi is clamped, not reported
     }
@@ -287,6 +313,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         sel.push_back(3 + K);
     };
     {
+        // (x7: this line keeps the rd_bulk zone off the 16-bit profiler hash of brisck.cc:77 under /tmp/x7sf/tree)
         DeviceZoneScopedN("rd_bulk");
         // src_in[c] = whole window tile of user u, chunk c (win[par]); src_in[Ch + c] = whole raw projection tile
         src_in.reserve_back(2 * ChA);
@@ -342,6 +369,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             }
         }
         mask_T.push_back(1);
+#if !GDN_LAZY
         e_t.reserve_back(T);
         zero_reserved(e_t, noc, T);
         {
@@ -352,6 +380,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             }
         }
         e_t.push_back(T);
+#endif
         noc.async_read_barrier();
 #if !GDN_EARLY_SRC
         src_in.push_back(2 * ChA);
@@ -366,8 +395,25 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         DeviceZoneScopedN("rd_state");
         state_in.reserve_back(KVs);
         read_state();
+#if GDN_LAZY
+        // the stash of the previous verify; zeros when nothing is replayed (FRESH / HOLD: the slots may hold a stale
+        // stash, even non-finite values, and the compute's replay multiplies them by W = 0)
+        ktp_in.reserve_back(Kt);
+        up_in.reserve_back(Vs);
+        if (lazy_no_replay) {
+            zero_reserved(ktp_in, noc, Kt);
+            zero_reserved(up_in, noc, Vs);
+        } else {
+            read_tiles_at(ring_acc, ktp_in, noc, stash_blk * KV, Kt, 0);
+            read_tiles_at(ring_acc, up_in, noc, stash_blk * KV + Kt + s * Vs, Vs, 0);
+        }
+#endif
         noc.async_read_barrier();
         state_in.push_back(KVs);
+#if GDN_LAZY
+        ktp_in.push_back(Kt);
+        up_in.push_back(Vs);
+#endif
     }
 #elif GDN_FAST
     // ---- FAST tail: the compute is busy with phase A / B (about 25 us), so the reader's serial software gate math

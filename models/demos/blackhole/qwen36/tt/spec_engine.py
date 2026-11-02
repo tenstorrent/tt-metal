@@ -386,6 +386,20 @@ def parked_rows_host(ring, e_prev, s, T):
     return slot, e
 
 
+def parked_rows_host_lazy(ring, e_prev, par, s, T, row):
+    """parked_rows_host under QWEN36_SPEC_STEP_LAZY (K4): the ring holds D (slot 0) and the last verify's stash
+    (slot 1 + par, par = the window parity at park time), not the per-token states, so the committed state is D
+    replayed s + 1 tokens on the host (fp32 torch, tt/gdn/lazy_ref.py; the device replay's math, not its bits). The
+    restored row then verifies FRESH (ctrl mi = T: nothing replayed) from the shifted E_prev."""
+    from models.demos.blackhole.qwen36.tt.gdn.lazy_ref import TILE, parked_slot0_lazy
+
+    Kt, Vt = ring.shape[-2] // TILE, ring.shape[-1] // TILE
+    slot = parked_slot0_lazy(ring, s, T, par, (int(row) * T) % TILE, Kt, Vt)
+    e = torch.zeros_like(e_prev)
+    e[:, : e_prev.shape[1] - s] = e_prev[:, s:]
+    return slot, e
+
+
 def draft_step_plan(pending, p, K):
     """(pending tok [B,1] int32, [K] position vectors [B] int32): step k writes slot p[u] + k."""
     tok = torch.tensor([[int(t)] for t in pending], dtype=torch.int32)
@@ -891,6 +905,7 @@ class MTPSpecEngine:
     _dv_guard = None
     _dv_full_now = False
     _dr_traces_full = None
+    _lazy = False  # K4 (QWEN36_SPEC_STEP_LAZY) class default, same reason; set by __init__
 
     def __init__(self, model, batch_size, draft_len):
         assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
@@ -1033,6 +1048,25 @@ class MTPSpecEngine:
         # Fast join (module docstring): 1 = a fresh row is seeded in place and verified inside the normal replay;
         # 0 = the eager T = 1 seed forward (_seed / _join), as before.
         self.fast_join = spec_fast_join_enabled()
+        # K4 (QWEN36_SPEC_STEP_LAZY=1 with the fused spec step): ring slot 0 = the pre-verify state + a stash; a row
+        # whose slot 0 was just seeded / restored verifies FRESH (ctrl mi = T), parked rows are replayed on the host
+        from models.demos.blackhole.qwen36.tt.gdn.tp import gdn_spec_step_lazy_enabled
+
+        self._lazy = gdn_spec_step_lazy_enabled() and bool(self._gdn) and all(
+            getattr(dn, "_spec_fused", False) for dn in self._gdn
+        )
+        if self._lazy and not self.fast_join:
+            raise ValueError(
+                "QWEN36_SPEC_STEP_LAZY=1 needs QWEN36_SPEC_FAST_JOIN=1 (the eager T = 1 seed / join path has no "
+                "FRESH marking)"
+            )
+        if self._lazy and not self.host_slotmap:
+            raise ValueError(
+                "QWEN36_SPEC_STEP_LAZY=1 needs QWEN36_SPEC_SLOTMAP=1 (a device slot remap moves a row's stash to "
+                "another row, whose tile rows r0 = (row*T) % 32 the next verify would replay)"
+            )
+        if self._lazy and self.T < 3:
+            raise ValueError(f"QWEN36_SPEC_STEP_LAZY=1 needs T = K + 1 >= 3 (ring slots 0..2), got T = {self.T}")
         # Fast prefill (module docstring): 1 = prompts replay the spec short traces / chunk trace / slot-write traces;
         # 0 = the eager prefill_for_spec path (B > 1) or the B == 1 chunk-trace path, as before.
         self.fast_prefill = spec_fast_prefill_enabled()
@@ -2742,6 +2776,8 @@ class MTPSpecEngine:
         if self.host_slotmap:
             self._set_slot_map(slot_map_after_remap(self._phys, idx))
             return
+        if self._lazy:  # K4: __init__ refuses this combination; never move stash blocks across tile rows
+            raise ValueError("QWEN36_SPEC_STEP_LAZY=1: device slot remap refused (needs QWEN36_SPEC_SLOTMAP=1)")
         if getattr(self, "_ch_g", None) is not None:  # QWEN36_SPEC_CHAIN
             self._chain_drop("slot_change")  # the device remap moves the engine rows the chain state describes
         for dn in self._gdn:
@@ -3764,6 +3800,10 @@ class MTPSpecEngine:
         if to_park:
             t0 = time.perf_counter()
             saved = self._park_save(to_park)
+            if self._lazy:
+                # K4: the stash of the row's last verify sits in ring slot 1 + (the parity the next verify reads)
+                par = self.model.vfy_gdn_parity()
+                saved = {u: [(r, e, par) for r, e in saved[u]] for u in saved}
             for u in to_park:
                 self._parked[u] = saved[u]
             self._park_note("park", t0)
@@ -3778,7 +3818,14 @@ class MTPSpecEngine:
         if back:
             t0 = time.perf_counter()
             states = [
-                {u: parked_rows_host(*self._parked[u][li], int(mi_prev[u]), T) for u in back}
+                {
+                    u: (
+                        parked_rows_host_lazy(*self._parked[u][li], int(mi_prev[u]), T, u)
+                        if self._lazy
+                        else parked_rows_host(*self._parked[u][li], int(mi_prev[u]), T)
+                    )
+                    for u in back
+                }
                 for li in range(len(self._gdn))
             ]
             self._park_load(states)
@@ -3786,9 +3833,9 @@ class MTPSpecEngine:
                 del self._parked[u]
             self._park_note("unpark", t0)
             logger.info(f"[spec_engine] unparked slot(s) {back}, {self._park_last_ms:.1f} ms")
-            # restored into ring slot 0: the returning row verifies from mi = 0
+            # restored into ring slot 0: the returning row verifies from mi = 0 (K4: FRESH, nothing to replay)
             mi_prev = mi_prev.clone()
-            mi_prev[back] = 0
+            mi_prev[back] = T if self._lazy else 0  # T = lazy_ref.fresh_mi(T)
         if not bool(active.all()):
             pt = pt.clone()
             pt[~active] = 0  # vLLM null block
@@ -3812,7 +3859,7 @@ class MTPSpecEngine:
             # replay as 0-draft rows at mi = 0 next to the running rows (one forward for the whole step).
             fresh = self._seed_fresh_rows(tokens, start_pos, pt, fresh_now, rows)
             mi_prev = mi_prev.clone()
-            mi_prev[fresh] = 0
+            mi_prev[fresh] = T if self._lazy else 0  # K4: slot 0 was just seeded -> FRESH (lazy_ref.fresh_mi)
         elif fresh_now:
             if self._bucketed():
                 self._vb = self.B  # the eager seed / join runs the B-row traces

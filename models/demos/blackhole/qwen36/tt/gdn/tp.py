@@ -121,10 +121,40 @@ def gdn_spec_step_kernel_opts():
     return opts
 
 
-# x8 (kernel_opts bit 10, kGdnSpecOptNarrowGateReads; port of x7 5c6149788ed onto r9): the gate-scalar writer reads only
-# the face rows it uses (the a|b rows of the user, dt_bias / -exp(A)'s face row) instead of whole DRAM pages that every
-# core reads from one bank. Bit-identical; QWEN36_SPEC_STEP_NARROW_GR=1 adds it wherever gate scalars (bit 1) are on.
+# K4 (kernel_opts bit 8, GdnSpecStepKernelOpt::kGdnSpecOptLazy): NOT in SPEC_STEP_OPT_KNOWN on purpose -- it changes the
+# arithmetic and the ring / ctrl contract, so QWEN36_SPEC_STEP_OPT cannot switch it on; QWEN36_SPEC_STEP_LAZY does.
+SPEC_STEP_OPT_LAZY = 256
+# x7 gdn-sfpu (kernel_opts bit 9, kGdnSpecOptSfpuGate, K4 only): the gate transcendentals on the compute SFPU instead of
+# the writer's software fp32, and the replay decay C filled in DST (no 1024-store C tile). Changes numerics vs K4.
+SPEC_STEP_OPT_SFPU_GATE = 512
+# x7 (kernel_opts bit 10, kGdnSpecOptNarrowGateReads): the gate-scalar writer reads only the face rows it uses (the a|b
+# rows of the user, dt_bias / -exp(A)'s face row, the replay rows of the decay page) instead of whole DRAM pages that
+# every core reads from one bank. Bit-identical; QWEN36_SPEC_STEP_NARROW_GR=1 adds it wherever gate scalars are on.
 SPEC_STEP_OPT_NARROW_GR = 1024
+# x8 gdn-intrace (bits 11 / 12, bit-identical, with SFPU_GATE): QWEN36_SPEC_STEP_SFPU_FACE=1 runs the SFPU gate ops on
+# the one face the writer reads; QWEN36_SPEC_STEP_EARLY_GR=1 issues the ctrl-independent gate reads with the ctrl read
+SPEC_STEP_OPT_SFPU_GATE_FACE = 2048
+SPEC_STEP_OPT_EARLY_GR = 4096
+
+
+def gdn_spec_step_lazy_sfpu_enabled():
+    """QWEN36_SPEC_STEP_LAZY_SFPU (default "0" = off; with QWEN36_SPEC_STEP_LAZY=1 only): K4's gate scalars on the
+    compute SFPU (plain-kernel sigmoid / softplus / exp op order) instead of the writer's software exp / log1p; every
+    value block evaluates all T gates itself (no gate split / exchange) and the replay decay C is a DST fill. NOT
+    bit-identical to K4."""
+    return os.environ.get("QWEN36_SPEC_STEP_LAZY_SFPU", "0").strip() == "1"
+
+
+def gdn_spec_step_lazy_enabled():
+    """QWEN36_SPEC_STEP_LAZY (default "0" = off; K4): the fused spec verify (QWEN36_VERIFY_SPEC_STEP=1, fp32 state) runs
+    gdn_spec_step with kernel_opts bit 8: the chunked (WY) token phase + lazy rollback. Per (user, head) one state read
+    and one state write per verify instead of one read and T writes, no serial per-token state passes; NOT
+    bit-identical (exact-fp32 elementwise ops, about 30% closer to fp64 than the serial kernel in the host model).
+    Changes the ring contract (see tt/gdn/lazy_ref.py): ring slot 0 = the state before the previous verify, slots 1
+    and 2 = that verify's stash (parity double-buffered); the engine marks a row whose slot 0 was just seeded / restored
+    FRESH with ctrl mi = T (lazy_ref.fresh_mi) and parks rows through lazy_ref.parked_slot0_lazy. Needs T >= 3 and
+    QWEN36_SPEC_FAST_JOIN=1."""
+    return os.environ.get("QWEN36_SPEC_STEP_LAZY", "0").strip() == "1"
 
 
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
@@ -3681,15 +3711,40 @@ class TPGatedDeltaNet:
                 ("kernel_opts", _opts),
                 f"[gdn-spec-step] QWEN36_SPEC_STEP_OPT={_opts:#x}: bit-identical kernel restructurings on",
             )
+        if T > 1 and gdn_spec_step_lazy_enabled():
+            # K4: the verify only (the T = 1 seed on rec_state keeps the original contract); refuse loudly where the
+            # op would (it never drops the bit silently either)
+            assert self._decode_step_fp32_state, "QWEN36_SPEC_STEP_LAZY=1 needs the fp32 GDN state (fp32_state)"
+            assert T >= 3, f"QWEN36_SPEC_STEP_LAZY=1 needs T >= 3 (ring slots 0..2), got T = {T}"
+            extra["kernel_opts"] = extra.get("kernel_opts", 0) | SPEC_STEP_OPT_LAZY
+            if gdn_spec_step_lazy_sfpu_enabled():
+                extra["kernel_opts"] |= SPEC_STEP_OPT_SFPU_GATE
+                _log_spec_step_once(
+                    ("lazy_sfpu", T),
+                    "[gdn-spec-step] QWEN36_SPEC_STEP_LAZY_SFPU=1: K4 gates on the compute SFPU, C filled in DST",
+                )
+            _log_spec_step_once(
+                ("lazy", T),
+                f"[gdn-spec-step] QWEN36_SPEC_STEP_LAZY=1: K4 chunked token phase + lazy rollback at T={T} "
+                "(ring slot 0 = pre-verify state, slots 1/2 = stash; not bit-identical)",
+            )
         if (
             os.environ.get("QWEN36_SPEC_STEP_NARROW_GR", "0").strip() == "1"
-            and extra.get("kernel_opts", 0) & SPEC_STEP_OPT_GATE_SCALARS
+            and extra.get("kernel_opts", 0) & (SPEC_STEP_OPT_GATE_SCALARS | SPEC_STEP_OPT_LAZY)
         ):
             extra["kernel_opts"] |= SPEC_STEP_OPT_NARROW_GR
             _log_spec_step_once(
                 ("narrow_gr", T),
                 "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_GR=1: face-row gate reads (bit-identical)",
             )
+        if extra.get("kernel_opts", 0) & SPEC_STEP_OPT_SFPU_GATE:
+            if os.environ.get("QWEN36_SPEC_STEP_SFPU_FACE", "0").strip() == "1":
+                extra["kernel_opts"] |= SPEC_STEP_OPT_SFPU_GATE_FACE
+            if (
+                os.environ.get("QWEN36_SPEC_STEP_EARLY_GR", "0").strip() == "1"
+                and extra["kernel_opts"] & SPEC_STEP_OPT_NARROW_GR
+            ):
+                extra["kernel_opts"] |= SPEC_STEP_OPT_EARLY_GR
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,
             win_a,

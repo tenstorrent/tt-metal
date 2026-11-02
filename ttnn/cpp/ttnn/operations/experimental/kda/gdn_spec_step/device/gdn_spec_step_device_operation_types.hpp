@@ -52,8 +52,8 @@ struct GdnSpecStepParams {
     // per (u, h) (the original program). Part of the program hash.
     uint32_t value_blocks = 1;
     // kernel_opts (QWEN36_SPEC_STEP_OPT): bitmask of bit-identical kernel restructurings (0 = the original program,
-    // byte for byte). See GdnSpecStepKernelOpt; every bit keeps out, ring and window bit-identical to 0. Part of the
-    // program hash.
+    // byte for byte). See GdnSpecStepKernelOpt; every bit keeps out, ring and window bit-identical to 0, except
+    // kGdnSpecOptLazy (K4), which changes the arithmetic and the ring / ctrl contract. Part of the program hash.
     uint32_t kernel_opts = 0;
 };
 
@@ -84,13 +84,46 @@ enum GdnSpecStepKernelOpt : uint32_t {
     kGdnSpecOptGscSplit = 1u << 6,
     // value_blocks > 1: each block normalizes / gates only its own output columns (the row stats stay full-row)
     kGdnSpecOptVsTail = 1u << 7,
-    // gate scalars (bit 1): the writer's gate reads fetch only the face rows they use -- the user's T rows of the a|b
-    // tile(s), tile 0's face row of dt_bias / -exp(A) holding the head -- instead of whole 2-4 KB pages that every core
-    // reads from the same DRAM bank. Bit-identical. (Bits 8 / 9 are K4 / SFPU gates on the x7 branch; not here.)
+    // K4 (QWEN36_SPEC_STEP_LAZY): chunked (WY) token phase + lazy rollback. NOT bit-identical (every other bit is) and
+    // it CHANGES THE RING CONTRACT, so the caller must opt in on both sides:
+    //   ring slot 0 block (u, h) = D, the state BEFORE the previous verify's T tokens (seeds keep writing slot 0);
+    //   ring slot 1 + par (u, h) = the previous verify's stash: page j < Kt = K^T tile j (normalized keys, token
+    //     columns r0 + t), page Kt + v = the WY deltas U tile v (token rows r0 + t), page Kt + Vt = the per-token decay
+    //     exp(g_t) at element (r0 + t, 0) (column 0 only); this verify writes its own stash into slot 1 + (1 - par)
+    //     (the parity double-buffer: no page is read and written in one launch);
+    //   ctrl word 1 + u = mi of the previous verify (replay mi + 1 stashed tokens onto D), or any value >= T = FRESH
+    //     (slot 0 was just seeded / restored: no replay, conv-window mi 0); the ring-block words only carry HOLD.
+    // Per (u, h): S' = D replayed (exact-fp32 SFPU decay + one rank-(mi+1) FPU update) -> written back to slot 0; the T
+    // new tokens' outputs from S' in WY form (U = (I + N)^-1 diag(beta)(V - diag(E) K S'), O = diag(E) Q S' +
+    // (Q K^T o G) U), elementwise ops on the SFPU in exact fp32: one state read + one state write per step instead of
+    // one read + T writes, and no serial per-token state passes. Needs fast_mode + fp32_state and 3 <= T <= 8;
+    // implies kGdnSpecOptGateScalars (the writer computes the gate scalars and the WY coefficient tiles; GscSplit keeps
+    // splitting the gate math over the value blocks) and ignores the token-loop bits (FusedDecay, HoistInv) and A3Half
+    // (code size: the program fills the 70656 B kernel config buffer).
+    kGdnSpecOptLazy = 1u << 8,
+    // K4 only (x7 gdn-sfpu, QWEN36_SPEC_STEP_LAZY_SFPU): the gate transcendentals run on the compute SFPU instead of the
+    // writer's software fp32. The writer hands the compute the raw a|b tile(s) and the head's dt_bias / -exp(A) bits;
+    // the compute evaluates beta = sigmoid(b), dec = exp(-exp(A) softplus(a + dt_bias)) over the whole tile in the plain
+    // (non-fast) kernel's SFPU op order and returns the two fp32 tiles; the writer picks each token's pair and builds the
+    // WY coefficient tiles from them as before, except C (the replay decay), which the compute fills in DST from one
+    // scalar. Every block evaluates all T tokens itself (no gate exchange: GscSplit is ignored). NOT bit-identical to K4
+    // (SFPU instead of software exp / log1p); ignored without kGdnSpecOptLazy.
+    kGdnSpecOptSfpuGate = 1u << 9,
+    // gate scalars (bit 1 or K4): the writer's gate reads fetch only the face rows they use -- the user's T rows of the
+    // a|b tile(s), tile 0's face row of dt_bias / -exp(A) holding the head, the replay rows of the decay page's column 0
+    // -- instead of whole 2-4 KB pages that every core reads from the same DRAM bank. Bit-identical.
     kGdnSpecOptNarrowGateReads = 1u << 10,
+    // x8 (with kGdnSpecOptSfpuGate): the compute's SFPU gate ops run on the ONE face that holds every value the writer
+    // reads ((r0 + t, h) and (r0 + t, Nv + h)), instead of all four. Applied only when 2*Nv <= 16 (one a|b tile, both
+    // columns in face column 0); ignored otherwise. Bit-identical to kGdnSpecOptSfpuGate.
+    kGdnSpecOptSfpuGateFace = 1u << 11,
+    // x8 (with kGdnSpecOptSfpuGate + kGdnSpecOptNarrowGateReads): the writer issues the ctrl-independent gate reads (a|b
+    // rows, dt_bias / -exp(A) face rows) together with its ctrl read, ahead of the reader's bulk reads. Bit-identical.
+    kGdnSpecOptEarlyGateReads = 1u << 12,
     kGdnSpecOptAll = kGdnSpecOptFusedDecay | kGdnSpecOptGateScalars | kGdnSpecOptEarlySrc | kGdnSpecOptHoistInv |
                      kGdnSpecOptQkShare | kGdnSpecOptA3Half | kGdnSpecOptGscSplit | kGdnSpecOptVsTail |
-                     kGdnSpecOptNarrowGateReads,
+                     kGdnSpecOptLazy | kGdnSpecOptSfpuGate | kGdnSpecOptNarrowGateReads | kGdnSpecOptSfpuGateFace |
+                     kGdnSpecOptEarlyGateReads,
 };
 
 struct GdnSpecStepInputs {
