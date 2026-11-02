@@ -228,6 +228,13 @@ class DSV41Attention:
             fp32_dest_acc_en=os.environ.get("DSV41_ATTN_LIN_FP32", "1") == "1",
             packer_l1_acc=False,
         )
+        self.ckc_lofi = ttnn.init_device_compute_kernel_config(  # DSV41_ATTN_LIN_LOFI=1 (call-time arm of the single-layer loop): LoFi, no fp32 accumulation
+            md.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
         self.ckc_sdpa = ttnn.init_device_compute_kernel_config(
             md.arch(),
             math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("DSV41_ATTN_SDPA_FID", "HiFi4")),
@@ -320,11 +327,12 @@ class DSV41Attention:
 
     # ---- helpers --------------------------------------------------------------------------------------
     def _lin(self, x, w, name, **kw):
+        ckc = self.ckc_lofi if os.environ.get("DSV41_ATTN_LIN_LOFI") == "1" else self.ckc
         if (
             int(x.shape[-2]) > 32
         ):  # spec verify with > 32 rows (DSV41_SPEC_ROWS): the tuned 1D configs are per_core_M = 1 (<= 32 rows)
-            return ttnn.linear(x, w, compute_kernel_config=self.ckc, core_grid=ttnn.CoreGrid(y=8, x=8), **kw)
-        return ttnn.linear(x, w, compute_kernel_config=self.ckc, **self._proj[name], **kw)
+            return ttnn.linear(x, w, compute_kernel_config=ckc, core_grid=ttnn.CoreGrid(y=8, x=8), **kw)
+        return ttnn.linear(x, w, compute_kernel_config=ckc, **self._proj[name], **kw)
 
     def _rope_rows(self, x, c, s, name="SW"):
         """x [..., 512] (any leading dims): x * C + (x @ P) * S with full-width tables broadcast over rows."""
