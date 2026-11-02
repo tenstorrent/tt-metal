@@ -560,7 +560,9 @@ def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: t
             golden, ttnn.to_torch(output), name=f"Kimi-K3 {name}", pcc_threshold=0.999, nrmse_threshold=0.008
         )
     assert_bit_identical(
-        inputs[:, -3:, :], convolution_tail_from_device_layout(ttnn.to_torch(carry)), name="Kimi-K3 replacement carry"
+        inputs[:, -3:, :],
+        convolution_tail_from_device_layout(ttnn.to_torch(carry), 3),
+        name="Kimi-K3 replacement carry",
     )
     logger.info(f"QKV causal Conv1D plus SiLU kimi-k3: measured_ns={duration_ns:.0f}, runtime_id={runtime_id}")
     lower = _K3_EXPECTED_DURATION_NS * (1 - _PRODUCTION_PERF_MARGIN)
@@ -843,4 +845,6 @@ def test_qkv_causal_conv1d_silu_tiled_input(
         )
     # One rank: the carry is the last three tokens.
     last_rows = inputs[:, -3:, :]
-    assert_bit_identical(last_rows, convolution_tail_from_device_layout(ttnn.to_torch(carry)), name="replacement carry")
+    assert_bit_identical(
+        last_rows, convolution_tail_from_device_layout(ttnn.to_torch(carry), 3), name="replacement carry"
+    )

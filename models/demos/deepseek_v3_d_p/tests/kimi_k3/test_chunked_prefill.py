@@ -281,7 +281,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             for t in range(tp_size):
                 row, column = (0, t) if SP_AXIS == 0 else (t, 0)
                 tp_shards.append(
-                    convolution_tail_from_device_layout(shards[row * columns + column]).reshape(history, -1)
+                    convolution_tail_from_device_layout(shards[row * columns + column], history).reshape(history, -1)
                 )
             got_conv = torch.cat(
                 [

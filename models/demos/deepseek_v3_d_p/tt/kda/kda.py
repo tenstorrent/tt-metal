@@ -153,14 +153,18 @@ def convolution_tail_to_device_layout(tail: torch.Tensor) -> torch.Tensor:
     )
 
 
-def convolution_tail_from_device_layout(tail: torch.Tensor) -> torch.Tensor:
-    """`[..., W/64, (K-1)*64]` device layout -> `[..., K-1, W]` host rows. The input must be the device layout."""
+def convolution_tail_from_device_layout(tail: torch.Tensor, history_rows: int) -> torch.Tensor:
+    """`[..., W/64, (K-1)*64]` device layout -> `[..., K-1, W]` host rows, with `history_rows = K-1`.
+
+    Raises unless each page holds `history_rows` rows of one segment, so a `[..., K-1, W]` row tail is refused instead
+    of being decoded into permuted channels.
+    """
     *lead, segments, row = tail.shape
-    if row % KDA_CONVOLUTION_SEGMENT_CHANNELS != 0:
+    if row != history_rows * KDA_CONVOLUTION_SEGMENT_CHANNELS:
         raise ValueError(
-            f"segment row {row} is not a multiple of {KDA_CONVOLUTION_SEGMENT_CHANNELS}; not a device-layout tail"
+            f"page of {row} elements is not {history_rows} rows of a {KDA_CONVOLUTION_SEGMENT_CHANNELS}-channel "
+            "segment; not a device-layout convolution tail"
         )
-    history_rows = row // KDA_CONVOLUTION_SEGMENT_CHANNELS
     return (
         tail.reshape(*lead, segments, history_rows, KDA_CONVOLUTION_SEGMENT_CHANNELS)
         .transpose(-3, -2)

@@ -91,7 +91,7 @@ def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> No
     )
     assert_accurate(
         golden_convolution,
-        convolution_tail_from_device_layout(ttnn.to_torch(convolution_tt)),
+        convolution_tail_from_device_layout(ttnn.to_torch(convolution_tt), config.conv_kernel_size - 1),
         name="layer convolution state",
         pcc_threshold=0.999,
         nrmse_threshold=0.003,
@@ -155,7 +155,7 @@ def test_forward_contract(device: ttnn.Device) -> None:
     )
     assert_accurate(
         golden_convolution,
-        convolution_tail_from_device_layout(ttnn.to_torch(final_state.convolution)),
+        convolution_tail_from_device_layout(ttnn.to_torch(final_state.convolution), config.conv_kernel_size - 1),
         name="segmented convolution state",
         pcc_threshold=0.999,
         nrmse_threshold=0.004,

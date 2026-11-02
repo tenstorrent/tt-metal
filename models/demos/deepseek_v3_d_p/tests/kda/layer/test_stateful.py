@@ -68,7 +68,7 @@ def test_segmented_prefill_matches_reference_and_reuses_program(
     )
     assert_accurate(
         golden_convolution,
-        convolution_tail_from_device_layout(ttnn.to_torch(state.convolution)),
+        convolution_tail_from_device_layout(ttnn.to_torch(state.convolution), config.conv_kernel_size - 1),
         name="segmented convolution state",
         pcc_threshold=0.999,
         nrmse_threshold=0.004,

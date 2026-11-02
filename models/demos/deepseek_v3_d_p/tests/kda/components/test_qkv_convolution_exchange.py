@@ -232,7 +232,7 @@ class _Exchange:
         return [
             [
                 torch.cat([ttnn.to_torch(part) for part in parts], dim=-1)[0],
-                convolution_tail_from_device_layout(ttnn.to_torch(final)),
+                convolution_tail_from_device_layout(ttnn.to_torch(final), _HISTORY_ROWS),
             ]
             for *parts, final in zip(q, k, v, carry, strict=True)
         ]
