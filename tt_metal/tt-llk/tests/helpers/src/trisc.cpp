@@ -141,18 +141,18 @@ extern "C" __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_pr
     // works (PACK_ISOLATE: up to +70 %). The pack tail pushes one word into the pack->math hardware mailbox after its
     // completion store; the pop blocks until then. The L1 check below only guards against a stale mailbox word.
     (void)ckernel::mailbox_read(ckernel::ThreadId::PackThreadId);
+    // RC experiment (warmup-agent): LLK_TAIL_MODE=1 (overlay stream 0 SCRATCH_1) returns right after the pop, with no
+    // L1 access after the pack thread's completion store: the kernel keeps its natural last port-3 requester.
+    if (*reinterpret_cast<volatile std::uint32_t*>(host_signal::NOC_OVERLAY_START_ADDR + (host_signal::STREAM_SCRATCH_REG_INDEX + 1) * 4) == 1)
+    {
+        return;
+    }
     while (ckernel::load_blocking(pack_mailbox) != ckernel::KERNEL_COMPLETE)
     {
         const std::uint64_t gap_start = ckernel::read_wall_clock();
         while (ckernel::read_wall_clock() - gap_start < POLL_GAP_CYCLES)
         {
         }
-    }
-    // RC experiment (warmup-agent): LLK_TAIL_MODE=1 (overlay stream 0 SCRATCH_1) skips the settle and the last load,
-    // so the kernel ends with its natural last port-3 requester. Same ELFs for both modes.
-    if (*reinterpret_cast<volatile std::uint32_t*>(host_signal::NOC_OVERLAY_START_ADDR + (host_signal::STREAM_SCRATCH_REG_INDEX + 1) * 4) == 1)
-    {
-        return;
     }
     const std::uint64_t settle_start = ckernel::read_wall_clock();
     while (ckernel::read_wall_clock() - settle_start < SETTLE_CYCLES)
