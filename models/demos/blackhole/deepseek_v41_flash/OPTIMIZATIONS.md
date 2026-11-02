@@ -615,6 +615,10 @@ The prefill indexer gathers its top-512 candidates in TILE layout (81 vs 233 us 
 
 Rows of idle prefill slots are routed to the sentinel expert (branch `ssinghal/dsv4p1-prefill-opt` 61f587f12d5). The prefill agent will add the dynamic chunk rule and host-table work later (re-merge its tip when reported). Pending: `ssinghal/dsv4p1-moe-place2` is merged to its current tip (1bbdc067397).
 
+## 8.35 Tool-calling fix (plugin `a83b4c6`; rc5 plugin branch `ssinghal/dsv4p1-rc5-plugin` commit `bf576e4`)
+
+Plugin-side fix, no model-side change and no switch. Invalid tool results are refused with HTTP 400 (unknown `tool_call_id`, duplicate id, missing / empty id on a `role: tool` message; streaming and non-streaming; `tool_result_validation.py`, hooked in `entrypoints.py`), and JSON scalars (int / float / bool / null) of tool-schema properties declared without a `type` are returned as scalars, not strings (`tool_arg_typing.py`). Unchanged: reverse-order parallel results, forced named / required `tool_choice` with structured outputs, `tool_choice: none`, raw user `tool_result` blocks (400), DSML-shaped text inside tool results. Remaining limits: partial results are accepted, typed schemas unchanged, DSML text in strings not escaped. CPU test: `tests/test_tool_result_validation.py` (plugin repo). Same commit as in the rc4c image `rc4c-785f0df9b28-2406dcb1-a83b4c6`.
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
