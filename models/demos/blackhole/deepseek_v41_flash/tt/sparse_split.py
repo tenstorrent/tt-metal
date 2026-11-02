@@ -60,6 +60,8 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     if qt:
         QMODE = 2
     assert n_cores <= grid.x * grid.y
+    n_chunks_row = -(-topk // k_chunk)
+    assert G == 1 or -(-n_chunks_row // G) <= 2, "senders hold at most 2 chunks (ping-pong CB parity)"
     DHt = vDHt = D // 32
     Skt = k_chunk // 32
     Sqt = H // 32
@@ -287,7 +289,9 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     )
     prog = ttnn.ProgramDescriptor(
         kernels=[reader, writer, compute],
-        semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=core_set, initial_value=0)],
+        semaphores=[
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(max(1, 2 * (G - 1)))
+        ],
         cbs=cbs,
     )
     prog.custom_program_hash = (0x5A1 << 40) | (

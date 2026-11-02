@@ -242,46 +242,56 @@ void kernel_main() {
         if (split_g != 0) {
             DeviceZoneScopedN("W_SEND");
             // sender: my partial state (out, max, sum) sits in the ping-pong CBs: chunk 1 lands in b, so an odd count
-            // ends in b
+            // ends in b. The MAX tile is sent as soon as it exists (single chunk: right after the QK row max, ~4 us
+            // before the PV output): the leader forms the global max and the corrections while the outputs are still in
+            // flight.
             if (my_cnt > 0) {
                 const bool in_b = (my_cnt & 1) != 0;
                 experimental::CB s_out(in_b ? cb_out_b : cb_out_a), s_max(in_b ? cb_max_b : cb_max_a),
                     s_sum(in_b ? cb_sum_b : cb_sum_a);
-                s_out.wait_front(block_tiles);
-                s_max.wait_front(H / tt::constants::TILE_HEIGHT);
-                s_sum.wait_front(H / tt::constants::TILE_HEIGHT);
+                constexpr uint32_t ST = H / tt::constants::TILE_HEIGHT;  // state rows (tiles) per max / sum
                 experimental::CB r_out(cb_recv_out), r_max(cb_recv_max), r_sum(cb_recv_sum);
                 const uint32_t slot = split_g - 1;
                 const uint32_t o_addr = r_out.get_write_ptr() + slot * block_tiles * TILE_B;
-                const uint32_t m_addr = r_max.get_write_ptr() + slot * (H / tt::constants::TILE_HEIGHT) * TILE_B;
-                const uint32_t l_addr = r_sum.get_write_ptr() + slot * (H / tt::constants::TILE_HEIGHT) * TILE_B;
-                noc_async_write(
-                    s_max.get_read_ptr(),
-                    get_noc_addr(leader_x, leader_y, m_addr),
-                    (H / tt::constants::TILE_HEIGHT) * TILE_B);
-                noc_async_write(
-                    s_sum.get_read_ptr(),
-                    get_noc_addr(leader_x, leader_y, l_addr),
-                    (H / tt::constants::TILE_HEIGHT) * TILE_B);
+                const uint32_t m_addr = r_max.get_write_ptr() + slot * ST * TILE_B;
+                const uint32_t l_addr = r_sum.get_write_ptr() + slot * ST * TILE_B;
+                s_max.wait_front(ST);
+                noc_async_write(s_max.get_read_ptr(), get_noc_addr(leader_x, leader_y, m_addr), ST * TILE_B);
+                noc_async_write_barrier();
+                noc_semaphore_inc(get_noc_addr(leader_x, leader_y, get_semaphore(sem_id + slot)), 1);
+                s_out.wait_front(block_tiles);
+                s_sum.wait_front(ST);
+                noc_async_write(s_sum.get_read_ptr(), get_noc_addr(leader_x, leader_y, l_addr), ST * TILE_B);
                 noc_async_write(s_out.get_read_ptr(), get_noc_addr(leader_x, leader_y, o_addr), block_tiles * TILE_B);
                 noc_async_write_barrier();
-                noc_semaphore_inc(get_noc_addr(leader_x, leader_y, get_semaphore(sem_id)), 1);
+                noc_semaphore_inc(get_noc_addr(leader_x, leader_y, get_semaphore(sem_id + (NSPLIT - 1) + slot)), 1);
                 noc_async_atomic_barrier();
             }
             continue;
         }
         if (n_remote > 0) {
             DeviceZoneScopedN("W_RECV");
-            volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
-            noc_semaphore_wait_min(sem, n_remote);
-            noc_semaphore_set(sem, 0);
+            constexpr uint32_t ST = H / tt::constants::TILE_HEIGHT;
             experimental::CB r_out(cb_recv_out), r_max(cb_recv_max), r_sum(cb_recv_sum);
-            r_out.reserve_back(n_remote * block_tiles);
-            r_max.reserve_back(n_remote * (H / tt::constants::TILE_HEIGHT));
-            r_sum.reserve_back(n_remote * (H / tt::constants::TILE_HEIGHT));
-            r_out.push_back(n_remote * block_tiles);
-            r_max.push_back(n_remote * (H / tt::constants::TILE_HEIGHT));
-            r_sum.push_back(n_remote * (H / tt::constants::TILE_HEIGHT));
+            for (uint32_t q = 0; q < n_remote;
+                 ++q) {  // the max tiles first (early), compute forms M and the corrections from them
+                volatile tt_l1_ptr uint32_t* sem =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id + q));
+                noc_semaphore_wait(sem, 1);
+                noc_semaphore_set(sem, 0);
+                r_max.reserve_back(ST);
+                r_max.push_back(ST);
+            }
+            for (uint32_t q = 0; q < n_remote; ++q) {  // then each (out, sum) state as it lands
+                volatile tt_l1_ptr uint32_t* sem =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id + (NSPLIT - 1) + q));
+                noc_semaphore_wait(sem, 1);
+                noc_semaphore_set(sem, 0);
+                r_out.reserve_back(block_tiles);
+                r_sum.reserve_back(ST);
+                r_out.push_back(block_tiles);
+                r_sum.push_back(ST);
+            }
         }
         {
             DeviceZoneScopedN("W_OUTWAIT");
