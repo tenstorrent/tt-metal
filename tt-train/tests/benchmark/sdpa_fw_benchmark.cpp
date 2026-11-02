@@ -39,8 +39,10 @@
 // training_shakespeare_nanollama3_char.yaml: batch_size=1, max_steps=23, model_save_interval=0,
 // and nanollama3_char.yaml: max_sequence_length=8192. No other model/optimizer settings changed.
 //
-// Usage: sdpa_fw_benchmark [scenario-name-substring] [q_chunk_size,k_chunk_size,heads_per_item[,max_pieces[,num_cores]]
-// ...] Env:   TTML_SDPA_BENCH_WARMUP (default 2), TTML_SDPA_BENCH_MEASURE (default 10)
+// Usage: sdpa_fw_benchmark [scenario-name-substring] [shape=B,Hq,Hkv,S,D[,causal|none|arbitrary[,gate]] ...]
+//        [q_chunk_size,k_chunk_size,heads_per_item[,max_pieces[,num_cores]] ...] [pairs] [default_pairs]
+//        pairs = main's chunking placed as main did (heavy/light pairs); default_pairs = the default chunking so placed.
+// Env:   TTML_SDPA_BENCH_WARMUP (default 2), TTML_SDPA_BENCH_MEASURE (default 10)
 
 #include <fmt/format.h>
 
@@ -48,6 +50,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tt-metalium/distributed.hpp>
@@ -240,12 +243,13 @@ void run_scenario(
     rows.push_back(measure("default (picked)", {}));
     for (const auto& cfg : extra_configs) {
         const std::string label = fmt::format(
-            "q{} k{} h{} p{} c{}",
+            "q{} k{} h{} p{} c{}{}",
             cfg.q_chunk_size,
             cfg.k_chunk_size,
             cfg.heads_per_item,
             cfg.max_pieces,
-            cfg.num_cores);
+            cfg.num_cores,
+            cfg.causal_pairs ? " pairs" : "");
         try {
             rows.push_back(measure(label, cfg));
         } catch (const std::exception& e) {
@@ -309,14 +313,61 @@ void run_scenario(
     }
 }
 
+// shape=B,Hq,Hkv,S,D[,causal|none|arbitrary[,gate]]: a scenario that is not in the table.
+std::optional<Scenario> scenario_of(const char* arg) {
+    Scenario sc;
+    char mask[16] = "causal";
+    char gate[8] = "";
+    if (std::sscanf(
+            arg,
+            "shape=%u,%u,%u,%u,%u,%15[a-z],%7[a-z]",
+            &sc.batch,
+            &sc.q_heads,
+            &sc.kv_heads,
+            &sc.seq_len,
+            &sc.head_dim,
+            mask,
+            gate) < 5) {
+        return std::nullopt;
+    }
+    const std::string_view mask_name = mask;
+    sc.mask_type = mask_name == "none"        ? ttml::metal::AttentionMaskType::None
+                   : mask_name == "arbitrary" ? ttml::metal::AttentionMaskType::Arbitrary
+                                              : ttml::metal::AttentionMaskType::Causal;
+    sc.gate = std::string_view(gate) == "gate";
+    sc.name = fmt::format(
+        "shape_b{}_h{}_kv{}_s{}_d{}_{}{}",
+        sc.batch,
+        sc.q_heads,
+        sc.kv_heads,
+        sc.seq_len,
+        sc.head_dim,
+        mask_name,
+        sc.gate ? "_gate" : "");
+    return sc;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     std::string filter;
     std::vector<ttml::metal::SDPAForwardProgramConfig> extra_configs;
+    std::vector<Scenario> scenarios;
     for (int i = 1; i < argc; ++i) {
         ttml::metal::SDPAForwardProgramConfig cfg{};
-        if (std::sscanf(
+        if (const auto sc = scenario_of(argv[i])) {
+            scenarios.push_back(*sc);
+        } else if (std::string_view(argv[i]) == "pairs") {
+            // main's chunking and main's placement (heavy/light pairs): the baseline main actually ran.
+            cfg = kMainConfig;
+            cfg.causal_pairs = true;
+            extra_configs.push_back(cfg);
+        } else if (std::string_view(argv[i]) == "default_pairs") {
+            // the default chunking placed as main did, never cut.
+            cfg.max_pieces = 1U;
+            cfg.causal_pairs = true;
+            extra_configs.push_back(cfg);
+        } else if (std::sscanf(
                 argv[i],
                 "%u,%u,%u,%u,%u",
                 &cfg.q_chunk_size,
@@ -338,7 +389,10 @@ int main(int argc, char** argv) {
             "SDPA forward benchmark (warmup={} measure={}, host us per launch between two device syncs)\n",
             num_warmup,
             num_measure);
-        for (const auto& sc : kScenarios) {
+        if (scenarios.empty()) {
+            scenarios = kScenarios;
+        }
+        for (const auto& sc : scenarios) {
             if (!filter.empty() && sc.name.find(filter) == std::string::npos) {
                 continue;
             }
