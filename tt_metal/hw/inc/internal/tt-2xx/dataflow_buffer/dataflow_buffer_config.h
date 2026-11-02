@@ -546,9 +546,6 @@ inline uint32_t dfb_dm0_desc_stride_for(uint32_t max_counters) {
 inline uint32_t dfb_dm0_desc_threshold_offset(uint32_t stride) {
     return stride == 32u ? static_cast<uint32_t>(offsetof(dfb_dm0_txn_descriptor_image_t, threshold)) : stride - 2u;
 }
-// dm0_packed bits [1:0]: 0 = 32 B, 1 = 16 B, 2 = 8 B.
-inline uint32_t dfb_dm0_desc_stride_code(uint32_t stride) { return stride == 8u ? 2u : (stride == 16u ? 1u : 0u); }
-inline uint32_t dfb_dm0_packed_desc_stride(uint64_t w) { return 32u >> (static_cast<uint32_t>(w) & 3u); }
 
 // The descriptor pool holds one slot per txn id actually in use, in ascending id order, so their size
 // depends on how many ids a core uses and not on where those ids sit in [0, HW_TXN_ID_MAX].
