@@ -22,6 +22,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import cmp_fuse as _CF
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import (
     HEAD_DIM,
     NH,
@@ -238,13 +239,20 @@ class SpecCompressedAttention(_PagedMixin, DSV41CompressedAttention):
             lat = ttnn.rms_norm(self._lin(x, self.c_wkv, "CP"), weight=self.c_norm, epsilon=self.eps)
         else:
             cs = self._lin(x, self.c_wcat, "CP", dtype=ttnn.float32)  # [1,1,T,1024] fp32 = [kv | score]
-            cs3 = ttnn.reshape(ttnn.to_layout(cs, ttnn.ROW_MAJOR_LAYOUT), [U, n, 2 * HEAD_DIM])
-            prev = ttnn.reshape(ttnn.to_layout(self.prev_cs, ttnn.ROW_MAJOR_LAYOUT), [U, 1, 2 * HEAD_DIM])
-            prev_all = (
-                prev if n == 1 else ttnn.concat([prev, ttnn.slice(cs3, [0, 0, 0], [U, n - 1, 2 * HEAD_DIM])], dim=1)
-            )
-            a = ttnn.to_layout(ttnn.reshape(prev_all, [1, 1, T, 2 * HEAD_DIM]), ttnn.TILE_LAYOUT)
-            self.cs_block = cs3
+            if _CF.enabled() and _CF.ok(cs, self.prev_cs, U, n):
+                # DSV41_CMP_FUSE=1: the shifted block and the commit selection are pure data movement on the fp32 tiles (tt/cmp_fuse.py): no RM round trips; cs_block stays the TILE tensor
+                a = _CF.compress_shift(cs, self.prev_cs, U, n)
+                self.cs_block = cs
+                self._cs_tile = True
+            else:
+                self._cs_tile = False
+                cs3 = ttnn.reshape(ttnn.to_layout(cs, ttnn.ROW_MAJOR_LAYOUT), [U, n, 2 * HEAD_DIM])
+                prev = ttnn.reshape(ttnn.to_layout(self.prev_cs, ttnn.ROW_MAJOR_LAYOUT), [U, 1, 2 * HEAD_DIM])
+                prev_all = (
+                    prev if n == 1 else ttnn.concat([prev, ttnn.slice(cs3, [0, 0, 0], [U, n - 1, 2 * HEAD_DIM])], dim=1)
+                )
+                a = ttnn.to_layout(ttnn.reshape(prev_all, [1, 1, T, 2 * HEAD_DIM]), ttnn.TILE_LAYOUT)
+                self.cs_block = cs3
             sl = lambda t, lo: ttnn.slice(t, [0, 0, 0, lo], [1, 1, T, lo + HEAD_DIM])
             d = ttnn.subtract(a, cs)
             pooled = ttnn.addcmul(sl(cs, 0), sl(d, 0), sl(ttnn.sigmoid(d), HEAD_DIM))
@@ -258,6 +266,12 @@ class SpecCompressedAttention(_PagedMixin, DSV41CompressedAttention):
             return
         U, n = self.U, self.n
         gidx = getattr(self, "_commit_idx", None)
+        if getattr(
+            self, "_cs_tile", False
+        ):  # DSV41_CMP_FUSE: cs_block is the fp32 TILE tensor of this round's compressor projection
+            assert m is None or gidx is not None
+            _CF.commit_select(self.cs_block, self.prev_cs, gidx if m is not None else None, U, n)
+            return
         if m is not None and gidx is not None:
             # DSV41_SPEC_COMMIT_GATHER=1: block index m[u] of every user picked by one row-major gather (gidx [U,1,1024] uint32, built once per round); the one-hot multiply + sum picks the
             # same elements (exact in fp32) after a 50 us single-core tilize of cs_block per layer
