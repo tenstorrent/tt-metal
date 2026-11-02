@@ -89,15 +89,39 @@ def fused_forward(model, input, mask):
 
     blocks = list(model.blocks)
     residual = out
-    h = blocks[0].attention_norm(residual)  # no gradient upstream (frozen embedding): the plain op
+    # Sequence parallel (iteration 42): the residual stream lives row-sharded over the TP group. Every TP all-reduce
+    # is a reduce-scatter followed by an all-gather; the norm (and the residual add fused into it) runs between the
+    # two on the chip's quarter of the rows, the all-gather hands the normalized rows to the column-parallel layers
+    # (its backward reduce-scatters their partial input gradients: no broadcast node, no dx all-reduce), the
+    # row-parallel layers return their reduce-scattered shard. Same bytes on the links, a quarter of the norm work.
+    sp_axis = getattr(model, "sequence_parallel_axis", None)
+    sp = sp_axis is not None
+
+    def gather(t, replicated_grad=False):
+        # SHARDED: the consumer is a LoRA column-parallel layer without its broadcast node, so the gather's backward
+        # reduce-scatters the partial input gradients; REPLICATED: the consumer (the LM head's base column-parallel
+        # linear) still broadcasts and all-reduces its dx itself, the gather's backward only takes the local rows.
+        if not sp:
+            return t
+        kind = (
+            ttml.ops.distributed.GradOutputType.REPLICATED
+            if replicated_grad
+            else ttml.ops.distributed.GradOutputType.SHARDED
+        )
+        return ttml.ops.distributed.all_gather(t, 2, sp_axis, kind)
+
+    if sp:
+        residual = ttml.ops.distributed.scatter(residual, 2, sp_axis)  # the replicated embedding rows -> the shard
+    h = gather(blocks[0].attention_norm(residual))  # no gradient upstream (frozen embedding): the plain op
     for i, block in enumerate(blocks):
         delta = block.attention(h, mask)
         residual, h = add_rmsnorm(residual, delta, block.mlp_norm)
-        delta = block.mlp(h)
+        delta = block.mlp(gather(h))
         if i + 1 < len(blocks):
             residual, h = add_rmsnorm(residual, delta, blocks[i + 1].attention_norm)
+            h = gather(h)
         else:
-            h = add_rmsnorm(residual, delta, model.ln_fc, return_sum=False)
+            h = gather(add_rmsnorm(residual, delta, model.ln_fc, return_sum=False), replicated_grad=True)
     logits = model.fc(h)
     if not model.config.use_tp and model.padded_vocab_size != model.config.vocab_size:
         from ttml.models.llama.autograd_ops import SliceLastDim
@@ -106,10 +130,16 @@ def fused_forward(model, input, mask):
     return logits
 
 
-def use_fused_residual_norm(model) -> int:
+def use_fused_residual_norm(model, sequence_parallel: bool = True) -> int:
     """Switch the :class:`ttml.models.mistral.Mistral` inside ``model`` (or ``model`` itself) to
-    :func:`fused_forward`. Every RMSNorm gamma must be frozen. Returns the number of fused norms."""
+    :func:`fused_forward`. Every RMSNorm gamma must be frozen. Returns the number of fused norms.
+
+    ``sequence_parallel`` (iteration 42, TP only): the residual stream row-sharded over the TP group, the norms on the
+    shard between the reduce-scatter and the all-gather halves of each all-reduce (see :func:`fused_forward`); the
+    row-parallel LoRA layers return their reduce-scattered shard and the column-parallel ones drop the broadcast
+    node (the all-gather's backward reduces their partial input gradients)."""
     from ttml.models.mistral import Mistral
+    from ttml.modules.lora import LoraColumnParallelLinear, LoraRowParallelLinear
 
     targets = [m for _, m in model.named_modules() if isinstance(m, Mistral)]
     if isinstance(model, Mistral):
@@ -126,4 +156,10 @@ def use_fused_residual_norm(model) -> int:
     for name, m in llama.named_modules():
         if name.endswith("w2") and getattr(m, "weight_cat_fwd", None) is not None:
             m.transposed_output = True
+    row_parallel = [m for _, m in llama.named_modules() if isinstance(m, LoraRowParallelLinear)]
+    if sequence_parallel and row_parallel:
+        llama.sequence_parallel_axis = row_parallel[0].cluster_axis
+        for _, m in llama.named_modules():
+            if isinstance(m, (LoraRowParallelLinear, LoraColumnParallelLinear)):
+                m.sequence_parallel = True
     return len(norms) - 1  # the first norm stays the plain op

@@ -1,0 +1,10 @@
+=== norm kernels on the sequence-parallel shard (256 rows) vs the full rows 2026-11-02T16:47:02Z
+fwd rows 1024, token-major delta               median    130 us  min    130  rel 8.7e-03  PCC 0.9999958
+fwd rows 1024, transposed delta                median    132 us  min    131  rel 8.7e-03  PCC 0.9999958
+bwd rows 1024 + residual grad                  median    137 us  min    137  rel 7.6e-03  PCC 0.9999934
+bwd rows 1024 + residual grad, transposed out  median    176 us  min    175  rel 7.6e-03  PCC 0.9999934
+fwd rows  256, token-major delta               median     46 us  min     46  rel 8.2e-03  PCC 0.9999958
+fwd rows  256, transposed delta                median     45 us  min     45  rel 8.2e-03  PCC 0.9999958
+bwd rows  256 + residual grad                  median     50 us  min     50  rel 7.7e-03  PCC 0.9999933
+bwd rows  256 + residual grad, transposed out  median     60 us  min     60  rel 7.7e-03  PCC 0.9999933
+=== done 2026-11-02T16:47:07Z

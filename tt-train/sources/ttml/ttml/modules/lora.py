@@ -332,7 +332,8 @@ class LoraColumnParallelLinear(AbstractModuleBase):
 
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None
-        x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
+        if not getattr(self, "sequence_parallel", False):  # under SP the all-gather feeding x reduces dx itself
+            x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
         if getattr(self, "lora_fused", False) and not (
             self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0
         ):
@@ -454,7 +455,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
                     transposed_output=getattr(self, "transposed_output", False),
                     lowrank_sink=self,
                 )
-            out = ttml.ops.distributed.all_reduce(out, self.input_is_parallel, self.cluster_axis)
+            out = self._reduce_output(out)
             if self.bias is not None:
                 out = ttml.ops.binary.add(out, self.bias.tensor)
             return out
@@ -469,16 +470,26 @@ class LoraRowParallelLinear(AbstractModuleBase):
             # (linear in h); dh = s g B is full on every rank, dB_r = s g^T h_r is a partial that
             # `fused_lora.reduce_partial_lora_grads` sums once per step.
             out = _LoraUpdateAdd.apply(base, h, self.lora_B.tensor, self.scaling)
-            out = ttml.ops.distributed.all_reduce(out, self.input_is_parallel, self.cluster_axis)
+            out = self._reduce_output(out)
             if self.bias is not None:
                 out = ttml.ops.binary.add(out, self.bias.tensor)
             return out
+        assert not getattr(self, "sequence_parallel", False), "sequence parallel needs the batched gradient mode"
         base = ttml.ops.distributed.all_reduce(base, self.input_is_parallel, self.cluster_axis)
         if self.bias is not None:
             base = ttml.ops.binary.add(base, self.bias.tensor)
         # all-reduce h before B (B is replicated and then sees the full h, so dB is already complete).
         h = ttml.ops.distributed.all_reduce(h, self.input_is_parallel, self.cluster_axis)
         return _LoraUpdateAdd.apply(base, h, self.lora_B.tensor, self.scaling)
+
+    def _reduce_output(self, out):
+        """The output all-reduce, or under sequence parallel (iteration 42) its reduce-scatter half: the token
+        rows split over the TP group (the columns of a transposed output), the consumer norm running on the shard
+        and the all-gather after it; the node's backward all-gathers the shard's gradient."""
+        if not getattr(self, "sequence_parallel", False):
+            return ttml.ops.distributed.all_reduce(out, self.input_is_parallel, self.cluster_axis)
+        dim = 3 if getattr(self, "transposed_output", False) else 2
+        return ttml.ops.distributed.reduce_scatter(out, dim, self.cluster_axis)
 
 
 _LORA_MODULE_MAP: dict[type, type] = {
