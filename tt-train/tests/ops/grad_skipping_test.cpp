@@ -118,6 +118,7 @@ BackwardRun run_backward(
     const OpUnderTest& op, const std::vector<bool>& requires_grad, bool freeze_before_backward = false) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<TensorPtr> inputs;
+    inputs.reserve(op.inputs.size());
     for (size_t i = 0; i < op.inputs.size(); ++i) {
         inputs.push_back(ttml::autograd::create_tensor(
             ttml::core::from_xtensor(op.inputs[i].value, device, op.inputs[i].layout), requires_grad[i]));
