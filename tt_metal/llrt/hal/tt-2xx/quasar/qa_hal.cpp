@@ -23,6 +23,7 @@
 #include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"  // dfb::NUM_DFBS
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -656,6 +657,7 @@ void Hal::initialize_qa(
     this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = true;
+    this->num_dataflow_buffers_ = ::dfb::NUM_DFBS;
     this->supports_implicit_dfb_sync_ = true;
     this->num_tile_counters_ = NOC_NUM_TILE_COUNTERS;
 

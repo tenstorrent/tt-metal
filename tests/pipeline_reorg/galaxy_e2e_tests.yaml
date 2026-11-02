@@ -229,6 +229,18 @@
   team: scaleout
   budget_type: e2e
 
+# An 8x4 Fabric2D mesh split into two 4x4 halves: three shared-link transfers each over the direct D2D path
+# and the cable relay, checked bit for bit with metadata.
+- id: bh-galaxy-d2d-socket-sync-shared-links
+  name: BH Galaxy D2D socket sync shared links (direct and relay)
+  cmd: pytest models/demos/deepseek_v3_d_p/tests/test_d2d_socket_sync.py -k "fabric2d-8x4" -vvv --tb=short
+  skus:
+    bh_galaxy:
+      timeout: 3 # measured 54 s on a BH galaxy with a cold kernel cache
+  owner_id: U06LRK6JDGB # Saad Jameel
+  team: models
+  budget_type: e2e
+
 # BH galaxy is the only Blackhole SKU in CI whose firmware bundle clears the DRAM-programmable-cores
 # floor (19.12.0.0), so it is the only place these tests run instead of skipping. Single-device
 # suites: they cover the DRAM-core/GCB/prefetcher path itself, not multi-device sharding.

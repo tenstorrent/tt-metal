@@ -13,7 +13,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include <numeric>
 #include <ranges>
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
