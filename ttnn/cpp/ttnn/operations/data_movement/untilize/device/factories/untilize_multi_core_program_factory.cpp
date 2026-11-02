@@ -64,6 +64,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     constexpr const char* WRITER_INTERLEAVED_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_runtime_rows.cpp";
+    constexpr const char* WRITER_THREADS_SRC =
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "writer_unary_stick_layout_split_rows_multi_core_threads.cpp";
     constexpr const char* COMPUTE_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
         "untilize_variable_num_blocks_metal2.cpp";
@@ -245,11 +248,21 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
     uint32_t num_cols_per_output_block = output_page_width;
 
+    // The writer issues one NoC command per output row of every block, which bounds this op on Quasar; there
+    // the rows of a block are dealt over four DM harts that all consume every block (ALL pattern). Together with
+    // the reader that is five of the six user harts. WH/BH keep the single-hart writer, and so does runtime
+    // rows, whose writer derives its row range on device and has no threaded form.
+    const bool threaded_writer = device->arch() == tt::ARCH::QUASAR && !runtime_rows;
+    const uint32_t writer_threads = threaded_writer ? 4 : 1;
     KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = std::filesystem::path{runtime_rows ? WRITER_INTERLEAVED_SRC : WRITER_SRC},
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .source = std::filesystem::path{
+            runtime_rows ? WRITER_INTERLEAVED_SRC : (threaded_writer ? WRITER_THREADS_SRC : WRITER_SRC)},
+        .num_threads = writer_threads,
+        .dfb_bindings =
+            {threaded_writer
+                 ? AllConsumerOf(OUT, "out")
+                 : DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args =
             {{"tile_height", tile_height},
@@ -258,7 +271,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
              {"output_element_size", output_element_size},
              {"num_cols_per_input_block", num_cols_per_input_block},
              {"num_cols_per_output_block", num_cols_per_output_block}},
-        .hw_config = ttnn::create_writer_datamovement_config(),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/threaded_writer),
     };
     if (runtime_rows) {
         writer_spec.compile_time_args.insert({"num_cores", num_compute_cores});
