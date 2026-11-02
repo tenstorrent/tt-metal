@@ -32,7 +32,7 @@ constexpr uint32_t onetile = 1U;
 // saving ~75% of SFPU cycles.
 #ifdef TRISC_MATH
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-void recip_tile_first_column(uint32_t idst) {
+void sdpa_fw_recip_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -339,7 +339,7 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
     }
     recip_tile_init();
     for (uint32_t i = 0; i < n; ++i) {
-        MATH((recip_tile_first_column(i)));
+        MATH((sdpa_fw_recip_tile_first_column(i)));
     }
     tile_regs_commit();
 

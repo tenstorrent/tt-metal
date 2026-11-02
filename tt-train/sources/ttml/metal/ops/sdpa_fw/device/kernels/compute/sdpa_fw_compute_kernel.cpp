@@ -26,6 +26,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "sdpa_compute_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/sdpa_fw_work_list.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_mask_lightweight.hpp"
 
 // Work item: one Q chunk of a head stack (see sdpa_fw_work_list.hpp), rows = Sq_chunk_t * heads_per_item
 // tile-rows. The item walks K/V in steps of Sk_chunk_t tiles; per step it does QK^T, online softmax and
@@ -251,35 +252,28 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
 
 #ifdef CAUSAL_MASK
         if (k_step >= first_masked_step) {
-            // Add the causal mask onto the scores already in L1. The CB holds exactly one step, so
-            // pop + reserve lands on the same slots; with L1-accumulate on, pack_tile adds to the
-            // tile already there instead of overwriting it.
+            // Add the causal mask onto the scores already in L1 with ttnn's SDPA helper: the CB holds
+            // exactly one step, so pop + reserve lands on the same slots, and with L1-accumulate on the
+            // packer adds the diagonal tile (mask[0]) and the all -1e9 tile (mask[1]) to the score tiles
+            // already there. One call per stacked head: the heads share the diagonal, each in its own
+            // band of Sq_chunk_t rows.
             cb_wait_front(cb_attention_weights, score_tiles);
             cb_pop_front(cb_attention_weights, score_tiles);
             cb_reserve_back(cb_attention_weights, score_tiles);
-
-            // Both mask tiles go to DST once; the packer then stamps them onto every masked slot.
-            copy_init(cb_attn_mask);
-            tile_regs_acquire();
-            copy_tile(cb_attn_mask, /* diagonal pattern */ 0, /* dst */ 0);
-            copy_tile(cb_attn_mask, /* all -1e9 */ 1, /* dst */ 1);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_l1_acc(1);
-            const uint32_t step_first_k_tile = k_step * Sk_chunk_t;
-            for (uint32_t r = 0; r < rows; ++r) {
-                const uint32_t row_tile = first_row_tile + r % Sq_chunk_t;  // heads share the diagonal
-                // K tiles left of this row's diagonal tile stay unmasked.
-                const uint32_t first_masked_n = (row_tile > step_first_k_tile) ? (row_tile - step_first_k_tile) : 0U;
-                for (uint32_t n = first_masked_n; n < Sk_chunk_t; ++n) {
-                    // mask[0] on the diagonal tile, mask[1] (all -1e9) past it.
-                    const uint32_t mask_dst = (step_first_k_tile + n == row_tile) ? 0U : 1U;
-                    pack_tile</* out_of_order */ true>(mask_dst, cb_attention_weights, /* offset */ r * Sk_chunk_t + n);
-                }
+            for (uint32_t h = 0; h < heads_per_item; ++h) {
+                apply_causal_mask_lightweight<sm_block_size>(
+                    cb_attn_mask,
+                    /* neginf_idx */ 1U,
+                    /* diag_idx */ 0U,
+                    cb_attention_weights,
+                    /* q_start_tile */ first_row_tile,
+                    /* k_start_tile */ k_step * Sk_chunk_t,
+                    /* num_rows */ Sq_chunk_t,
+                    /* num_cols */ Sk_chunk_t,
+                    /* straddle_col */ 0U,
+                    /* straddle_jump */ 0U,
+                    /* row_base */ h * Sq_chunk_t);
             }
-            pack_reconfig_l1_acc(0);
-            tile_regs_release();
-
             cb_push_back(cb_attention_weights, score_tiles);
         }
 #endif
