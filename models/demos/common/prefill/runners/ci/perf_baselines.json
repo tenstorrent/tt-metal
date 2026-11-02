@@ -30,13 +30,13 @@
           "@1020k": {
             "throughput_tok_s": 0.04,
             "ttft_s": 0.04,
-            "chunk_time_ms": 0.15
+            "chunk_time_ms": 0.2
           }
         },
         "8kw": {
           "throughput_tok_s": 23450,
           "ttft_s": 33.8,
-          "chunk_time_ms": 1030
+          "chunk_time_ms": 980
         }
       },
       "sc1": {
