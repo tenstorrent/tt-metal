@@ -92,9 +92,10 @@ def main() -> int:
                                      layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
                 y0 = ttnn.to_torch(mlp.forward(x0)).float().numpy()[0, 0, 0]
                 p0 = cpu_ref.pcc(y[0], y0)
+                rel = float(np.abs(y - ref).max() / np.abs(ref).max())  # scale-sensitive: PCC isn't (SCALE16 bug, 01:34)
                 print(f"L{layer} S={s} prefill_mlp: pcc vs float64 {p:.6f}; row0 vs A3 decode {p0:.6f}; "
-                      f"decode vs float64 {cpu_ref.pcc(y0, ref[0]):.6f}", flush=True)
-                rc |= p < 0.999 or p0 < 0.999
+                      f"decode vs float64 {cpu_ref.pcc(y0, ref[0]):.6f}; max rel err {rel:.4f}", flush=True)
+                rc |= p < 0.999 or p0 < 0.999 or not rel < 0.05
                 ms = {
                     "dequant_gu": timed(lambda: pf.dequant(mlp.w_gu, mlp.s_gu, 5120, 17408, gu=True)),
                     "dequant_down": timed(lambda: pf.dequant(mlp.w_d, mlp.s_d, 17408, 5120)),

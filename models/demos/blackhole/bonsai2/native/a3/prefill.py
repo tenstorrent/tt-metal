@@ -52,10 +52,10 @@ def scales_view(s, s_tiles: int):
 
 
 def scale_tiles(s):
-    """(bytes per scale tile, CB data format, fp16 flag): A's BONSAI_SCALE16 tiles are 2 KB fp16 in a bf16 carrier CB."""
-    if getattr(s, "fp16", False):
-        return 2048, ttnn.bfloat16, 1
-    return 4096, ttnn.float32, 0
+    """(bytes per scale tile in DRAM, CB format, compute fp16 flag). A's BONSAI_SCALE16 tiles are 2 KB fp16: the
+    reader converts the rows it needs to fp32 (kernels/scale_cvt.h), so the CB is fp32 either way. Reprogramming SrcB to
+    Float16 in compute decoded the bits with an 8-bit-exponent bias (outputs ~1e-33 too small, found by A 01:34)."""
+    return (2048 if getattr(s, "fp16", False) else 4096), ttnn.float32, 0
 
 
 def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b, fidelity=None):
@@ -103,7 +103,7 @@ def dequant(w, s, k: int, n: int, gu: bool = False, dtype=ttnn.bfloat8_b, fideli
                 math_fidelity=fidelity or _DQ_FID, fp32_dest_acc_en=_FP32_DEST, math_approx_mode=False)),
         ],
         semaphores=[],
-        cbs=[cb(0, ttnn.DataType.BFLOAT2_B, wtb, 64), cb(1, sfmt, stb, 2), cb(16, dtype, otb, 64)])
+        cbs=[cb(0, ttnn.DataType.BFLOAT2_B, wtb, 64), cb(1, sfmt, 4096, 2), cb(16, dtype, otb, 64)])
     ttnn.generic_op([wt, st] + outs, prog)
     return tuple(outs) if gu else outs[0]
 

@@ -9,6 +9,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "scale_loc.h"
+#include "scale_cvt.h"
 #include "api/debug/dprint.h"
 
 // Bounded semaphore wait (debug safety): never hangs the chip; on timeout the caller reports and continues.
@@ -50,11 +51,16 @@ void kernel_main() {
             const uint32_t bank = c / cpb, j = c % cpb;
             cb_reserve_back(cb_s, 1);
             const ScaleLoc loc = scale_loc<pk, s_tiles, tail_t, s_full, rem>(j, G);
-            noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr + loc.tile * s_tb), get_write_ptr(cb_s), s_tb);
+            const uint32_t s_slot = get_write_ptr(cb_s);  // fp32 4 KB slot; fp16 tiles land in its upper half
+            noc_async_read(get_noc_addr_from_bank_id<true>(bank, s_addr + loc.tile * s_tb), s_slot + (s_tb == 2048 ? 2048 : 0), s_tb);
             cb_reserve_back(cb_c, 32);
             noc_async_read(get_noc_addr_from_bank_id<true>(bank, w_addr + (j * kt + G * 32) * wtb),
                            get_write_ptr(cb_c), 32 * wtb);
             noc_async_read_barrier();
+            if constexpr (s_tb == 2048) {
+                invalidate_l1_cache();
+                fp16_rows_to_fp32(s_slot, loc.row, 8);
+            }
             cb_push_back(cb_s, 1);
             cb_push_back(cb_c, 32);
         }

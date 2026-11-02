@@ -55,9 +55,10 @@ def test_prefill_inmodel(mesh_device):
         y = ttnn.to_torch(pf.prefill_linear(tl, xt)).float().numpy().reshape(s, tl.n)
         ref = sh.had.rotate(x.float().numpy()) @ w.T
         p = cpu_ref.pcc(y, ref)
-        print(f"INMODEL {label} S={s}: pcc {p:.6f} |y|max {np.abs(y).max():.3e} |ref|max {np.abs(ref).max():.3e} "
+        rel = float(np.abs(y - ref).max() / np.abs(ref).max())
+        print(f"INMODEL {label} S={s}: pcc {p:.6f} max rel err {rel:.4f} |y|max {np.abs(y).max():.3e} |ref|max {np.abs(ref).max():.3e} "
               f"scales fp16={getattr(tl.s, 'fp16', None)}", flush=True)
-        rc |= not (p > 0.999)
+        rc |= not (p > 0.999 and rel < 0.05)
     t = {n: read_ternary(sh.gguf, f"blk.0.ffn_{n}.weight") for n in ("gate", "up", "down")}
     x, xt = x_of(5120)
     y = ttnn.to_torch(pf.prefill_mlp(mlp, xt)).float().numpy().reshape(s, 5120)
@@ -66,7 +67,8 @@ def test_prefill_inmodel(mesh_device):
     u = cpu_ref.project_ternary(t["up"], sh.had, xb)
     ref = cpu_ref.project_ternary(t["down"], sh.had, g / (1 + np.exp(-g)) * u)
     p = cpu_ref.pcc(y, ref)
-    print(f"INMODEL mlp L0 S={s}: pcc {p:.6f} |y|max {np.abs(y).max():.3e} |ref|max {np.abs(ref).max():.3e} "
+    rel = float(np.abs(y - ref).max() / np.abs(ref).max())
+    print(f"INMODEL mlp L0 S={s}: pcc {p:.6f} max rel err {rel:.4f} |y|max {np.abs(y).max():.3e} |ref|max {np.abs(ref).max():.3e} "
           f"scales fp16={getattr(mlp.s_gu, 'fp16', None)}", flush=True)
-    rc |= not (p > 0.999)
+    rc |= not (p > 0.999 and rel < 0.05)
     assert not rc, "an in-model ternary prefill projection is wrong"
