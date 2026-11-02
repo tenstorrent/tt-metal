@@ -26,7 +26,10 @@ from ttexalens.tt_exalens_lib import (
     TTException,
     load_elf,
     parse_elf,
+    read_from_device,
     read_word_from_device,
+    write_to_device,
+    write_words_to_device,
 )
 
 from . import device as device_module
@@ -51,7 +54,6 @@ from .device import (
     set_tensix_soft_reset,
     wait_brisc_boot_ready,
 )
-from .device_io import read_from_device, write_to_device, write_words_to_device
 from .device_print import aux_size_for
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -744,14 +746,19 @@ class TestConfig:
 
         For a ``tt_llk_quasar`` tree, prepend the selected variant's header root
         and expose the tree root for qualified includes of the base headers.
+        The in-tree Quasar tree has no ``common/inc/sfpu``: its eltwise SFPU kernels are in
+        ``llk_sfpu`` and its experimental ones under ``common/inc/experimental``. A Quasar tree
+        that still ships the directory keeps it as a root.
         """
         root = Path(arch_root)
         roots = [
             root / "llk_lib",
             root / "llk_lib" / "hal",
             root / "common" / "inc",
-            root / "common" / "inc" / "sfpu",
         ]
+        sfpu = root / "common" / "inc" / "sfpu"
+        if root.name != "tt_llk_quasar" or sfpu.is_dir():
+            roots.append(sfpu)
         if root.name == "tt_llk_quasar":
             roots.append(root)
             variant = quasar_variant()
