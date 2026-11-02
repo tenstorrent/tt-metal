@@ -476,6 +476,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         OUT_WRITE_NOCS,
         CB_OUT_TILES_NOC0,
         blocking.seq_tiles,
+        _dest_tiles(compute_kernel_config),
     ]
 
     reader_rt = {}
