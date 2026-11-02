@@ -35,6 +35,8 @@ DEST_ACC = DestAccumulation.No
 MATHOP = MathOperation.ReduceColumn
 REDUCE_POOL = ReducePool.Max
 INPUT_DIMENSIONS = [512, 64]  # four independent 4x2 subblocks
+BLOCK_CT_DIM = 2
+BLOCK_RT_DIM = 4
 
 # all_negative catches a max seed that is not really -inf.
 STIMULI = {
@@ -74,22 +76,30 @@ def _run_sfpu_reduce_sdpa(
     if run_types is None:
         run_types = [PerfRunType.PACK_ISOLATE] if is_perf else [PerfRunType.L1_TO_L1]
 
-    block_ct_dim = 2
-    block_rt_dim = 4
-    tile_count = input_dimensions[1] // 32 * input_dimensions[0] // 32
+    test_config_kwargs = {
+        "test_name": "sources/sfpu_reduce_sdpa_test.cpp",
+        "formats": formats,
+        "unpack_to_dest": False,  # Math performs the A2D copy.
+        "dest_acc": dest_acc,
+    }
 
     if is_perf:
+        tile_count = (input_dimensions[0] // TILE_DIMENSIONS[0]) * (
+            input_dimensions[1] // TILE_DIMENSIONS[1]
+        )
+        # Keep this name literal so schema v4 can derive the perf compile parameters.
         templates = [
             MATH_OP(mathop=mathop),
             REDUCE_POOL_TYPE(reduce_pool),
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                block_ct_dim=BLOCK_CT_DIM,
+                block_rt_dim=BLOCK_RT_DIM,
+            ),
         ]
-        configuration = create_test_or_perf_config(
-            is_perf=True,
-            run_types=run_types,
-            test_config_kwargs={
-                "test_name": "sources/sfpu_reduce_sdpa_test.cpp",
-                "formats": formats,
+        test_config_kwargs.update(
+            {
                 "templates": templates,
                 "runtimes": [
                     TILE_COUNT(tile_count),
@@ -105,9 +115,12 @@ def _run_sfpu_reduce_sdpa(
                     tile_count_B=tile_count,
                     tile_count_res=tile_count,
                 ),
-                "unpack_to_dest": False,
-                "dest_acc": dest_acc,
-            },
+            }
+        )
+        configuration = create_test_or_perf_config(
+            is_perf=True,
+            run_types=run_types,
+            test_config_kwargs=test_config_kwargs,
         )
         configuration.run(perf_report)
         return
@@ -130,7 +143,7 @@ def _run_sfpu_reduce_sdpa(
 
     # Each destination block is an independent 4x2 SDPA reduction subblock.
     golden_tensor = torch.zeros_like(src_A_untilized)
-    subblock_rows = block_rt_dim * 32
+    subblock_rows = BLOCK_RT_DIM * TILE_DIMENSIONS[0]
     for row in range(0, input_dimensions[0], subblock_rows):
         golden_tensor[row, :] = torch.max(
             src_A_untilized[row : row + subblock_rows, :], dim=0
@@ -146,8 +159,8 @@ def _run_sfpu_reduce_sdpa(
         generate_input_dim(
             input_dimensions,
             input_dimensions,
-            block_ct_dim=block_ct_dim,
-            block_rt_dim=block_rt_dim,
+            block_ct_dim=BLOCK_CT_DIM,
+            block_rt_dim=BLOCK_RT_DIM,
         ),
         MATH_OP(mathop=mathop, pool_type=reduce_pool),
     ]
@@ -157,12 +170,8 @@ def _run_sfpu_reduce_sdpa(
         NUM_BLOCKS(num_blocks),
         NUM_TILES_IN_BLOCK(num_tiles_in_block),
     ]
-    configuration = create_test_or_perf_config(
-        is_perf=False,
-        run_types=run_types,
-        test_config_kwargs={
-            "test_name": "sources/sfpu_reduce_sdpa_test.cpp",
-            "formats": formats,
+    test_config_kwargs.update(
+        {
             "templates": functional_compile_params,
             "runtimes": functional_runtime_params,
             "variant_stimuli": StimuliConfig(
@@ -175,9 +184,12 @@ def _run_sfpu_reduce_sdpa(
                 tile_count_B=tile_cnt_B,
                 tile_count_res=tile_cnt_A,
             ),
-            "unpack_to_dest": False,
-            "dest_acc": dest_acc,
-        },
+        }
+    )
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
     res_from_L1 = configuration.run().result
 
