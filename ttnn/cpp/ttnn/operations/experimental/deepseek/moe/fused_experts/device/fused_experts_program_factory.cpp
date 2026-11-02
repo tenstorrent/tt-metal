@@ -50,7 +50,7 @@ uint32_t largest_divisor_at_most(uint32_t n, uint32_t cap) {
 constexpr uint32_t kNoDownShard = 0xFFFFFFFFu;
 
 // The in-op router runs on up to kRouterCores cores of the first grid row below the expert grid, which
-// hold the gate's [K, 32] tile columns round-robin in L1 (core c: columns c, c + cores, ...).
+// take the gate's [K, 32] tile columns round-robin (core c: columns c, c + cores, ...).
 constexpr uint32_t kRouterCores = 12;
 // A core's score and ranking tiles sit in DEST together: 8 16-bit tiles in half-sync mode.
 constexpr uint32_t kRouterMaxTilesPerCore = 4;
@@ -328,7 +328,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t shared_limit_bits = std::bit_cast<uint32_t>(operation_attributes.shared_swiglu_limit);
 
     // In-op router: num_router_cores cores of row GRID_Y (the first row below the expert grid). The gate
-    // weight is resident in their L1, its [K, 32] tile columns dealt round-robin, so core c owns
+    // weight's [K, 32] tile columns are dealt round-robin (in their L1, or streamed from DRAM), so core c owns
     // columns c, c + num_router_cores, ... -- the first `router_tiles % num_router_cores` cores one more
     // than the rest. Each computes those experts' bf16 scores and biased ranking on its own copy of the
     // replica, and writes its top_k (key, id, score) candidates into slot c of the leader's cb_routing,
@@ -342,6 +342,12 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     Buffer* router_weight_buffer = run_router ? tensor_args.router_weight->buffer() : nullptr;
     Buffer* router_bias_buffer = run_router ? tensor_args.router_bias->buffer() : nullptr;
     const uint32_t router_tile_bytes = run_router ? static_cast<uint32_t>(router_weight_buffer->page_size()) : 0u;
+    // An L1 gate sits on the router cores, and cb_rw is aliased over it; a DRAM gate is streamed into
+    // cb_rw in four K pieces per column (pieces stay even for custom_mm's split accumulation), so the
+    // matmul starts on the first piece while the rest are still in flight.
+    const bool router_gate_in_dram =
+        run_router && router_weight_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const uint32_t router_piece_tiles = router_gate_in_dram && k_tiles % 8u == 0 ? k_tiles / 4u : k_tiles;
     CoreRangeSet router_cores;
     if (run_router) {
         TT_FATAL(
@@ -374,10 +380,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         router_cores = CoreRangeSet{CoreRange{{0, GRID_Y}, {num_router_cores - 1u, GRID_Y}}};
         const auto& nd = tensor_args.router_weight->memory_config().nd_shard_spec().value();
         TT_FATAL(
-            nd.grid == router_cores && nd.orientation == ShardOrientation::ROW_MAJOR &&
-                nd.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D,
-            "fused_experts: router_weight must be L1 ND-sharded ROW_MAJOR ROUND_ROBIN_1D over the router cores {}, "
-            "got grid {}",
+            router_gate_in_dram || (nd.grid == router_cores && nd.orientation == ShardOrientation::ROW_MAJOR &&
+                                    nd.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D),
+            "fused_experts: an L1 router_weight must be ND-sharded ROW_MAJOR ROUND_ROBIN_1D over the router cores "
+            "{}, got grid {}",
             router_cores.str(),
             nd.grid.str());
     }
@@ -1098,8 +1104,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
 
     // Router-core CBs, after every expert-grid CB so they cannot shift an expert-grid address:
     //   cb_rin    the replica's row as k_tiles 1x32 tiles, aliased over the shard like cb_input;
-    //   cb_rw     the core's tile columns of the gate weight, aliased over its L1 shards (a core's
-    //             shards sit back to back, each one column's k_tiles tiles in K order);
+    //   cb_rw     the core's tile columns of the gate weight, each one column's k_tiles tiles in K order:
+    //             aliased over its shards of an L1 gate (which sit back to back), or the reader's copy
+    //             of a DRAM gate;
     //   cb_rbias  the whole bf16 bias row as E/32 1x32 tiles, so tile t is the bias of tile column t;
     //   cb_rout   the bf16 scores, then the bf16 ranking (scores + bias), for the reader's top-k
     //             (bf16 because custom_mm only runs with a 16-bit DEST).
@@ -1129,7 +1136,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
                 .data_format = datatype_to_dataformat_converter(tensor_args.router_weight->dtype()),
                 .page_size = router_tile_bytes,
             }}},
-            .buffer = router_weight_buffer,
+            .buffer = router_gate_in_dram ? nullptr : router_weight_buffer,
         });
         desc.cbs.push_back(CBDescriptor{
             .total_size = router_tiles * router_bias_tile_bytes,
@@ -1747,8 +1754,12 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             sem_router_id,
             top_k,
             num_router_cores,
+            router_gate_in_dram ? 1u : 0u,
+            router_piece_tiles,
+            router_tile_bytes,
         };
         TensorAccessorArgs(*router_bias_buffer).append_to(router_reader_ct_args);
+        TensorAccessorArgs(*router_weight_buffer).append_to(router_reader_ct_args);
 
         KernelDescriptor router_reader_desc;
         router_reader_desc.kernel_source = std::string(kKernelDir) + "/dataflow/router_topk.cpp";
@@ -1765,7 +1776,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         router_compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         router_compute_desc.core_ranges = router_cores;
         router_compute_desc.compile_time_args = {
-            cb_rin, k_tiles, cb_rw, cb_rbias, router_tiles, cb_rout, num_router_cores};
+            cb_rin, k_tiles, cb_rw, cb_rbias, router_tiles, cb_rout, num_router_cores, router_piece_tiles};
         // custom_mm, as in matmul_decode: LoFi only, and its split_acc finalization assumes a 16-bit DEST.
         router_compute_desc.config = ComputeConfigDescriptor{
             .math_fidelity = MathFidelity::LoFi,
@@ -1774,10 +1785,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
 
         for (uint32_t c = 0; c < num_router_cores; ++c) {
             const CoreCoord core{c, GRID_Y};
-            // The bias is bound as a buffer so a program-cache hit patches its address (cb_rw's alias
-            // follows the weight the same way).
+            // The bias and gate are bound as buffers so a program-cache hit patches their addresses (an L1
+            // gate's cb_rw alias follows it the same way).
             router_reader_desc.emplace_runtime_args(
-                core, {router_bias_buffer, router_tile_count(c), c, hub0_noc_x, hub0_noc_y});
+                core, {router_bias_buffer, router_weight_buffer, router_tile_count(c), c, hub0_noc_x, hub0_noc_y});
             router_compute_desc.runtime_args.emplace_back(
                 core, KernelDescriptor::CoreRuntimeArgs{c, router_tile_count(c)});
         }

@@ -8,15 +8,18 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 // Router reader + partial top-k kernel (RISCV_0 of each router core, the row below the expert grid).
 //
-// The gate weight is resident in this core's L1: its tile columns slot, slot + col_stride, ... (n_tiles
-// of them), back to back, each k_tiles tiles in K order. The kernel
-//   1. publishes the activation (cb_rin is aliased over this core's own replica shard) and the weight
-//      (cb_rw is aliased over its shards), and reads the whole bf16 bias row into cb_rbias;
+// This core's gate tile columns are slot, slot + col_stride, ... (n_tiles of them), each one [D, 32]
+// ND shard of k_tiles tiles in K order. The kernel
+//   1. publishes the activation (cb_rin is aliased over this core's own replica shard), reads the whole
+//      bf16 bias row into cb_rbias, and fills cb_rw with the weight: an L1-resident gate is already
+//      there (cb_rw is aliased over this core's shards, back to back), a DRAM gate is streamed in
+//      piece_tiles-tile K pieces, column by column, with two pieces in flight;
 //   2. takes router_scores.cpp's bf16 [scores | ranking] tiles from cb_rout and keeps the top_k of its
 //      n_tiles * 32 experts by ranking, best first and of equal rankings the lower id first;
 //   3. writes them to slot `slot` of the leader's cb_routing as (order key, expert id, fp32 score)
@@ -27,11 +30,12 @@
 //   3: cb_rbias        4: bias_page_bytes (the bias row)      5: bias_tiles (E / 32)
 //   6: cb_rout         7: cb_routing      8: cand_offset      9: cand_slot_bytes
 //   10: sem_router     11: top_k          12: col_stride (the router core count)
-//   13+: TensorAccessorArgs(bias)
+//   13: gate_in_dram   14: piece_tiles    15: gate tile bytes
+//   16+: TensorAccessorArgs(bias), then TensorAccessorArgs(gate)
 //
 // Runtime args:
-//   0: bias address   1: n_tiles   2: slot (this core's index, also its first tile column)
-//   3: leader_noc_x   4: leader_noc_y
+//   0: bias address   1: gate address   2: n_tiles   3: slot (this core's index, also its first tile column)
+//   4: leader_noc_x   5: leader_noc_y
 
 namespace {
 
@@ -54,13 +58,18 @@ void kernel_main() {
     constexpr uint32_t sem_router_id = get_compile_time_arg_val(10);
     constexpr uint32_t top_k = get_compile_time_arg_val(11);
     constexpr uint32_t col_stride = get_compile_time_arg_val(12);
-    constexpr auto bias_args = TensorAccessorArgs<13>();
+    constexpr bool gate_in_dram = get_compile_time_arg_val(13) != 0;
+    constexpr uint32_t piece_tiles = get_compile_time_arg_val(14);
+    constexpr uint32_t gate_tile_bytes = get_compile_time_arg_val(15);
+    constexpr auto bias_args = TensorAccessorArgs<16>();
+    constexpr auto gate_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
 
     const uint32_t bias_addr = get_arg_val<uint32_t>(0);
-    const uint32_t n_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t slot = get_arg_val<uint32_t>(2);
-    const uint32_t leader_noc_x = get_arg_val<uint32_t>(3);
-    const uint32_t leader_noc_y = get_arg_val<uint32_t>(4);
+    const uint32_t gate_addr = get_arg_val<uint32_t>(1);
+    const uint32_t n_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t slot = get_arg_val<uint32_t>(3);
+    const uint32_t leader_noc_x = get_arg_val<uint32_t>(4);
+    const uint32_t leader_noc_y = get_arg_val<uint32_t>(5);
 
     Noc noc;
     CircularBuffer cb_rin(cb_rin_id);
@@ -70,14 +79,47 @@ void kernel_main() {
 
     cb_rin.reserve_back(k_tiles);
     cb_rin.push_back(k_tiles);
-    cb_rw.reserve_back(n_tiles * k_tiles);
-    cb_rw.push_back(n_tiles * k_tiles);
 
     cb_rbias.reserve_back(bias_tiles);
     noc.async_read(
         TensorAccessor(bias_args, bias_addr), cb_rbias, bias_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     cb_rbias.push_back(bias_tiles);
+
+    cb_rw.reserve_back(n_tiles * k_tiles);
+    if constexpr (gate_in_dram) {
+        // cb_rw holds all n_tiles columns unwrapped, so piece q lands at base + q * piece_bytes. Piece q + 1
+        // is issued before piece q is waited on (by its own transaction id), so the reads stay back to back
+        // while each landed piece goes to compute.
+        constexpr uint32_t pieces_per_col = k_tiles / piece_tiles;
+        constexpr uint32_t piece_bytes = piece_tiles * gate_tile_bytes;
+        constexpr uint32_t kPieceTrid[2] = {1u, 2u};
+        const auto gate_accessor = TensorAccessor(gate_args, gate_addr);
+        ShardView gate(gate_accessor);
+        const uint32_t base = cb_rw.get_write_ptr();
+        const uint32_t pieces = n_tiles * pieces_per_col;
+        auto issue_piece = [&](uint32_t q) {
+            noc.async_read<NocOptions::TXN_ID>(
+                gate,
+                CoreLocalMem<uint32_t>(base + q * piece_bytes),
+                piece_bytes,
+                {.shard_id = slot + (q / pieces_per_col) * col_stride,
+                 .offset_bytes = (q % pieces_per_col) * piece_bytes},
+                {.offset_bytes = 0},
+                {.trid = kPieceTrid[q % 2u]});
+        };
+        issue_piece(0);
+        for (uint32_t q = 0; q < pieces; ++q) {
+            if (q + 1u < pieces) {
+                issue_piece(q + 1u);
+            }
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = kPieceTrid[q % 2u]});
+            cb_rw.push_back(piece_tiles);
+        }
+        noc_async_read_set_trid(0, noc.get_noc_id());
+    } else {
+        cb_rw.push_back(n_tiles * k_tiles);
+    }
 
     // cb_rout: n_tiles bf16 1x32 score tiles, then their n_tiles ranking tiles. A 1x32 tile is its 32
     // values in column order, so local expert i's score is half-word i and its ranking n_tiles*32 + i.

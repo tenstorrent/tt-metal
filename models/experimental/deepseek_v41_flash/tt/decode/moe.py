@@ -91,13 +91,16 @@ class DeepSeekV41TopKRouter(DeepSeekV4TopKRouter):
 
     def ranking_bias(self, image_mask=None, layout=ttnn.ROW_MAJOR_LAYOUT) -> ttnn.Tensor:
         """V4's bias, or with ``image_mask`` (``[1, T]`` uint32 ROW_MAJOR, 1 for an image token) each token's own row
-        of :attr:`bias_table` as ``[1, 1, T, E]`` in ``layout``."""
+        of :attr:`bias_table` as ``[1, 1, T, E]`` in ``layout``, DRAM interleaved (where ``fused_experts`` reads a
+        one-row bias from)."""
         if image_mask is None:
             return super().ranking_bias()
         if self.bias_table is None:
             raise ValueError("the checkpoint has no gate.bias_vl for image tokens")
         t = image_mask.shape[-1]
-        rows = ttnn.embedding(image_mask, self.bias_table, layout=layout)  # [1, T, E]
+        rows = ttnn.embedding(
+            image_mask, self.bias_table, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # [1, T, E]
         return ttnn.reshape(rows, [1, 1, t, self.num_experts])
 
 
@@ -192,7 +195,7 @@ class DeepSeekV41SparseMoeBlock(DeepSeekV4SparseMoeBlock):
     shared expert's: bfloat8_b by default, since at bfloat4_b its error is larger than the routed
     experts'. Under TP the router is replicated, the shared expert's ``I`` is split like the
     routed experts' (576 per rank at TP4), and the summed partials are all-reduced, as in V4.
-    ``verify_rows`` see :class:`DeepSeekV4SparseMoeBlock`.
+    ``verify_rows`` and ``resident_router_gate`` see :class:`DeepSeekV4SparseMoeBlock`.
     """
 
     router_cls = DeepSeekV41TopKRouter
@@ -210,6 +213,7 @@ class DeepSeekV41SparseMoeBlock(DeepSeekV4SparseMoeBlock):
         use_prefetcher: bool = False,
         prefetch_buffers=None,
         verify_rows: int = 1,
+        resident_router_gate: bool = False,
     ):
         if experts.tp_size != tp_size:
             raise ValueError(f"the experts were built for TP{experts.tp_size}, not TP{tp_size}")
@@ -225,4 +229,5 @@ class DeepSeekV41SparseMoeBlock(DeepSeekV4SparseMoeBlock):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             verify_rows=verify_rows,
+            resident_router_gate=resident_router_gate,
         )
