@@ -20,9 +20,10 @@ constexpr auto kWriterKernelPath =
 
 // reader runtime args: (source_addr, num_tiles, start_tile)
 constexpr uint32_t kSourceBufferIdx = 0;
-// writer runtime args: (destination_addr, num_tiles, start_tile, tile_offset)
+// writer runtime args: (destination_addr, num_tiles, start_tile, tile_row_offset, tile_col_offset, Wt_src, Wt_dst)
 constexpr uint32_t kDestinationBufferIdx = 0;
-constexpr uint32_t kTileOffsetIdx = 3;
+constexpr uint32_t kTileRowOffsetIdx = 3;
+constexpr uint32_t kTileColOffsetIdx = 4;
 
 constexpr auto kCbIndex = tt::CBIndex::c_0;
 constexpr uint32_t kBlockSize = 4U;
@@ -44,11 +45,12 @@ WriteTileBlockProgramFactory::cached_program_t WriteTileBlockProgramFactory::cre
     const uint32_t tile_size_bytes = tt::tile_size(data_format);
 
     const auto src_shape = source.padded_shape();
-    const uint32_t Wt = src_shape[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t Wt_src = src_shape[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t Wt_dst = destination.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     const uint32_t num_tiles = src_shape.volume() / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
-    // Tiles of a row-major tile layout are contiguous across rows, so the whole block is one tile range offset by
-    // tile_row_offset * Wt in the destination.
-    const uint32_t tile_offset = operation_attributes.tile_row_offset * Wt;
+    // Source tile i (row i / Wt_src, column i % Wt_src) lands at destination tile
+    // (tile_row_offset + i / Wt_src) * Wt_dst + tile_col_offset + i % Wt_src: one contiguous range when the widths
+    // match, a strided column block otherwise (the writer maps every tile).
 
     auto grid = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = grid.y;
@@ -94,7 +96,13 @@ WriteTileBlockProgramFactory::cached_program_t WriteTileBlockProgramFactory::cre
                 program,
                 writer_kernel,
                 work.core,
-                {destination_buffer->address(), work.num_units, work.start, tile_offset});
+                {destination_buffer->address(),
+                 work.num_units,
+                 work.start,
+                 operation_attributes.tile_row_offset,
+                 operation_attributes.tile_col_offset,
+                 Wt_src,
+                 Wt_dst});
         });
 
     return cached_program_t{std::move(program), {reader_kernel, writer_kernel, num_cores, num_cores_y}};
@@ -110,8 +118,6 @@ void WriteTileBlockProgramFactory::override_runtime_arguments(
 
     auto* source_buffer = tensor_args.source.buffer();
     auto* destination_buffer = tensor_args.destination.buffer();
-    const uint32_t Wt = tensor_args.source.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    const uint32_t tile_offset = operation_attributes.tile_row_offset * Wt;
 
     auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
@@ -119,7 +125,8 @@ void WriteTileBlockProgramFactory::override_runtime_arguments(
         reader_runtime_args[core.x][core.y][kSourceBufferIdx] = source_buffer->address();
         auto& writer_args = writer_runtime_args[core.x][core.y];
         writer_args[kDestinationBufferIdx] = destination_buffer->address();
-        writer_args[kTileOffsetIdx] = tile_offset;
+        writer_args[kTileRowOffsetIdx] = operation_attributes.tile_row_offset;
+        writer_args[kTileColOffsetIdx] = operation_attributes.tile_col_offset;
     });
 }
 

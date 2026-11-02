@@ -34,6 +34,7 @@ from .frozen_linear import (
     TRANSPOSED_SHAPES,
     _compute_config,
     forward_matmul_kwargs,
+    forward_transposed_matmul_kwargs,
     full_core_grid,
     local_in_out,
 )
@@ -64,6 +65,13 @@ def write_tail(weight_cat, tail_rows, in_features):
     ttml.ops.metal.write_tile_block(weight_cat, tail_rows, in_features // 32)
 
 
+def write_tail_columns(weight_cat_fwd, tail_cols, in_features):
+    """Overwrite the first tail tile-column block (columns ``in_features .. in_features + 32``) of the transposed
+    forward copy ``weight_cat_fwd`` (``[1, 1, out, in + TAIL_ROWS]``) with ``tail_cols`` (``[1, 1, out, 32]``), in
+    place (iteration 36: the same scaled ``B`` the row tail of ``weight_cat`` holds, as columns)."""
+    ttml.ops.metal.write_tile_block(weight_cat_fwd, tail_cols, 0, in_features // 32)
+
+
 class FusedLoraLinearT(Function):
     """``[x | x A^T] @ W_cat_t`` with ``W_cat_t`` holding ``s * B^T`` (times ``1/tp`` for a row-parallel layer) in its
     tail, and the backward reading ``dx`` and ``dh`` from one ``W_cat_t @ g^T``."""
@@ -82,6 +90,7 @@ class FusedLoraLinearT(Function):
         dh_scale,
         reduce_axis,
         h_reduce_axis,
+        weight_cat_fwd=None,
     ):
         cfg = _compute_config()
         x_val, a_val, b_val, w_val = x.get_value(), lora_A.get_value(), lora_B.get_value(), weight_cat.get_value()
@@ -93,6 +102,19 @@ class FusedLoraLinearT(Function):
         if rank != 32:
             bt = ttnn.pad(bt, padding=[(0, 0), (0, 0), (0, 32 - rank), (0, 0)], value=0.0)
         write_tail(w_val, bt, in_features)
+        # Transposed-orientation forward (iteration 36): the module keeps ``W_cat^T`` ([out, in + tail], a plain
+        # ttnn tensor, no gradient) whose tail columns get the same scaled B; ``y^T = W_cat^T @ x_cat^T`` runs the
+        # weight as the row-multicast operand on the full grid, then one transpose. Only for shapes with a config.
+        rows = int(x_val.shape[-2])
+        transposed_kwargs = (
+            forward_transposed_matmul_kwargs(in_features + TAIL_ROWS, out_features, rows)
+            if weight_cat_fwd is not None
+            else None
+        )
+        if transposed_kwargs is not None:
+            b_cols = ttnn.transpose(bt, -2, -1)  # [1, 1, out, 32]
+            write_tail_columns(weight_cat_fwd, b_cols, in_features)
+            ttnn.deallocate(b_cols)
         # Wide input (iteration 24): the producer (SwiGLU) wrote x into a [T, in + TAIL_ROWS] buffer, so h goes
         # straight into its tail (zero-padded to TAIL_ROWS) and the K-concat and pad disappear. Otherwise the
         # concat path.
@@ -113,12 +135,17 @@ class FusedLoraLinearT(Function):
             h_pad = ttnn.pad(h, padding=[(0, 0), (0, 0), (0, 0), (0, TAIL_ROWS - rank)], value=0.0)
             x_cat = ttnn.concat([x_val, h_pad], dim=3)  # [T, in + TAIL_ROWS]
             ttnn.deallocate(h_pad)
-        y = ttnn.matmul(
-            x_cat,
-            w_val,
-            compute_kernel_config=cfg,
-            **forward_matmul_kwargs(in_features, out_features, x_cat.shape[-2], k=x_cat.shape[-1]),
-        )
+        if transposed_kwargs is not None:
+            y_t = ttnn.matmul(weight_cat_fwd, x_cat, transpose_b=True, compute_kernel_config=cfg, **transposed_kwargs)
+            y = ttnn.transpose(y_t, -2, -1)
+            ttnn.deallocate(y_t)
+        else:
+            y = ttnn.matmul(
+                x_cat,
+                w_val,
+                compute_kernel_config=cfg,
+                **forward_matmul_kwargs(in_features, out_features, x_cat.shape[-2], k=x_cat.shape[-1]),
+            )
         ctx.save_for_backward(x_val, a_val, h, w_val)
         ctx.meta = (scaling, in_features, out_features, rank, dh_scale, reduce_axis, wide)
         return y
@@ -194,7 +221,17 @@ def _install_wide_swiglu(model, w2_names: set[str]) -> list[str]:
 
 
 def fused_lora_linear_t(
-    x, weight_cat, lora_A, lora_B, scaling, shape, tail_scale=1.0, dh_scale=1.0, reduce_axis=None, h_reduce_axis=None
+    x,
+    weight_cat,
+    lora_A,
+    lora_B,
+    scaling,
+    shape,
+    tail_scale=1.0,
+    dh_scale=1.0,
+    reduce_axis=None,
+    h_reduce_axis=None,
+    weight_cat_fwd=None,
 ):
     in_features, out_features = shape
     return FusedLoraLinearT.apply(
@@ -209,10 +246,11 @@ def fused_lora_linear_t(
         dh_scale,
         reduce_axis,
         h_reduce_axis,
+        weight_cat_fwd,
     )
 
 
-def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True) -> list[str]:
+def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True, transposed_rows_hint: int = 1024) -> list[str]:
     """Extend every transposed frozen weight of a LoRA wrapper by a zero tail of ``TAIL_ROWS`` rows and switch the
     wrapper to :class:`FusedLoraLinearT`. Call after :func:`transpose_frozen_weights`.
 
@@ -221,7 +259,10 @@ def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True) -> list[
     (``A`` of a column-parallel, ``B`` of a row-parallel layer) with a partial gradient, which
     :func:`reduce_partial_lora_grads` sums over the TP axis in two collectives per step. This marks every TP LoRA
     wrapper, fused or on the composite adapter (the shapes not on the transposed path). The training step must
-    call it after the backward and before the optimizer step."""
+    call it after the backward and before the optimizer step.
+
+    ``transposed_rows_hint``: the token count the transposed-orientation forward configs are checked against when
+    deciding which fused weights get the ``W_cat^T`` copy (iteration 36)."""
     from .lora import LoraColumnParallelLinear, LoraLinear, LoraRowParallelLinear, skinny_matmul_fits
 
     converted: list[str] = []
@@ -249,6 +290,10 @@ def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True) -> list[
         ttnn.deallocate(zeros)
         module.lora_fused = True
         converted.append(name)
+        # Transposed-orientation forward copy (iteration 36): ``W_cat^T`` for the shapes with a config (the TP w2
+        # shard); its tail columns are rewritten with the scaled B every forward.
+        if forward_transposed_matmul_kwargs(rows + TAIL_ROWS, cols, transposed_rows_hint) is not None:
+            module.weight_cat_fwd = ttnn.transpose(extended, -2, -1)
         # The wide input path (iteration 24) needs h unreduced on the rank: every wrapper but a row-parallel one
         # without the batched gradients (that one all-reduces h before the tail).
         if (

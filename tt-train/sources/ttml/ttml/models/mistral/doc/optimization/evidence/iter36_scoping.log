@@ -1,0 +1,32 @@
+=== w2 forward transposed orientation [5120, 8256] x [1024, 8256]^T on 11x10 2026-11-02T10:26:18Z
+M=5120 K=8256 N=1024 transpose_b: ttnn's choice on 11x10: 0.813 ms 106.5 TFLOP/s
+  2D 11x10 pcM 16 pcN 3 depth  3 sub 1x3: 0.760 ms  113.9 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 16 pcN 3 depth  3 sub 4x1: 0.748 ms  115.8 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 16 pcN 3 depth  3 sub 2x1: 0.752 ms  115.2 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 16 pcN 3 depth  6 sub 1x3: 0.730 ms  118.5 TFLOP/s  max|diff| 3.12e-02
+  2D 11x10 pcM 16 pcN 3 depth  6 sub 4x1: 0.737 ms  117.5 TFLOP/s  max|diff| 3.12e-02
+  2D 11x10 pcM 16 pcN 3 depth  6 sub 2x1: 0.740 ms  116.9 TFLOP/s  max|diff| 3.12e-02
+=== qkv forward transposed [1536, 5120] x [1024, 5120]^T
+M=1536 K=5120 N=1024 transpose_b: ttnn's choice on 11x10: 0.171 ms 94.4 TFLOP/s
+  2D 11x10 pcM 5 pcN 3 depth  4 sub 1x3: 0.166 ms   97.1 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 5 pcN 3 depth  8 sub 1x3: 0.155 ms  103.6 TFLOP/s  max|diff| 1.56e-02
+=== out forward transposed [5120, 1536] x [1024, 1536]^T
+M=5120 K=1536 N=1024 transpose_b: ttnn's choice on 11x10: 0.189 ms 85.1 TFLOP/s
+  2D 11x10 pcM 16 pcN 3 depth  4 sub 1x3: 0.181 ms   89.2 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 16 pcN 3 depth  4 sub 4x1: 0.181 ms   88.9 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 16 pcN 3 depth  4 sub 2x1: 0.182 ms   88.3 TFLOP/s  max|diff| 0.00e+00
+  2D 11x10 pcM 16 pcN 3 depth  8 sub 1x3: 0.167 ms   96.4 TFLOP/s  max|diff| 1.56e-02
+  2D 11x10 pcM 16 pcN 3 depth  8 sub 4x1: 0.171 ms   94.0 TFLOP/s  max|diff| 1.56e-02
+  2D 11x10 pcM 16 pcN 3 depth  8 sub 2x1: 0.167 ms   96.5 TFLOP/s  max|diff| 1.56e-02
+=== transposes
+transpose [5120, 1024] -> [1024, 5120] bf16: 60 us (175 GB/s read)
+transpose [1536, 1024] -> [1024, 1536] bf16: 19 us (165 GB/s read)
+=== TP=4 memory probe 2026-11-02T10:26:34Z
+step 1: DRAM allocated after forward 17.58 GiB
+step 1: DRAM allocated after backward 11.69 GiB
+step 1: DRAM allocated after the optimizer step 11.69 GiB (weights + state)
+step 2: DRAM allocated after forward 17.59 GiB
+step 2: DRAM allocated after backward 11.69 GiB
+step 2: DRAM allocated after the optimizer step 11.69 GiB (weights + state)
+40 of 40 layers, tp 4: 496.9 ms/step over 1 steps (best 496.9), 194.0 TFLOP/s, MFU 32.65%
+=== done 2026-11-02T10:29:58Z

@@ -267,7 +267,13 @@ class LoraLinear(AbstractModuleBase):
             from .fused_lora import fused_lora_linear_t
 
             return fused_lora_linear_t(
-                x, self.weight.tensor, self.lora_A.tensor, self.lora_B.tensor, self.scaling, self.frozen_shape
+                x,
+                self.weight.tensor,
+                self.lora_A.tensor,
+                self.lora_B.tensor,
+                self.scaling,
+                self.frozen_shape,
+                weight_cat_fwd=getattr(self, "weight_cat_fwd", None),
             )
         base = _base_linear(self, x, bias)
         lora_input = x
@@ -325,6 +331,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
                 self.scaling,
                 self.frozen_shape,
                 reduce_axis=None if getattr(self, "tp_partial_grads", None) else self.cluster_axis,
+                weight_cat_fwd=getattr(self, "weight_cat_fwd", None),
             )
         base = _base_linear(self, x, bias_t)
         if self.gather_output:
@@ -400,7 +407,13 @@ class LoraRowParallelLinear(AbstractModuleBase):
                 # ranks (linear in h), dh = s g B is full on every rank, and dB_r = s g^T h_r is a partial that
                 # `reduce_partial_lora_grads` sums once per step.
                 out = fused_lora_linear_t(
-                    x, self.weight.tensor, self.lora_A.tensor, self.lora_B.tensor, self.scaling, self.frozen_shape
+                    x,
+                    self.weight.tensor,
+                    self.lora_A.tensor,
+                    self.lora_B.tensor,
+                    self.scaling,
+                    self.frozen_shape,
+                    weight_cat_fwd=getattr(self, "weight_cat_fwd", None),
                 )
             else:
                 # A is row-sharded (h partial, all-reduced inside), B replicated: the tail carries s/tp * B^T so
@@ -416,6 +429,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
                     tail_scale=1.0 / tp,
                     dh_scale=float(tp),
                     h_reduce_axis=self.cluster_axis,
+                    weight_cat_fwd=getattr(self, "weight_cat_fwd", None),
                 )
             out = ttml.ops.distributed.all_reduce(out, self.input_is_parallel, self.cluster_axis)
             if self.bias is not None:

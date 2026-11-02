@@ -27,6 +27,8 @@ __all__ = [
     "transpose_frozen_weights",
     "FORWARD_CORE_GRID",
     "FORWARD_PROGRAM_CONFIG",
+    "FORWARD_TRANSPOSED_CONFIG",
+    "forward_transposed_matmul_kwargs",
     "PROGRAM_CONFIG_2D",
     "matmul_kwargs_2d",
     "TRANSPOSED_SHAPES",
@@ -132,6 +134,43 @@ PROGRAM_CONFIG_2D: dict[tuple[int, int, int, bool], dict] = {
         grid=(11, 8), in0_block_w=6, out_subblock_h=4, out_subblock_w=1, per_core_M=4, per_core_N=15
     ),
 }
+
+
+# Transposed-orientation forward (iteration 36): ``y^T = W_cat^T @ x_cat^T`` with the weight copy ``[out, in + tail]`` as
+# the row-multicast operand and the activation as the free-transposed column operand. The output dim then splits over
+# the grid's rows (M = out) and the token dim over its columns (N = rows / 32 tiles), so the w2 forward runs on all
+# 110 cores (0.730 vs 0.883 ms standalone for [5120, 8256] x [1024, 8256]^T against the 88-core 2D config) at the
+# cost of a second weight copy and a transpose of the [out, rows] result. Keyed by (K = in + tail, out); ``rows``
+# fixes per_core_N at call time. Shapes not listed keep the plain orientation.
+FORWARD_TRANSPOSED_CONFIG: dict[tuple[int, int], dict] = {
+    (8256, 5120): dict(grid=(11, 10), in0_block_w=6, out_subblock_h=1, out_subblock_w=3, per_core_M=16),
+}
+
+
+def forward_transposed_matmul_kwargs(k: int, out_features: int, rows: int) -> dict | None:
+    """``program_config=`` for the transposed-orientation forward ``[out, k] x [rows, k]^T`` (``transpose_b``), or
+    ``None`` when the shape is not listed, the grid is too small or ``rows`` does not fill the config's columns."""
+    spec = FORWARD_TRANSPOSED_CONFIG.get((k, out_features))
+    if spec is None or rows % 32 != 0:
+        return None
+    grid = ttml.autograd.AutoContext.get_instance().get_device().compute_with_storage_grid_size()
+    gx, gy = spec["grid"]
+    per_core_n = -(-(rows // 32) // gx)
+    if gx > grid.x or gy > grid.y or per_core_n % spec["out_subblock_w"] != 0 or (k // 32) % spec["in0_block_w"] != 0:
+        return None
+    return {
+        "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=spec["grid"],
+            in0_block_w=spec["in0_block_w"],
+            out_subblock_h=spec["out_subblock_h"],
+            out_subblock_w=spec["out_subblock_w"],
+            per_core_M=spec["per_core_M"],
+            per_core_N=per_core_n,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+    }
 
 
 def matmul_kwargs_2d(m: int, k: int, n: int, transpose_b: bool) -> dict | None:

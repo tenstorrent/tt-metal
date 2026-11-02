@@ -1,0 +1,10 @@
+[0/2] Re-checking globbed directories...
+[1/8] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/7] Linking CXX shared library ttnn/_ttnncpp.so
+[3/7] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/write_tile_block/device/write_tile_block_program_factory.cpp.o
+[4/7] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/write_tile_block/device/write_tile_block_device_operation.cpp.o
+[5/7] Linking CXX static library tt-train/sources/ttml/libttml.a
+[6/7] Building CXX object tt-train/sources/ttml/CMakeFiles/_ttml.dir/nanobind/nb_ops.cpp.o
+[7/7] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so
+build rc=0

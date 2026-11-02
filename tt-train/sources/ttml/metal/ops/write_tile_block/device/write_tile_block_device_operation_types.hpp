@@ -10,6 +10,7 @@ namespace ttml::metal::ops::write_tile_block::device {
 
 struct WriteTileBlockParams {
     uint32_t tile_row_offset = 0U;
+    uint32_t tile_col_offset = 0U;  // iteration 36: the block may be narrower than the destination
 };
 
 struct WriteTileBlockInputs {

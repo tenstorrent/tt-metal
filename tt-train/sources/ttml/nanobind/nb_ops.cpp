@@ -885,8 +885,10 @@ void py_module(nb::module_& m) {
             nb::arg("destination"),
             nb::arg("source"),
             nb::arg("tile_row_offset"),
-            "Copy every tile of `source` ([.., Rs, C] TILE bf16) into `destination` ([.., R, C]) at tile-row "
-            "`tile_row_offset`, in place, split over all cores by tile. Returns `destination`.");
+            nb::arg("tile_col_offset") = 0U,
+            "Copy every tile of `source` ([.., Rs, Cs] TILE bf16) into `destination` ([.., R, C]) at tile-row "
+            "`tile_row_offset` and tile-column `tile_col_offset`, in place, split over all cores by tile. Returns "
+            "`destination`.");
         py_metal.def(
             "rmsnorm_fw",
             &ttml::metal::rmsnorm_fw,

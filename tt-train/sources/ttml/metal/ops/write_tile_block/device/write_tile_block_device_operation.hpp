@@ -31,6 +31,6 @@ struct WriteTileBlockOperation {
 namespace ttnn::prim {
 
 ttml::metal::ops::write_tile_block::device::WriteTileBlockOperation::tensor_return_value_t ttml_write_tile_block(
-    const ttnn::Tensor& destination, const ttnn::Tensor& source, uint32_t tile_row_offset);
+    const ttnn::Tensor& destination, const ttnn::Tensor& source, uint32_t tile_row_offset, uint32_t tile_col_offset);
 
 }  // namespace ttnn::prim

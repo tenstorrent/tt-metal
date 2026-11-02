@@ -17,11 +17,14 @@ void WriteTileBlockOperation::validate_on_program_cache_miss(
     check_device_tensor(source, "WriteTileBlock", "Source");
     const auto dst_shape = destination.padded_shape();
     const auto src_shape = source.padded_shape();
+    const uint32_t dst_tile_cols = dst_shape[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t src_tile_cols = src_shape[-1] / tt::constants::TILE_WIDTH;
     TT_FATAL(
-        dst_shape[-1] == src_shape[-1],
-        "WriteTileBlock: destination width {} must equal source width {}",
-        dst_shape[-1],
-        src_shape[-1]);
+        args.tile_col_offset + src_tile_cols <= dst_tile_cols,
+        "WriteTileBlock: source tile-columns {} at offset {} exceed destination tile-columns {}",
+        src_tile_cols,
+        args.tile_col_offset,
+        dst_tile_cols);
     const uint32_t dst_tile_rows = dst_shape.volume() / dst_shape[-1] / tt::constants::TILE_HEIGHT;
     const uint32_t src_tile_rows = src_shape.volume() / src_shape[-1] / tt::constants::TILE_HEIGHT;
     TT_FATAL(
@@ -56,10 +59,11 @@ ttsl::hash::hash_t WriteTileBlockOperation::compute_program_hash(
 namespace ttnn::prim {
 
 ttml::metal::ops::write_tile_block::device::WriteTileBlockOperation::tensor_return_value_t ttml_write_tile_block(
-    const ttnn::Tensor& destination, const ttnn::Tensor& source, uint32_t tile_row_offset) {
+    const ttnn::Tensor& destination, const ttnn::Tensor& source, uint32_t tile_row_offset, uint32_t tile_col_offset) {
     using OperationType = ttml::metal::ops::write_tile_block::device::WriteTileBlockOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{.tile_row_offset = tile_row_offset};
+    auto operation_attributes =
+        OperationType::operation_attributes_t{.tile_row_offset = tile_row_offset, .tile_col_offset = tile_col_offset};
     auto tensor_args = OperationType::tensor_args_t{.destination = destination, .source = source};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
