@@ -591,6 +591,8 @@ class TtPrefillTransformer(LightweightModule):
                         list replaces actual_isl / actual_start / actual_end / cache_user_id, and
                         on_layer_complete is called as (layer_idx, chunk), once per non-empty chunk. A
                         pipeline rank takes and leaves its indexer indices packed (indexer_indices_shape()).
+                        d2h_service then sends nothing: it only has each chunk's KV pad window zeroed, the
+                        caller sending the forward's acks once it is done.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next rank.
@@ -603,13 +605,16 @@ class TtPrefillTransformer(LightweightModule):
         """
         if chunks is not None:
             assert (
-                d2h_service is None and metadata is None and mtp_union is None
-            ), "a packed forward acks through TtPrefillRuntime.prefill_forward, and has no MTP"
+                metadata is None and mtp_union is None
+            ), "a packed forward reads no single-chunk metadata, and has no MTP"
             return self.forward_packed(
                 token_ids,
                 kvpe_cache,
                 chunks,
                 seed_indexer_indices=seed_indexer_indices,
+                # A packed forward's D2H acks go out once it is done (TtPrefillRuntime.prefill_forward); here
+                # the service only asks for each chunk's KV pad window to be zeroed as it is written.
+                zero_pad=d2h_service is not None,
                 index_kv_cache=index_kv_cache,
                 return_intermediates=return_intermediates,
                 read_profiler=read_profiler,

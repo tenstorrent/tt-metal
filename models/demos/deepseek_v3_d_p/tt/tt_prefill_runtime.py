@@ -1483,14 +1483,16 @@ class TtPrefillRuntime:
                 )
             )
         )
-        out = self.model.forward_packed(
+        # d2h_service here only zeroes each chunk's pad window; the acks follow the forward (_send_packed_acks).
+        out = self.model.forward(
             input_tensor,
             kv_caches.kvpe,
-            chunks,
+            actual_isl=cfg.chunk_size,
+            chunks=chunks,
             index_kv_cache=kv_caches.index,
             on_layer_complete=on_layer_complete,
-            seed_indexer_indices=indexer_indices,
-            zero_pad=d2h_service is not None,
+            d2h_service=d2h_service,
+            **self._seed_kwargs(indexer_indices),
         )
         ttnn.deallocate(input_tensor)
         if indexer_indices is not None and indexer_indices is not getattr(self.model, "last_indexer_indices", None):
