@@ -34,7 +34,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include <enchantum/enchantum.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
