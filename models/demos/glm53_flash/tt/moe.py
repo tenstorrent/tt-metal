@@ -1767,23 +1767,31 @@ class TtRoutedExperts(LightweightModule):
         y_rm = ttnn.to_layout(out16, ttnn.ROW_MAJOR_LAYOUT)  # the gather table [max_buf, H] bf16 rows
         ttnn.deallocate(out16)
         tick("out_relayout")  # bf8 -> bf16 -> ROW_MAJOR of the [max_buf, H] output
-        comb = ttnn.embedding(pos_rm, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tick("pick_gather")  # the [T*k, H] output rows  # [1, T*k, H]: every pick's output row
-        ttnn.deallocate(y_rm)
-        ttnn.deallocate(pos_rm)
-        comb5 = ttnn.reshape(comb, [1, 1, T, k, H])
         w_loc = ttnn.multiply(w, loc_tk)  # the routing weights, 0 at the non-local picks (their rows are garbage)
         ttnn.deallocate(loc_tk)
-        w16 = ttnn.typecast(w_loc, ttnn.bfloat16)
-        w_rm = ttnn.unsqueeze(ttnn.to_layout(w16, ttnn.ROW_MAJOR_LAYOUT), -1)  # [1,1,T,k,1]
-        ttnn.deallocate(w_loc)
-        ttnn.deallocate(w16)
-        y = ttnn.experimental.deepseek_prefill.post_combine_reduce(
-            comb5, w_rm, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )  # [1,1,T,H] TILE: sum over the picks, zero weights skipped
-        tick("post_combine")  # the routing weights + the weighted sum over the picks
-        for t in (comb, w_rm, counts, offsets):
-            ttnn.deallocate(t)
+        if self._combine_serves():
+            # GLM53_REGIONS_COMBINE=kernel (custom_ops/pick_combine): every pick's row read once into the weighted sum,
+            # no [T*k, H] gather table round trip (403 MB written + read twice at T = 4096)
+            y = self._pick_combine_op()(y_rm, pos_rm, w_loc, T=T, k=k)  # [1,1,T,H] TILE
+            tick("pick_combine")
+            for t in (y_rm, pos_rm, w_loc, counts, offsets):
+                ttnn.deallocate(t)
+        else:
+            comb = ttnn.embedding(pos_rm, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+            tick("pick_gather")  # the [T*k, H] output rows  # [1, T*k, H]: every pick's output row
+            ttnn.deallocate(y_rm)
+            ttnn.deallocate(pos_rm)
+            comb5 = ttnn.reshape(comb, [1, 1, T, k, H])
+            w16 = ttnn.typecast(w_loc, ttnn.bfloat16)
+            w_rm = ttnn.unsqueeze(ttnn.to_layout(w16, ttnn.ROW_MAJOR_LAYOUT), -1)  # [1,1,T,k,1]
+            ttnn.deallocate(w_loc)
+            ttnn.deallocate(w16)
+            y = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+                comb5, w_rm, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )  # [1,1,T,H] TILE: sum over the picks, zero weights skipped
+            tick("post_combine")  # the routing weights + the weighted sum over the picks
+            for t in (comb, w_rm, counts, offsets):
+                ttnn.deallocate(t)
         if stamps is not None:
             total = sum(v for _, v in stamps)
             logger.info(
@@ -1800,6 +1808,18 @@ class TtRoutedExperts(LightweightModule):
         return y
 
     # ---------------------------------------------- GLM53_REGIONS_PLAN (custom_ops/region_plan; "chain" = the ttnn chain)
+    def _combine_serves(self) -> bool:
+        """``GLM53_REGIONS_COMBINE=kernel``: the pick gather + weighted combine as one op (custom_ops/pick_combine);
+        the default is the ttnn chain (``embedding`` + ``post_combine_reduce``)."""
+        return os.environ.get("GLM53_REGIONS_COMBINE", "chain") == "kernel"
+
+    def _pick_combine_op(self):
+        from models.demos.glm53_flash.custom_ops.pick_combine.op import PickCombine
+
+        if getattr(self, "_pick_combine", None) is None:
+            self._pick_combine = PickCombine(self.device)
+        return self._pick_combine
+
     def _plan_serves(self) -> bool:
         """The region bookkeeping as one kernel (the default since 2026-11-01: bit-identical to the chain, 1.2 / 8.6 ms
         at 2048 / 16 K tokens against 6.2 / 35 ms; served c1 1 M TTFT 494.8 -> 443.0 s); ``GLM53_REGIONS_PLAN=chain``

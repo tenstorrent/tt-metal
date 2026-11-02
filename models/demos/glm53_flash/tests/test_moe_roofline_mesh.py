@@ -61,6 +61,7 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (  # noqa: E402
     expert_dispatch_golden_ep,
 )
 from models.demos.glm53_flash.custom_ops.glu_split.op import GluSplit  # noqa: E402
+from models.demos.glm53_flash.custom_ops.pick_combine.op import PickCombine  # noqa: E402
 from models.demos.glm53_flash.custom_ops.region_plan.op import RegionPlan  # noqa: E402
 from models.demos.glm53_flash.custom_ops.router_topk.op import RouterTopk  # noqa: E402
 from models.demos.glm53_flash.tests.custom_ops.test_expert_dispatch import DOWN_READERS, GROUPS  # noqa: E402
@@ -222,6 +223,149 @@ def test_region_plan_chip0(mesh_device, T):
     ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
     assert torch.equal(ttnn.to_torch(outs[2]).reshape(T, k).long(), pos_g)
     ttnn.release_trace(mesh_device, tid)
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("T", [2048, 4096], ids=["slab-2048", "slab-4096"])
+def test_pick_combine_chip0(mesh_device, T):
+    """``PickCombine`` (the regions path's pick gather + weighted combine as one op) vs the fp32 golden and vs the
+    ttnn chain (``embedding`` of every pick's row + ``post_combine_reduce``) at the 8x4's shapes (H = 6144, k = 8,
+    a quarter of the picks non-local = weight 0 and a garbage table row): within bf16 rounding of the golden, the
+    chain's result within the same bound, the warmed walls of both."""
+    H, k, E_loc = 6144, 8, 72
+    g = torch.Generator().manual_seed(T)
+    max_buf = -(-(T * k + E_loc * 32) // 32) * 32
+    y_host = (torch.randn(max_buf, H, generator=g) * 0.5).bfloat16()
+    y_host[max_buf - 1] = float("nan")  # the dummy row the non-local picks point at: never read
+    pos_host = torch.randint(0, max_buf - 1, (T, k), generator=g)
+    w_host = torch.rand(T, k, generator=g).bfloat16().float()
+    local = torch.rand(T, k, generator=g) > 0.25
+    w_host = torch.where(local, w_host, torch.zeros_like(w_host))
+    pos_host = torch.where(local, pos_host, torch.full_like(pos_host, max_buf - 1))
+    golden = PickCombine.golden(y_host, pos_host.reshape(-1), w_host)
+    y_rm = ttnn.from_torch(y_host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    pos = ttnn.from_torch(
+        pos_host.reshape(1, T * k).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+    )
+    w = ttnn.from_torch(w_host.reshape(1, 1, T, k), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    op = PickCombine(mesh_device)
+    out = op(y_rm, pos, w, T=T, k=k)
+    got = ttnn.to_torch(out).float().reshape(T, H)
+    err = (got - golden).abs().max().item()
+    scale = golden.abs().max().item()
+    assert torch.isfinite(got).all(), "a garbage (NaN) dummy row leaked into the sum"
+    if err > 2e-2 * scale:  # diagnostics: which contract did the device compute?
+        rows = y_host.float()[pos_host.long()]  # [T, k, H] (the dummy row is NaN: masked below)
+        rows = torch.where((w_host != 0).unsqueeze(-1), rows, torch.zeros_like(rows))
+        cands = {
+            "golden": golden,
+            "unweighted sum": rows.sum(1),
+            "first pick only": rows[:, 0] * w_host[:, :1],
+        }
+        wc = w_host.reshape(T // 32, 32, k)  # per-column weights: token block b, column c % 32
+        colw = torch.stack([wc[:, :, j].repeat_interleave(1, 0) for j in range(k)], -1)  # [blocks, 32, k]
+        per_col = torch.zeros(T, H)
+        for j in range(k):
+            wj = colw[:, :, j]  # [blocks, 32]
+            per_col += rows[:, j] * wj.repeat(1, H // 32).reshape(T // 32, 1, H).expand(T // 32, 32, H).reshape(T, H)
+        cands["weights by column"] = per_col
+        for name, c in cands.items():
+            logger.info(f"pick_combine diag T={T}: max |got - {name}| {(got - c).abs().max().item():.3g}")
+        logger.info(f"pick_combine diag: got[0, :8] {got[0, :8].tolist()} golden {golden[0, :8].tolist()}")
+        bad = (got - golden).abs() > 0.1
+        bt = bad.any(1).nonzero().reshape(-1)
+        bc = bad.any(0).nonzero().reshape(-1)
+        logger.info(
+            f"pick_combine diag: {int(bad.sum())} bad elements; bad tokens {len(bt)} (first {bt[:12].tolist()}, "
+            f"blocks {sorted(set((bt // 32).tolist()))[:12]}, in-block rows {sorted(set((bt % 32).tolist()))[:16]}); "
+            f"bad columns {len(bc)} (first {bc[:12].tolist()}, column tiles {sorted(set((bc // 32).tolist()))[:16]}, "
+            f"in-tile cols {sorted(set((bc % 32).tolist()))[:16]})"
+        )
+        frac = bad.float()
+        by_pos = frac.reshape(T // 32, 32, H // 32, 32).mean(dim=(0, 2))  # [row % 32, col % 32]
+        by_ctile = frac.reshape(T, H // 256, 8, 32).mean(dim=(0, 1, 3))  # column tile within the slice
+        by_slice = frac.reshape(T, H // 256, 256).mean(dim=(0, 2))  # slice
+        logger.info(
+            f"pick_combine diag: bad fraction by in-tile row (0..31): {[round(v, 2) for v in by_pos.mean(1).tolist()]}"
+        )
+        logger.info(
+            f"pick_combine diag: bad fraction by in-tile col (0..31): {[round(v, 2) for v in by_pos.mean(0).tolist()]}"
+        )
+        logger.info(
+            f"pick_combine diag: bad fraction by column tile in the slice (0..7): {[round(v, 2) for v in by_ctile.tolist()]}"
+        )
+        logger.info(
+            f"pick_combine diag: bad fraction by slice (0..{H // 256 - 1}): {[round(v, 2) for v in by_slice.tolist()]}"
+        )
+        # which weights did the device apply? least squares of got[t, slice] over the t's k rows (the slice's columns)
+        for t in (0, 1, 33):
+            for sl in (0, 1, 2):
+                cols = slice(sl * 256, (sl + 1) * 256)
+                A = rows[t, :, cols].T  # [256, k]
+                sol = torch.linalg.lstsq(A, got[t, cols].unsqueeze(1)).solution.reshape(-1)
+                resid = (A @ sol - got[t, cols]).abs().max().item()
+                logger.info(
+                    f"pick_combine diag: token {t} slice {sl}: fitted weights {[round(v, 3) for v in sol.tolist()]} "
+                    f"(true {[round(v, 3) for v in w_host[t].tolist()]}, resid {resid:.3g})"
+                )
+        for ct in (0, 4):  # column tile 0 vs 4 of slice 1 for token 0
+            cols = slice(256 + ct * 32, 256 + (ct + 1) * 32)
+            A = rows[0, :, cols].T
+            sol = torch.linalg.lstsq(A, got[0, cols].unsqueeze(1)).solution.reshape(-1)
+            logger.info(
+                f"pick_combine diag: token 0 slice 1 column tile {ct}: fitted {[round(v, 3) for v in sol.tolist()]}"
+            )
+        t0c = (got[0] - golden[0]).abs()
+        logger.info(
+            f"pick_combine diag: token 0 bad columns (first 40): {(t0c > 0.1).nonzero().reshape(-1)[:40].tolist()}"
+        )
+        logger.info(f"pick_combine diag: token 0 cols 0..40 got {[round(v, 3) for v in got[0, :40].tolist()]}")
+        logger.info(f"pick_combine diag: token 0 cols 0..40 gold {[round(v, 3) for v in golden[0, :40].tolist()]}")
+        if len(bt):
+            t0 = int(bt[0])
+            c0 = int(bc[0])
+            logger.info(
+                f"pick_combine diag: token {t0} col {c0}: got {got[t0, c0].item():.4f} golden {golden[t0, c0].item():.4f} "
+                f"w {w_host[t0].tolist()} rows {rows[t0, :, c0].tolist()}"
+            )
+    assert err <= 2e-2 * scale, (err, scale)
+    # the chain: the gather table + the weighted reduce (what the regions path runs today)
+    comb = ttnn.embedding(pos, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+    comb5 = ttnn.reshape(comb, [1, 1, T, k, H])
+    w16 = ttnn.typecast(w, ttnn.bfloat16)
+    w_rm = ttnn.unsqueeze(ttnn.to_layout(w16, ttnn.ROW_MAJOR_LAYOUT), -1)
+    y_chain = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+        comb5, w_rm, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    chain = ttnn.to_torch(y_chain).float().reshape(T, H)
+    err_chain = (chain - golden).abs().max().item()
+    assert torch.isfinite(chain).all()
+    ttnn.synchronize_device(mesh_device)
+
+    def timed(fn):
+        best = 1e9
+        for _ in range(3):
+            t0 = time.perf_counter()
+            fn()
+            ttnn.synchronize_device(mesh_device)
+            best = min(best, time.perf_counter() - t0)
+        return best
+
+    t_op = timed(lambda: op(y_rm, pos, w, T=T, k=k))
+
+    def chain_fn():
+        c = ttnn.embedding(pos, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+        c5 = ttnn.reshape(c, [1, 1, T, k, H])
+        ttnn.experimental.deepseek_prefill.post_combine_reduce(
+            c5, w_rm, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    t_chain = timed(chain_fn)
+    logger.info(
+        f"pick_combine T={T} k={k} H={H}: max |err| vs fp32 golden {err:.3g} (chain {err_chain:.3g}, scale {scale:.3g}); "
+        f"warmed wall op {t_op * 1e3:.2f} ms vs chain (embedding + post_combine_reduce) {t_chain * 1e3:.2f} ms"
+    )
 
 
 @pytest.mark.timeout(900)
