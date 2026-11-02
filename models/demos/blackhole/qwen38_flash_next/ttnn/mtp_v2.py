@@ -46,7 +46,8 @@ import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from types import SimpleNamespace
 from typing import Any
 
 import torch
@@ -2110,6 +2111,14 @@ def capture_commit(
 
 # --------------------------------------------------------------------------- the draft body (design 2.5)
 
+# QWEN38_DRAFT_1ROW: "1" (default) runs the draft rows on the MTP layer's 1-row decode body (forward_draft_1row), "probe" only
+# allocates its state (the device unit test runs both bodies on one state), anything else ("0") keeps the verify-form rows.
+DRAFT_1ROW_ENV = "QWEN38_DRAFT_1ROW"
+
+
+def draft_1row_mode() -> str:
+    return os.environ.get(DRAFT_1ROW_ENV, "1").strip()
+
 
 @dataclass(frozen=True)
 class Qwen38TTNNDraftState:
@@ -2133,6 +2142,10 @@ class Qwen38TTNNDraftState:
     sentinel_rest: Any
     pass_row: Any
     _owner: object = field(repr=False, compare=False)
+    # QWEN38_DRAFT_1ROW: the 1-row body's own generic layer state (the alignment layer's caches, a staging tile and a raw-key
+    # ring of its own) and the ring select stack of the device hand-off; None when the 1-row body is off
+    generic_state: Any = None
+    ring_select_stack: Any = None
 
 
 def _validate_draft_state(model: Qwen38TTNNTextModel, verify: Qwen38TTNNVerifyState, draft: Qwen38TTNNDraftState):
@@ -2210,6 +2223,14 @@ def allocate_draft_state(model: Qwen38TTNNTextModel, verify: Qwen38TTNNVerifySta
             label="draft pass row",
         )
         actions.append(("draft pass row", lambda: _deallocate(pass_row)))
+        generic_state = ring_select_stack = None
+        if draft_1row_mode() in ("1", "probe"):
+            base = verify.alignment.generic_state
+            private = layer.attention.allocate_draft_generic_state(base.attention)
+            actions.append(("draft 1-row QSA state", lambda: layer.attention.release_draft_generic_state(private)))
+            generic_state = replace(base, attention=private)
+            ring_select_stack = qsa_module.upload_ring_select_stack(mesh_device, mesh_contract)
+            actions.append(("draft ring select stack", lambda: _deallocate(ring_select_stack)))
         draft = Qwen38TTNNDraftState(
             drafts=verify.drafts,
             qsa_state=qsa_state,
@@ -2220,6 +2241,8 @@ def allocate_draft_state(model: Qwen38TTNNTextModel, verify: Qwen38TTNNVerifySta
             sentinel_rest=sentinel_rest,
             pass_row=pass_row,
             _owner=model._state_owner,
+            generic_state=generic_state,
+            ring_select_stack=ring_select_stack,
         )
         _validate_draft_state(model, verify, draft)
         return draft
@@ -2233,9 +2256,21 @@ def release_draft_state(model: Qwen38TTNNTextModel, verify: Qwen38TTNNVerifyStat
 
     _validate_draft_state(model, verify, draft)
     layer = verify.alignment.layer
+    one_row = (
+        []
+        if draft.generic_state is None
+        else [
+            ("draft ring select stack", lambda: _deallocate(draft.ring_select_stack)),
+            (
+                "draft 1-row QSA state",
+                lambda: layer.attention.release_draft_generic_state(draft.generic_state.attention),
+            ),
+        ]
+    )
     _run_cleanup(
         "draft state",
         [
+            *one_row,
             ("draft pass row", lambda: _deallocate(draft.pass_row)),
             ("draft sentinel rest", lambda: _deallocate(draft.sentinel_rest)),
             ("draft advance selectors", draft.advance_selectors.deallocate),
@@ -2292,6 +2327,143 @@ def forward_draft_history(model: Qwen38TTNNTextModel, verify: Qwen38TTNNVerifySt
         model._mark_poisoned("forward_draft_history", 0, error)
 
 
+def _row_position_inputs(model: Qwen38TTNNTextModel, state: Qwen38TTNNTextModelGenericState, position):
+    """The 1-row decode body's RoPE rows and QSA position inputs at the device scalar ``position`` (P + row): the decode
+    tail's derive (fused program or chain) on a position view that swaps only the scalar."""
+
+    real = state.position
+    view = SimpleNamespace(
+        scalar=position,
+        shift=real.shift,
+        ones_row=real.ones_row,
+        index_row=lambda: ttnn.multiply(real.ones_row, position, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        rope_index_row=real.rope_index_row,
+        rope_block_start_index_row=real.rope_block_start_index_row,
+    )
+    if model._position_derive is not None:
+        return model._position_derive(model, SimpleNamespace(position=view))
+    index_row = view.index_row()
+    rope_index_row = view.rope_index_row(index_row)
+    rope_block_start_row = view.rope_block_start_index_row(index_row)
+    rope = model.rope_table.rows(rope_index_row, rope_block_start_row)
+    _deallocate(index_row, rope_index_row, rope_block_start_row)
+    return rope, qsa_module.derive_qsa_position_inputs(position, model.qsa_position_constants)
+
+
+def forward_draft_1row(
+    model: Qwen38TTNNTextModel,
+    verify: Qwen38TTNNVerifyState,
+    draft: Qwen38TTNNDraftState,
+    state: Qwen38TTNNTextModelGenericState,
+    verify_output: Qwen38TTNNVerifyOutput,
+    *,
+    derive_history: bool = True,
+    observer: Callable[[str], Any] | None = None,
+    hidden_probe: Callable[[int, Any], None] | None = None,
+) -> None:
+    """:func:`forward_draft` with every row on the MTP layer's 1-row decode body (``forward_decode_generic``, as
+    :func:`forward_mtp_step_row` runs it) at the device position ``P + row``.  The draft's private 1-row state (the
+    alignment layer's caches, its own staging tile and raw-key ring) is synchronized once at the start from the draft raw
+    history and the cache block at ``P & ~31`` (``handoff_draft_state_device``); the ring and staging then advance in
+    place, so no ``commit_verify`` runs between rows.  Rows write the caches by position as the verify-form rows do: rows
+    >= P are dead until the next verify pass rewrites them, and rows < P % 32 of the block are written back unchanged.
+    """
+
+    def stage(name: str) -> None:
+        if observer is not None:
+            observer(f"draft1:{name}")
+
+    _validate_draft_state(model, verify, draft)
+    if draft.generic_state is None or draft.ring_select_stack is None:
+        raise RuntimeError("the 1-row draft body needs its state: allocate the draft with QWEN38_DRAFT_1ROW=1")
+    if not isinstance(derive_history, bool):
+        raise TypeError(f"derive_history must be a bool, got {derive_history!r}")
+    if not isinstance(verify_output, Qwen38TTNNVerifyOutput) or not verify_output.active:
+        raise ValueError("the draft body needs the live verify output whose readback row it reads")
+    if _shape(verify_output.readback) != (1, 1, 1, READBACK_WIDTH) or verify_output.readback.dtype != ttnn.float32:
+        raise RuntimeError(
+            f"verify readback must be FP32 [1,1,1,{READBACK_WIDTH}], got {tensor_metadata(verify_output.readback)}"
+        )
+    if model.poisoned:
+        raise RuntimeError("the text model is poisoned")
+    alignment = verify.alignment
+    qsa = alignment.layer.attention
+    lm_head = model.model_io.lm_head
+    constants = verify.accept_constants
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    processed_rows = 0
+    try:
+        if derive_history:
+            forward_draft_history(model, verify, draft)
+        next_token = _lane(verify_output.readback, READBACK_FIXED_LANES.index("next_token"))
+        drafts = [_lane(verify_output.readback, READBACK_FIXED_LANES.index("first_draft"))]
+        residual_row = alignment.residual  # the persistent row: never deallocated here
+        stage("history")
+        for row in range(verify.drafts - 1):
+            position = state.position.scalar if row == 0 else ttnn.add(state.position.scalar, row, memory_config=dram)
+            rope, qsa_position = _row_position_inputs(model, state, position)
+            if row == 0:
+                qsa.handoff_draft_state_device(
+                    draft.generic_state.attention,
+                    draft.qsa_state,
+                    position,
+                    qsa_position.kv_block_start,
+                    draft.qsa_constants,
+                    draft.ring_select_stack,
+                )
+            stage(f"row-{row}:inputs")
+            token_row = _token_row_from_lane(model, drafts[-1], draft.sentinel_rest)
+            embedding = model.model_io.embedding.embed_device_token(token_row)
+            _deallocate(token_row)
+            mixed = alignment.input_mixer(embedding, residual_row)
+            _deallocate(embedding)
+            if residual_row is not alignment.residual:
+                _deallocate(residual_row)
+            stage(f"row-{row}:embed-mixer")
+            residual_row = alignment.layer.forward_decode_generic(
+                mixed, draft.generic_state, prepared_ple=None, rope=rope, qsa_position=qsa_position
+            )
+            stage(f"row-{row}:layer")
+            if _shape(residual_row) != MTP_RESIDUAL_SHAPE:
+                raise RuntimeError(
+                    f"draft residual row has shape {_shape(residual_row)}, expected {MTP_RESIDUAL_SHAPE}"
+                )
+            hidden = alignment.final_mixer(residual_row)
+            if hidden_probe is not None:
+                hidden_probe(row, hidden)
+            logits = lm_head(hidden)
+            candidates = lm_head.greedy_candidates(logits, values_by_gather=True)
+            _deallocate(logits.tensor, hidden)
+            resolved = lm_head.resolve_greedy_on_device(candidates)  # FP32 TILE token row, column 0 = the id
+            _deallocate(candidates.local_indices, candidates.local_values)
+            resolved_lanes = ttnn.to_layout(resolved, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+            _deallocate(resolved)
+            drafts.append(_lane(resolved_lanes, 0))
+            _deallocate(resolved_lanes)
+            if row:
+                _deallocate(position)
+            qsa_position.deallocate()
+            rope.deallocate()
+            processed_rows += 1
+            stage(f"row-{row}:head")
+        if residual_row is not alignment.residual:
+            _deallocate(residual_row)
+        token_lanes = ttnn.concat([next_token, *drafts, constants.sentinel_tail], dim=3, memory_config=dram)
+        draft_lanes = ttnn.concat(
+            [*drafts, constants.sentinel_tail, constants.sentinel_lane], dim=3, memory_config=dram
+        )
+        pass_row = ttnn.concat([verify_output.readback, token_lanes], dim=3, memory_config=dram)
+        _land(pass_row, draft.pass_row, label="assembled pass row")
+        token_tile = ttnn.to_layout(token_lanes, ttnn.TILE_LAYOUT, memory_config=dram)
+        model.model_io.embedding.validate_token_row(token_tile, label="assembled verify token row")
+        _land(token_tile, verify.token_row, label="assembled verify token row")
+        _land(draft_lanes, verify.draft_lanes, label="assembled draft lanes")
+        _deallocate(token_lanes, token_tile, draft_lanes, pass_row, next_token, *drafts)
+        stage("assemble")
+    except BaseException as error:
+        model._mark_poisoned("forward_draft_1row", processed_rows, error)
+
+
 def capture_draft_history(
     model: Qwen38TTNNTextModel,
     verify: Qwen38TTNNVerifyState,
@@ -2319,8 +2491,11 @@ def forward_draft(
     *,
     derive_history: bool = True,
     observer: Callable[[str], Any] | None = None,
+    hidden_probe: Callable[[int, Any], None] | None = None,
 ) -> None:
     """The k - 1 draft rows of one pass at the device position ``P`` (after the previous verify's ``P <- P + a + 1``).
+    ``QWEN38_DRAFT_1ROW=1`` runs :func:`forward_draft_1row` instead; ``hidden_probe`` (eager diagnostics only) is called with
+    (row, the final mixer's hidden) before the hidden is released.
 
     Row i (i = 1 .. k - 1) embeds ``d_i`` from the device token chain (``d_1`` = lane 2 of the verify readback
     row, later ids the previous row's row-0 argmax), mixes it with the previous MTP residual (``alignment.residual``
@@ -2341,6 +2516,17 @@ def forward_draft(
         if observer is not None:
             observer(f"draft:{name}")
 
+    if draft_1row_mode() == "1":
+        return forward_draft_1row(
+            model,
+            verify,
+            draft,
+            state,
+            verify_output,
+            derive_history=derive_history,
+            observer=observer,
+            hidden_probe=hidden_probe,
+        )
     _validate_draft_state(model, verify, draft)
     if not isinstance(derive_history, bool):
         raise TypeError(f"derive_history must be a bool, got {derive_history!r}")
@@ -2417,6 +2603,8 @@ def forward_draft(
                     f"draft residual row has shape {_shape(residual_row)}, expected {MTP_RESIDUAL_SHAPE}"
                 )
             hidden = alignment.final_mixer(residual_row)
+            if hidden_probe is not None:
+                hidden_probe(row, hidden)
             logits = lm_head(hidden)
             candidates = lm_head.greedy_candidates(logits, values_by_gather=True)
             _deallocate(logits.tensor, hidden)
@@ -3523,6 +3711,7 @@ __all__ = [
     "enter_verify_mode",
     "forward_commit",
     "forward_draft",
+    "forward_draft_1row",
     "forward_draft_history",
     "forward_mtp_step_row",
     "forward_verify",

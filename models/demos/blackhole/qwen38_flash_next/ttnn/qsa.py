@@ -1840,6 +1840,25 @@ def chunk_handoff_ring_select_rows(prefilled: int) -> torch.Tensor:
     return select
 
 
+def upload_ring_select_stack(mesh_device, mesh_contract: Qwen38MeshContract):
+    """BF16 TILE ``[1,1,32,1024]``, row m (m = 0..3) the flattened :func:`verify_handoff_ring_select_rows` of ``P % 4 = m``
+    (rows 4..31 zero): the device hand-off picks row ``P % 4`` with a one-hot matmul."""
+
+    stack = torch.zeros(1, 1, CHUNK_ROWS, CHUNK_ROWS * CHUNK_ROWS, dtype=torch.bfloat16)
+    for phase in range(COMPRESS_RATIO):
+        stack[0, 0, phase] = verify_handoff_ring_select_rows(phase).reshape(-1)
+    tensor = ttnn.from_torch(
+        stack,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh_device),
+    )
+    mesh_contract.validate_tensor(tensor, placement=TensorPlacement.REPLICATED)
+    return tensor
+
+
 def verify_handoff_ring_select_rows(position: int) -> torch.Tensor:
     """Host image of the BF16 ``[1,1,32,32]`` 0/1 select whose matmul with a verify state's raw history (rows
     0..2 = the raw keys of positions P - 3 .. P - 1) is the raw-key ring at ``P = position``: ring row j <
@@ -7015,6 +7034,71 @@ class Qwen38TTNNQSA:
         if ring is not None and _tensor_key(ring) != _tensor_key(state.raw_key_ring):
             raise RuntimeError("QSA raw-key ring verify hand-off was not in place")
         _deallocate(ring_select)
+
+    def allocate_draft_generic_state(self, base: Qwen38TTNNQSAGenericState) -> Qwen38TTNNQSAGenericState:
+        """The draft rows' 1-row state: ``base``'s caches (position-addressed, shared) with a staging tile and a raw-key
+        ring of its own, so the 1-row draft body never touches the committed chain's ring and staging."""
+
+        self._validate_generic_state(base)
+        return replace(
+            base,
+            kv_staging=self._allocate_pair_grouped((1, 1, CACHE_WRITE_ROWS, 2 * HEAD_DIM), layout=ttnn.TILE_LAYOUT),
+            raw_key_ring=self._allocate_replicated_tile_zeros((1, 1, CACHE_WRITE_ROWS, INDEX_HEAD_DIM)),
+        )
+
+    def release_draft_generic_state(self, state: Qwen38TTNNQSAGenericState) -> None:
+        """Release only the two buffers :meth:`allocate_draft_generic_state` added (the caches belong to the base)."""
+
+        _deallocate(state.kv_staging, state.raw_key_ring)
+
+    def handoff_draft_state_device(
+        self,
+        state: Qwen38TTNNQSAGenericState,
+        verify_state: Qwen38TTNNQSAVerifyState,
+        position_scalar,
+        kv_block_start,
+        constants: Qwen38TTNNQSAVerifyConstants,
+        ring_select_stack,
+    ) -> None:
+        """:meth:`handoff_verify_state` with ``P`` read from a device scalar (trace safe): the staging tile takes the cache
+        block at ``P & ~31`` (``kv_block_start``, the position derive's), the raw-key ring the open block's raw keys out of
+        ``verify_state.raw_history`` through the one-hot row of ``ring_select_stack`` picked by ``P % 4`` (each output
+        element is one 0/1 term times 1.0, the host select's values)."""
+
+        self._validate_generic_state(state)
+        self._validate_verify_state(verify_state)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        read_row = ttnn.add(constants.chunk.arange32_lanes, kv_block_start, memory_config=dram)
+        read_indices = ttnn.reshape(read_row, (1, 1, CACHE_WRITE_ROWS))
+        looked_up = ttnn.embedding(
+            read_indices, state.packed_kv_cache, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=dram
+        )
+        resident = ttnn.unsqueeze_to_4D(looked_up) if len(looked_up.shape) == 3 else looked_up
+        _retag_tensor(resident, reference=state.packed_kv_cache, shard_dim=1)
+        _require_shape(resident, (1, 1, CACHE_WRITE_ROWS, 2 * HEAD_DIM), "QSA draft hand-off resident KV block rows")
+        staged = ttnn.copy(resident, state.kv_staging)
+        if staged is not None and _tensor_key(staged) != _tensor_key(state.kv_staging):
+            raise RuntimeError("QSA draft KV staging hand-off was not in place")
+        _deallocate(resident, read_row)
+        position_tiled = ttnn.to_layout(position_scalar, ttnn.TILE_LAYOUT, memory_config=dram)
+        remainder = ttnn.bitwise_and(position_tiled, COMPRESS_RATIO - 1, memory_config=dram)  # P % 4
+        onehot_bits = ttnn.eq(constants.arange32_row, remainder, dtype=ttnn.uint32, memory_config=dram)
+        onehot = ttnn.typecast(onehot_bits, ttnn.bfloat16, memory_config=dram)
+        select_flat = ttnn.matmul(
+            onehot, ring_select_stack, memory_config=dram, compute_kernel_config=constants.select_compute_config
+        )
+        _require_shape(select_flat, (1, 1, 1, CHUNK_ROWS * CHUNK_ROWS), "QSA draft ring select row")
+        ring_select = ttnn.reshape(select_flat, (1, 1, CHUNK_ROWS, CHUNK_ROWS))  # a relayout into a new buffer
+        ring = ttnn.matmul(
+            ring_select,
+            verify_state.raw_history,
+            memory_config=dram,
+            compute_kernel_config=self.compute_config,
+            optional_output_tensor=state.raw_key_ring,
+        )
+        if ring is not None and _tensor_key(ring) != _tensor_key(state.raw_key_ring):
+            raise RuntimeError("QSA draft raw-key ring hand-off was not in place")
+        _deallocate(position_tiled, remainder, onehot_bits, onehot, select_flat, ring_select)
 
     def _raw_window_verify(self, verify_state: Qwen38TTNNQSAVerifyState, raw_rows):
         """``[raw history tile | raw rows tile]``: two whole tiles on dim 2 (the GDN FIR window layout)."""

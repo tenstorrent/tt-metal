@@ -3519,10 +3519,20 @@ class Qwen38TracedChain:
                     ("fused",) if not target.sampled else ("split", "sampled") if target.device_accept else ("split",)
                 )
                 rounds = [(residue, warm_form) for residue in range(RESIDUE_CLASSES) for warm_form in warm_forms]
+                dr2_positions = []
+                if (
+                    os.environ.get("QWEN38_DR2_COMPARE") == "1"
+                ):  # device unit test of the 1-row draft rows (tools/dr2_probe.py)
+                    from models.demos.blackhole.qwen38_flash_next.tools import dr2_probe
+
+                    dr2_positions = dr2_probe.positions()
+                    rounds = [(n % RESIDUE_CLASSES, warm_forms[0]) for n in dr2_positions]
                 for index, (residue, warm_form) in enumerate(rounds):
                     # 1-row steps to this round's residue class (the seed's programs at every P mod 4; the first chain
                     # starts aligned, a later chain wherever the previous one's rounds left P)
-                    while warm_fed % RESIDUE_CLASSES != residue:
+                    while (
+                        (warm_fed < dr2_positions[index]) if dr2_positions else (warm_fed % RESIDUE_CLASSES != residue)
+                    ):
                         resolved, ple_context = warm_step(warm_fed, resolved, ple_context, mtp_next=None)
                         warm_fed += 1
                     position = state.position.read()
@@ -3575,7 +3585,10 @@ class Qwen38TracedChain:
                             model, target.verify, mtp_v2.decide_greedy(warm_tokens_pass, head_readback)
                         )
                         output = mtp_v2.forward_verify_tail(model, target.verify, state, head, catch_up=False)
-                    mtp_v2.forward_draft(model, target.verify, target.draft, state, output)
+                    if dr2_positions:
+                        dr2_probe.run(mtp_v2, model, target, state, output, position, synchronize)
+                    else:
+                        mtp_v2.forward_draft(model, target.verify, target.draft, state, output)
                     synchronize()
                     if head is not None:
                         head.release_tensors()
