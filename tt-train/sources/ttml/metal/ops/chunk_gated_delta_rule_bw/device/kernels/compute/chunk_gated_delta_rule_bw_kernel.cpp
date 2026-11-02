@@ -4,13 +4,14 @@
 //
 // chunk_gated_delta_rule_bw compute (TRISC).
 //
+// The forward's saved intermediates h, v_new and A (= Tinv = (I + N)^-1) are inputs: the backward
+// reads the inverse, the states and the corrected values and rebuilds none of them.
+//
 // Three stages in one binary, selected by the runtime item counts:
-//   P : chunk_decay -> decay_mask(L) -> ut_matrix(A) -> ut_inverse(Tinv, by
-//       Neumann doubling) -> chunk_prep_products (kcd, Q, P, U) -> intra_attn
-//       -> scan_seed (u, c)
-//   S : state_forward_step / state_reverse_step.  The state block stays
-//       resident in cb_sa / cb_sb across ALL chunk steps — it is never packed
-//       out to DRAM between steps.
+//   P : chunk_decay -> decay_mask(L) -> load Tinv -> chunk_prep_products
+//       (kcd, Q, P, U) -> intra_attn -> scan_seed (u, c)
+//   S : state_reverse_step.  The state block stays resident in cb_sb across
+//       ALL chunk steps — it is never packed out to DRAM between steps.
 //   G : the five gradients dq, dk, dv, dg, dbeta, V-accumulated inside the
 //       core (dh0 = dS_0 leaves at the end of stage S).
 //
@@ -30,8 +31,7 @@
 //
 // Sign conventions that remove constant-tile and masking work:
 //   * `CST_NSTRICT` holds -1 on the strictly-lower triangle, so
-//     `A = ((k_beta@k^T) . L) . NSTRICT` is the negated UT matrix in one op,
-//     and `dAn = (Tinv^T d_attn Tinv^T) . NSTRICT` is -dA, which makes both of
+//     `dAn = (Tinv^T d_attn Tinv^T) . NSTRICT` is -dA, which makes both of
 //     dA's consumers (`W = -dA.L`, and the R term) plain positive products.
 //   * `ndkcd = +dv_new @ S^T = -d_kcd`; its two consumers carry the sign.
 //   * `M = Mraw . L` is used directly (never `Mt = Mraw . tril`): L is already
@@ -513,32 +513,12 @@ void kernel_main() {
         // ---- decay_mask_block ------------------------------------------
         build_L(cb_vecc, 0);
 
-        // ---- ut_matrix_block -------------------------------------------
+        // ---- Tinv ------------------------------------------------------
+        // The forward's A = (I + N)^-1, built there by its blocked inverse: read, never rebuilt.
         p_mbc(cb_kb, cb_veca, cb_kc, 0, VA_BETA, Ct, Kt, 1, CtKt);
-        if constexpr (HAS_SAVED) {
-            // Tinv is the forward's A.
-            cb_wait_front(cb_load_item, LITEM);
-            PCOPY(cb_load_item, cb_ca, 0, CtCt, CtCt);
-            cb_pop_front(cb_load_item, LITEM);
-        } else {
-            mmT(cb_kc, cb_kb, cb_cc, 0, 0, Ct, Kt, Ct);
-            PMUL(cb_cc, cb_cbL, cb_cc, 0, 0, CtCt, 0);
-            PMUL(cb_cc, cb_const, cb_cc, 0, CST_NSTRICT, CtCt, 0);  // cb_cc = A
-
-            // ---- ut_inverse_block (Neumann doubling) -------------------
-            PCOPY(cb_cc, cb_cd, 0, CtCt, CtCt);
-            PADD(cb_const, cb_cc, cb_ca, CST_EYE, 0, CtCt, CtCt);
-            cb_pop_front(cb_cc, CtCt);
-            for (uint32_t j = 1; j < NEUMANN_STEPS; ++j) {
-                PCOPY(cb_cd, cb_ce, 0, CtCt, CtCt);
-                mm_ip(cb_cd, cb_ce, cb_cd, 0, 0, Ct, Ct, Ct);  // Pw <- Pw @ Pw
-                cb_pop_front(cb_ce, CtCt);
-                mm(cb_ca, cb_cd, cb_ce, 0, 0, Ct, Ct, Ct);  // Z = Tinv @ Pw
-                PADD(cb_ca, cb_ce, cb_ca, 0, 0, CtCt, 0);
-                cb_pop_front(cb_ce, CtCt);
-            }
-            cb_pop_front(cb_cd, CtCt);
-        }
+        cb_wait_front(cb_load_item, LITEM);
+        PCOPY(cb_load_item, cb_ca, 0, CtCt, CtCt);
+        cb_pop_front(cb_load_item, LITEM);
 
         // ---- chunk_prep_products_block ---------------------------------
         p_mbc(cb_kc, cb_veca, cb_kc, 0, VA_GAMMA, Ct, Kt, 1, 0);
@@ -555,9 +535,6 @@ void kernel_main() {
         p_tr(cb_cc, cb_ce, 0, Ct, Ct, CtCt);
 
         // ---- store_prep_block ------------------------------------------
-        if constexpr (!HAS_SAVED) {
-            egress_f32(cb_ca, 0, CtCt);  // Tinv
-        }
         egress_f32(cb_kd, 0, CtKt);  // kcd
         egress_f32(cb_kb, 0, CtKt);  // P
         egress_vec4(cb_vecc, 0);     // g, beta, dc1, w
@@ -567,19 +544,7 @@ void kernel_main() {
         for (uint32_t vb = 0; vb < NVB; ++vb) {
             cb_wait_front(cb_doin, CtVb);
             PCOPY(cb_doin, cb_vb, 0, CtVb, CtVb);
-            if constexpr (HAS_SAVED) {
-                mm(cb_ce, cb_vb, cb_vc, 0, 0, Ct, Ct, Vb);  // u = intra^T @ do
-            } else {
-                // v_corr only seeds the forward scan.
-                cb_wait_front(cb_vin, MAXV);
-                PCOPY(cb_vin, cb_vc, 0, CtVb, CtVb);
-                p_mbc(cb_vc, cb_veca, cb_vc, 0, VA_BETA, Ct, Vb, 1, 0);
-                mm(cb_ca, cb_vc, cb_va, 0, 0, Ct, Ct, Vb);  // v_corr = Tinv @ v_beta
-                egress_f32(cb_va, 0, CtVb);
-                mm_ip(cb_ce, cb_vb, cb_vc, 0, 0, Ct, Ct, Vb);  // u = intra^T @ do
-                cb_pop_front(cb_va, CtVb);
-                cb_pop_front(cb_vin, MAXV);
-            }
+            mm(cb_ce, cb_vb, cb_vc, 0, 0, Ct, Ct, Vb);  // u = intra^T @ do
             egress_f32(cb_vc, 0, CtVb);
             mm(cb_ktr, cb_vb, cb_sa, 0, 0, Kt, Ct, Vb);  // c = Q^T @ do
             egress_f32(cb_sa, 0, KtVb);
@@ -608,42 +573,6 @@ void kernel_main() {
     // =====================================================================
     for (uint32_t oi = 0; oi < num_owned; ++oi) {
         for (uint32_t vb = 0; vb < NVB; ++vb) {
-            // Forward half: rebuild S_i and v_new.  The saved forward already holds both.
-            if constexpr (!HAS_SAVED) {
-                if constexpr (HAS_H0) {
-                    cb_wait_front(cb_vin, MAXV);
-                    PCOPY(cb_vin, cb_sa, 0, KtVb, KtVb);
-                    cb_pop_front(cb_vin, MAXV);
-                } else {
-                    PZERO(cb_sa, KtVb, KtVb);
-                }
-
-                for (uint32_t i = 0; i < NC; ++i) {
-                    constexpr uint32_t L_KCD = 0;
-                    constexpr uint32_t L_P = CtKt;
-                    constexpr uint32_t L_VCORR = 2 * CtKt;
-                    constexpr uint32_t L_DC1 = 2 * CtKt + CtVb;
-                    cb_wait_front(cb_load_vb, LVB);
-                    egress_f32(cb_sa, 0, KtVb);                 // S_i
-                    PEXP1(cb_load_vb, cb_vecc, L_DC1, Ct, Ct);  // Gamma tile
-                    mm(cb_load_vb, cb_sa, cb_vb, L_KCD, 0, Ct, Kt, Vb);
-                    PSUB(cb_load_vb, cb_vb, cb_va, L_VCORR, 0, CtVb, CtVb);  // v_new
-                    egress_f32(cb_va, 0, CtVb);
-                    p_tr(cb_load_vb, cb_ktr, L_P, Ct, Kt, CtKt);  // P^T
-                    mm(cb_ktr, cb_va, cb_sb, 0, 0, Kt, Ct, Vb);
-                    p_mbc(cb_sa, cb_vecc, cb_sa, 0, 0, Kt, Vb, 0, 0);
-                    PADD(cb_sa, cb_sb, cb_sa, 0, 0, KtVb, 0);
-
-                    cb_pop_front(cb_va, CtVb);
-                    cb_pop_front(cb_vb, CtVb);
-                    cb_pop_front(cb_sb, KtVb);
-                    cb_pop_front(cb_ktr, CtKt);
-                    cb_pop_front(cb_vecc, Ct);
-                    cb_pop_front(cb_load_vb, LVB);
-                }
-                cb_pop_front(cb_sa, KtVb);
-            }
-
             if constexpr (HAS_DHT) {
                 cb_wait_front(cb_vin, MAXV);
                 PCOPY(cb_vin, cb_sb, 0, KtVb, KtVb);

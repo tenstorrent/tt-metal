@@ -193,7 +193,6 @@ Geometry make_geometry(const operation_attributes_t& args, const tensor_args_t& 
     geo.NC = geo.T / args.chunk_size;
     geo.BH = geo.B * geo.HV;
     geo.NI = geo.BH * geo.NC;
-    geo.neumann_steps = std::max(1U, static_cast<uint32_t>(std::ceil(std::log2(static_cast<double>(args.chunk_size)))));
 
     const TileSizes tiles{
         .in = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_args.q.dtype())),
@@ -216,28 +215,23 @@ Geometry make_geometry(const operation_attributes_t& args, const tensor_args_t& 
         cb_bytes(geo.Ct, geo.Kt, 1U, tiles));
     geo.NVB = geo.Vt / geo.Vb;
 
-    const uint32_t CtCt = geo.Ct * geo.Ct;
     const uint32_t CtKt = geo.Ct * geo.Kt;
     const uint32_t CtVt = geo.Ct * geo.Vt;
     const uint32_t KtVt = geo.Kt * geo.Vt;
-    // The saved forward replaces Tinv, S and v_new, and v_corr only feeds the forward scan.
-    const bool saved = tensor_args.has_saved_forward();
+    // Only what the backward itself produces lives in the scratch: Tinv, S_i and v_new are the saved
+    // forward's A, h and v_new.
     uint32_t off = 0;
     auto take = [&](uint32_t per_item) {
         const uint32_t base = off;
         off += geo.NI * per_item;
         return base;
     };
-    geo.sc_attn = take(saved ? 0U : CtCt);
     geo.sc_kcd = take(CtKt);
     geo.sc_p = take(CtKt);
     geo.sc_vec = take(4U * geo.Ct);
-    geo.sc_vcorr = take(saved ? 0U : CtVt);
     geo.sc_u = take(CtVt);
     geo.sc_c = take(KtVt);
-    geo.sc_s = take(saved ? 0U : KtVt);
     geo.sc_ds = take(KtVt);
-    geo.sc_vnew = take(saved ? 0U : CtVt);
     geo.sc_dvnew = take(CtVt);
     geo.scratch_tiles = std::max(off, 1U);
     return geo;
@@ -252,7 +246,6 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
     const Geometry geo = make_geometry(args, tensor_args);
     const bool has_h0 = tensor_args.initial_state.has_value();
     const bool has_dht = tensor_args.d_final_state.has_value();
-    const bool has_saved = tensor_args.has_saved_forward();
 
     const tt::DataFormat in_format = tt::tt_metal::datatype_to_dataformat_converter(q.dtype());
     const tt::DataFormat gate_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.g.dtype());
@@ -332,22 +325,17 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
         geo.NVB,
         geo.NC,
         geo.BH,
-        geo.neumann_steps,
         static_cast<uint32_t>(q.element_size()),
         dest_limit,
         static_cast<uint32_t>(has_h0),
         static_cast<uint32_t>(has_dht),
         geo.Tt,
-        geo.sc_attn,
         geo.sc_kcd,
         geo.sc_p,
         geo.sc_vec,
-        geo.sc_vcorr,
         geo.sc_u,
         geo.sc_c,
-        geo.sc_s,
         geo.sc_ds,
-        geo.sc_vnew,
         geo.sc_dvnew,
         sem_prep,
         sem_scan,
@@ -363,20 +351,19 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
         kNumVecBSlots,
         geo.HK,
         geo.G,
-        static_cast<uint32_t>(has_saved),
         static_cast<uint32_t>(d_out_is_head_major(tensor_args)),
         static_cast<uint32_t>(tensor_args.g.element_size()),
     };
 
     const auto& scratch = outputs[kScratch];
     // An absent optional tensor borrows a present tensor's accessor so the CT-arg layout is the same
-    // in every variant; the kernels guard each use behind HAS_H0 / HAS_DHT / HAS_SAVED.
+    // in every variant; the kernels guard each use behind HAS_H0 / HAS_DHT.
     auto* h0_buffer = has_h0 ? tensor_args.initial_state->buffer() : q.buffer();
     auto* dht_buffer = has_dht ? tensor_args.d_final_state->buffer() : q.buffer();
     auto* dh0_buffer = has_h0 ? outputs[kDh0].buffer() : outputs[kDq].buffer();
-    auto* h_buffer = has_saved ? tensor_args.h->buffer() : scratch.buffer();
-    auto* v_new_buffer = has_saved ? tensor_args.v_new->buffer() : scratch.buffer();
-    auto* a_buffer = has_saved ? tensor_args.a->buffer() : scratch.buffer();
+    auto* h_buffer = tensor_args.h.buffer();
+    auto* v_new_buffer = tensor_args.v_new.buffer();
+    auto* a_buffer = tensor_args.a.buffer();
 
     std::vector<uint32_t> reader_ct = common_ct;
     for (const auto* buffer :
@@ -503,7 +490,6 @@ void ChunkGatedDeltaRuleBackwardProgramFactory::override_runtime_arguments(
     const auto& shared = cached_program.shared_variables;
     const bool has_h0 = tensor_args.initial_state.has_value();
     const bool has_dht = tensor_args.d_final_state.has_value();
-    const bool has_saved = tensor_args.has_saved_forward();
 
     auto& reader_args = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& writer_args = GetRuntimeArgs(program, shared.writer_kernel_id);
@@ -518,9 +504,9 @@ void ChunkGatedDeltaRuleBackwardProgramFactory::override_runtime_arguments(
         r[6] = has_h0 ? tensor_args.initial_state->buffer()->address() : 0U;
         r[7] = has_dht ? tensor_args.d_final_state->buffer()->address() : 0U;
         r[8] = outputs[kScratch].buffer()->address();
-        r[9] = has_saved ? tensor_args.h->buffer()->address() : r[8];
-        r[10] = has_saved ? tensor_args.v_new->buffer()->address() : r[8];
-        r[11] = has_saved ? tensor_args.a->buffer()->address() : r[8];
+        r[9] = tensor_args.h.buffer()->address();
+        r[10] = tensor_args.v_new.buffer()->address();
+        r[11] = tensor_args.a.buffer()->address();
         r[15] = scale_bits;
 
         auto& w = writer_args[core.x][core.y];

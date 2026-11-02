@@ -22,9 +22,11 @@ struct ChunkGatedDeltaRuleBackwardParams {
 
 // q, k [B,T,HK*K]; v [B,T,HV*V]; g, beta [B,T,HV]; each may also be rank 4 as [B,1,T,X].
 // d_out is token-major [B,T,HV*V] or head-major [B*HV,1,T,V] (also rank 3 as [B*HV,T,V]).
-// initial_state, d_final_state [B,HV,K,V].
 // h [B*HV,NC,K,V], v_new [B*HV,1,T,V], a [B*HV,1,T,C]: the FLOAT32 intermediates of
-// ttml::metal::chunk_gated_delta_rule_fw, given all together or not at all.
+// ttml::metal::chunk_gated_delta_rule_fw.  a is T_inv = (I + N)^-1, so the backward reads the inverse, the
+// states and the corrected values and rebuilds none of them.
+// initial_state, d_final_state [B,HV,K,V]; initial_state only decides whether dh0 is produced, its values
+// are already in h.
 struct ChunkGatedDeltaRuleBackwardInputs {
     ttnn::Tensor q;
     ttnn::Tensor k;
@@ -32,15 +34,11 @@ struct ChunkGatedDeltaRuleBackwardInputs {
     ttnn::Tensor g;
     ttnn::Tensor beta;
     ttnn::Tensor d_out;
+    ttnn::Tensor h;
+    ttnn::Tensor v_new;
+    ttnn::Tensor a;
     std::optional<ttnn::Tensor> initial_state;
     std::optional<ttnn::Tensor> d_final_state;
-    std::optional<ttnn::Tensor> h;
-    std::optional<ttnn::Tensor> v_new;
-    std::optional<ttnn::Tensor> a;
-
-    [[nodiscard]] bool has_saved_forward() const {
-        return h.has_value();
-    }
 };
 
 // [N,T,X] or [N,1,T,X] -> [N,1,T,X]; any other shape is returned unchanged for the caller to reject.

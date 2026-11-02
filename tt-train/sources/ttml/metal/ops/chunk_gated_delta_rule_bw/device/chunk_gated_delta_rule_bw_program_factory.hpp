@@ -16,12 +16,11 @@ namespace ttml::metal::ops::chunk_gated_delta_rule_bw::device {
 struct Geometry {
     uint32_t B{}, T{}, HV{}, HK{}, G{}, K{}, V{};
     uint32_t Ct{}, Kt{}, Vt{}, Tt{}, NC{}, BH{}, NI{};
-    uint32_t neumann_steps{};
     uint32_t Vb{};   // V tiles per compute pass: the largest divisor of Vt whose L1 footprint fits
     uint32_t NVB{};  // Vt / Vb
 
     // Tile-index bases of the per-item blocks inside the f32 scratch tensor.
-    uint32_t sc_attn{}, sc_kcd{}, sc_p{}, sc_vec{}, sc_vcorr{}, sc_u{}, sc_c{}, sc_s{}, sc_ds{}, sc_vnew{}, sc_dvnew{};
+    uint32_t sc_kcd{}, sc_p{}, sc_vec{}, sc_u{}, sc_c{}, sc_ds{}, sc_dvnew{};
     uint32_t scratch_tiles{};
 };
 

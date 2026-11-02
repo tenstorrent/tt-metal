@@ -9,27 +9,35 @@
     dq, dk [B, 1, T, HK*K]      dv [B, 1, T, HV*V]     dg, dbeta [B, 1, T, HV]
     dh0    [B, HV, K, V]
 
+The backward takes the saved h / v_new / A of ttml.ops.metal.chunk_gated_delta_rule_fw as required inputs: A
+is the forward's UT inverse, and the backward reads it (and h, v_new) instead of rebuilding any of them.  The
+inputs here are bf16-representable, because the forward only takes bf16 q / k / v, so that an fp32 backward
+sees exactly the values its saved forward was computed from.
+
 Pinned here:
-1. Every gradient against a float64 autograd oracle of the token-by-token recurrence.
+1. Every gradient against a float64 autograd oracle of the token-by-token recurrence, with the saved forward
+   of ttml.ops.metal.chunk_gated_delta_rule_fw, including a Qwen3.8-sized shape with head-major d_out.
 2. Two live input sets at one shape each get their own answer from one cached program.
 3. Shape-contract violations raise before dispatch.
-4. Fed the saved h / v_new / A of ttml.ops.metal.chunk_gated_delta_rule_fw, every gradient still
-   matches the oracle, including a Qwen3.8-sized shape with head-major d_out.
+4. Highly correlated keys within a chunk (the case a truncated Neumann-series inverse gets wrong without any
+   NaN) match the oracle: the inverse comes from the forward's blocked solve.
 5. Head-major d_out [B*HV, 1, T, V] and rank-3 [B, T, X] inputs give bit-identical gradients.
 6. Several items per core at Vb > 1 (every CB keeps a uniform push size across items).
 7. Strong gates (|cumsum(g)| in the hundreds within a chunk) still match the oracle.
-8. FLOAT32 gates with BFLOAT16 q/k/v/d_out (the forward's dtype contract) match the oracle, with and
-   without the saved forward; dg / dbeta come back in q's dtype.
+8. FLOAT32 gates with BFLOAT16 q/k/v/d_out (the forward's dtype contract) match the oracle; dg / dbeta come
+   back in q's dtype.
 9. Weak gates (the default here) keep the inter-chunk state carry observable; one decaying-gate case
    covers the other regime.  See `WEAK_GATE`.
 10. An explicit `scale` is checked against the oracle in absolute terms, not only by correlation.
-11. Cache hits patch every buffer address, with all input and output sets alive at once, and a changed
-    `initial_state` / `d_final_state` presence, saved forward or gate dtype misses the cache.
+11. Cache hits patch every buffer address (the saved forward's included), with all input and output sets alive
+    at once, and a changed `initial_state` / `d_final_state` presence, gate dtype or chunk size misses the
+    cache.
 12. `d_final_state` without `initial_state`, GVA at G = 4, 8 and 32 (HV = 32), K > V, and every V-block
     geometry (`BLOCK_SHAPES`) match the oracle; T = 4096 with no decay keeps the error of T = 256.
 13. Rejections name the offending value (exact text), for shapes, dtypes, layouts, placement, T = 0,
-    B = 0, states and saved tensors of the wrong dtype or shape, and a shape with no V block that fits
-    L1; a tensor placed differently (L1 instead of DRAM) is rejected even with the DRAM program cached.
+    B = 0, states and saved tensors of the wrong dtype or shape, a missing saved tensor, and a shape with no
+    V block that fits L1; a tensor placed differently (L1 instead of DRAM) is rejected even with the DRAM
+    program cached.
 
 Tolerances: every gradient must reach PCC >= `PCC_MIN` and a relative RMS error <= `RMS_MAX`, for both
 dtypes.  Measured on Blackhole over all cases here the worst relative RMS is 1.0e-2 (`dg` at strong
@@ -114,16 +122,24 @@ def device():
     return ttml.autograd.AutoContext.get_instance().get_device()
 
 
-def _build_inputs(shape, state_mode, dtype, seed=42, gate_scale=WEAK_GATE):
+def _build_inputs(shape, state_mode, dtype, seed=42, gate_scale=WEAK_GATE, bf16_exact=True, key_corr=0.0):
     """Seeded inputs, rounded to `dtype` so the oracle sees what the device sees. q/k are L2-normalized
-    along K (caller contract) and stay at the key-head count."""
+    along K (caller contract) and stay at the key-head count.
+
+    The forward only takes bf16 q / k / v, and the backward reads its saved h / v_new / A, so by default the
+    values are bf16-representable whatever `dtype` is: an fp32 backward then sees exactly what its forward saw.
+    `key_corr` in [0, 1) mixes one key direction shared by the whole sequence into every k, which makes the
+    keys of a chunk strongly correlated: the UT matrix N then has a large norm and its inverse is the hard case."""
     B, T, HK, HV, K, V = shape
     gen = torch.Generator().manual_seed(seed)
     rn = lambda *s: torch.randn(*s, generator=gen, dtype=torch.float64)
     l2 = lambda x: x / x.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    k_raw = rn(B, T, HK, K)
+    if key_corr:
+        k_raw = key_corr * rn(B, 1, HK, K) + (1.0 - key_corr) * k_raw
     x = {
         "q": l2(rn(B, T, HK, K)),
-        "k": l2(rn(B, T, HK, K)),
+        "k": l2(k_raw),
         "v": rn(B, T, HV, V),
         "g": F.logsigmoid(rn(B, T, HV)) * gate_scale,
         "beta": torch.rand(B, T, HV, generator=gen, dtype=torch.float64),
@@ -131,6 +147,8 @@ def _build_inputs(shape, state_mode, dtype, seed=42, gate_scale=WEAK_GATE):
         "h0": rn(B, HV, K, V) * 0.1 if state_mode in ("with_h0", "with_h0_and_dht") else None,
         "dht": rn(B, HV, K, V) if state_mode in ("with_h0_and_dht", "dht_only") else None,
     }
+    if bf16_exact:
+        x = {n: None if t is None else t.to(torch.bfloat16).double() for n, t in x.items()}
     return {n: None if t is None else t.to(TORCH_DTYPE[dtype]).double() for n, t in x.items()}
 
 
@@ -216,7 +234,7 @@ def _upload(x, shape, dtype, device, *, rank=4, do_head_major=False, gate_dtype=
     return f
 
 
-def _dispatch(f, shape, chunk_size, *, saved=None, scale=None):
+def _dispatch(f, shape, chunk_size, *, saved, scale=None):
     return ttml.ops.metal.chunk_gated_delta_rule_bw(
         f["q"],
         f["k"],
@@ -224,18 +242,21 @@ def _dispatch(f, shape, chunk_size, *, saved=None, scale=None):
         f["g"],
         f["beta"],
         f["do"],
-        shape[4],
+        **saved,
+        key_head_dim=shape[4],
         initial_state=f["h0"],
         d_final_state=f["dht"],
         chunk_size=chunk_size,
         scale=scale,
-        **(saved or {}),
     )
 
 
 def _run_ttml(
     x, shape, chunk_size, dtype, device, *, rank=4, do_head_major=False, saved=None, gate_dtype=None, scale=None
 ):
+    """The backward fed the saved forward `saved`, or the one ttml's forward saves for `x` when it is None."""
+    if saved is None:
+        saved = _run_ttml_fw(x, shape, chunk_size, device, gate_dtype or ttnn.bfloat16, scale)
     f = _upload(x, shape, dtype, device, rank=rank, do_head_major=do_head_major, gate_dtype=gate_dtype)
     return _dispatch(f, shape, chunk_size, saved=saved, scale=scale)
 
@@ -273,7 +294,8 @@ def _out_shapes(shape):
     }
 
 
-def _check_grads(got, expected, shape, dtype):
+def _check_grads(got, expected, shape, dtype, *, bounds=None):
+    """`bounds` maps a gradient name to its own (pcc_min, rms_max) where the default pair does not apply."""
     shapes = _out_shapes(shape)
     for name, dev_t, exp in zip(GRAD_NAMES, got, expected):
         if exp is None:
@@ -282,7 +304,8 @@ def _check_grads(got, expected, shape, dtype):
         assert dev_t.layout == ttnn.TILE_LAYOUT and dev_t.dtype == dtype, f"{name}: {dev_t.layout} {dev_t.dtype}"
         host = ttnn.to_torch(dev_t).double()
         assert tuple(host.shape) == shapes[name], f"{name}: shape {tuple(host.shape)} != {shapes[name]}"
-        assert_close(name, host, exp.reshape(host.shape), pcc_min=PCC_MIN, rms_max=RMS_MAX)
+        pcc_min, rms_max = (bounds or {}).get(name, (PCC_MIN, RMS_MAX))
+        assert_close(name, host, exp.reshape(host.shape), pcc_min=pcc_min, rms_max=rms_max)
 
 
 @pytest.mark.parametrize("shape,chunk_size", SHAPES, ids=SHAPE_IDS)
@@ -304,13 +327,14 @@ def test_cache_hit_patches_buffer_addresses(device):
     xa = _build_inputs(shape, "with_h0_and_dht", dtype, seed=1)
     xb = _build_inputs(shape, "with_h0_and_dht", dtype, seed=2)
     ta, tb = _upload(xa, shape, dtype, device), _upload(xb, shape, dtype, device)
-    ia, ib = _addresses(ta), _addresses(tb)
+    sa, sb = _run_ttml_fw(xa, shape, chunk_size, device), _run_ttml_fw(xb, shape, chunk_size, device)
+    ia, ib = _addresses({**ta, **sa}), _addresses({**tb, **sb})
     assert all(ia[n] != ib[n] for n in ia), "input sets share a buffer address"
 
-    got_a = _dispatch(ta, shape, chunk_size)
+    got_a = _dispatch(ta, shape, chunk_size, saved=sa)
     entries = device.num_program_cache_entries()
     assert entries > 0
-    got_b = _dispatch(tb, shape, chunk_size)
+    got_b = _dispatch(tb, shape, chunk_size, saved=sb)
     assert device.num_program_cache_entries() == entries, "a second input set at the same shape recompiled"
     assert all(a.buffer_address() != b.buffer_address() for a, b in zip(got_a, got_b)), "gradients share a buffer"
 
@@ -318,22 +342,23 @@ def test_cache_hit_patches_buffer_addresses(device):
     _check_grads(got_b, _oracle(xb, shape), shape, dtype)
     for name, ha, hb in zip(GRAD_NAMES, got_a, got_b):
         assert not torch.equal(ttnn.to_torch(ha), ttnn.to_torch(hb)), f"{name}: sets A and B gave the same answer"
-    again = _dispatch(ta, shape, chunk_size)
+    again = _dispatch(ta, shape, chunk_size, saved=sa)
     assert device.num_program_cache_entries() == entries
     for name, first, second in zip(GRAD_NAMES, got_a, again):
         assert torch.equal(ttnn.to_torch(first), ttnn.to_torch(second)), f"{name}: rerun with input set A changed"
 
 
 def test_attribute_changes_miss_the_cache(device):
-    """`initial_state` / `d_final_state` presence, the saved forward, the gate dtype and the chunk size each
-    select a different program."""
+    """`initial_state` / `d_final_state` presence, the gate dtype and the chunk size each select a different
+    program."""
     # No other test (in any GDN file) dispatches this shape.
     shape, chunk_size, dtype = (1, 384, 1, 2, 64, 64), 32, ttnn.bfloat16
     keep = []
 
-    def run(state_mode, *, saved=False, gate_dtype=None, chunk=chunk_size):
+    def run(state_mode, *, gate_dtype=None, chunk=chunk_size):
         x = _build_inputs(shape, state_mode, dtype)
-        sv = _run_ttml_fw(x, shape, chunk, device) if saved else None
+        # The forward's own programs are built before the count starts: only the backward's may be new.
+        sv = _run_ttml_fw(x, shape, chunk, device, gate_dtype or ttnn.bfloat16)
         before = device.num_program_cache_entries()
         t = _upload(x, shape, dtype, device, gate_dtype=gate_dtype)
         keep.append((t, sv, _dispatch(t, shape, chunk, saved=sv)))
@@ -345,46 +370,44 @@ def test_attribute_changes_miss_the_cache(device):
     assert run("with_h0_and_dht") > 0, "adding d_final_state reused the program"
     assert run("with_h0", gate_dtype=ttnn.float32) > 0, "an fp32 gate reused the bf16-gate program"
     assert run("with_h0", chunk=64) > 0, "a different chunk size reused the program"
-    # The forward's own programs are built before the count starts: only the backward's may be new.
-    assert run("with_h0", saved=True) > 0, "the saved forward reused the recompute program"
 
 
-@pytest.mark.parametrize("shape,chunk_size", SHAPES, ids=SHAPE_IDS)
-@pytest.mark.parametrize("state_mode", ["do_only", "with_h0", "with_h0_and_dht", "dht_only"])
-def test_saved_forward_vs_oracle(shape, chunk_size, state_mode, device):
-    dtype = ttnn.bfloat16
-    x = _build_inputs(shape, state_mode, dtype)
-    got = _run_ttml(x, shape, chunk_size, dtype, device, saved=_run_ttml_fw(x, shape, chunk_size, device))
-    recomputed = _run_ttml(x, shape, chunk_size, dtype, device)
-    _check_grads(got, _oracle(x, shape), shape, dtype)
-    for name, dev_t, rec_t in zip(GRAD_NAMES, got, recomputed):
-        if dev_t is not None:
-            assert_close(
-                f"{name} saved vs recomputed",
-                ttnn.to_torch(dev_t),
-                ttnn.to_torch(rec_t).double(),
-                pcc_min=PCC_MIN,
-                rms_max=RMS_MAX,
-            )
+DTYPES = [ttnn.float32, ttnn.bfloat16]
+DTYPE_IDS = ["fp32", "bf16"]
 
 
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("shape,chunk_size", COVERAGE_SHAPES, ids=COVERAGE_IDS)
-@pytest.mark.parametrize("saved", [False, True], ids=["fp32_recompute", "bf16_saved"])
-def test_coverage_shapes_vs_oracle(shape, chunk_size, saved, device):
-    dtype = ttnn.bfloat16 if saved else ttnn.float32
+def test_coverage_shapes_vs_oracle(shape, chunk_size, dtype, device):
     x = _build_inputs(shape, "with_h0_and_dht", dtype)
-    sv = _run_ttml_fw(x, shape, chunk_size, device) if saved else None
-    _check_grads(_run_ttml(x, shape, chunk_size, dtype, device, saved=sv), _oracle(x, shape), shape, dtype)
+    _check_grads(_run_ttml(x, shape, chunk_size, dtype, device), _oracle(x, shape), shape, dtype)
 
 
-@pytest.mark.parametrize("saved", [False, True], ids=["fp32_recompute", "bf16_saved"])
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("K,V,chunk_size", BLOCK_SHAPES, ids=BLOCK_IDS)
-def test_block_shapes_vs_oracle(K, V, chunk_size, saved, device):
+def test_block_shapes_vs_oracle(K, V, chunk_size, dtype, device):
     shape = (1, 2 * chunk_size, 1, 2, K, V)
-    dtype = ttnn.bfloat16 if saved else ttnn.float32
     x = _build_inputs(shape, "with_h0_and_dht", dtype)
-    sv = _run_ttml_fw(x, shape, chunk_size, device) if saved else None
-    _check_grads(_run_ttml(x, shape, chunk_size, dtype, device, saved=sv), _oracle(x, shape), shape, dtype)
+    _check_grads(_run_ttml(x, shape, chunk_size, dtype, device), _oracle(x, shape), shape, dtype)
+
+
+# At key correlation 0.99 and chunk 64 (measured on Blackhole) dq, dk, dv, dbeta and dh0 keep their usual
+# accuracy (relative RMS <= 8e-3), while dg, which differentiates through the inverse of the ill-conditioned
+# I + N, falls to PCC 0.9990 / relative RMS 2.9e-2 (0.9978 / 3.8e-2 at 0.999).  The bound below sits about 1.7x
+# above that; a wrong inverse puts every gradient far outside the default bounds, not only dg.
+CORRELATED_DG_BOUNDS = {"dg": (0.998, 0.05)}
+
+
+@pytest.mark.parametrize("key_corr", [0.9, 0.99], ids=["corr_0.9", "corr_0.99"])
+@pytest.mark.parametrize("shape,chunk_size", [SHAPES[1], SHAPES[2]], ids=[SHAPE_IDS[1], SHAPE_IDS[2]])
+def test_correlated_keys_vs_oracle(shape, chunk_size, key_corr, device):
+    """Keys that nearly share one direction make N = strictly_lower(k_beta k^T . L) large, so its inverse is
+    the hard part.  A truncated Neumann series loses all of its accuracy there while every gradient stays
+    finite and merely wrong; the saved A comes from the forward's blocked solve and does not."""
+    dtype = ttnn.float32
+    x = _build_inputs(shape, "with_h0_and_dht", dtype, key_corr=key_corr)
+    got = _run_ttml(x, shape, chunk_size, dtype, device)
+    _check_grads(got, _oracle(x, shape), shape, dtype, bounds=CORRELATED_DG_BOUNDS)
 
 
 def test_long_sequence_error_does_not_grow(device):
@@ -406,30 +429,24 @@ def test_qwen_shape_saved_forward_head_major_d_out(device):
     _check_grads(got, _chunked_oracle(x, shape, chunk_size), shape, dtype)
 
 
-@pytest.mark.parametrize("saved", [False, True], ids=["recompute", "saved"])
-def test_fp32_gates_with_bf16_inputs(saved, device):
+def test_fp32_gates_with_bf16_inputs(device):
     """The forward takes BF16 or FP32 gates beside BF16 q/k/v; the backward must take the same."""
     shape, chunk_size = SHAPES[2]
     dtype = ttnn.bfloat16
     x = _build_inputs(shape, "with_h0", dtype)
-    x32 = _build_inputs(shape, "with_h0", ttnn.float32)
+    x32 = _build_inputs(shape, "with_h0", ttnn.float32, bf16_exact=False)
     x["g"], x["beta"] = x32["g"], x32["beta"]  # not representable in bf16
-    sv = _run_ttml_fw(x, shape, chunk_size, device, ttnn.float32) if saved else None
+    sv = _run_ttml_fw(x, shape, chunk_size, device, ttnn.float32)
     got = _run_ttml(x, shape, chunk_size, dtype, device, saved=sv, gate_dtype=ttnn.float32)
     _check_grads(got, _oracle(x, shape), shape, dtype)
 
 
-@pytest.mark.parametrize(
-    "dtype,saved",
-    [(ttnn.bfloat16, False), (ttnn.bfloat16, True), (ttnn.float32, False)],
-    ids=["bf16_recompute", "bf16_saved", "fp32_recompute"],
-)
-def test_many_items_per_core(dtype, saved, device):
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
+def test_many_items_per_core(dtype, device):
     """Items > cores at Vb > 1.  The fp32 row has the tight tolerance that a slightly corrupted dg fails."""
     shape, chunk_size = MANY_ITEMS_SHAPE
     x = _build_inputs(shape, "with_h0", dtype)
-    sv = _run_ttml_fw(x, shape, chunk_size, device) if saved else None
-    got = _run_ttml(x, shape, chunk_size, dtype, device, saved=sv)
+    got = _run_ttml(x, shape, chunk_size, dtype, device)
     _check_grads(got, _chunked_oracle(x, shape, chunk_size), shape, dtype)
 
 
@@ -451,17 +468,15 @@ def test_strong_gate_vs_oracle(shape, chunk_size, device):
 
 
 @pytest.mark.parametrize("scale", [0.3, 1.0], ids=["scale_0.3", "scale_1"])
-@pytest.mark.parametrize("saved", [False, True], ids=["recompute", "saved"])
-def test_explicit_scale(scale, saved, device):
+def test_explicit_scale(scale, device):
     """dq, and every gradient through o, scale with `scale`: a wrong or ignored one keeps the PCC of dq at 1."""
     shape, chunk_size = SHAPES[1]
     dtype = ttnn.bfloat16
     assert abs(scale - shape[4] ** -0.5) > 0.1, "scale must differ from the default K^-0.5"
     x = _build_inputs(shape, "with_h0_and_dht", dtype)
-    sv = _run_ttml_fw(x, shape, chunk_size, device, scale=scale) if saved else None
-    got = _run_ttml(x, shape, chunk_size, dtype, device, saved=sv, scale=scale)
+    got = _run_ttml(x, shape, chunk_size, dtype, device, scale=scale)
     _check_grads(got, _oracle(x, shape, scale=scale), shape, dtype)
-    default = _run_ttml(x, shape, chunk_size, dtype, device, saved=sv)
+    default = _run_ttml(x, shape, chunk_size, dtype, device)
     ratio = ttnn.to_torch(got[0]).double().norm() / ttnn.to_torch(default[0]).double().norm()
     assert ratio > 1.5, f"dq barely moved with scale {scale} (ratio {ratio:.3f})"
 
@@ -469,15 +484,14 @@ def test_explicit_scale(scale, saved, device):
 @pytest.mark.parametrize(
     "shape,chunk_size", [SHAPES[2], SHAPES[3], SHAPES[4]], ids=[SHAPE_IDS[2], SHAPE_IDS[3], SHAPE_IDS[4]]
 )
-@pytest.mark.parametrize("saved", [False, True], ids=["recompute", "saved"])
-def test_layouts_bit_identical(shape, chunk_size, saved, device):
+def test_layouts_bit_identical(shape, chunk_size, device):
     """Head-major d_out and rank-3 inputs read the same pages as the rank-4 token-major baseline."""
     dtype = ttnn.bfloat16
     x = _build_inputs(shape, "with_h0_and_dht", dtype, seed=3)
-    fw = (lambda: _run_ttml_fw(x, shape, chunk_size, device)) if saved else (lambda: None)
-    base = _run_ttml(x, shape, chunk_size, dtype, device, saved=fw())
-    head_major = _run_ttml(x, shape, chunk_size, dtype, device, do_head_major=True, saved=fw())
-    rank3 = _run_ttml(x, shape, chunk_size, dtype, device, rank=3, saved=fw())
+    sv = _run_ttml_fw(x, shape, chunk_size, device)
+    base = _run_ttml(x, shape, chunk_size, dtype, device, saved=sv)
+    head_major = _run_ttml(x, shape, chunk_size, dtype, device, do_head_major=True, saved=sv)
+    rank3 = _run_ttml(x, shape, chunk_size, dtype, device, rank=3, saved=sv)
     for name, tb, th, t3 in zip(GRAD_NAMES, base, head_major, rank3):
         hb, hh, h3 = (ttnn.to_torch(t) for t in (tb, th, t3))
         assert torch.equal(hb, hh), f"{name}: head-major d_out differs"
@@ -486,20 +500,33 @@ def test_layouts_bit_identical(shape, chunk_size, saved, device):
         assert torch.equal(hb.reshape(h3.shape), h3), f"{name}: rank-3 inputs differ"
 
 
-def test_rejects_partial_saved_forward(device, expect_error):
+def _zero_saved(device, BH=1, NC=1, T=32, K=32, V=32, C=32):
+    """Zero saved-forward tensors (h, v_new, a) of the shapes the backward expects for these extents.  Rejection
+    tests whose error comes before the saved tensors are checked only need them to exist."""
+    z = lambda *s: _dev(torch.zeros(*s), device, ttnn.float32)
+    return {"h": z(BH, NC, K, V), "v_new": z(BH, 1, T, V), "a": z(BH, 1, T, C)}
+
+
+@pytest.mark.parametrize("name", ["h", "v_new", "a"])
+def test_rejects_missing_saved_forward(name, device, expect_error):
+    """h, v_new and a are required: the backward has no mode that rebuilds the inverse, the states or the
+    corrected values.  A missing one is an argument error, not a silent fallback."""
     shape, chunk_size = SHAPES[1]
     x = _build_inputs(shape, "do_only", ttnn.bfloat16)
     saved = _run_ttml_fw(x, shape, chunk_size, device)
-    del saved["a"]
-    with expect_error(RuntimeError, "h, v_new and a are the saved forward and must be given together"):
+    del saved[name]
+    with expect_error(TypeError, "incompatible function arguments"):
         _run_ttml(x, shape, chunk_size, ttnn.bfloat16, device, saved=saved)
 
 
 def test_rejects_bad_d_out(device, expect_error):
     z = lambda *s: _dev(torch.zeros(*s), device, ttnn.bfloat16)
     q, k, v, g, beta = z(1, 1, 64, 64), z(1, 1, 64, 64), z(1, 1, 64, 128), z(1, 1, 64, 2), z(1, 1, 64, 2)
+    saved = _zero_saved(device, BH=2, NC=2, T=64, K=64, V=64, C=32)
     with expect_error(RuntimeError, "d_out must be token-major"):
-        ttml.ops.metal.chunk_gated_delta_rule_bw(q, k, v, g, beta, z(1, 1, 64, 64), 64, chunk_size=32)
+        ttml.ops.metal.chunk_gated_delta_rule_bw(
+            q, k, v, g, beta, z(1, 1, 64, 64), **saved, key_head_dim=64, chunk_size=32
+        )
 
 
 @pytest.mark.parametrize(
@@ -523,15 +550,18 @@ def test_rejects_bad_shapes(T, q_width, v_width, H, key_head_dim, chunk_size, ma
         q_width, v_width = 64, 33 * 32
     q, k, v = z(1, 1, T, q_width), z(1, 1, T, q_width), z(1, 1, T, v_width)
     g, beta, do = z(1, 1, T, H), z(1, 1, T, H), z(1, 1, T, v_width)
+    # Every case here is rejected before the saved tensors are looked at, so any valid ones will do.
     with expect_error(RuntimeError, match):
-        ttml.ops.metal.chunk_gated_delta_rule_bw(q, k, v, g, beta, do, key_head_dim, chunk_size=chunk_size)
+        ttml.ops.metal.chunk_gated_delta_rule_bw(
+            q, k, v, g, beta, do, **_zero_saved(device), key_head_dim=key_head_dim, chunk_size=chunk_size
+        )
 
 
 def test_rejects_zero_batch(device, expect_error):
     z = lambda *s: _dev(torch.zeros(*s), device, ttnn.bfloat16)
     args = [z(0, 1, 64, 32), z(0, 1, 64, 32), z(0, 1, 64, 32), z(0, 1, 64, 1), z(0, 1, 64, 1), z(0, 1, 64, 32)]
     with expect_error(RuntimeError, "B=0 must be at least 1 and T=64 at least chunk_size=32"):
-        ttml.ops.metal.chunk_gated_delta_rule_bw(*args, 32, chunk_size=32)
+        ttml.ops.metal.chunk_gated_delta_rule_bw(*args, **_zero_saved(device), key_head_dim=32, chunk_size=32)
 
 
 @pytest.mark.parametrize("key_head_dim", [256, 512], ids=["K256", "K512"])
@@ -540,8 +570,9 @@ def test_rejects_shapes_with_no_fitting_v_block(key_head_dim, device, expect_err
     K = key_head_dim
     z = lambda *s: _dev(torch.zeros(*s), device, ttnn.bfloat16)
     args = [z(1, 1, 64, K), z(1, 1, 64, K), z(1, 1, 64, K), z(1, 1, 64, 1), z(1, 1, 64, 1), z(1, 1, 64, K)]
+    saved = _zero_saved(device, BH=1, NC=1, T=64, K=K, V=K, C=64)  # valid, so the L1 budget is what fails
     with expect_error(RuntimeError, "no V block fits L1"):
-        ttml.ops.metal.chunk_gated_delta_rule_bw(*args, K, chunk_size=64)
+        ttml.ops.metal.chunk_gated_delta_rule_bw(*args, **saved, key_head_dim=K, chunk_size=64)
 
 
 def _bad_input(name, device):
@@ -561,7 +592,7 @@ def _bad_input(name, device):
         z(1, 1, 64, 1),
         z(1, 1, 64, 32),
     )
-    kwargs = {"chunk_size": 32}
+    kwargs = {"chunk_size": 32, "key_head_dim": 32, **_zero_saved(device, BH=1, NC=2, T=64, K=32, V=32, C=32)}
     f32 = ttnn.float32
     if name == "k_dtype":
         k = z(1, 1, 64, 32, dt=f32)
@@ -601,14 +632,14 @@ def _bad_input(name, device):
 def test_rejects_bad_inputs(name, match, device, expect_error):
     args, kwargs = _bad_input(name, device)
     with expect_error(RuntimeError, match):
-        ttml.ops.metal.chunk_gated_delta_rule_bw(*args, 32, **kwargs)
+        ttml.ops.metal.chunk_gated_delta_rule_bw(*args, **kwargs)
 
 
 def test_placement_is_rejected_after_the_program_is_cached(device, expect_error):
     """With the DRAM program cached, k in L1 must still fail: validation runs on cache hits too, and the
     program key carries the placement, so the DRAM program is neither reused nor trusted for it."""
     args, kwargs = _bad_input("none", device)
-    ttml.ops.metal.chunk_gated_delta_rule_bw(*args, 32, **kwargs)  # fills the cache with the DRAM variant
+    ttml.ops.metal.chunk_gated_delta_rule_bw(*args, **kwargs)  # fills the cache with the DRAM variant
     args[1] = ttnn.to_memory_config(args[1], ttnn.L1_MEMORY_CONFIG)
     with expect_error(RuntimeError, "k must be in DRAM. Got: L1"):
-        ttml.ops.metal.chunk_gated_delta_rule_bw(*args, 32, **kwargs)
+        ttml.ops.metal.chunk_gated_delta_rule_bw(*args, **kwargs)

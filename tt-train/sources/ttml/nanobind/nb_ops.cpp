@@ -782,12 +782,12 @@ void py_module(nb::module_& m) {
                const ttnn::Tensor& g,
                const ttnn::Tensor& beta,
                const ttnn::Tensor& d_out,
+               const ttnn::Tensor& h,
+               const ttnn::Tensor& v_new,
+               const ttnn::Tensor& a,
                uint32_t key_head_dim,
                const std::optional<ttnn::Tensor>& initial_state,
                const std::optional<ttnn::Tensor>& d_final_state,
-               const std::optional<ttnn::Tensor>& h,
-               const std::optional<ttnn::Tensor>& v_new,
-               const std::optional<ttnn::Tensor>& a,
                uint32_t chunk_size,
                std::optional<float> scale) {
                 return ttml::metal::chunk_gated_delta_rule_bw(
@@ -797,12 +797,12 @@ void py_module(nb::module_& m) {
                     g,
                     beta,
                     d_out,
-                    key_head_dim,
-                    initial_state,
-                    d_final_state,
                     h,
                     v_new,
                     a,
+                    key_head_dim,
+                    initial_state,
+                    d_final_state,
                     chunk_size,
                     scale);
             },
@@ -812,19 +812,20 @@ void py_module(nb::module_& m) {
             nb::arg("g"),
             nb::arg("beta"),
             nb::arg("d_out"),
+            nb::arg("h"),
+            nb::arg("v_new"),
+            nb::arg("a"),
             nb::arg("key_head_dim"),
             nb::arg("initial_state") = nb::none(),
             nb::arg("d_final_state") = nb::none(),
-            nb::arg("h") = nb::none(),
-            nb::arg("v_new") = nb::none(),
-            nb::arg("a") = nb::none(),
             nb::arg("chunk_size") = 64U,
             nb::arg("scale") = nb::none(),
             "Chunked gated delta rule backward on flat layouts.\n"
             "q, k [B,T,HK*K]; v [B,T,HV*V]; g, beta [B,T,HV] (each also accepted as [B,1,T,X]);\n"
             "d_out [B,T,HV*V] or head-major [B*HV,1,T,V];\n"
-            "initial_state, d_final_state [B,HV,K,V] (optional);\n"
-            "h, v_new, a: the saved intermediates of chunk_gated_delta_rule_fw (optional, all or none).\n"
+            "h, v_new, a: the saved intermediates of chunk_gated_delta_rule_fw (required); a is the forward's\n"
+            "UT inverse, which the backward reads instead of recomputing;\n"
+            "initial_state, d_final_state [B,HV,K,V] (optional; initial_state only enables dh0).\n"
             "Returns [dq, dk, dv, dg, dbeta, dh0]; dh0 is None without initial_state.");
         py_metal.def(
             "moe_group",

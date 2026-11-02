@@ -67,7 +67,7 @@ def _fw_inputs(device_of):
 
 
 def _bw_inputs(device_of):
-    """(args, kwargs) for the backward with every optional input present."""
+    """(args, kwargs) for the backward with every optional input present and the saved forward."""
     f32 = ttnn.float32
     args = [
         _tensor(device_of("q"), 1, 1, T, D),
@@ -97,7 +97,7 @@ def _fw(args, kwargs):
 
 
 def _bw(args, kwargs):
-    return ttml.ops.metal.chunk_gated_delta_rule_bw(*args, D, **kwargs)
+    return ttml.ops.metal.chunk_gated_delta_rule_bw(*args, key_head_dim=D, **kwargs)
 
 
 def test_fw_control_all_on_one_device(submeshes):

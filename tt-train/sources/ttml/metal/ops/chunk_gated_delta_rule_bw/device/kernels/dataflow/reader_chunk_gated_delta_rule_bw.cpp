@@ -268,16 +268,14 @@ void kernel_main() {
     const auto g_acc = TensorAccessor(ga, g_addr, gate_tile);
     const auto b_acc = TensorAccessor(ba, beta_addr, gate_tile);
     const auto do_acc = TensorAccessor(doa, do_addr, in_tile);
+    // The state tensors only carry the shape of the gradients: h0's values are already in the saved h.
     [[maybe_unused]] const auto h0_acc = TensorAccessor(h0a, h0_addr, in_tile);
     [[maybe_unused]] const auto dht_acc = TensorAccessor(dhta, dht_addr, in_tile);
     const auto sc_acc = TensorAccessor(sca, sc_addr, f32_tile);
-    // Without the saved forward these alias the scratch at its S / v_new / Tinv bases.
+    // The forward's saved states, corrected values and T_inv.
     const auto h_acc = TensorAccessor(ha, h_addr, f32_tile);
     const auto vn_acc = TensorAccessor(vna, vn_addr, f32_tile);
     const auto a_acc = TensorAccessor(aa, a_addr, f32_tile);
-    constexpr uint32_t S_BASE = HAS_SAVED ? 0 : SC_S;
-    constexpr uint32_t VNEW_BASE = HAS_SAVED ? 0 : SC_VNEW;
-    constexpr uint32_t TINV_BASE = HAS_SAVED ? 0 : SC_ATTN;
 
     build_constant_tiles(scale_bits);
 
@@ -306,7 +304,7 @@ void kernel_main() {
         }
         cb_push_back(cb_gatein, 2 * Ct);
 
-        if constexpr (HAS_SAVED) {
+        {
             // Tinv rides in the first CtCt pages of a stage-G-sized cb_load_item block.
             cb_reserve_back(cb_load_item, LITEM);
             const uint32_t dst = get_write_ptr(cb_load_item);
@@ -318,9 +316,6 @@ void kernel_main() {
         }
 
         for (uint32_t vb = 0; vb < NVB; ++vb) {
-            if constexpr (!HAS_SAVED) {
-                read_flat_block(v_acc, cb_vin, MAXV, b, tt0, gH * Vt, h, Vt, vb * Vb, Vb);
-            }
             read_do_block(do_acc, bh, b, tt0, h, vb);
         }
     }
@@ -342,25 +337,6 @@ void kernel_main() {
             const uint32_t h = bh % gH;
 
             for (uint32_t vb = 0; vb < NVB; ++vb) {
-                if constexpr (HAS_H0 && !HAS_SAVED) {
-                    read_state_block(h0_acc, b, h, vb);
-                }
-
-                for (uint32_t i = 0; i < (HAS_SAVED ? 0 : NC); ++i) {
-                    const uint32_t wi = bh * NC + i;
-                    cb_reserve_back(cb_load_vb, LVB);
-                    uint32_t dst = get_write_ptr(cb_load_vb);
-                    read_sub(sc_acc, dst, SC_KCD + wi * ST_KCD, Ct, Kt, 0, Kt, f32_tile);
-                    dst += CtKt * f32_tile;
-                    read_sub(sc_acc, dst, SC_P + wi * ST_P, Ct, Kt, 0, Kt, f32_tile);
-                    dst += CtKt * f32_tile;
-                    read_sub(sc_acc, dst, SC_VCORR + wi * ST_VCORR, Ct, Vt, vb * Vb, Vb, f32_tile);
-                    dst += CtVb * f32_tile;
-                    noc_async_read(sc_acc.get_noc_addr(SC_VEC + wi * ST_VEC + 2 * Ct), dst, f32_tile);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_load_vb, LVB);
-                }
-
                 if constexpr (HAS_DHT) {
                     read_state_block(dht_acc, b, h, vb);
                 }
@@ -410,7 +386,7 @@ void kernel_main() {
         {
             uint32_t dst = get_write_ptr(cb_load_item);
             for (uint32_t i = 0; i < CtCt; ++i) {
-                noc_async_read(a_acc.get_noc_addr(TINV_BASE + wi * ST_ATTN + i), dst + i * f32_tile, f32_tile);
+                noc_async_read(a_acc.get_noc_addr(wi * ST_ATTN + i), dst + i * f32_tile, f32_tile);
             }
             dst += CtCt * f32_tile;
             for (uint32_t i = 0; i < 4 * Ct; ++i) {
@@ -426,11 +402,11 @@ void kernel_main() {
             cb_reserve_back(cb_load_vb, LVB);
             {
                 uint32_t dst = get_write_ptr(cb_load_vb);
-                read_sub(vn_acc, dst, VNEW_BASE + wi * ST_VNEW, Ct, Vt, vb * Vb, Vb, f32_tile);
+                read_sub(vn_acc, dst, wi * ST_VNEW, Ct, Vt, vb * Vb, Vb, f32_tile);
                 dst += CtVb * f32_tile;
                 read_sub(sc_acc, dst, SC_DVNEW + wi * ST_DVNEW, Ct, Vt, vb * Vb, Vb, f32_tile);
                 dst += CtVb * f32_tile;
-                read_sub(h_acc, dst, S_BASE + wi * ST_S, Kt, Vt, vb * Vb, Vb, f32_tile);
+                read_sub(h_acc, dst, wi * ST_S, Kt, Vt, vb * Vb, Vb, f32_tile);
                 dst += KtVb * f32_tile;
                 read_sub(sc_acc, dst, SC_DS + wi * ST_DS, Kt, Vt, vb * Vb, Vb, f32_tile);
             }

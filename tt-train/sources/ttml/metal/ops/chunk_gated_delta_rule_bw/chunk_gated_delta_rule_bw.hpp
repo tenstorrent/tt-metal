@@ -38,14 +38,14 @@ struct ChunkGatedDeltaRuleBwNeeds {
 // multiples of 32 and HV <= 32.  q, k, v, d_out and the optional states share one dtype (BFLOAT16 or
 // FLOAT32); g and beta share another and may be BFLOAT16 or FLOAT32 whatever q's is, as in the forward.
 //
-// h, v_new, a: the FLOAT32 intermediates returned by chunk_gated_delta_rule_fw, given all together.
-// With them the backward reads the forward's states, corrected values and UT inverse instead of
-// recomputing them.
+// h [B*HV, NC, K, V], v_new [B*HV, 1, T, V], a [B*HV, 1, T, C]: the FLOAT32 intermediates returned by
+// chunk_gated_delta_rule_fw (save_for_backward), all required.  The backward reads the forward's states, its
+// corrected values and its UT inverse a = (I + N)^-1 and rebuilds none of them.  initial_state therefore
+// only decides whether dh0 is produced: its values are already in h.
 //
 // DRAM scratch: the call allocates one transient FLOAT32 tensor of B*HV*T/chunk_size work items.  With
-// Ct, Kt, Vt the chunk, K and V extents in tiles, an item is 2*Ct*Kt + 2*Ct*Vt + 2*Kt*Vt + 4*Ct tiles
-// with the saved forward and Ct*Ct + 2*Ct*Vt + Kt*Vt more without it: at chunk_size 64, K = V = 128,
-// 288 KB (432 KB) per item, i.e. 576 MiB for B*HV = 32 at T = 4096.
+// Ct, Kt, Vt the chunk, K and V extents in tiles, an item is 2*Ct*Kt + 2*Ct*Vt + 2*Kt*Vt + 4*Ct tiles:
+// at chunk_size 64, K = V = 128, 288 KB per item, i.e. 576 MiB for B*HV = 32 at T = 4096.
 //
 // Returns {dq, dk, dv, dg, dbeta, dh0} with the shapes of {q, k, v, g, beta, initial_state}, all in
 // q's dtype (cast dg / dbeta back if the gates are in the other dtype); dh0 is nullopt when
@@ -57,12 +57,12 @@ std::vector<std::optional<ttnn::Tensor>> chunk_gated_delta_rule_bw(
     const ttnn::Tensor& g,
     const ttnn::Tensor& beta,
     const ttnn::Tensor& d_out,
+    const ttnn::Tensor& h,
+    const ttnn::Tensor& v_new,
+    const ttnn::Tensor& a,
     uint32_t key_head_dim,
     const std::optional<ttnn::Tensor>& initial_state = std::nullopt,
     const std::optional<ttnn::Tensor>& d_final_state = std::nullopt,
-    const std::optional<ttnn::Tensor>& h = std::nullopt,
-    const std::optional<ttnn::Tensor>& v_new = std::nullopt,
-    const std::optional<ttnn::Tensor>& a = std::nullopt,
     uint32_t chunk_size = 64U,
     std::optional<float> scale = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,

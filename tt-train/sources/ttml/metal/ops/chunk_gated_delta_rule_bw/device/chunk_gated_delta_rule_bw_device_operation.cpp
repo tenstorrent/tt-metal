@@ -65,15 +65,15 @@ void ChunkGatedDeltaRuleBackwardDeviceOperation::validate_on_program_cache_miss(
           std::pair{&tensor_args.v, "v"},
           std::pair{&tensor_args.g, "g"},
           std::pair{&tensor_args.beta, "beta"},
-          std::pair{&tensor_args.d_out, "d_out"}}) {
+          std::pair{&tensor_args.d_out, "d_out"},
+          std::pair{&tensor_args.h, "h"},
+          std::pair{&tensor_args.v_new, "v_new"},
+          std::pair{&tensor_args.a, "a"}}) {
         check_same_device(*tensor, tensor_args.q, kOp, name, "q");
     }
     for (const auto& [optional_tensor, name] :
          {std::pair{&tensor_args.initial_state, "initial_state"},
-          std::pair{&tensor_args.d_final_state, "d_final_state"},
-          std::pair{&tensor_args.h, "h"},
-          std::pair{&tensor_args.v_new, "v_new"},
-          std::pair{&tensor_args.a, "a"}}) {
+          std::pair{&tensor_args.d_final_state, "d_final_state"}}) {
         if (optional_tensor->has_value()) {
             check_same_device(**optional_tensor, tensor_args.q, kOp, name, "q");
         }
@@ -178,27 +178,22 @@ void ChunkGatedDeltaRuleBackwardDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    const bool has_h = tensor_args.h.has_value();
-    TT_FATAL(
-        tensor_args.v_new.has_value() == has_h && tensor_args.a.has_value() == has_h,
-        "chunk_gated_delta_rule_bw: h, v_new and a are the saved forward and must be given together");
-    if (has_h) {
-        const uint32_t BH = B * HV;
-        const ttnn::Shape h_shape({BH, T / C, K, V});
-        const ttnn::Shape v_new_shape({BH, 1U, T, V});
-        const ttnn::Shape a_shape({BH, 1U, T, C});
-        for (const auto& [tensor, name, shape] :
-             {std::tuple{&*tensor_args.h, "h", &h_shape},
-              std::tuple{&*tensor_args.v_new, "v_new", &v_new_shape},
-              std::tuple{&*tensor_args.a, "a", &a_shape}}) {
-            check_device_tensor(*tensor, kOp, name, dram_tile({tt::tt_metal::DataType::FLOAT32}));
-            TT_FATAL(
-                tensor->logical_shape() == *shape,
-                "chunk_gated_delta_rule_bw: {} must be {}, got {}",
-                name,
-                *shape,
-                tensor->logical_shape());
-        }
+    // The saved forward: T_inv (a), the states entering each chunk (h) and the corrected values (v_new).
+    const uint32_t BH = B * HV;
+    const ttnn::Shape h_shape({BH, T / C, K, V});
+    const ttnn::Shape v_new_shape({BH, 1U, T, V});
+    const ttnn::Shape a_shape({BH, 1U, T, C});
+    for (const auto& [tensor, name, shape] :
+         {std::tuple{&tensor_args.h, "h", &h_shape},
+          std::tuple{&tensor_args.v_new, "v_new", &v_new_shape},
+          std::tuple{&tensor_args.a, "a", &a_shape}}) {
+        check_device_tensor(*tensor, kOp, name, dram_tile({tt::tt_metal::DataType::FLOAT32}));
+        TT_FATAL(
+            tensor->logical_shape() == *shape,
+            "chunk_gated_delta_rule_bw: {} must be {}, got {}",
+            name,
+            *shape,
+            tensor->logical_shape());
     }
 }
 
@@ -251,11 +246,11 @@ ttsl::hash::hash_t ChunkGatedDeltaRuleBackwardDeviceOperation::compute_program_h
         describe(tensor_args.g),
         describe(tensor_args.beta),
         describe(tensor_args.d_out),
-        describe(tensor_args.initial_state),
-        describe(tensor_args.d_final_state),
         describe(tensor_args.h),
         describe(tensor_args.v_new),
-        describe(tensor_args.a));
+        describe(tensor_args.a),
+        describe(tensor_args.initial_state),
+        describe(tensor_args.d_final_state));
 }
 
 }  // namespace ttml::metal::ops::chunk_gated_delta_rule_bw::device
@@ -270,11 +265,11 @@ ttml_chunk_gated_delta_rule_bw(
     const ttnn::Tensor& g,
     const ttnn::Tensor& beta,
     const ttnn::Tensor& d_out,
+    const ttnn::Tensor& h,
+    const ttnn::Tensor& v_new,
+    const ttnn::Tensor& a,
     const std::optional<ttnn::Tensor>& initial_state,
     const std::optional<ttnn::Tensor>& d_final_state,
-    const std::optional<ttnn::Tensor>& h,
-    const std::optional<ttnn::Tensor>& v_new,
-    const std::optional<ttnn::Tensor>& a,
     uint32_t chunk_size,
     uint32_t key_head_dim,
     float scale,
@@ -295,11 +290,11 @@ ttml_chunk_gated_delta_rule_bw(
         .g = g,
         .beta = beta,
         .d_out = d_out,
-        .initial_state = initial_state,
-        .d_final_state = d_final_state,
         .h = h,
         .v_new = v_new,
-        .a = a};
+        .a = a,
+        .initial_state = initial_state,
+        .d_final_state = d_final_state};
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }
 

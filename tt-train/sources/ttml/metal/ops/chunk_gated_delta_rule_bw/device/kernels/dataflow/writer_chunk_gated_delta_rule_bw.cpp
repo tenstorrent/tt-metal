@@ -6,7 +6,7 @@
 // that release the stage barriers:
 //   Stage P : drains the derived prep blocks to the f32 scratch, then sends one sem_prep increment
 //             per item to that item's scan owner (Barrier 1 fan-in, NC increments per group).
-//   Stage S : drains S_i / v_new / dS / dv_new / dh0, then sends one sem_scan increment to every
+//   Stage S : drains dS / dv_new / dh0, then sends one sem_scan increment to every
 //             core holding stage-G work in the group it just scanned (Barrier 2 fan-out).
 //   Stage G : the five gradients.
 // ALL prep increments are issued before ANY wait anywhere in the program, so the rendezvous cannot
@@ -174,17 +174,11 @@ void kernel_main() {
     for (uint32_t p = 0; p < num_items; ++p) {
         const uint32_t wi = item_start + p;
 
-        if constexpr (!HAS_SAVED) {
-            drain_flat(sc_acc, SC_ATTN + wi * ST_ATTN, CtCt);
-        }
         drain_flat(sc_acc, SC_KCD + wi * ST_KCD, CtKt);
         drain_flat(sc_acc, SC_P + wi * ST_P, CtKt);
         drain_flat(sc_acc, SC_VEC + wi * ST_VEC, 4 * Ct);
 
         for (uint32_t vb = 0; vb < NVB; ++vb) {
-            if constexpr (!HAS_SAVED) {
-                drain_strided(sc_acc, SC_VCORR + wi * ST_VCORR, Ct, Vt, vb * Vb, Vb);
-            }
             drain_strided(sc_acc, SC_U + wi * ST_U, Ct, Vt, vb * Vb, Vb);
             drain_strided(sc_acc, SC_C + wi * ST_C, Kt, Vt, vb * Vb, Vb);
         }
@@ -213,11 +207,6 @@ void kernel_main() {
             const uint32_t h = bh % gH;
 
             for (uint32_t vb = 0; vb < NVB; ++vb) {
-                for (uint32_t i = 0; i < (HAS_SAVED ? 0 : NC); ++i) {
-                    const uint32_t wi = bh * NC + i;
-                    drain_strided(sc_acc, SC_S + wi * ST_S, Kt, Vt, vb * Vb, Vb);
-                    drain_strided(sc_acc, SC_VNEW + wi * ST_VNEW, Ct, Vt, vb * Vb, Vb);
-                }
                 for (int32_t i = (int32_t)NC - 1; i >= 0; --i) {
                     const uint32_t wi = bh * NC + (uint32_t)i;
                     drain_strided(sc_acc, SC_DS + wi * ST_DS, Kt, Vt, vb * Vb, Vb);

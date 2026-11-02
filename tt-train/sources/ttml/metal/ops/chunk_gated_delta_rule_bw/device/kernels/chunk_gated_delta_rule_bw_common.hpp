@@ -16,8 +16,9 @@
 //   dq, dk      [G*B, 1, T, HK*K]    plane g holds value head hk*G + g; the host sums the G planes
 //   dv          [B, 1, T, HV*V]      dg, dbeta [B, 1, T, HV]
 //   h0, dht, dh0 [B, HV, K, V]
-//   saved h [B*HV, NC, K, V], v_new [B*HV, 1, T, V], A [B*HV, 1, T, C] (f32): item wi's block
-//   starts at tile wi * ST_S / ST_VNEW / ST_ATTN, the stride of the scratch block it replaces.
+//   saved h [B*HV, NC, K, V], v_new [B*HV, 1, T, V], A [B*HV, 1, T, C] (f32), the forward's outputs:
+//   item wi's block starts at tile wi * ST_S / ST_VNEW / ST_ATTN.  A is T_inv = (I + N)^-1 itself, so the
+//   backward never rebuilds the inverse, the states or the corrected values.
 // The work item is a VALUE head h; its key head is h / G.
 
 #pragma once
@@ -37,51 +38,43 @@ constexpr uint32_t Vb = get_compile_time_arg_val(8);   // V tiles per compute pa
 constexpr uint32_t NVB = get_compile_time_arg_val(9);  // Vt / Vb
 constexpr uint32_t NC = get_compile_time_arg_val(10);  // chunks per sequence
 // Compile-time arg 11 (B*HV) is host-only too.
-constexpr uint32_t NEUMANN_STEPS = get_compile_time_arg_val(12);
-constexpr uint32_t ESZ = get_compile_time_arg_val(13);  // input element bytes
-constexpr uint32_t DEST_LIMIT = get_compile_time_arg_val(14);
-constexpr uint32_t HAS_H0 = get_compile_time_arg_val(15);
-constexpr uint32_t HAS_DHT = get_compile_time_arg_val(16);
-constexpr uint32_t Tt = get_compile_time_arg_val(17);
+constexpr uint32_t ESZ = get_compile_time_arg_val(12);  // input element bytes
+constexpr uint32_t DEST_LIMIT = get_compile_time_arg_val(13);
+constexpr uint32_t HAS_H0 = get_compile_time_arg_val(14);
+constexpr uint32_t HAS_DHT = get_compile_time_arg_val(15);
+constexpr uint32_t Tt = get_compile_time_arg_val(16);
 
 // Tile-index bases of the per-item blocks inside the f32 scratch tensor.
-constexpr uint32_t SC_ATTN = get_compile_time_arg_val(18);
-constexpr uint32_t SC_KCD = get_compile_time_arg_val(19);
-constexpr uint32_t SC_P = get_compile_time_arg_val(20);
-constexpr uint32_t SC_VEC = get_compile_time_arg_val(21);
-constexpr uint32_t SC_VCORR = get_compile_time_arg_val(22);
-constexpr uint32_t SC_U = get_compile_time_arg_val(23);
-constexpr uint32_t SC_C = get_compile_time_arg_val(24);
-constexpr uint32_t SC_S = get_compile_time_arg_val(25);
-constexpr uint32_t SC_DS = get_compile_time_arg_val(26);
-constexpr uint32_t SC_VNEW = get_compile_time_arg_val(27);
-constexpr uint32_t SC_DVNEW = get_compile_time_arg_val(28);
-constexpr uint32_t SEM_PREP = get_compile_time_arg_val(29);
-constexpr uint32_t SEM_SCAN = get_compile_time_arg_val(30);
+constexpr uint32_t SC_KCD = get_compile_time_arg_val(17);
+constexpr uint32_t SC_P = get_compile_time_arg_val(18);
+constexpr uint32_t SC_VEC = get_compile_time_arg_val(19);
+constexpr uint32_t SC_U = get_compile_time_arg_val(20);
+constexpr uint32_t SC_C = get_compile_time_arg_val(21);
+constexpr uint32_t SC_DS = get_compile_time_arg_val(22);
+constexpr uint32_t SC_DVNEW = get_compile_time_arg_val(23);
+constexpr uint32_t SEM_PREP = get_compile_time_arg_val(24);
+constexpr uint32_t SEM_SCAN = get_compile_time_arg_val(25);
 
 // Uniform CB block sizes (one push size per CB) and named-slot counts.
-constexpr uint32_t NCONST = get_compile_time_arg_val(31);    // cb_const pages
-constexpr uint32_t NCOL = get_compile_time_arg_val(32);      // cb_colones pages
-constexpr uint32_t MAXV = get_compile_time_arg_val(33);      // cb_vin block
-constexpr uint32_t LVB = get_compile_time_arg_val(34);       // cb_load_vb block
-constexpr uint32_t LITEM = get_compile_time_arg_val(35);     // cb_load_item block
-constexpr uint32_t MAXBLK = get_compile_time_arg_val(36);    // cb_egr block
-constexpr uint32_t MAXBLK_G = get_compile_time_arg_val(37);  // cb_gegr block
-constexpr uint32_t NUM_CONST_MASKS = get_compile_time_arg_val(38);
-constexpr uint32_t VECA_BLOCKS = get_compile_time_arg_val(39);
-constexpr uint32_t VECB_BLOCKS = get_compile_time_arg_val(40);
-constexpr uint32_t gHK = get_compile_time_arg_val(41);  // key-head count
-constexpr uint32_t gG = get_compile_time_arg_val(42);   // value heads per key head
-// The forward's h / v_new / A are inputs: Tinv, S_i and v_new are read, not rebuilt, and the
-// forward half of the stage-S scan does not run.
-constexpr uint32_t HAS_SAVED = get_compile_time_arg_val(43);
-constexpr uint32_t DO_HEAD_MAJOR = get_compile_time_arg_val(44);  // d_out is [B*HV, 1, T, V]
+constexpr uint32_t NCONST = get_compile_time_arg_val(26);    // cb_const pages
+constexpr uint32_t NCOL = get_compile_time_arg_val(27);      // cb_colones pages
+constexpr uint32_t MAXV = get_compile_time_arg_val(28);      // cb_vin block
+constexpr uint32_t LVB = get_compile_time_arg_val(29);       // cb_load_vb block
+constexpr uint32_t LITEM = get_compile_time_arg_val(30);     // cb_load_item block
+constexpr uint32_t MAXBLK = get_compile_time_arg_val(31);    // cb_egr block
+constexpr uint32_t MAXBLK_G = get_compile_time_arg_val(32);  // cb_gegr block
+constexpr uint32_t NUM_CONST_MASKS = get_compile_time_arg_val(33);
+constexpr uint32_t VECA_BLOCKS = get_compile_time_arg_val(34);
+constexpr uint32_t VECB_BLOCKS = get_compile_time_arg_val(35);
+constexpr uint32_t gHK = get_compile_time_arg_val(36);            // key-head count
+constexpr uint32_t gG = get_compile_time_arg_val(37);             // value heads per key head
+constexpr uint32_t DO_HEAD_MAJOR = get_compile_time_arg_val(38);  // d_out is [B*HV, 1, T, V]
 
 // g / beta element bytes: the gate dtype is independent of q's (BF16 or FP32 gates with either input
 // dtype), and only the reader's column gather sees it.  dg / dbeta are written in the input dtype.
-constexpr uint32_t GATE_ESZ = get_compile_time_arg_val(45);
+constexpr uint32_t GATE_ESZ = get_compile_time_arg_val(39);
 
-constexpr uint32_t CT_ACC_BASE = 46;
+constexpr uint32_t CT_ACC_BASE = 40;
 
 constexpr uint32_t CHUNK = Ct * 32;
 constexpr uint32_t CtCt = Ct * Ct;
@@ -91,12 +84,12 @@ constexpr uint32_t KtVb = Kt * Vb;
 constexpr uint32_t CtVt = Ct * Vt;
 constexpr uint32_t KtVt = Kt * Vt;
 
-// Per-item scratch strides; must mirror ScratchMap on the host.
+// Per-item strides; must mirror the host's scratch map.  ST_ATTN / ST_S / ST_VNEW are the strides of the
+// saved forward's A / h / v_new, the others those of the scratch tensor.
 constexpr uint32_t ST_ATTN = CtCt;
 constexpr uint32_t ST_KCD = CtKt;
 constexpr uint32_t ST_P = CtKt;
 constexpr uint32_t ST_VEC = 4 * Ct;  // g, beta, dc1, w
-constexpr uint32_t ST_VCORR = CtVt;
 constexpr uint32_t ST_U = CtVt;
 constexpr uint32_t ST_C = KtVt;
 constexpr uint32_t ST_S = KtVt;
