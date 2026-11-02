@@ -138,6 +138,14 @@ Tensor invoke_impl(
         t_false.logical_shape());
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
+    if (output.has_value() && is_floating_point(t_true.dtype()) && is_floating_point(t_false.dtype()) &&
+        !is_floating_point(output->dtype())) {
+        // where selects the floating-point value bits; packing them into an integer
+        // buffer does not convert them. Convert after selection into the caller's buffer.
+        auto selected = ternary_utils::invoke_ternary_llk<TernaryOpType::WHERE>(
+            condition, t_true, t_false, DataType::FLOAT32, output->memory_config(), std::nullopt, sub_core_grids);
+        return ttnn::typecast(selected, output->dtype(), output->memory_config(), output, sub_core_grids);
+    }
     log_debug(tt::LogOp, "Where LLK - TTT");
     return ternary_utils::invoke_ternary_llk<TernaryOpType::WHERE>(
         condition, t_true, t_false, output_dtype, memory_config, output, sub_core_grids);
