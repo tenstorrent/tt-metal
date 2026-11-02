@@ -616,6 +616,11 @@ GATHERING_BUILD_VARIANTS = [
         "math",
     ),
     (
+        "topk_xl index separation",
+        "test_topk_xl.py::test_topk_xl_separate_indices[K:512-core_id:0-group_shift:16]",
+        "math",
+    ),
+    (
         "topk_xl unfused macro",
         "test_topk_xl_unfused_macro.py::test_topk_xl_unfused_macro_chained[K:512-num_chunks:2]",
         "math",
