@@ -59,7 +59,7 @@ def gate_hm(o, z, w, out, eps=1e-6, grid_w=8, stage=3):
     rows = -(-H // grid_w)
     assert H == rows * grid_w, f"{H} heads must fill a {grid_w}-wide rectangle"
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_w - 1, rows - 1))])
-    assert Dt <= 16, "packed rows must stay in faces 0/1"
+    assert Dt <= 8, "packed rows must sit inside the 8 replicated sum-of-squares rows"
     cbs = [
         _cb(0, Dt, ttnn.float32, cores),  # o, row 0 of tile t replicated in rows 0..Dt-1 (sum-of-squares source)
         _cb(1, 1, ttnn.bfloat16, cores),  # z, packed
