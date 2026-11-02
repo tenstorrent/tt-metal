@@ -13,7 +13,7 @@ from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
-from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.kda import convolution_tail_from_device_layout, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -193,7 +193,7 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
 
     actual_output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
     recurrent_shards = _host_shards(state.recurrent)
-    convolution_shards = _host_shards(state.convolution)
+    convolution_shards = [convolution_tail_from_device_layout(shard) for shard in _host_shards(state.convolution)]
     actual_recurrent = torch.cat(recurrent_shards, dim=1)
     local_key_width = config.head_k_dim
     local_value_width = config.head_v_dim
