@@ -2417,6 +2417,64 @@ tasks:
       emu_match_median: '> 0'
       emu_match_worst: '> 0'
       sites: '>= 6'
+- id: P.27
+  title: 'EXPERTS_BFP8: routed experts in bfloat8_b under MOE_IMPL=block (exact for the fp4 checkpoint), A/B against bfp4, with measured DRAM per chip at 1M'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - FIX.21
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-02: FIX.21 attributed most of the device''s extra error over DeepSeek''s reference to the bfloat4_b
+      routed-expert weights (DS41-196: 16.5 % of the e2m1 values move, 0.5 -> 0 and 1.5 -> 2 in every 16-value face row
+      holding a 4 or 6; bfloat8_b holds every e2m1 x ue8m0 value exactly in the [N, K] / weights_nk layout). (1) Make
+      EXPERTS_IMPL=bfp8 work with MOE_IMPL=block (tt/moe_block_adapter.py asserts bfloat4_b today; the block MoE and the
+      flat expert op must take bfloat8_b weights in the same weights_nk layout; add a fork option with a test only if the op
+      needs one). The default stays bfp4 (a switch-only pick, F241); the owner decides after the A/B. (2) DRAM per chip,
+      measured, not estimated: write models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py that loads the model
+      for ONE slot at the deployment context (1,048,576 tokens; every served cache and table allocated as serving allocates
+      it) and records, from the allocator (ttnn.get_memory_view(device, ttnn.BufferType.DRAM) per chip of the mesh), the
+      DRAM allocated after load (dram_load_gib_max / _min over chips) and the peak while one chunk runs at start 1,039,360
+      (the last whole chunk before 1M; sample the allocator after every layer and inside the MoE and attention, report the
+      max over chips and samples as dram_peak_gib_max), plus the bytes per group (routed experts, other weights, served
+      caches, tables) from the buffers the model allocates, and the allocator''s DRAM capacity per chip (dram_capacity_gib).
+      Recorded, never gated by a fixed number. It runs on both sides of the A/B. (3) Agent rules 18 / 19; device jobs over a
+      few minutes through devjob (start / wait), never killed. Do not profile the model and do not run the A/B yourself
+      (the orchestrator measures bfp4 vs bfp8 at 51200 / 512000 / 1039360 and runs the ladder and contract tests on both
+      sides). No fork regression suites; add tests only for what you add. Report: memory per group on both sides, and
+      whether bfp8 fits 1M within the 27.2 GiB budget and within the physical capacity.'
+  ab:
+    env:
+      EXPERTS_IMPL: bfp4
+      ENGRAM_TABLE: resident
+    change:
+      EXPERTS_IMPL: bfp8
+      ENGRAM_TABLE: resident
+  ab_mode: full
+  ab_rungs:
+  - last
+  ab_positions:
+  - 51200
+  - 512000
+  - 1039360
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      dram_load_gib_max: '> 0'
+      dram_peak_gib_max: '> 0'
+      dram_capacity_gib: '> 0'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -2438,6 +2496,7 @@ tasks:
   - P.26
   - FIX.20
   - FIX.21
+  - P.27
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
