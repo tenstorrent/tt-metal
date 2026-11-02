@@ -12,9 +12,12 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
+    PerfRunType,
+    Transpose,
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     SPECIALS_READY_OPS,
@@ -23,12 +26,22 @@ from helpers.sfpu_domains import (
     specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    calculate_tile_and_face_counts,
+    generate_stimuli,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    ITERATIONS,
+    LOOP_FACTOR,
+    NUM_FACES,
     SFPU_BINOP_MODE,
     SFPU_UNARY_SCALAR,
+    TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
     fp32_bits,
 )
 
@@ -76,6 +89,12 @@ def _run_sfpu_binop_scalar(
     scalar=_PRESUBMIT_SCALAR,
     input_dimensions=[32, 32],
     spec_A=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    iterations=32,
 ):
     """Drive one scalar binop variant.
 
@@ -83,50 +102,77 @@ def _run_sfpu_binop_scalar(
     presubmit/nightly split, but the tensor operand had no knob at all and was pinned to
     the default above, so the only way to reach an edge on it was to edit this function.
     """
-    torch.manual_seed(0)
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
     scalar_bits = _scalar_bits_for(mathop, scalar)
-
-    spec_a = _DEFAULT_TENSOR_SPEC if spec_A is None else spec_A
-
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=spec_a,
+    tile_cnt_A, tile_cnt_B, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    generate_golden = get_golden_generator(ScalarBinopGolden)
-    golden = generate_golden(
-        mathop, src_A, scalar_bits, formats.output_format, dest_acc
-    )
+    src_A = src_B = golden = None
+    if not is_perf:
+        torch.manual_seed(0)
+        spec_a = _DEFAULT_TENSOR_SPEC if spec_A is None else spec_A
 
-    configuration = TestConfig(
-        "sources/sfpu_binop_scalar_test.cpp",
-        formats,
-        templates=[
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=input_dimensions,
+            spec_A=spec_a,
+        )
+
+        generate_golden = get_golden_generator(ScalarBinopGolden)
+        golden = generate_golden(
+            mathop, src_A, scalar_bits, formats.output_format, dest_acc
+        )
+
+    test_config_kwargs = {
+        "test_name": "sources/sfpu_binop_scalar_test.cpp",
+        "formats": formats,
+        "templates": [
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(scalar_bits),
             APPROX_MODE(_APPROX_MODE),
+            ITERATIONS(iterations),
+            TILE_COUNT(tile_cnt_A),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
         ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            src_A.flatten(),
+        "runtimes": [],
+        "variant_stimuli": StimuliConfig(
+            None if src_A is None else src_A.flatten(),
             formats.input_format,
-            src_B.flatten(),
+            None if src_B is None else src_B.flatten(),
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=dest_acc,
-        compile_time_formats=True,
+        # The perf sweep deliberately retains Float32 with a 16-bit Dest. That
+        # combination is performance-only and must unpack directly to Dest; routing
+        # it through SrcA is rejected by the LLK. The functional sweep skips it.
+        "unpack_to_dest": formats.input_format.is_32_bit(),
+        "dest_acc": dest_acc,
+        "compile_time_formats": True,
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
-    res_from_L1 = res_from_L1[:1024]
+    res_from_L1 = res_from_L1[: len(golden)]
 
     assert len(res_from_L1) == len(
         golden
@@ -165,6 +211,12 @@ _SCALAR_OPS = [
     MathOperation.ScalarRsub,
 ]
 
+SFPU_BINOP_SCALAR_SWEEP = dict(
+    formats=_SCALAR_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_SCALAR_OPS,
+)
+
 
 def _skip_unsupported(formats, dest_acc, mathop, scalar):
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
@@ -177,11 +229,7 @@ def _skip_unsupported(formats, dest_acc, mathop, scalar):
         pytest.skip(_ZERO_DIVISOR_UNREACHABLE)
 
 
-@parametrize(
-    formats=_SCALAR_FORMATS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=_SCALAR_OPS,
-)
+@parametrize(**SFPU_BINOP_SCALAR_SWEEP)
 def test_sfpu_binop_scalar(formats, dest_acc, mathop):
     _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
     _run_sfpu_binop_scalar(formats, dest_acc, mathop, scalar=_PRESUBMIT_SCALAR)
