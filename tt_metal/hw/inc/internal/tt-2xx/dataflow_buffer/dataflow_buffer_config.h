@@ -108,7 +108,10 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
 
     [dfb_config_base + dm1_remapper_blob_offset]:
       DM1 remapper blob — core-wide, read by DM1:
-        [dfb_dm1_remapper_core_header_t (4B)][pad to 64B][dfb_dm1_remapper_slot_t x num_slots]
+        [dfb_dm1_remapper_core_header_t (4B)][pad to 64B]
+        [ready flags: one byte per remapper pair (64B), host-zeroed; DM1 sets flags[pair] uncached once
+         it has programmed that pair, and producers (DM and TRISC) poll their pair's byte uncached]
+        [dfb_dm1_remapper_slot_t x num_slots]
 
     [dfb_config_base + dm0_isr_blob_offset]:
       DM0 ISR blob — core-wide, read by DM0:
@@ -510,11 +513,21 @@ static_assert(sizeof(dfb_dm0_isr_blob_core_header_t) == 8, "dfb_dm0_isr_blob_cor
 // Starting the payload right after the header would start the cached walk 4 or 8 bytes into a line
 // (a 192B slot array would then occupy 4 lines instead of 3), so the payload starts on the next
 // line. The host emitter and both device readers must use these, not sizeof(the core header).
-constexpr uint32_t DFB_DM1_CACHED_PAYLOAD_OFFSET = 64u;
+//
+// The DM1 blob has one more line between the header and the slot array: the ready flags, one byte per
+// remapper pair. DM1 sets flags[pair] after programming that pair, and a producer (DM or TRISC packer)
+// polls its own pair's byte instead of the pair's ClientL register. Both sides use the uncached alias,
+// which is the fastest of the variants measured for DM producers (issue #55788). The host serializes the line as zeros
+// with every config write, so each launch starts with every flag clear.
+constexpr uint32_t DFB_DM1_READY_FLAGS_OFFSET = 64u;
+constexpr uint32_t DFB_DM1_READY_FLAGS_BYTES = 64u;
+constexpr uint32_t DFB_DM1_CACHED_PAYLOAD_OFFSET = DFB_DM1_READY_FLAGS_OFFSET + DFB_DM1_READY_FLAGS_BYTES;
 constexpr uint32_t DFB_DM0_CACHED_PAYLOAD_OFFSET = 64u;
 static_assert(
-    sizeof(dfb_dm1_remapper_core_header_t) <= DFB_DM1_CACHED_PAYLOAD_OFFSET,
-    "DM1 remapper core header no longer fits before the cached payload");
+    sizeof(dfb_dm1_remapper_core_header_t) <= DFB_DM1_READY_FLAGS_OFFSET,
+    "DM1 remapper core header no longer fits before the ready flags");
+static_assert(
+    DFB_DM1_READY_FLAGS_BYTES >= dfb::NUM_REMAPPER_PAIRINGS, "DM1 ready flags need one byte per remapper pair");
 static_assert(
     sizeof(dfb_dm0_isr_blob_core_header_t) <= DFB_DM0_CACHED_PAYLOAD_OFFSET,
     "DM0 ISR core header no longer fits before the cached payload");
