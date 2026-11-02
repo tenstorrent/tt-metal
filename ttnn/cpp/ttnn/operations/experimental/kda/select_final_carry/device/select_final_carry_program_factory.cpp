@@ -95,8 +95,8 @@ tt::tt_metal::ProgramDescriptor build_program(
             all_cores = all_cores.merge(fabric_range);
         }
     }
-    // A 2D multicast leaves every hop in one ETH direction. On a 2D fabric whose SP axis turns (the LoudBox and
-    // QuietBox rings), every send goes to each other rank as a 2D unicast, through the connection its route leaves on.
+    // A 2D multicast leaves every hop in one ETH direction. On a 2D fabric whose SP axis turns, every send goes to
+    // each other rank as a 2D unicast, through the connection its route leaves on.
     const bool unicast_peers = sp_size > 1 && tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
                                !ttnn::ccl::is_axis_straight(*mesh, axis);
     const uint32_t ring_index = ttnn::ccl::get_linearized_index_from_physical_coord(in.prefix_final, coord, axis);
@@ -200,8 +200,8 @@ tt::tt_metal::ProgramDescriptor build_program(
                     }
                 }
                 // Per other rank: the connection its route leaves on, its chip and mesh. A route may leave on a link
-                // that is neither SP neighbor's (a shortcut across the LoudBox 2x4 mesh): it gets a connection of its
-                // own, which carries only unicasts.
+                // that is neither SP neighbor's (a shortcut across a 2x4 mesh): it gets a connection of its own,
+                // which carries only unicasts.
                 std::vector<uint32_t> peer_args;
                 if (unicast_peers) {
                     std::vector<CoreCoord> connection_eth_cores;

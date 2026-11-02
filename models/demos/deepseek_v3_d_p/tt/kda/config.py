@@ -27,10 +27,9 @@ KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 # core; the rest of L1 holds the summary, prefix and scan buffers that run while the chunk terms are alive.
 # Single-device and longer-sequence geometries exceed the budget and would clash with those buffers.
 KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
-# With the entry correction, the summary's emitted output terms also live in L1, and its circular buffers double on a
-# grid that splits each head's values over 2 cores instead of 4 (11x10): the chunk terms then stay in L1 only up to
-# Galaxy SP8xTP4's 256 KiB per core on its 12x10 grid.
-KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE = 256 * 1024
+# With the entry correction, the summary's emitted output terms also live in L1 next to the chunk terms, which then
+# fit Kimi-K3's per-chip workload on 11x10 and 12x10 grids.
+KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE = 280 * 1024
 # The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
 # each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
@@ -52,8 +51,6 @@ KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
 # The gathered transforms and the chain's FP32 entry state and final carry stay in interleaved L1 when each core's share
 # fits this budget (131 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
 KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE = 160 * 1024
-# Links high_bw_all_gather spreads the SP prefix summaries over; meshes with fewer on the SP axis keep ttnn.all_gather.
-KDA_HIGH_BW_PREFIX_GATHER_LINKS = 2
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
@@ -88,9 +85,6 @@ class KDARecurrenceProgramConfig:
     summary_group_chunks: int = 20
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
-    # Gather the SP prefix summaries with high_bw_all_gather into a persistent DRAM buffer. The recurrence takes it only
-    # when the SP axis has KDA_HIGH_BW_PREFIX_GATHER_LINKS links; other meshes keep ttnn.all_gather.
-    high_bw_prefix_gather: bool = False
     # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayAffinePrefix):
     # each rank applies its own summary to the entry state it receives and forwards the result. The summary also emits
     # each chunk's output terms, and an EntryCorrection program forms the chunk outputs and the final state from the
@@ -208,8 +202,6 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         recurrence=KDARecurrenceProgramConfig(
             local_scan_strategy="grouped",
             summary_group_chunks=group_chunks[active_seq_len_local],
-            # Galaxy SP8xTP4 at T=5120: 136 us instead of 184 us for the 1.6 MB-per-chip summary gather.
-            high_bw_prefix_gather=active_seq_len_local == _TUNED_PROJECTION_ROWS,
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,

@@ -181,6 +181,7 @@
     # One K3 KDA capture serving two user slots (#59977): the only test that fails if a trace pins its slot.
     pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_slot_trace.py -k "sp2tp4" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py -k "loudbox and not perf" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_recurrence.py::test_distributed_recurrence_split_interval_matches_reference -k "mesh-2x4" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4-2link and layer0 and device" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:

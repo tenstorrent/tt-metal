@@ -9,8 +9,8 @@
 // convolution cores once its own predecessor's rows have landed. The owner of the interval's final segment assembles
 // the replacement carry and multicasts it to every other rank; every rank writes it to final_history.
 //
-// A 2D multicast leaves every hop in one ETH direction, so on a 2D fabric whose SP axis turns (the LoudBox and QuietBox
-// rings) the barrier and the carry go to each other rank as a 2D unicast instead (unicast_peers).
+// A 2D multicast leaves every hop in one ETH direction, so on a 2D fabric whose SP axis turns the barrier and the
+// carry go to each other rank as a 2D unicast instead (unicast_peers).
 
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/qkv_conv_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"

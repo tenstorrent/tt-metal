@@ -21,10 +21,12 @@ constexpr uint32_t chunk_bytes = get_compile_time_arg_val(5);       // one fabri
 constexpr uint32_t kt = get_compile_time_arg_val(6);                // tile columns per state
 constexpr uint32_t slots = get_compile_time_arg_val(7);             // unit buffers
 constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(8);  // on the head cores
-constexpr auto start_args = TensorAccessorArgs<9>();
+// 1D routing: hops to the successor, 1 forward, or sp_size - 1 backward from the last rank of a line.
+constexpr uint32_t successor_hops = get_compile_time_arg_val(9);
+constexpr auto start_args = TensorAccessorArgs<10>();
 constexpr uint32_t chunks = (unit_bytes + chunk_bytes - 1) / chunk_bytes;
-#if !defined(ROUTING_MODE) || ((ROUTING_MODE & ROUTING_MODE_2D) == 0)
-#error "relay_affine_prefix routes over a 2D fabric"
+#if defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)
+#define RELAY_ROUTES_2D 1
 #endif
 // One packet header per packet of each slot, out of this RISC's share of the pool.
 static_assert(
@@ -73,9 +75,16 @@ void kernel_main() {
     for (uint32_t b = 0; b < slots; ++b) {
         for (uint32_t c = 0; c < chunks; ++c) {
             hdrs[b][c] = PacketHeaderPool::allocate_header();
+#if defined(RELAY_ROUTES_2D)
             // 2D routing: the hand-off from the last rank to the first crosses the mesh when the fabric does not wrap
             // the SP axis.
             (void)fabric_set_unicast_route(hdrs[b][c], dst_chip_id, dst_mesh_id);
+#else
+            // 1D routing: the connection leaves towards the successor's side of the line.
+            (void)dst_chip_id;
+            (void)dst_mesh_id;
+            hdrs[b][c]->to_chip_unicast(static_cast<uint8_t>(successor_hops));
+#endif
         }
     }
     conn.open();

@@ -21,6 +21,23 @@ RelayAffinePrefixOperation::program_factory_t RelayAffinePrefixOperation::select
     return RelayAffinePrefixProgramFactory{};
 }
 
+// A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
+void RelayAffinePrefixOperation::validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t& in) {
+    constexpr std::string_view operation_name = "relay_affine_prefix";
+    for (const auto& [tensor, name] :
+         {std::pair{&in.packed, "packed"},
+          std::pair{&in.initial_state, "initial_state"},
+          std::pair{&in.landing, "landing"}}) {
+        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+    }
+    kda_factory_detail::check_distinct_buffers(
+        {{&in.packed, "packed"},
+         {&in.initial_state, "initial_state"},
+         {&in.actual_start, "actual_start"},
+         {&in.landing, "landing"}},
+        operation_name);
+}
+
 void RelayAffinePrefixOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     constexpr std::string_view operation_name = "relay_affine_prefix";
@@ -57,12 +74,6 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
     const auto* mesh = in.packed.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(mesh->shape()[attrs.sequence_parallel_axis] >= 2, "{}: needs at least two SP ranks", operation_name);
-    // The last rank hands the final state to the first: one hop on a torus, across the SP line on a mesh, which only
-    // 2D routing reaches.
-    TT_FATAL(
-        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
-        "{}: needs a 2D fabric (FABRIC_2D or a torus)",
-        operation_name);
     TT_FATAL(
         attrs.num_links > 0 && attrs.cores.size() >= heads + attrs.num_links,
         "{}: needs a core per head, then a sender per link",

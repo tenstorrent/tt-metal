@@ -42,6 +42,30 @@ RecurrentChunkScanOperation::program_factory_t RecurrentChunkScanOperation::sele
     return RecurrentChunkScanProgramFactory{};
 }
 
+// A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
+void RecurrentChunkScanOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
+    const std::string_view operation_name =
+        attrs.mode == RecurrentChunkScanMode::RECURRENT ? "recurrent_chunk_scan" : "summarize_chunk_recurrence";
+    for (const auto& [tensor, name] : std::array{
+             std::pair{&in.v_beta, "v_beta"},
+             std::pair{&in.kd, "kd"},
+             std::pair{&in.q_decay, "q_decay"},
+             std::pair{&in.intra, "intra"},
+             std::pair{&in.k_dec_t, "k_dec_t"},
+             std::pair{&in.final_decay, "final_decay"},
+             std::pair{&in.t_inv, "t_inv"}}) {
+        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+    }
+    for (const auto& [tensor, name] :
+         {std::pair{&in.group_entry_states, "group_entry_states"},
+          std::pair{&in.tail_entry_states, "tail_entry_states"}}) {
+        if (tensor->has_value()) {
+            kda_factory_detail::check_allocated_device_tensor(**tensor, operation_name, name);
+        }
+    }
+}
+
 void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;

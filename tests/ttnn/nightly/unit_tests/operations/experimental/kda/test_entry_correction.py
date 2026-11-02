@@ -33,7 +33,7 @@ pytestmark = [
 ]
 
 _CHUNK = 32
-# Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads, over the model's 110 correction cores.
+# Kimi-K3's per-device workload: 640 tokens of 24 heads, over the model's 110 correction cores.
 _ROWS, _HEADS, _KEY = 640, 24, 128
 _CHUNKS = _ROWS // _CHUNK
 _MAX_CORES = 110

@@ -42,9 +42,8 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             local_rows (int): Positive, 32-aligned token rows per SP device.
             num_links (int): Fabric links to the successor, one sender core each.
             cores (list[ttnn.CoreCoord]): One core per head, then one sender per link, all distinct.
-            sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence, of at least two ranks,
-                on a 2D fabric (FABRIC_2D or a torus; the last rank's hand-off to the first crosses the axis on
-                a mesh).
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence, of at least two ranks
+                (the last rank's hand-off to the first crosses the axis when it does not wrap).
             entry_memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the entry states.
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The hop's matmul fidelity;

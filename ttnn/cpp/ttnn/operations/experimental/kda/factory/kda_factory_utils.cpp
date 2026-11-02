@@ -235,6 +235,47 @@ ValueBlockDistribution distribute_value_blocks(
     // intermittently twice as slow.
     const uint32_t row_blocks = best_split(grid.x, grid.y);
     const bool vertical = row_blocks > 1 && best_split(grid.y, grid.x) == row_blocks;
+    // When neither one orientation fits a larger split (11x10: 4 blocks fit 2 heads per row or column, 20 or 22 heads),
+    // heads fill grid columns first and the rows the columns leave over take the rest, each head's blocks still in one
+    // contiguous line.
+    const auto grid_x = static_cast<uint32_t>(grid.x);
+    const auto grid_y = static_cast<uint32_t>(grid.y);
+    const auto mixed_capacity = [&](uint32_t blocks) {
+        return (grid_y / blocks) * grid_x + (grid_y % blocks) * (grid_x / blocks);
+    };
+    uint32_t mixed_blocks = 1;
+    for (uint32_t candidate = std::min(value_tiles, grid_y); candidate > row_blocks; --candidate) {
+        if (value_tiles % candidate == 0 && batch_heads <= mixed_capacity(candidate)) {
+            mixed_blocks = candidate;
+            break;
+        }
+    }
+    if (mixed_blocks > row_blocks) {
+        const uint32_t heads_per_column = grid_y / mixed_blocks;
+        const uint32_t column_heads = heads_per_column * grid_x;
+        const uint32_t heads_per_row = grid_x / mixed_blocks;
+        const uint32_t first_row = heads_per_column * mixed_blocks;
+        ValueBlockDistribution result;
+        result.value_blocks = mixed_blocks;
+        result.value_tiles_per_core = value_tiles / mixed_blocks;
+        std::vector<tt::tt_metal::CoreRange> lines;
+        for (uint32_t head = 0; head < batch_heads; ++head) {
+            const bool in_column = head < column_heads;
+            const uint32_t x0 =
+                in_column ? head / heads_per_column : (head - column_heads) % heads_per_row * mixed_blocks;
+            const uint32_t y0 =
+                in_column ? head % heads_per_column * mixed_blocks : first_row + (head - column_heads) / heads_per_row;
+            for (uint32_t block = 0; block < mixed_blocks; ++block) {
+                result.cores.push_back(
+                    in_column ? tt::tt_metal::CoreCoord{x0, y0 + block} : tt::tt_metal::CoreCoord{x0 + block, y0});
+                result.head.push_back(head);
+                result.value_block.push_back(block);
+            }
+            lines.emplace_back(result.cores[result.cores.size() - mixed_blocks], result.cores.back());
+        }
+        result.core_set = tt::tt_metal::CoreRangeSet(lines).merge_ranges();
+        return result;
+    }
     const uint32_t value_blocks = row_blocks;
     const uint32_t line = vertical ? grid.y : grid.x;
     const uint32_t heads_per_line = line / value_blocks;

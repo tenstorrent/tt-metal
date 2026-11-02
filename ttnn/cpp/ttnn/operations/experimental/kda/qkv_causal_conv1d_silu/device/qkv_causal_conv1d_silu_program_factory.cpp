@@ -87,7 +87,7 @@ ExchangeRoute exchange_route(const ttnn::MeshDevice& device, const ttnn::MeshCoo
     if (route.unicast_peers) {
         const auto source = device.get_fabric_node_id(coordinate);
         // Connections use link 0 (compute_fabric_connection_rt_args below). A peer's route may leave on a link that is
-        // neither SP neighbor's (a shortcut across the LoudBox 2x4 mesh): it gets a connection of its own.
+        // neither SP neighbor's (a shortcut across a 2x4 mesh): it gets a connection of its own.
         std::vector<tt::tt_metal::CoreCoord> connection_eth_cores;
         for (const auto& neighbor : route.neighbors) {
             connection_eth_cores.push_back(tt::tt_fabric::get_forwarding_eth_core(device, source, neighbor, 0));

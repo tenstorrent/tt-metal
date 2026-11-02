@@ -20,6 +20,28 @@ EntryCorrectionOperation::program_factory_t EntryCorrectionOperation::select_pro
     return EntryCorrectionProgramFactory{};
 }
 
+// A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
+void EntryCorrectionOperation::validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t& in) {
+    constexpr std::string_view operation_name = "entry_correction";
+    for (const auto& [tensor, name] :
+         {std::pair{&in.terms, "terms"},
+          std::pair{&in.final_a, "final_a"},
+          std::pair{&in.final_b, "final_b"},
+          std::pair{&in.entry, "entry"},
+          std::pair{&in.tail_entry, "tail_entry"}}) {
+        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+    }
+    kda_factory_detail::check_distinct_buffers(
+        {{&in.terms, "terms"},
+         {&in.final_a, "final_a"},
+         {&in.final_b, "final_b"},
+         {&in.entry, "entry"},
+         {&in.tail_entry, "tail_entry"},
+         {&in.actual_start, "actual_start"},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
+        operation_name);
+}
+
 void EntryCorrectionOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     constexpr std::string_view operation_name = "entry_correction";
