@@ -5,10 +5,8 @@
 // channels sit in row 0 of Dt tiles (o: [heads, 1, D] fp32 pages h*Dt + t; z: bf16 row pages h*Dt + t; w: bf16
 // pages t). Only those rows are read, and they are packed so the compute kernel works on ONE tile per head:
 //   cb_po / cb_pz / cb_pw: row t = row 0 of tile t (rows 0..Dt-1, faces 0 and 1)
-//   cb_o4: tile t has o's row 0 of tile t in rows 0..7, so the transposed matmul's [r, c] is sum(o^2) for r, c < 8:
-//          column 0 is the per-row broadcast source for rinv, and columns 1..7 must be finite too, because
-//          sfpu_mul_bcast_col masks the other 7 lanes of each 8-lane row group with 0.0 and rotate-adds them
-//          (0 * NaN from stale rows gave NaN/inf at 522fbdf3c82, A 04:57)
+//   cb_o4: tile t has o's row 0 of tile t in rows 0..Dt-1, so the transposed matmul's [r, 0] is sum(o^2) for every
+//          packed row r (the per-row broadcast source for rinv)
 // Rows past Dt are never written and never read back. A NoC transfer keeps source and destination at the same offset
 // within a 64 B line: fp32 rows are 64 B, so o lands directly; bf16 rows are 32 B, so z/w are staged in 64 B slots
 // and moved into place locally.
@@ -41,7 +39,7 @@ void kernel_main() {
     cpw.reserve_back(1);
     for (uint32_t t = 0; t < Dt; t++) {
         for (uint32_t f = 0; f < 2; f++) {
-            for (uint32_t r = 0; r < 8; r++) {
+            for (uint32_t r = 0; r < Dt; r++) {
                 noc.async_read(o, c4, 64, {.page_id = h * Dt + t, .offset_bytes = f * ff},
                                {.offset_bytes = t * tf + f * ff + r * 64});
             }

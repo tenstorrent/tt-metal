@@ -12,7 +12,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
-constexpr uint32_t cb_out = 4, cb_stage = 7;
+constexpr uint32_t cb_out = 4, cb_stage = 8;
 
 void kernel_main() {
     constexpr uint32_t Dt = get_compile_time_arg_val(0);
