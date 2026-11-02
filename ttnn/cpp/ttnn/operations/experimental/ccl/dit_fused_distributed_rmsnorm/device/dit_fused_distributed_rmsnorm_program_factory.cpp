@@ -7,8 +7,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
-#include <map>
-#include <string>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -19,7 +18,6 @@
 #include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 
 using namespace tt::tt_metal;
@@ -212,7 +210,7 @@ bool decide_block_major_post(
     const uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
     // Whole-row CBs that the block-major layout collapses to O(block_size):
     uint64_t whole_row = static_cast<uint64_t>(padded) * intermediate_tile_bytes;  // intermediate_cb
-    // rotated_input_cb sizing. With per_head_norm, create_cb keeps both rotated_input_cb and
+    // rotated_input_cb sizing. With per_head_norm, the CB layout keeps both rotated_input_cb and
     // input_cb resident whole-row even for RMS no-rope, so count both. Otherwise use the original
     // gate (unchanged for callers that don't set per_head_norm).
     if (per_head_norm) {
@@ -294,7 +292,7 @@ DitFusedDistributedRmsnormSizing compute_sizing(
     s.stats_per_token = (args.norm_type == DitFusedNormType::LAYERNORM) ? 2u : 1u;
     s.stick_bytes = s.stats_per_token * 128u;
     // Worker cap = device compute grid − forwarder cores. Derived from the input's
-    // device so create_stats_buffer / validate / compute_output_specs / create_at all
+    // device so create_stats_buffer / validate / compute_output_specs / the program builder all
     // agree on num_workers (they share this single-source-of-truth path). Only evaluated
     // on the !is_tp_1 (all-gather) branch: derive_worker_cap calls into fabric
     // (get_tt_fabric_max_payload_size_bytes), which reaches the fabric context — null when
@@ -350,12 +348,23 @@ tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnorm
         stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
 }
 
-DitFusedDistributedRmsnormMeshWorkloadFactory::cached_program_t
-DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+// Forwarder f takes the core right after the num_workers worker cores in row-major grid order. Shared by the
+// descriptor builder and override_runtime_arguments() so both resolve the same core.
+CoreCoord forwarder_core(const CoreCoord& grid_size, uint32_t num_workers, uint32_t f) {
+    const uint32_t index = num_workers + f;
+    return CoreCoord(index % grid_size.x, index / grid_size.x);
+}
+
+ProgramDescriptor build_program_descriptor(
     const DitFusedDistributedRmsnormParams& args,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const DitFusedDistributedRmsnormInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
+    namespace dyn = dit_fused_distributed_rmsnorm_dynamic;
+
     Tensor& output_tensor = tensor_return_value.at(0);
     // Stats DRAM scratch: only allocated for the all-gather path (TP>1, whole-row
     // norm). When not allocated (is_tp_1) the drain-only writer doesn't reference it.
@@ -370,7 +379,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const auto& tile_row_map = tensor_args.affine_tile_row_map;
     const bool use_tile_row_map = tile_row_map.has_value();
 
-    Program program = CreateProgram();
+    ProgramDescriptor desc;
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t W = input_shape[-1];                            // hidden dim per device
@@ -528,8 +537,8 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     std::vector<CoreCoord> worker_cores(all_cores_vec.begin(), all_cores_vec.begin() + num_workers);
     std::vector<CoreCoord> forwarder_cores;
     forwarder_cores.reserve(num_forwarders);
-for (uint32_t f = 0; f < num_forwarders; f++) {
-        forwarder_cores.push_back(all_cores_vec[num_workers + f]);
+    for (uint32_t f = 0; f < num_forwarders; f++) {
+        forwarder_cores.push_back(forwarder_core(grid_size, num_workers, f));
     }
 
     CoreRangeSet worker_core_set;
@@ -661,7 +670,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // welford_zero_cb is resident for LN regardless of layout; reserve it from the cap too.
     l1_cap_bytes -= welford_zero_bytes;
     l1_cap_bytes -= tile_row_map_bytes;
-    // weight/bias CB tile counts — MUST match the create_cb sizing below. All modes hold ONE
+    // weight/bias CB tile counts — MUST match the add_cb sizing below. All modes hold ONE
     // row (num_tile_cols): broadcast resident, per-token / per-batch streamed per row.
     const uint32_t weight_cb_tiles_est = has_weight ? num_tile_cols : 0u;
     const uint32_t bias_cb_tiles_est = has_bias ? num_tile_cols : 0u;
@@ -770,8 +779,51 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // LINE NaN bugs where fabric mcasts landed at the wrong remote page.)
     TT_FATAL(
         !use_mux || stats_dram_tensor != nullptr,
-        "create_at requires a stats DRAM scratch tensor at tensor_return_value[1] when use_mux is true");
+        "dit_fused_distributed_rmsnorm requires a stats DRAM scratch tensor at tensor_return_value[1] when use_mux "
+        "is true");
     tt::tt_metal::Buffer* stats_dram_buffer = use_mux ? stats_dram_tensor->buffer() : nullptr;
+    TT_FATAL(
+        !use_mux || stats_dram_buffer != nullptr, "dit_fused_distributed_rmsnorm stats DRAM scratch buffer is null");
+
+    // Tensor buffers handed to Buffer* bindings. Absent optionals stay null: the binding emits 0 and
+    // registers nothing.
+    const auto optional_buffer = [](const std::optional<const Tensor>& t, const char* name) -> Buffer* {
+        if (!t.has_value()) {
+            return nullptr;
+        }
+        Buffer* const buffer = t->buffer();
+        TT_FATAL(buffer != nullptr, "dit_fused_distributed_rmsnorm {} buffer is null", name);
+        return buffer;
+    };
+    Buffer* const input_buffer = input_tensor.buffer();
+    TT_FATAL(input_buffer != nullptr, "dit_fused_distributed_rmsnorm input buffer is null");
+    Buffer* const output_buffer = output_tensor.buffer();
+    TT_FATAL(output_buffer != nullptr, "dit_fused_distributed_rmsnorm output buffer is null");
+    Buffer* const weight_buffer = optional_buffer(weight, "weight");
+    Buffer* const bias_buffer = optional_buffer(bias, "bias");
+    Buffer* const rope_cos_buffer = fuse_rope ? optional_buffer(rope_cos, "rope_cos") : nullptr;
+    Buffer* const rope_sin_buffer = fuse_rope ? optional_buffer(rope_sin, "rope_sin") : nullptr;
+    Buffer* const trans_mat_buffer = fuse_rope ? optional_buffer(trans_mat, "transformation_mat") : nullptr;
+    Buffer* const recip_buffer = use_recip_lut ? optional_buffer(reciprocals, "reciprocals") : nullptr;
+    Buffer* const tile_row_map_buffer = optional_buffer(tile_row_map, "affine_tile_row_map");
+
+    // Every CB below is an intermediate L1 buffer; none is tensor-backed.
+    const auto add_cb = [&desc](
+                            uint32_t cb_id,
+                            const CoreRangeSet& cores,
+                            uint32_t page_size,
+                            uint32_t num_pages,
+                            tt::DataFormat data_format) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_pages * page_size,
+            .core_ranges = cores,
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_id),
+                .data_format = data_format,
+                .page_size = page_size,
+            }},
+        });
+    };
 
     // ------------------------------------------------------------------------
     // CB allocations (on worker cores)
@@ -839,7 +891,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     const uint32_t kStreamingInputBlocks = use_mux ? 2u : 4u;
     const uint32_t input_cb_tiles =
         streaming_low_l1 ? (kStreamingInputBlocks * block_size) : (kInputCbChunks * chunk_input_tiles);
-    create_cb(input_cb_id, program, worker_core_set, input_tile_size, input_cb_tiles, input_format);
+    add_cb(input_cb_id, worker_core_set, input_tile_size, input_cb_tiles, input_format);
 
     // per_head_norm produces num_heads_per_device stat tiles per row instead
     // of one. is_tp_1 already captures the "no AG needed" path for both
@@ -849,21 +901,20 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // per-head fan-out.
     const uint32_t per_row_stats_count = args.per_head_norm ? args.num_heads_per_device : args.ring_size;
     const uint32_t stats_local_tiles = (args.ring_size > 1 && !args.per_head_norm) ? chunk_size_rows : 1;
-    create_cb(stats_local_cb_id, program, worker_core_set, fp32_tile_size, stats_local_tiles, fp32_format);
+    add_cb(stats_local_cb_id, worker_core_set, fp32_tile_size, stats_local_tiles, fp32_format);
     // Both paths (forwarder AG and is_tp_1) push gathered stats one chunk at a time,
     // so a chunk-sized CB suffices.
     const uint32_t stats_gathered_rows = chunk_size_rows;
     const uint32_t stats_gathered_tiles = stats_gathered_rows * per_row_stats_count;
-    create_cb(stats_gathered_cb_id, program, worker_core_set, fp32_tile_size, stats_gathered_tiles, fp32_format);
+    add_cb(stats_gathered_cb_id, worker_core_set, fp32_tile_size, stats_gathered_tiles, fp32_format);
 
     // Transposed stat CBs on the worker cores. For is_tp_1 these are unused stubs
     // (that path keeps stats in col 0 and reduces locally). chunk==1 so local is
     // stats_per_token (1 RMS sum-sq, 2 LayerNorm mean+var); gathered is
     // stats_per_token * ring_size (the per-device partials to merge).
-    create_cb(stats_transposed_local_cb_id, program, worker_core_set, fp32_tile_size, stats_per_token, fp32_format);
-    create_cb(
+    add_cb(stats_transposed_local_cb_id, worker_core_set, fp32_tile_size, stats_per_token, fp32_format);
+    add_cb(
         stats_transposed_gathered_cb_id,
-        program,
         worker_core_set,
         fp32_tile_size,
         use_mux ? args.ring_size * stats_per_token : 1u,
@@ -882,10 +933,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             "dit_fused_distributed_rmsnorm: fabric packet holds {} sticks but a forwarder group has {} workers",
             sticks_per_packet,
             workers_per_forwarder);
-        tt::tt_metal::CircularBufferConfig packet_cfg =
-            tt::tt_metal::CircularBufferConfig(2u * unit_packet_bytes, {{packet_cb_id, fp32_format}})
-                .set_page_size(packet_cb_id, unit_packet_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_core_set, packet_cfg);
+        add_cb(packet_cb_id, all_core_set, unit_packet_bytes, 2u, fp32_format);
     }
 
     // Per-token weight/bias is per-row: weight_cb holds chunk_size_rows
@@ -905,24 +953,24 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     //    at TP=1 (the full unsharded width) instead of holding batch*num_tile_cols tiles.
     // chunk_size_rows==1, so per-token's chunk_size_rows*num_tile_cols is also just num_tile_cols.
     const uint32_t weight_cb_tiles = has_weight ? num_tile_cols : 1;
-    create_cb(weight_cb_id, program, worker_core_set, weight_tile_sz, weight_cb_tiles, weight_format);
+    add_cb(weight_cb_id, worker_core_set, weight_tile_sz, weight_cb_tiles, weight_format);
     const uint32_t bias_cb_tiles = has_bias ? num_tile_cols : 1;
-    create_cb(bias_cb_id, program, worker_core_set, bias_tile_sz, bias_cb_tiles, bias_format);
+    add_cb(bias_cb_id, worker_core_set, bias_tile_sz, bias_cb_tiles, bias_format);
     // Recip LUT CB: one contiguous page of reduce_width fp32 (== recip_lut_bytes). A 4 B
     // stub when unused (the reader/compute gate on use_recip and never touch it).
-    create_cb(recip_lut_cb_id, program, worker_core_set, use_recip_lut ? recip_lut_bytes : 4u, 1u, fp32_format);
+    add_cb(recip_lut_cb_id, worker_core_set, use_recip_lut ? recip_lut_bytes : 4u, 1u, fp32_format);
     if (use_tile_row_map) {
-        create_cb(tile_row_map_cb_id, program, worker_core_set, tile_row_map_bytes, 1u, tt::DataFormat::UInt32);
+        add_cb(tile_row_map_cb_id, worker_core_set, tile_row_map_bytes, 1u, tt::DataFormat::UInt32);
     }
 
     // Zeroed welford-state scratch (LayerNorm only): 2 fp32 tiles (mean, M2). 1-tile stub otherwise.
-    create_cb(welford_zero_cb_id, program, worker_core_set, fp32_tile_size, is_layernorm ? 2u : 1u, fp32_format);
-    create_cb(reduce_scalar_sum_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
-    create_cb(reduce_scalar_avg_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
-    create_cb(epsilon_cb_id, program, worker_core_set, bf16_tile_size, 1, bf16_format);
-    create_cb(reduce_result_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
-    create_cb(pre_intermediate_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
-    create_cb(transformation_mat_cb_id, program, worker_core_set, bf16_tile_size, 1, bf16_format);
+    add_cb(welford_zero_cb_id, worker_core_set, fp32_tile_size, is_layernorm ? 2u : 1u, fp32_format);
+    add_cb(reduce_scalar_sum_cb_id, worker_core_set, fp32_tile_size, 1, fp32_format);
+    add_cb(reduce_scalar_avg_cb_id, worker_core_set, fp32_tile_size, 1, fp32_format);
+    add_cb(epsilon_cb_id, worker_core_set, bf16_tile_size, 1, bf16_format);
+    add_cb(reduce_result_cb_id, worker_core_set, fp32_tile_size, 1, fp32_format);
+    add_cb(pre_intermediate_cb_id, worker_core_set, fp32_tile_size, 1, fp32_format);
+    add_cb(transformation_mat_cb_id, worker_core_set, bf16_tile_size, 1, bf16_format);
 
     // Block-major POST: fuse the matmul + RoPE finalize per block so
     // rotated_input_cb is block-local instead of whole-row (set below once the
@@ -968,11 +1016,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         const uint32_t rope_cb_tiles = (per_head_rope && fuse_mm_rope && !block_major_post)
                                            ? std::min(rope_resident_tiles, kRopeStreamBlocks * block_size)
                                            : rope_resident_tiles;
-        create_cb(rope_cos_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
-        create_cb(rope_sin_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
+        add_cb(rope_cos_cb_id, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
+        add_cb(rope_sin_cb_id, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
     } else {
-        create_cb(rope_cos_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
-        create_cb(rope_sin_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
+        add_cb(rope_cos_cb_id, worker_core_set, fp32_tile_size, 1, fp32_format);
+        add_cb(rope_sin_cb_id, worker_core_set, fp32_tile_size, 1, fp32_format);
     }
 
     // intermediate_cb and rotated_input_cb are compute-only (producer and
@@ -996,20 +1044,13 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // whole (padded) row for sub-phase-major handoff.
     const uint32_t intermediate_cb_tiles =
         block_major_post ? (2u * block_size) : (tt::div_up(num_tile_cols, block_size) * block_size);
-    create_cb(
-        intermediate_cb_id,
-        program,
-        worker_core_set,
-        intermediate_tile_size,
-        intermediate_cb_tiles,
-        intermediate_format);
+    add_cb(intermediate_cb_id, worker_core_set, intermediate_tile_size, intermediate_cb_tiles, intermediate_format);
     // Block-major POST fuses matmul+rope per block, so rotated_input_cb only needs
     // to hold a block (double-buffered for matmul->rope pipelining) instead of a
     // whole row — this is what reclaims the L1 for wide per-head shards. The
     // resident sub-phase-major path (everything else) keeps the whole-row buffer.
     const uint32_t rotated_cb_tiles = fuse_mm_rope ? (2u * block_size) : intermediate_cb_tiles;
-    create_cb(
-        rotated_input_cb_id, program, worker_core_set, intermediate_tile_size, rotated_cb_tiles, intermediate_format);
+    add_cb(rotated_input_cb_id, worker_core_set, intermediate_tile_size, rotated_cb_tiles, intermediate_format);
     // output_cb sized to 2 full padded rows so the writer can deep-drain a
     // whole row under ONE noc.async_writes_flushed() (instead of flushing every
     // block_size=2 tiles) while compute produces the next row. The shallow
@@ -1018,7 +1059,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // = shared DRAM-write contention). A row-deep CB lets writes pipeline at
     // DRAM depth (the writer drains the whole row under one flush).
     const uint32_t output_cb_tiles = 2u * intermediate_cb_tiles;
-    create_cb(output_cb_id, program, worker_core_set, output_tile_size, output_cb_tiles, output_format);
+    add_cb(output_cb_id, worker_core_set, output_tile_size, output_cb_tiles, output_format);
 
     // Packet header CB. The forwarder reserves 2 header slots (fwd+bwd) from it,
     // so on the AG path it lives on the FORWARDER cores. is_tp_1's drain-only
@@ -1032,20 +1073,27 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     {
         const uint32_t header_tiles = use_mux ? 4u : 1u;
         const CoreRangeSet& header_cores = use_mux ? forwarder_core_set : worker_core_set;
-        tt::tt_metal::CircularBufferConfig packet_header_cb_config =
-            tt::tt_metal::CircularBufferConfig(
-                header_tiles * packet_header_size_bytes, {{reserved_packet_header_cb_id, tt::DataFormat::RawUInt32}})
-                .set_page_size(reserved_packet_header_cb_id, packet_header_size_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, header_cores, packet_header_cb_config);
+        add_cb(
+            reserved_packet_header_cb_id,
+            header_cores,
+            packet_header_size_bytes,
+            header_tiles,
+            tt::DataFormat::RawUInt32);
     }
 
     // Sync semaphores for the worker<->forwarder handshake. arrival (workers inc,
     // forwarder waits) + go (forwarder incs, workers wait) are on-chip; created on
     // the WHOLE grid so their L1 address is identical across workers + forwarders
     // (kernels resolve via Semaphore(id)). out_ready is the caller's GlobalSemaphore,
-    // fabric-inc'd by peer forwarders (resolved later).
-    const uint32_t arrival_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
-    const uint32_t go_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
+    // fabric-inc'd by peer forwarders (resolved later). Both are pushed before the
+    // fabric connection helper, which takes the next free ids on the forwarder cores.
+    const auto add_semaphore = [&desc, &all_core_set]() -> uint32_t {
+        const auto id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{.id = id, .core_ranges = all_core_set, .initial_value = 0u});
+        return id;
+    };
+    const uint32_t arrival_sem_id = use_mux ? add_semaphore() : 0u;
+    const uint32_t go_sem_id = use_mux ? add_semaphore() : 0u;
 
     // ------------------------------------------------------------------------
     // Reader kernel (on worker cores)
@@ -1123,19 +1171,33 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     } else {
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
     }
-    std::map<std::string, std::string> reader_defines;
+    KernelDescriptor::Defines reader_defines;
     if (use_tile_row_map) {
-        reader_defines["AFFINE_TILE_ROW_MAP"] = "1";
+        reader_defines.emplace_back("AFFINE_TILE_ROW_MAP", "1");
         reader_compile_args.push_back(tile_row_map_cb_id);
         TensorAccessorArgs(tile_row_map->buffer()).append_to(reader_compile_args);
     }
 
-    KernelHandle reader_kernel_id = CreateKernel(
-        program,
+    const auto make_kernel = [](const char* kernel_source,
+                                const CoreRangeSet& core_ranges,
+                                std::vector<uint32_t> compile_time_args,
+                                KernelDescriptor::ConfigDescriptor config) {
+        KernelDescriptor kernel;
+        kernel.kernel_source = kernel_source;
+        kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        kernel.core_ranges = core_ranges;
+        kernel.compile_time_args = std::move(compile_time_args);
+        kernel.config = std::move(config);
+        return kernel;
+    };
+
+    KernelDescriptor reader_kernel = make_kernel(
         "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
         "dit_rmsnorm_fused_reader.cpp",
         worker_core_set,
-        ReaderDataMovementConfig(reader_compile_args, reader_defines));
+        std::move(reader_compile_args),
+        ReaderConfigDescriptor{});
+    reader_kernel.defines = std::move(reader_defines);
 
     // ------------------------------------------------------------------------
     // Writer kernel (on worker cores). Two variants:
@@ -1144,7 +1206,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     //   AG path (ring>1, !per_head_norm)   → forwarder-model worker writer; the
     //                                         per-link forwarder cores hold the fabric.
     // ------------------------------------------------------------------------
-    KernelHandle writer_kernel_id;
+    KernelDescriptor writer_kernel;
     if (!use_mux) {
         // Drain-only writer for the is_tp_1 (no-AG) path.
         std::vector<uint32_t> writer_compile_args = {
@@ -1179,12 +1241,12 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
         }
 
-        writer_kernel_id = CreateKernel(
-            program,
+        writer_kernel = make_kernel(
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "dit_rmsnorm_fused_writer.cpp",
             worker_core_set,
-            WriterDataMovementConfig(writer_compile_args));
+            std::move(writer_compile_args),
+            WriterConfigDescriptor{});
     } else {
         // Forwarder-model worker writer (AG path): no fabric. Per row it pushes
         // its 128 B stick into the forwarder's grid-uniform packet CB, waits the
@@ -1221,18 +1283,19 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         } else {
             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
         }
-        writer_kernel_id = CreateKernel(
-            program,
+        writer_kernel = make_kernel(
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "dit_rmsnorm_fused_worker_writer.cpp",
             worker_core_set,
-            WriterDataMovementConfig(writer_compile_args));
+            std::move(writer_compile_args),
+            WriterConfigDescriptor{});
     }
 
     // ------------------------------------------------------------------------
     // Forwarder kernels (AG path): one per forwarder core (per-core CT args).
     // ------------------------------------------------------------------------
-    std::vector<KernelHandle> forwarder_kernel_ids(num_forwarders, 0);
+    std::vector<KernelDescriptor> forwarder_kernels;
+    forwarder_kernels.reserve(num_forwarders);
     for (uint32_t f = 0; f < num_forwarders; f++) {
         const uint32_t group_begin = f * workers_per_forwarder;
         const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
@@ -1263,12 +1326,12 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
         fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
         fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
-        forwarder_kernel_ids[f] = CreateKernel(
-            program,
+        forwarder_kernels.push_back(make_kernel(
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
             "dit_fused_norm_forwarder.cpp",
             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
-            WriterDataMovementConfig(fwd_ct));
+            std::move(fwd_ct),
+            WriterConfigDescriptor{}));
     }
 
     // ------------------------------------------------------------------------
@@ -1355,33 +1418,22 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         "dit_fused_distributed_rmsnorm requires fp32_dest_acc_en=true in the compute kernel config "
         "(internals are always fp32); got fp32_dest_acc_en=false.");
 
-    const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/" +
-        std::string(is_layernorm ? "dit_layernorm_fused_compute.cpp" : "dit_rmsnorm_fused_compute.cpp");
-    KernelHandle compute_kernel_id = CreateKernel(
-        program,
-        compute_kernel_path,
+    KernelDescriptor compute_kernel = make_kernel(
+        is_layernorm ? "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/"
+                       "dit_layernorm_fused_compute.cpp"
+                     : "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/"
+                       "dit_rmsnorm_fused_compute.cpp",
         worker_core_set,
-        ComputeConfig{
+        std::move(compute_compile_args),
+        ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_args,
         });
 
     // ------------------------------------------------------------------------
     // Common runtime args
     // ------------------------------------------------------------------------
-    const uint32_t input_addr = input_tensor.buffer()->address();
-    const uint32_t output_addr = output_tensor.buffer()->address();
-    const uint32_t weight_addr = has_weight ? weight.value().buffer()->address() : 0;
-    const uint32_t bias_addr = has_bias ? bias.value().buffer()->address() : 0;
-    const uint32_t rope_cos_addr = fuse_rope ? rope_cos.value().buffer()->address() : 0;
-    const uint32_t rope_sin_addr = fuse_rope ? rope_sin.value().buffer()->address() : 0;
-    const uint32_t trans_mat_addr_rt = fuse_rope ? trans_mat.value().buffer()->address() : 0u;
-    const uint32_t recip_addr_rt = use_recip_lut ? reciprocals.value().buffer()->address() : 0u;
-    const uint32_t stats_dram_addr = use_mux ? stats_dram_buffer->address() : 0u;
-
     uint32_t out_ready_sem_bank_addr = 0;
     if (args.ring_size > 1 && !args.per_head_norm) {
         TT_FATAL(
@@ -1406,16 +1458,23 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // ------------------------------------------------------------------------
     // Buffer bindings are uniform across workers; keep row ranges and forwarder
     // routing in per-core args so a cache hit updates each binding only once.
-    std::vector<uint32_t> reader_common_args = {
-        input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt};
+    // Slot order is pinned by dit_fused_distributed_rmsnorm_dynamic::kReader*AddrArg / kWriter*AddrArg.
+    KernelDescriptor::RTArgList reader_common_args;
+    reader_common_args.push_back(input_buffer);
+    reader_common_args.push_back(weight_buffer);
+    reader_common_args.push_back(bias_buffer);
+    reader_common_args.push_back(rope_cos_buffer);
+    reader_common_args.push_back(rope_sin_buffer);
+    reader_common_args.push_back(recip_buffer);
     if (use_tile_row_map) {
-        reader_common_args.push_back(tile_row_map->buffer()->address());
+        reader_common_args.push_back(tile_row_map_buffer);
     }
-    SetCommonRuntimeArgs(program, reader_kernel_id, reader_common_args);
+    reader_kernel.emplace_common_runtime_args(reader_common_args);
+    TT_ASSERT(reader_kernel.common_runtime_args.size() == (use_tile_row_map ? 7u : 6u));
     if (use_mux) {
-        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt, stats_dram_addr});
+        writer_kernel.emplace_common_runtime_args({output_buffer, trans_mat_buffer, stats_dram_buffer});
     } else {
-        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt});
+        writer_kernel.emplace_common_runtime_args({output_buffer, trans_mat_buffer});
     }
     for (uint32_t i = 0; i < num_workers; i++) {
         const auto& core = worker_cores[i];
@@ -1423,7 +1482,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
         const uint32_t this_core_rows = tile_row_end - tile_row_start;
 
-        SetRuntimeArgs(program, reader_kernel_id, core, {tile_row_start, tile_row_end});
+        reader_kernel.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{tile_row_start, tile_row_end});
 
         std::vector<uint32_t> writer_rt_args = {tile_row_start, tile_row_end};
         if (use_mux) {
@@ -1434,12 +1493,12 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             writer_rt_args.push_back(f);
             writer_rt_args.push_back(worker_slot(i));
         }
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+        writer_kernel.runtime_args.emplace_back(core, std::move(writer_rt_args));
 
         // RT arg 1 (tile_row_start): the worker's first GLOBAL tile-row, so LN compute can map
         // each local row to its batch (global_row / rows_per_batch_tiles) for per-batch adaLN.
-        std::vector<uint32_t> compute_rt_args = {this_core_rows, tile_row_start};
-        SetRuntimeArgs(program, compute_kernel_id, core, compute_rt_args);
+        compute_kernel.runtime_args.emplace_back(
+            core, KernelDescriptor::CoreRuntimeArgs{this_core_rows, tile_row_start});
     }
 
     // ------------------------------------------------------------------------
@@ -1455,61 +1514,74 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     if (num_forwarders > 0) {
         const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
         for (uint32_t f = 0; f < num_forwarders; f++) {
-        const auto& core = forwarder_cores[f];
-        const uint32_t group_begin = f * workers_per_forwarder;
-        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
-        std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
-        for (uint32_t w = group_begin; w < group_end; w++) {
-            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
-            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));
-        }
-        for (uint32_t r = 0; r < max_rounds; r++) {
-            uint32_t pc = 0;
+            const auto& core = forwarder_cores[f];
+            const uint32_t group_begin = f * workers_per_forwarder;
+            const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+            // Worker NoC coords, present_count[r], then the fabric connections; appended after
+            // the two address slots (dit_fused_distributed_rmsnorm_dynamic::kForwarder*Arg).
+            std::vector<uint32_t> fwd_rt_tail;
             for (uint32_t w = group_begin; w < group_end; w++) {
-                if (worker_num_rows(w) > r) {
-                    pc++;
-                }
+                fwd_rt_tail.push_back(static_cast<uint32_t>(worker_virtual[w].x));
+                fwd_rt_tail.push_back(static_cast<uint32_t>(worker_virtual[w].y));
             }
-            fwd_rt.push_back(pc);
-        }
-        fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
-        if (forward_fabric_node_id.has_value()) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
-        }
-        fwd_rt.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
-        if (backward_fabric_node_id.has_value()) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
-        }
-        SetRuntimeArgs(program, forwarder_kernel_ids[f], core, fwd_rt);
+            for (uint32_t r = 0; r < max_rounds; r++) {
+                uint32_t pc = 0;
+                for (uint32_t w = group_begin; w < group_end; w++) {
+                    if (worker_num_rows(w) > r) {
+                        pc++;
+                    }
+                }
+                fwd_rt_tail.push_back(pc);
+            }
+            fwd_rt_tail.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
+            if (forward_fabric_node_id.has_value()) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, desc, core, fwd_rt_tail);
+            }
+            fwd_rt_tail.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
+            if (backward_fabric_node_id.has_value()) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, desc, core, fwd_rt_tail);
+            }
+            KernelDescriptor::RTArgList fwd_rt;
+            fwd_rt.reserve(2 + fwd_rt_tail.size());
+            fwd_rt.push_back(stats_dram_buffer);
+            fwd_rt.push_back(  // smuggled-rta-ok: caller-supplied GlobalSemaphore, hash-excluded and re-applied via
+                               // override_runtime_arguments()
+                out_ready_sem_bank_addr);
+            fwd_rt.append(fwd_rt_tail);
+            forwarder_kernels[f].emplace_runtime_args(core, fwd_rt);
         }
     }
 
-    DitFusedDistributedRmsnormSharedVariables shared{
-        .reader_common_args = &GetCommonRuntimeArgs(program, reader_kernel_id),
-        .writer_common_args = &GetCommonRuntimeArgs(program, writer_kernel_id),
-        .forwarder_runtime_args = {},
+    // Push order is pinned by dit_fused_distributed_rmsnorm_dynamic, which override_runtime_arguments() patches.
+    const auto push_kernel = [&desc](KernelDescriptor&& kernel, uint32_t expected_idx, const char* name) {
+        TT_FATAL(
+            desc.kernels.size() == expected_idx,
+            "dit_fused_distributed_rmsnorm {} kernel must be at index {}, got {}",
+            name,
+            expected_idx,
+            desc.kernels.size());
+        desc.kernels.push_back(std::move(kernel));
     };
-    TT_ASSERT(shared.reader_common_args->size() == (use_tile_row_map ? 7u : 6u));
-    TT_ASSERT(shared.writer_common_args->size() == (use_mux ? 3 : 2));
-    shared.forwarder_runtime_args.reserve(forwarder_kernel_ids.size());
-    for (size_t f = 0; f < forwarder_kernel_ids.size(); ++f) {
-        auto& runtime_args = GetRuntimeArgs(program, forwarder_kernel_ids[f], forwarder_cores[f]);
-        TT_ASSERT(runtime_args.size() >= 2);
-        shared.forwarder_runtime_args.push_back(&runtime_args);
+    push_kernel(std::move(reader_kernel), dyn::kReaderKernelIdx, "reader");
+    push_kernel(std::move(writer_kernel), dyn::kWriterKernelIdx, "writer");
+    push_kernel(std::move(compute_kernel), dyn::kComputeKernelIdx, "compute");
+    for (uint32_t f = 0; f < num_forwarders; f++) {
+        push_kernel(std::move(forwarder_kernels[f]), dyn::kFirstForwarderKernelIdx + f, "forwarder");
     }
-    return {std::move(program), std::move(shared)};
+    return desc;
 }
 
-DitFusedDistributedRmsnormMeshWorkloadFactory::cached_mesh_workload_t
-DitFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor DitFusedDistributedRmsnormMeshWorkloadFactory::create_workload_descriptor(
     const DitFusedDistributedRmsnormParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const DitFusedDistributedRmsnormInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    std::vector<Tensor>& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
 
     // The physical route is fixed for a cached workload. Resolve ring
     // availability only here, not on every invocation of the operator.
@@ -1525,80 +1597,99 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
         // Local normalization has no device-specific routing or runtime arguments.
         // Reuse one program across each participating range, including per-head TP>1.
         if (resolved_args.ring_size == 1 || resolved_args.per_head_norm) {
-            auto cached = create_at(resolved_args, range.start_coord(), tensor_args, tensor_return_value);
-            workload.add_program(range, std::move(cached.program));
-            shared_variables.emplace(range, std::move(cached.shared_variables));
+            workload_descriptor.programs.push_back(
+                {range,
+                 CMAKE_UNIQUE_NAMESPACE::build_program_descriptor(
+                     resolved_args, range.start_coord(), tensor_args, tensor_return_value)});
             continue;
         }
         for (const auto& coord : range) {
-            auto cached = create_at(resolved_args, coord, tensor_args, tensor_return_value);
-            workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached.program));
-            shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached.shared_variables));
+            workload_descriptor.programs.push_back(
+                {ttnn::MeshCoordinateRange(coord),
+                 CMAKE_UNIQUE_NAMESPACE::build_program_descriptor(
+                     resolved_args, coord, tensor_args, tensor_return_value)});
         }
     }
-
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+    return workload_descriptor;
 }
 
 void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+    tt::tt_metal::Program& program,
     const DitFusedDistributedRmsnormParams& operation_attributes,
     const DitFusedDistributedRmsnormInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    const uint32_t input_addr = tensor_args.input.buffer()->address();
-    const uint32_t output_addr = tensor_return_value.at(0).buffer()->address();
-    const uint32_t weight_addr = tensor_args.weight.has_value() ? tensor_args.weight.value().buffer()->address() : 0;
-    const uint32_t bias_addr = tensor_args.bias.has_value() ? tensor_args.bias.value().buffer()->address() : 0;
-    const uint32_t trans_mat_addr =
-        tensor_args.transformation_mat.has_value() ? tensor_args.transformation_mat.value().buffer()->address() : 0;
-    const uint32_t rope_cos_addr =
-        tensor_args.rope_cos.has_value() ? tensor_args.rope_cos.value().buffer()->address() : 0;
-    const uint32_t rope_sin_addr =
-        tensor_args.rope_sin.has_value() ? tensor_args.rope_sin.value().buffer()->address() : 0;
-    // Stats DRAM scratch and the output are refreshed on each cache hit.
-    const uint32_t stats_dram_addr = tensor_return_value.size() > 1 ? tensor_return_value[1].buffer()->address() : 0u;
-    // Recip LUT tensor is also a regular (caller-owned) device tensor; refresh its addr.
-    const uint32_t recip_addr =
-        tensor_args.reciprocals.has_value() ? tensor_args.reciprocals.value().buffer()->address() : 0u;
-    const auto& tile_row_map = tensor_args.affine_tile_row_map;
+    std::vector<Tensor>& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    namespace dyn = dit_fused_distributed_rmsnorm_dynamic;
 
-    const uint32_t out_ready_sem_addr = operation_attributes.multi_device_global_semaphore.empty()
-                                            ? 0u
-                                            : operation_attributes.multi_device_global_semaphore.front().address();
-    // The workload owns the kernels backing these argument objects. No program,
-    // kernel, or core lookup is needed; data() follows dispatch payload relocation.
-    for (const auto& [range, shared] : cached_workload.shared_variables) {
-        auto* reader_common = shared.reader_common_args->data();
-        reader_common[0] = input_addr;
-        reader_common[1] = weight_addr;
-        reader_common[2] = bias_addr;
-        reader_common[3] = rope_cos_addr;
-        reader_common[4] = rope_sin_addr;
-        reader_common[5] = recip_addr;
-        if (tile_row_map.has_value()) {
-            reader_common[6] = tile_row_map->buffer()->address();
+    // The out_ready GlobalSemaphore is excluded from DitFusedDistributedRmsnormDeviceOperation::compute_program_hash,
+    // so its address is re-applied here. Every tensor address is re-applied by role as well: when two tensor
+    // arguments share a buffer (weight and bias, rope_cos and rope_sin), binding resolution yields no bindings,
+    // and the workload path has no rebuild fallback.
+    const auto address_of = [](const std::optional<const Tensor>& t, const char* name) -> uint32_t {
+        if (!t.has_value()) {
+            return 0u;
         }
+        Buffer* const buffer = t->buffer();
+        TT_FATAL(buffer != nullptr, "dit_fused_distributed_rmsnorm {} buffer is null", name);
+        return static_cast<uint32_t>(buffer->address());
+    };
+    Buffer* const input_buffer = tensor_args.input.buffer();
+    TT_FATAL(input_buffer != nullptr, "dit_fused_distributed_rmsnorm input buffer is null");
+    Buffer* const output_buffer = tensor_return_value.at(0).buffer();
+    TT_FATAL(output_buffer != nullptr, "dit_fused_distributed_rmsnorm output buffer is null");
 
-        auto* writer_common = shared.writer_common_args->data();
-        writer_common[0] = output_addr;
-        writer_common[1] = trans_mat_addr;
-        if (!shared.forwarder_runtime_args.empty()) {
-            writer_common[2] = stats_dram_addr;
-        }
-        // Forwarders read the stats DRAM scratch base at rt[0] and the out_ready
-        // GlobalSemaphore address at rt[1]. BOTH must be refreshed on cache hits:
-        // the caller ping-pongs a distinct semaphore per launch and the semaphore
-        // is NOT part of compute_program_hash, so a cache hit that skipped this
-        // refresh would silently keep using the semaphore baked at first compile —
-        // defeating the ping-pong isolation and racing the in-kernel sem reset
-        // against peers' in-flight fabric atomic-incs (AG desync / hang). Mirrors
-        // rms_allgather_program_factory's runtime_args[7] = semaphore.address().
-        for (auto* args : shared.forwarder_runtime_args) {
-            auto* forwarder_data = args->data();
-            forwarder_data[0] = stats_dram_addr;
-            forwarder_data[1] = out_ready_sem_addr;
+    auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, dyn::kReaderKernelIdx);
+    reader_common[dyn::kReaderInputAddrArg] = static_cast<uint32_t>(input_buffer->address());
+    reader_common[dyn::kReaderWeightAddrArg] = address_of(tensor_args.weight, "weight");
+    reader_common[dyn::kReaderBiasAddrArg] = address_of(tensor_args.bias, "bias");
+    reader_common[dyn::kReaderRopeCosAddrArg] = address_of(tensor_args.rope_cos, "rope_cos");
+    reader_common[dyn::kReaderRopeSinAddrArg] = address_of(tensor_args.rope_sin, "rope_sin");
+    // The reader binds the LUT only on the LayerNorm path; RMS leaves the slot 0.
+    reader_common[dyn::kReaderRecipAddrArg] = operation_attributes.norm_type == DitFusedNormType::LAYERNORM
+                                                  ? address_of(tensor_args.reciprocals, "reciprocals")
+                                                  : 0u;
+    if (tensor_args.affine_tile_row_map.has_value()) {
+        reader_common[dyn::kReaderTileRowMapAddrArg] =
+            address_of(tensor_args.affine_tile_row_map, "affine_tile_row_map");
+    }
+
+    auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, dyn::kWriterKernelIdx);
+    writer_common[dyn::kWriterOutputAddrArg] = static_cast<uint32_t>(output_buffer->address());
+    writer_common[dyn::kWriterTransMatAddrArg] = address_of(tensor_args.transformation_mat, "transformation_mat");
+
+    // tensor_return_value[1] (the stats DRAM scratch) exists only on the all-gather path, which is the only
+    // path with forwarders and a worker-writer stats slot.
+    if (tensor_return_value.size() > 1) {
+        Buffer* const stats_buffer = tensor_return_value[1].buffer();
+        TT_FATAL(stats_buffer != nullptr, "dit_fused_distributed_rmsnorm stats DRAM scratch buffer is null");
+        const auto stats_address = static_cast<uint32_t>(stats_buffer->address());
+        writer_common[dyn::kWriterStatsAddrArg] = stats_address;
+
+        // Forwarders read the stats DRAM scratch base and the out_ready GlobalSemaphore
+        // address. BOTH must be refreshed on cache hits: the caller ping-pongs a distinct
+        // semaphore per launch and the semaphore is NOT part of compute_program_hash, so a
+        // cache hit that skipped this refresh would silently keep using the semaphore baked
+        // at first compile — defeating the ping-pong isolation and racing the in-kernel sem
+        // reset against peers' in-flight fabric atomic-incs (AG desync / hang).
+        TT_FATAL(
+            !operation_attributes.multi_device_global_semaphore.empty(),
+            "TP>1 requires at least one GlobalSemaphore in multi_device_global_semaphore");
+        const auto out_ready_sem_address =
+            static_cast<uint32_t>(operation_attributes.multi_device_global_semaphore.front().address());
+        // On the all-gather path compute_sizing derives the same num_workers as build_program_descriptor,
+        // and forwarder_core places forwarders for both, so the kernel index and core match the cached program.
+        const auto sizing = compute_sizing(operation_attributes, tensor_args.input);
+        const CoreCoord grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
+        const uint32_t num_forwarders =
+            std::min<uint32_t>(std::max<uint32_t>(1u, operation_attributes.num_links), sizing.num_workers);
+        for (uint32_t f = 0; f < num_forwarders; f++) {
+            auto& forwarder_args = tt::tt_metal::GetRuntimeArgs(
+                program,
+                dyn::kFirstForwarderKernelIdx + f,
+                CMAKE_UNIQUE_NAMESPACE::forwarder_core(grid_size, sizing.num_workers, f));
+            forwarder_args[dyn::kForwarderStatsAddrArg] = stats_address;
+            forwarder_args[dyn::kForwarderOutReadySemArg] = out_ready_sem_address;
         }
     }
 }
-
 }  // namespace ttnn::experimental::prim

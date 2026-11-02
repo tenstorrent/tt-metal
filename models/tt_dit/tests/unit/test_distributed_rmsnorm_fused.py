@@ -28,6 +28,9 @@ Tests
 * ``test_rmsnorm_module_corr`` — ``DistributedRMSNorm`` module (static weight) e2e.
 * ``test_layernorm_module_corr``— ``DistributedLayerNorm`` module (adaLN) e2e.
 * ``test_dit_per_head_rmsnorm_mesh_cache_rebinding`` — per-chip data, cache rebinding, and trace replay.
+* ``test_rmsnorm_ag_cache_hit_rebinding`` / ``test_layernorm_ag_cache_hit_rebinding`` /
+  ``test_rmsnorm_ag_cache_hit_aliased_miss`` — all-gather cache hits on new tensors,
+  semaphores and stats buffers (T3K / LoudBox).
 * ``test_traced_corr``         — traced-replay output == eager (semaphore-reset guard).
 * ``test_layernorm_module_bench``— fused LN vs composite-chain speedup (perf, dev).
 
@@ -1445,6 +1448,193 @@ def test_dit_per_head_rmsnorm_mesh_cache_rebinding(mesh_device):
     # trace capture/release, including when the next launch binds other tensors.
     check(run(0), 0)
     assert mesh_device.num_program_cache_entries() == cache_entries
+
+
+# ---------------------------------------------------------------------------
+# All-gather cache hits: every launch binds a different live tensor set
+# ---------------------------------------------------------------------------
+# T3K / LoudBox (2,4): TP=4 rides mesh axis 1 (a 4-chip line) and axis 0 replicates, so the
+# workload holds one program per chip. Four tile rows per chip spread over several workers.
+_AG_CACHE_TP = 4
+_AG_CACHE_TP_AXIS = 1
+_AG_CACHE_LINKS = 1
+_AG_CACHE_ROWS = 128
+_AG_CACHE_HEADS = 2  # per device
+_AG_CACHE_HEAD_DIM = 128
+_AG_CACHE_DIM = _AG_CACHE_TP * _AG_CACHE_HEADS * _AG_CACHE_HEAD_DIM
+_AG_CACHE_MESH = pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+_AG_CACHE_FABRIC = pytest.mark.parametrize("device_params", [line_params], indirect=True)
+
+
+def _ag_cache_submesh(mesh_device):
+    return _resolve_submesh(mesh_device, _AG_CACHE_TP, _AG_CACHE_TP_AXIS, full_mesh=True)
+
+
+def _ag_cache_rms_set(submesh, ccl, seed, *, alias=False):
+    """One complete RMSNorm + weight + bias + broadcast RoPE argument set with its own
+    semaphore, stats buffer and golden. alias=True passes the weight tensor as bias and
+    the rope_cos tensor as rope_sin."""
+    torch.manual_seed(seed)
+    rows, hd, dim, axis = _AG_CACHE_ROWS, _AG_CACHE_HEAD_DIM, _AG_CACHE_DIM, _AG_CACHE_TP_AXIS
+    x = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16)
+    w = torch.randn(1, dim, dtype=torch.bfloat16)
+    b = w if alias else torch.randn(1, dim, dtype=torch.bfloat16)
+    cos_raw = torch.randn(1, rows, 1, hd // 2)
+    sin_raw = cos_raw if alias else torch.randn(1, rows, 1, hd // 2)
+    cos_f, sin_f = stack_cos_sin(cos_raw, sin_raw)  # (1, rows, 1, hd)
+    cos_host, sin_host = cos_f.permute(0, 2, 1, 3), sin_f.permute(0, 2, 1, 3)  # (1, 1, rows, hd)
+
+    s = {"x": bf16_tensor(x, device=submesh, mesh_axis=axis, shard_dim=-1)}
+    s["weight"] = bf16_tensor(w, device=submesh, mesh_axis=axis, shard_dim=-1)
+    s["bias"] = s["weight"] if alias else bf16_tensor(b, device=submesh, mesh_axis=axis, shard_dim=-1)
+    s["cos"] = from_torch(cos_host, device=submesh, dtype=ttnn.float32)
+    s["sin"] = s["cos"] if alias else from_torch(sin_host, device=submesh, dtype=ttnn.float32)
+    s["trans"] = bf16_tensor(get_rot_transformation_mat(), device=submesh)
+    s["sem"] = ccl.get_ag_ping_pong_semaphore(axis)
+    s["pob"] = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+        s["x"],
+        axis,
+        submesh,
+        num_heads_per_device=_AG_CACHE_HEADS,
+        num_links=_AG_CACHE_LINKS,
+        weight=s["weight"],
+        transformation_mat=s["trans"],
+        rope_cos=s["cos"],
+        rope_sin=s["sin"],
+    )
+
+    heads = dim // hd
+    xf = x.float().reshape(rows, dim)
+    y = xf * (xf.pow(2).mean(-1, keepdim=True) + NORM_EPS).rsqrt()
+    y = (y * w.float() + b.float()).reshape(rows, heads, hd)
+    cos = cos_host[0, 0].to(torch.bfloat16).float()[:, None, :]  # (rows, 1, hd), broadcast over heads
+    sin = sin_host[0, 0].to(torch.bfloat16).float()[:, None, :]
+    rot = torch.stack([-y[..., 1::2], y[..., 0::2]], dim=-1).flatten(-2)  # (-x1, x0, -x3, x2, ...)
+    s["ref"] = (y * cos + rot * sin).reshape(rows, dim)
+    return s
+
+
+def _ag_cache_ln_set(submesh, ccl, seed):
+    """One complete LayerNorm + weight + bias + reciprocal-LUT argument set with its own
+    semaphore, stats buffer and golden."""
+    torch.manual_seed(seed)
+    rows, dim, axis = _AG_CACHE_ROWS, _AG_CACHE_DIM, _AG_CACHE_TP_AXIS
+    h_local = dim // _AG_CACHE_TP
+    x = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16)
+    w = torch.randn(1, dim, dtype=torch.bfloat16)
+    b = torch.randn(1, dim, dtype=torch.bfloat16)
+    recip = torch.tensor([1.0 / (i + 1) for i in range(h_local)], dtype=torch.float32).reshape(1, 1, 1, h_local)
+
+    s = {"x": bf16_tensor(x, device=submesh, mesh_axis=axis, shard_dim=-1)}
+    s["weight"] = bf16_tensor(w, device=submesh, mesh_axis=axis, shard_dim=-1)
+    s["bias"] = bf16_tensor(b, device=submesh, mesh_axis=axis, shard_dim=-1)
+    s["recip"] = from_torch(recip, device=submesh, layout=ttnn.Layout.ROW_MAJOR, dtype=ttnn.float32)
+    s["sem"] = ccl.get_ag_ping_pong_semaphore(axis)
+    s["pob"] = ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
+        s["x"],
+        axis,
+        submesh,
+        num_heads_per_device=1,
+        num_links=_AG_CACHE_LINKS,
+        weight=s["weight"],
+    )
+
+    xf = x.float().reshape(rows, dim)
+    mean = xf.mean(-1, keepdim=True)
+    var = xf.var(-1, unbiased=False, keepdim=True)
+    s["ref"] = (xf - mean) * (var + NORM_EPS).rsqrt() * w.float() + b.float()
+    return s
+
+
+def _ag_cache_run(submesh, s):
+    if "recip" in s:
+        return ttnn.experimental.dit_fused_distributed_layernorm(
+            s["x"],
+            _AG_CACHE_TP_AXIS,
+            submesh,
+            s["sem"],
+            topology=ttnn.Topology.Linear,
+            epsilon=NORM_EPS,
+            num_heads_per_device=1,
+            weight=s["weight"],
+            bias=s["bias"],
+            persistent_output_buffer=s["pob"],
+            num_preferred_links=_AG_CACHE_LINKS,
+            reciprocals=s["recip"],
+        )
+    return ttnn.experimental.dit_fused_distributed_rmsnorm(
+        s["x"],
+        _AG_CACHE_TP_AXIS,
+        submesh,
+        s["sem"],
+        topology=ttnn.Topology.Linear,
+        epsilon=NORM_EPS,
+        num_heads_per_device=_AG_CACHE_HEADS,
+        weight=s["weight"],
+        bias=s["bias"],
+        transformation_mat=s["trans"],
+        rope_cos=s["cos"],
+        rope_sin=s["sin"],
+        persistent_output_buffer=s["pob"],
+        num_preferred_links=_AG_CACHE_LINKS,
+    )
+
+
+def _ag_cache_check(submesh, s, label):
+    pcc = _pcc(_gather(_ag_cache_run(submesh, s), _AG_CACHE_TP_AXIS), s["ref"])
+    assert pcc >= 0.999, f"{label}: PCC={pcc}"
+
+
+def _ag_cache_hit_rebinding(mesh_device, make_set):
+    submesh = _ag_cache_submesh(mesh_device)
+    ccl = CCLManager(mesh_device=submesh, num_links=_AG_CACHE_LINKS, topology=ttnn.Topology.Linear)
+    # Both sets stay alive so the hits bind different addresses. Consecutive launches
+    # alternate the two ping-pong semaphores and stats buffers.
+    sets = [make_set(submesh, ccl, seed) for seed in (13, 29)]
+    # Every device must finish creating its semaphores before any peer's first atomic-inc.
+    ttnn.synchronize_device(submesh)
+
+    submesh.enable_program_cache()
+    _ag_cache_check(submesh, sets[0], "miss, set 0")
+    cache_entries = submesh.num_program_cache_entries()
+    for index in (1, 0, 1):
+        _ag_cache_check(submesh, sets[index], f"hit, set {index}")
+        assert submesh.num_program_cache_entries() == cache_entries
+
+
+@_AG_CACHE_MESH
+@_AG_CACHE_FABRIC
+def test_rmsnorm_ag_cache_hit_rebinding(mesh_device):
+    """All-gather RMSNorm + RoPE: each cache hit binds a new input, weight, bias, cos, sin,
+    transformation matrix, semaphore and stats buffer, and must match its own golden."""
+    _ag_cache_hit_rebinding(mesh_device, _ag_cache_rms_set)
+
+
+@_AG_CACHE_MESH
+@_AG_CACHE_FABRIC
+def test_layernorm_ag_cache_hit_rebinding(mesh_device):
+    """All-gather LayerNorm with a reciprocal LUT: each cache hit binds a new input, weight,
+    bias, reciprocals, semaphore and stats buffer, and must match its own golden."""
+    _ag_cache_hit_rebinding(mesh_device, _ag_cache_ln_set)
+
+
+@_AG_CACHE_MESH
+@_AG_CACHE_FABRIC
+def test_rmsnorm_ag_cache_hit_aliased_miss(mesh_device):
+    """The miss passes one tensor as both weight and bias and one as both rope_cos and
+    rope_sin; the hit passes distinct tensors with different data and must see its own."""
+    submesh = _ag_cache_submesh(mesh_device)
+    ccl = CCLManager(mesh_device=submesh, num_links=_AG_CACHE_LINKS, topology=ttnn.Topology.Linear)
+    aliased = _ag_cache_rms_set(submesh, ccl, 13, alias=True)
+    distinct = _ag_cache_rms_set(submesh, ccl, 29)
+    ttnn.synchronize_device(submesh)
+
+    submesh.enable_program_cache()
+    submesh.clear_program_cache()
+    _ag_cache_check(submesh, aliased, "aliased miss")
+    cache_entries = submesh.num_program_cache_entries()
+    _ag_cache_check(submesh, distinct, "distinct hit")
+    assert submesh.num_program_cache_entries() == cache_entries
 
 
 @pytest.mark.parametrize(
