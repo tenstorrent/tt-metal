@@ -27,17 +27,17 @@
       "sc4": {
         "probe": "@1020k",
         "8kw": {
-          "throughput_tok_s": 22974,
-          "ttft_s": 35.02,
-          "chunk_time_ms": 1038
+          "throughput_tok_s": 23434,
+          "ttft_s": 32.67,
+          "chunk_time_ms": 814
         }
       },
       "sc1": {
         "probe": "@1020k",
         "14kw": {
-          "throughput_tok_s": 6264,
-          "ttft_s": 126.02,
-          "chunk_time_ms": 815
+          "throughput_tok_s": 6733,
+          "ttft_s": 115.26,
+          "chunk_time_ms": 761
         }
       }
     },
@@ -77,33 +77,33 @@
         },
         "8kw": {
           "@5k": {
-            "throughput_tok_s": 13915,
-            "chunk_time_ms": 1346
+            "throughput_tok_s": 16431,
+            "chunk_time_ms": 1067
           },
           "@50k": {
-            "throughput_tok_s": 12571,
-            "ttft_s": 4.67,
-            "chunk_time_ms": 1607
+            "throughput_tok_s": 14236,
+            "ttft_s": 4.02,
+            "chunk_time_ms": 1520
           },
           "@100k": {
-            "throughput_tok_s": 11255,
-            "ttft_s": 9.03,
-            "chunk_time_ms": 1919
+            "throughput_tok_s": 11769,
+            "ttft_s": 7.97,
+            "chunk_time_ms": 1890
           },
           "@255k": {
-            "throughput_tok_s": 6885,
-            "ttft_s": 27.93,
-            "chunk_time_ms": 3441
+            "throughput_tok_s": 7190,
+            "ttft_s": 25.92,
+            "chunk_time_ms": 3029
           },
           "@510k": {
-            "throughput_tok_s": 4519,
-            "ttft_s": 76.14,
-            "chunk_time_ms": 5936
+            "throughput_tok_s": 4689,
+            "ttft_s": 72.06,
+            "chunk_time_ms": 5360
           },
           "@1M": {
-            "throughput_tok_s": 2731,
-            "ttft_s": 232.97,
-            "chunk_time_ms": 10437
+            "throughput_tok_s": 2781,
+            "ttft_s": 224.7,
+            "chunk_time_ms": 10628
           }
         }
       },
@@ -142,33 +142,33 @@
         },
         "14kw": {
           "@5k": {
-            "throughput_tok_s": 17978,
-            "chunk_time_ms": 293
+            "throughput_tok_s": 23480,
+            "chunk_time_ms": 220
           },
           "@50k": {
-            "throughput_tok_s": 16817,
-            "ttft_s": 2.85,
-            "chunk_time_ms": 284
+            "throughput_tok_s": 21208,
+            "ttft_s": 2.25,
+            "chunk_time_ms": 238
           },
           "@100k": {
-            "throughput_tok_s": 15654,
-            "ttft_s": 6.08,
-            "chunk_time_ms": 339
+            "throughput_tok_s": 17769,
+            "ttft_s": 4.88,
+            "chunk_time_ms": 284
           },
           "@255k": {
-            "throughput_tok_s": 11536,
-            "ttft_s": 17.59,
-            "chunk_time_ms": 437
+            "throughput_tok_s": 12482,
+            "ttft_s": 15.58,
+            "chunk_time_ms": 406
           },
           "@510k": {
-            "throughput_tok_s": 7280,
-            "ttft_s": 46.88,
-            "chunk_time_ms": 696
+            "throughput_tok_s": 7778,
+            "ttft_s": 42.74,
+            "chunk_time_ms": 651
           },
           "@1M": {
-            "throughput_tok_s": 4237,
-            "ttft_s": 146.25,
-            "chunk_time_ms": 1214
+            "throughput_tok_s": 4379,
+            "ttft_s": 137.46,
+            "chunk_time_ms": 1176
           }
         }
       }
