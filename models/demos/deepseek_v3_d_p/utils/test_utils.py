@@ -59,27 +59,27 @@ def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False, sp_ax
     The sequence is sharded along mesh axis ``sp_axis`` and TP runs along the other one.
     TP-sharded, every tp-coord holds a distinct slice, so flatten into linear chip order (sp_coord*tp +
     tp_coord) over sp*tp stripes. Mirrors sparse_mla/test_sparse_mla.py::_cache_natural."""
-    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, striped_cache_to_host
 
     tp_axis = 1 - sp_axis
     sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
-    dims = [None, None]
-    dims[sp_axis], dims[tp_axis] = 2, 1  # sequence along SP, TP replicas or slices on dim 1
     is_mla_cache = isinstance(tt_cache, MlaKvCache)
-    cache_sr = ttnn.to_torch(
-        tt_cache.storage if is_mla_cache else tt_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=mesh_device.shape),
-    )  # [num_slots, tp, seq_dim, head_dim]
+    storage = tt_cache.storage if is_mla_cache else tt_cache
+    if tp_shard_kv:
+        cache = striped_cache_to_host(storage, mesh_device, sp_axis)  # [num_slots, seq_len_cache, head_dim]
+        stripes = sp * tp
+    else:
+        dims = [None, None]
+        dims[sp_axis], dims[tp_axis] = 2, 1  # sequence along SP, TP replicas on dim 1
+        # [num_slots, seq_dim, head_dim]: any TP replica
+        cache = ttnn.to_torch(
+            storage,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=mesh_device.shape),
+        )[:, 0]
+        stripes = sp
     if is_mla_cache:
-        cache_sr = tt_cache.unpack_host(cache_sr)
-    cache_sr = cache_sr.to(torch.float32)
-    if not tp_shard_kv:
-        return cache_sr[:, 0], sp
-    local = cache_sr.shape[2] // sp  # per-chip rows = seq_len_cache / (sp*tp)
-    flat = torch.cat(
-        [cache_sr[:, t, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=1
-    )  # [num_slots, sp*tp*local == seq_len_cache, head_dim] in linear chip order
-    return flat, sp * tp
+        cache = tt_cache.unpack_host(cache)
+    return cache.to(torch.float32), stripes
 
 
 def tp_stripe_major_cache(linear_chip_order: torch.Tensor, sp: int, tp: int) -> torch.Tensor:
