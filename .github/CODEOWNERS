@@ -445,6 +445,8 @@ ttnn/cpp/ttnn/operations/experimental/isin/ @tenstorrent/metalium-developers-ext
 ttnn/cpp/ttnn/operations/experimental/isin/**/CMakeLists.txt @tenstorrent/metalium-developers-external-experience @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/kda/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/ @atupe-tt
+ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/**/CMakeLists.txt @atupe-tt @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/matmul/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/experimental/matmul/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/matmul_decode/ @tenstorrent/cse-developer-ttnn
