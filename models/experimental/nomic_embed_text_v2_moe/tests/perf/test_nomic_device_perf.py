@@ -29,8 +29,8 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 # work alone 171.0, with #58503 294.1, before the router 300.0, before the routed experts 312.8,
 # with their w2 at HiFi2 609.1. The generated single-dispatch layer norm (tt/common.py) measured
 # 645.6 on a p100a, where ttnn.layer_norm measured 620.0; with the norm outputs kept in L1 669.6;
-# with the generated qkv_proj_heads_rope (tt/attention.py) 759.1.
-EXPECTED_SEQUENCES_PER_S = 759.1
+# with the generated qkv_proj_heads_rope (tt/attention.py) 772.7.
+EXPECTED_SEQUENCES_PER_S = 772.7
 
 # Wide enough to absorb run-to-run kernel variation, tight enough to catch a real regression.
 MARGIN = 0.03
