@@ -37,7 +37,7 @@ struct ReshapeCodegenInputs {
     Tensor input;
 };
 
-struct ReshapeCodegenProgramFactory {
+struct ReshapeCodegenRMProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ReshapeCodegenParams& operation_attributes,
         const ReshapeCodegenInputs& tensor_args,

@@ -88,6 +88,7 @@ void kernel_main() {
         // page and never crosses a page or allocation boundary.
         static_assert((READ_ALIGNMENT & (READ_ALIGNMENT - 1)) == 0);
         constexpr uint32_t READ_ALIGNMENT_MASK = READ_ALIGNMENT - 1;
+        constexpr uintptr_t WORD_MASK = sizeof(uint64_t) - 1;
         const uint32_t read_size = aligned_page_size;
         const uint32_t scratch_slot_size = aligned_page_size + READ_ALIGNMENT;
 
@@ -119,8 +120,8 @@ void kernel_main() {
                     // When new_stick_size is 16B-aligned (cb_page_bytes == new_stick_size), the ratio destination
                     // pages and the source are one contiguous block of ratio*new_half uint16, so it is copied as
                     // uint64 words when both ends are 8B-aligned; otherwise each page is repacked per element.
-                    if (cb_page_bytes == a->new_stick_size && (reinterpret_cast<uintptr_t>(src_ptr) & 7u) == 0 &&
-                        (cb_base & 7u) == 0) {
+                    if (cb_page_bytes == a->new_stick_size && (reinterpret_cast<uintptr_t>(src_ptr) & WORD_MASK) == 0 &&
+                        (cb_base & WORD_MASK) == 0) {
                         const uint32_t n16 = a->ratio * new_half;  // total uint16 elems
                         const uint32_t n64 = n16 >> 2;             // full uint64 words
                         uint64_t* d64 = reinterpret_cast<uint64_t*>(cb_base);

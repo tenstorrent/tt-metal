@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <functional>
 #include <limits>
 #include <numeric>
 
@@ -30,16 +31,8 @@ constexpr uint64_t kMaxCbPages = std::numeric_limits<uint16_t>::max();
 // Program creation starts every CB at a DRAM-aligned address, so a CB takes its size rounded up to that alignment.
 uint64_t cb_footprint(uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); }
 
-// Largest power of two no greater than `n` (n > 0). Reduced CB depths step along powers of two so that small moves of
-// the L1 frontier keep the same program and its cache key.
-uint64_t power_of_two_floor(uint64_t n) { return std::bit_floor(n); }
-
 uint64_t volume_before_last(const ttnn::Shape& shape) {
-    uint64_t volume = 1;
-    for (size_t i = 0; i + 1 < shape.rank(); ++i) {
-        volume *= shape[i];
-    }
-    return volume;
+    return std::accumulate(shape.cbegin(), shape.cend() - 1, uint64_t{1}, std::multiplies<>());
 }
 
 uint32_t tile_bytes_of(const Tensor& input) {
@@ -264,14 +257,15 @@ std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget) {
             if (limit == 0) {
                 return std::nullopt;
             }
-            plan.push_sticks = static_cast<uint32_t>(power_of_two_floor(limit));
+            plan.push_sticks = static_cast<uint32_t>(std::bit_floor<uint64_t>(limit));
             depth = 2 * static_cast<uint64_t>(plan.push_sticks) * pages_per_split_stick;
         } else {
             const uint64_t push_pairs = ring_budget / push_bytes;
             if (push_pairs == 0) {
                 return std::nullopt;
             }
-            depth = 2 * power_of_two_floor(push_pairs) * pages_per_split_stick;
+            // Powers of two so that small moves of the L1 frontier keep the same program and its cache key.
+            depth = 2 * std::bit_floor<uint64_t>(push_pairs) * pages_per_split_stick;
         }
     }
     plan.cb_depth = static_cast<uint32_t>(depth);

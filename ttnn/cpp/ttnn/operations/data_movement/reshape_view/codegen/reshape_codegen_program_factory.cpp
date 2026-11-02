@@ -428,7 +428,7 @@ WorkloadDescriptor table_workload(
 
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor ReshapeCodegenProgramFactory::create_descriptor(
+tt::tt_metal::ProgramDescriptor ReshapeCodegenRMProgramFactory::create_descriptor(
     const ReshapeCodegenParams& operation_attributes,
     const ReshapeCodegenInputs& tensor_args,
     Tensor& tensor_return_value) {

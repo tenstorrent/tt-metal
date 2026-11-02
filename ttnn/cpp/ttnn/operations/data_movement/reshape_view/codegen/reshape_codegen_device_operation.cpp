@@ -42,7 +42,7 @@ ReshapeCodegenDeviceOperation::program_factory_t ReshapeCodegenDeviceOperation::
         }
         return ReshapeCodegenTileMappedProgramFactory{};
     }
-    return ReshapeCodegenProgramFactory{};
+    return ReshapeCodegenRMProgramFactory{};
 }
 
 void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
