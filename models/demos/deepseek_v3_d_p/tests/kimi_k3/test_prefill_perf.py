@@ -54,7 +54,10 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 DEPTHS = [1, 5, 12, 24]
-# 1 chunk is 5120 tokens; 11 chunks is 56320 — the "55k" leg. The second is not just a longer run:
+# Each placement runs its production chunk: 5120 tokens on an 8x4 stage, 2560 on a 4x4 stage (640 tokens per
+# chip on both), so the per-op comparison is the one the pipelines actually run.
+CHUNK_4X4 = 2560
+# At 5120, 1 chunk is 5120 tokens and 11 chunks is 56320, the "55k" leg. The second is not just a longer run:
 # MLA attends over every token cached so far, so chunk N costs more than chunk N-1, and the
 # per-chunk curve is the only thing that shows how prefill scales with context.
 CHUNK_COUNTS = [1, 11]
@@ -95,7 +98,8 @@ def test_prefill_cost(mesh_device, device_params, sp_axis, tp_axis, num_layers, 
 
     checkpoint = Path(checkpoint)
     root = resolve_model_root(checkpoint)
-    total_len = SEQ_LEN * num_chunks
+    seq_len = CHUNK_4X4 if tuple(mesh_device.shape) == (4, 4) else SEQ_LEN
+    total_len = seq_len * num_chunks
     config = kimi_k3_hf_config(max_seq=total_len)
     cache = cache_root(checkpoint, tuple(mesh_device.shape), tp_axis)
 
@@ -137,7 +141,7 @@ def test_prefill_cost(mesh_device, device_params, sp_axis, tp_axis, num_layers, 
         KimiK3Config,
         _model_state_dict(checkpoint, num_layers, root, cache),
         num_layers=num_layers,
-        seq_len=SEQ_LEN,
+        seq_len=seq_len,
         residual_factory=residual_factory,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
@@ -165,7 +169,7 @@ def test_prefill_cost(mesh_device, device_params, sp_axis, tp_axis, num_layers, 
         )
     chunks = [
         prepare_prefill_input_tensor(
-            trace.token_ids(SEQ_LEN, SEQ_LEN * c)[0].tolist(),
+            trace.token_ids(seq_len, seq_len * c)[0].tolist(),
             mesh_device,
             tuple(mesh_device.shape)[sp_axis],
             False,
@@ -179,7 +183,7 @@ def test_prefill_cost(mesh_device, device_params, sp_axis, tp_axis, num_layers, 
         """One whole prefill: every chunk, in order, as a request would arrive."""
         model.reset_streams()
         for index, tokens in enumerate(chunks):
-            start = index * SEQ_LEN if num_chunks > 1 else None
+            start = index * seq_len if num_chunks > 1 else None
             out = model.forward(tokens, kvpe_cache=kvpe, actual_start=start)
             if out is not None:
                 ttnn.deallocate(out)
@@ -235,7 +239,7 @@ def test_prefill_cost(mesh_device, device_params, sp_axis, tp_axis, num_layers, 
             for index, tokens in enumerate(chunks):
 
                 def one(_tokens=tokens, _index=index):
-                    out = model.forward(_tokens, kvpe_cache=kvpe, actual_start=_index * SEQ_LEN)
+                    out = model.forward(_tokens, kvpe_cache=kvpe, actual_start=_index * seq_len)
                     if out is not None:
                         ttnn.deallocate(out)
 
