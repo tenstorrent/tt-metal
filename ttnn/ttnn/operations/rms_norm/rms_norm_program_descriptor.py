@@ -189,6 +189,29 @@ PERF_ABLATE = ()
 NOC_SWAP_COLUMNS = 3
 
 
+# HEIGHT_SHARDED ROW_MAJOR "flat" regime (Perf 2, perf_experiments/height_rm_flat; kernels rms_norm_flat_*.cpp): a
+# stick of W datums is contiguous in the shard, so it is normalized as ceil(W / 1024) flat tiles (1024 consecutive
+# datums each) — sum x^2 = DEST-accumulated x_j * x_j + one FPU REDUCE_SCALAR + finalize; out_j = x_j * inv (bcast
+# scalar) * gamma_j, gamma_j = flat tile j of the RM gamma page (resident: W * elem bytes, one DRAM read + multicast).
+# cb_x / cb_out are backed on the shards (page = gcd(stick pitch, tile bytes)); a partial last flat tile per stick
+# (W % 1024 != 0) is staged through a zero-filled tail tile. No tilize / untilize / 32x stick padding / gamma stream.
+# BH p150b: (1,1,128,4096) fp32 1 stick / core 93.3 -> 3.3 us, (1,224,11008) 2 sticks 121.6 -> 6.9 us,
+# (3104,4064) 24 sticks 43.2 -> 29.5 us. Gate (cost model, bf16 / fp32 DEST off / HiFi4 calibration; fp32 and fp32
+# DEST only make the tilized path slower, so the model is conservative there):
+#   flat    ~ FLAT_FIXED_NS + S * (FLAT_STICK_NS + FLAT_TILE_NS * ceil(W / 1024) + FLAT_TAIL_NS * [W % 1024 != 0])
+#   tilized ~ ceil(S / 32) * (TILIZED_ROW_NS + TILIZED_WTILE_NS * ceil(W / 32))      (S = sticks per Tensix core)
+# Crossover: W = 256: S ~ 7; 512: ~13; 1024: ~29; 2048: ~37; >= 4096: >= 64. Also used when the tilized plan does not
+# fit L1 and the flat one does (fp32 [32, 4096] shards).
+RM_FLAT_FORCE = False  # test hook: every expressible + L1-fitting HEIGHT RM input takes the flat path
+FLAT_FIXED_NS = 1200
+FLAT_STICK_NS = 150  # per stick: REDUCE_SCALAR + one-vector finalize + pack
+FLAT_TILE_NS = 230  # per flat tile: x*x (pass 1) + x*inv*gamma (pass 2)
+FLAT_TAIL_NS = 80  # per stick with a partial last flat tile (tail staging copy + second CB)
+TILIZED_ROW_NS = 2300  # per tile-row of the tilized path
+TILIZED_WTILE_NS = 310  # per W tile of a tile-row
+FLAT_MAX_CB_PAGES = 32768  # zero-copy cb_x / cb_out pages per Tensix core (16-bit CB page counters)
+
+
 def _f32_bits(v: float) -> int:
     return struct.unpack("<I", struct.pack("<f", float(v)))[0]
 
@@ -906,7 +929,7 @@ def _shard_backed_cb(index, tensor, core_ranges):
     return cb
 
 
-def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
+def _create_tilized_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
     device = input_tensor.device()
     geo = derive_geometry(input_tensor.shape)
     is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -1217,4 +1240,201 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
         )
         inv_mc.attach(descriptor, "inv_mcast", writers, next_sem)
     descriptor.kernels = readers + writers + [compute]
+    return descriptor
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# HEIGHT_SHARDED ROW_MAJOR flat regime (see the "flat" regime block above RM_FLAT_FORCE)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def flat_expressible(input_tensor, gamma) -> bool:
+    """HEIGHT_SHARDED ROW_MAJOR fp32 / bf16 input whose shard holds whole sticks, gamma absent or ROW_MAJOR.
+
+    A TILE gamma would need a row-0 gather into flat order (not built; RM input + TILE gamma under HEIGHT sharding is
+    golden-INVALID) — it keeps the tilized path.
+    """
+    if input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+        return False
+    mc = input_tensor.memory_config()
+    if mc.memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        return False
+    if input_tensor.dtype not in (ttnn.float32, ttnn.bfloat16):
+        return False
+    if gamma is not None and (
+        gamma.layout != ttnn.ROW_MAJOR_LAYOUT or gamma.dtype not in (ttnn.float32, ttnn.bfloat16)
+    ):
+        return False
+    return int(mc.shard_spec.shape[1]) >= int(input_tensor.shape[-1])
+
+
+def flat_plan(input_tensor, gamma, fp32_dest: bool) -> dict:
+    """Geometry + CB plan of the flat path: {cb: (pages, page_bytes, dtype)}; shard-backed CBs carry pages = None.
+
+    cb_x / cb_out alias the input / output shards with page = gcd(stick pitch, tile bytes), so flat tile j of stick s
+    is page s * stick_pages + j * tile_pages. W % 1024 != 0: cb_x_rm / cb_out_rm hold one zero-padded tail tile per
+    stick. cb_ones (the REDUCE_SCALAR 1.0 scaler) follows the accumulator dtype: REDUCE_SCALAR moves its 32 first-stage
+    partial sums DEST -> srcB (MOVD2B), so a bf16 scaler would truncate them to bf16 (fp32 DEST, no gamma: rms error vs
+    torch 0.0027 -> 0.0015 bf16, 0.0014 -> 0.00056 fp32; same device time).
+    """
+    W = int(input_tensor.shape[-1])
+    x_dtype = input_tensor.dtype
+    elem = _datum_bytes(input_tensor)
+    T = ttnn.tile_size(x_dtype)
+    sh = int(input_tensor.memory_config().shard_spec.shape[0])
+    pitch = input_tensor.buffer_aligned_page_size()  # stick pitch inside the shard
+    nt = _div_up(W, 1024)
+    n_body = W // 1024
+    tail_bytes = (W - 1024 * n_body) * elem
+    page = math.gcd(pitch, T)
+    t_acc = acc_dtype(fp32_dest)
+    cbs = {CB_X: (None, page, x_dtype), CB_OUT: (None, page, x_dtype)}
+    if tail_bytes:
+        cbs[CB_X_RM] = (sh, T, x_dtype)
+        cbs[CB_OUT_RM] = (sh, T, x_dtype)
+    cbs[CB_SUMSQ] = (sh, ttnn.tile_size(t_acc), t_acc)
+    cbs[CB_INV_RMS] = (sh, ttnn.tile_size(t_acc), t_acc)
+    cbs[CB_ONES] = (1, ttnn.tile_size(t_acc), t_acc)
+    if gamma is not None:
+        cbs[CB_GAMMA] = (nt, ttnn.tile_size(gamma.dtype), gamma.dtype)
+    return dict(
+        W=W,
+        elem=elem,
+        T=T,
+        sh=sh,
+        pitch=pitch,
+        nt=nt,
+        n_body=n_body,
+        has_tail_cb=tail_bytes != 0,
+        tail_bytes=tail_bytes,
+        page=page,
+        stick_pages=pitch // page,
+        tile_pages=T // page,
+        cbs=cbs,
+        footprint=sum(n * b for (n, b, _) in cbs.values() if n is not None),
+    )
+
+
+def flat_fits(plan, budget: int) -> bool:
+    return plan["footprint"] <= budget and plan["sh"] * plan["stick_pages"] < FLAT_MAX_CB_PAGES
+
+
+def flat_preferred(plan) -> bool:
+    """Cost model (see the "flat" regime block above RM_FLAT_FORCE): the flat path is estimated no slower than the tilized one."""
+    S, W, nt = plan["sh"], plan["W"], plan["nt"]
+    flat = FLAT_FIXED_NS + S * (FLAT_STICK_NS + FLAT_TILE_NS * nt + FLAT_TAIL_NS * (1 if W % 1024 else 0))
+    tilized = _div_up(S, TILE) * (TILIZED_ROW_NS + TILIZED_WTILE_NS * _div_up(W, TILE))
+    return flat <= tilized
+
+
+def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
+    """Flat HEIGHT RM regime when expressible + fits L1 + (cost model prefers it); else the tilized program. If the
+    tilized plan does not fit L1 but the flat one does, the flat path runs."""
+    kw = dict(epsilon=epsilon, compute_kernel_config=compute_kernel_config)
+    flat_ok = False
+    if flat_expressible(input_tensor, gamma):
+        plan = flat_plan(input_tensor, gamma, bool(compute_kernel_config.fp32_dest_acc_en))
+        flat_ok = flat_fits(plan, cb_l1_budget(input_tensor.device()))
+        if flat_ok and (RM_FLAT_FORCE or flat_preferred(plan)):
+            return create_flat_program_descriptor(input_tensor, gamma, output_tensor, **kw)
+    try:
+        return _create_tilized_program_descriptor(input_tensor, gamma, output_tensor, **kw)
+    except RuntimeError:
+        if not flat_ok:
+            raise
+        return create_flat_program_descriptor(input_tensor, gamma, output_tensor, **kw)
+
+
+def _backed_cb_paged(index, tensor, dtype, page, core_ranges):
+    """CB aliasing a sharded tensor's resident shard (zero-copy) with an explicit page size."""
+    cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor)
+    cb.core_ranges = core_ranges
+    cb.format_descriptors = [ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)]
+    return cb
+
+
+def create_flat_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
+    device = input_tensor.device()
+    shape = [int(d) for d in input_tensor.shape]
+    W = shape[-1]
+    rows = math.prod(shape[:-1])
+    has_gamma = gamma is not None
+    plan = flat_plan(input_tensor, gamma, bool(compute_kernel_config.fp32_dest_acc_en))
+    pitch, nt, T = plan["pitch"], plan["nt"], plan["T"]
+    assert output_tensor.buffer_aligned_page_size() == pitch
+    n_body, has_tail_cb, tail_bytes = plan["n_body"], plan["has_tail_cb"], plan["tail_bytes"]
+    stick_pages, tile_pages = plan["stick_pages"], plan["tile_pages"]
+
+    # Active Tensix cores: shard g (sh sticks, the last one ragged) on the g-th core of the shard grid in its orientation.
+    ss = input_tensor.memory_config().shard_spec
+    sh = plan["sh"]
+    order = _ordered_shard_cores(ss.grid, ss.orientation == ttnn.ShardOrientation.ROW_MAJOR)
+    n_shards = _div_up(rows, sh)
+    assert len(order) >= n_shards
+    cores = [ttnn.CoreCoord(x, y) for (x, y) in order[:n_shards]]
+    sticks_of = [min(sh, rows - g * sh) for g in range(n_shards)]
+    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+
+    cbs = []
+    for idx, (pages, page_bytes, dtype) in plan["cbs"].items():
+        if pages is None:
+            cbs.append(
+                _backed_cb_paged(idx, input_tensor if idx == CB_X else output_tensor, dtype, page_bytes, core_ranges)
+            )
+        else:
+            cbs.append(_cb(idx, pages, page_bytes, dtype, core_ranges))
+    g_page = gamma.buffer_aligned_page_size() if has_gamma else 0  # one read of the whole (aligned) gamma page
+    assert not has_gamma or g_page <= nt * ttnn.tile_size(gamma.dtype)
+
+    defines = []
+    if has_gamma:
+        defines.append(("RMS_HAS_GAMMA", "1"))
+    defines.extend((name, "1") for name in PERF_ABLATE)
+    gamma_mcast = has_gamma and GAMMA_MCAST_SHARDED_K1
+    if gamma_mcast:
+        defines.append(("RMS_GAMMA_MCAST", "1"))
+
+    stick_bytes = W * plan["elem"]
+    reader_ct = [n_body, int(has_tail_cb), tail_bytes, pitch, T, stick_pages, stick_bytes]
+    compute_ct = [n_body, int(has_tail_cb), stick_pages, tile_pages]
+    writer_ct = [n_body, int(has_tail_cb), tail_bytes, pitch, T, stick_pages, stick_bytes, g_page, nt, g_page]
+    writer_ct.extend(
+        (ttnn.TensorAccessorArgs(gamma) if has_gamma else ttnn.TensorAccessorArgs()).get_compile_time_args()
+    )
+
+    x_addr, out_addr = input_tensor.buffer_address(), output_tensor.buffer_address()
+    g_addr = gamma.buffer_address() if has_gamma else 0
+    inv_w_bits, eps_bits = _f32_bits(1.0 / W), _f32_bits(epsilon)
+    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    for c, n in zip(cores, sticks_of):
+        reader_rt[c.x][c.y] = [x_addr, n]
+        compute_rt[c.x][c.y] = [n, inv_w_bits, eps_bits]
+        writer_rt[c.x][c.y] = [out_addr, n, g_addr]
+
+    def _k(name, ct, rt, cfg):
+        return ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / name),
+            core_ranges=core_ranges,
+            compile_time_args=ct,
+            defines=defines,
+            runtime_args=rt,
+            config=cfg,
+        )
+
+    reader = _k("rms_norm_flat_reader.cpp", reader_ct, reader_rt, ttnn.ReaderConfigDescriptor())
+    writer = _k("rms_norm_flat_writer.cpp", writer_ct, writer_rt, ttnn.WriterConfigDescriptor())
+    compute = _k("rms_norm_flat_compute.cpp", compute_ct, compute_rt, compute_kernel_config)
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
+    if gamma_mcast:
+        # One group of every active Tensix core; sender = core 0 (reads the gamma page once) on the writer NoC; one-shot.
+        mc = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),
+            core_ranges,
+            len(cores),
+            ttnn.McastFixedSenderConfig(sender_index=0),
+            ttnn.McastCoreOrder.RowMajor,
+        )
+        mc.attach(descriptor, "gamma_mcast", [writer], SEM_GAMMA_MCAST_FIRST)
+    descriptor.kernels = [reader, writer, compute]
     return descriptor

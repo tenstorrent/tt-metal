@@ -1,0 +1,689 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-01 23:45:41] SAFE_PYTEST: waiting for device (20s) — holder pid=3707505 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/row_partial_mcast/bench_row_partial.py -s --import-mode=prepend " parent pid=3707498 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/row_partial_mcast/run.sh t2 wk8_b4,wk16_b4,wk32_b4,wk64_b4,wk64_b1,wk128_b1,wk128_b16,wid_til"
+[2026-11-01 23:46:03] SAFE_PYTEST: waiting for device (40s) — holder pid=3707505 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/row_partial_mcast/bench_row_partial.py -s --import-mode=prepend " parent pid=3707498 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/row_partial_mcast/run.sh t2 wk8_b4,wk16_b4,wk32_b4,wk64_b4,wk64_b1,wk128_b1,wk128_b16,wid_til"
+[2026-11-01 23:46:24] SAFE_PYTEST: waiting for device (60s) — holder pid=3707505 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/row_partial_mcast/bench_row_partial.py -s --import-mode=prepend " parent pid=3707498 cmd="/bin/bash ttnn/ttnn/operations/rms_norm/perf_experiments/row_partial_mcast/run.sh t2 wk8_b4,wk16_b4,wk32_b4,wk64_b4,wk64_b1,wk128_b1,wk128_b16,wid_til"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — compile step -> JIT server bgdepyc04:12345 when >= 10 programs, else local (real pass always local)
+SAFE_PYTEST: env UP_FRONT_INLINE_JIT_SERVER=1 UP_FRONT_INLINE_FARM_MIN_PROGRAMS=10 TT_METAL_JIT_SERVER_ENDPOINT=bgdepyc04:12345 TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1 UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=128 PYTHONPATH=/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal:/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal python -m tracy -r -m pytest -p tests.plugins.up_front_collect /tmp/hrf_bench/test_hrf_bench.py -s -p conftest
+========================================
+2026-11-01 23:46:30.931 | INFO     | __main__:main:374 - Using port 8086
+2026-11-01 23:46:30.931 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-01 23:46:31.067 | INFO     | __main__:run_workload:409 - Test process started
+2026-11-01 23:46:32.876 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/adamjanovic/.cache/ttnn,model_cache_path=/home/adamjanovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.20, pytest-9.0.3, pluggy-1.7.0
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /tmp/hrf_bench
+plugins: xdist-3.8.0, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, split-0.11.0, repeat-0.9.4, anyio-4.16.0, timeout-2.4.0, github-actions-annotate-failures-0.3.0
+collected 12 items
+2026-11-01 23:46:36.213 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-11-01 23:46:36.213 | info     |             UMD | Cluster constructor started. (cluster.cpp:409)
+2026-11-01 23:46:36.213 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-11-01 23:46:36.213 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-11-01 23:46:36.217 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:654)
+2026-11-01 23:46:36.217 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-11-01 23:46:36.251 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:176)
+2026-11-01 23:46:36.251 | info     |             UMD | IOMMU: enabled (cluster.cpp:150)
+2026-11-01 23:46:36.251 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:153)
+2026-11-01 23:46:36.251 | info     |             UMD | Cluster constructor completed. (cluster.cpp:880)
+2026-11-01 23:46:36.252 | info     |             UMD | Starting devices in cluster (cluster.cpp:1466)
+2026-11-01 23:46:36.256 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1475)
+2026-11-01 23:46:36.368 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:531)
+2026-11-01 23:46:36.368 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:593)
+2026-11-01 23:46:36.369 | info     |          Fabric | Loaded physical groupings from: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-11-01 23:46:36.369 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-11-01 23:46:36.369 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1523)
+2026-11-01 23:46:36.369 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1617)
+2026-11-01 23:46:36.369 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 1x1_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1826)
+2026-11-01 23:46:36.370 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1943)
+2026-11-01 23:46:36.428 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:37.192 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s1: (1, 1, 64, 4096) shard=[1, 4096] cores=64
+HRF_ORDER sw4096_s1 base
+HRF_PREC sw4096_s1 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw4096_s1 zc32
+HRF_PREC sw4096_s1 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw4096_s1 st
+HRF_PREC sw4096_s1 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:37.372 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:37.688 | info     |           Metal | Disabling and clearing program cache on MeshDevice 3 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s2: (1, 1, 128, 4096) shard=[2, 4096] cores=64
+HRF_ORDER sw4096_s2 base
+HRF_PREC sw4096_s2 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw4096_s2 zc32
+HRF_PREC sw4096_s2 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw4096_s2 st
+HRF_PREC sw4096_s2 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:37.816 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:37.911 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s4: (1, 1, 256, 4096) shard=[4, 4096] cores=64
+HRF_ORDER sw4096_s4 base
+HRF_PREC sw4096_s4 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw4096_s4 zc32
+HRF_PREC sw4096_s4 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw4096_s4 st
+HRF_PREC sw4096_s4 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:38.062 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:38.155 | info     |           Metal | Disabling and clearing program cache on MeshDevice 7 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s8: (1, 1, 512, 4096) shard=[8, 4096] cores=64
+HRF_ORDER sw4096_s8 base
+HRF_PREC sw4096_s8 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw4096_s8 zc32
+HRF_PREC sw4096_s8 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw4096_s8 st
+HRF_PREC sw4096_s8 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:38.413 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:38.695 | info     |           Metal | Disabling and clearing program cache on MeshDevice 9 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s16: (1, 1, 1024, 4096) shard=[16, 4096] cores=64
+HRF_ORDER sw4096_s16 base
+HRF_PREC sw4096_s16 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw4096_s16 zc32
+HRF_PREC sw4096_s16 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw4096_s16 st
+HRF_PREC sw4096_s16 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:39.520 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:39.613 | info     |           Metal | Disabling and clearing program cache on MeshDevice 11 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s32: (1, 1, 2048, 4096) shard=[32, 4096] cores=64
+HRF_ORDER sw4096_s32 base
+HRF_PREC sw4096_s32 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw4096_s32 zc32
+HRF_PREC sw4096_s32 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw4096_s32 st
+HRF_PREC sw4096_s32 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:41.417 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:41.512 | info     |           Metal | Disabling and clearing program cache on MeshDevice 13 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s64: (1, 1, 4096, 4096) shard=[64, 4096] cores=64
+HRF_ORDER sw4096_s64 base
+HRF_PREC sw4096_s64 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw4096_s64 zc32
+HRF_PREC sw4096_s64 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw4096_s64 st
+HRF_PREC sw4096_s64 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:45.236 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:45.329 | info     |           Metal | Disabling and clearing program cache on MeshDevice 15 (mesh_device.cpp:1232)
+HRF_GEOM sw1024_s1: (1, 1, 64, 1024) shard=[1, 1024] cores=64
+HRF_ORDER sw1024_s1 base
+HRF_PREC sw1024_s1 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw1024_s1 zc32
+HRF_PREC sw1024_s1 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw1024_s1 st
+HRF_PREC sw1024_s1 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:45.388 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:45.481 | info     |           Metal | Disabling and clearing program cache on MeshDevice 17 (mesh_device.cpp:1232)
+HRF_GEOM sw1024_s4: (1, 1, 256, 1024) shard=[4, 1024] cores=64
+HRF_ORDER sw1024_s4 base
+HRF_PREC sw1024_s4 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw1024_s4 zc32
+HRF_PREC sw1024_s4 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw1024_s4 st
+HRF_PREC sw1024_s4 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:45.534 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:46:45.553 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:45.826 | info     |           Metal | Disabling and clearing program cache on MeshDevice 19 (mesh_device.cpp:1232)
+HRF_GEOM sw1024_s16: (1, 1, 1024, 1024) shard=[16, 1024] cores=64
+HRF_ORDER sw1024_s16 base
+HRF_PREC sw1024_s16 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw1024_s16 zc32
+HRF_PREC sw1024_s16 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw1024_s16 st
+HRF_PREC sw1024_s16 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:45.927 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:46:45.955 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:46.049 | info     |           Metal | Disabling and clearing program cache on MeshDevice 21 (mesh_device.cpp:1232)
+HRF_GEOM sw1024_s32: (1, 1, 2048, 1024) shard=[32, 1024] cores=64
+HRF_ORDER sw1024_s32 base
+HRF_PREC sw1024_s32 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw1024_s32 zc32
+HRF_PREC sw1024_s32 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw1024_s32 st
+HRF_PREC sw1024_s32 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:46.368 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:46:46.388 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:46.481 | info     |           Metal | Disabling and clearing program cache on MeshDevice 23 (mesh_device.cpp:1232)
+HRF_GEOM sw1024_s64: (1, 1, 4096, 1024) shard=[64, 1024] cores=64
+HRF_ORDER sw1024_s64 base
+HRF_PREC sw1024_s64 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw1024_s64 zc32
+HRF_PREC sw1024_s64 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+HRF_ORDER sw1024_s64 st
+HRF_PREC sw1024_s64 st pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:46:47.787 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+
+UP_FRONT_INLINE: collect pass over 12 item(s) took 11.6s
+UP_FRONT_INLINE: compile route farm (programs=36, farm_min=10)
+
+UP_FRONT_COLLECT: 36 ops stashed across 12 bodies -> 36 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=24 fallback=0
+2026-11-01 23:46:47.812 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:47.904 | info     |           Metal | Enabling program cache on MeshDevice 25 (mesh_device.cpp:1222)
+2026-11-01 23:46:49.582 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/2569719964681885215//brisc/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/2569719964681885215//brisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:49.582 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/2569719964681885215//brisc/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/2569719964681885215//brisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:49.582 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/2569719964681885215//brisc/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/2569719964681885215//brisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:49.584 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_reader/6186782868861723862//ncrisc/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_reader/6186782868861723862//ncrisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:49.584 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_reader/6186782868861723862//ncrisc/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_reader/6186782868861723862//ncrisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:49.584 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_reader/6186782868861723862//ncrisc/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_reader/6186782868861723862//ncrisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.079 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/9719294753240281656//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/9719294753240281656//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.135 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/8439807618911827015//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/8439807618911827015//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.135 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/8439807618911827015//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/8439807618911827015//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.135 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/8439807618911827015//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/8439807618911827015//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.195 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.195 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.195 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.195 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.195 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.661 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/8439807618911827015//trisc1/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/8439807618911827015//trisc1/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.661 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/9719294753240281656//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/9719294753240281656//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.661 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc1/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc1/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.664 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc1/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc1/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.669 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc1/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/15492481463427082552//trisc1/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.672 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/9719294753240281656//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/9719294753240281656//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.674 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/9719294753240281656//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/9719294753240281656//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:53.683 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/12854326002699320045//brisc/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/12854326002699320045//brisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:54.725 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:54.725 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:54.726 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc0/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:54.730 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc1/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc1/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:54.730 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc1/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc1/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:54.730 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc1/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc1/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:54.734 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc2/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc2/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:46:54.734 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc2/.build_state.8878032109757067002_3737138 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/13343800573899717665//trisc2/.build_state: No such file or directory (jit_build_utils.cpp:377)
+UP_FRONT_COLLECT: 36 collected · 36 built · 0 already compiled in 6.8s (workers=128, errors=0) -> on-disk JIT cache warm
+2026-11-01 23:46:54.778 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=36 programs=36 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=36 compile_s=7.0 collect_s=11.6 route=farm
+UP_FRONT_INLINE: compile step took 7.0s; starting the real pass
+
+../../../../../../../tmp/hrf_bench/test_hrf_bench.py 2026-11-01 23:46:54.805 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:54.888 | info     |           Metal | Disabling and clearing program cache on MeshDevice 27 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s1: (1, 1, 64, 4096) shard=[1, 4096] cores=64
+HRF_ORDER sw4096_s1 base
+HRF_PREC sw4096_s1 base pcc=0.999991 max_abs=0.125 rms=0.006608
+HRF_ORDER sw4096_s1 zc32
+HRF_PREC sw4096_s1 zc32 pcc=0.999992 max_abs=0.125 rms=0.003882 | vs_base: pcc=0.999990 max_abs=0.125 exact=False
+HRF_ORDER sw4096_s1 st
+HRF_PREC sw4096_s1 st pcc=0.999992 max_abs=0.125 rms=0.003882 | vs_base: pcc=0.999990 max_abs=0.125 exact=False
+.2026-11-01 23:46:55.063 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:46:55.075 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=2626ns, avg=15909.7ns, max=42337ns (profiler_analysis.cpp:729)
+2026-11-01 23:46:55.075 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=4000ns, range=[0..40000), underflow(<0ns)=0, overflow(>=40000ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:46:55.075 | info     |           Metal |   [           0 ..         4000) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.075 | info     |           Metal |   [        4000 ..         8000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.075 | info     |           Metal |   [        8000 ..        12000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.075 | info     |           Metal |   [       12000 ..        16000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.075 | info     |           Metal |   [       16000 ..        20000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.075 | info     |           Metal |   [       20000 ..        24000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.075 | info     |           Metal |   [       24000 ..        28000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.075 | info     |           Metal |   [       28000 ..        32000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.075 | info     |           Metal |   [       32000 ..        36000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.075 | info     |           Metal |   [       36000 ..        40000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.103 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:55.187 | info     |           Metal | Disabling and clearing program cache on MeshDevice 29 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s2: (1, 1, 128, 4096) shard=[2, 4096] cores=64
+HRF_ORDER sw4096_s2 base
+HRF_PREC sw4096_s2 base pcc=0.999991 max_abs=0.1875 rms=0.006569
+HRF_ORDER sw4096_s2 zc32
+HRF_PREC sw4096_s2 zc32 pcc=0.999992 max_abs=0.125 rms=0.003945 | vs_base: pcc=0.999990 max_abs=0.1875 exact=False
+HRF_ORDER sw4096_s2 st
+HRF_PREC sw4096_s2 st pcc=0.999992 max_abs=0.125 rms=0.003945 | vs_base: pcc=0.999990 max_abs=0.1875 exact=False
+.2026-11-01 23:46:55.307 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:46:55.318 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=3739ns, avg=16741.3ns, max=42355ns (profiler_analysis.cpp:729)
+2026-11-01 23:46:55.318 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=3900ns, range=[0..39000), underflow(<0ns)=0, overflow(>=39000ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:46:55.318 | info     |           Metal |   [           0 ..         3900) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.318 | info     |           Metal |   [        3900 ..         7800) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.318 | info     |           Metal |   [        7800 ..        11700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.318 | info     |           Metal |   [       11700 ..        15600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.318 | info     |           Metal |   [       15600 ..        19500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.318 | info     |           Metal |   [       19500 ..        23400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.318 | info     |           Metal |   [       23400 ..        27300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.318 | info     |           Metal |   [       27300 ..        31200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.318 | info     |           Metal |   [       31200 ..        35100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.318 | info     |           Metal |   [       35100 ..        39000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.349 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:55.433 | info     |           Metal | Disabling and clearing program cache on MeshDevice 31 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s4: (1, 1, 256, 4096) shard=[4, 4096] cores=64
+HRF_ORDER sw4096_s4 base
+HRF_PREC sw4096_s4 base pcc=0.999991 max_abs=0.1875 rms=0.006628
+HRF_ORDER sw4096_s4 zc32
+HRF_PREC sw4096_s4 zc32 pcc=0.999992 max_abs=0.09375 rms=0.00396 | vs_base: pcc=0.999990 max_abs=0.125 exact=False
+HRF_ORDER sw4096_s4 st
+HRF_PREC sw4096_s4 st pcc=0.999992 max_abs=0.09375 rms=0.00396 | vs_base: pcc=0.999990 max_abs=0.125 exact=False
+.2026-11-01 23:46:55.614 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:46:55.625 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=6311ns, avg=18646.3ns, max=42490ns (profiler_analysis.cpp:729)
+2026-11-01 23:46:55.625 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=3700ns, range=[3700..40700), underflow(<3700ns)=0, overflow(>=40700ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:46:55.625 | info     |           Metal |   [        3700 ..         7400) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.625 | info     |           Metal |   [        7400 ..        11100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.625 | info     |           Metal |   [       11100 ..        14800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.625 | info     |           Metal |   [       14800 ..        18500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.625 | info     |           Metal |   [       18500 ..        22200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.625 | info     |           Metal |   [       22200 ..        25900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.625 | info     |           Metal |   [       25900 ..        29600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.625 | info     |           Metal |   [       29600 ..        33300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.625 | info     |           Metal |   [       33300 ..        37000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.625 | info     |           Metal |   [       37000 ..        40700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:55.652 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:55.736 | info     |           Metal | Disabling and clearing program cache on MeshDevice 33 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s8: (1, 1, 512, 4096) shard=[8, 4096] cores=64
+HRF_ORDER sw4096_s8 base
+HRF_PREC sw4096_s8 base pcc=0.999991 max_abs=0.125 rms=0.006674
+HRF_ORDER sw4096_s8 zc32
+HRF_PREC sw4096_s8 zc32 pcc=0.999992 max_abs=0.125 rms=0.003976 | vs_base: pcc=0.999991 max_abs=0.1562 exact=False
+HRF_ORDER sw4096_s8 st
+HRF_PREC sw4096_s8 st pcc=0.999992 max_abs=0.125 rms=0.003976 | vs_base: pcc=0.999991 max_abs=0.1562 exact=False
+.2026-11-01 23:46:56.300 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:46:56.304 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=11467ns, avg=22402.3ns, max=42603ns (profiler_analysis.cpp:729)
+2026-11-01 23:46:56.304 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=3200ns, range=[9600..41600), underflow(<9600ns)=0, overflow(>=41600ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:46:56.304 | info     |           Metal |   [        9600 ..        12800) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:46:56.304 | info     |           Metal |   [       12800 ..        16000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:46:56.304 | info     |           Metal |   [       16000 ..        19200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:56.304 | info     |           Metal |   [       19200 ..        22400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:56.304 | info     |           Metal |   [       22400 ..        25600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:56.304 | info     |           Metal |   [       25600 ..        28800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:56.304 | info     |           Metal |   [       28800 ..        32000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:56.304 | info     |           Metal |   [       32000 ..        35200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:56.304 | info     |           Metal |   [       35200 ..        38400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:56.304 | info     |           Metal |   [       38400 ..        41600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:56.344 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:56.428 | info     |           Metal | Disabling and clearing program cache on MeshDevice 35 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s16: (1, 1, 1024, 4096) shard=[16, 4096] cores=64
+HRF_ORDER sw4096_s16 base
+HRF_PREC sw4096_s16 base pcc=0.999991 max_abs=0.125 rms=0.006724
+HRF_ORDER sw4096_s16 zc32
+HRF_PREC sw4096_s16 zc32 pcc=0.999992 max_abs=0.125 rms=0.003952 | vs_base: pcc=0.999991 max_abs=0.1875 exact=False
+HRF_ORDER sw4096_s16 st
+HRF_PREC sw4096_s16 st pcc=0.999992 max_abs=0.125 rms=0.003952 | vs_base: pcc=0.999991 max_abs=0.1875 exact=False
+.2026-11-01 23:46:57.461 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:46:57.472 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=21467ns, avg=29733.3ns, max=42986ns (profiler_analysis.cpp:729)
+2026-11-01 23:46:57.472 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=2200ns, range=[19800..41800), underflow(<19800ns)=0, overflow(>=41800ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:46:57.472 | info     |           Metal |   [       19800 ..        22000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:46:57.472 | info     |           Metal |   [       22000 ..        24200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:57.472 | info     |           Metal |   [       24200 ..        26400) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:46:57.472 | info     |           Metal |   [       26400 ..        28600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:57.472 | info     |           Metal |   [       28600 ..        30800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:57.472 | info     |           Metal |   [       30800 ..        33000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:57.472 | info     |           Metal |   [       33000 ..        35200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:57.472 | info     |           Metal |   [       35200 ..        37400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:57.472 | info     |           Metal |   [       37400 ..        39600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:57.472 | info     |           Metal |   [       39600 ..        41800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:46:57.640 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:46:58.296 | info     |           Metal | Disabling and clearing program cache on MeshDevice 37 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s32: (1, 1, 2048, 4096) shard=[32, 4096] cores=64
+HRF_ORDER sw4096_s32 base
+HRF_PREC sw4096_s32 base pcc=0.999991 max_abs=0.1875 rms=0.006821
+HRF_ORDER sw4096_s32 zc32
+HRF_PREC sw4096_s32 zc32 pcc=0.999992 max_abs=0.125 rms=0.003958 | vs_base: pcc=0.999991 max_abs=0.1875 exact=False
+HRF_ORDER sw4096_s32 st
+HRF_PREC sw4096_s32 st pcc=0.999992 max_abs=0.125 rms=0.003958 | vs_base: pcc=0.999991 max_abs=0.1875 exact=False
+.2026-11-01 23:47:00.600 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:47:00.610 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=41859ns, avg=44853.3ns, max=48366ns (profiler_analysis.cpp:729)
+2026-11-01 23:47:00.610 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=700ns, range=[41300..48300), underflow(<41300ns)=0, overflow(>=48300ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:47:00.610 | info     |           Metal |   [       41300 ..        42000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:00.610 | info     |           Metal |   [       42000 ..        42700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:00.610 | info     |           Metal |   [       42700 ..        43400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:00.610 | info     |           Metal |   [       43400 ..        44100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:00.610 | info     |           Metal |   [       44100 ..        44800) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:00.610 | info     |           Metal |   [       44800 ..        45500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:00.610 | info     |           Metal |   [       45500 ..        46200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:00.610 | info     |           Metal |   [       46200 ..        46900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:00.610 | info     |           Metal |   [       46900 ..        47600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:00.610 | info     |           Metal |   [       47600 ..        48300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:00.648 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:47:01.197 | info     |           Metal | Disabling and clearing program cache on MeshDevice 39 (mesh_device.cpp:1232)
+HRF_GEOM sw4096_s64: (1, 1, 4096, 4096) shard=[64, 4096] cores=64
+HRF_ORDER sw4096_s64 base
+HRF_PREC sw4096_s64 base pcc=0.999991 max_abs=0.1875 rms=0.006737
+HRF_ORDER sw4096_s64 zc32
+HRF_PREC sw4096_s64 zc32 pcc=0.999992 max_abs=0.125 rms=0.003932 | vs_base: pcc=0.999991 max_abs=0.1875 exact=False
+2026-11-01 23:47:04.077 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 152 clash with L1 buffers on core range [0-0 - 0-0]. L1 buffer allocated at 524288 and static circular buffer region ends at 1432704 (assert.hpp:104)
+F2026-11-01 23:47:04.771 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:47:04.783 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=82572ns, avg=100391.0ns, max=118210ns (profiler_analysis.cpp:729)
+2026-11-01 23:47:04.783 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=3600ns, range=[79200..115200), underflow(<79200ns)=0, overflow(>=115200ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:47:04.783 | info     |           Metal |   [       79200 ..        82800) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:04.783 | info     |           Metal |   [       82800 ..        86400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:04.783 | info     |           Metal |   [       86400 ..        90000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:04.783 | info     |           Metal |   [       90000 ..        93600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:04.783 | info     |           Metal |   [       93600 ..        97200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:04.783 | info     |           Metal |   [       97200 ..       100800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:04.783 | info     |           Metal |   [      100800 ..       104400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:04.783 | info     |           Metal |   [      104400 ..       108000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:04.783 | info     |           Metal |   [      108000 ..       111600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:04.783 | info     |           Metal |   [      111600 ..       115200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:04.806 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+2026-11-01 23:47:04.823 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:47:05.219 | info     |           Metal | Disabling and clearing program cache on MeshDevice 41 (mesh_device.cpp:1232)
+HRF_GEOM sw1024_s1: (1, 1, 64, 1024) shard=[1, 1024] cores=64
+HRF_ORDER sw1024_s1 base
+HRF_PREC sw1024_s1 base pcc=0.999991 max_abs=0.0625 rms=0.004986
+HRF_ORDER sw1024_s1 zc32
+HRF_PREC sw1024_s1 zc32 pcc=0.999992 max_abs=0.0625 rms=0.004006 | vs_base: pcc=0.999992 max_abs=0.09375 exact=False
+HRF_ORDER sw1024_s1 st
+HRF_PREC sw1024_s1 st pcc=0.999992 max_abs=0.0625 rms=0.004006 | vs_base: pcc=0.999992 max_abs=0.09375 exact=False
+.2026-11-01 23:47:05.347 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:47:05.358 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=1868ns, avg=5338.0ns, max=12267ns (profiler_analysis.cpp:729)
+2026-11-01 23:47:05.358 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=1100ns, range=[1100..12100), underflow(<1100ns)=0, overflow(>=12100ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:47:05.358 | info     |           Metal |   [        1100 ..         2200) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.358 | info     |           Metal |   [        2200 ..         3300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.358 | info     |           Metal |   [        3300 ..         4400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.358 | info     |           Metal |   [        4400 ..         5500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.358 | info     |           Metal |   [        5500 ..         6600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.358 | info     |           Metal |   [        6600 ..         7700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.358 | info     |           Metal |   [        7700 ..         8800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.358 | info     |           Metal |   [        8800 ..         9900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.358 | info     |           Metal |   [        9900 ..        11000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.358 | info     |           Metal |   [       11000 ..        12100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.396 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:47:05.495 | info     |           Metal | Disabling and clearing program cache on MeshDevice 43 (mesh_device.cpp:1232)
+HRF_GEOM sw1024_s4: (1, 1, 256, 1024) shard=[4, 1024] cores=64
+HRF_ORDER sw1024_s4 base
+HRF_PREC sw1024_s4 base pcc=0.999991 max_abs=0.125 rms=0.005164
+HRF_ORDER sw1024_s4 zc32
+HRF_PREC sw1024_s4 zc32 pcc=0.999992 max_abs=0.09375 rms=0.004108 | vs_base: pcc=0.999992 max_abs=0.125 exact=False
+HRF_ORDER sw1024_s4 st
+HRF_PREC sw1024_s4 st pcc=0.999992 max_abs=0.09375 rms=0.004108 | vs_base: pcc=0.999992 max_abs=0.125 exact=False
+.2026-11-01 23:47:05.584 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:47:05.595 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=3492ns, avg=6517.7ns, max=12336ns (profiler_analysis.cpp:729)
+2026-11-01 23:47:05.595 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=900ns, range=[2700..11700), underflow(<2700ns)=0, overflow(>=11700ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:47:05.595 | info     |           Metal |   [        2700 ..         3600) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.595 | info     |           Metal |   [        3600 ..         4500) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.595 | info     |           Metal |   [        4500 ..         5400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.595 | info     |           Metal |   [        5400 ..         6300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.595 | info     |           Metal |   [        6300 ..         7200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.595 | info     |           Metal |   [        7200 ..         8100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.595 | info     |           Metal |   [        8100 ..         9000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.595 | info     |           Metal |   [        9000 ..         9900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.595 | info     |           Metal |   [        9900 ..        10800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.595 | info     |           Metal |   [       10800 ..        11700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:05.631 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:47:05.988 | info     |           Metal | Disabling and clearing program cache on MeshDevice 45 (mesh_device.cpp:1232)
+HRF_GEOM sw1024_s16: (1, 1, 1024, 1024) shard=[16, 1024] cores=64
+HRF_ORDER sw1024_s16 base
+HRF_PREC sw1024_s16 base pcc=0.999991 max_abs=0.125 rms=0.005218
+HRF_ORDER sw1024_s16 zc32
+HRF_PREC sw1024_s16 zc32 pcc=0.999992 max_abs=0.125 rms=0.004035 | vs_base: pcc=0.999992 max_abs=0.125 exact=False
+HRF_ORDER sw1024_s16 st
+HRF_PREC sw1024_s16 st pcc=0.999992 max_abs=0.125 rms=0.004035 | vs_base: pcc=0.999992 max_abs=0.125 exact=False
+.2026-11-01 23:47:06.232 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:47:06.236 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=10464ns, avg=11472.0ns, max=12648ns (profiler_analysis.cpp:729)
+2026-11-01 23:47:06.236 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=300ns, range=[10200..13200), underflow(<10200ns)=0, overflow(>=13200ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:47:06.236 | info     |           Metal |   [       10200 ..        10500) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.236 | info     |           Metal |   [       10500 ..        10800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.236 | info     |           Metal |   [       10800 ..        11100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.236 | info     |           Metal |   [       11100 ..        11400) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.236 | info     |           Metal |   [       11400 ..        11700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.236 | info     |           Metal |   [       11700 ..        12000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.236 | info     |           Metal |   [       12000 ..        12300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.236 | info     |           Metal |   [       12300 ..        12600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.236 | info     |           Metal |   [       12600 ..        12900) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.236 | info     |           Metal |   [       12900 ..        13200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.265 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:47:06.349 | info     |           Metal | Disabling and clearing program cache on MeshDevice 47 (mesh_device.cpp:1232)
+HRF_GEOM sw1024_s32: (1, 1, 2048, 1024) shard=[32, 1024] cores=64
+HRF_ORDER sw1024_s32 base
+HRF_PREC sw1024_s32 base pcc=0.999991 max_abs=0.125 rms=0.00522
+HRF_ORDER sw1024_s32 zc32
+HRF_PREC sw1024_s32 zc32 pcc=0.999992 max_abs=0.125 rms=0.004055 | vs_base: pcc=0.999992 max_abs=0.1875 exact=False
+HRF_ORDER sw1024_s32 st
+HRF_PREC sw1024_s32 st pcc=0.999992 max_abs=0.125 rms=0.004055 | vs_base: pcc=0.999992 max_abs=0.1875 exact=False
+.2026-11-01 23:47:06.715 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:47:06.720 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=13456ns, avg=18266.3ns, max=21526ns (profiler_analysis.cpp:729)
+2026-11-01 23:47:06.720 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=900ns, range=[12600..21600), underflow(<12600ns)=0, overflow(>=21600ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:47:06.720 | info     |           Metal |   [       12600 ..        13500) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.720 | info     |           Metal |   [       13500 ..        14400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.720 | info     |           Metal |   [       14400 ..        15300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.720 | info     |           Metal |   [       15300 ..        16200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.720 | info     |           Metal |   [       16200 ..        17100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.720 | info     |           Metal |   [       17100 ..        18000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.720 | info     |           Metal |   [       18000 ..        18900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.720 | info     |           Metal |   [       18900 ..        19800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.720 | info     |           Metal |   [       19800 ..        20700) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.720 | info     |           Metal |   [       20700 ..        21600) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:06.756 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:47:06.839 | info     |           Metal | Disabling and clearing program cache on MeshDevice 49 (mesh_device.cpp:1232)
+HRF_GEOM sw1024_s64: (1, 1, 4096, 1024) shard=[64, 1024] cores=64
+HRF_ORDER sw1024_s64 base
+HRF_PREC sw1024_s64 base pcc=0.999991 max_abs=0.125 rms=0.005162
+HRF_ORDER sw1024_s64 zc32
+HRF_PREC sw1024_s64 zc32 pcc=0.999992 max_abs=0.09375 rms=0.004065 | vs_base: pcc=0.999992 max_abs=0.125 exact=False
+HRF_ORDER sw1024_s64 st
+HRF_PREC sw1024_s64 st pcc=0.999992 max_abs=0.09375 rms=0.004065 | vs_base: pcc=0.999992 max_abs=0.125 exact=False
+.2026-11-01 23:47:07.915 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:47:07.919 | info     |           Metal | Device kernel duration perf summary (device=0): count=3, min=23967ns, avg=34804.0ns, max=41904ns (profiler_analysis.cpp:729)
+2026-11-01 23:47:07.919 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=1800ns, range=[23400..41400), underflow(<23400ns)=0, overflow(>=41400ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:47:07.919 | info     |           Metal |   [       23400 ..        25200) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:07.919 | info     |           Metal |   [       25200 ..        27000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:07.919 | info     |           Metal |   [       27000 ..        28800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:07.919 | info     |           Metal |   [       28800 ..        30600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:07.919 | info     |           Metal |   [       30600 ..        32400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:07.919 | info     |           Metal |   [       32400 ..        34200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:07.919 | info     |           Metal |   [       34200 ..        36000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:07.919 | info     |           Metal |   [       36000 ..        37800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:47:07.919 | info     |           Metal |   [       37800 ..        39600) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:47:07.919 | info     |           Metal |   [       39600 ..        41400) |                                        |        0 (profiler_analysis.cpp:777)
+UP_FRONT_INLINE: real pass took 13.1s
+
+
+=================================== FAILURES ===================================
+____________________________ test_bench[sw4096_s64] ____________________________
+
+device = MeshDevice(1x1 grid, 1 devices), cell = 'sw4096_s64'
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f01acbafee0>
+
+    @pytest.mark.parametrize("cell", IDS)
+    def test_bench(device, cell, monkeypatch):
+        import torch  # function-local: the ttnn tree forbids global torch imports
+
+        device.disable_and_clear_program_cache()
+        cfg = CELLS[cell]
+        shape, dtype = cfg["shape"], cfg["dtype"]
+        torch_dtype = torch.float32 if dtype == F32 else torch.bfloat16
+        torch.manual_seed(0)
+        x = torch.randn(shape, dtype=torch.float32).to(torch_dtype)
+        W = shape[-1]
+        g, tg = None, None
+        if cfg["g"] is not None:
+            g = torch.randn(W, dtype=torch.float32).to(torch.float32 if cfg["g"] == F32 else torch.bfloat16)
+            tg = create_ttnn_input_tensor(g.reshape(1, 1, 1, W), device, dtype=cfg["g"], layout=RM)
+        mc = None
+        if cfg["shard"]:
+            mc = shard_config(cfg["shard"][0], cfg["shard"][1], ML.HEIGHT_SHARDED, layout=RM, dtype=dtype, device=device)
+        tx = create_ttnn_input_tensor(x, device, dtype=dtype, layout=RM, memory_layout=ML.HEIGHT_SHARDED, memory_config=mc)
+        ck = ttnn.ComputeConfigDescriptor()
+        ck.math_fidelity = cfg["fid"]
+        ck.fp32_dest_acc_en = cfg["fp32"]
+        ck.math_approx_mode = False
+        expected = pytorch_rms_norm(x, gamma=g, epsilon=1e-6)
+        ss = tx.memory_config().shard_spec
+        print(f"HRF_GEOM {cell}: {shape} shard={list(ss.shape)} cores={ss.grid.num_cores()}")
+
+        ref = None
+        for v in VSEL:
+            mode = VARIANTS[v]
+            if mode is None:
+                monkeypatch.setattr(op_mod, "create_program_descriptor", fpd.pd.create_program_descriptor)
+            else:
+                monkeypatch.setattr(fpd, "FLAT_MODE", mode.split("+")[0])
+                monkeypatch.setattr(fpd, "FLAT_ONES_ACC", mode.endswith("+ones_acc"))
+                monkeypatch.setattr(fpd, "FLAT_MAX_STICKS", 1 << 30)
+                monkeypatch.setattr(op_mod, "create_program_descriptor", fpd.create_program_descriptor)
+>           out = rms_norm(tx, gamma=tg, epsilon=1e-6, compute_kernel_config=ck, memory_config=tx.memory_config())
+
+/tmp/hrf_bench/test_hrf_bench.py:118:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/operations/rms_norm/rms_norm.py:236: in rms_norm
+    return ttnn.generic_op(io, descriptor)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.generic_op', function=<ttnn._ttnn.operations.generic.generic_op_t obje...ut_tensor', 'optional_tensor', 'optional_output_tensor', 'out', 'output', 'output_tensors', 'optional_output_tensors'))
+function_args = ([ttnn.Tensor([[[[-1.1250e+00, -1.1562e+00,  ..., -1.7266e+00,  6.0156e-01],
+               [ 1.9453e+00,  1.0078e+00,...Type::BFLOAT16, layout=Layout::ROW_MAJOR)], <ttnn._ttnn.program_descriptor.ProgramDescriptor object at 0x564e5b9c6cd0>)
+function_kwargs = {}, cq_id = None, recording = False, started = False
+python_io_record = None
+
+    def __call__(self, *function_args, **function_kwargs):
+        if self._requires_slow_runtime():
+            return self._slow_operation_instance()(*function_args, **function_kwargs)
+
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        started = False
+        python_io_record = None
+        try:
+            if recording:
+                ttnn.graph.track_function_start(self.python_fully_qualified_name)
+                started = True
+                python_io_record = ttnn.graph.append_python_io_record(self.python_fully_qualified_name)
+                ttnn.graph.record_python_operation(
+                    self.python_fully_qualified_name,
+                    function_args,
+                    function_kwargs,
+                    record=python_io_record,
+                )
+                input_tensors = get_all_tensors((function_args, function_kwargs))
+                set_tensor_id(input_tensors)
+
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+E               RuntimeError: TT_THROW @ /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tt_metal/impl/program/program.cpp:2634: tt::exception
+E               info:
+E               Statically allocated circular buffers in program 152 clash with L1 buffers on core range [0-0 - 0-0]. L1 buffer allocated at 524288 and static circular buffer region ends at 1432704
+E               backtrace:
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xaff413) [0x7f01bfc93413]
+E                --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E                --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+E                --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+E                --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSJ_12MeshWorkloadEb+0x310) [0x7f01c35df520]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x2ca7082) [0x7f01c35e2082]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RKNS1_18ProgramCacheLookupERKT0_+0x16c) [0x7f01c35ddfdc]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations7generic24GenericOpDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x7f01c35dcea1]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations7generic24GenericOpDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x147) [0x7f01c35d7f07]
+E                --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::experimental::MeshProgramDescriptor const&)
+E                --- ttnn::generic_op(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, tt::tt_metal::ProgramDescriptor const&)
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/_ttnn.so(+0x64cb5f) [0x7f01c3cb1b5f]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/_ttnn.so(+0x3bc9fd) [0x7f01c3a219fd]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x99) [0x564e3077e3e9]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x3b72fa) [0x564e308c42fa]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x7414) [0x564e307df074]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x99) [0x564e3077e3e9]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x3b72fa) [0x564e308c42fa]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_MakeTpCall+0x136) [0x564e30667b86]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x564e30807ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x564e3080c60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x31e9b) [0x564e30809afb]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0xaae2) [0x564e307e2742]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x5967) [0x564e307dd5c7]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x564e30807ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x272279) [0x564e3077f279]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x564e30807ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x116) [0x564e3077e466]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x3b72fa) [0x564e308c42fa]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_MakeTpCall+0x136) [0x564e30667b86]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x564e3080c60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x31e9b) [0x564e30809afb]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x2fd72) [0x564e308079d2]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x5967) [0x564e307dd5c7]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x564e30807ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x272279) [0x564e3077f279]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x564e30807ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x116) [0x564e3077e466]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x3b72fa) [0x564e308c42fa]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x7414) [0x564e307df074]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x564e3080c60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x216e6) [0x564e307f9346]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x272279) [0x564e3077f279]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x564e3080c60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x31e9b) [0x564e30809afb]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x564e3080c60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x216e6) [0x564e307f9346]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x564e3080c60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x31e9b) [0x564e30809afb]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x5967) [0x564e307dd5c7]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x564e30807ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x272279) [0x564e3077f279]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x564e30807ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x116) [0x564e3077e466]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x3b72fa) [0x564e308c42fa]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyObject_MakeTpCall+0x136) [0x564e30667b86]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x2ff60e) [0x564e3080c60e]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x31e9b) [0x564e30809afb]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x5967) [0x564e307dd5c7]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(+0x1a3e07) [0x564e306b0e07]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x30268) [0x564e30807ec8]
+E                --- /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x2e3) [0x564e3077cdc3]
+
+ttnn/ttnn/decorators.py:1245: RuntimeError
+=========================== short test summary info ============================
+FAILED ../../../../../../../tmp/hrf_bench/test_hrf_bench.py::test_bench[sw4096_s64]
+======================== 1 failed, 11 passed in 32.07s =========================
+2026-11-01 23:47:09.305 | info     |    BuildKernels | JIT cache stats: 71/71 hits (100.0%) [10 cached, 231 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 23:47:09.305 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 23:47:09.309 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-11-01 23:47:09.309 | info     |             UMD | Closing devices in cluster (cluster.cpp:1480)
+2026-11-01 23:47:09.359 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1490)
+2026-11-01 23:47:09.360 | info     |             UMD | Cluster destructor started. (cluster.cpp:1211)
+2026-11-01 23:47:09.360 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1224)
+2026-11-01 23:47:09.627 | INFO     | __main__:main:483 - Copying /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/build/profiler/build_wasm/traces/conftest_2026_11_01_23_47_09.tracy
+2026-11-01 23:47:09.640 | INFO     | __main__:main:486 - Copied /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/build/profiler/build_wasm/traces/conftest_2026_11_01_23_47_09.tracy
+2026-11-01 23:47:09.640 | INFO     | __main__:main:495 - embed.tracy -> traces/conftest_2026_11_01_23_47_09.tracy
+2026-11-01 23:47:09.640 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-01 23:47:09.641 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-01 23:47:09.641 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-01 23:47:10.926 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-01 23:47:10.990 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-01 23:47:10.990 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-01 23:47:13.625 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-01 23:47:13.625 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-01 23:47:13.990 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-01 23:47:13.990 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-01 23:47:14.043 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-01 23:47:14.079 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_11_01_23_47_13/ops_perf_results_2026_11_01_23_47_13.csv
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 12 item(s) took 11.6s
+PRECOMPILE: UP_FRONT_INLINE: compile route farm (programs=36, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 36 ops stashed across 12 bodies -> 36 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=24 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 36 collected · 36 built · 0 already compiled in 6.8s (workers=128, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 7.0s; starting the real pass
+PRECOMPILE: UP_FRONT_INLINE: real pass took 13.1s
+SAFE_PYTEST: PROFILER CSV: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_11_01_23_47_13/ops_perf_results_2026_11_01_23_47_13.csv
+SAFE_PYTEST_RESULT: PASS

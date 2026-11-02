@@ -1,0 +1,732 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-01 23:48:29] SAFE_PYTEST: waiting for device (20s) — holder pid=3744430 cmd="/bin/bash scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/compact_gamma/test_cg_bench.py::test_bench --import-mode=prepend -s " parent pid=3744426 cmd="timeout 2400 scripts/run_safe_pytest.sh --dev --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/compact_gamma/test_cg_bench.py::test_bench --im"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — compile step -> JIT server bgdepyc04:12345 when >= 10 programs, else local (real pass always local)
+SAFE_PYTEST: env UP_FRONT_INLINE_JIT_SERVER=1 UP_FRONT_INLINE_FARM_MIN_PROGRAMS=10 TT_METAL_JIT_SERVER_ENDPOINT=bgdepyc04:12345 TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1 UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=128 PYTHONPATH=/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal:/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal python -m tracy -r -m pytest -p tests.plugins.up_front_collect /tmp/hrf_bench/test_hrf_bench.py -s -p conftest
+========================================
+2026-11-01 23:48:39.566 | INFO     | __main__:main:374 - Using port 8086
+2026-11-01 23:48:39.566 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-01 23:48:39.772 | INFO     | __main__:run_workload:409 - Test process started
+2026-11-01 23:48:41.605 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/adamjanovic/.cache/ttnn,model_cache_path=/home/adamjanovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.20, pytest-9.0.3, pluggy-1.7.0
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /tmp/hrf_bench
+plugins: xdist-3.8.0, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, split-0.11.0, repeat-0.9.4, anyio-4.16.0, timeout-2.4.0, github-actions-annotate-failures-0.3.0
+collected 21 items
+2026-11-01 23:48:44.883 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-11-01 23:48:44.883 | info     |             UMD | Cluster constructor started. (cluster.cpp:409)
+2026-11-01 23:48:44.884 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-11-01 23:48:44.884 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-11-01 23:48:44.888 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:654)
+2026-11-01 23:48:44.888 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-11-01 23:48:44.922 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:176)
+2026-11-01 23:48:44.922 | info     |             UMD | IOMMU: enabled (cluster.cpp:150)
+2026-11-01 23:48:44.922 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:153)
+2026-11-01 23:48:44.922 | info     |             UMD | Cluster constructor completed. (cluster.cpp:880)
+2026-11-01 23:48:44.923 | info     |             UMD | Starting devices in cluster (cluster.cpp:1466)
+2026-11-01 23:48:44.965 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1475)
+2026-11-01 23:48:45.095 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:531)
+2026-11-01 23:48:45.095 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:593)
+2026-11-01 23:48:45.096 | info     |          Fabric | Loaded physical groupings from: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-11-01 23:48:45.096 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-11-01 23:48:45.097 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1523)
+2026-11-01 23:48:45.097 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1617)
+2026-11-01 23:48:45.097 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 1x1_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1826)
+2026-11-01 23:48:45.097 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1943)
+2026-11-01 23:48:45.175 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:46.094 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1232)
+HRF_GEOM sw2048_s8: (1, 1, 512, 2048) shard=[8, 2048] cores=64
+HRF_ORDER sw2048_s8 base
+HRF_PREC sw2048_s8 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw2048_s8 zc32
+HRF_PREC sw2048_s8 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:46.268 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:46.533 | info     |           Metal | Disabling and clearing program cache on MeshDevice 3 (mesh_device.cpp:1232)
+HRF_GEOM sw2048_s16: (1, 1, 1024, 2048) shard=[16, 2048] cores=64
+HRF_ORDER sw2048_s16 base
+HRF_PREC sw2048_s16 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw2048_s16 zc32
+HRF_PREC sw2048_s16 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:46.768 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:46.862 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1232)
+HRF_GEOM sw2048_s24: (1, 1, 1536, 2048) shard=[24, 2048] cores=64
+HRF_ORDER sw2048_s24 base
+HRF_PREC sw2048_s24 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw2048_s24 zc32
+HRF_PREC sw2048_s24 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:47.088 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:47.685 | info     |           Metal | Disabling and clearing program cache on MeshDevice 7 (mesh_device.cpp:1232)
+HRF_GEOM sw2048_s32: (1, 1, 2048, 2048) shard=[32, 2048] cores=64
+HRF_ORDER sw2048_s32 base
+HRF_PREC sw2048_s32 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw2048_s32 zc32
+HRF_PREC sw2048_s32 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:48.243 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:48.626 | info     |           Metal | Disabling and clearing program cache on MeshDevice 9 (mesh_device.cpp:1232)
+HRF_GEOM sw256_s1: (1, 1, 64, 256) shard=[1, 256] cores=64
+HRF_ORDER sw256_s1 base
+HRF_PREC sw256_s1 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw256_s1 zc32
+HRF_PREC sw256_s1 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:48.852 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:49.260 | info     |           Metal | Disabling and clearing program cache on MeshDevice 11 (mesh_device.cpp:1232)
+HRF_GEOM sw256_s2: (1, 1, 128, 256) shard=[2, 256] cores=64
+HRF_ORDER sw256_s2 base
+HRF_PREC sw256_s2 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw256_s2 zc32
+HRF_PREC sw256_s2 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:49.335 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:49.873 | info     |           Metal | Disabling and clearing program cache on MeshDevice 13 (mesh_device.cpp:1232)
+HRF_GEOM sw256_s4: (1, 1, 256, 256) shard=[4, 256] cores=64
+HRF_ORDER sw256_s4 base
+HRF_PREC sw256_s4 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw256_s4 zc32
+HRF_PREC sw256_s4 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:49.953 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:50.046 | info     |           Metal | Disabling and clearing program cache on MeshDevice 15 (mesh_device.cpp:1232)
+HRF_GEOM sw256_s8: (1, 1, 512, 256) shard=[8, 256] cores=64
+HRF_ORDER sw256_s8 base
+HRF_PREC sw256_s8 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw256_s8 zc32
+HRF_PREC sw256_s8 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:50.128 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:50.221 | info     |           Metal | Disabling and clearing program cache on MeshDevice 17 (mesh_device.cpp:1232)
+HRF_GEOM sw512_s2: (1, 1, 128, 512) shard=[2, 512] cores=64
+HRF_ORDER sw512_s2 base
+HRF_PREC sw512_s2 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw512_s2 zc32
+HRF_PREC sw512_s2 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:50.258 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:50.304 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:50.398 | info     |           Metal | Disabling and clearing program cache on MeshDevice 19 (mesh_device.cpp:1232)
+HRF_GEOM sw512_s4: (1, 1, 256, 512) shard=[4, 512] cores=64
+HRF_ORDER sw512_s4 base
+HRF_PREC sw512_s4 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw512_s4 zc32
+HRF_PREC sw512_s4 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:50.439 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:50.558 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:50.652 | info     |           Metal | Disabling and clearing program cache on MeshDevice 21 (mesh_device.cpp:1232)
+HRF_GEOM sw512_s8: (1, 1, 512, 512) shard=[8, 512] cores=64
+HRF_ORDER sw512_s8 base
+HRF_PREC sw512_s8 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw512_s8 zc32
+HRF_PREC sw512_s8 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:50.702 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:50.740 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:50.835 | info     |           Metal | Disabling and clearing program cache on MeshDevice 23 (mesh_device.cpp:1232)
+HRF_GEOM sw4096f_s8: (1, 1, 512, 4096) shard=[8, 4096] cores=64
+HRF_ORDER sw4096f_s8 base
+HRF_PREC sw4096f_s8 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw4096f_s8 zc32
+HRF_PREC sw4096f_s8 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:51.025 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:51.064 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:51.157 | info     |           Metal | Disabling and clearing program cache on MeshDevice 25 (mesh_device.cpp:1232)
+HRF_GEOM sw4096f_s16: (1, 1, 1024, 4096) shard=[16, 4096] cores=64
+HRF_ORDER sw4096f_s16 base
+HRF_PREC sw4096f_s16 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER sw4096f_s16 zc32
+HRF_PREC sw4096f_s16 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:51.781 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:51.821 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:51.915 | info     |           Metal | Disabling and clearing program cache on MeshDevice 27 (mesh_device.cpp:1232)
+HRF_GEOM sw4096f_s32: (1, 1, 2048, 4096) shard=[32, 4096] cores=64
+2026-11-01 23:48:51.965 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:52.003 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:52.096 | info     |           Metal | Disabling and clearing program cache on MeshDevice 29 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_3104x4064: (3104, 4064) shard=[24, 4064] cores=130
+HRF_ORDER hgt_rm_3104x4064 base
+HRF_PREC hgt_rm_3104x4064 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER hgt_rm_3104x4064 zc32
+HRF_PREC hgt_rm_3104x4064 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:53.788 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:53.924 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:54.678 | info     |           Metal | Disabling and clearing program cache on MeshDevice 31 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_3x736x5119: (3, 1, 736, 5119) shard=[17, 5120] cores=130
+HRF_ORDER hgt_rm_3x736x5119 base
+HRF_PREC hgt_rm_3x736x5119 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER hgt_rm_3x736x5119 zc32
+HRF_PREC hgt_rm_3x736x5119 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:56.323 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:56.416 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:56.817 | info     |           Metal | Disabling and clearing program cache on MeshDevice 33 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_1500x1000: (1500, 1000) shard=[12, 1000] cores=125
+HRF_ORDER hgt_rm_1500x1000 base
+HRF_PREC hgt_rm_1500x1000 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER hgt_rm_1500x1000 zc32
+HRF_PREC hgt_rm_1500x1000 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:56.929 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:56.948 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:57.041 | info     |           Metal | Disabling and clearing program cache on MeshDevice 35 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_2047x2047: (2047, 2047) shard=[16, 2048] cores=128
+HRF_ORDER hgt_rm_2047x2047 base
+HRF_PREC hgt_rm_2047x2047 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER hgt_rm_2047x2047 zc32
+HRF_PREC hgt_rm_2047x2047 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:57.340 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:57.360 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:57.453 | info     |           Metal | Disabling and clearing program cache on MeshDevice 37 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_992x3000: (1, 1, 992, 3000) shard=[8, 3000] cores=124
+HRF_ORDER hgt_rm_992x3000 base
+HRF_PREC hgt_rm_992x3000 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER hgt_rm_992x3000 zc32
+HRF_PREC hgt_rm_992x3000 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:57.708 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:57.728 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:57.821 | info     |           Metal | Disabling and clearing program cache on MeshDevice 39 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_32x64: (1, 1, 32, 64) shard=[1, 64] cores=32
+HRF_ORDER hgt_rm_32x64 base
+HRF_PREC hgt_rm_32x64 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER hgt_rm_32x64 zc32
+HRF_PREC hgt_rm_32x64 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:57.853 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:48:57.880 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:57.972 | info     |           Metal | Disabling and clearing program cache on MeshDevice 41 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_1024x1024_gf32: (1024, 1024) shard=[8, 1024] cores=128
+HRF_ORDER hgt_rm_1024x1024_gf32 base
+HRF_PREC hgt_rm_1024x1024_gf32 base pcc=1.000000 max_abs=0 rms=0
+HRF_ORDER hgt_rm_1024x1024_gf32 zc32
+HRF_PREC hgt_rm_1024x1024_gf32 zc32 pcc=1.000000 max_abs=0 rms=0 | vs_base: pcc=1.000000 max_abs=0 exact=True
+2026-11-01 23:48:58.047 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+
+UP_FRONT_INLINE: collect pass over 21 item(s) took 13.2s
+UP_FRONT_INLINE: compile route farm (programs=40, farm_min=10)
+
+UP_FRONT_COLLECT: 40 ops stashed across 21 bodies -> 40 unique programs (swallowed 1, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=42 fallback=0
+2026-11-01 23:48:58.063 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:48:58.155 | info     |           Metal | Enabling program cache on MeshDevice 43 (mesh_device.cpp:1222)
+2026-11-01 23:49:04.019 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/611998682549409494//trisc0/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/611998682549409494//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.019 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/611998682549409494//trisc0/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/611998682549409494//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.022 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/611998682549409494//trisc1/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/611998682549409494//trisc1/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.022 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/611998682549409494//trisc1/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/611998682549409494//trisc1/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.548 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/7096177633852591798//trisc0/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/7096177633852591798//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.553 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/7096177633852591798//trisc2/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/7096177633852591798//trisc2/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.555 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/6018849726236155751//brisc/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/6018849726236155751//brisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.556 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_reader/11771999229568273237//ncrisc/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_reader/11771999229568273237//ncrisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.562 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/12244404119607733197//trisc0/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/12244404119607733197//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.565 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/12244404119607733197//trisc1/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/12244404119607733197//trisc1/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.568 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/12244404119607733197//trisc2/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_compute/12244404119607733197//trisc2/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.571 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/6283398551703029214//brisc/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_writer/6283398551703029214//brisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:04.573 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_reader/1769643071498694643//ncrisc/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_flat_reader/1769643071498694643//ncrisc/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:06.920 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/3407631838539571848//trisc0/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/3407631838539571848//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:06.921 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/16736254302394180803//trisc0/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/16736254302394180803//trisc0/.build_state: No such file or directory (jit_build_utils.cpp:377)
+2026-11-01 23:49:06.928 | error    |    BuildKernels | Failed to rename temporary file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/3407631838539571848//trisc2/.build_state.8342333861642674820_3750723 to target file /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/built/tt-metal-cache2992868696108093202/kernels/rms_norm_compute/3407631838539571848//trisc2/.build_state: No such file or directory (jit_build_utils.cpp:377)
+UP_FRONT_COLLECT: 40 collected · 40 built · 0 already compiled in 8.8s (workers=128, errors=0) -> on-disk JIT cache warm
+2026-11-01 23:49:06.971 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=40 programs=40 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=40 compile_s=8.9 collect_s=13.2 route=farm
+UP_FRONT_INLINE: compile step took 8.9s; starting the real pass
+
+../../../../../../../tmp/hrf_bench/test_hrf_bench.py 2026-11-01 23:49:06.991 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:07.075 | info     |           Metal | Disabling and clearing program cache on MeshDevice 45 (mesh_device.cpp:1232)
+HRF_GEOM sw2048_s8: (1, 1, 512, 2048) shard=[8, 2048] cores=64
+HRF_ORDER sw2048_s8 base
+HRF_PREC sw2048_s8 base pcc=0.999991 max_abs=0.125 rms=0.006078
+HRF_ORDER sw2048_s8 zc32
+HRF_PREC sw2048_s8 zc32 pcc=0.999992 max_abs=0.0625 rms=0.003995 | vs_base: pcc=0.999991 max_abs=0.125 exact=False
+.2026-11-01 23:49:07.252 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:07.262 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=7836ns, avg=15166.0ns, max=22496ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:07.262 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=1500ns, range=[7500..22500), underflow(<7500ns)=0, overflow(>=22500ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:07.262 | info     |           Metal |   [        7500 ..         9000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.262 | info     |           Metal |   [        9000 ..        10500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.262 | info     |           Metal |   [       10500 ..        12000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.262 | info     |           Metal |   [       12000 ..        13500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.262 | info     |           Metal |   [       13500 ..        15000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.262 | info     |           Metal |   [       15000 ..        16500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.262 | info     |           Metal |   [       16500 ..        18000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.262 | info     |           Metal |   [       18000 ..        19500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.262 | info     |           Metal |   [       19500 ..        21000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.262 | info     |           Metal |   [       21000 ..        22500) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.319 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:07.402 | info     |           Metal | Disabling and clearing program cache on MeshDevice 47 (mesh_device.cpp:1232)
+HRF_GEOM sw2048_s16: (1, 1, 1024, 2048) shard=[16, 2048] cores=64
+HRF_ORDER sw2048_s16 base
+HRF_PREC sw2048_s16 base pcc=0.999991 max_abs=0.1875 rms=0.006082
+HRF_ORDER sw2048_s16 zc32
+HRF_PREC sw2048_s16 zc32 pcc=0.999992 max_abs=0.0625 rms=0.00399 | vs_base: pcc=0.999991 max_abs=0.125 exact=False
+.2026-11-01 23:49:07.645 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:07.658 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=14156ns, avg=18477.0ns, max=22798ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:07.658 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=900ns, range=[13500..22500), underflow(<13500ns)=0, overflow(>=22500ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:49:07.658 | info     |           Metal |   [       13500 ..        14400) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.658 | info     |           Metal |   [       14400 ..        15300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.658 | info     |           Metal |   [       15300 ..        16200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.658 | info     |           Metal |   [       16200 ..        17100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.658 | info     |           Metal |   [       17100 ..        18000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.658 | info     |           Metal |   [       18000 ..        18900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.658 | info     |           Metal |   [       18900 ..        19800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.658 | info     |           Metal |   [       19800 ..        20700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.658 | info     |           Metal |   [       20700 ..        21600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.658 | info     |           Metal |   [       21600 ..        22500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:07.728 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:08.100 | info     |           Metal | Disabling and clearing program cache on MeshDevice 49 (mesh_device.cpp:1232)
+HRF_GEOM sw2048_s24: (1, 1, 1536, 2048) shard=[24, 2048] cores=64
+HRF_ORDER sw2048_s24 base
+HRF_PREC sw2048_s24 base pcc=0.999991 max_abs=0.125 rms=0.006054
+HRF_ORDER sw2048_s24 zc32
+HRF_PREC sw2048_s24 zc32 pcc=0.999992 max_abs=0.125 rms=0.003995 | vs_base: pcc=0.999991 max_abs=0.125 exact=False
+.2026-11-01 23:49:08.472 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:08.483 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=20642ns, avg=21933.0ns, max=23224ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:08.483 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=300ns, range=[20400..23400), underflow(<20400ns)=0, overflow(>=23400ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:08.483 | info     |           Metal |   [       20400 ..        20700) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:08.483 | info     |           Metal |   [       20700 ..        21000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:08.483 | info     |           Metal |   [       21000 ..        21300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:08.483 | info     |           Metal |   [       21300 ..        21600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:08.483 | info     |           Metal |   [       21600 ..        21900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:08.483 | info     |           Metal |   [       21900 ..        22200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:08.483 | info     |           Metal |   [       22200 ..        22500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:08.483 | info     |           Metal |   [       22500 ..        22800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:08.483 | info     |           Metal |   [       22800 ..        23100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:08.483 | info     |           Metal |   [       23100 ..        23400) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:08.522 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:08.606 | info     |           Metal | Disabling and clearing program cache on MeshDevice 51 (mesh_device.cpp:1232)
+HRF_GEOM sw2048_s32: (1, 1, 2048, 2048) shard=[32, 2048] cores=64
+HRF_ORDER sw2048_s32 base
+HRF_PREC sw2048_s32 base pcc=0.999991 max_abs=0.125 rms=0.005949
+HRF_ORDER sw2048_s32 zc32
+HRF_PREC sw2048_s32 zc32 pcc=0.999992 max_abs=0.125 rms=0.003979 | vs_base: pcc=0.999991 max_abs=0.1875 exact=False
+.2026-11-01 23:49:09.233 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:09.237 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=23824ns, avg=25490.5ns, max=27157ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:09.237 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=400ns, range=[23600..27600), underflow(<23600ns)=0, overflow(>=27600ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:09.237 | info     |           Metal |   [       23600 ..        24000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.237 | info     |           Metal |   [       24000 ..        24400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.237 | info     |           Metal |   [       24400 ..        24800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.237 | info     |           Metal |   [       24800 ..        25200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.237 | info     |           Metal |   [       25200 ..        25600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.237 | info     |           Metal |   [       25600 ..        26000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.237 | info     |           Metal |   [       26000 ..        26400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.237 | info     |           Metal |   [       26400 ..        26800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.237 | info     |           Metal |   [       26800 ..        27200) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.237 | info     |           Metal |   [       27200 ..        27600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.273 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:09.356 | info     |           Metal | Disabling and clearing program cache on MeshDevice 53 (mesh_device.cpp:1232)
+HRF_GEOM sw256_s1: (1, 1, 64, 256) shard=[1, 256] cores=64
+HRF_ORDER sw256_s1 base
+HRF_PREC sw256_s1 base pcc=0.999990 max_abs=0.0625 rms=0.004644
+HRF_ORDER sw256_s1 zc32
+HRF_PREC sw256_s1 zc32 pcc=0.999992 max_abs=0.0625 rms=0.004057 | vs_base: pcc=0.999995 max_abs=0.0625 exact=False
+.2026-11-01 23:49:09.447 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:09.458 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=1916ns, avg=3358.5ns, max=4801ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:09.458 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=300ns, range=[1800..4800), underflow(<1800ns)=0, overflow(>=4800ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:49:09.458 | info     |           Metal |   [        1800 ..         2100) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.458 | info     |           Metal |   [        2100 ..         2400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.458 | info     |           Metal |   [        2400 ..         2700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.458 | info     |           Metal |   [        2700 ..         3000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.458 | info     |           Metal |   [        3000 ..         3300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.458 | info     |           Metal |   [        3300 ..         3600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.458 | info     |           Metal |   [        3600 ..         3900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.458 | info     |           Metal |   [        3900 ..         4200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.458 | info     |           Metal |   [        4200 ..         4500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.458 | info     |           Metal |   [        4500 ..         4800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.484 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:09.567 | info     |           Metal | Disabling and clearing program cache on MeshDevice 55 (mesh_device.cpp:1232)
+HRF_GEOM sw256_s2: (1, 1, 128, 256) shard=[2, 256] cores=64
+HRF_ORDER sw256_s2 base
+HRF_PREC sw256_s2 base pcc=0.999990 max_abs=0.0625 rms=0.004839
+HRF_ORDER sw256_s2 zc32
+HRF_PREC sw256_s2 zc32 pcc=0.999992 max_abs=0.0625 rms=0.004117 | vs_base: pcc=0.999995 max_abs=0.0625 exact=False
+.2026-11-01 23:49:09.627 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:09.631 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=2580ns, avg=3692.0ns, max=4804ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:09.631 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=300ns, range=[2400..5400), underflow(<2400ns)=0, overflow(>=5400ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:09.631 | info     |           Metal |   [        2400 ..         2700) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.631 | info     |           Metal |   [        2700 ..         3000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.631 | info     |           Metal |   [        3000 ..         3300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.631 | info     |           Metal |   [        3300 ..         3600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.631 | info     |           Metal |   [        3600 ..         3900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.631 | info     |           Metal |   [        3900 ..         4200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.631 | info     |           Metal |   [        4200 ..         4500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.631 | info     |           Metal |   [        4500 ..         4800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.631 | info     |           Metal |   [        4800 ..         5100) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.631 | info     |           Metal |   [        5100 ..         5400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.664 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:09.747 | info     |           Metal | Disabling and clearing program cache on MeshDevice 57 (mesh_device.cpp:1232)
+HRF_GEOM sw256_s4: (1, 1, 256, 256) shard=[4, 256] cores=64
+HRF_ORDER sw256_s4 base
+HRF_PREC sw256_s4 base pcc=0.999990 max_abs=0.0625 rms=0.004846
+HRF_ORDER sw256_s4 zc32
+HRF_PREC sw256_s4 zc32 pcc=0.999991 max_abs=0.0625 rms=0.004228 | vs_base: pcc=0.999995 max_abs=0.0625 exact=False
+.2026-11-01 23:49:09.811 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:09.821 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=4018ns, avg=4426.5ns, max=4835ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:09.821 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[4000..5000), underflow(<4000ns)=0, overflow(>=5000ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:09.821 | info     |           Metal |   [        4000 ..         4100) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.821 | info     |           Metal |   [        4100 ..         4200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.821 | info     |           Metal |   [        4200 ..         4300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.821 | info     |           Metal |   [        4300 ..         4400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.821 | info     |           Metal |   [        4400 ..         4500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.821 | info     |           Metal |   [        4500 ..         4600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.821 | info     |           Metal |   [        4600 ..         4700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.821 | info     |           Metal |   [        4700 ..         4800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.821 | info     |           Metal |   [        4800 ..         4900) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.821 | info     |           Metal |   [        4900 ..         5000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.845 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:09.929 | info     |           Metal | Disabling and clearing program cache on MeshDevice 59 (mesh_device.cpp:1232)
+HRF_GEOM sw256_s8: (1, 1, 512, 256) shard=[8, 256] cores=64
+HRF_ORDER sw256_s8 base
+HRF_PREC sw256_s8 base pcc=0.999990 max_abs=0.0625 rms=0.004879
+HRF_ORDER sw256_s8 zc32
+HRF_PREC sw256_s8 zc32 pcc=0.999991 max_abs=0.0625 rms=0.004241 | vs_base: pcc=0.999995 max_abs=0.0625 exact=False
+.2026-11-01 23:49:09.995 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:09.999 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=4852ns, avg=5841.0ns, max=6830ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:09.999 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=200ns, range=[4800..6800), underflow(<4800ns)=0, overflow(>=6800ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:49:09.999 | info     |           Metal |   [        4800 ..         5000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.999 | info     |           Metal |   [        5000 ..         5200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.999 | info     |           Metal |   [        5200 ..         5400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.999 | info     |           Metal |   [        5400 ..         5600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.999 | info     |           Metal |   [        5600 ..         5800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.999 | info     |           Metal |   [        5800 ..         6000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.999 | info     |           Metal |   [        6000 ..         6200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.999 | info     |           Metal |   [        6200 ..         6400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.999 | info     |           Metal |   [        6400 ..         6600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:09.999 | info     |           Metal |   [        6600 ..         6800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.025 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:10.108 | info     |           Metal | Disabling and clearing program cache on MeshDevice 61 (mesh_device.cpp:1232)
+HRF_GEOM sw512_s2: (1, 1, 128, 512) shard=[2, 512] cores=64
+HRF_ORDER sw512_s2 base
+HRF_PREC sw512_s2 base pcc=0.999991 max_abs=0.0625 rms=0.004836
+HRF_ORDER sw512_s2 zc32
+HRF_PREC sw512_s2 zc32 pcc=0.999992 max_abs=0.0625 rms=0.004089 | vs_base: pcc=0.999993 max_abs=0.09375 exact=False
+.2026-11-01 23:49:10.218 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:10.223 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=2613ns, avg=4962.5ns, max=7312ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:10.223 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=500ns, range=[2500..7500), underflow(<2500ns)=0, overflow(>=7500ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:10.223 | info     |           Metal |   [        2500 ..         3000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.223 | info     |           Metal |   [        3000 ..         3500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.223 | info     |           Metal |   [        3500 ..         4000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.223 | info     |           Metal |   [        4000 ..         4500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.223 | info     |           Metal |   [        4500 ..         5000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.223 | info     |           Metal |   [        5000 ..         5500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.223 | info     |           Metal |   [        5500 ..         6000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.223 | info     |           Metal |   [        6000 ..         6500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.223 | info     |           Metal |   [        6500 ..         7000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.223 | info     |           Metal |   [        7000 ..         7500) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.248 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:10.331 | info     |           Metal | Disabling and clearing program cache on MeshDevice 63 (mesh_device.cpp:1232)
+HRF_GEOM sw512_s4: (1, 1, 256, 512) shard=[4, 512] cores=64
+HRF_ORDER sw512_s4 base
+HRF_PREC sw512_s4 base pcc=0.999991 max_abs=0.0625 rms=0.004892
+HRF_ORDER sw512_s4 zc32
+HRF_PREC sw512_s4 zc32 pcc=0.999992 max_abs=0.0625 rms=0.00413 | vs_base: pcc=0.999993 max_abs=0.09375 exact=False
+.2026-11-01 23:49:10.397 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:10.401 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=4039ns, avg=5685.0ns, max=7331ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:10.401 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=400ns, range=[4000..8000), underflow(<4000ns)=0, overflow(>=8000ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:10.401 | info     |           Metal |   [        4000 ..         4400) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.401 | info     |           Metal |   [        4400 ..         4800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.401 | info     |           Metal |   [        4800 ..         5200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.401 | info     |           Metal |   [        5200 ..         5600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.401 | info     |           Metal |   [        5600 ..         6000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.401 | info     |           Metal |   [        6000 ..         6400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.401 | info     |           Metal |   [        6400 ..         6800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.401 | info     |           Metal |   [        6800 ..         7200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.401 | info     |           Metal |   [        7200 ..         7600) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.401 | info     |           Metal |   [        7600 ..         8000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.426 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:10.510 | info     |           Metal | Disabling and clearing program cache on MeshDevice 65 (mesh_device.cpp:1232)
+HRF_GEOM sw512_s8: (1, 1, 512, 512) shard=[8, 512] cores=64
+HRF_ORDER sw512_s8 base
+HRF_PREC sw512_s8 base pcc=0.999991 max_abs=0.125 rms=0.004847
+HRF_ORDER sw512_s8 zc32
+HRF_PREC sw512_s8 zc32 pcc=0.999991 max_abs=0.09375 rms=0.00417 | vs_base: pcc=0.999994 max_abs=0.125 exact=False
+.2026-11-01 23:49:10.587 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=6861ns, avg=7113.5ns, max=7366ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:10.587 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[6800..7800), underflow(<6800ns)=0, overflow(>=7800ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:10.587 | info     |           Metal |   [        6800 ..         6900) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.587 | info     |           Metal |   [        6900 ..         7000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.587 | info     |           Metal |   [        7000 ..         7100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.587 | info     |           Metal |   [        7100 ..         7200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.587 | info     |           Metal |   [        7200 ..         7300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.587 | info     |           Metal |   [        7300 ..         7400) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.587 | info     |           Metal |   [        7400 ..         7500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.587 | info     |           Metal |   [        7500 ..         7600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.587 | info     |           Metal |   [        7600 ..         7700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.587 | info     |           Metal |   [        7700 ..         7800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:10.625 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:10.708 | info     |           Metal | Disabling and clearing program cache on MeshDevice 67 (mesh_device.cpp:1232)
+HRF_GEOM sw4096f_s8: (1, 1, 512, 4096) shard=[8, 4096] cores=64
+HRF_ORDER sw4096f_s8 base
+HRF_PREC sw4096f_s8 base pcc=1.000000 max_abs=0.03806 rms=0.001912
+HRF_ORDER sw4096f_s8 zc32
+HRF_PREC sw4096f_s8 zc32 pcc=1.000000 max_abs=0.03559 rms=0.001129 | vs_base: pcc=1.000000 max_abs=0.02118 exact=False
+.2026-11-01 23:49:11.084 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=11296ns, avg=32800.5ns, max=54305ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:11.084 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=4400ns, range=[8800..52800), underflow(<8800ns)=0, overflow(>=52800ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:49:11.085 | info     |           Metal |   [        8800 ..        13200) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:11.085 | info     |           Metal |   [       13200 ..        17600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:11.085 | info     |           Metal |   [       17600 ..        22000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:11.085 | info     |           Metal |   [       22000 ..        26400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:11.085 | info     |           Metal |   [       26400 ..        30800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:11.085 | info     |           Metal |   [       30800 ..        35200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:11.085 | info     |           Metal |   [       35200 ..        39600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:11.085 | info     |           Metal |   [       39600 ..        44000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:11.085 | info     |           Metal |   [       44000 ..        48400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:11.085 | info     |           Metal |   [       48400 ..        52800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:11.110 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:11.193 | info     |           Metal | Disabling and clearing program cache on MeshDevice 69 (mesh_device.cpp:1232)
+HRF_GEOM sw4096f_s16: (1, 1, 1024, 4096) shard=[16, 4096] cores=64
+HRF_ORDER sw4096f_s16 base
+HRF_PREC sw4096f_s16 base pcc=1.000000 max_abs=0.03553 rms=0.001914
+HRF_ORDER sw4096f_s16 zc32
+HRF_PREC sw4096f_s16 zc32 pcc=1.000000 max_abs=0.02386 rms=0.001139 | vs_base: pcc=1.000000 max_abs=0.01987 exact=False
+.2026-11-01 23:49:12.187 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=21470ns, avg=50407.5ns, max=79345ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:12.187 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=5800ns, range=[17400..75400), underflow(<17400ns)=0, overflow(>=75400ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:49:12.187 | info     |           Metal |   [       17400 ..        23200) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:12.187 | info     |           Metal |   [       23200 ..        29000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:12.187 | info     |           Metal |   [       29000 ..        34800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:12.187 | info     |           Metal |   [       34800 ..        40600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:12.187 | info     |           Metal |   [       40600 ..        46400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:12.187 | info     |           Metal |   [       46400 ..        52200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:12.187 | info     |           Metal |   [       52200 ..        58000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:12.187 | info     |           Metal |   [       58000 ..        63800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:12.187 | info     |           Metal |   [       63800 ..        69600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:12.187 | info     |           Metal |   [       69600 ..        75400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:12.244 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:12.327 | info     |           Metal | Disabling and clearing program cache on MeshDevice 71 (mesh_device.cpp:1232)
+HRF_GEOM sw4096f_s32: (1, 1, 2048, 4096) shard=[32, 4096] cores=64
+F2026-11-01 23:49:13.192 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0}
+2026-11-01 23:49:13.225 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:13.521 | info     |           Metal | Disabling and clearing program cache on MeshDevice 73 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_3104x4064: (3104, 4064) shard=[24, 4064] cores=130
+HRF_ORDER hgt_rm_3104x4064 base
+HRF_PREC hgt_rm_3104x4064 base pcc=0.999991 max_abs=0.1875 rms=0.006666
+HRF_ORDER hgt_rm_3104x4064 zc32
+HRF_PREC hgt_rm_3104x4064 zc32 pcc=0.999992 max_abs=0.125 rms=0.003956 | vs_base: pcc=0.999991 max_abs=0.1875 exact=False
+.2026-11-01 23:49:15.993 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=34519ns, avg=38888.5ns, max=43258ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:15.993 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=900ns, range=[34200..43200), underflow(<34200ns)=0, overflow(>=43200ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:49:15.993 | info     |           Metal |   [       34200 ..        35100) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:15.993 | info     |           Metal |   [       35100 ..        36000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:15.993 | info     |           Metal |   [       36000 ..        36900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:15.993 | info     |           Metal |   [       36900 ..        37800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:15.993 | info     |           Metal |   [       37800 ..        38700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:15.993 | info     |           Metal |   [       38700 ..        39600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:15.993 | info     |           Metal |   [       39600 ..        40500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:15.993 | info     |           Metal |   [       40500 ..        41400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:15.993 | info     |           Metal |   [       41400 ..        42300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:15.993 | info     |           Metal |   [       42300 ..        43200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:16.048 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:16.131 | info     |           Metal | Disabling and clearing program cache on MeshDevice 75 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_3x736x5119: (3, 1, 736, 5119) shard=[17, 5120] cores=130
+HRF_ORDER hgt_rm_3x736x5119 base
+HRF_PREC hgt_rm_3x736x5119 base pcc=0.999991 max_abs=0.1875 rms=0.007454
+HRF_ORDER hgt_rm_3x736x5119 zc32
+HRF_PREC hgt_rm_3x736x5119 zc32 pcc=0.999992 max_abs=0.125 rms=0.004287 | vs_base: pcc=0.999990 max_abs=0.25 exact=False
+.2026-11-01 23:49:18.156 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=28760ns, avg=41013.0ns, max=53266ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:18.156 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=2500ns, range=[27500..52500), underflow(<27500ns)=0, overflow(>=52500ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:49:18.156 | info     |           Metal |   [       27500 ..        30000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.156 | info     |           Metal |   [       30000 ..        32500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.156 | info     |           Metal |   [       32500 ..        35000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.156 | info     |           Metal |   [       35000 ..        37500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.156 | info     |           Metal |   [       37500 ..        40000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.156 | info     |           Metal |   [       40000 ..        42500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.156 | info     |           Metal |   [       42500 ..        45000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.156 | info     |           Metal |   [       45000 ..        47500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.156 | info     |           Metal |   [       47500 ..        50000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.156 | info     |           Metal |   [       50000 ..        52500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.222 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:18.307 | info     |           Metal | Disabling and clearing program cache on MeshDevice 77 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_1500x1000: (1500, 1000) shard=[12, 1000] cores=125
+HRF_ORDER hgt_rm_1500x1000 base
+HRF_PREC hgt_rm_1500x1000 base pcc=0.999991 max_abs=0.125 rms=0.004958
+HRF_ORDER hgt_rm_1500x1000 zc32
+HRF_PREC hgt_rm_1500x1000 zc32 pcc=0.999992 max_abs=0.125 rms=0.004068 | vs_base: pcc=0.999992 max_abs=0.125 exact=False
+.2026-11-01 23:49:18.565 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=9553ns, avg=11261.5ns, max=12970ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:18.565 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=400ns, range=[9200..13200), underflow(<9200ns)=0, overflow(>=13200ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:18.565 | info     |           Metal |   [        9200 ..         9600) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.565 | info     |           Metal |   [        9600 ..        10000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.565 | info     |           Metal |   [       10000 ..        10400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.565 | info     |           Metal |   [       10400 ..        10800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.565 | info     |           Metal |   [       10800 ..        11200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.565 | info     |           Metal |   [       11200 ..        11600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.565 | info     |           Metal |   [       11600 ..        12000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.565 | info     |           Metal |   [       12000 ..        12400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.565 | info     |           Metal |   [       12400 ..        12800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.565 | info     |           Metal |   [       12800 ..        13200) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:18.631 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:18.714 | info     |           Metal | Disabling and clearing program cache on MeshDevice 79 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_2047x2047: (2047, 2047) shard=[16, 2048] cores=128
+HRF_ORDER hgt_rm_2047x2047 base
+HRF_PREC hgt_rm_2047x2047 base pcc=0.999991 max_abs=0.125 rms=0.005719
+HRF_ORDER hgt_rm_2047x2047 zc32
+HRF_PREC hgt_rm_2047x2047 zc32 pcc=0.999992 max_abs=0.125 rms=0.004188 | vs_base: pcc=0.999991 max_abs=0.1875 exact=False
+.2026-11-01 23:49:19.298 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=16219ns, avg=19594.5ns, max=22970ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:19.298 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=700ns, range=[16100..23100), underflow(<16100ns)=0, overflow(>=23100ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:19.298 | info     |           Metal |   [       16100 ..        16800) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:19.298 | info     |           Metal |   [       16800 ..        17500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:19.298 | info     |           Metal |   [       17500 ..        18200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:19.298 | info     |           Metal |   [       18200 ..        18900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:19.298 | info     |           Metal |   [       18900 ..        19600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:19.298 | info     |           Metal |   [       19600 ..        20300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:19.298 | info     |           Metal |   [       20300 ..        21000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:19.298 | info     |           Metal |   [       21000 ..        21700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:19.298 | info     |           Metal |   [       21700 ..        22400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:19.298 | info     |           Metal |   [       22400 ..        23100) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:19.360 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:19.547 | info     |           Metal | Disabling and clearing program cache on MeshDevice 81 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_992x3000: (1, 1, 992, 3000) shard=[8, 3000] cores=124
+HRF_ORDER hgt_rm_992x3000 base
+HRF_PREC hgt_rm_992x3000 base pcc=0.999992 max_abs=0.1875 rms=0.006778
+HRF_ORDER hgt_rm_992x3000 zc32
+HRF_PREC hgt_rm_992x3000 zc32 pcc=0.999992 max_abs=0.125 rms=0.004001 | vs_base: pcc=0.999992 max_abs=0.125 exact=False
+.2026-11-01 23:49:19.996 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:20.008 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=10707ns, avg=21588.0ns, max=32469ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:20.008 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=2200ns, range=[8800..30800), underflow(<8800ns)=0, overflow(>=30800ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:49:20.008 | info     |           Metal |   [        8800 ..        11000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.008 | info     |           Metal |   [       11000 ..        13200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.008 | info     |           Metal |   [       13200 ..        15400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.008 | info     |           Metal |   [       15400 ..        17600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.008 | info     |           Metal |   [       17600 ..        19800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.008 | info     |           Metal |   [       19800 ..        22000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.008 | info     |           Metal |   [       22000 ..        24200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.008 | info     |           Metal |   [       24200 ..        26400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.008 | info     |           Metal |   [       26400 ..        28600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.008 | info     |           Metal |   [       28600 ..        30800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.056 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:20.665 | info     |           Metal | Disabling and clearing program cache on MeshDevice 83 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_32x64: (1, 1, 32, 64) shard=[1, 64] cores=32
+HRF_ORDER hgt_rm_32x64 base
+HRF_PREC hgt_rm_32x64 base pcc=0.999996 max_abs=0.03125 rms=0.004097
+HRF_ORDER hgt_rm_32x64 zc32
+HRF_PREC hgt_rm_32x64 zc32 pcc=0.999995 max_abs=0.03125 rms=0.003895 | vs_base: pcc=0.999999 max_abs=0.03125 exact=False
+.2026-11-01 23:49:20.750 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:20.753 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=2041ns, avg=2635.5ns, max=3230ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:20.753 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=200ns, range=[2000..4000), underflow(<2000ns)=0, overflow(>=4000ns)=0) (profiler_analysis.cpp:772)
+2026-11-01 23:49:20.753 | info     |           Metal |   [        2000 ..         2200) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.753 | info     |           Metal |   [        2200 ..         2400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.753 | info     |           Metal |   [        2400 ..         2600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.753 | info     |           Metal |   [        2600 ..         2800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.753 | info     |           Metal |   [        2800 ..         3000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.753 | info     |           Metal |   [        3000 ..         3200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.753 | info     |           Metal |   [        3200 ..         3400) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.753 | info     |           Metal |   [        3400 ..         3600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.753 | info     |           Metal |   [        3600 ..         3800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.753 | info     |           Metal |   [        3800 ..         4000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:20.884 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-01 23:49:21.236 | info     |           Metal | Disabling and clearing program cache on MeshDevice 85 (mesh_device.cpp:1232)
+HRF_GEOM hgt_rm_1024x1024_gf32: (1024, 1024) shard=[8, 1024] cores=128
+HRF_ORDER hgt_rm_1024x1024_gf32 base
+HRF_PREC hgt_rm_1024x1024_gf32 base pcc=0.999995 max_abs=0.0625 rms=0.004475
+HRF_ORDER hgt_rm_1024x1024_gf32 zc32
+HRF_PREC hgt_rm_1024x1024_gf32 zc32 pcc=0.999996 max_abs=0.0625 rms=0.00418 | vs_base: pcc=0.999999 max_abs=0.0625 exact=False
+.2026-11-01 23:49:21.621 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (thread_pool.cpp:103)
+2026-11-01 23:49:21.626 | info     |           Metal | Device kernel duration perf summary (device=0): count=2, min=5751ns, avg=9212.5ns, max=12674ns (profiler_analysis.cpp:729)
+2026-11-01 23:49:21.626 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=700ns, range=[5600..12600), underflow(<5600ns)=0, overflow(>=12600ns)=1) (profiler_analysis.cpp:772)
+2026-11-01 23:49:21.626 | info     |           Metal |   [        5600 ..         6300) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-01 23:49:21.626 | info     |           Metal |   [        6300 ..         7000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:21.626 | info     |           Metal |   [        7000 ..         7700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:21.626 | info     |           Metal |   [        7700 ..         8400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:21.626 | info     |           Metal |   [        8400 ..         9100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:21.626 | info     |           Metal |   [        9100 ..         9800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:21.626 | info     |           Metal |   [        9800 ..        10500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:21.626 | info     |           Metal |   [       10500 ..        11200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:21.626 | info     |           Metal |   [       11200 ..        11900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-01 23:49:21.626 | info     |           Metal |   [       11900 ..        12600) |                                        |        0 (profiler_analysis.cpp:777)
+UP_FRONT_INLINE: real pass took 14.7s
+
+
+=================================== FAILURES ===================================
+___________________________ test_bench[sw4096f_s32] ____________________________
+
+device = MeshDevice(1x1 grid, 1 devices), cell = 'sw4096f_s32'
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f6ce8eb7d90>
+
+    @pytest.mark.parametrize("cell", IDS)
+    def test_bench(device, cell, monkeypatch):
+        import torch  # function-local: the ttnn tree forbids global torch imports
+
+        device.disable_and_clear_program_cache()
+        cfg = CELLS[cell]
+        shape, dtype = cfg["shape"], cfg["dtype"]
+        torch_dtype = torch.float32 if dtype == F32 else torch.bfloat16
+        torch.manual_seed(0)
+        x = torch.randn(shape, dtype=torch.float32).to(torch_dtype)
+        W = shape[-1]
+        g, tg = None, None
+        if cfg["g"] is not None:
+            g = torch.randn(W, dtype=torch.float32).to(torch.float32 if cfg["g"] == F32 else torch.bfloat16)
+            tg = create_ttnn_input_tensor(g.reshape(1, 1, 1, W), device, dtype=cfg["g"], layout=RM)
+        mc = None
+        if cfg["shard"]:
+            mc = shard_config(cfg["shard"][0], cfg["shard"][1], ML.HEIGHT_SHARDED, layout=RM, dtype=dtype, device=device)
+        tx = create_ttnn_input_tensor(x, device, dtype=dtype, layout=RM, memory_layout=ML.HEIGHT_SHARDED, memory_config=mc)
+        ck = ttnn.ComputeConfigDescriptor()
+        ck.math_fidelity = cfg["fid"]
+        ck.fp32_dest_acc_en = cfg["fp32"]
+        ck.math_approx_mode = False
+        expected = pytorch_rms_norm(x, gamma=g, epsilon=1e-6)
+        ss = tx.memory_config().shard_spec
+        print(f"HRF_GEOM {cell}: {shape} shard={list(ss.shape)} cores={ss.grid.num_cores()}")
+
+        ref = None
+        for v in VSEL:
+            mode = VARIANTS[v]
+            if mode is None:
+                monkeypatch.setattr(op_mod, "create_program_descriptor", fpd.pd.create_program_descriptor)
+            else:
+                monkeypatch.setattr(fpd, "FLAT_MODE", mode.split("+")[0])
+                monkeypatch.setattr(fpd, "FLAT_ONES_ACC", mode.endswith("+ones_acc"))
+                monkeypatch.setattr(fpd, "FLAT_MAX_STICKS", 1 << 30)
+                monkeypatch.setattr(op_mod, "create_program_descriptor", fpd.create_program_descriptor)
+>           out = rms_norm(tx, gamma=tg, epsilon=1e-6, compute_kernel_config=ck, memory_config=tx.memory_config())
+
+/tmp/hrf_bench/test_hrf_bench.py:130:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/operations/rms_norm/rms_norm.py:232: in rms_norm
+    descriptor = create_program_descriptor(
+ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py:847: in create_program_descriptor
+    blk = select_sharded_blocking(geo, sz, input_tensor, budget)
+ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py:672: in select_sharded_blocking
+    b, d, opts = _solve_rows_sharded(sz, k, slice_w, crt_max, budget, base_opts)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+sz = <ttnn.operations.rms_norm.rms_norm_program_descriptor._Sizes object at 0x7f6ce8eb5720>
+k = 1, slice_w = 128, crt_max = 1, budget = 412544
+opts = PlanOpts(shard_backed=False, owner_combine=False, gather_depth=2, mask_tail=False, gamma_chunk=0, rm_chunk_cap=32, pipe_nb=0)
+
+    def _solve_rows_sharded(sz: _Sizes, k: int, slice_w: int, crt_max: int, budget: int, opts: PlanOpts):
+        """_solve_rows over _sharded_plan_candidates(): the first regime in which one tile-row block fits."""
+        for cand in _sharded_plan_candidates(sz, slice_w, opts):
+            try:
+                return _solve_rows(sz, k, slice_w, crt_max, budget, cand, allow_depth2=False)
+            except RuntimeError:
+                continue
+>       raise RuntimeError(
+            f"rms_norm: one tile-row block does not fit L1 ({budget} B per core), even with streamed gamma / RM chunk 1"
+        )
+E       RuntimeError: rms_norm: one tile-row block does not fit L1 (412544 B per core), even with streamed gamma / RM chunk 1
+
+ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py:426: RuntimeError
+=========================== short test summary info ============================
+FAILED ../../../../../../../tmp/hrf_bench/test_hrf_bench.py::test_bench[sw4096f_s32]
+======================== 1 failed, 20 passed in 37.13s =========================
+2026-11-01 23:49:22.847 | info     |    BuildKernels | JIT cache stats: 146/146 hits (100.0%) [10 cached, 324 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-01 23:49:22.847 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-01 23:49:22.851 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-11-01 23:49:22.851 | info     |             UMD | Closing devices in cluster (cluster.cpp:1480)
+2026-11-01 23:49:22.868 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1490)
+2026-11-01 23:49:22.868 | info     |             UMD | Cluster destructor started. (cluster.cpp:1211)
+2026-11-01 23:49:22.868 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1224)
+2026-11-01 23:49:23.183 | INFO     | __main__:main:483 - Copying /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/build/profiler/build_wasm/traces/conftest_2026_11_01_23_49_23.tracy
+2026-11-01 23:49:23.195 | INFO     | __main__:main:486 - Copied /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/build/profiler/build_wasm/traces/conftest_2026_11_01_23_49_23.tracy
+2026-11-01 23:49:23.196 | INFO     | __main__:main:495 - embed.tracy -> traces/conftest_2026_11_01_23_49_23.tracy
+2026-11-01 23:49:23.196 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-01 23:49:23.196 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-01 23:49:23.196 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-01 23:49:24.759 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-01 23:49:24.836 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-01 23:49:24.837 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-01 23:49:28.257 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-01 23:49:28.258 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-01 23:49:28.822 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-01 23:49:28.822 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-01 23:49:28.892 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-01 23:49:28.934 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_11_01_23_49_28/ops_perf_results_2026_11_01_23_49_28.csv
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 21 item(s) took 13.2s
+PRECOMPILE: UP_FRONT_INLINE: compile route farm (programs=40, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 40 ops stashed across 21 bodies -> 40 unique programs (swallowed 1, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=42 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 40 collected · 40 built · 0 already compiled in 8.8s (workers=128, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 8.9s; starting the real pass
+PRECOMPILE: UP_FRONT_INLINE: real pass took 14.7s
+SAFE_PYTEST: PROFILER CSV: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_11_01_23_49_28/ops_perf_results_2026_11_01_23_49_28.csv
+SAFE_PYTEST_RESULT: PASS

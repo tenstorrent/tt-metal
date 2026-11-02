@@ -1,0 +1,659 @@
+diff --git 1/ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py 2/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/rms_norm_program_descriptor.py
+index e9a34af9250..48f5971b05e 100644
+--- 1/ttnn/ttnn/operations/rms_norm/rms_norm_program_descriptor.py
++++ 2/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/rms_norm_program_descriptor.py
+@@ -159,12 +159,36 @@ PERF_ABLATE = ()
+ # gamma read + multicast on the read-heavy NoC0 measured 10-22 us to issue): the inv_rms senders (member 0 of each
+ # owner group) and the k > 1 gamma column senders stay unswapped; k = 1 sends gamma from the first unswapped Tensix
+ # core. Bit-identical output. BH p150b, see perf_experiments/dram_noc_balance/port. 0 = usual pairing everywhere.
+ NOC_SWAP_COLUMNS = 3
+
+
++# HEIGHT_SHARDED ROW_MAJOR "flat" regime (Perf 2, perf_experiments/height_rm_flat; kernels rms_norm_flat_*.cpp): a
++# stick of W datums is contiguous in the shard, so it is normalized as ceil(W / 1024) flat tiles (1024 consecutive
++# datums each) — sum x^2 = DEST-accumulated x_j * x_j + one FPU REDUCE_SCALAR + finalize; out_j = x_j * inv (bcast
++# scalar) * gamma_j, gamma_j = flat tile j of the RM gamma page (resident: W * elem bytes, one DRAM read + multicast).
++# cb_x / cb_out are backed on the shards (page = gcd(stick pitch, tile bytes)); a partial last flat tile per stick
++# (W % 1024 != 0) is staged through a zero-filled tail tile. No tilize / untilize / 32x stick padding / gamma stream.
++# BH p150b: (1,1,128,4096) fp32 1 stick / core 93.3 -> 3.3 us, (1,224,11008) 2 sticks 121.6 -> 6.9 us,
++# (3104,4064) 24 sticks 43.2 -> 29.5 us. Gate (cost model, bf16 / fp32 DEST off / HiFi4 calibration; fp32 and fp32
++# DEST only make the tilized path slower, so the model is conservative there):
++#   flat    ~ FLAT_FIXED_NS + S * (FLAT_STICK_NS + FLAT_TILE_NS * ceil(W / 1024) + FLAT_TAIL_NS * [W % 1024 != 0])
++#   tilized ~ ceil(S / 32) * (TILIZED_ROW_NS + TILIZED_WTILE_NS * ceil(W / 32))      (S = sticks per Tensix core)
++# Crossover: W = 256: S ~ 7; 512: ~13; 1024: ~29; 2048: ~37; >= 4096: >= 64. Also used when the tilized plan does not
++# fit L1 and the flat one does (fp32 [32, 4096] shards).
++RM_FLAT = True
++RM_FLAT_FORCE = False  # test hook: every expressible + L1-fitting HEIGHT RM input takes the flat path
++FLAT_FIXED_NS = 1200
++FLAT_STICK_NS = 150  # per stick: REDUCE_SCALAR + one-vector finalize + pack
++FLAT_TILE_NS = 230  # per flat tile: x*x (pass 1) + x*inv*gamma (pass 2)
++FLAT_TAIL_NS = 80  # per stick with a partial last flat tile (tail staging copy + second CB)
++TILIZED_ROW_NS = 2300  # per tile-row of the tilized path
++TILIZED_WTILE_NS = 310  # per W tile of a tile-row
++FLAT_MAX_CB_PAGES = 32768  # zero-copy cb_x / cb_out pages per Tensix core (16-bit CB page counters)
++
++
+ def _f32_bits(v: float) -> int:
+     return struct.unpack("<I", struct.pack("<f", float(v)))[0]
+
+
+ def _div_up(a: int, b: int) -> int:
+     return (a + b - 1) // b
+@@ -823,13 +847,13 @@ def _shard_backed_cb(index, tensor, core_ranges):
+     """CB aliasing a TILE tensor's resident shard (zero-copy: the shard IS the CB's L1)."""
+     cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor)
+     cb.core_ranges = core_ranges
+     return cb
+
+
+-def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
++def _create_tilized_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
+     device = input_tensor.device()
+     geo = derive_geometry(input_tensor.shape)
+     is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+     sharded = is_sharded(input_tensor)
+     has_gamma = gamma is not None
+     x_dtype = input_tensor.dtype
+@@ -1116,6 +1140,199 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, co
+             ttnn.McastFixedSenderConfig(),
+             inv_order,
+         )
+         inv_mc.attach(descriptor, "inv_mcast", writers, next_sem)
+     descriptor.kernels = readers + writers + [compute]
+     return descriptor
++
++
++# ---------------------------------------------------------------------------------------------------------------------
++# HEIGHT_SHARDED ROW_MAJOR flat regime (see RM_FLAT)
++# ---------------------------------------------------------------------------------------------------------------------
++
++
++def flat_expressible(input_tensor, gamma) -> bool:
++    """HEIGHT_SHARDED ROW_MAJOR fp32 / bf16 input whose shard holds whole sticks, gamma absent or ROW_MAJOR.
++
++    A TILE gamma would need a row-0 gather into flat order (not built; RM input + TILE gamma under HEIGHT sharding is
++    golden-INVALID) — it keeps the tilized path.
++    """
++    if not RM_FLAT or input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
++        return False
++    mc = input_tensor.memory_config()
++    if mc.memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
++        return False
++    if input_tensor.dtype not in (ttnn.float32, ttnn.bfloat16):
++        return False
++    if gamma is not None and (gamma.layout != ttnn.ROW_MAJOR_LAYOUT or gamma.dtype not in (ttnn.float32, ttnn.bfloat16)):
++        return False
++    return int(mc.shard_spec.shape[1]) >= int(input_tensor.shape[-1])
++
++
++def flat_plan(input_tensor, gamma, fp32_dest: bool) -> dict:
++    """Geometry + CB plan of the flat path: {cb: (pages, page_bytes, dtype)}; shard-backed CBs carry pages = None.
++
++    cb_x / cb_out alias the input / output shards with page = gcd(stick pitch, tile bytes), so flat tile j of stick s
++    is page s * stick_pages + j * tile_pages. W % 1024 != 0: cb_x_rm / cb_out_rm hold one zero-padded tail tile per
++    stick. cb_ones (the REDUCE_SCALAR 1.0 scaler) follows the accumulator dtype: REDUCE_SCALAR moves its 32 first-stage
++    partial sums DEST -> srcB (MOVD2B), so a bf16 scaler would truncate them to bf16 (fp32 DEST, no gamma: rms error vs
++    torch 0.0027 -> 0.0015 bf16, 0.0014 -> 0.00056 fp32; same device time).
++    """
++    W = int(input_tensor.shape[-1])
++    x_dtype = input_tensor.dtype
++    elem = _datum_bytes(input_tensor)
++    T = ttnn.tile_size(x_dtype)
++    sh = int(input_tensor.memory_config().shard_spec.shape[0])
++    pitch = input_tensor.buffer_aligned_page_size()  # stick pitch inside the shard
++    nt = _div_up(W, 1024)
++    n_body = W // 1024
++    tail_bytes = (W - 1024 * n_body) * elem
++    page = math.gcd(pitch, T)
++    t_acc = acc_dtype(fp32_dest)
++    cbs = {CB_X: (None, page, x_dtype), CB_OUT: (None, page, x_dtype)}
++    if tail_bytes:
++        cbs[CB_X_RM] = (sh, T, x_dtype)
++        cbs[CB_OUT_RM] = (sh, T, x_dtype)
++    cbs[CB_SUMSQ] = (sh, ttnn.tile_size(t_acc), t_acc)
++    cbs[CB_INV_RMS] = (sh, ttnn.tile_size(t_acc), t_acc)
++    cbs[CB_ONES] = (1, ttnn.tile_size(t_acc), t_acc)
++    if gamma is not None:
++        cbs[CB_GAMMA] = (nt, ttnn.tile_size(gamma.dtype), gamma.dtype)
++    return dict(
++        W=W,
++        elem=elem,
++        T=T,
++        sh=sh,
++        pitch=pitch,
++        nt=nt,
++        n_body=n_body,
++        has_tail_cb=tail_bytes != 0,
++        tail_bytes=tail_bytes,
++        page=page,
++        stick_pages=pitch // page,
++        tile_pages=T // page,
++        cbs=cbs,
++        footprint=sum(n * b for (n, b, _) in cbs.values() if n is not None),
++    )
++
++
++def flat_fits(plan, budget: int) -> bool:
++    return plan["footprint"] <= budget and plan["sh"] * plan["stick_pages"] < FLAT_MAX_CB_PAGES
++
++
++def flat_preferred(plan) -> bool:
++    """Cost model (see RM_FLAT): the flat path is estimated no slower than the tilized one."""
++    S, W, nt = plan["sh"], plan["W"], plan["nt"]
++    flat = FLAT_FIXED_NS + S * (FLAT_STICK_NS + FLAT_TILE_NS * nt + FLAT_TAIL_NS * (1 if W % 1024 else 0))
++    tilized = _div_up(S, TILE) * (TILIZED_ROW_NS + TILIZED_WTILE_NS * _div_up(W, TILE))
++    return flat <= tilized
++
++
++def create_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
++    """Flat HEIGHT RM regime when expressible + fits L1 + (cost model prefers it); else the tilized program. If the
++    tilized plan does not fit L1 but the flat one does, the flat path runs."""
++    kw = dict(epsilon=epsilon, compute_kernel_config=compute_kernel_config)
++    flat_ok = False
++    if flat_expressible(input_tensor, gamma):
++        plan = flat_plan(input_tensor, gamma, bool(compute_kernel_config.fp32_dest_acc_en))
++        flat_ok = flat_fits(plan, cb_l1_budget(input_tensor.device()))
++        if flat_ok and (RM_FLAT_FORCE or flat_preferred(plan)):
++            return create_flat_program_descriptor(input_tensor, gamma, output_tensor, **kw)
++    try:
++        return _create_tilized_program_descriptor(input_tensor, gamma, output_tensor, **kw)
++    except RuntimeError:
++        if not flat_ok:
++            raise
++        return create_flat_program_descriptor(input_tensor, gamma, output_tensor, **kw)
++
++
++def _backed_cb_paged(index, tensor, dtype, page, core_ranges):
++    """CB aliasing a sharded tensor's resident shard (zero-copy) with an explicit page size."""
++    cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor)
++    cb.core_ranges = core_ranges
++    cb.format_descriptors = [ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)]
++    return cb
++
++
++def create_flat_program_descriptor(input_tensor, gamma, output_tensor, *, epsilon, compute_kernel_config):
++    device = input_tensor.device()
++    shape = [int(d) for d in input_tensor.shape]
++    W = shape[-1]
++    rows = math.prod(shape[:-1])
++    has_gamma = gamma is not None
++    plan = flat_plan(input_tensor, gamma, bool(compute_kernel_config.fp32_dest_acc_en))
++    pitch, nt, T = plan["pitch"], plan["nt"], plan["T"]
++    assert output_tensor.buffer_aligned_page_size() == pitch
++    n_body, has_tail_cb, tail_bytes = plan["n_body"], plan["has_tail_cb"], plan["tail_bytes"]
++    stick_pages, tile_pages = plan["stick_pages"], plan["tile_pages"]
++
++    # Active Tensix cores: shard g (sh sticks, the last one ragged) on the g-th core of the shard grid in its orientation.
++    ss = input_tensor.memory_config().shard_spec
++    sh = plan["sh"]
++    order = _ordered_shard_cores(ss.grid, ss.orientation == ttnn.ShardOrientation.ROW_MAJOR)
++    n_shards = _div_up(rows, sh)
++    assert len(order) >= n_shards
++    cores = [ttnn.CoreCoord(x, y) for (x, y) in order[:n_shards]]
++    sticks_of = [min(sh, rows - g * sh) for g in range(n_shards)]
++    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
++
++    cbs = []
++    for idx, (pages, page_bytes, dtype) in plan["cbs"].items():
++        if pages is None:
++            cbs.append(
++                _backed_cb_paged(idx, input_tensor if idx == CB_X else output_tensor, dtype, page_bytes, core_ranges)
++            )
++        else:
++            cbs.append(_cb(idx, pages, page_bytes, dtype, core_ranges))
++    g_page = gamma.buffer_aligned_page_size() if has_gamma else 0  # one read of the whole (aligned) gamma page
++    assert not has_gamma or g_page <= nt * ttnn.tile_size(gamma.dtype)
++
++    defines = []
++    if has_gamma:
++        defines.append(("RMS_HAS_GAMMA", "1"))
++    defines.extend((name, "1") for name in PERF_ABLATE)
++    gamma_mcast = has_gamma and GAMMA_MCAST_SHARDED_K1
++    if gamma_mcast:
++        defines.append(("RMS_GAMMA_MCAST", "1"))
++
++    stick_bytes = W * plan["elem"]
++    reader_ct = [n_body, int(has_tail_cb), tail_bytes, pitch, T, stick_pages, stick_bytes]
++    compute_ct = [n_body, int(has_tail_cb), stick_pages, tile_pages]
++    writer_ct = [n_body, int(has_tail_cb), tail_bytes, pitch, T, stick_pages, stick_bytes, g_page, nt, g_page]
++    writer_ct.extend((ttnn.TensorAccessorArgs(gamma) if has_gamma else ttnn.TensorAccessorArgs()).get_compile_time_args())
++
++    x_addr, out_addr = input_tensor.buffer_address(), output_tensor.buffer_address()
++    g_addr = gamma.buffer_address() if has_gamma else 0
++    inv_w_bits, eps_bits = _f32_bits(1.0 / W), _f32_bits(epsilon)
++    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
++    for c, n in zip(cores, sticks_of):
++        reader_rt[c.x][c.y] = [x_addr, n]
++        compute_rt[c.x][c.y] = [n, inv_w_bits, eps_bits]
++        writer_rt[c.x][c.y] = [out_addr, n, g_addr]
++
++    def _k(name, ct, rt, cfg):
++        return ttnn.KernelDescriptor(
++            kernel_source=str(KERNEL_DIR / name),
++            core_ranges=core_ranges,
++            compile_time_args=ct,
++            defines=defines,
++            runtime_args=rt,
++            config=cfg,
++        )
++
++    reader = _k("rms_norm_flat_reader.cpp", reader_ct, reader_rt, ttnn.ReaderConfigDescriptor())
++    writer = _k("rms_norm_flat_writer.cpp", writer_ct, writer_rt, ttnn.WriterConfigDescriptor())
++    compute = _k("rms_norm_flat_compute.cpp", compute_ct, compute_rt, compute_kernel_config)
++    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
++    if gamma_mcast:
++        # One group of every active Tensix core; sender = core 0 (reads the gamma page once) on the writer NoC; one-shot.
++        mc = ttnn.Mcast(
++            device,
++            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False),
++            core_ranges,
++            len(cores),
++            ttnn.McastFixedSenderConfig(sender_index=0),
++            ttnn.McastCoreOrder.RowMajor,
++        )
++        mc.attach(descriptor, "gamma_mcast", [writer], SEM_GAMMA_MCAST_FIRST)
++    descriptor.kernels = [reader, writer, compute]
++    return descriptor
+diff --git 1/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/kernels/rms_norm_flat_reader.cpp 2/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/kernels/rms_norm_flat_reader.cpp
+new file mode 100644
+index 00000000000..e3cd5e398f3
+--- /dev/null
++++ 2/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/kernels/rms_norm_flat_reader.cpp
+@@ -0,0 +1,72 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// rms_norm FLAT reader (NCRISC) — HEIGHT_SHARDED ROW_MAJOR, few sticks per Tensix core.
++//
++// A stick of W datums is contiguous in the shard, so it is read by compute as ceil(W / 1024) "flat tiles" (1024
++// consecutive datums each, in memory order — the face/row placement inside a tile is irrelevant for an elementwise
++// square, a whole-tile sum and an elementwise multiply by a gamma laid out the same way). No tilize.
++//   cb_x IS the input shard (page = gcd(stick pitch, tile bytes), so flat tile j
++//       of stick s is page s * stick_pages + j * tile_pages). The reader only publishes it. When W % 1024 != 0 the
++//       stick's last partial flat tile (W % 1024 datums) is copied (one local NoC read per stick) into a zero-filled
++//       one-tile slot of cb_x_rm — the in-place partial tile would read the next stick / past the shard end.
++// Raw NoC (no kernel_lib local-copy helper): one tail-piece local read per stick (pitch-strided source, tile-strided
++// destination) — dataflow_kernel_lib's local copy fixes the source and steps only the destination.
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "api/dataflow/noc.h"
++#include "api/dataflow/circular_buffer.h"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
++#include "rms_norm_common.hpp"
++
++using namespace rms_norm_cb;
++
++constexpr uint32_t n_body = get_compile_time_arg_val(0);        // flat tiles per stick read from cb_x
++constexpr bool has_tail_cb = get_compile_time_arg_val(1) != 0;  // W % 1024 != 0: tail tile via cb_x_rm
++constexpr uint32_t tail_bytes = get_compile_time_arg_val(2);    // valid bytes of the tail tile
++constexpr uint32_t x_pitch = get_compile_time_arg_val(3);       // shard stick pitch (aligned page bytes)
++constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);    // flat tile bytes (1024 datums)
++constexpr uint32_t stick_pages = get_compile_time_arg_val(5);   // cb_x pages per stick
++[[maybe_unused]] constexpr uint32_t stick_bytes = get_compile_time_arg_val(6);  // W * elem
++
++#ifdef RMS_ABLATE_DM
++constexpr bool ablate_dm = true;
++#else
++constexpr bool ablate_dm = false;
++#endif
++
++void kernel_main() {
++#ifdef RMS_ABLATE_EMPTY
++    return;
++#endif
++    const uint32_t x_addr = get_arg_val<uint32_t>(0);
++    const uint32_t sticks = get_arg_val<uint32_t>(1);
++    Noc noc;
++    {
++        MaybeDeviceZoneScope("rd_block");
++        // zero-copy body: cb_x is backed on the shard — publish the valid sticks' pages
++        cb_reserve_back(cb_x, sticks * stick_pages);
++        cb_push_back(cb_x, sticks * stick_pages);
++        if constexpr (has_tail_cb) {
++            CircularBuffer cb(cb_x_rm);
++            cb_reserve_back(cb_x_rm, sticks);
++            const uint32_t base = get_write_ptr(cb_x_rm);
++            noc.async_write_zeros(cb, sticks * tile_bytes);
++            noc.write_zeros_l1_barrier();
++            if constexpr (!ablate_dm) {
++                for (uint32_t s = 0; s < sticks; ++s) {
++                    noc_async_read(
++                        get_noc_addr(x_addr + s * x_pitch + n_body * tile_bytes), base + s * tile_bytes, tail_bytes);
++                }
++            }
++            noc_async_read_barrier();
++            cb_push_back(cb_x_rm, sticks);
++        }
++    }
++    // 1.0 scaler of compute's FPU whole-tile sum (reduce_tile SCALAR)
++    dataflow_kernel_lib::
++        calculate_and_prepare_reduce_scaler<cb_ones, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_SCALAR>();
++}
+diff --git 1/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/kernels/rms_norm_flat_compute.cpp 2/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/kernels/rms_norm_flat_compute.cpp
+new file mode 100644
+index 00000000000..99c13310dd2
+--- /dev/null
++++ 2/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/kernels/rms_norm_flat_compute.cpp
+@@ -0,0 +1,204 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// rms_norm FLAT compute (TRISC0/1/2) — HEIGHT_SHARDED ROW_MAJOR, few sticks per Tensix core.
++//
++// Each stick is ceil(W / 1024) "flat tiles" (1024 consecutive datums each; see rms_norm_flat_reader.cpp). Per stick:
++//   pass 1     sum_j x_j * x_j, DEST-accumulated over the stick's flat tiles (FPU ELWMUL) -> cb_sumsq (1 tile)
++//   collapse   reduce<SUM, REDUCE_SCALAR, ReduceTile> (FPU, 1.0 scaler in the accumulator dtype) + finalize
++//              (rsqrt(sum / W + eps) on the one SFPU vector holding element (0, 0)) -> cb_inv_rms (1 tile per stick)
++//   pass 2     out_j = (x_j * bcast_scalar(inv)) [* gamma_j via DEST reuse] -> cb_out (zero-copy: the output shard)
++// gamma_j = flat tile j of the RM gamma page (same datum order as x_j). Zero padding past W (the tail slot) adds 0 to
++// sum x^2; the output datums past W are never written back.
++// No tilize / untilize, no 32x row padding: work per stick is 3 * ceil(W / 1024) tile ops + one scalar reduce,
++// against 5 * W / 32 tile ops per (up to 32-stick) tile-row on the tilized path.
++//
++// Raw compute API (documented helper bypass): eltwise_chain addresses an input by tile index with a unit column step
++// (Strided{base, row_stride}); the zero-copy cb_x has pages of gcd(stick pitch, tile bytes), so flat tile j of stick
++// s is page s * stick_pages + j * tile_pages (non-unit column step), and a stick's last flat tile may come from a
++// second CB (cb_x_rm / cb_out_rm tail slot). Capability gap (addressing), not ergonomics. The finalize is the op's
++// FinalizeInvRms SFPU body (rms_norm_compute.cpp) scoped to ONE vector instead of column 0's eight (VectorMode::RC_custom:
++// the stock entry points scope only by face) — bit-identical output, ~210 ns less per stick (BH p150b, 32 sticks / core).
++
++#include <cstdint>
++
++#include "api/compute/compute_kernel_hw_startup.h"
++#include "api/compute/cb_api.h"
++#include "api/compute/eltwise_binary.h"
++#include "api/compute/bcast.h"
++#include "api/compute/eltwise_unary/rsqrt.h"
++#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
++#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#include "rms_norm_common.hpp"
++#ifdef TRISC_MATH
++#include "ckernel_sfpu_sqrt.h"
++#include "sfpu/ckernel_sfpu_converter.h"
++#endif
++
++using namespace compute_kernel_lib;
++using namespace rms_norm_cb;
++
++constexpr uint32_t n_body = get_compile_time_arg_val(0);        // flat tiles per stick in cb_x
++constexpr bool has_tail_cb = get_compile_time_arg_val(1) != 0;  // + 1 tail flat tile per stick in cb_x_rm / cb_out_rm
++constexpr uint32_t stick_pages = get_compile_time_arg_val(2);   // cb_x / cb_out pages per stick
++constexpr uint32_t tile_pages = get_compile_time_arg_val(3);    // cb_x / cb_out pages per flat tile
++constexpr uint32_t per_stick = n_body + (has_tail_cb ? 1 : 0);  // flat tiles per stick (= gamma flat tiles)
++// a CB whose page is a whole tile (hw startup / format inits read the page size as the tile size)
++constexpr uint32_t cb_xa = has_tail_cb ? cb_x_rm : cb_x;
++constexpr uint32_t cb_outa = has_tail_cb ? cb_out_rm : cb_out;
++
++#ifdef TRISC_MATH
++// Flat: the stick's sum sits at element (0, 0) only (REDUCE_SCALAR) and pass 2 broadcasts element (0, 0) only
++// (BroadcastType::SCALAR) -> finalize the ONE SFPU vector holding it (face 0, first vector) instead of column 0's 8.
++sfpi_inline void finalize_scalar_body(const uint32_t inv_w_bits, const uint32_t eps_bits) {
++    const sfpi::vFloat inv_w = ckernel::sfpu::Converter::as_float(inv_w_bits);
++    const sfpi::vFloat eps = ckernel::sfpu::Converter::as_float(eps_bits);
++    sfpi::vFloat y =
++        ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false>(sfpi::dst_reg[0] * inv_w + eps);
++    if constexpr (!DST_ACCUM_MODE) {
++        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
++    }
++    sfpi::dst_reg[0] = y;
++}
++#endif
++
++struct FinalizeInvRms {
++    uint32_t inv_w_bits;
++    uint32_t eps_bits;
++    ALWI void operator()(uint32_t dst) const {
++        rsqrt_tile_init();
++        MATH((_llk_math_eltwise_unary_sfpu_params_(
++            finalize_scalar_body, dst, VectorMode::RC_custom, inv_w_bits, eps_bits)));
++    }
++};
++
++ALWI uint32_t body_page(uint32_t s, uint32_t j) { return s * stick_pages + j * tile_pages; }
++
++void kernel_main() {
++#ifdef RMS_ABLATE_EMPTY
++    return;
++#endif
++    const uint32_t sticks = get_arg_val<uint32_t>(0);
++    const FinalizeInvRms finalize{get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(2)};
++    constexpr uint32_t batch = DEST_AUTO_LIMIT;
++
++    compute_kernel_hw_startup(cb_xa, cb_xa, cb_sumsq_tiles);
++
++    {
++        MaybeDeviceZoneScope("cmp_wait_x");
++        cb_wait_front(cb_x, sticks * stick_pages);
++        if constexpr (has_tail_cb) {
++            cb_wait_front(cb_x_rm, sticks);
++        }
++    }
++    // ---- pass 1: per stick, sum_j x_j^2 accumulated in one DEST tile (ELWMUL accumulates into DEST) ----
++    {
++        MaybeDeviceZoneScope("cmp_pass1");
++        reconfig_data_format(cb_xa, cb_xa);
++        pack_reconfig_data_format(cb_sumsq_tiles);
++        mul_init(cb_xa, cb_xa, true);
++        for (uint32_t s0 = 0; s0 < sticks; s0 += batch) {
++            const uint32_t n = (sticks - s0) < batch ? (sticks - s0) : batch;
++            cb_reserve_back(cb_sumsq_tiles, n);
++            tile_regs_acquire();
++            for (uint32_t i = 0; i < n; ++i) {
++                const uint32_t s = s0 + i;
++                for (uint32_t j = 0; j < n_body; ++j) {
++                    const uint32_t p = body_page(s, j);
++                    mul_tiles(cb_x, cb_x, p, p, i);
++                }
++                if constexpr (has_tail_cb) {
++                    mul_tiles(cb_x_rm, cb_x_rm, s, s, i);
++                }
++            }
++            tile_regs_commit();
++            tile_regs_wait();
++            for (uint32_t i = 0; i < n; ++i) {
++                pack_tile(i, cb_sumsq_tiles);
++            }
++            tile_regs_release();
++            cb_push_back(cb_sumsq_tiles, n);
++        }
++    }
++    // ---- collapse: whole-tile sum (FPU reduce SCALAR) + finalize -> inv_rms at (0, 0) ----
++    {
++        MaybeDeviceZoneScope("cmp_collapse");
++        reduce<
++            PoolType::SUM,
++            ReduceDim::REDUCE_SCALAR,
++            cb_sumsq_tiles,
++            cb_ones,
++            cb_inv_rms,
++            ReduceInputPolicy::BulkWaitBulkPop,
++            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
++            ReduceFp32Mode::Fast,
++            ReduceAlgorithm::ReduceTile>(
++            ReduceInputBlockShape::of(1, 1, sticks), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, finalize);
++    }
++    cb_wait_front(cb_inv_rms, sticks);
++#ifdef RMS_HAS_GAMMA
++    {
++        MaybeDeviceZoneScope("cmp_wait_gamma");  // flat gamma (writer load / multicast)
++        cb_wait_front(cb_gamma, per_stick);
++    }
++#endif
++    // ---- pass 2: out_j = x_j * inv (bcast scalar) [* gamma_j, DEST reuse], packed in place ----
++    {
++        MaybeDeviceZoneScope("cmp_pass2");
++        cb_reserve_back(cb_out, sticks * stick_pages);
++        if constexpr (has_tail_cb) {
++            cb_reserve_back(cb_out_rm, sticks);
++        }
++        pack_reconfig_data_format(cb_outa);
++        const uint32_t total = sticks * per_stick;
++        for (uint32_t t0 = 0; t0 < total; t0 += batch) {
++            const uint32_t n = (total - t0) < batch ? (total - t0) : batch;
++            tile_regs_acquire();
++            reconfig_data_format(cb_xa, cb_inv_rms);
++            mul_bcast_scalar_init(cb_xa, cb_inv_rms);
++            for (uint32_t i = 0; i < n; ++i) {
++                const uint32_t s = (t0 + i) / per_stick;
++                const uint32_t j = (t0 + i) - s * per_stick;
++                if (j < n_body) {
++                    mul_tiles_bcast_scalar(cb_x, cb_inv_rms, body_page(s, j), s, i);
++                } else {
++                    mul_tiles_bcast_scalar(cb_x_rm, cb_inv_rms, s, s, i);
++                }
++            }
++#ifdef RMS_HAS_GAMMA
++            reconfig_data_format_srcb(cb_inv_rms, cb_gamma);
++            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_gamma);
++            for (uint32_t i = 0; i < n; ++i) {
++                const uint32_t s = (t0 + i) / per_stick;
++                const uint32_t j = (t0 + i) - s * per_stick;
++                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_gamma, j, i);
++            }
++#endif
++            tile_regs_commit();
++            tile_regs_wait();
++            for (uint32_t i = 0; i < n; ++i) {
++                const uint32_t s = (t0 + i) / per_stick;
++                const uint32_t j = (t0 + i) - s * per_stick;
++                if (j < n_body) {
++                    pack_tile<true>(i, cb_out, body_page(s, j));
++                } else {
++                    pack_tile<true>(i, cb_out_rm, s);
++                }
++            }
++            tile_regs_release();
++        }
++        cb_push_back(cb_out, sticks * stick_pages);
++        if constexpr (has_tail_cb) {
++            cb_push_back(cb_out_rm, sticks);
++        }
++    }
++    cb_pop_front(cb_x, sticks * stick_pages);
++    if constexpr (has_tail_cb) {
++        cb_pop_front(cb_x_rm, sticks);
++    }
++    cb_pop_front(cb_inv_rms, sticks);
++#ifdef RMS_HAS_GAMMA
++    cb_pop_front(cb_gamma, per_stick);
++#endif
++}
+diff --git 1/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/kernels/rms_norm_flat_writer.cpp 2/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/kernels/rms_norm_flat_writer.cpp
+new file mode 100644
+index 00000000000..47302ac0a8b
+--- /dev/null
++++ 2/ttnn/ttnn/operations/rms_norm/perf_experiments/height_rm_flat/graduation/kernels/rms_norm_flat_writer.cpp
+@@ -0,0 +1,109 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// rms_norm FLAT writer (BRISC) — HEIGHT_SHARDED ROW_MAJOR, few sticks per Tensix core.
++//
++// Flat gamma: the RM gamma is ONE DRAM page of W datums, which IS ceil(W / 1024) flat tiles in the same datum order
++//   as a flat x stick — no faces-0/1 re-layout, no expand, no streaming (W * elem bytes resident: 16 KB at fp32
++//   W = 4096, vs. one half tile per 32 columns = 16x that for the tilized row-broadcast layout). One DRAM read of
++//   the page by the multicast sender (kernel_lib Mcast, one group of every Tensix core — the op's
++//   RMS_GAMMA_MCAST k = 1 channel), one multicast of the same bytes; receivers wait. Datums past W in the last flat
++//   tile are don't-care (their outputs are never written back).
++// Store:
++//   cb_out IS the output shard — compute packs the full flat tiles in place; the stick's tail flat tile
++//       (W % 1024 != 0) comes through cb_out_rm and its valid bytes are written back (one local NoC write per stick).
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "api/dataflow/noc.h"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#ifdef RMS_GAMMA_MCAST
++#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
++#endif
++#include "rms_norm_common.hpp"
++
++using namespace rms_norm_cb;
++
++constexpr uint32_t n_body = get_compile_time_arg_val(0);
++constexpr bool has_tail_cb = get_compile_time_arg_val(1) != 0;
++constexpr uint32_t tail_bytes = get_compile_time_arg_val(2);
++constexpr uint32_t out_pitch = get_compile_time_arg_val(3);
++constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
++constexpr uint32_t stick_pages = get_compile_time_arg_val(5);
++[[maybe_unused]] constexpr uint32_t stick_bytes = get_compile_time_arg_val(6);  // W * elem
++constexpr uint32_t g_read_bytes = get_compile_time_arg_val(7);  // gamma aligned page bytes (one read, one multicast)
++constexpr uint32_t gamma_tiles = get_compile_time_arg_val(8);   // flat gamma tiles = ceil(W / 1024)
++constexpr uint32_t gamma_page_bytes = get_compile_time_arg_val(9);
++[[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<10>();
++
++#ifdef RMS_ABLATE_DM
++constexpr bool ablate_dm = true;
++#else
++constexpr bool ablate_dm = false;
++#endif
++
++#ifdef RMS_GAMMA_MCAST
++constexpr auto gamma_mcast = dataflow_kernel_lib::McastArgs<
++    get_named_compile_time_arg_val("gamma_mcast_ct_offset"),
++    get_named_compile_time_arg_val("gamma_mcast_rt_offset")>();
++#endif
++
++void kernel_main() {
++#ifdef RMS_ABLATE_EMPTY
++    return;
++#endif
++    const uint32_t out_addr = get_arg_val<uint32_t>(0);
++    const uint32_t sticks = get_arg_val<uint32_t>(1);
++    [[maybe_unused]] const uint32_t gamma_addr = get_arg_val<uint32_t>(2);
++
++#ifdef RMS_HAS_GAMMA
++    {
++        cb_reserve_back(cb_gamma, gamma_tiles);
++        const uint32_t base = get_write_ptr(cb_gamma);
++        {
++            MaybeDeviceZoneScope("wr_gamma_issue");
++#ifdef RMS_GAMMA_MCAST
++            const bool reads = gamma_mcast.can_send();
++#else
++            constexpr bool reads = true;
++#endif
++            if (reads) {
++                const auto g_acc = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
++                noc_async_read(g_acc.get_noc_addr(0), base, g_read_bytes);
++            }
++        }
++        MaybeDeviceZoneScope("wr_gamma_finish");  // barrier (+ multicast send / receive wait)
++#ifdef RMS_GAMMA_MCAST
++        Noc noc;
++        if (auto sender = gamma_mcast.optional_sender(noc)) {
++            noc_async_read_barrier();
++            sender->send(base, base, g_read_bytes);  // zero fan-out: src == dst, no transfer
++        } else if (auto receiver = gamma_mcast.optional_receiver(noc)) {
++            receiver->receive();
++        }
++#else
++        noc_async_read_barrier();
++#endif
++        cb_push_back(cb_gamma, gamma_tiles);
++    }
++#endif
++
++    MaybeDeviceZoneScope("wr_store");
++    // zero-copy: the full flat tiles are already in the output shard
++    cb_wait_front(cb_out, sticks * stick_pages);
++    if constexpr (has_tail_cb) {
++        cb_wait_front(cb_out_rm, sticks);
++        const uint32_t l1 = get_read_ptr(cb_out_rm);
++        if constexpr (!ablate_dm) {
++            for (uint32_t s = 0; s < sticks; ++s) {
++                noc_async_write(
++                    l1 + s * tile_bytes, get_noc_addr(out_addr + s * out_pitch + n_body * tile_bytes), tail_bytes);
++            }
++        }
++        noc_async_writes_flushed();
++        cb_pop_front(cb_out_rm, sticks);
++    }
++    cb_pop_front(cb_out, sticks * stick_pages);
++    noc_async_write_barrier();
++}

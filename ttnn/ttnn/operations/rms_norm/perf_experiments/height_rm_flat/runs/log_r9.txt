@@ -1,0 +1,110 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-02 00:30:22] SAFE_PYTEST: waiting for device (20s) — holder pid=43154 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/rms_norm/perf_experiments/row_partial_mcast/bench_row_partial.py -s --import-mode=prepend " parent pid=43147 cmd="/bin/bash /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/ttnn/ttnn/operations/rms_n"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — compile step -> JIT server bgdepyc04:12345 when >= 10 programs, else local (real pass always local)
+SAFE_PYTEST: env UP_FRONT_INLINE_JIT_SERVER=1 UP_FRONT_INLINE_FARM_MIN_PROGRAMS=10 TT_METAL_JIT_SERVER_ENDPOINT=bgdepyc04:12345 TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1 UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=128 PYTHONPATH=/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal:/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal python -m tracy -r -m pytest -p tests.plugins.up_front_collect /tmp/hrf_bench/test_hrf_bench.py -s -p conftest
+========================================
+2026-11-02 00:30:43.520 | INFO     | __main__:main:374 - Using port 8086
+2026-11-02 00:30:43.520 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-02 00:30:43.639 | INFO     | __main__:run_workload:409 - Test process started
+2026-11-02 00:30:45.508 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/adamjanovic/.cache/ttnn,model_cache_path=/home/adamjanovic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.20, pytest-9.0.3, pluggy-1.7.0
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /tmp/hrf_bench
+plugins: xdist-3.8.0, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, split-0.11.0, repeat-0.9.4, anyio-4.16.0, timeout-2.4.0, github-actions-annotate-failures-0.3.0
+collected 1 item
+2026-11-02 00:30:48.826 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-11-02 00:30:48.826 | info     |             UMD | Cluster constructor started. (cluster.cpp:409)
+2026-11-02 00:30:48.826 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-11-02 00:30:48.826 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-11-02 00:30:48.830 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:654)
+2026-11-02 00:30:48.830 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-11-02 00:30:48.864 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:176)
+2026-11-02 00:30:48.864 | info     |             UMD | IOMMU: enabled (cluster.cpp:150)
+2026-11-02 00:30:48.864 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:153)
+2026-11-02 00:30:48.864 | info     |             UMD | Cluster constructor completed. (cluster.cpp:880)
+2026-11-02 00:30:48.865 | info     |             UMD | Starting devices in cluster (cluster.cpp:1466)
+2026-11-02 00:30:48.925 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1475)
+2026-11-02 00:30:49.044 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:531)
+2026-11-02 00:30:49.044 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:593)
+2026-11-02 00:30:49.045 | info     |          Fabric | Loaded physical groupings from: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-11-02 00:30:49.045 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-11-02 00:30:49.045 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1523)
+2026-11-02 00:30:49.045 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1617)
+2026-11-02 00:30:49.046 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 1x1_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1826)
+2026-11-02 00:30:49.046 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1943)
+2026-11-02 00:30:49.105 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-02 00:30:49.871 | info     |           Metal | Disabling and clearing program cache on MeshDevice 1 (mesh_device.cpp:1232)
+HRF_GEOM sw4096f_s32: (1, 1, 2048, 4096) shard=[32, 4096] cores=64
+HRF_ORDER sw4096f_s32 grad
+HRF_PREC sw4096f_s32 grad pcc=1.000000 max_abs=0 rms=0
+
+UP_FRONT_INLINE: collect pass over 1 item(s) took 1.6s
+UP_FRONT_INLINE: compile route local (programs=1, farm_min=10)
+
+UP_FRONT_COLLECT: 1 ops stashed across 1 bodies -> 1 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=2 fallback=0
+2026-11-02 00:30:50.478 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-02 00:30:50.607 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1222)
+UP_FRONT_COLLECT: 1 collected · 1 built · 0 already compiled in 0.0s (workers=128, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=1 programs=1 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=1 compile_s=0.2 collect_s=1.6 route=local
+UP_FRONT_INLINE: compile step took 0.2s; starting the real pass
+
+../../../../../../../tmp/hrf_bench/test_hrf_bench.py 2026-11-02 00:30:50.722 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-11-02 00:30:50.808 | info     |           Metal | Disabling and clearing program cache on MeshDevice 5 (mesh_device.cpp:1232)
+HRF_GEOM sw4096f_s32: (1, 1, 2048, 4096) shard=[32, 4096] cores=64
+HRF_ORDER sw4096f_s32 grad
+HRF_PREC sw4096f_s32 grad pcc=1.000000 max_abs=0.02863 rms=0.001132
+.2026-11-02 00:30:51.725 | info     |           Metal | Device kernel duration perf summary (device=0): count=1, min=35509ns, avg=35509.0ns, max=35509ns (profiler_analysis.cpp:729)
+2026-11-02 00:30:51.725 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[35500..36500), underflow(<35500ns)=0, overflow(>=36500ns)=0) (profiler_analysis.cpp:772)
+2026-11-02 00:30:51.725 | info     |           Metal |   [       35500 ..        35600) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-02 00:30:51.725 | info     |           Metal |   [       35600 ..        35700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-02 00:30:51.725 | info     |           Metal |   [       35700 ..        35800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-02 00:30:51.725 | info     |           Metal |   [       35800 ..        35900) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-02 00:30:51.725 | info     |           Metal |   [       35900 ..        36000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-02 00:30:51.725 | info     |           Metal |   [       36000 ..        36100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-02 00:30:51.725 | info     |           Metal |   [       36100 ..        36200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-02 00:30:51.725 | info     |           Metal |   [       36200 ..        36300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-02 00:30:51.725 | info     |           Metal |   [       36300 ..        36400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-02 00:30:51.725 | info     |           Metal |   [       36400 ..        36500) |                                        |        0 (profiler_analysis.cpp:777)
+UP_FRONT_INLINE: real pass took 1.1s
+
+
+============================== 1 passed in 3.25s ===============================
+2026-11-02 00:30:52.900 | info     |    BuildKernels | JIT cache stats: 23/23 hits (100.0%) [10 cached, 17 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-02 00:30:52.900 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-02 00:30:52.904 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-11-02 00:30:52.904 | info     |             UMD | Closing devices in cluster (cluster.cpp:1480)
+2026-11-02 00:30:52.926 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1490)
+2026-11-02 00:30:52.926 | info     |             UMD | Cluster destructor started. (cluster.cpp:1211)
+2026-11-02 00:30:52.926 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1224)
+2026-11-02 00:30:53.129 | INFO     | __main__:main:483 - Copying /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/build/profiler/build_wasm/traces/conftest_2026_11_02_00_30_53.tracy
+2026-11-02 00:30:53.135 | INFO     | __main__:main:486 - Copied /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/build/profiler/build_wasm/traces/conftest_2026_11_02_00_30_53.tracy
+2026-11-02 00:30:53.266 | INFO     | __main__:main:495 - embed.tracy -> traces/conftest_2026_11_02_00_30_53.tracy
+2026-11-02 00:30:53.266 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-02 00:30:53.266 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-02 00:30:53.267 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-02 00:30:53.954 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-02 00:30:53.991 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-02 00:30:53.992 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-02 00:30:55.397 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-02 00:30:55.397 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-02 00:30:55.408 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-02 00:30:55.408 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-02 00:30:55.423 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-02 00:30:55.425 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_11_02_00_30_55/ops_perf_results_2026_11_02_00_30_55.csv
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 1 item(s) took 1.6s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=1, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 1 ops stashed across 1 bodies -> 1 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=2 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 1 collected · 1 built · 0 already compiled in 0.0s (workers=128, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 0.2s; starting the real pass
+PRECOMPILE: UP_FRONT_INLINE: real pass took 1.1s
+SAFE_PYTEST: PROFILER CSV: /localdev/adamjanovic/2026_11_01/1349_adamjanovic_ab-tilize-run-scoreboard-catalog4/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_11_02_00_30_55/ops_perf_results_2026_11_02_00_30_55.csv
+SAFE_PYTEST_RESULT: PASS

@@ -101,3 +101,4 @@ rm_narrow_staging/runs/dev_r9.csv
 rm_narrow_staging/runs/log_r1.txt
 rm_narrow_staging/runs/log_r2.txt
 rm_narrow_staging/runs/log_r8.txt
+height_rm_flat/runs/log_dev1.txt
