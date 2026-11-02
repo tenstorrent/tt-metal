@@ -835,6 +835,10 @@ jobs:
                           "all",
                           "galaxy-fabric-unit",
                           "galaxy-fabric-2d-torus-nightly",
+                          "galaxy-fabric-2x2-torus-z",
+                          "galaxy-fabric-2x2-torus-nonz",
+                          "galaxy-fabric-per-mesh-torus-yx",
+                          "galaxy-fabric-per-mesh-wh-combo",
                           "galaxy-fabric-multi-mesh-4x4-2x4s",
                           "galaxy-fabric-multi-mesh-2x8-2x4s",
                           "bh-galaxy-fabric-torus-stability",
@@ -1414,7 +1418,9 @@ jobs:
                           "bh_quietbox_2 (BH QB2)",
                           "bh_galaxy (BH Galaxy)",
                           "bh_sc1 (BH Single Galaxy)",
+                          "bh_sc1_high_power (BH SC1 High Power)",
                           "bh_sc4 (BH Supercluster 4)",
+                          "bh_sc4_high_power (BH SC4 High Power)",
                           "bh_sc16 (BH Supercluster 16)"
                         ],
                         "type": "string"
