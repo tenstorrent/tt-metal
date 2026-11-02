@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::prim {
@@ -44,6 +45,14 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t sp_rank = coord[axis];
     auto successor = coord;
     successor[axis] = (sp_rank + 1) % sp_size;
+    // The successor is the forward neighbor, one hop, except for the last rank of a line that does not wrap, which
+    // reaches rank 0 backward, sp_size - 1 hops (as qkv_causal_conv1d_silu's exchange_route).
+    const bool successor_forward = ttnn::ccl::is_axis_wrap_wired(*mesh, axis) || sp_rank + 1 < sp_size;
+    const uint32_t successor_hops = successor_forward ? 1 : sp_size - 1;
+    // 2D routing addresses the successor itself; 1D routing leaves on the link to the neighbor it heads through.
+    auto first_hop = coord;
+    first_hop[axis] = successor_forward ? (sp_rank + 1) % sp_size : (sp_rank + sp_size - 1) % sp_size;
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
 
     const uint32_t batch_heads = in.initial_state.logical_shape()[0];
     const uint32_t kt = in.initial_state.logical_shape()[1] / tt::constants::TILE_HEIGHT;
@@ -100,7 +109,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     std::vector<uint32_t> sender_ct = {cb_stage};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
-        sender_ct.end(), {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id});
+        sender_ct.end(),
+        {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id, successor_hops});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
 
     tt::tt_metal::KernelDescriptor reader{
@@ -156,11 +166,12 @@ tt::tt_metal::ProgramDescriptor build_program(
 
     const auto source_node = mesh->get_fabric_node_id(coord);
     const auto destination_node = mesh->get_fabric_node_id(successor);
-    const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, destination_node);
+    const auto connection_node = fabric_2d ? destination_node : mesh->get_fabric_node_id(first_hop);
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, connection_node);
     desc.kernels[sender_kernel].emplace_common_runtime_args({in.actual_start.buffer(), in.landing.buffer()});
     TT_FATAL(
         links.size() >= attrs.num_links,
-        "relay_affine_prefix uses {} links; the hop to the successor has {}",
+        "relay_affine_prefix uses {} links; the hop towards the successor has {}",
         attrs.num_links,
         links.size());
     for (uint32_t link = 0; link < attrs.num_links; ++link) {
@@ -181,7 +192,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         sender_rt.append(notify);
         std::vector<uint32_t> fabric_args;
         tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-            source_node, destination_node, links[link], desc, core, fabric_args, tt::CoreType::WORKER);
+            source_node, connection_node, links[link], desc, core, fabric_args, tt::CoreType::WORKER);
         sender_rt.append(fabric_args);
         desc.kernels[sender_kernel].emplace_runtime_args(core, sender_rt);
     }

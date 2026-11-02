@@ -49,12 +49,11 @@ _LOUDBOX_PERF_SKU = "bh_loudbox"
 _QUIETBOX_PERF_SKU = "bh_quietbox"
 _PERF_MARGIN = 0.03
 # Host wall time of one traced call: the median over _TIMING_SAMPLES samples, each of back-to-back trace replays
-# through device synchronization. The LoudBox and QuietBox rings open a 1D ring fabric (the layer then gathers the SP
-# prefix); every other case opens a 2D fabric with K3's payload (kda_device_params).
-# LoudBox SP8xTP1: CI run https://github.com/tenstorrent/tt-metal/actions/runs/41978641236 on main 95531ac9c2d.
+# through device synchronization. SP8xTP1 and SP4xTP1 open FABRIC_1D_RING, every other case a 2D fabric with K3's
+# payload (kda_device_params).
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        "SP8xTP1": 1.341,
+        "SP8xTP1": 1.106,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
@@ -67,10 +66,9 @@ _PERF_REFERENCE_MS = {
 # lowers the clock by an amount that varies by runner. The cross-chip programs' wait for their neighbours still moves
 # a single replay by a few percent, hence the wider margin.
 _DEVICE_PERF_MARGIN = 0.05
-# QuietBox SP4xTP1: CI run https://github.com/tenstorrent/tt-metal/actions/runs/41978641236 on main 95531ac9c2d.
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        "SP4xTP1": 1.289,
+        "SP4xTP1": 1.088,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.

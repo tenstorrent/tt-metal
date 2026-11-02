@@ -392,19 +392,31 @@ def test_distributed_recurrence_trace_replay_matches_eager(
 _STRADDLE_RANKS, _STRADDLE_LOCAL_ROWS = 4, 128
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True)
+# SP4 along mesh axis 1, on 2x4 and on 8x4 (one head per chip over 8 TP ranks).
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param((2, 4), kda_device_params((2, 4)), id="mesh-2x4"),
+        pytest.param(
+            (8, 4),
+            kda_device_params((8, 4)),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="galaxy-8x4",
+        ),
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "groups,start,length",
     [
         # Unsplit control at the same geometry: calibrates the gates for a 512-token recurrence.
         pytest.param(1, 0, None, id="g1-unsplit-control"),
-        # One group per head: the packed head summaries the distributed prefix gathers.
+        # One group per head: the packed head summaries the relay carries.
         pytest.param(1, 128 + 64, None, id="g1-split-mid-rank1"),
         pytest.param(1, 2 * 128 + 96, None, id="g1-split-one-chunk-head"),
         pytest.param(1, 2 * 128 + 32, None, id="g1-split-one-chunk-tail"),
         pytest.param(1, 128 + 64, 352, id="g1-end-inside-last-rank"),
-        # Ranks 3 and 0 hold no valid chunk: the gathered prefix must apply their identity summaries.
+        # Ranks 3 and 0 hold no valid chunk: the relay must apply their identity summaries.
         pytest.param(1, 128 + 64, 160, id="g1-empty-ranks"),
         pytest.param(1, 128 + 64, 480, id="g1-end-inside-tail"),
         pytest.param(1, 4 * 128 + 128 + 32, None, id="g1-start-beyond-span"),

@@ -45,8 +45,8 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
     """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload.
 
-    Galaxy's 8x4 takes K3's TorusXY. A ring of chips takes the torus over its one axis (TorusY for Nx1, TorusX for 1xN,
-    as the box's CI matrix lists them), and 2x2, 2x4 and 4x2 take unwrapped Fabric2D.
+    8x4 takes K3's TorusXY, a ring of chips the torus over its one axis (TorusY for Nx1, TorusX for 1xN), and 2x2,
+    2x4 and 4x2 an unwrapped Fabric2D.
     """
     rows, columns = mesh_shape
     if (rows, columns) == (8, 4):

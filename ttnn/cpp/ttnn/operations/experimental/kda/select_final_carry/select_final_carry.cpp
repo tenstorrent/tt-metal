@@ -51,13 +51,10 @@ ttnn::Tensor select_final_carry(
         mesh->shape().dims());
     const auto topology = ::ttnn::ccl::convert_2d_to_1d_topology(::ttnn::ccl::get_usable_topology(
         prefix_final, tt::tt_fabric::get_fabric_topology(*mesh), sequence_parallel_axis));
-    const auto available_links =
-        static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*mesh, sequence_parallel_axis));
-    TT_FATAL(
-        num_links.value_or(available_links) <= available_links,
-        "select_final_carry: num_links {} exceeds the {} links of the sequence-parallel axis",
-        num_links.value_or(available_links),
-        available_links);
+    // The link count, given or not, is checked against the axis on cache misses only.
+    const uint32_t links =
+        num_links ? *num_links
+                  : static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*mesh, sequence_parallel_axis));
     return ttnn::experimental::prim::select_final_carry(
         rank_final,
         prefix_final,
@@ -66,7 +63,7 @@ ttnn::Tensor select_final_carry(
         actual_end,
         sequence_parallel_axis,
         local_rows,
-        num_links.value_or(available_links),
+        links,
         topology,
         prefix_on_last_rank,
         cores,
