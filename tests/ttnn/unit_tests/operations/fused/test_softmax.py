@@ -1452,3 +1452,55 @@ def test_scale_mask_softmax_causal_mask_height_differs_from_width(device, op, ba
         atol=0.01,
         frobenius_threshold=0.05,
     )
+
+
+@pytest.mark.parametrize(
+    "input_shape, mask_shape, grid, block_h, error",
+    [
+        # block_h is smaller than the mask's tile rows, or not a multiple of them: the reader would hang
+        ((2, 2, 128, 128), (2, 1, 128, 128), (4, 2), 2, "positive multiple of the causal mask height"),
+        ((3, 1, 64, 128), (3, 1, 64, 128), (2, 1), 3, "positive multiple of the causal mask height"),
+        ((2, 1, 96, 128), (2, 1, 96, 128), (3, 1), 2, "positive multiple of the causal mask height"),
+        # one mask for a batch of two: the reader would step past the mask for batch 1
+        ((2, 2, 64, 128), (1, 1, 64, 128), (2, 2), 2, "Input and mask batch sizes must match"),
+        # valid: block_h is a multiple of the mask's tile rows
+        ((2, 2, 96, 128), (2, 1, 96, 128), (2, 1), 6, None),
+    ],
+)
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_sharded_scale_mask_softmax_causal_mask_validation(
+    device, expect_error, input_shape, mask_shape, grid, block_h, error, orientation
+):
+    torch.manual_seed(0)
+    scale = 0.125
+    W = input_shape[-1]
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_mask = (torch.rand(mask_shape) > 0.5).float() * -4.0
+    torch_mask = torch_mask.to(torch.bfloat16)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))})
+    shard_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [block_h * 32, W], orientation),
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid, subblock_w=1, block_h=block_h, block_w=W // 32
+    )
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=shard_config
+    )
+    ttnn_mask = ttnn.from_torch(torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if error is not None:
+        with expect_error(RuntimeError, error):
+            ttnn.scale_mask_softmax_in_place(
+                ttnn_input, scale, ttnn_mask, program_config=program_config, is_causal_mask=True
+            )
+        return
+
+    torch_output = F.softmax(torch_input.float() * scale + torch_mask.float(), dim=-1)
+    ttnn_output = ttnn.scale_mask_softmax_in_place(
+        ttnn_input, scale, ttnn_mask, program_config=program_config, is_causal_mask=True
+    )
+    assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output).float(), 0.999)
