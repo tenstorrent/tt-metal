@@ -29,6 +29,7 @@ from .llk_params import (
     MathFidelity,
     MathOperation,
     NarrowTile,
+    PackUntilizeBenchmark,
     PerfRunType,
     ReduceOrder,
     ReducePool,
@@ -90,6 +91,18 @@ class THROTTLE_LEVEL(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
+
+
+@dataclass
+class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
+    pack_untilize_benchmark: PackUntilizeBenchmark
+
+    def convert_to_cpp(self) -> str:
+        is_perf = self.pack_untilize_benchmark != PackUntilizeBenchmark.Functional
+        return (
+            f"// pack_untilize benchmark: {self.pack_untilize_benchmark.value}\n"
+            f"constexpr bool PACK_UNTILIZE_IS_PERF = {str(is_perf).lower()};"
+        )
 
 
 @dataclass
@@ -2183,10 +2196,12 @@ class EMA_INTERLEAVED_INIT(TemplateParameter):
 
 @dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
-    offset: int = 0
+    tile_dst_ct_offset: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t TILE_DST_CT_OFFSET = {self.offset};"
+        return (
+            f"constexpr std::uint32_t TILE_DST_CT_OFFSET = {self.tile_dst_ct_offset};"
+        )
 
 
 @dataclass
