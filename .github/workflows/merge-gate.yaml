@@ -552,7 +552,7 @@ jobs:
 
   # ===========================================================================
   # Team: llk
-  # test list: llk_merge_gate_tests.yaml
+  # test lists: llk_merge_gate_tests.yaml, llk_ttsim_merge_gate_tests.yaml
   # ===========================================================================
 
   # Merge-gate LLK gtest matrix (tests/pipeline_reorg/llk_merge_gate_tests.yaml).
@@ -619,6 +619,24 @@ jobs:
           || (needs.find-changes.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
           || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu')
           || '' }}
+
+  # ttnn SFPU op tests on ttsim for WH/BH LLK changes (llk_ttsim_merge_gate_tests.yaml).
+  # Not on main: sanity-tests.yaml runs the sim groups on every push.
+  llk-ttsim-merge-gate-tests:
+    needs: [build, find-changes]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (
+            needs.find-changes.outputs.llk-wormhole-changed == 'true' ||
+            needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
+            needs.find-changes.outputs.llk-common-changed == 'true' ||
+            needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
+            needs.find-changes.outputs.llk-ci-changed == 'true')
+        }}
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-smoke-tests-impl.yaml
+    with:
+      tests-yaml-path: ./tests/pipeline_reorg/llk_ttsim_merge_gate_tests.yaml
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   # LLK perf merge gate (tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml): measure
   # the queue head, non speed-of-light, L1_TO_L1, and compare it with the merge
@@ -862,14 +880,14 @@ jobs:
 
     # The LLK perf merge gate is in needs, so the queue waits for its verdict, but not
     # in optional-jobs while it is report-only, so its failure does not block a merge.
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-measure, llk-perf-merge-gate]
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, llk-ttsim-merge-gate-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-measure, llk-perf-merge-gate]
     runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, llk-ttsim-merge-gate-tests, ttsim-quasar-merge-gate-tests"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
