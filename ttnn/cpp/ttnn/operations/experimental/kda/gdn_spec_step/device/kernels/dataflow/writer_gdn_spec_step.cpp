@@ -336,7 +336,10 @@ TT_KERNEL void writer(
         noc.async_read(dtb_acc, dtb_ws, GDN_DTB_FP32 ? 4096u : 2048u, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read(nea_acc, nea_ws, GDN_NEA_FP32 ? 4096u : 2048u, {.page_id = 0}, {.offset_bytes = 0});
 #endif
-        noc.async_read_barrier();
+        {
+            DeviceZoneScopedN("wr_grd");  // gov gdn-v2 profiling zone: the gate read barrier
+            noc.async_read_barrier();
+        }
         uint32_t dtb_bits, nea_bits;
         {
             auto lock = dtb_ws.scoped_write_lock(1);
@@ -379,6 +382,7 @@ TT_KERNEL void writer(
         }
         gsc.push_back(1);
 #if GDN_GSC_SPLIT
+        DeviceZoneScopedN("wr_gsw");  // gov gdn-v2 profiling zone: the head's gate-slot swap
         // slots [t0, t1) (64 B aligned) into every block's gsc (itself included); `gsv` up on every block; once all VB
         // blocks' slots are in, gsc goes to the compute
         {

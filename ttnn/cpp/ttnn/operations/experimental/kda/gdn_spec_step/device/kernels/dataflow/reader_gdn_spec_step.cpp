@@ -238,7 +238,10 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     read_tiles_at(qkv_acc, z_in, noc, pg + z_tile0 + h * Vt, Vt, 0);
 #endif
 #if GDN_GATE_SCALARS
-    noc.async_read_barrier();
+    {
+        DeviceZoneScopedN("rd_zwait");  // gov gdn-v2 profiling zone (no code without PROFILE_KERNEL)
+        noc.async_read_barrier();
+    }
     z_in.push_back(Vt);
 #else
     // ab_in[0] = a's tile (ab_page + h/32); ab_in[1] = b's tile (ab_page + (Nv+h)/32) only when it differs (b_idx = 1;
@@ -363,6 +366,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         src_in.push_back(2 * ChA);
 #endif
         // taps[c]: rows 0..K-1 (tap j in row j) of tile column chunk_col(c); the rest of the tile is zero
+        DeviceZoneScopedN("rd_rest");  // gov gdn-v2 profiling zone: taps / w / selectors / masks issue + build
         taps.reserve_back(ChA);
         zero_reserved(taps, noc, ChA);
         {
@@ -409,7 +413,10 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             }
         }
         e_t.push_back(T);
-        noc.async_read_barrier();
+        {
+            DeviceZoneScopedN("rd_bwait");  // gov gdn-v2 profiling zone: the bulk read barrier
+            noc.async_read_barrier();
+        }
 #if !GDN_EARLY_SRC
         src_in.push_back(2 * ChA);
 #endif
