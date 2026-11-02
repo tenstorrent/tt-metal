@@ -562,13 +562,23 @@ execute_step_refresh_cost
 
 ### Step 6b: Record the perf verdict
 
-EXECUTE the following (a no-op that prints `not measured` when perf is disabled):
+First, a measure-only wave diagnosis of the kernel now in the tree. It captures waves of one variant on the emulator and records the floor, stall headroom and ranked causes (`codegen/skills/llk-perf-headroom`). It changes nothing in the tree. When perf is disabled, off the emulator, with `PERF_DIAG=false` or with little free disk, it prints `status=skipped`. EXECUTE (Bash tool, `timeout: 600000`, `dangerouslyDisableSandbox: true`, foreground):
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_perf_diagnose
+```
+While the printed line says `status=running`, EXECUTE the same way, as often as needed (each call waits up to 9 minutes):
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_perf_diagnose_wait
+```
+Then EXECUTE (a no-op that prints `not measured` when perf is disabled):
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_perf_finalize
 ```
 
-Quote the `PERF_FINAL:` line verbatim in your final report. It is a soft outcome: never change `STATUS` or `FINAL_RESULT` because of it.
+Quote the final `PERF_DIAG` line and the `PERF_FINAL:` line verbatim in your final report. Both are soft outcomes: never change `STATUS` or `FINAL_RESULT` because of them, and never act on the diagnosis in this run.
 
 ---
 

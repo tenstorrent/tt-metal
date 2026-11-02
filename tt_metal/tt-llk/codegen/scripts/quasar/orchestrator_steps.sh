@@ -825,6 +825,19 @@ def num(k):
     except (TypeError, ValueError): return None
 def s_(k):
     v = s.get(k); return v if v not in (None, "") else None
+def diagnosis():
+    # Measure-only wave diagnosis (execute_step_perf_diagnose); the summary fields come from diag.json.
+    if not s_("PERF_DIAG_STATUS"):
+        return None
+    d = {"status": s_("PERF_DIAG_STATUS"), "line": s_("PERF_DIAG_LINE"), "dir": s_("PERF_DIAG_DIR")}
+    try:
+        full = json.load(open((s_("PERF_DIAG_DIR") or "") + "/diag.json"))
+    except (OSError, ValueError):
+        full = {}
+    for key in ("run_type", "measured", "floor", "stall_headroom_pct", "bottleneck", "top_causes", "reason"):
+        if key in full:
+            d[key] = full[key]
+    return d
 print(json.dumps({"perf": {
     "enabled": s.get("PERF_ENABLED") is True,
     "verdict": s_("PERF_VERDICT") or "not_measured",       # follows the median variant
@@ -846,6 +859,7 @@ print(json.dumps({"perf": {
     "attempts": int(num("PERF_ATTEMPTS") or 0),
     "kept": int(num("PERF_KEPT") or 0),
     "baseline_csv": s_("PERF_BASELINE_CSV"), "best_csv": s_("PERF_BEST_CSV"),
+    "diagnosis": diagnosis(),
 }}))'
 }
 
@@ -1085,6 +1099,88 @@ execute_step_perf_revert() {
     _perf_restore best
     rj message --message "Perf: reverted $(sg PERF_LAST_LABEL) — kept best=${best} ($(sg PERF_LAST_VS_BEST) vs best)"
     echo "PERF_REVERT: restored best=${best} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
+}
+
+# ===========================================================================
+# Step 6b — measure-only wave diagnosis of the kernel in the tree (the final one).
+# One capture of the PERF_TEST_ID variant on the emulator: per-cycle breakdown,
+# floor, stall headroom and ranked causes (codegen/skills/llk-perf-headroom).
+# Records PERF_DIAG_STATUS/LINE/DIR in state; execute_step_perf_finalize puts it in
+# run.json. Never changes the kernel, the perf verdict or STATUS, and every outcome
+# (including skipped/failed) prints one PERF_DIAG line and returns 0.
+# Space: the emulator dump (~1 GB) and the wave file (~2 MB) are deleted; ~20 KB is
+# kept under $LOG_DIR/perf/diag. Skipped when the emulator filesystem has < 20 GB
+# free, when PERF_DIAG=false, or off the emulator. Run before execute_step_perf_finalize.
+# ===========================================================================
+execute_step_perf_diagnose() {
+    local _L; _L="$(_LOG)"
+    local why="" backend
+    backend="$(sg QSR_SIM_BACKEND)"
+    if [ "$(sg PERF_ENABLED)" != "true" ]; then why="perf not enabled ($(sg PERF_REASON))"
+    elif [ "$(sg PERF_DIAG)" = "false" ]; then why="PERF_DIAG=false"
+    elif [ "$(sg TARGET_ARCH)" != "quasar" ] || [ "${backend:-emu}" != "emu" ]; then
+        why="waves are captured on the Quasar emulator only (arch=$(sg TARGET_ARCH) backend=${backend:-emu})"
+    elif [ -z "$(sg PERF_TEST_ID)" ]; then why="no perf variant recorded (PERF_TEST_ID)"
+    fi
+    if [ -n "$why" ]; then
+        local skip="PERF_DIAG status=skipped reason='${why}'"
+        ss PERF_DIAG_STATUS skipped
+        ss PERF_DIAG_LINE "$skip"
+        echo "$skip"
+        return 0
+    fi
+    local rt=L1_TO_L1 llk
+    [ "$(sg PERF_METRIC)" = "mean(MATH_ISOLATE)" ] && rt=MATH_ISOLATE
+    llk="$(_wt)/tt_metal/tt-llk"
+    _disk_guard mkdir -p "$_L/perf" || return $?
+    rm -f "$_L/perf/diag.out"
+    rj message --message "Perf diagnosis (measure only): capturing waves of $(sg PERF_TEST_ID), ${rt}"
+    # Detached: a capture can outlast one foreground Bash call, and must never be killed
+    # half-way (it cleans up the emulator dump itself). _perf_diag_wait polls it in slices.
+    setsid nohup python "${PERF_DIAGNOSE_PY:-$_ORCH_SCRIPTS/perf_diagnose.py}" --llk "$llk" \
+        --module "$(sg PERF_MODULE)" --test-id "$(sg PERF_TEST_ID)" --run-type "$rt" \
+        --out-dir "$_L/perf/diag" >"$_L/perf/diag.out" 2>"$_L/perf/diag.stderr.txt" </dev/null &
+    ss PERF_DIAG_PID "$!"
+    ss PERF_DIAG_STATUS running
+    ss PERF_DIAG_DIR "$_L/perf/diag"
+    _perf_diag_wait
+}
+
+# Wait for a running diagnosis for up to PERF_DIAG_WAIT_SECS (default 540, under one
+# 10-minute Bash call). Prints the PERF_DIAG line, or status=running with what to call next.
+execute_step_perf_diagnose_wait() {
+    local _L; _L="$(_LOG)"
+    _perf_diag_wait
+}
+
+_perf_diag_wait() {
+    local pid line st waited=0 budget="${PERF_DIAG_WAIT_SECS:-540}"
+    if [ "$(sg PERF_DIAG_STATUS)" != "running" ]; then
+        line="$(sg PERF_DIAG_LINE)"
+        echo "${line:-PERF_DIAG status=skipped reason='no diagnosis was started'}"
+        return 0
+    fi
+    pid="$(sg PERF_DIAG_PID)"
+    while :; do
+        line="$(grep '^PERF_DIAG ' "$_L/perf/diag.out" 2>/dev/null | tail -1)"
+        [ -n "$line" ] && break
+        if ! kill -0 "$pid" 2>/dev/null; then
+            sleep 1   # let a just-exited writer's output land
+            line="$(grep '^PERF_DIAG ' "$_L/perf/diag.out" 2>/dev/null | tail -1)"
+            [ -n "$line" ] || line="PERF_DIAG status=failed reason='perf_diagnose.py exited without a result (see perf/diag.stderr.txt)'"
+            break
+        fi
+        if [ "$waited" -ge "$budget" ]; then
+            echo "PERF_DIAG status=running pid=${pid} waited=${waited}s next=execute_step_perf_diagnose_wait"
+            return 0
+        fi
+        sleep 2; waited=$((waited + 2))
+    done
+    st="$(printf '%s' "$line" | sed -n 's/^PERF_DIAG status=\([a-z_]*\).*/\1/p')"
+    ss PERF_DIAG_STATUS "${st:-failed}"
+    ss PERF_DIAG_LINE   "$line"
+    rj message --message "Perf diagnosis: ${line#PERF_DIAG }"
+    echo "$line"
 }
 
 # ===========================================================================
