@@ -425,6 +425,29 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
     }
 }
 
+// An A2D datacopy without broadcast runs as ELWADD (not MOVA2D) when dest is 32-bit or the integer FPU path is on
+// (except UInt16, which stays on MOVA2D), or for UInt8 datums.
+template <bool is_fp32_dest_acc_en, bool is_int_fpu_en = false>
+constexpr bool _datacopy_a2d_uses_elwadd_(const std::uint32_t dst_format)
+{
+    return ((is_fp32_dest_acc_en || is_int_fpu_en) && dst_format != to_underlying(DataFormat::UInt16)) || dst_format == to_underlying(DataFormat::UInt8);
+}
+
+// Src zero-substitution flag for an A2D datacopy, chosen once: clear when it runs as ELWADD, else the copy policy
+// for its source format (keep, or flush for fp8). copy_init calls this so its flag write is not undone by the init.
+template <bool is_fp32_dest_acc_en, bool is_int_fpu_en = false>
+inline void _configure_datacopy_a2d_zero_flag_state_(const std::uint32_t dst_format)
+{
+    if (_datacopy_a2d_uses_elwadd_<is_fp32_dest_acc_en, is_int_fpu_en>(dst_format))
+    {
+        math::_configure_elw_zero_flag_state_();
+    }
+    else
+    {
+        math::_configure_copy_zero_flag_state_(dst_format);
+    }
+}
+
 /**
  * @brief Program the datacopy MOP, selecting the move instruction (MOVA2D/MOVB2D/ELWADD) per direction, format, and broadcast.
  *
@@ -453,7 +476,7 @@ inline void eltwise_unary_configure_mop(
         std::uint32_t innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
         std::uint32_t outerloop = tilize ? 1 : num_faces;
 
-        if (((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == to_underlying(DataFormat::UInt16))) || (dst_format == to_underlying(DataFormat::UInt8)))
+        if (_datacopy_a2d_uses_elwadd_<is_fp32_dest_acc_en, is_int_fpu_en>(dst_format))
         {
             // use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode OR to handle uint8 datums
             math::_configure_elw_zero_flag_state_();
