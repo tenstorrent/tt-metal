@@ -2346,3 +2346,23 @@ pick_gather 4.7 + post_combine 2.2 ms (regions total 20.1-23.5 vs 25.0 ms; path 
 ~5.9-6.2 s vs 6.55-6.78 s). Served c1 1 M ladder: 494.8 (chain) -> 472.5 (rt4096) -> 443.0 (plan kernel) -> 456.9
 (paged) -> 434.1 (device ring) -> 427.6 (dual-NoC gather) -> 385.1 s (pick_combine): -22.2 %.
 `GLM53_REGIONS_COMBINE=kernel` is the code default; `chain` restores the ttnn chain.
+
+### 2026-11-02 08:40: the row-local scan on stock ops needs its own conv history exchange (the chunk-18 token flip)
+
+After the override retirement (05:00 entry) the served c1 1 M needle prefilled at the same pace (385.5 s) but answered
+with a thought where every earlier run answered in 7 tokens. Deterministic per tree, identical on the stock and the
+override runtime; the greedy chunk-end tokens matched the passing run for 17 chunks and diverged at the chunk starting
+at 278528; a per-layer mHC dump at that chunk (`GLM53_MHC_DUMP` + a start-selective hook, old vs new tree) showed
+layer 0's attention (KDA) output differing with a bit-identical input, so only the carried KDA state differed, while
+chunk 0 (before the boot-time wave captures) was bit-identical. Bisects: ttkda + moe alone passed (old absolute wave
+starts: row 0 the single owner), kda.py alone passed, so the flip needed both the stock multi-rank conv exchange and
+the all-owner row-slice bounds. Mechanism: `_HistoryExchange` (the persistent exchange buffer + global semaphores)
+was one per mesh for every ttKDA instance; the stock multi-rank exchange kernel, run by the wave captures with every
+rank its own owner, has each rank multicast its carry and bump every other rank's carry semaphore with no consumer;
+the sequence-parallel needle's non-owner ranks then passed their carry wait on the stale counts and read the carry
+page before the owner's rows landed (`noc_semaphore_set(0)` after the wait keeps the off-by-one alive), a slightly
+wrong conv history per chunk. Fix: one exchange per chronology mode (`_HistoryExchange.shared(mesh, width, scope)`,
+scope "local" for `ttKDA(sequence_parallel_size=1)` on a multi-row mesh); `test_mesh_local_kda` part (ii) now asserts
+the sequence-parallel carries against HF after a row-local run (the output-only comparison had hidden it). Rule: a
+persistent semaphore needs a consumer in every program variant that bumps it, or each variant gets its own set.
+Validation queued: the 8x4 unit file on the stock runtime, the c1 1 M needle on both runtimes, the 8 x 20 K wave smoke.
