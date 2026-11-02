@@ -11,7 +11,10 @@
 //   BRISC  sums the 32 values, writes partial[b] into the master's slot array, increments the
 //          master's sem 0; the master waits for every core, computes rstd, writes it to every core
 //          and increments their sem 1; every BRISC then fills cb_r and does the scatter.
-//   TRISC  y = x * g * rstd in fp32 (SFPU), packed bf16 -> cb_y, then x_b' = y_b @ M_b (custom_mm).
+//   TRISC  y = x * g * rstd in fp32 (SFPU), then x_b' = y_b @ M_b (custom_mm).
+// The block is handled as ONE 32x32 tile (row t = K-tile t's 32 values): NCRISC builds the x tile,
+// g comes as one fp32 tile per block, TRISC does whole-tile SFPU steps and packs one bf16 tile, and
+// BRISC re-lays its 32 rows into the 1x32 tiles custom_mm takes (32 tiny-tile copies cost 25 us).
 //
 // Runtime args, per core:
 //   TRISC:  rb_addr
@@ -28,6 +31,7 @@
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/reduce.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/compute/experimental/custom_mm.h"
@@ -40,33 +44,37 @@
 #endif
 
 constexpr uint32_t cb_x = 0, cb_m = 1, cb_o = 2, cb_stage = 3, cb_g = 7, cb_p = 8, cb_r = 9, cb_y = 10, cb_scr = 11;
+constexpr uint32_t cb_y32 = 13;  // y as one bf16 32x32 tile (cb_x holds x the same way, cb_g holds g)
 // cb_sync (4 KB, same address on every core of the program): partial[b] at +16 b, rstd at +1024,
 // NoC staging words at +2048 / +2064 (16 B strides: NoC writes keep the 16 B phase)
 constexpr uint32_t cb_sync = 12;
 constexpr uint32_t KT = 32;  // K-tiles per 1024-block
-constexpr uint32_t GRP = 4;  // tiles per SFPU group in the y pass (DST slots 0-3 x, 4-7 g)
 
 #if defined(COMPILE_FOR_TRISC) && defined(TRISC_MATH)
 constexpr uint32_t U = 32;
-// row 0 of a 1x32 tile in DST: units 0/1 (face 0 even/odd columns), 8/9 (face 1)
-inline void sq_acc() {  // slot 0 += slot 1 ^ 2
-#pragma GCC unroll 4
-    for (uint32_t i : {0u, 1u, 8u, 9u}) {
-        sfpi::vFloat v = sfpi::dst_reg[U + i];
-        sfpi::dst_reg[i] = sfpi::dst_reg[i] + v * v;
+inline void square_slot0() {
+#pragma GCC unroll 32
+    for (uint32_t i = 0; i < U; ++i) {
+        sfpi::vFloat v = sfpi::dst_reg[i];
+        sfpi::dst_reg[i] = v * v;
     }
 }
-inline void zero2() {
-#pragma GCC unroll 64
-    for (uint32_t i = 0; i < 2 * U; ++i) {
-        sfpi::dst_reg[i] = sfpi::vFloat(0.0f);
+inline void xg_and_sq() {  // slot 2 = slot 0 ^ 2 (for the partial), slot 0 = slot 0 * slot 1 (y' = x * g)
+#pragma GCC unroll 32
+    for (uint32_t i = 0; i < U; ++i) {
+        sfpi::vFloat v = sfpi::dst_reg[i];
+        sfpi::dst_reg[2 * U + i] = v * v;
+        sfpi::dst_reg[i] = v * sfpi::dst_reg[U + i];
     }
 }
-template <uint32_t J>
-inline void scale_one(sfpi::vFloat r) {  // slot J = slot J * slot (J + 4) * r
+inline void scale_rows() {  // row 0 of slots 0-3 *= rstd (row 0 of slot 4)
 #pragma GCC unroll 4
     for (uint32_t i : {0u, 1u, 8u, 9u}) {
-        sfpi::dst_reg[J * U + i] = sfpi::dst_reg[J * U + i] * sfpi::dst_reg[(J + 4) * U + i] * r;
+        sfpi::vFloat r = sfpi::dst_reg[4 * U + i];
+#pragma GCC unroll 4
+        for (uint32_t j = 0; j < 4; ++j) {
+            sfpi::dst_reg[j * U + i] = sfpi::dst_reg[j * U + i] * r;
+        }
     }
 }
 template <typename F>
@@ -111,29 +119,39 @@ void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0), m_addr = get_arg_val<uint32_t>(1), g_addr = get_arg_val<uint32_t>(2);
     const uint32_t b = get_arg_val<uint32_t>(3), r = get_arg_val<uint32_t>(4);
     const InterleavedAddrGen<x_is_dram> xg{.bank_base_address = x_addr, .page_size = 2048};
-    const InterleavedAddrGen<true> gg{.bank_base_address = g_addr, .page_size = 128};
+    const InterleavedAddrGen<true> gg{.bank_base_address = g_addr, .page_size = 4096};
     // x row 0 of each K-tile: 64 B-aligned reads (rows 0-1 of face 0 at +0, of face 1 at +512) into scratch
     cb_reserve_back(cb_scr, 1);
     const uint32_t scr = get_write_ptr(cb_scr);
-    cb_reserve_back(cb_x, KT);
-    cb_reserve_back(cb_g, KT);
-    for (uint32_t i = 0; i < KT; ++i) {
-        const uint32_t page = b * KT + i;
-        noc_async_read(get_noc_addr(page, xg, 0), scr + i * 128, 64);
-        noc_async_read(get_noc_addr(page, xg, 512), scr + i * 128 + 64, 64);
-        noc_async_read(get_noc_addr(page, gg, 0), get_write_ptr(cb_g) + i * 128, 128);
-    }
-    noc_async_read_barrier();
-    volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr);
-    volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_x));
-    for (uint32_t i = 0; i < KT; ++i) {
-        for (uint32_t w = 0; w < 8; ++w) {
-            d[i * 16 + w] = s[i * 32 + w];           // face 0 row 0
-            d[i * 16 + 8 + w] = s[i * 32 + 16 + w];  // face 1 row 0
+    cb_reserve_back(cb_x, 1);
+    cb_reserve_back(cb_g, 1);
+    noc_async_read(get_noc_addr(b, gg, 0), get_write_ptr(cb_g), 4096);  // g for block b: one fp32 tile
+    // tile row i = K-tile i's row 0: cols 0-15 at face (i/16)*2 row i%16, cols 16-31 in the next face.
+    // NoC copies, not RISC word loops (512 volatile L1 words per pass cost several us).
+    const uint32_t xt = get_write_ptr(cb_x);
+    if constexpr (!x_is_dram) {
+        for (uint32_t i = 0; i < KT; ++i) {
+            const uint32_t page = b * KT + i, f0 = xt + (i / 16) * 1024 + (i % 16) * 32;
+            noc_async_read(get_noc_addr(page, xg, 0), f0, 32);
+            noc_async_read(get_noc_addr(page, xg, 512), f0 + 512, 32);
         }
+        noc_async_read_barrier();
+    } else {  // DRAM: 64 B-aligned reads into scratch first (a 32 B read into another 64 B phase comes back wrong)
+        for (uint32_t i = 0; i < KT; ++i) {
+            const uint32_t page = b * KT + i;
+            noc_async_read(get_noc_addr(page, xg, 0), scr + i * 128, 64);
+            noc_async_read(get_noc_addr(page, xg, 512), scr + i * 128 + 64, 64);
+        }
+        noc_async_read_barrier();
+        for (uint32_t i = 0; i < KT; ++i) {
+            const uint32_t f0 = xt + (i / 16) * 1024 + (i % 16) * 32;
+            noc_async_read(get_noc_addr(scr + i * 128), f0, 32);
+            noc_async_read(get_noc_addr(scr + i * 128 + 64), f0 + 512, 32);
+        }
+        noc_async_read_barrier();
     }
-    cb_push_back(cb_x, KT);
-    cb_push_back(cb_g, KT);
+    cb_push_back(cb_x, 1);
+    cb_push_back(cb_g, 1);
     const uint32_t unit = 8 * b + r;
     uint32_t src = m_addr + (unit % upb) * 4 * KT * m_page;
     const uint32_t bank = unit / upb;
@@ -158,13 +176,28 @@ void kernel_main() {
     // 1. this block's partial sum of squares -> master's slot b
     cb_wait_front(cb_p, 1);
     volatile tt_l1_ptr float* p = reinterpret_cast<volatile tt_l1_ptr float*>(get_read_ptr(cb_p));
-    float part = 0.0f;
-    for (uint32_t c = 0; c < 32; ++c) {
-        part += p[c];
-    }
+    const float part = p[0];  // TRISC reduced the block to one value
     cb_pop_front(cb_p, 1);
     volatile tt_l1_ptr uint32_t* sl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slots);
     sl[2048 / 4] = as_u(part);  // staging word for the NoC write
+    // y (one 32x32 bf16 tile) -> 32 1x32 tiles for custom_mm: tile t = [row t cols 0-15][row t cols 16-31]
+    cb_wait_front(cb_y32, 1);
+    cb_reserve_back(cb_y, KT);
+    {
+        const uint32_t ys = get_read_ptr(cb_y32), yd = get_write_ptr(cb_y);
+        for (uint32_t t = 0; t < KT; ++t) {
+            const uint32_t f0 = ys + (t / 16) * 1024 + (t % 16) * 32;
+            noc_async_read(get_noc_addr(f0), yd + t * 64, 32);
+            noc_async_read(get_noc_addr(f0 + 512), yd + t * 64 + 32, 32);
+        }
+        noc_async_read_barrier();
+    }
+    cb_push_back(cb_y, KT);
+    cb_pop_front(cb_y32, 1);
+    constexpr uint32_t dbg = get_named_compile_time_arg_val("rp_debug");  // 1: no rstd exchange (rstd = 1/sqrt(partial*nb/K))
+    if constexpr (dbg & 1) {
+        sl[1024 / 4] = as_u(rsqrt_newton(part * inv_k * nblocks + eps));
+    } else {
     noc_async_write(slots + 2048, get_noc_addr(mxy >> 16, mxy & 0xffff, slots + 16 * b), 4);
     noc_async_write_barrier();
     noc_semaphore_inc(get_noc_addr(mxy >> 16, mxy & 0xffff, sem_part), 1);
@@ -188,6 +221,7 @@ void kernel_main() {
         }
     }
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_rstd), 1);
+    }
     // 3. rstd as a 1x32 fp32 row for TRISC
     cb_reserve_back(cb_r, 1);
     volatile tt_l1_ptr uint32_t* rr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_r));
@@ -197,6 +231,7 @@ void kernel_main() {
     }
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(3)) = rbits;  // rb shard: what MATH reads
     cb_push_back(cb_r, 1);  // the signal: TRISC unpack waits on it, MATH follows the unpacker
+
     // 4. scatter, as prep_hadamard_kernel.cpp
     cb_reserve_back(cb_stage, 1);
     const uint32_t stage = get_write_ptr(cb_stage);
@@ -225,77 +260,68 @@ void kernel_main() {
     }
 #elif defined(COMPILE_FOR_TRISC)
     deepseek_compute_kernel_init();
-    // 1. per-column partial sums of x^2 over this block's 32 K-tiles (slot 0), x tiles land in slot 1
-    copy_init(cb_x);
-    cb_wait_front(cb_x, KT);
+    // 1. one acquire: x -> slot 0, g -> slot 1; slot 2 = x^2 column-reduced (the partial, -> cb_p),
+    //    slot 0 = y' = x * g (-> cb_y32 as one bf16 tile; BRISC re-lays it for custom_mm). rstd is
+    //    applied to the output rows at the end: H(D (x g rstd)) = rstd H(D (x g)), so the exchange
+    //    overlaps the matmul instead of sitting in front of it.
+    cb_wait_front(cb_x, 1);
+    cb_wait_front(cb_g, 1);
     tile_regs_acquire();
-    MATH((sfpu_section([] { zero2(); })));
-    for (uint32_t t = 0; t < KT; ++t) {
-        copy_tile(cb_x, t, 1);
-        MATH((sfpu_section([] { sq_acc(); })));
+    copy_init(cb_x);
+    copy_tile(cb_x, 0, 0);
+    reconfig_data_format_srca(cb_x, cb_g);
+    copy_init(cb_g);
+    copy_tile(cb_g, 0, 1);
+    constexpr uint32_t tdbg = get_named_compile_time_arg_val("rp_tdebug");  // 2: no reduce, 4: no x*g / x^2
+    if constexpr (!(tdbg & 4)) {
+        MATH((sfpu_section([] { xg_and_sq(); })));
+    }
+    if constexpr (!(tdbg & 2)) {
+        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(2);
+        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(2);  // scalar at [0, 0]
     }
     tile_regs_commit();
     tile_regs_wait();
     cb_reserve_back(cb_p, 1);
     pack_reconfig_data_format(cb_p);
     pack_block_contiguous_init(cb_p);
-    pack_block_contiguous(0, cb_p, 1);
+    pack_block_contiguous(2, cb_p, 1);
     cb_push_back(cb_p, 1);
+    cb_reserve_back(cb_y32, 1);
+    pack_reconfig_data_format(cb_y32);
+    pack_block_contiguous_init(cb_y32);
+    pack_block_contiguous(0, cb_y32, 1);
+    cb_push_back(cb_y32, 1);
     tile_regs_release();
-    // 2. y = x * g * rstd, GRP tiles at a time (x in slots 0-3, g in 4-7), packed bf16 -> cb_y
-    // rstd: read by the MATH thread inside the SFPU step, which runs after copy_tile has waited on the
-    // unpacker, which waited on cb_r (MATH itself never waits on a CB, and has no CB interface).
-    const uint32_t r_addr = get_arg_val<uint32_t>(0);  // rb shard (same L1 address on every prep core)
-    cb_wait_front(cb_r, 1);
-    cb_wait_front(cb_g, KT);
-    cb_reserve_back(cb_y, KT);
-    pack_reconfig_data_format(cb_y);
-    pack_block_contiguous_init(cb_y);
-    for (uint32_t t0 = 0; t0 < KT; t0 += GRP) {
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_x);
-        copy_init(cb_x);
-        for (uint32_t j = 0; j < GRP; ++j) {
-            copy_tile(cb_x, t0 + j, j);
-        }
-        reconfig_data_format_srca(cb_g);
-        copy_init(cb_g);
-        for (uint32_t j = 0; j < GRP; ++j) {
-            copy_tile(cb_g, t0 + j, 4 + j);
-        }
-        MATH((sfpu_section([r_addr] {
-            const sfpi::vFloat rv = *reinterpret_cast<volatile float*>(r_addr);
-            scale_one<0>(rv);
-            scale_one<1>(rv);
-            scale_one<2>(rv);
-            scale_one<3>(rv);
-        })));
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_block_contiguous(0, cb_y, GRP);
-        tile_regs_release();
-    }
-    cb_push_back(cb_y, KT);
-    cb_pop_front(cb_x, KT);
-    cb_pop_front(cb_g, KT);
-    cb_pop_front(cb_r, 1);
-    // 3. x_b' = y_b @ M_b for this unit's 4 output tiles
+    cb_pop_front(cb_x, 1);
+    cb_pop_front(cb_g, 1);
+    // 2. x_b' = y'_b @ M_b for this unit's 4 output tiles, kept in DST slots 0-3 (full sync); then
+    //    rstd (cb_r, a 1x32 fp32 row) is copied into slot 4 -- the copy makes MATH wait for it -- and
+    //    one SFPU step scales the 4 output rows; one pack writes all 4.
     reconfig_full_operand<SrcOrder::Reverse>(cb_y, cb_m);
     custom_mm_block_init<false, CustomMmDestLayout::Default, true>(cb_y, cb_m, cb_o);
-    pack_block_contiguous_init(cb_o);
     cb_wait_front(cb_y, KT);
+    tile_regs_acquire();
     for (uint32_t j = 0; j < 4; ++j) {
         cb_wait_front(cb_m, KT);
-        tile_regs_acquire();
-        custom_mm_block<CustomMmDestLayout::Default, false>(cb_y, cb_m, 0, 0, 0, KT);
-        tile_regs_commit();
+        custom_mm_block<CustomMmDestLayout::Default, false>(cb_y, cb_m, 0, 0, j, KT);
         cb_pop_front(cb_m, KT);
-        tile_regs_wait();
-        cb_reserve_back(cb_o, 1);
-        pack_block_contiguous(0, cb_o, 1);
-        cb_push_back(cb_o, 1);
-        tile_regs_release();
     }
+    cb_wait_front(cb_r, 1);
+    reconfig_data_format_srca(cb_m, cb_r);
+    copy_init(cb_r);
+    copy_tile(cb_r, 0, 4);
+    MATH((sfpu_section([] { scale_rows(); })));
+    tile_regs_commit();
+    tile_regs_wait();
+    cb_reserve_back(cb_o, 4);
+    pack_reconfig_data_format(cb_o);
+    pack_block_contiguous_init(cb_o);
+    pack_block_contiguous(0, cb_o, 4);
+    cb_push_back(cb_o, 4);
+    tile_regs_release();
     cb_pop_front(cb_y, KT);
+    cb_pop_front(cb_r, 1);
 #endif
 }

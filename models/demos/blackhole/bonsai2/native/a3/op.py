@@ -663,15 +663,15 @@ KERNEL_RMSPREP = "models/demos/blackhole/bonsai2/native/a3/kernels/rmsprep_kerne
 
 
 def norm_gamma(device, w):
-    """(1 + w) as fp32 1x32 tiles [1, 1, 1, K] in DRAM (128 B pages) for rmsprep."""
+    """(1 + w) for rmsprep: one fp32 32x32 tile per 1024-block (row t = K-tile t), [K/32, 32] in DRAM."""
     import torch
 
-    g = (1.0 + torch.as_tensor(w, dtype=torch.float32)).reshape(1, 1, 1, -1)
-    return ttnn.from_torch(g, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile([1, 32]), device=device,
+    g = (1.0 + torch.as_tensor(w, dtype=torch.float32)).reshape(-1, 32)
+    return ttnn.from_torch(g, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device,
                            memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def rmsprep(x, g, m, x8, workers, eps):
+def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0):
     """x: residual [.., 32, K] bf16 32x32 tiles (row 0 live), L1 or DRAM; g: norm_gamma; m: hadamard_tensor(K).
     Writes x8 = mask(H(D (rmsnorm(x) * g))) on every A3 worker, like rmsnorm -> prep."""
     import struct
@@ -699,11 +699,16 @@ def rmsprep(x, g, m, x8, workers, eps):
             buffer_index=idx, data_format=fmt, page_size=size, tile=ttnn.TileDescriptor(tile))])
 
     t1, t32 = ttnn.Tile([1, 32]), ttnn.Tile([32, 32])
-    cbs = [cb(0, ttnn.bfloat16, t1, 32), cb(1, m.dtype, t32, 64), cb(2, ttnn.bfloat16, t1, 2),
-           cb(3, ttnn.bfloat16, ttnn.Tile([8, 32]), 1), cb(7, ttnn.float32, t1, 32), cb(8, ttnn.float32, t1, 1),
+    cbs = [cb(0, ttnn.bfloat16, t32, 1), cb(1, m.dtype, t32, 64), cb(2, ttnn.bfloat16, t1, 4),
+           cb(3, ttnn.bfloat16, ttnn.Tile([8, 32]), 1), cb(7, ttnn.float32, t32, 1), cb(8, ttnn.float32, t1, 1),
            cb(9, ttnn.float32, t1, 1), cb(10, ttnn.bfloat16, t1, 32), cb(11, ttnn.float32, t32, 1),
-           cb(12, ttnn.float32, t32, 1)]
+           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1)]
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=0) for i in (0, 1)]
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
+                                       math_approx_mode=False, dst_full_sync_en=True)
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    modes[7] = ttnn.UnpackToDestMode.UnpackToDestFp32  # g = 1 + w can need more mantissa than tf32
+    cfg.unpack_to_dest_mode = modes
     x_is_dram = x.memory_config().buffer_type == ttnn.BufferType.DRAM
     # rstd for the MATH thread: a per-call L1 shard at the same address on every prep core
     rb = ttnn.allocate_tensor_on_device(ttnn.TensorSpec(
@@ -719,12 +724,10 @@ def rmsprep(x, g, m, x8, workers, eps):
         core_ranges=grid,
         ncrisc_named_compile_time_args=[("rp_x_is_dram", int(x_is_dram)), ("rp_m_page", m_page),
                                         ("rp_units_per_bank", upb)],
-        brisc_named_compile_time_args=[],
-        trisc_named_compile_time_args=[],
+        brisc_named_compile_time_args=[("rp_debug", debug)],
+        trisc_named_compile_time_args=[("rp_tdebug", tdebug)],
         # full-sync DST: the SFPU steps address DST slots absolutely (half-sync alternates halves per acquire)
-        trisc_compute_config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False,
-            dst_full_sync_en=True),
+        trisc_compute_config=cfg,
         per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
             ncrisc_args=[(c, [x.buffer_address(), m.buffer_address(), g.buffer_address(), b, r])
                          for c, (b, r) in zip(cores, units)],

@@ -50,7 +50,29 @@ def main():
                 a3.rmsprep(xt, g, m, x8, workers, eps)
             ttnn.synchronize_device(device)
             dev = float(np.median(all_kernel_us(ttnn, device)))
-            print(f"rmsprep x in {'DRAM' if mem == ttnn.DRAM_MEMORY_CONFIG else 'L1':4s}: {dev:6.1f} us  pcc {pcc:.7f}  "
+            ttnn.ReadDeviceProfiler(device)
+            a3.rmsprep(xt, g, m, x8, workers, eps)
+            ttnn.synchronize_device(device)
+            ttnn.ReadDeviceProfiler(device)
+            for progs in ttnn.get_latest_programs_perf_data().values():
+                for pr in progs:
+                    res = pr.program_analyses_results
+                    print("   per-RISC us:", {k.replace("DEVICE ", "").replace(" KERNEL DURATION [ns]", ""):
+                                             round(int(v.duration) / 1e3, 1) for k, v in res.items()
+                                             if "KERNEL DURATION [ns]" in k and "PER CORE" not in k}, flush=True)
+            device_kernel_us(ttnn, device)
+            for _ in range(9):
+                a3.rmsprep(xt, g, m, x8, workers, eps, debug=1)
+            ttnn.synchronize_device(device)
+            dev_nosync = float(np.median(all_kernel_us(ttnn, device)))
+            for td in (2, 4, 6):
+                device_kernel_us(ttnn, device)
+                for _ in range(9):
+                    a3.rmsprep(xt, g, m, x8, workers, eps, debug=1, tdebug=td)
+                ttnn.synchronize_device(device)
+                print(f"   no exchange, tdebug={td}: {np.median(all_kernel_us(ttnn, device)):.1f} us", flush=True)
+            print(f"rmsprep x in {'DRAM' if mem == ttnn.DRAM_MEMORY_CONFIG else 'L1':4s}: {dev:6.1f} us (no rstd exchange "
+                  f"{dev_nosync:5.1f})  pcc {pcc:.7f}  "
                   f"max|err| {err:.3e} ({err / ulp:.1f} bf16 ulp at max)  all shards equal "
                   f"{bool((got == got[0:1]).all())}", flush=True)
             ttnn.deallocate(x8)
