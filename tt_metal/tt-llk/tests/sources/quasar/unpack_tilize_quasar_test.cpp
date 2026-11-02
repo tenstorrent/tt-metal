@@ -148,10 +148,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
-                        _llk_unpack_tilize_to_dest_set_src_offset_(tensor_shape, y * y_stride_external);
-                        for (std::uint32_t x = 0; x < FULL_CT_DIM; x += BLOCK_CT_DIM)
+                        if (tensor_shape.face_r_dim < FACE_R_DIM)
                         {
-                            _llk_unpack_tilize_to_dest_(x /*l1_tile_idx*/, y * FULL_CT_DIM + x /*dst_tile_idx*/);
+                            // The strided small-faces run carries the tile-row offset in its L1 index.
+                            for (std::uint32_t x = 0; x < FULL_CT_DIM; x += BLOCK_CT_DIM)
+                            {
+                                _llk_unpack_tilize_to_dest_small_faces_(
+                                    tensor_shape, y * y_stride_external + x /*l1_tile_idx*/, y * FULL_CT_DIM + x /*dst_tile_idx*/);
+                            }
+                        }
+                        else
+                        {
+                            _llk_unpack_tilize_to_dest_set_src_offset_(tensor_shape, y * y_stride_external);
+                            for (std::uint32_t x = 0; x < FULL_CT_DIM; x += BLOCK_CT_DIM)
+                            {
+                                _llk_unpack_tilize_to_dest_(x /*l1_tile_idx*/, y * FULL_CT_DIM + x /*dst_tile_idx*/);
+                            }
                         }
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)

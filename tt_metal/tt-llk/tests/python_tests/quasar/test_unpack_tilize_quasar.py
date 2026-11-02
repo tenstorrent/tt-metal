@@ -42,10 +42,7 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
     generate_input_dim,
 )
-from helpers.tile_constants import (
-    MX_SUPPORTED_TILE_SIZES,
-    is_mx_unsupported_tile_dims,
-)
+from helpers.tile_constants import is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test, result_tensor
 
@@ -120,11 +117,6 @@ def generate_unpack_tilize_combinations(
                         continue
                     for tile_dims in tile_sizes:
                         if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
-                            continue
-                        if (
-                            unpacks_to_dest(in_fmt, dest_acc)
-                            and tile_dims not in MX_SUPPORTED_TILE_SIZES
-                        ):
                             continue
                         tile_shape = construct_tile_shape(tile_dims)
                         dimensions_list = (
