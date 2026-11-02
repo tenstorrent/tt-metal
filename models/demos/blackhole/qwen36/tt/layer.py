@@ -89,7 +89,8 @@ class Qwen36DecoderLayer:
             # The ternary decode stack's defaults (counted 2026-11-01 19:13 with these, see agentA/runs/e2e_c3_*);
             # an explicit =0 still turns each off.
             for _f in ("QWEN36_1C_GDN_RECT", "QWEN36_1C_GDN_HMI", "QWEN36_1C_CONV_HM", "QWEN36_1C_GDN_TRIM", "QWEN36_1C_GDN_HMO",
-                       "QWEN36_1C_ATTN_LEAN", "QWEN36_1C_ATTN_QGVIEW", "QWEN36_1C_ATTN_TAIL"):  # B's attention flags: counted 22:04
+                       "QWEN36_1C_ATTN_LEAN", "QWEN36_1C_ATTN_QGVIEW", "QWEN36_1C_ATTN_TAIL",  # B's attention flags: counted 22:04
+                       "BONSAI_SCALE16"):  # fp16 scale tiles in A3: counted 22:26
                 os.environ.setdefault(_f, "1")
         self.is_full_attention = args.is_full_attention_layer(layer_num)
         # QWEN36_TP1_GDN=1: on one chip, run GDN layers with TPGatedDeltaNet at TP=1 instead of Qwen36GatedDeltaNet.
