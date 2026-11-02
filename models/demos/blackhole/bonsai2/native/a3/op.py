@@ -671,9 +671,10 @@ def norm_gamma(device, w):
                            memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0):
+def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
     """x: residual [.., 32, K] bf16 32x32 tiles (row 0 live), L1 or DRAM; g: norm_gamma; m: hadamard_tensor(K).
-    Writes x8 = mask(H(D (rmsnorm(x) * g))) on every A3 worker, like rmsnorm -> prep."""
+    Writes x8 = mask(H(D (rmsnorm(x) * g))) on every A3 worker, like rmsnorm -> prep.
+    y_out: optional L1-interleaved [.., 32, K] bf16 tensor that also gets rmsnorm(x) * g (row 0, rest zero)."""
     import struct
 
     device = x.device()
@@ -702,7 +703,11 @@ def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0):
     cbs = [cb(0, ttnn.bfloat16, t32, 1), cb(1, m.dtype, t32, 64), cb(2, ttnn.bfloat16, t1, 4),
            cb(3, ttnn.bfloat16, ttnn.Tile([8, 32]), 1), cb(7, ttnn.float32, t32, 1), cb(8, ttnn.float32, t1, 1),
            cb(9, ttnn.float32, t1, 1), cb(10, ttnn.bfloat16, t1, 32), cb(11, ttnn.float32, t32, 1),
-           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1)]
+           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1), cb(14, ttnn.bfloat16, t32, 1),
+           cb(15, ttnn.bfloat16, t32, 1)]
+    emit = y_out is not None
+    if emit:
+        assert y_out.memory_config().buffer_type == ttnn.BufferType.L1 and not y_out.is_sharded()
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=0) for i in (0, 1)]
     cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
                                        math_approx_mode=False, dst_full_sync_en=True)
@@ -718,14 +723,14 @@ def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0):
     brisc = []
     for i, (c, (b, r)) in enumerate(zip(cores, units)):
         a = [x8.buffer_address(), b, r, rb.buffer_address(), cxy[0], int(i == 0), len(cores), nb, fbits(1.0 / k), fbits(eps), len(wxy)] + wxy
-        brisc.append((c, a + (cxy if i == 0 else [])))
+        brisc.append((c, a + (cxy if i == 0 else []) + ([y_out.buffer_address()] if emit else [])))
     uk = UnifiedKernelDescriptor(
         kernel_source=KERNEL_RMSPREP,
         core_ranges=grid,
         ncrisc_named_compile_time_args=[("rp_x_is_dram", int(x_is_dram)), ("rp_m_page", m_page),
-                                        ("rp_units_per_bank", upb)],
-        brisc_named_compile_time_args=[("rp_debug", debug)],
-        trisc_named_compile_time_args=[("rp_tdebug", tdebug)],
+                                        ("rp_units_per_bank", upb), ("rp_emit", int(emit))],
+        brisc_named_compile_time_args=[("rp_debug", debug), ("rp_emit", int(emit))],
+        trisc_named_compile_time_args=[("rp_tdebug", tdebug), ("rp_emit", int(emit))],
         # full-sync DST: the SFPU steps address DST slots absolutely (half-sync alternates halves per acquire)
         trisc_compute_config=cfg,
         per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
@@ -736,6 +741,6 @@ def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0):
         ),
     )
     prog = ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=sems, cbs=cbs)
-    ttnn.generic_op([x, g, m, rb, x8], prog)
+    ttnn.generic_op([x, g, m, rb] + ([y_out] if emit else []) + [x8], prog)
     ttnn.deallocate(rb)
     return x8

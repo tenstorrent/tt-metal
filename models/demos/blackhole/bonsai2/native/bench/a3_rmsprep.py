@@ -75,6 +75,20 @@ def main():
                   f"{dev_nosync:5.1f})  pcc {pcc:.7f}  "
                   f"max|err| {err:.3e} ({err / ulp:.1f} bf16 ulp at max)  all shards equal "
                   f"{bool((got == got[0:1]).all())}", flush=True)
+            if mem == ttnn.L1_MEMORY_CONFIG:  # emit mode: also the normalized rows for a dense consumer
+                yo = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 32, k]), ttnn.bfloat16, ttnn.TILE_LAYOUT,
+                                                    device, ttnn.L1_MEMORY_CONFIG)
+                a3.rmsprep(xt, g, m, x8, workers, eps, y_out=yo)
+                got8 = ttnn.to_torch(x8).float().numpy().reshape(len(workers), 8, k)
+                yt = ttnn.to_torch(yo).float().numpy()[0, 0]
+                yerr = float(np.abs(yt[0] - y).max() / np.abs(y).max())
+                device_kernel_us(ttnn, device)
+                for _ in range(9):
+                    a3.rmsprep(xt, g, m, x8, workers, eps, y_out=yo)
+                ttnn.synchronize_device(device)
+                print(f"emit: {np.median(all_kernel_us(ttnn, device)):6.1f} us  x8 unchanged {bool((got8 == got).all())}  "
+                      f"y rel max err {yerr:.2e}  rows 1-31 zero {bool((yt[1:] == 0).all())}", flush=True)
+                ttnn.deallocate(yo)
             ttnn.deallocate(x8)
             ttnn.deallocate(xt)
     finally:
