@@ -31,7 +31,28 @@ KERNEL = "models/demos/blackhole/bonsai2/native/a3/kernels/ternary_mm_kernel.cpp
 AVOID = frozenset({(0, 0)})
 
 
+def worker_cores_rect(device, workers_per_bank: int):
+    """Workers as two exact rectangles (logical cols 0-1 and 7-8, rows 1-8; 32 cores at 4 per bank),
+    each bank taking the rows nearest its optimal reader. A scattered set is many rectangles for the
+    dispatcher; this tests whether that is the ~7 us gap before every A3 op in the traced profile."""
+    assert workers_per_bank == 4
+    primary = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    blocks = {"L": [(x, y) for y in range(1, 9) for x in (0, 1)], "R": [(x, y) for y in range(1, 9) for x in (7, 8)]}
+    out = []
+    for b, c in sorted(enumerate(primary), key=lambda t: t[1].y):
+        free = blocks["L" if c.x < 4 else "R"]
+        pick = sorted(free, key=lambda p: (abs(p[1] - c.y), p[0]))[:4]
+        for sub, (x, y) in enumerate(pick):
+            free.remove((x, y))
+            out.append((ttnn.CoreCoord(x, y), b, sub))
+    return out
+
+
 def worker_cores(device, workers_per_bank: int, avoid=AVOID):
+    import os
+
+    if os.environ.get("BONSAI_A3_RECT") == "1":
+        return worker_cores_rect(device, workers_per_bank)
     """[(core, bank, sub)] -- the optimal reader per bank, plus a neighbour per extra worker."""
     primary = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     grid = device.compute_with_storage_grid_size()
