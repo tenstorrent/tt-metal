@@ -159,8 +159,8 @@ inline __attribute__((always_inline)) void eltwise_binary_configure()
     static_assert(elw_ops_per_tile == 8, "the replay above records 8 instructions: 4 faces x 2 instructions of 8 rows");
 
     // MOP template 1: the tile replay once (one pass of the outer loop, one of the inner).
-    hal::mop::program<hal::mop::MopConfig<hal::mop::MopTemplate::Template1> {
-        .outer_loop = {.count = 1}, .inner_loop = {.count = 1, .body_op = hal::replay::get_operation<tile_replay>()}}>();
+    constexpr auto tile_mop = hal::mop::loop(1, hal::mop::loop(1, hal::replay::get_operation<tile_replay>()));
+    hal::mop::program(tile_mop);
     reset_math_counters();
 }
 

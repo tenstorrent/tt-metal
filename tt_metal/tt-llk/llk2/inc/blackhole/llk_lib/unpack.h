@@ -450,8 +450,9 @@ inline __attribute__((always_inline)) void unpack_configure()
             record_context_body<P, cfg::Thcon[cfg::Reg3].Base_cntx1_address>();
         });
     // MOP template 0: each iteration runs the current context's body (the zmask picks context 1's shadow op).
-    hal::mop::program<hal::mop::MopConfig<hal::mop::MopTemplate::Template0> {
-        .start_op = hal::replay::get_operation<context0>(), .start_op_shadow = hal::replay::get_operation<context1>()}>();
+    constexpr auto context_mop =
+        hal::mop::foreach_mask_bit(hal::mop::if_clear(hal::replay::get_operation<context0>()), hal::mop::otherwise(hal::replay::get_operation<context1>()));
+    hal::mop::program(context_mop);
 }
 
 // ---- execute -------------------------------------------------------------------------------------------------------
