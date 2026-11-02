@@ -115,7 +115,7 @@ using ComputeConfig = m2::ComputeHardwareConfig;
 
 // Returned lists, dicts, and optional and variant fields are copies, so nothing read from them refers into a spec. A
 // nested object that is always there is returned by reference instead (def_rw's default), so writes through it reach
-// its parent, which it keeps alive.
+// its parent, which it keeps alive. TensorParameter.spec, a ttnn TensorSpec, is a copy too.
 constexpr auto COPY = nb::rv_policy::copy;
 
 // Python holds the tensors of a ProgramRunArgs in this attribute, which keeps them alive while the
@@ -245,8 +245,8 @@ void bind_tensor_parameter(nb::module_& mod) {
         mod,
         "TensorParameter",
         "A tensor the program's kernels use: its name and the single-device TensorSpec its tensor argument "
-        "must have. relaxations refers into this object, so writes through it change the parameter. See "
-        "tensor_parameter.hpp.")
+        "must have. relaxations refers into this object, so writes through it change the parameter; spec is read as "
+        "a copy, so assign a whole TensorSpec to change it. See tensor_parameter.hpp.")
         .def(
             "__init__",
             [](m2::TensorParameter* self,
@@ -892,7 +892,7 @@ void bind_program_run_args(nb::module_& mod) {
         .def_rw("runtime_varargs", &m2::AdvancedKernelRunArgs::runtime_varargs, COPY)
         .def_rw("common_runtime_varargs", &m2::AdvancedKernelRunArgs::common_runtime_varargs, COPY);
 
-    // dynamic_attr: the Python object keeps its tensor arguments alive (see make_tensor_args). __setattr__ below
+    // dynamic_attr: the Python object keeps its tensor arguments alive (see set_tensor_owners). __setattr__ below
     // still rejects names that are not attributes of the class, as for the other classes; Python subclasses may add
     // attributes of their own.
     auto run_args = nb::class_<m2::ProgramRunArgs>(
@@ -1001,7 +1001,15 @@ void bind_program_run_args(nb::module_& mod) {
 }  // namespace
 
 void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type) {
-    if (self.type().is(bound_type) && !nb::hasattr(bound_type, name) && !name.equal(nb::str(TENSOR_ARGS_ATTRIBUTE))) {
+    // Another value there would leave the C++ object referring to tensors that nothing keeps alive.
+    if (name.equal(nb::str(TENSOR_ARGS_ATTRIBUTE))) {
+        throw nb::attribute_error(fmt::format(
+                                      "'{}' object attribute '{}' is read-only",
+                                      nb::cast<std::string>(self.type().attr("__name__")),
+                                      TENSOR_ARGS_ATTRIBUTE)
+                                      .c_str());
+    }
+    if (self.type().is(bound_type) && !nb::hasattr(bound_type, name)) {
         throw nb::attribute_error(fmt::format(
                                       "'{}' object has no attribute '{}'",
                                       nb::cast<std::string>(self.type().attr("__name__")),
