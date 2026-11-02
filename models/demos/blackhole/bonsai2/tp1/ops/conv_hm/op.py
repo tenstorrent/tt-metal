@@ -14,8 +14,10 @@ Contract (one user, one token, D = 128):
     q [NK, 1, 128], k [NK, 1, 128], v [NV, 1, 128]  fp32 TILE, one head per tile-row (what the recurrence takes
     with head_major_input), written into caller-owned persistent buffers whose padding rows stay zero.
 
-One core per state tile (r_t, c_t): 12 cores as one 4 x 3 rectangle (a scattered set costs dispatch per range in a
-trace; see GDN_RECT). conv = sum_j tap[j] * state_new[j] runs in fp32 DST, so it is NOT bit-exact with the bf16
+One core per HALF state tile (16 heads x 32 channels; a face pair is a contiguous 1 KB of a bf16 tile, so two cores
+own disjoint bytes): 20 cores as one 4 x 5 rectangle (a scattered set costs dispatch per range in a trace; see
+GDN_RECT). The 12-core version was reader-bound (A's 699665c8c43 profile: 20.5 us, NCRISC 15.7): 64 x 32 B reads,
+whole-tile zero-fills and 1024 RISC copies per core; now 16 x 1 KB reads, no zero-fill and 256 copies per core. conv = sum_j tap[j] * state_new[j] runs in fp32 DST, so it is NOT bit-exact with the bf16
 ttnn chain (which rounds after every tap); it is closer to float64 (test_conv_hm_fused.py).
 """
 
@@ -59,8 +61,9 @@ def conv_hm(qkv, state, taps, q, k, v):
     R = 2 * nk + nv
     assert tuple(state[0].shape) == (1, R, D) and tuple(taps[0].shape) == (1, R, D), (state[0].shape, taps[0].shape)
     assert qkv.shape[-1] == R * D, qkv.shape
-    rt_n = -(-R // 32)
-    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(D // 32 - 1, rt_n - 1))])
+    assert R % 16 == 0, R
+    n_halves = R // 16
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(D // 32 - 1, n_halves - 1))])
 
     cbs = [
         _cb(0, 1, ttnn.bfloat16, cores),  # new row, for compute
@@ -68,20 +71,20 @@ def conv_hm(qkv, state, taps, q, k, v):
         _cb(2, K, ttnn.bfloat16, cores),  # taps
         _cb(3, 1, ttnn.float32, cores),  # conv + silu, fp32
         _cb(4, K, ttnn.bfloat16, cores),  # old rows 1..K-1 + new row, for the writer
-        _cb(5, 2, ttnn.bfloat16, cores),  # reader scratch: 64 B-aligned slots for the 2 x 32 B runs per head
+        _cb(5, 8, ttnn.bfloat16, cores),  # reader scratch: 16 x 1 KB, the first half of each head's qkv tile
     ]
     rd_rt, wr_rt = [], []
-    for r_t in range(rt_n):
-        rows = min(32, R - 32 * r_t)
+    for r_h in range(n_halves):
+        r_t, half = r_h // 2, r_h % 2
         for c_t in range(D // 32):
-            core = (c_t, r_t)
+            core = (c_t, r_h)
             rd_rt.append(
                 (core, [qkv.buffer_address(), *[s.buffer_address() for s in state], *[t.buffer_address() for t in taps],
-                        r_t, c_t, rows])
+                        r_t, c_t, half])
             )
             wr_rt.append(
                 (core, [*[s.buffer_address() for s in state], q.buffer_address(), k.buffer_address(), v.buffer_address(),
-                        r_t, c_t, rows])
+                        r_t, c_t, half])
             )
     reader = ttnn.KernelDescriptor(
         kernel_source=f"{KERNELS}/reader_conv_hm.cpp",
