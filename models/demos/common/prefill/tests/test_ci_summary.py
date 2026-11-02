@@ -22,3 +22,19 @@ def test_ci_pcc_matrix_reports_gqa_and_preserves_mla_index(tmp_path, capsys):
     assert lines[1].split() == ["layer", "kvpe.nope", "kvpe.pe", "K", "V", "index"]
     assert lines[2].split() == ["16", "0.98500", "0.97500", "0.99980", "0.99924", "0.96500"]
     assert lines[-1].endswith("0.965000")
+
+
+def test_metrics_sidecar_splits_the_config_suffix_with_its_layout(tmp_path, monkeypatch):
+    import json
+
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _publish_json
+
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    for name, model, config in (
+        ("kimi_k3_sc4_4x4", "kimi_k3", "sc4_4x4"),
+        ("kimi_k3_sc4", "kimi_k3", "sc4"),
+        ("glm53_mtp_kv_share_sc1", "glm53_mtp_kv_share", "sc1"),
+    ):
+        _publish_json({"num_chunks": 1}, name)
+        rec = json.loads((tmp_path / "perf_json" / f"{name}.json").read_text())
+        assert (rec["model"], rec["config"]) == (model, config)
