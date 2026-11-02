@@ -294,6 +294,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // slots, number at most num_cores: 120 * 4 * 6 tiles = 11 MiB at D=128 with 4-row items, scaling with
     // the rows of an item, and less in practice (the default picks need about 60 slots). Shapes with
     // enough items per core cut nothing and own none. The scratch is DRAM whatever the inputs' placement.
+    // Allocating it per call instead would need the output specs to run the chunk pick and the scheduler on
+    // every launch (the slot count is the schedule's) and a third return tensor through the op; the knob
+    // doc points workloads with many distinct shapes to max_pieces = 1 meanwhile.
     std::optional<ttnn::Tensor> scratch;
     if (split_units) {
         [[maybe_unused]] auto cb_partial_in = create_circular_buffer(
