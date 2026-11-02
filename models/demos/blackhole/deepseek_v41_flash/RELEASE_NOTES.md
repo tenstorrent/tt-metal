@@ -5,9 +5,9 @@ Release `0.24.0-785f0df-2406dcb` (internal name rc4c, vLLM 0.31.0). Start-up com
 | | |
 |---|---|
 | Image (target name, **not pushed yet**) | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-785f0df-2406dcb` |
-| Local image | `dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901` (also tagged locally with the ghcr name above) |
-| Commits | tt-metal `785f0df9b28` (branch `ssinghal/dsv4p1-rc3`; the release notes live in later docs-only commits of that branch), tt-inference-server `2406dcb15` (`ssinghal/dsv4p1-rc3-ttis`), vllm-tt-plugin `d7b6901` (`ssinghal/dsv4p1-rc3-plugin`) |
-| Offline copy | `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_rc4c_785f0df9b28.tar` (`docker load -i`) |
+| Local image | `dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-a83b4c6` (id `<IMAGE ID: to be filled in from the tool-fix build>`; also tagged locally with the ghcr name above). The ghcr tag is unchanged, but its content now includes the plugin tool-calling fix (plugin `a83b4c6` instead of `d7b6901`). |
+| Commits | tt-metal `785f0df9b28` (branch `ssinghal/dsv4p1-rc3`; the release notes live in later docs-only commits of that branch), tt-inference-server `2406dcb15` (`ssinghal/dsv4p1-rc3-ttis`), vllm-tt-plugin `a83b4c6` (tool-calling fix, on top of `d7b6901`) (`ssinghal/dsv4p1-rc3-plugin`) |
+| Offline copy | `<tar of the a83b4c6 image: path to be filled in>` (`docker load -i`); the earlier tar `img_rc4c_785f0df9b28.tar` holds the image without the tool-calling fix |
 
 This release is **B=8 only**. B=16 and B=4 are not part of this release (the catalog still contains their entries; they were not validated for it).
 
@@ -34,6 +34,7 @@ Serving behaviour that is on by default in the catalog:
 - **Prefix caching on a 512-token grid, block-paged on device at B=8** (`DSV41_APC_GRID=512`, `DSV41_APC_PAGED=1` for the B=8 entries). A repeated or shared prefix is restored instead of recomputed (numbers below). Hits are bit-identical to a cold prefill in the owner's device test.
 - **Prefix cache and images**: image content hashes are part of the cache key (`DSV41_APC_IMAGES=1`); vLLM's own prefix-cache reads are skipped for requests with images (plugin). **`cache_salt` is honoured**: a request with another salt never reuses a cached prefix.
 - **Cross-context vision fix**: a stale image mask in one prefill context could leak into the next text-only window (text chats answered with grounding text in a mixed image + text run); fixed on the code path.
+- **Tool-calling fix (plugin `a83b4c6`).** Invalid tool results are refused with HTTP 400, streaming and non-streaming: an unknown `tool_call_id`, a duplicate id, or a missing / empty id on a `role: tool` message. JSON scalars (int / float / bool / null) for tool-schema properties declared without a `type` are returned as JSON scalars, not strings. Unchanged: parallel results in reverse order pair correctly, forced named / required `tool_choice` work with structured outputs, `tool_choice: none`, raw user `tool_result` content blocks are rejected with HTTP 400, and DSML-shaped text inside a tool result does not create spurious calls. Remaining limits: partial results are accepted (fewer results than calls), typed schemas are unchanged, and DSML text inside string values is not escaped. This fix does not change performance (no table was re-measured).
 - `usage.prompt_tokens_details.cached_tokens` is returned (`enable-prompt-tokens-details` in the catalog).
 - Earlier B=8 work included in this image: fp8 KV serving with APC (`DSV41_FP8_SERVING`, paged fp8 prefill), mHC PRE16 / X2LITE, column-TP shared expert, fused MoE tail, post-SDPA glue, fused2 router, key-slab sharded indexer (`DSV41_IDX_KEY_SHARD`), host-side round work (`DSV41_HOSTOPT_*`), drafter sets A and B, row-aware / Up=2 prefill, `DSV41_UNI_TOPO=linear` (fix of an intermittent combine deadlock), MoE core pin (`MOE_COMPUTE_PIN_EAST_X=7`).
 
@@ -74,12 +75,14 @@ These use a shared prompt on purpose, so they hit the prefix cache (`res_a1/`): 
 
 ## Accuracy and checks (rc4c, B=8, 1M build, catalog default)
 
+All results in this section were measured on the rc4c image with plugin `d7b6901`, before the tool-calling fix; the fix (plugin `a83b4c6`) touches only the plugin's tool-call handling (`entrypoints.py`, `tool_arg_typing.py`, `tool_result_validation.py`). Re-run results for tool calling: see the Tool-calling row.
+
 | Check | Result | Source |
 |---|---|---|
 | GSM8K (lm-eval, flexible-extract) | 96.21 % (stderr 0.53) | `res_a2/gsm.log` |
 | GPQA diamond (zero-shot CoT, flexible-extract) | 78.79 % (stderr 2.91) | `res_a2/gpqa.log` |
 | Needle in a haystack | found at 65,557 / 131,085 / 262,142 / 599,956 / 1,039,901 prompt tokens (1M run: 596 s) | `res_a2/needle_*.json`, `needle1m.log` |
-| Tool-calling checks (`toolchecks`) | 35 PASS, 0 FAIL | `res_a1/toolchecks.log` |
+| Tool-calling checks (`toolchecks`) | 35 PASS, 0 FAIL on the image with plugin `d7b6901` (without the tool-calling fix); the re-run on the `a83b4c6` image is pending (`dsv4-logs/toolfix/RESULTS.md`, not written yet) | `res_a1/toolchecks.log` |
 | Structured-output matrix (json_schema / regex / choice / tools, plain and stream, greedy and sampled) | 28/28 on two reruns (`res_a3/matrix_rerun1.log`, `matrix_rerun2.log`) and 28/28 mixed with background load (`res_a1/matrix_mixed.log`); **the first run was 27/28** (one `json_schema/plain/sampled` cell failed, `res_a1/matrix.log`) | files named |
 | API checks | 23/23 | `res_a1/api.log` |
 | Pre-stream validation | HTTP 400 for unsupported streaming combinations; supported ones HTTP 200 | `res_a1/prestream.log` |
@@ -88,6 +91,8 @@ These use a shared prompt on purpose, so they hit the prefix cache (`res_a1/`): 
 | `cached_tokens` accounting | `CACHED_TOKENS_OK` (11,264 of 11,626 on a repeat) | `res_a1/cached.log` |
 
 ## Known limitations
+
+- Tool calling: partial tool results (fewer results than calls) are accepted, typed tool schemas are unchanged, and DSML-shaped text inside string values is not escaped.
 
 - Greedy output is not bit-reproducible across batch composition, or when adaptive speculation changes the verify width k (bf16 accumulation differs). The differences occur at near-tie tokens and the text stays coherent; earlier releases behave the same way (`dsv4-logs/det_rc4c/RESULTS.md`).
 - For sequential repeatability set `DSV41_VLLM_SPEC_ADAPT=0` (fixed k = 5) or `DSV41_VLLM_SPEC_FORCED_K` in the catalog entry (mount a modified `model_spec.json`; the throughput cost was not measured). Concurrent and mixed batches can still differ at near-tie tokens.

@@ -8,11 +8,11 @@ Target registry name (**not pushed yet**) and the local image it was tagged from
 
 ```
 ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-785f0df-2406dcb
-dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901      # same image (id 27afaf993dab), local name
+dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-a83b4c6      # same content as the ghcr name (image id <IMAGE ID: to be filled in>); plugin a83b4c6 with the tool-calling fix
 ```
 
 - 21.7 GB on disk. No weights or caches inside.
-- Offline copy (5.4 GB tar): `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_rc4c_785f0df9b28.tar` (`docker load -i <tar>`).
+- Offline copy (tar): `<path of the a83b4c6 image tar: to be filled in>` (`docker load -i <tar>`); the earlier tar `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_rc4c_785f0df9b28.tar` is the image without the tool-calling fix.
 - The image contains the model catalog (`/home/container_app_user/model_specs/model_spec.json`, baked at build time). **No runtime spec file is needed**: the server picks the catalog entry from `--model`, `--tt-device` and `--impl`. (The `assets/runtime_spec_*.json` files are not used by rc4c.)
 
 ## Configurations
@@ -24,7 +24,7 @@ dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901      # same image (id 27afaf
 B=8: speculative decoding, image input (up to 250 images per prompt), tool calling / reasoning parser / non-thinking default (`tokenizer-mode deepseek_v41`), structured outputs, prefix caching on a 512-token grid (device block-paged at B=8), paged prefill. The catalog also has vision entries (`deepseek-v41-flash-vlm-b8-1m`) that differ only in the model type used by the evaluation workflows. B=4 entries exist in the catalog but were not validated for rc4c. All settings of an entry are in the catalog (`workflows/model_specs/dev/llm.yaml` and `vlm.yaml` of tt-inference-server `2406dcb15`); read them with:
 
 ```bash
-docker run --rm --entrypoint cat dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901 /home/container_app_user/model_specs/model_spec.json > model_spec.json
+docker run --rm --entrypoint cat dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-a83b4c6 /home/container_app_user/model_specs/model_spec.json > model_spec.json
 ```
 
 ## Start
@@ -37,7 +37,7 @@ The weight cache is keyed by directory only, so each checkpoint needs its own em
 export CKPT=/path/to/deepseek-v41-flash-1017   # checkpoint, read-only
 export CACHE=/path/to/dsv41_cache_1017         # weights/ unified/ kernels/, reused across starts
 export STATE=/path/to/dsv41_state              # scratch dirs the server writes
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-785f0df-2406dcb   # once pushed; before that the local name dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-d7b6901
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-785f0df-2406dcb   # once pushed; before that the local name dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-a83b4c6
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 hf download deepseek-ai/DeepSeek-V4.1-Flash-1017 --local-dir $CKPT        # a token may be needed
