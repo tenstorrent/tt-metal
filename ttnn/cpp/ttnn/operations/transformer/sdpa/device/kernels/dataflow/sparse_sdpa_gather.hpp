@@ -17,7 +17,8 @@ namespace sparse_sdpa {
 
 // Per-NoC trid-ring depths for each gather half. Raw tiled rows favor a shallow ring; packed scaled rows
 // benefit from more outstanding reads because each transfer is smaller and has reconstruction work to overlap.
-constexpr uint32_t K_TRID_RING = 4;
+constexpr uint32_t K_TRID_RING =
+    8;  // cores-for-prefill: was 4 (8 reads in flight per core over both NoCs = latency-bound)
 constexpr uint32_t SCALED_K_TRID_RING = 8;
 
 // Offset, in tile elements, of column zero for a logical row in the four-face tile layout.

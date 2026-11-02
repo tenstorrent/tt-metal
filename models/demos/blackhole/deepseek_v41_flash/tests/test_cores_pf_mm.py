@@ -22,6 +22,7 @@ SHAPES = {  # name: (M, K, N) per chip
     "wq_b": (1024, 1280, 4096),
     "wo_a": (1024, 4608, 1024),
     "wo_b": (1024, 1024, 5120),
+    "ekv": (256, 6144, 3200),
 }
 REPS = int(os.environ.get("CMM_REPS", "20"))
 
@@ -130,6 +131,18 @@ def test_cores_pf_mm(device):
                 rows.append((us, grid, blk, sb, d, pcc))
             except Exception as e:  # noqa
                 rows.append((1e9, grid, blk, sb, -1, str(e)[:60]))
+        try:  # the shape as ttnn.matmul with an 8x8 core grid (what tt/engram.py uses for the kv projection)
+
+            def f8():
+                return ttnn.matmul(
+                    tx, tw, compute_kernel_config=ckc, dtype=ttnn.bfloat16, core_grid=ttnn.CoreGrid(y=8, x=8)
+                )
+
+            f8.dev = dev
+            us8 = timeit(f8)
+            print(f"CMM {nm} ttnn.matmul core_grid 8x8: {us8:.1f} us", flush=True)
+        except Exception as e:  # noqa
+            print(f"CMM {nm} ttnn.matmul 8x8 FAIL {str(e)[:80]}", flush=True)
         rows.sort(key=lambda r: r[0])
         sh = [r for r in rows if r[1] == (8, 10) and r[2] == (8, 8, 8) and r[3] is None]
         print(f"CMM {nm} M{M} K{K} N{N}: shipped {sh[0][0]:.1f} us" if sh else f"CMM {nm}: no shipped row", flush=True)
