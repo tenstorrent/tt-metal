@@ -194,14 +194,15 @@ def test_sp_prefill_padded_ragged_chunk_carry(mesh_device, weights):
             (2048, 2176, 256),
             (2176, 2348, 256),
         ],
-        "128 minimal then 172/256 from 2176": [
+        "one chunk to 2176 then 172/512": [(0, 2176, 2176), (2176, 2348, 512)],
+    }
+    if unit <= 128:  # the minimal padded chunk of 128 rows exists on up to 4 rows (one 32-row slab per row)
+        plans["128 minimal then 172/256 from 2176"] = [
             (0, 1024, 1024),
             (1024, 2048, 1024),
             (2048, 2176, 128),
             (2176, 2348, 256),
-        ],
-        "one chunk to 2176 then 172/512": [(0, 2176, 2176), (2176, 2348, 512)],
-    }
+        ]
     results = {}
     for name, plan in plans.items():
         y_p, (rec_p, conv_p) = run_plan(plan)
