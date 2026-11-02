@@ -8,7 +8,7 @@ reference's seeded random weights, and compares in fp32: the RoPE cos and sin, t
 of every layer, the tower output and the vision tokens. With HF's eager attention the reference runs the
 same ops, so the results must be bit-identical; with HF's default SDPA attention they must agree to fp32
 rounding. Two more tests check that the reference's default dimensions are HF's (and the checkpoint's, when
-HF_MODEL is set) and that load_hf_state_dict maps HF's names.
+HF_MODEL is set) and that load_hf_state_dict maps HF's names and rejects vision weights it has no place for.
 
 No device and no checkpoint. Needs transformers with minimax_m3_vl (tt-metal pins 5.12.1), which the hf_vision
 fixture imports: without it these tests fail, and the other tests in the directory still collect. The test does
@@ -172,9 +172,10 @@ def test_vision_config_defaults_match_hf(hf_vision):
 
 
 @torch.no_grad()
-def test_vision_load_hf_state_dict(hf_vision):
-    """load_hf_state_dict takes HF's names, skips other keys and layers past num_hidden_layers, and accepts
-    the patch embed weight flattened to (hidden, patch_dim)."""
+def test_vision_load_hf_state_dict(hf_vision, expect_error):
+    """load_hf_state_dict takes HF's names, skips other keys and layers past num_hidden_layers, accepts
+    the patch embed weight flattened to (hidden, patch_dim), and raises for a vision tower or projector weight that
+    the reference has no module for."""
     reference, tower, projector = _build(hf_vision, "hd80")
     weights = {f"vision_tower.{k}": v for k, v in tower.state_dict().items()}
     weights.update({f"multi_modal_projector.{k}": v for k, v in projector.state_dict().items()})
@@ -188,3 +189,13 @@ def test_vision_load_hf_state_dict(hf_vision):
 
     short = MiniMaxM3VisionEncoder(dataclasses.replace(config, num_hidden_layers=1)).load_hf_state_dict(weights)
     assert torch.equal(short.layers[0].mlp.fc1.weight, reference.layers[0].mlp.fc1.weight)
+
+    # Weights of a tower with a final LayerNorm or a learned position embedding, which this one does not have, and of
+    # a projector with a norm, which the strict load rejects under the reference's name.
+    for key in ("vision_tower.post_layernorm.weight", "vision_tower.embeddings.position_embedding.weight"):
+        with expect_error(ValueError, key):
+            MiniMaxM3VisionEncoder(config).load_hf_state_dict({**weights, key: torch.zeros(config.hidden_size)})
+    with expect_error(RuntimeError, '"projector.norm.weight"'):
+        MiniMaxM3VisionEncoder(config).load_hf_state_dict(
+            {**weights, "multi_modal_projector.norm.weight": torch.zeros(TEXT_HIDDEN)}
+        )

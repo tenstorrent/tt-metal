@@ -32,8 +32,10 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.tensor_utils import nearest_32
+from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.block import M3VLBlock
-from models.demos.minimax_m3.tt.vision.common import mesh_mapper
+from models.demos.minimax_m3.tt.vision.common import to_device
 from models.demos.minimax_m3.tt.vision.image_input import check_image_input
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
@@ -56,7 +58,8 @@ class M3VLVisionModel(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        model_args,
+        config: MiniMaxM3VisionConfig,
+        padded_head_dim: int,
         patch_embed: M3VLPatchEmbed,
         pre_layrnorm: M3VLLayerNorm,
         blocks: List[M3VLBlock],
@@ -64,7 +67,8 @@ class M3VLVisionModel(LightweightModule):
     ):
         super().__init__()
         self.device = mesh_device
-        self.args = model_args
+        self.config = config
+        self.padded_head_dim = padded_head_dim
         self.patch_embed = patch_embed
         self.pre_layrnorm = pre_layrnorm
         self.blocks = blocks
@@ -75,34 +79,23 @@ class M3VLVisionModel(LightweightModule):
     def from_torch(
         cls,
         mesh_device,
-        reference,  # MiniMaxM3VisionEncoder from reference/vision.py
-        model_args,
+        reference,  # MiniMaxM3VisionEncoder from reference/vision.py, whose config gives the dimensions
         with_projector: bool = True,
         dtype=ttnn.bfloat16,
     ) -> "M3VLVisionModel":
+        config = reference.config
+        # q, k and v heads padded to whole tiles on device (80 -> 96), in the weights and the RoPE tables.
+        padded_head_dim = nearest_32(config.head_dim)
         patch_embed = M3VLPatchEmbed.from_torch(mesh_device, reference.patch_embed, dtype=dtype)
         pre_layrnorm = M3VLLayerNorm.from_torch(mesh_device, reference.pre_layrnorm, dtype=dtype)
         blocks = [
-            M3VLBlock.from_torch(
-                mesh_device,
-                ref_layer,
-                hidden_size=model_args.hidden_size,
-                num_heads=model_args.num_attention_heads,
-                head_dim=model_args.head_dim,
-                dtype=dtype,
-            )
-            for ref_layer in reference.layers
+            M3VLBlock.from_torch(mesh_device, ref_layer, padded_head_dim, dtype=dtype) for ref_layer in reference.layers
         ]
-        projector = (
-            M3VLProjector.from_torch(
-                mesh_device, reference.projector, spatial_merge_size=model_args.spatial_merge_size, dtype=dtype
-            )
-            if with_projector
-            else None
-        )
+        projector = M3VLProjector.from_torch(mesh_device, reference.projector, dtype=dtype) if with_projector else None
         return cls(
             mesh_device=mesh_device,
-            model_args=model_args,
+            config=config,
+            padded_head_dim=padded_head_dim,
             patch_embed=patch_embed,
             pre_layrnorm=pre_layrnorm,
             blocks=blocks,
@@ -112,25 +105,17 @@ class M3VLVisionModel(LightweightModule):
     # ------------------------------------------------------------------
     def _push_pixel_values(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
         """Push flattened pixel_values (L, 1176) to device as bf16 (1, 1, L, 1176), whatever the weights' dtype."""
-        L, D = pixel_values.shape
-        return ttnn.from_torch(
-            pixel_values.to(torch.bfloat16).view(1, 1, L, D).contiguous(),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper(self.device),
-        )
+        return to_device(pixel_values.reshape(1, 1, *pixel_values.shape), self.device)
 
     def _stage_rope(self, image_grid_thw: torch.Tensor):
         """New cos and sin tables of the grid on device (rope_tensors), which the caller owns."""
         return rope_tensors(
             self.device,
             image_grid_thw,
-            head_dim=self.args.head_dim,
-            padded_head_dim=self.args.padded_head_dim,
-            theta=self.args.rope_theta,
-            spatial_merge_size=self.args.spatial_merge_size,
+            head_dim=self.config.head_dim,
+            padded_head_dim=self.padded_head_dim,
+            theta=self.config.rope_theta,
+            spatial_merge_size=self.config.spatial_merge_size,
         )
 
     def _cached_rope(self, image_grid_thw: torch.Tensor):
@@ -159,7 +144,7 @@ class M3VLVisionModel(LightweightModule):
         value would reach every patch through attention, and the patches of several images would attend to each other,
         as in Hugging Face 5.12.1; vLLM and SGLang keep attention inside each image.
         """
-        check_image_input(pixel_values, image_grid_thw)
+        check_image_input(pixel_values, image_grid_thw, self.config.patch_dim)
         x_tt = self._push_pixel_values(pixel_values)
         x_tt = self.patch_embed(x_tt)
         x_tt = self.pre_layrnorm(x_tt)

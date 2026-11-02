@@ -17,7 +17,7 @@ import torch
 
 import ttnn
 from models.demos.minimax_m3.reference.vision import rope_cos_sin
-from models.demos.minimax_m3.tt.vision.common import mesh_mapper
+from models.demos.minimax_m3.tt.vision.common import to_device
 
 
 def rope_cos_sin_padded(
@@ -49,15 +49,4 @@ def rope_tensors(
     rotary_embedding_llama takes.
     """
     cos, sin = rope_cos_sin_padded(grid_thw, head_dim, padded_head_dim, theta, spatial_merge_size)
-    mm = mesh_mapper(mesh_device)
-    return tuple(
-        ttnn.from_torch(
-            table.view(1, 1, *table.shape).to(torch.bfloat16),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mm,
-        )
-        for table in (cos, sin)
-    )
+    return tuple(to_device(table.view(1, 1, *table.shape), mesh_device) for table in (cos, sin))

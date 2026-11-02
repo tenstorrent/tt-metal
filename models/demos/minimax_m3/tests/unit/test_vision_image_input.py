@@ -22,12 +22,13 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.image_input import num_tokens
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
-from models.demos.minimax_m3.tt.vision.model_config import MiniMaxM3VLModelArgs
 from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 
+CONFIG = MiniMaxM3VisionConfig()  # the checkpoint's: 1176 values per patch
 ROWS = torch.zeros(16, 1176)  # the patch rows of an image of 4 x 4 patches
 GRID = torch.tensor([[1, 4, 4]])
 
@@ -80,7 +81,8 @@ def test_vision_model_rejects_bad_input(case, expect_error, monkeypatch):
     monkeypatch.setattr(ttnn, "from_torch", _device_work)
     model = M3VLVisionModel(
         None,
-        MiniMaxM3VLModelArgs(),
+        CONFIG,
+        padded_head_dim=96,  # head_dim 80 in whole tiles; no case gets as far as the RoPE tables
         patch_embed=_device_work,
         pre_layrnorm=_device_work,
         blocks=[],
@@ -111,11 +113,9 @@ def test_vision_model_uploads_pixels_as_bf16(dtype, expect_error, monkeypatch):
     monkeypatch.setattr(M3VLPatchEmbed, "from_torch", build)
     monkeypatch.setattr(M3VLLayerNorm, "from_torch", build)
     monkeypatch.setattr(ttnn, "from_torch", from_torch)
-    monkeypatch.setattr("models.demos.minimax_m3.tt.vision.model.mesh_mapper", lambda mesh_device: None)
-    reference = SimpleNamespace(patch_embed=None, pre_layrnorm=None, layers=[])
-    model = M3VLVisionModel.from_torch(
-        None, reference, MiniMaxM3VLModelArgs(), with_projector=False, dtype=ttnn.bfloat8_b
-    )
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
+    reference = SimpleNamespace(config=CONFIG, patch_embed=None, pre_layrnorm=None, layers=[])
+    model = M3VLVisionModel.from_torch(None, reference, with_projector=False, dtype=ttnn.bfloat8_b)
     with expect_error(RuntimeError, "stop after the pixel upload"):
         model.forward_tower(torch.full((24, 1176), 4.0, dtype=dtype), torch.tensor([[1, 4, 6]]))
     assert weight_dtypes == [ttnn.bfloat8_b, ttnn.bfloat8_b]

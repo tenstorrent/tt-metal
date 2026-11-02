@@ -307,19 +307,26 @@ class MiniMaxM3VisionEncoder(nn.Module):
         """Load weights in the Hugging Face MiniMaxM3VLModel key layout (vision_tower.*, multi_modal_projector.*).
 
         Other keys (the language model) are skipped, and so are layers past num_hidden_layers, so a shorter
-        reference can take the first layers of the checkpoint. A patch embed weight flattened to
-        (hidden, patch_dim) is reshaped back to the Conv3d layout.
+        reference can take the first layers of the checkpoint. A vision_tower.* key outside the patch embed,
+        pre_layrnorm and layers, such as a final LayerNorm or a learned position embedding, raises ValueError;
+        with strict, load_state_dict raises for any other weight the reference does not have, such as an unknown
+        multi_modal_projector.* one. A patch embed weight flattened to (hidden, patch_dim) is reshaped back to the
+        Conv3d layout.
         """
-        own = {}
+        own, unmapped = {}, []
         for key, value in state_dict.items():
             name = next((ours + key[len(hf) :] for ours, hf in _HF_PREFIXES if key.startswith(hf)), None)
             if name is None:
+                if key.startswith("vision_tower."):
+                    unmapped.append(key)
                 continue
             if name.startswith("layers.") and int(name.split(".")[1]) >= self.config.num_hidden_layers:
                 continue
             if name == "patch_embed.weight":
                 value = value.reshape(self.patch_embed.weight.shape)
             own[name] = value
+        if unmapped:
+            raise ValueError(f"vision tower weights with no place in the reference: {sorted(unmapped)}")
         self.load_state_dict(own, strict=strict)
         return self
 

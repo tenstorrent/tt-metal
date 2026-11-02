@@ -17,8 +17,6 @@ There is no attention mask / cu_seqlens (the tower attends fully).
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 
 import ttnn
@@ -33,14 +31,12 @@ class M3VLBlock(LightweightModule):
 
     def __init__(
         self,
-        mesh_device,
         layer_norm1: M3VLLayerNorm,
         attention: M3VLAttention,
         layer_norm2: M3VLLayerNorm,
         mlp: M3VLMLP,
     ):
         super().__init__()
-        self.device = mesh_device
         self.layer_norm1 = layer_norm1
         self.attention = attention
         self.layer_norm2 = layer_norm2
@@ -51,9 +47,7 @@ class M3VLBlock(LightweightModule):
         cls,
         mesh_device,
         ref_layer: torch.nn.Module,  # VisionEncoderLayer (reference/vision.py): layer_norm1/2, self_attn, mlp
-        hidden_size: int,
-        num_heads: int,
-        head_dim: int,
+        padded_head_dim: int,
         dtype=ttnn.bfloat16,
     ) -> "M3VLBlock":
         for attr in ("layer_norm1", "layer_norm2", "self_attn", "mlp"):
@@ -61,27 +55,13 @@ class M3VLBlock(LightweightModule):
                 ref_layer, attr
             ), f"expected MiniMaxM3VLVisionEncoderLayer-like module with .{attr}, got {type(ref_layer).__name__}"
         return cls(
-            mesh_device=mesh_device,
             layer_norm1=M3VLLayerNorm.from_torch(mesh_device, ref_layer.layer_norm1, dtype=dtype),
-            attention=M3VLAttention.from_torch(
-                mesh_device,
-                ref_layer.self_attn,
-                hidden_size=hidden_size,
-                num_heads=num_heads,
-                head_dim=head_dim,
-                dtype=dtype,
-            ),
+            attention=M3VLAttention.from_torch(mesh_device, ref_layer.self_attn, padded_head_dim, dtype=dtype),
             layer_norm2=M3VLLayerNorm.from_torch(mesh_device, ref_layer.layer_norm2, dtype=dtype),
             mlp=M3VLMLP.from_torch(mesh_device, ref_layer.mlp, dtype=dtype),
         )
 
-    def forward(
-        self,
-        x: ttnn.Tensor,
-        cos: ttnn.Tensor,
-        sin: ttnn.Tensor,
-        memory_config: Optional["ttnn.MemoryConfig"] = None,
-    ) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         # Sublayer 1: pre-norm attention with residual.
         residual = x
         normed = self.layer_norm1(x)
@@ -95,11 +75,7 @@ class M3VLBlock(LightweightModule):
         normed = self.layer_norm2(x)
         mlp_out = self.mlp(normed)
         ttnn.deallocate(normed)
-        out = ttnn.add(
-            residual,
-            mlp_out,
-            memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
-        )
+        out = ttnn.add(residual, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(residual)
         ttnn.deallocate(mlp_out)
         return out

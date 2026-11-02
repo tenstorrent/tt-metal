@@ -15,6 +15,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
+from models.common.tensor_utils import nearest_32
 from models.demos.minimax_m3.tt.vision.attention import M3VLAttention
 from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 
@@ -41,19 +42,13 @@ def test_vision_attention_vs_ref(mesh_device, device_params, grid_thw, vision_re
     config = reference.config
     ref_out = reference.layers[0].self_attn(x_in[None], *reference.rope(acts["grid_thw"]))[0]
 
-    tt_attn = M3VLAttention.from_torch(
-        mesh_device,
-        reference.layers[0].self_attn,
-        hidden_size=config.hidden_size,
-        num_heads=config.num_attention_heads,
-        head_dim=config.head_dim,
-        dtype=ttnn.bfloat16,
-    )
+    padded_head_dim = nearest_32(config.head_dim)  # as M3VLVisionModel.from_torch pads the heads
+    tt_attn = M3VLAttention.from_torch(mesh_device, reference.layers[0].self_attn, padded_head_dim, dtype=ttnn.bfloat16)
     cos_tt, sin_tt = rope_tensors(
         mesh_device,
         acts["grid_thw"],
         head_dim=config.head_dim,
-        padded_head_dim=tt_attn.padded_head_dim,
+        padded_head_dim=padded_head_dim,
         theta=config.rope_theta,
         spatial_merge_size=config.spatial_merge_size,
     )

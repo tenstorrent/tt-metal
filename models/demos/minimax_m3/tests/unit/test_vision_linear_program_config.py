@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host-only checks of the vision encoder's weight-matmul program configs (tt/vision/common.py, linear_program_config).
-No device: the configs are built with the real ttnn classes and checked on the host.
+Host-only checks of the vision encoder's weight-matmul program configs (tt/vision/common.py, linear_program_config)
+and of linear(), which runs every weight matmul with them. No device: the configs are built with the real ttnn classes
+and checked on the host.
 
 - At 672x672 (2304 patches) on a 12x10 grid every linear gets the config pinned in CONFIGS_672.
 - At the smaller sizes of CONFIGS_MID on 12x10, a linear whose transposed split would have fewer than
@@ -17,6 +18,8 @@ No device: the configs are built with the real ttnn classes and checked on the h
   Blackhole chips have depending on harvesting, every config passes the checks the matmul device op and its 2D
   multicast factory make, the factory's circular buffers fit in LINEAR_L1_BYTES, and no config uses transpose_mcast
   with fewer than LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core.
+- linear() gives ttnn.linear the helper's config for the tiles of its operands' padded shapes and runs the activation,
+  the accurate GELU in the MLPs, as an op of its own on the matmul's output.
 
 The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
 
@@ -26,34 +29,38 @@ Run:
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import pytest
 
 import ttnn
+from models.common.tensor_utils import nearest_32
+from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.common import (
     LINEAR_L1_BYTES,
     LINEAR_MIN_TRANSPOSED_PER_CORE_M,
     _linear_blocking,
     hifi4_compute_config,
+    linear,
     linear_compute_config,
     linear_program_config,
 )
-from models.demos.minimax_m3.tt.vision.model_config import MiniMaxM3VLModelArgs
+from models.demos.minimax_m3.tt.vision.mlp import accurate_gelu
 
-ARGS = MiniMaxM3VLModelArgs()
-HEADS_SIZE = ARGS.num_attention_heads * ARGS.padded_head_dim  # q, k and v each, with the heads padded (1536)
-MERGE = ARGS.spatial_merge_size**2
+CONFIG = MiniMaxM3VisionConfig()
+HEADS_SIZE = CONFIG.num_attention_heads * nearest_32(CONFIG.head_dim)  # q, k and v each, with the heads padded (1536)
+MERGE = CONFIG.spatial_merge_size**2
 # The encoder's weight matmuls: (in_features, out_features, patches per row).
 LINEARS = {
-    "patch_embed": (ARGS.patch_flat_dim, ARGS.hidden_size, 1),
-    "qkv": (ARGS.hidden_size, 3 * HEADS_SIZE, 1),
-    "out_proj": (HEADS_SIZE, ARGS.hidden_size, 1),
-    "fc1": (ARGS.hidden_size, ARGS.intermediate_size, 1),
-    "fc2": (ARGS.intermediate_size, ARGS.hidden_size, 1),
-    "linear_1": (ARGS.hidden_size, ARGS.projector_hidden_size, 1),
-    "linear_2": (ARGS.projector_hidden_size, ARGS.text_hidden_size, 1),
-    "merge_linear_1": (ARGS.merged_hidden_size, ARGS.projector_hidden_size, MERGE),
-    "merge_linear_2": (ARGS.projector_hidden_size, ARGS.text_hidden_size, MERGE),
+    "patch_embed": (CONFIG.patch_dim, CONFIG.hidden_size, 1),
+    "qkv": (CONFIG.hidden_size, 3 * HEADS_SIZE, 1),
+    "out_proj": (HEADS_SIZE, CONFIG.hidden_size, 1),
+    "fc1": (CONFIG.hidden_size, CONFIG.intermediate_size, 1),
+    "fc2": (CONFIG.intermediate_size, CONFIG.hidden_size, 1),
+    "linear_1": (CONFIG.hidden_size, CONFIG.projector_hidden_size, 1),
+    "linear_2": (CONFIG.projector_hidden_size, CONFIG.text_hidden_size, 1),
+    "merge_linear_1": (CONFIG.merged_hidden_size, CONFIG.projector_hidden_size, MERGE),
+    "merge_linear_2": (CONFIG.projector_hidden_size, CONFIG.text_hidden_size, MERGE),
 }
 FIELDS = ("transpose_mcast", "per_core_M", "per_core_N", "in0_block_w", "out_subblock_h", "out_subblock_w")
 # At 2304 patches on a 12x10 grid.
@@ -171,3 +178,42 @@ def test_vision_linear_program_config_valid(grid, fp32_dest_acc):
                     transposed += 1
                 configs += 1
     assert configs > 0 and transposed > 0
+
+
+def test_vision_linear(monkeypatch):
+    """linear() gives ttnn.linear the bias, the compute config, DRAM for the output and the helper's config for the
+    tiles of x's and w's padded shapes: fc1 of a 2160-patch image (2176 rows padded) gets the config of 2160 rows, and
+    of a 16-patch one ttnn's own. It runs the activation, the accurate GELU here, as an op of its own on ttnn.linear's
+    output, not as ttnn.linear's activation argument, and without one returns ttnn.linear's output."""
+    calls = []
+
+    def record(op):
+        def run(x, *args, **kwargs):
+            calls.append((op, x, args, kwargs))
+            return f"{op} output"
+
+        return run
+
+    monkeypatch.setattr(ttnn, "linear", record("linear"))
+    monkeypatch.setattr(ttnn, "gelu", record("gelu"))
+    compute_kernel_config = linear_compute_config()
+    in_features, out_features, _ = LINEARS["fc1"]
+    device = _Device(12, 10)
+    w = SimpleNamespace(padded_shape=(in_features, out_features))
+    for patches, padded_rows in ((2160, 2176), (16, 32)):
+        x = SimpleNamespace(padded_shape=(1, 1, padded_rows, in_features), device=lambda: device)
+        calls.clear()
+        assert linear(x, w, "bias", compute_kernel_config, activation=accurate_gelu) == "gelu output"
+        [(op, x_in, args, kwargs), gelu] = calls
+        assert op == "linear" and x_in is x and args == (w,), calls
+        config, want = kwargs.pop("program_config"), _config("fc1", patches)
+        assert (config is None) == (want is None), (patches, config)
+        if want is not None:
+            assert tuple(getattr(config, f) for f in FIELDS) == tuple(getattr(want, f) for f in FIELDS), config
+        assert kwargs == dict(
+            bias="bias", compute_kernel_config=compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        # fast_and_approximate_mode=True would select ttnn's fast lookup-table GELU.
+        assert gelu == ("gelu", "linear output", (), {"fast_and_approximate_mode": False}), gelu
+        calls.clear()
+        assert linear(x, w, None, compute_kernel_config) == "linear output" and len(calls) == 1

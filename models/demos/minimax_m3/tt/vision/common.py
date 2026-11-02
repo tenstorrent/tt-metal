@@ -3,16 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared host-side helpers for the MiniMax-M3-VL ttnn modules.
 
-Small utilities that every submodule needs: the mesh mapper, the
-torch->ttnn Linear weight/bias converters, the head-dim tile rounding, the
-standard and weight-matmul compute-kernel configs, the weight-matmul program
-config and the SDPA program config.
+Small utilities that every submodule needs: the upload of host tensors
+(to_device) and the torch->ttnn Linear weight/bias converters built on it,
+the standard and weight-matmul compute-kernel configs, the weight matmul
+(linear) with its program config, and the SDPA program config.
 Centralised here so the modules don't each copy them.
 """
 from __future__ import annotations
 
 import functools
 import math
+from typing import Callable, Optional
 
 import torch
 
@@ -35,50 +36,31 @@ _SUBBLOCKS = (
 )  # fmt: skip
 
 
-def next_tile_multiple(x: int, tile: int = ttnn.TILE_SIZE) -> int:
-    """Round up to the next multiple of the tile size (32)."""
-    return ((x + tile - 1) // tile) * tile
-
-
-def mesh_mapper(device):
-    """Replicate-to-mesh mapper for a MeshDevice, else None (single device)."""
-    return ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
-
-
-def mesh_composer(device, dim: int = 0):
-    """Concat-from-mesh composer for a MeshDevice, else None."""
-    return ttnn.ConcatMeshToTensor(device, dim=dim) if isinstance(device, ttnn.MeshDevice) else None
+def to_device(tensor: torch.Tensor, mesh_device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    """Host tensor, rounded to bf16 on the host, -> ttnn tile tensor of dtype in DRAM, replicated over the mesh."""
+    return ttnn.from_torch(
+        tensor.to(torch.bfloat16).contiguous(),
+        device=mesh_device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
 
 def as_linear_weight(mesh_device, torch_w: torch.Tensor, dtype) -> ttnn.Tensor:
     """torch nn.Linear weight [out, in] -> ttnn tile tensor [in, out] (operand-b convention)."""
-    w = torch_w.detach().to(torch.bfloat16).transpose(-2, -1).contiguous()
-    return ttnn.as_tensor(
-        w,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mesh_mapper(mesh_device),
-    )
+    return to_device(torch_w.transpose(-2, -1), mesh_device, dtype)
 
 
 def as_linear_bias(mesh_device, torch_b: torch.Tensor, dtype) -> ttnn.Tensor:
     """torch bias [out] -> ttnn tile tensor [1, 1, 1, out], replicated."""
-    b = torch_b.detach().to(torch.bfloat16).view(1, 1, 1, -1).contiguous()
-    return ttnn.as_tensor(
-        b,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mesh_mapper(mesh_device),
-    )
+    return to_device(torch_b.view(1, 1, 1, -1), mesh_device, dtype)
 
 
 def hifi4_compute_config(fp32_dest_acc: bool = True, packer_l1_acc: bool = False):
     """Standard HiFi4 compute-kernel config. Matmul-bearing ops use fp32_dest_acc=True;
-    LayerNorm uses False (matches the original per-module settings)."""
+    LayerNorm uses False."""
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
@@ -91,6 +73,31 @@ def linear_compute_config():
     """HiFi4 config for the weight matmuls (ttnn.linear): fp32 accumulation, and packer_l1_acc so the partial sums
     of each output block accumulate in L1 instead of being reloaded for every K block."""
     return hifi4_compute_config(packer_l1_acc=True)
+
+
+def linear(
+    x: ttnn.Tensor,
+    w: ttnn.Tensor,
+    b: Optional[ttnn.Tensor],
+    compute_kernel_config,
+    activation: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
+) -> ttnn.Tensor:
+    """The encoder's weight matmul: x @ w + b into DRAM, then activation, if given, as an op of its own on the result.
+
+    w is [in, out] and b [1, 1, 1, out] or None, as as_linear_weight and as_linear_bias put them on the device. The
+    program config is linear_program_config's for the tiles of x's and w's padded shapes.
+    """
+    out = ttnn.linear(
+        x,
+        w,
+        bias=b,
+        compute_kernel_config=compute_kernel_config,
+        program_config=linear_program_config(
+            x.device(), x.padded_shape[-2], w.padded_shape[-2], w.padded_shape[-1], compute_kernel_config
+        ),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return out if activation is None else activation(out)
 
 
 def linear_program_config(mesh_device, rows: int, in_features: int, out_features: int, compute_kernel_config):
