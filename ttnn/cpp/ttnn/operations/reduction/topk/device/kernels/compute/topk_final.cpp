@@ -82,7 +82,7 @@ void kernel_main() {
     compute_kernel_hw_startup(input_dfb_index, values_dfb_index);
     copy_init(input_dfb_index);
     ckernel::topk_tile_init<fused_keys>();
-    constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
+    constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest);
 
     DataflowBuffer input_dfb(input_dfb_index);
     DataflowBuffer index_dfb(index_dfb_index);
@@ -186,7 +186,7 @@ void kernel_main() {
             // those back to row layout and emit (the only defuse of the whole pipeline). In fused
             // mode the c_5/c_7 CT-arg slots carry the two small final-core staging CBs.
             constexpr std::uint32_t staging_values_dfb_index = index_dfb_index;  // c_5 by its fused-mode role
-            defuse_and_pack_outputs<largest != 0>(
+            defuse_and_pack_outputs<largest>(
                 input_transposed_dfb_index,  // packed keys after the merge tree (c_6)
                 staging_values_dfb_index,    // staging: defused bf16 values, column layout (c_5)
                 index_transposed_dfb_index,  // staging: defused u16 indices, column layout (c_7)

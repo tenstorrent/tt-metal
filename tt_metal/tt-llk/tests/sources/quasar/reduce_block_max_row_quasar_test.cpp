@@ -76,7 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
 
     _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(TILE_CNT, tensor_shape_A);
     _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /*dst_index*/, tensor_shape_A);

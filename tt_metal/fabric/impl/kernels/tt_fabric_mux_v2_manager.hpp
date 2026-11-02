@@ -155,7 +155,7 @@ inline void run_manager() {
     uint32_t shared_ring_read_count = 0;
 
     zero_per_channel_scalar_region(
-        ct_args::connection_handshake_region_base_address,
+        map_address(ct_args::connection_handshake_region_base_address),
         ct_args::per_channel_scalar_region_stride_bytes,
         ct_args::num_channels);
     initialize_shared_ring_header();

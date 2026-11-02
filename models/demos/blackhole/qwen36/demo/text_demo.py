@@ -149,7 +149,7 @@ DEVICE_PARAMS = [
 
 SAMPLE_PROMPTS_DIR = "models/demos/blackhole/qwen36/demo/sample_prompts"
 SHARED_PROMPTS_DIR = "models/demos/llama3_70b_galaxy/demo/sample_prompts"
-TT_TRANSFORMERS_PROMPTS_DIR = "models/tt_transformers/demo/sample_prompts"
+TT_TRANSFORMERS_PROMPTS_DIR = "models/ttt_compat/demo/sample_prompts"
 
 
 _FRANKENSTEIN_CONFIGS = {
