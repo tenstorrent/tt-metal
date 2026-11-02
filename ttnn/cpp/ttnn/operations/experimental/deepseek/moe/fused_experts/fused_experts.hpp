@@ -40,8 +40,15 @@ namespace ttnn::experimental::deepseek::moe {
 // exactly once); it costs one gather/broadcast synchronization per block instead of one for the whole
 // op, and it double-buffers the activation block so consecutive blocks pipeline.
 //
-// ROUTING INPUT. The routing decision reaches the op in one of two forms, exactly one of which must
+// ROUTING INPUT. The routing decision reaches the op in one of three forms, exactly one of which must
 // be supplied:
+//
+//   * `router_weight` + `router_bias` -- the learned router itself (6-expert path, one replicated
+//     token row). Router cores outside the expert grid (the first free grid row) each run the gate
+//     matmul for a slice of the experts on their own copy of the replica, apply sqrt(softplus) and
+//     the bias in bf16 (matmul_decode's LoFi custom_mm), keep their top_k candidates and write them to
+//     {0,0}, which merges them into the final top-k and weights the winners by their scores. `routing_scores` is then
+//     absent.
 //
 //   * `routing_indices` -- the router's own top-k output: each token's selected expert ids, plus the
 //     score row they index. Ids are TILE; scores are TILE or (decode) ROW_MAJOR. The op
@@ -125,6 +132,12 @@ namespace ttnn::experimental::deepseek::moe {
 //                     groups, and each group's down partial joins the existing group-0 reduce.
 //   shared_swiglu_limit: clamp limit for the shared expert's SwiGLU; defaults to swiglu_limit,
 //                     and +inf leaves it unclamped.
+//   router_weight / router_bias: the learned router, run inside the op (see ROUTING INPUT). The
+//                     weight is [H, E] TILE, resident in L1, ND-sharded [H, 32] (one 32-expert
+//                     tile column per shard) ROW_MAJOR ROUND_ROBIN_1D over exactly the router
+//                     cores; the bias the [1, 1, 1, E] bfloat16 ROW_MAJOR row, DRAM
+//                     interleaved. The input must be the one-row L1 replica, covering the router
+//                     cores as well as the expert grid.
 //
 // Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE or ROW_MAJOR):
 //   act       = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit),
@@ -142,7 +155,6 @@ namespace ttnn::experimental::deepseek::moe {
 // TILE or ROW_MAJOR.
 Tensor fused_experts(
     const Tensor& input_tensor,
-    const Tensor& routing_scores,
     const std::vector<Tensor>& gate_up_weights,
     const std::vector<Tensor>& down_weights,
     uint32_t num_experts,
@@ -154,10 +166,13 @@ Tensor fused_experts(
     uint32_t experts_block_size = 0,
     bool two_hub_gather = true,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& routing_scores = std::nullopt,
     const std::optional<Tensor>& routing_indices = std::nullopt,
     const std::optional<Tensor>& ranking_scores = std::nullopt,
     const std::optional<Tensor>& shared_gate_up_weights = std::nullopt,
     const std::optional<Tensor>& shared_down_weights = std::nullopt,
-    std::optional<float> shared_swiglu_limit = std::nullopt);
+    std::optional<float> shared_swiglu_limit = std::nullopt,
+    const std::optional<Tensor>& router_weight = std::nullopt,
+    const std::optional<Tensor>& router_bias = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek::moe

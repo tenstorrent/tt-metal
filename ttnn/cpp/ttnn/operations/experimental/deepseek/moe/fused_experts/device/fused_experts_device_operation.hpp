@@ -104,7 +104,6 @@ struct FusedExpertsDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const Tensor& routing_scores,
         const std::vector<Tensor>& gate_up_weights,
         const std::vector<Tensor>& down_weights,
         uint32_t num_experts,
@@ -116,11 +115,14 @@ struct FusedExpertsDeviceOperation {
         uint32_t experts_block_size,
         bool two_hub_gather,
         const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& routing_scores,
         const std::optional<Tensor>& routing_indices,
         const std::optional<Tensor>& ranking_scores,
         const std::optional<Tensor>& shared_gate_up_weights,
         const std::optional<Tensor>& shared_down_weights,
-        std::optional<float> shared_swiglu_limit);
+        std::optional<float> shared_swiglu_limit,
+        const std::optional<Tensor>& router_weight,
+        const std::optional<Tensor>& router_bias);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts
@@ -129,7 +131,6 @@ namespace ttnn::prim {
 ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation::tensor_return_value_t
 fused_experts(
     const Tensor& input_tensor,
-    const Tensor& routing_scores,
     const std::vector<Tensor>& gate_up_weights,
     const std::vector<Tensor>& down_weights,
     uint32_t num_experts,
@@ -141,9 +142,12 @@ fused_experts(
     uint32_t experts_block_size = 0,
     bool two_hub_gather = true,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& routing_scores = std::nullopt,
     const std::optional<Tensor>& routing_indices = std::nullopt,
     const std::optional<Tensor>& ranking_scores = std::nullopt,
     const std::optional<Tensor>& shared_gate_up_weights = std::nullopt,
     const std::optional<Tensor>& shared_down_weights = std::nullopt,
-    std::optional<float> shared_swiglu_limit = std::nullopt);
+    std::optional<float> shared_swiglu_limit = std::nullopt,
+    const std::optional<Tensor>& router_weight = std::nullopt,
+    const std::optional<Tensor>& router_bias = std::nullopt);
 }  // namespace ttnn::prim

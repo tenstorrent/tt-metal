@@ -18,6 +18,9 @@ from all 8 DRAM banks (``whole_k`` is the layout prefill also reads). Tokens aft
 
     python -m tracy -p -r -v -m pytest models/experimental/deepseek_v41_flash/tests/decode/test_moe.py -k "tp12 and banked"
 
+``fused_router`` has ``fused_experts`` run the router on the grid row below its experts (one op for the whole
+routed MoE); ``own_router`` runs it as its own ops and hands the op the score and ranking rows.
+
 The converted ttnn weights (~8.5 GB per layer) are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``,
 default ``../cache``, per checkpoint).
 
@@ -64,8 +67,9 @@ def _snapshot():
 @pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("layer", (2, 39))
+@pytest.mark.parametrize("fused_router", (True, False), ids=("fused_router", "own_router"))
 @torch.no_grad()
-def test_moe_decode(device, layer):
+def test_moe_decode(device, layer, fused_router):
     snapshot = _snapshot()
     config = load_config(snapshot)
     loader = DeepseekV4WeightLoader(snapshot)
@@ -76,6 +80,8 @@ def test_moe_decode(device, layer):
         config, expert_provider(loader, layer), device, dtype=ttnn.bfloat4_b, cache=cache
     )
     moe = DeepSeekV41SparseMoeBlock(config, moe_weights(loader, layer), device, experts, cache=cache)
+    assert moe.fused_router or not fused_router, "this layer's fused_experts cannot run the router"
+    moe.fused_router = fused_router
 
     torch.manual_seed(0)
     hidden = torch.randn(NUM_TOKENS, config.hidden_size)
@@ -155,8 +161,9 @@ def test_moe_decode_s5(device, layer):
 @pytest.mark.parametrize("tp_size", tuple(TP_SUBMESHES), ids=lambda tp: f"tp{tp}")
 @pytest.mark.parametrize("balance_dram_banks", (False, True), ids=("whole_k", "banked"))
 @pytest.mark.parametrize("layer", (39,))
+@pytest.mark.parametrize("fused_router", (True, False), ids=("fused_router", "own_router"))
 @torch.no_grad()
-def test_moe_decode_tp(mesh_device, tp_size, balance_dram_banks, layer):
+def test_moe_decode_tp(mesh_device, tp_size, balance_dram_banks, layer, fused_router):
     from tracy import signpost
 
     if tuple(mesh_device.shape) != PARENT_MESH:
@@ -178,6 +185,8 @@ def test_moe_decode_tp(mesh_device, tp_size, balance_dram_banks, layer):
         balance_dram_banks=balance_dram_banks,
     )
     moe = DeepSeekV41SparseMoeBlock(config, moe_weights(loader, layer), device, experts, cache=cache, tp_size=tp_size)
+    assert moe.fused_router or not fused_router, "this layer's fused_experts cannot run the router"
+    moe.fused_router = fused_router
     logger.info(f"TP{tp_size}: I per chip {experts.intermediate} (unpadded {config.moe_intermediate_size // tp_size})")
 
     torch.manual_seed(0)

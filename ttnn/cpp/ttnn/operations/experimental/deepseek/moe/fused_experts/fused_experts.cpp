@@ -10,7 +10,6 @@ namespace ttnn::experimental::deepseek::moe {
 
 Tensor fused_experts(
     const Tensor& input_tensor,
-    const Tensor& routing_scores,
     const std::vector<Tensor>& gate_up_weights,
     const std::vector<Tensor>& down_weights,
     uint32_t num_experts,
@@ -22,14 +21,16 @@ Tensor fused_experts(
     uint32_t experts_block_size,
     bool two_hub_gather,
     const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& routing_scores,
     const std::optional<Tensor>& routing_indices,
     const std::optional<Tensor>& ranking_scores,
     const std::optional<Tensor>& shared_gate_up_weights,
     const std::optional<Tensor>& shared_down_weights,
-    std::optional<float> shared_swiglu_limit) {
+    std::optional<float> shared_swiglu_limit,
+    const std::optional<Tensor>& router_weight,
+    const std::optional<Tensor>& router_bias) {
     return ttnn::prim::fused_experts(
         input_tensor,
-        routing_scores,
         gate_up_weights,
         down_weights,
         num_experts,
@@ -41,11 +42,14 @@ Tensor fused_experts(
         experts_block_size,
         two_hub_gather,
         memory_config,
+        routing_scores,
         routing_indices,
         ranking_scores,
         shared_gate_up_weights,
         shared_down_weights,
-        shared_swiglu_limit);
+        shared_swiglu_limit,
+        router_weight,
+        router_bias);
 }
 
 }  // namespace ttnn::experimental::deepseek::moe

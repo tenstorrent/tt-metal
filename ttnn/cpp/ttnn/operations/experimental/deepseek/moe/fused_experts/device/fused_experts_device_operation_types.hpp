@@ -73,7 +73,11 @@ struct operation_attributes_t {
 // [1, 1, B, H].
 //
 // Expert selection/scaling is fully on-device (no host-side `expert_ids` / "hit" list). The
-// selection itself reaches the op in one of two forms, and exactly one of them is provided:
+// selection itself reaches the op in one of three forms, and exactly one of them is provided:
+//
+//   * `router_weight` (+ `router_bias`) -- the learned router itself. The op runs the gate matmul,
+//     sqrt(softplus), the bias add and the top-k on cores of its own, next to the expert grid, and
+//     weights the winners by their scores. No routing tensor exists outside the op.
 //
 //   * `routing_indices` -- the router's own top-k output: each token row carries its k selected
 //     expert ids (a `ttnn.topk` index output, or an `ttnn.embedding` gather from a frozen table).
@@ -84,9 +88,9 @@ struct operation_attributes_t {
 //     round-trip of its id output, and it is the only form that can rank on scores that never
 //     leave the op.
 //
-// Either way the per-token weights come from `routing_scores` at the selected experts, normalized
-// and scaled by the op itself -- so nothing has to scatter k values out to E columns that would
-// then be scanned straight back down to k.
+// With ids or a ranking row the per-token weights come from `routing_scores` at the selected experts,
+// normalized and scaled by the op itself -- so nothing has to scatter k values out to E columns that
+// would then be scanned straight back down to k.
 struct tensor_args_t {
     // Activations, [1, 1, B, H] with B <= 32 token rows. TILE, or ROW_MAJOR (decode: one row is
     // loaded as 1x32 compute tiles with no tilize, several are restriped into bit_ceil(B)-row tiles).
@@ -101,8 +105,9 @@ struct tensor_args_t {
     // Per-expert scores, [1, 1, B, E] bfloat16 -- the UNBIASED router scores. TILE, or ROW_MAJOR
     // (one decode stick per token). The op gathers s[b, selected_ids[b, j]] from these, so it
     // must be the score tensor the selection was derived from (the ranking may have used a
-    // bias-corrected copy of it).
-    Tensor routing_scores;
+    // bias-corrected copy of it). Required with `routing_indices` / `ranking_scores`, absent with
+    // `router_weight`.
+    std::optional<Tensor> routing_scores;
 
     // Scores to RANK on, [1, 1, B, E] bfloat16 -- TILE or ROW_MAJOR. Same shape and
     // dtype rules as `routing_scores`. When present the op selects each token's `top_k` largest
@@ -125,6 +130,14 @@ struct tensor_args_t {
     // and the dtype may differ from the routed weights'.
     std::optional<Tensor> shared_gate_up_weights;
     std::optional<Tensor> shared_down_weights;
+
+    // The learned router, run inside the op (6-expert path, one replicated token row): scores =
+    // sqrt(softplus(x @ router_weight)), ranked on scores + router_bias. `router_weight` is [H, E]
+    // TILE, resident in L1 on the router cores, ND-sharded [H, 32] round-robin so each shard is one
+    // 32-expert tile column; `router_bias` is
+    // the [1, 1, 1, E] bfloat16 ROW_MAJOR bias row, DRAM interleaved. Both or neither are given.
+    std::optional<Tensor> router_weight;
+    std::optional<Tensor> router_bias;
 };
 
 using spec_return_value_t = tt::tt_metal::TensorSpec;

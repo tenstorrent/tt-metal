@@ -4,6 +4,9 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
+#ifdef FE_CUSTOM_MM
+#include "api/compute/experimental/custom_mm.h"
+#endif
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
@@ -81,6 +84,28 @@
 //   0: core_index (this core's flat grid index, x*GRID_Y + y)
 //   1: down_local (6-expert path: 0xFFFFFFFF on a gate_up-only 9th-row core, which skips the down
 //      matmul and the reduce)
+//
+// FE_CUSTOM_MM (Blackhole, input tile {1, 2, 4, 8} x 32): the gate_up and routed down matmuls run
+// matmul_decode's custom_mm, one call per output block, which fixes the program at LoFi with a 16-bit
+// DEST. The routing-weight multiply is the one FPU op that loses precision at LoFi, so it pins HiFi4.
+
+// mul_init / mul_tiles at HiFi4 whatever the program's fidelity.
+ALWI void mul_tiles_hifi4_init(uint32_t icb0, uint32_t icb1) {
+    mul_init(icb0, icb1);
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MathFidelity::HiFi4>(
+        icb0, icb1, true)));
+}
+
+ALWI void mul_tiles_hifi4(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::NONE,
+          DST_ACCUM_MODE,
+          MathFidelity::HiFi4,
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
+}
+
 void kernel_main() {
     constexpr uint32_t num_active = get_compile_time_arg_val(0);
     constexpr uint32_t k_tiles = get_compile_time_arg_val(1);
@@ -147,6 +172,10 @@ void kernel_main() {
     constexpr uint32_t kPieceK = k_tiles / kGateUpPieces;
     // Gate and up then share one DST acquire: 4 fp32 tiles at half sync.
     static_assert(kGateUpPieces == 1 || kShardTileCols <= 4, "a split gate_up slice holds gate and up in DST at once");
+#ifdef FE_CUSTOM_MM
+    // custom_mm writes the whole [gate | up] slice in one call: 8 16-bit tiles at half sync.
+    static_assert(kShardTileCols <= 8, "custom_mm holds gate and up in DST at once");
+#endif
 
     // gate: clamp(min = -inf, max = limit); up: clamp(min = -limit, max = limit).
     constexpr uint32_t kNegInfBits = 0xFF800000u;
@@ -180,6 +209,31 @@ void kernel_main() {
         if (swiglu_core) {
             for (uint32_t s = 0; s < i_shards_per_core; ++s) {
                 DeviceZoneScopedN("FE_C_GU_MM");
+#ifdef FE_CUSTOM_MM
+                // gate -> dst [0, swiglu_tiles), up -> dst [swiglu_tiles, kShardTileCols): the slice's
+                // [K, kShardTileCols] tiles are row-major, so one custom_mm covers both, chained over
+                // the K-pieces (only the last one finalizes).
+                reconfig_full_operand(cb_weights_id, cb_input_id);
+                pack_reconfig_data_format(cb_mm_id);
+                custom_mm_block_init_short<false, true, false>(cb_input_id, cb_weights_id, cb_mm_id, kShardTileCols);
+                mm_cb.reserve_back(kShardTileCols);
+                tile_regs_acquire();
+                for (uint32_t p = 0; p < kGateUpPieces; ++p) {
+                    w_cb.wait_front(gate_up_reserve_tiles);
+                    if (p + 1 == kGateUpPieces) {
+                        custom_mm_block<true>(cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
+                    } else {
+                        custom_mm_block<false>(cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
+                    }
+                    w_cb.pop_front(gate_up_reserve_tiles);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t n = 0; n < kShardTileCols; ++n) {
+                    pack_tile<true>(n, cb_mm_id, n);
+                }
+                tile_regs_release();
+#else
                 matmul_init(cb_input_id, cb_weights_id);
                 reconfig_full_operand(cb_weights_id, cb_input_id);
                 pack_reconfig_data_format(cb_mm_id);
@@ -241,6 +295,7 @@ void kernel_main() {
 
                     w_cb.pop_front(gate_up_reserve_tiles);
                 }
+#endif
                 mm_cb.push_back(kShardTileCols);
 
                 mm_cb.wait_front(kShardTileCols);
@@ -289,18 +344,37 @@ void kernel_main() {
             CircularBuffer shared_w_cb(cb_shared_gate_up_id);
             constexpr uint32_t kChunkTiles = 2 * shared_chunk_k;
 
+            constexpr uint32_t kSharedChunks = k_tiles / shared_chunk_k;
+#ifdef FE_CUSTOM_MM
+            reconfig_full_operand(cb_shared_gate_up_id, cb_input_id);
+            pack_reconfig_data_format(cb_mm_id);
+            custom_mm_block_init_short<false, true, false>(cb_input_id, cb_shared_gate_up_id, cb_mm_id, 2);
+#else
             matmul_init(cb_input_id, cb_shared_gate_up_id);
             reconfig_full_operand(cb_shared_gate_up_id, cb_input_id);
             pack_reconfig_data_format(cb_mm_id);
+#endif
             mm_cb.reserve_back(2);
 
             tile_regs_acquire();
-            for (uint32_t c = 0; c < k_tiles / shared_chunk_k; ++c) {
+            for (uint32_t c = 0; c < kSharedChunks; ++c) {
                 shared_w_cb.wait_front(kChunkTiles);
+#ifdef FE_CUSTOM_MM
+                // A chunk is [shared_chunk_k, 2] tiles row-major: gate -> dst 0, up -> dst 1, chained over
+                // the chunks (only the last one finalizes).
+                if (c + 1 == kSharedChunks) {
+                    custom_mm_block<true>(
+                        cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k, 0, 0, shared_chunk_k, 2);
+                } else {
+                    custom_mm_block<false>(
+                        cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k, 0, 0, shared_chunk_k, 2);
+                }
+#else
                 for (uint32_t k = 0; k < shared_chunk_k; ++k) {
                     matmul_tiles(cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k + k, 2 * k, 0);
                     matmul_tiles(cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k + k, 2 * k + 1, 1);
                 }
+#endif
                 shared_w_cb.pop_front(kChunkTiles);
             }
             tile_regs_commit();
@@ -366,6 +440,15 @@ void kernel_main() {
         for (uint32_t s = 0; s < shards_per_core; ++s) {
             down_w_cb.wait_front(down_reserve_tiles);
 
+#ifdef FE_CUSTOM_MM
+            reconfig_full_operand(cb_down_w_id, cb_act_id);
+            pack_reconfig_data_format(cb_mm_id);
+            custom_mm_block_init_short<false, true, false>(cb_act_id, cb_down_w_id, cb_mm_id, kOutTilesPerCore);
+            mm_cb.reserve_back(kOutTilesPerCore);
+
+            tile_regs_acquire();
+            custom_mm_block<true>(cb_act_id, cb_down_w_id, 0, 0, 0, i_tiles, kOutTilesPerCore);
+#else
             matmul_init(cb_act_id, cb_down_w_id);
             reconfig_full_operand(cb_down_w_id, cb_act_id);
             pack_reconfig_data_format(cb_mm_id);
@@ -377,6 +460,7 @@ void kernel_main() {
                     matmul_tiles(cb_act_id, cb_down_w_id, k, k * kOutTilesPerCore + n, n);
                 }
             }
+#endif
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, cb_mm_id);
@@ -387,14 +471,14 @@ void kernel_main() {
             down_w_cb.pop_front(down_reserve_tiles);
 
             mm_cb.wait_front(kOutTilesPerCore);
-            mul_init(cb_mm_id, cb_rscalar_id);
+            mul_tiles_hifi4_init(cb_mm_id, cb_rscalar_id);
             reconfig_full_operand(cb_mm_id, cb_rscalar_id);
             pack_reconfig_data_format(weighted_id);
             weighted_cb.reserve_back(kOutTilesPerCore);
 
             tile_regs_acquire();
-            mul_tiles(cb_mm_id, cb_rscalar_id, 0, 0, 0);
-            mul_tiles(cb_mm_id, cb_rscalar_id, 1, 0, 1);
+            mul_tiles_hifi4(cb_mm_id, cb_rscalar_id, 0, 0, 0);
+            mul_tiles_hifi4(cb_mm_id, cb_rscalar_id, 1, 0, 1);
             tile_regs_commit();
             mm_cb.pop_front(kOutTilesPerCore);
             tile_regs_wait();
@@ -498,6 +582,34 @@ void kernel_main() {
             // ===============================================================================
             if (swiglu_core) {
                 for (uint32_t j = 0; j < block_experts; ++j) {
+#ifdef FE_CUSTOM_MM
+                    // gate -> dst [0, swiglu_tiles), up -> dst [swiglu_tiles, kShardTileCols) in one
+                    // custom_mm over the row-major slice, chained over the K-pieces.
+                    reconfig_full_operand(cb_weights_id, cb_input_id);
+                    pack_reconfig_data_format(cb_mm_id);
+                    custom_mm_block_init_short<false, true, false>(
+                        cb_input_id, cb_weights_id, cb_mm_id, kShardTileCols);
+                    mm_cb.reserve_back(kShardTileCols);
+                    tile_regs_acquire();
+                    for (uint32_t p = 0; p < kGateUpPieces; ++p) {
+                        w_cb.wait_front(gate_up_reserve_tiles);
+                        if (p + 1 == kGateUpPieces) {
+                            custom_mm_block<true>(
+                                cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
+                        } else {
+                            custom_mm_block<false>(
+                                cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
+                        }
+                        w_cb.pop_front(gate_up_reserve_tiles);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t n = 0; n < kShardTileCols; ++n) {
+                        pack_tile<true>(n, cb_mm_id, n);
+                    }
+                    tile_regs_release();
+                    mm_cb.push_back(kShardTileCols);
+#else
                     if constexpr (kGateUpPieces > 1) {
                         // gate -> dst n, up -> dst swiglu_tiles + n, summed over the slice's K-pieces.
                         matmul_init(cb_input_id, cb_weights_id);
@@ -576,6 +688,7 @@ void kernel_main() {
                         mm_cb.push_back(kShardTileCols);
                         w_cb.pop_front(gate_up_reserve_tiles);
                     }
+#endif
 
                     // ---- SwiGLU: cb_mm (gate | up) -> cb_out (swiglu_tiles tiles). ----
                     mm_cb.wait_front(kShardTileCols);
@@ -649,6 +762,15 @@ void kernel_main() {
                 down_w_cb.wait_front(down_reserve_tiles);
 
                 // ---- down matmul -> cb_mm staging (reuses the dead Phase-1 gate_up staging buffer). ----
+#ifdef FE_CUSTOM_MM
+                reconfig_full_operand(cb_down_w_id, cb_act_id);
+                pack_reconfig_data_format(cb_mm_id);
+                custom_mm_block_init_short<false, true, false>(cb_act_id, cb_down_w_id, cb_mm_id, kOutTilesPerCore);
+                mm_cb.reserve_back(kOutTilesPerCore);
+
+                tile_regs_acquire();
+                custom_mm_block<true>(cb_act_id, cb_down_w_id, act_base, 0, 0, i_tiles, kOutTilesPerCore);
+#else
                 matmul_init(cb_act_id, cb_down_w_id);
                 // reconfig_full_operand: SrcA moves from cb_mm (face_r_dim = input_tile_h) back to
                 // cb_down_w (face_r_dim=16). SrcB stays face_r_dim = input_tile_h (cb_input ->
@@ -664,6 +786,7 @@ void kernel_main() {
                         matmul_tiles(cb_act_id, cb_down_w_id, act_base + k, k * kOutTilesPerCore + n, n);
                     }
                 }
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(0, cb_mm_id);
@@ -690,7 +813,7 @@ void kernel_main() {
                 const uint32_t mul_dst_id = first ? (last ? cb_down_out_id : cb_acc_id) : cb_wtmp_id;
                 CircularBuffer mul_dst_cb(mul_dst_id);
                 mm_cb.wait_front(kOutTilesPerCore);
-                mul_init(cb_mm_id, cb_rscalar_id);
+                mul_tiles_hifi4_init(cb_mm_id, cb_rscalar_id);
                 // reconfig_full_operand: SrcA moves from cb_down_w (face_r_dim=16) to cb_mm
                 // (face_r_dim = input_tile_h). Face geometry changes on tiny inputs.
                 reconfig_full_operand(cb_mm_id, cb_rscalar_id);
@@ -698,8 +821,8 @@ void kernel_main() {
                 mul_dst_cb.reserve_back(kOutTilesPerCore);
 
                 tile_regs_acquire();
-                mul_tiles(cb_mm_id, cb_rscalar_id, 0, j, 0);
-                mul_tiles(cb_mm_id, cb_rscalar_id, 1, j, 1);
+                mul_tiles_hifi4(cb_mm_id, cb_rscalar_id, 0, j, 0);
+                mul_tiles_hifi4(cb_mm_id, cb_rscalar_id, 1, j, 1);
                 tile_regs_commit();
                 mm_cb.pop_front(kOutTilesPerCore);
                 tile_regs_wait();
