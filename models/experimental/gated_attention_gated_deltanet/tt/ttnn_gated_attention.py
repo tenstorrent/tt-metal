@@ -303,11 +303,19 @@ def gated_attention_forward_ttnn(
     ckc = compute_kernel_config
     qkv_fused = None
     if fused_qkv_weight is not None:
-        if isinstance(fused_qkv_weight, ttnn.Tensor):
-            qkv_fused = ttnn.linear(hidden_states, fused_qkv_weight, compute_kernel_config=ckc, memory_config=memory_config)
-        else:  # bonsai2 BONSAI_NATIVE=pq2_0: exact-ternary TernaryLinear, decode only
-            assert T <= ttnn.TILE_SIZE, "exact-ternary qkv is decode-only"
-            qkv_fused = fused_qkv_weight.forward(hidden_states, out_mem=memory_config)
+
+        def _qkv(h):
+            if isinstance(fused_qkv_weight, ttnn.Tensor):
+                return ttnn.linear(h, fused_qkv_weight, compute_kernel_config=ckc, memory_config=memory_config)
+            if T <= ttnn.TILE_SIZE:  # bonsai2 BONSAI_NATIVE=pq2_0: exact-ternary TernaryLinear (A3 decode)
+                return fused_qkv_weight.forward(h, out_mem=memory_config)
+            from models.demos.blackhole.bonsai2.native.a3.prefill import prefill_linear  # pq2_0 prefill
+
+            return prefill_linear(fused_qkv_weight, h, mem=memory_config)
+
+        from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
+
+        qkv_fused = pftime.timed("attn_qkv", T, _qkv, hidden_states)
         _qg_n = num_attention_heads * head_dim * 2
         _kv_n = num_key_value_heads * head_dim
         _total = _qg_n + 2 * _kv_n
@@ -699,23 +707,34 @@ def gated_attention_forward_ttnn(
     # 2c (QWEN36_1C_OPROJ_1D): the 110-core 1D mcast config with the activation in L1. Measured on
     # this shape: 137.3 us today (DRAM activation, auto config) -> 102.2 us, and the L1 placement on
     # its own changes nothing (137.7), so the config is what buys the time.
-    if not isinstance(o_proj_weight, ttnn.Tensor):
-        # bonsai2 BONSAI_NATIVE=pq2_0: an exact-ternary TernaryLinear (decode only); a ttnn weight never gets here.
-        assert T <= ttnn.TILE_SIZE, "exact-ternary o_proj is decode-only"
-        attn_output = o_proj_weight.forward(attn_output, out_mem=memory_config)
-    elif _os.environ.get("QWEN36_1C_OPROJ_1D") == "1" and T <= ttnn.TILE_SIZE:
-        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+    def _oproj(attn_output):
+        if not isinstance(o_proj_weight, ttnn.Tensor):
+            # bonsai2 BONSAI_NATIVE=pq2_0: an exact-ternary TernaryLinear (A3 decode; prefill via dequant + stock matmul).
+            if T <= ttnn.TILE_SIZE:
+                attn_output = o_proj_weight.forward(attn_output, out_mem=memory_config)
+            else:
+                from models.demos.blackhole.bonsai2.native.a3.prefill import prefill_linear
 
-        _grid = device.compute_with_storage_grid_size()
-        attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
-        attn_output = ttnn.linear(
-            attn_output,
-            o_proj_weight,
-            compute_kernel_config=ckc,
-            program_config=_tpc.create_matmul_1d_decode_progcfg(1, attn_output.shape[-1], o_proj_weight.shape[-1], 110, grid_w=_grid.x),
-            memory_config=memory_config,
-        )
-    else:
-        attn_output = ttnn.linear(attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+                attn_output = prefill_linear(o_proj_weight, attn_output, mem=memory_config)
+        elif _os.environ.get("QWEN36_1C_OPROJ_1D") == "1" and T <= ttnn.TILE_SIZE:
+            from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+            _grid = device.compute_with_storage_grid_size()
+            attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
+            attn_output = ttnn.linear(
+                attn_output,
+                o_proj_weight,
+                compute_kernel_config=ckc,
+                program_config=_tpc.create_matmul_1d_decode_progcfg(1, attn_output.shape[-1], o_proj_weight.shape[-1], 110, grid_w=_grid.x),
+                memory_config=memory_config,
+            )
+        else:
+            attn_output = ttnn.linear(attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+
+        return attn_output
+
+    from models.demos.blackhole.bonsai2.native.a3 import pftime  # BONSAI_PF_TIME debug timer (no-op when unset)
+
+    attn_output = pftime.timed("attn_o", T, _oproj, attn_output)
 
     return attn_output, new_key, new_value

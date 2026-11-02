@@ -5,7 +5,15 @@
 Branch A: paged prefill (chunk_page_table is not None) — no memory_config, no cur_pos_tensor.
 Branch C: concat prefill (else) — uses memory_config, past_key/past_value; returns new_key/new_value.
 """
+import ttnn
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import gated_attention_forward_ttnn
+
+
+def _native_qkv(weights):
+    """bonsai2 BONSAI_NATIVE=pq2_0: the ternary fused [q+gate|k|v] in-projection (a TernaryLinear) runs prefill
+    too, through a3/prefill.prefill_linear; a dense fused weight keeps the three-matmul prefill as before."""
+    w = getattr(weights, "fused_qkv", None)
+    return None if w is None or isinstance(w, ttnn.Tensor) else w
 
 
 def prefill_forward(
@@ -37,6 +45,7 @@ def prefill_forward(
             k_proj_weight=weights.k_proj,
             v_proj_weight=weights.v_proj,
             o_proj_weight=weights.o_proj,
+            fused_qkv_weight=_native_qkv(weights),
             q_norm_weight=weights.q_norm,
             k_norm_weight=weights.k_norm,
             cos=cos,
@@ -66,6 +75,7 @@ def prefill_forward(
             k_proj_weight=weights.k_proj,
             v_proj_weight=weights.v_proj,
             o_proj_weight=weights.o_proj,
+            fused_qkv_weight=_native_qkv(weights),
             q_norm_weight=weights.q_norm,
             k_norm_weight=weights.k_norm,
             cos=cos,
