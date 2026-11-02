@@ -141,6 +141,13 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             max_seq_len=params.max_seq_len,
             mesh_shape=params.mesh_shape,
             chunk_size=params.chunk_size,
+            # Only an adapter whose runtime serves prefill_forward packs; otherwise the runner runs a forward of
+            # several chunks as prefill_chunk per chunk, on a one-chunk runtime.
+            forward_tokens_budget=(
+                params.forward_chunks * params.chunk_size
+                if self.supports_packed_forward and params.forward_chunks > 1
+                else None
+            ),
             num_users=params.num_users,
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,

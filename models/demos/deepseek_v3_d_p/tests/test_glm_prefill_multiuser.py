@@ -578,3 +578,231 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
         assert not failures, f"[traced] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
         runtime.release_trace()
+
+
+# The pipeline test's layer kinds: rank 0 (layers 0-1, dense, both "full") hands its last top-k to rank 1, whose first
+# layer is "shared" (MoE, reusing it) and whose second computes its own ("full", MoE). The boundary carries every chunk's
+# indices packed, and the downstream rank also owns an indexer-K cache layer.
+_PIPELINE_INDEXER_TYPES = ["full", "full", "shared", "full"]
+PIPELINE_SPLIT = 2  # rank 0 owns layers [0, 2), rank 1 [2, 4)
+D2H_READ_TIMEOUT_S = 120
+
+
+def _pipeline_caches(config, mesh_device, first_layer_idx, num_layers, num_slots, seq_cache):
+    mesh_shape = list(mesh_device.shape)
+    first_full = full_indexer_rank(config, first_layer_idx)
+    return MlaKvCaches(
+        kvpe=init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=seq_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=0,
+            tp_axis=1,
+            num_kvpe_cache_layers=num_layers,
+            num_users=num_slots,
+        ),
+        index=init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=0,
+            tp_axis=1,
+            num_kvpe_cache_layers=full_indexer_rank(config, first_layer_idx + num_layers) - first_full,
+            num_users=num_slots,
+            dtype=ttnn.bfloat8_b,
+        ),
+    )
+
+
+def _read_d2h_records(service, count):
+    """``count`` 12 B (slot, start, end) records off the D2H FIFO, failing (not hanging) if fewer arrive."""
+    import struct
+    import threading
+
+    records, errors = [], []
+
+    def read():
+        try:
+            for _ in range(count):
+                records.append(struct.unpack("<3I", service.read_metadata()[:12]))
+        except Exception as e:  # surfaced below
+            errors.append(e)
+
+    t = threading.Thread(target=read, daemon=True)
+    t.start()
+    t.join(D2H_READ_TIMEOUT_S)
+    assert not errors, errors
+    assert not t.is_alive(), f"only {len(records)} of {count} D2H ack records arrived in {D2H_READ_TIMEOUT_S}s"
+    return records
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM53Adapter.l1_small_size,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("traced", [False, True], ids=["eager", "traced"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_packed_pipeline_matches_one_rank(variant, config_only, mesh_device, device_params, num_links, traced):
+    """Packed forwards split over two pipeline ranks must fill the same KVPE and indexer-K as one rank holding every
+    layer, with the activation and every chunk's GLM-5.3 indexer indices handed from rank 0 to rank 1 the way the
+    runner's D2D sockets hand them over (the same per-chip tensors).
+
+    Rank 0 acks through a real D2H service: one 12 B (slot, start, end) record per non-empty chunk per layer, each
+    chunk's records contiguous and in pack order (#63438's packed contract), all after the forward's KV writes.
+
+    Eager: the split must be bit-exact (same programs on the same inputs). Traced: the ranks replay their captures
+    (per-chunk metadata, MoE padding config, persistent input and indices staged before each replay) against the
+    eager one-rank reference, at TRACED_PCC."""
+    assert_gate_mode_matches_adapter(variant, GATE_MODE)
+    sp = mesh_device.shape[0]
+    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
+    lengths, forwards = _packed_schedule(chunk)
+    num_users = len(lengths)
+    seq_cache = N_CHUNKS * chunk
+    config = _test_config(config_only)
+    config.indexer_types = list(_PIPELINE_INDEXER_TYPES)
+    config.max_seq_len = seq_cache
+    mesh_device.enable_program_cache()
+
+    def rt_config(first_layer_idx, num_layers, use_trace):
+        return TtPrefillRuntimeConfig(
+            num_layers=num_layers,
+            max_seq_len=seq_cache,
+            mesh_shape=tuple(mesh_device.shape),
+            chunk_size=chunk,
+            forward_tokens_budget=FORWARD_CHUNKS * chunk,
+            num_users=num_users,
+            num_links=num_links,
+            topology=per_axis_topology(device_params["fabric_config"]),
+            capacity_factor=8,
+            gate_fallback_mode=GATE_MODE,
+            model_cfg=_TestGLM53Config,
+            routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
+            sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
+            use_trace=use_trace,
+            tp_shard_kv=True,
+            first_layer_idx=first_layer_idx,
+            is_first_rank=first_layer_idx == 0,
+            is_last_rank=first_layer_idx + num_layers == NUM_LAYERS,
+        )
+
+    state_dict = glm_random_transformer_state_dict(config, _TestGLM53Config, NUM_LAYERS, share_experts=True)
+
+    def layers(a, b):  # shallow copies: a build may pop keys from its layer dicts
+        return {"embed_weight": state_dict["embed_weight"], "layers": [dict(l) for l in state_dict["layers"][a:b]]}
+
+    split = [(0, PIPELINE_SPLIT), (PIPELINE_SPLIT, NUM_LAYERS - PIPELINE_SPLIT)]
+    ref = TtPrefillRuntime(mesh_device, config, layers(0, NUM_LAYERS), rt_config(0, NUM_LAYERS, False))
+    ranks = [
+        TtPrefillRuntime(mesh_device, config, layers(first, first + n), rt_config(first, n, traced))
+        for first, n in split
+    ]
+    del state_dict
+    assert ranks[0].forwards_indexer_indices and ranks[1].receives_indexer_indices
+    assert (
+        ranks[1].indexer_indices_shape()[2] == FORWARD_CHUNKS * ranks[1].model.layers[0].mla.indexer_indices_shape()[2]
+    )
+
+    ref_caches = _pipeline_caches(config, mesh_device, 0, NUM_LAYERS, ref.config.cache_num_users, seq_cache)
+    rank_caches = [
+        _pipeline_caches(config, mesh_device, first, n, r.config.cache_num_users, seq_cache)
+        for (first, n), r in zip(split, ranks)
+    ]
+    d2h = ttnn.D2HStreamService(
+        mesh_device,
+        global_spec=None,
+        fifo_size_bytes=16 * 1024,
+        worker_cores=ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        metadata_size_bytes=12,
+        metadata_ring=True,
+    )
+    acks_per_chunk = ranks[0].config.num_layers
+    try:
+        ids = _token_ids(config, num_users, max(lengths))
+
+        def tokens(runtime, chunks):
+            toks = []
+            for c in chunks:
+                real = [] if c.is_empty else ids[c.slot_id][c.actual_start : c.actual_end].tolist()
+                toks.append(real + [0] * (chunk - len(real)))
+            return runtime.make_forward_input(toks, [c.actual_start for c in chunks])
+
+        for r, caches in zip(ranks, rank_caches):
+            r.compile(caches)
+        ref.compile(ref_caches)
+        if traced:
+            ranks[0].set_d2h_ack_service(d2h)
+            for r, caches in zip(ranks, rank_caches):
+                r.capture_trace(caches)
+            warm = _read_d2h_records(d2h, ranks[0].warmup_ack_count())
+            logger.info(f"[pipeline] drained {len(warm)} warm-up D2H records")
+
+        for f, chunks in enumerate(forwards):
+            logger.info(f"[pipeline {'traced' if traced else 'eager'}] forward {f}: {chunks}")
+            out = ranks[0].prefill_forward(tokens(ranks[0], chunks), rank_caches[0], chunks, d2h_service=d2h)
+            # What the D2D sockets deliver: copies of rank 0's per-chip activation and packed indices.
+            act, idx = ttnn.clone(out), ttnn.clone(ranks[0].outbound_indexer_indices)
+            if not traced:
+                ttnn.deallocate(out)
+            assert ranks[1].prefill_forward(act, rank_caches[1], chunks, indexer_indices=idx) is None
+            want = [
+                (c.slot_id, c.actual_start, c.actual_end)
+                for c in chunks
+                if not c.is_empty
+                for _ in range(acks_per_chunk)
+            ]
+            got = _read_d2h_records(d2h, len(want))
+            assert got == want, f"forward {f}: D2H records {got} != {want}"
+        for chunks in forwards:
+            ref.prefill_forward(tokens(ref, chunks), ref_caches, chunks)
+        ttnn.synchronize_device(mesh_device)
+
+        failures = []
+        full_layers = [l for l, t in enumerate(config.indexer_types[:NUM_LAYERS]) if t == "full"]
+        ref_kv = _read_user_slots(ref_caches.kvpe, mesh_device, NUM_LAYERS, ref.config.cache_num_users)
+        ref_idx = _read_user_slots(ref_caches.index, mesh_device, len(full_layers), ref.config.cache_num_users)
+        for (first, n), r, caches in zip(split, ranks, rank_caches):
+            n_idx = full_indexer_rank(config, first + n) - full_indexer_rank(config, first)
+            kv = _read_user_slots(caches.kvpe, mesh_device, n, r.config.cache_num_users)
+            idx = _read_user_slots(caches.index, mesh_device, n_idx, r.config.cache_num_users)
+            for u in range(num_users):
+                pairs = [("kvpe", kv[u][i], ref_kv[u][first + i], first + i) for i in range(n)]
+                pairs += [
+                    ("indexer_k", idx[u][i], ref_idx[u][full_indexer_rank(config, first) + i], None)
+                    for i in range(n_idx)
+                ]
+                for name, got, want, layer in pairs:
+                    diff = (got - want).abs().max().item()
+                    pcc = _pcc(want, got)
+                    logger.info(
+                        f"[pipeline] rank@{first} slot {u} {name} layer {layer} max|diff| {diff:.3e} PCC {pcc:.6f}"
+                    )
+                    if (diff != 0) if not traced else (pcc < TRACED_PCC):
+                        failures.append(
+                            f"rank@{first} slot {u} {name} layer {layer}: max|diff| {diff:.3e} PCC {pcc:.6f}"
+                        )
+        assert not failures, f"[pipeline] {len(failures)} mismatch(es):\n" + "\n".join(failures)
+    finally:
+        # Releases each model's sub-device managers too (and the D2H service a traced rank holds); the D2H
+        # service's device-side teardown needs the mesh still open.
+        for r in ranks + [ref]:
+            r.release_trace()
+        d2h = None
