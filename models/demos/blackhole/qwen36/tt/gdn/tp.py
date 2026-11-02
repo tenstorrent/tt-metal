@@ -135,6 +135,11 @@ SPEC_STEP_OPT_ROWS_SFPU = 16384
 # gov gdn-v2 (kernel_opts bit 15, kGdnSpecOptNarrowGr2, with NARROW_GR): one contiguous a|b read per face holding a / b
 # (every core reads the same page). Bit-identical; QWEN36_SPEC_STEP_NARROW_GR2=1 adds it wherever NARROW_GR is on.
 SPEC_STEP_OPT_NARROW_GR2 = 32768
+# gov gdn-v2 (kernel_opts bit 16, kGdnSpecOptRowsNorm, with ROWS_SFPU): the norms' SFPU tails on the user's row pairs.
+SPEC_STEP_OPT_ROWS_NORM = 65536
+# gov gdn-v2 (kernel_opts bit 17, kGdnSpecOptFastSoftfloat, with gate scalars): the writer's gate math with fast
+# bit-exact IEEE multiply / add. Bit-identical; QWEN36_SPEC_STEP_FAST_SF=1 adds it wherever gate scalars (bit 1) are on.
+SPEC_STEP_OPT_FAST_SF = 131072
 
 
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
@@ -3717,6 +3722,21 @@ class TPGatedDeltaNet:
             _log_spec_step_once(
                 ("rows_sfpu", T),
                 "[gdn-spec-step] QWEN36_SPEC_STEP_ROWS_SFPU=1: user-row SFPU tails (bit-identical)",
+            )
+            if os.environ.get("QWEN36_SPEC_STEP_ROWS_NORM", "0").strip() == "1":
+                extra["kernel_opts"] |= SPEC_STEP_OPT_ROWS_NORM
+                _log_spec_step_once(
+                    ("rows_norm", T),
+                    "[gdn-spec-step] QWEN36_SPEC_STEP_ROWS_NORM=1: user-row norm SFPU tails (bit-identical)",
+                )
+        if (
+            os.environ.get("QWEN36_SPEC_STEP_FAST_SF", "0").strip() == "1"
+            and extra.get("kernel_opts", 0) & SPEC_STEP_OPT_GATE_SCALARS
+        ):
+            extra["kernel_opts"] |= SPEC_STEP_OPT_FAST_SF
+            _log_spec_step_once(
+                ("fast_sf", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_FAST_SF=1: fast exact gate math (bit-identical)",
             )
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,

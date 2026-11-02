@@ -366,7 +366,6 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         src_in.push_back(2 * ChA);
 #endif
         // taps[c]: rows 0..K-1 (tap j in row j) of tile column chunk_col(c); the rest of the tile is zero
-        DeviceZoneScopedN("rd_rest");  // gov gdn-v2 profiling zone: taps / w / selectors / masks issue + build
         taps.reserve_back(ChA);
         zero_reserved(taps, noc, ChA);
         {

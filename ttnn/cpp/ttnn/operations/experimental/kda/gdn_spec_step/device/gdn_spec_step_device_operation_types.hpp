@@ -100,10 +100,16 @@ enum GdnSpecStepKernelOpt : uint32_t {
     // gov gdn-v2 (with NARROW_GR): the writer's a|b gate read is one contiguous read of the user's T rows per face
     // holding a[h] / b[Nv + h] (1 request per core at Nv <= 16 instead of 2 * T): every core reads the same page.
     kGdnSpecOptNarrowGr2 = 1u << 15,
+    // gov gdn-v2 (with ROWS_SFPU): the norms' SFPU tails (k / q l2 rsqrt + scale, the output rmsnorm's scale + rsqrt) on
+    // the user's row pairs; every consumer masks / multiplies the other rows to the same zeros. Bit-identical.
+    kGdnSpecOptRowsNorm = 1u << 16,
+    // gov gdn-v2 (gate scalars): the writer's software-fp32 gate math with fast bit-exact IEEE multiply / add (normal
+    // operand fast path, the compiler's soft-float otherwise), op for op. Bit-identical.
+    kGdnSpecOptFastSoftfloat = 1u << 17,
     kGdnSpecOptAll = kGdnSpecOptFusedDecay | kGdnSpecOptGateScalars | kGdnSpecOptEarlySrc | kGdnSpecOptHoistInv |
                      kGdnSpecOptQkShare | kGdnSpecOptA3Half | kGdnSpecOptGscSplit | kGdnSpecOptVsTail |
                      kGdnSpecOptNarrowGateReads | kGdnSpecOptNarrowSrc | kGdnSpecOptRowsSfpu |
-                     kGdnSpecOptNarrowGr2,
+                     kGdnSpecOptNarrowGr2 | kGdnSpecOptRowsNorm | kGdnSpecOptFastSoftfloat,
 };
 
 struct GdnSpecStepInputs {

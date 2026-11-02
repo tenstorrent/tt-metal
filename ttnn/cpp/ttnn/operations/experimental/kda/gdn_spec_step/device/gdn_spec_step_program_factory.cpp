@@ -412,6 +412,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
             "GDN_DTB_FP32", in.dt_bias.dtype() == DataType::FLOAT32 ? "1" : "0");
         writer.compiler_options.defines.emplace(
             "GDN_NEA_FP32", in.neg_exp_A.dtype() == DataType::FLOAT32 ? "1" : "0");
+        if ((a.kernel_opts & kGdnSpecOptFastSoftfloat) != 0) {
+            writer.compiler_options.defines.emplace("GDN_FAST_SOFTFLOAT", "1");  // fast exact gate math (bit-identical)
+        }
         if ((a.kernel_opts & kGdnSpecOptNarrowGateReads) != 0) {
             writer.compiler_options.defines.emplace("GDN_NARROW_GR", "1");  // face-row gate reads (bit-identical)
             if ((a.kernel_opts & kGdnSpecOptNarrowGr2) != 0) {
@@ -519,6 +522,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     }
     if (FP32 && (a.kernel_opts & kGdnSpecOptRowsSfpu) != 0 && T % 2 == 0) {
         compute.compiler_options.defines.emplace("GDN_ROWS_SFPU", "1");  // user-row SFPU tails (bit-identical)
+        if ((a.kernel_opts & kGdnSpecOptRowsNorm) != 0) {
+            compute.compiler_options.defines.emplace("GDN_ROWS_NORM", "1");  // user-row norm tails (bit-identical)
+        }
     }
     if (A3_HALF) {
         compute.compiler_options.defines.emplace("GDN_A3_HALF", "1");

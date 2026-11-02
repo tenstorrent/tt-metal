@@ -382,10 +382,10 @@ TT_KERNEL void writer(
         }
         gsc.push_back(1);
 #if GDN_GSC_SPLIT
-        DeviceZoneScopedN("wr_gsw");  // gov gdn-v2 profiling zone: the head's gate-slot swap
         // slots [t0, t1) (64 B aligned) into every block's gsc (itself included); `gsv` up on every block; once all VB
         // blocks' slots are in, gsc goes to the compute
         {
+            DeviceZoneScopedN("wr_gsw");  // gov gdn-v2 profiling zone: the head's gate-slot swap
             Semaphore gsv(sem::gsv);
             gsc.wait_front(1);
             ready.wait(VB);  // every block of the head runs this program and has reserved its gsc
