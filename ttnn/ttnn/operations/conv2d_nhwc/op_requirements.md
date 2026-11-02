@@ -75,7 +75,7 @@ Cells that fail out of the box go to `EXCLUSIONS`, not their own refinement.
 - The flagged SDXL level-1 3×3 BLOCK loose case passes its precision gate.
 - 0 loud categories.
 
-### [ ] Refinement 3 — Speed up the perf-flagged SDXL level-1 3×3 (BLOCK)
+### [x] Refinement 3 — Speed up the perf-flagged SDXL level-1 3×3 (BLOCK)
 
 **Type**: perf
 
@@ -97,6 +97,12 @@ No SUPPORTED change.
 - Measured device-ns on the flagged shape improves toward `achievable_ns`, with `device_l1_peak_bytes` ≤ 618,992 (report both).
 - Its precision gate still holds and the golden suite is green.
 - No regression across the config-spanning guard set: one representative per distinct kernel path × layout × placement (interleaved R0, BLOCK, WIDTH; with/without bias; relu).
+
+**Outcome**:
+- Measured: 883,338 → 258,975 cycles/core (654 → 192 µs at 1350 MHz, 3.41×) against `achievable_ns` 149,049. `device_l1_peak_bytes` is 590,336 (≤ 618,992). The precision gate and golden BLOCK/WIDTH slice are green, and no guard shape regressed.
+- What changed: interleaved slice K order, send-depth tilize schedule (replaces the 468 KB prefetch), run-based stateful gather, and weight stream lead.
+- Bottleneck now: compute alone is 194k cycles (unpack-bound 1×2 subblock, because bm = 13 is prime). The row act exchange alone is ~174k (transfer-bound, 2.9k cycles per 78 KB block). Together they give 258k because the overlap is imperfect (likely L1 contention).
+- Next would be bk = 6 or 2×2 subblocks. Both exceed the L1 target at bm = 13. A two-RISC act exchange (two blocks in flight) or a gated LoFi / bf16-DEST policy are the alternatives. Not done: they are either over the L1 target or need a new precision gate / RISC split beyond this refinement's scope.
 
 ### [ ] Refinement 4 — Depthwise convolution (regime R11)
 

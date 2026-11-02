@@ -92,3 +92,57 @@
 - Tests added:
   - `test_conv2d_nhwc_sharded.py`: `run_sharded` takes dtype / weight_dtype / activation / orientation. Added `test_conv2d_nhwc_mixed_precision` (interleaved, BLOCK, WIDTH-tail × {bf16×bf16, bf16×bf8b, bf16×fp32, fp32×bf8b} × {none, relu}), `test_conv2d_nhwc_relu_no_bias_block`, and `test_conv2d_nhwc_block_col_major` (s1, s2 ragged).
   - `test_conv2d_nhwc_perf_probe.py`: `test_perf_probe_block_sdxl_l1_bf16_bf8b`, the perf-1 contract config.
+
+## Refinement 3 — Speed up the perf-flagged SDXL level-1 3×3 (BLOCK)
+- Date: 2026-11-02
+- What was done (perf; no SUPPORTED change). Target config: SDXL level-1 3×3, (1, 64, 64, 640) → 640, bf16 ROW_MAJOR pre-sharded (410, 64) on 10×10 BLOCK, bf8b weights, bias.
+  - **Baseline breakdown** (883k cycles/core): the whole-slice own prefetch (468 KB, over the L1 target by itself) tilized all 9 own K-blocks before the first matmul, so the reader's gather (~600k cycles) sat entirely on the critical path.
+  - **Interleaved slice K order** (writer + compute only; the prepared weight layout is unchanged): K-block j is own K-block j div S of slice j mod S. The writer maps weight rows `slice·slice_k_tiles + (j div S)·bk`; the rotating sender order becomes 0, 1, …, S−1, 0, …
+  - **Send-depth tilize schedule**: the owner tilizes own block kb + `ACT_SEND_DEPTH` right after own block kb was multicast. The old `OWN_PREFETCH` knob is subsumed (`ACT_SEND_DEPTH ≥ kblocks_per_slice` is the old prefetch). `cb_act_rm` is one own K-block deep (`ACT_RM_KBLOCKS`), so the reader gathers the next own block during the other S−1 slices' turns.
+  - **Gather rewrite** (reader, shared by R0 and R4/R5):
+    - Stateful local NoC reads: every gather source is core-local, so the read state is set once per m-block.
+    - K-block → band segments are built once per K-block.
+    - Interior pixels of one output row form a run with an affine source address: a tight `read; addr += stride·tap; dst += row` loop.
+    - Edge pixels and K-padded blocks keep the general `gather_row`.
+    - Result: interior tile-row gather 5,000 → 1,000 cycles. Before the rewrite, the per-row address arithmetic alone was ~107 cycles per row.
+  - **Weight stream lead** (writer): `SHARDED_WEIGHT_DEPTH = 6`. Weight block j + 4 is issued before act block j and landed (barrier + column multicast) after it, so the weight DRAM latency and column handshake leave the row chain. Depth 2 reproduces the old one-ahead behaviour. R0 keeps `WEIGHT_DEPTH = 2`.
+  - **L1 footprint target**: `SHARDED_CB_BUDGET_BYTES = 480 KiB` for R4/R5 CBs (the shards are extra), then the old budgets as fallbacks. The plan is bm = 13, bk = 3, 60 K-blocks, F = 484,608 B.
+- Measured (device per-core kernel max from `profile_log_device.csv`, AICLK 1350 MHz; the aggregate CSV duration is corrupted, as in Refinement 1):
+  - **SDXL L1 3×3 BLOCK bf16 × bf8b: 883,338 → 258,975 cycles (654 → 192 µs, 3.41×).** `achievable_ns` = 149,049 (201k cycles), so we are 1.29× off.
+  - `device_l1_peak_bytes` (graph capture, as the harness): **590,336 B ≤ 618,992 B** (before: the prefetch footprint alone exceeded it).
+  - Step by step:
+    - interleaved order + send-depth schedule: 883k → 480k
+    - stateful reads: → 464k
+    - interior fast path: → 377k (still per pixel)
+    - run-based gather: → 284k
+    - writer weight/act overlap: → 266k
+    - weight lead 4: → 258k
+  - Guard set, before → after (cycles):
+    - BLOCK 28×28×256 fp32 bias: 103.3k → 81.0k
+    - BLOCK 28×28×256 bf16 × bf8b no bias: 66.9k → 40.2k
+    - WIDTH 14×14×256→512 s2 fp32: 109.3k → 97.4k
+    - interleaved 28×28×256 bf16 × bf8b relu: 101.9k → 101.1k
+    - interleaved SDXL 64×64×640 fp32: 11.869M → 11.868M
+  - No shape got slower.
+- Bottleneck now (ablations on the target config, all at bk = 3):
+  - Compute alone (all NoC stubbed): 194k.
+    - LoFi would give 171k; bf16 DEST gives no change; tilize is ~10k.
+    - The rest is unpack-bound matmul at the forced 1×2 subblock: bm = 13 is prime, so in1 is re-unpacked for every in0 row.
+  - Data movement alone (matmul stubbed):
+    - weights stubbed: 174k (145k with a 32 B act payload)
+    - with weights: 238k before the lead
+  - The row act exchange is transfer-bound at ~2.9k cycles per 78 KB block.
+  - Combined: 258k. Compute and exchange overlap imperfectly. A deeper landing ring (depth 3) gave only −6k, and a stubbed tilize −2k. The likely cause is L1 contention between the 78 KB/block multicast landing, the unpacker and the fp32 packer-L1 accumulation.
+- Next levers (not done):
+  - bk = 6 (half the K-block passes and handshakes) needs ≈ 777 KB of CBs at bm = 13 — over the L1 target.
+  - Padding bm to 14 for 2×2 subblocks costs +7.7% exchange bytes and also exceeds the budget.
+  - LoFi / bf16 DEST for bf16 × bf8b would need a shape-class precision gate (Refinement 2 data).
+  - Splitting the act exchange across both data-movement RISCs (two landing CBs by owner parity, matmul `In0SourceFn`) would keep two blocks in flight.
+- Accuracy achieved: the SDXL loose case passes its precision gate (PCC ≥ 0.995, rel-RMS ≤ 0.05; bf16). Every unit test passes at its prior tolerance (fp32 PCC ≥ 0.999 / rel-RMS ≤ 0.02).
+- Golden test progress: `test_golden.py -k "BLOCK_SHARDED or WIDTH_SHARDED"`: 130 passed, 99 xfailed, 72 skipped, 0 failed, 0 XPASS. This includes the SDXL level-1 3×3 BLOCK loose case and the other BLOCK loose cases.
+- Issues encountered:
+  - The profiler marker budget truncates per-K-block zones at ~30 per type, so the zone breakdowns cover the first half of the run.
+  - The JIT farm's up-front precompile fails (an unrelated sfpi header error) and is skipped (best-effort).
+- Tests added: `test_conv2d_nhwc_perf_probe.py`:
+  - `test_l1_peak_block_sdxl_l1_bf16_bf8b` — the harness's graph-capture L1 peak
+  - guard probes `test_guard_interleaved_bf16_relu`, `test_guard_block_bf16_nobias`, `test_guard_width_strided`
