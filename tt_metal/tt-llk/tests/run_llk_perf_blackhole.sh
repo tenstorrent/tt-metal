@@ -82,7 +82,7 @@ fi
 # file (suite) per pytest invocation, in collection order, with the same --dist loadgroup
 # -n 15 -x. PERF_RESET=1 issues `tt-smi -r all` before each suite; PERF_RESET=0 is the same
 # per-suite split without the reset (the fair control for the reset).
-PERF_RESET="${PERF_RESET:-1}"
+PERF_RESET="${PERF_RESET:-0}"
 echo "[reset-recheck] PERF_RESET=$PERF_RESET"
 tt-smi -ls 2>&1 | sed 's/^/[reset-recheck]   /' || echo "[reset-recheck] WARNING: tt-smi -ls failed"
 
