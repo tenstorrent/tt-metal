@@ -2137,7 +2137,10 @@
 # GLM-5.3 as 8 stages of 4x4 across four galaxies (two per galaxy), against the 8x4 SC4 leg.
 # Bound by tt-run discovery like the Kimi-K3 SC4 leg. Own test_type: dispatch it by name. The 4x4
 # cache is not under GLM-5.3-Cache-prefill yet, so this points at the copy infra made (job 161770's
-# build, 78 layers, no MTP).
+# build, 78 layers, no MTP). KV is deduped over SP*TP and the leg is traced, both from the glm53 manifest.
+# 55 slots at the 1M window: in the per-stage capacity probe (two stages per Galaxy via
+# PREFILL_PP_LAYER_OFFSET, a full 1M request at each N), stages 6-7, the tightest 10-layer pair, fit 55
+# traced and ran out of memory at 56; stages 0-1 fit at least 60 (PR #62125).
 - name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC4 4x4"
   cmd: |
     set -euo pipefail
@@ -2147,6 +2150,7 @@
     fi
     cd "${TT_METAL_HOME}"
     export PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/rkim/glm53_ttnn_cache
+    export PREFILL_NUM_USERS=55
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_4x4
   test_type: glm_prefill_runner_4x4
   test_tags: [glm_5_3, runner, kv_cache]
