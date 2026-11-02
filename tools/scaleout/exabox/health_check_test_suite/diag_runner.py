@@ -2565,6 +2565,303 @@ def run_sys_triage(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 1b — tray 12 V feed (hot-swap and CPLD latches)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A failing bus bar or tray 12 V feed sags the tray's input under load. Each
+# tray has two MP5990 hot-swap controllers (HSCs) on its 12 V input, and they
+# latch what they saw: STATUS_INPUT's VIN_UV_WARN / VIN_UV_FAULT, and
+# STATUS_WORD's OFF and IOUT_OC when the sag or a trip turned the tray off. The
+# tray CPLD latches which hot-swap's power-good dropped. A whole tray dropping
+# off PCIe otherwise reads as 8 missing chips, with nothing pointing at the feed.
+#
+# The latches hold until the tray is re-powered (a power cycle, or the tray
+# re-power of a glx_reset), so they are read here, right after the snapshot and
+# before any reset or load. pre_reboot only: it runs no reset at all, and it is
+# the tier run on a unit that has just misbehaved.
+#
+# Reads only, in-band through the BMC's I2C master (`ipmitool raw 0x06 0x52`).
+# Every transaction goes through TRAY_POWER_ALLOWED; anything else raises before
+# ipmitool is called. Nothing is ever written to an HSC: no CLEAR_FAULTS, no
+# limit, no peak register (reading those clears them). The one write on the bus
+# is the CPLD's debug-index select (0x50 <- 0x5F / 0x58) ahead of its 0x51 read,
+# which only picks the register to read; it has no power or reset action.
+#
+# The phase does not gate yet: VIN_UV_WARN also latches on feeds that sag
+# without dropping the tray, so it is worth recording before it is worth
+# ticketing on.
+TIER_TRAY_POWER = {
+    "light": False,
+    "medium": False,
+    "deploy": False,
+    "pre_reboot": True,
+}
+
+# Tray -> its I2C bus behind the BMC. The BDF range follows UBB_NIBBLE_TO_TRAY.
+TRAY_POWER_BUS = {1: 0x11, 2: 0x13, 3: 0x0D, 4: 0x0F}
+TRAY_POWER_HSC_ADDRS = (0x40, 0x42)  # 8-bit addresses, as ipmitool takes them
+TRAY_POWER_CPLD_ADDR = 0x80
+
+HSC_STATUS_WORD, HSC_STATUS_IOUT, HSC_STATUS_INPUT = 0x79, 0x7B, 0x7C
+CPLD_REG_ALIVE, CPLD_DBG_INDEX, CPLD_DBG_DATA = 0x1E, 0x50, 0x51
+CPLD_DBG_PG, CPLD_DBG_POWER = 0x5F, 0x58
+
+# (addr, bytes to read, bytes written) for every transaction the phase may send.
+TRAY_POWER_ALLOWED = frozenset(
+    [(a, 2, (HSC_STATUS_WORD,)) for a in TRAY_POWER_HSC_ADDRS]
+    + [(a, 1, (HSC_STATUS_IOUT,)) for a in TRAY_POWER_HSC_ADDRS]
+    + [(a, 1, (HSC_STATUS_INPUT,)) for a in TRAY_POWER_HSC_ADDRS]
+    + [
+        (TRAY_POWER_CPLD_ADDR, 1, (CPLD_REG_ALIVE,)),
+        (TRAY_POWER_CPLD_ADDR, 0, (CPLD_DBG_INDEX, CPLD_DBG_PG)),
+        (TRAY_POWER_CPLD_ADDR, 0, (CPLD_DBG_INDEX, CPLD_DBG_POWER)),
+        (TRAY_POWER_CPLD_ADDR, 1, (CPLD_DBG_DATA,)),
+    ]
+)
+
+STATUS_WORD_BITS = {
+    1: "CML",
+    2: "TEMPERATURE",
+    3: "VIN_UV",
+    4: "IOUT_OC",
+    5: "VOUT_OV",
+    6: "OFF",
+    7: "BUSY",
+    8: "UNKNOWN",
+    9: "OTHER",
+    10: "FANS",
+    11: "POWER_GOOD#",
+    12: "MFR",
+    13: "INPUT",
+    14: "IOUT/POUT",
+    15: "VOUT",
+}
+STATUS_INPUT_BITS = {
+    0: "PIN_OP_WARN",
+    1: "IIN_OC_WARN",
+    2: "IIN_OC_FAULT",
+    3: "UNIT_OFF_LOW_VIN",
+    4: "VIN_UV_FAULT",
+    5: "VIN_UV_WARN",
+    6: "VIN_OV_WARN",
+    7: "VIN_OV_FAULT",
+}
+
+# CPLD reg 0x1E / dbg 0x5F of a tray with both 12 V rails good, and of the
+# known bus-bar signature (12 V-B power-good low, tray off).
+CPLD_HEALTHY, CPLD_BUSBAR = ("ff", "7c"), ("00", "78")
+CPLD_FEED_FAULTS = frozenset({"TRAY_12V_LOST", "BUSBAR_SIG", "HOTSWAP_OC"})
+TRAY_POWER_HINT = "bus bar / tray 12 V feed"
+TRAY_POWER_CALL_S = 15
+TRAY_POWER_MAX_READS = 4
+
+
+def tray_bdf_range(tray: int) -> str:
+    n = TRAY_TO_UBB_NIBBLE[tray]
+    return f"{n:x}1:00.0-{n:x}8:00.0"
+
+
+def _set_bits(value: int, names: dict) -> list[str]:
+    return [name for bit, name in sorted(names.items()) if value >> bit & 1]
+
+
+def decode_hsc_status(word: int, inp: int, iout: int | None = None) -> tuple[list[str], list[str]]:
+    """(faults, set bits) for one HSC's STATUS_WORD / STATUS_INPUT (/ STATUS_IOUT).
+
+    A fault is OFF, IOUT_OC, VIN_UV_FAULT or VIN_UV_WARN. The set-bit list
+    names everything latched, for the report; CML alone is not a fault (a
+    read of an unsupported code sets it).
+    """
+    set_bits = _set_bits(word, STATUS_WORD_BITS) + _set_bits(inp, STATUS_INPUT_BITS)
+    if iout is not None and iout & 0x80:
+        set_bits.append("IOUT_OC_FAULT")
+    faults = []
+    if word & 0x40:
+        faults.append("OFF")
+    if word & 0x10 or (iout is not None and iout & 0x80):
+        faults.append("IOUT_OC")
+    if inp & 0x10:
+        faults.append("VIN_UV_FAULT")
+    if inp & 0x20:
+        faults.append("VIN_UV_WARN")
+    return faults, set_bits
+
+
+def decode_cpld_power(reg1e: str | None, dbg5f: str | None, dbg58: str | None = None) -> tuple[str, str]:
+    """(state, text) for a tray CPLD's reg 0x1E / dbg 0x5F (/ dbg 0x58), as two-digit hex strings.
+
+    dbg 0x5F bit 3 / bit 2 are the 12 V-A / 12 V-B hot-swap power-good; dbg
+    0x58 bit 7 is power enable, bit 6 brake_n, bit 3 the over-current warning
+    (active low). reg 0x1E reads ff while the tray is up.
+    """
+    if reg1e is None or dbg5f is None:
+        return "UNREAD", "no stable read"
+
+    def bit(v: str | None, b: int) -> bool | None:
+        return None if v is None else bool(int(v, 16) >> b & 1)
+
+    low = [rail for rail, b in (("A", 3), ("B", 2)) if not bit(dbg5f, b)]
+    oc_n = bit(dbg58, 3)
+    if (reg1e, dbg5f) == CPLD_HEALTHY:
+        return "HEALTHY", "12 V rails good"
+    if low and oc_n is False:
+        return "HOTSWAP_OC", f"12 V-{'/'.join(low)} hot-swap power-good low with an over-current warning"
+    if (reg1e, dbg5f) == CPLD_BUSBAR:
+        return "BUSBAR_SIG", "12 V-B hot-swap power-good low, tray off: the bus-bar signature"
+    if low and reg1e != "ff":
+        return "TRAY_12V_LOST", f"12 V-{'/'.join(low)} hot-swap power-good low, tray off"
+    if dbg5f == CPLD_HEALTHY[1] and reg1e != "ff":
+        return "CHIPS_DOWN_12V_GOOD", "tray down with its 12 V good: not the 12 V feed"
+    return "OTHER", "unexpected reading"
+
+
+def _parse_raw_bytes(out: str, nbytes: int) -> list[int] | None:
+    toks = out.split()
+    if len(toks) != nbytes or not all(re.fullmatch(r"[0-9a-fA-F]{2}", t) for t in toks):
+        return None
+    return [int(t, 16) for t in toks]
+
+
+class TrayPowerReader:
+    """In-band reads of the tray HSCs and CPLDs, gated by TRAY_POWER_ALLOWED.
+
+    `runner(argv) -> CompletedProcess` is injectable so the tests can see every
+    transaction without ipmitool.
+    """
+
+    def __init__(self, runner=None):
+        base = ["ipmitool"]
+        if os.geteuid() != 0:
+            base = ["sudo", "-n"] + base
+        self.base = base
+        self.runner = runner or (lambda argv: run(argv, capture_output=True, text=True, timeout=TRAY_POWER_CALL_S))
+        self.reads_ok = 0
+        self.errors: list[str] = []
+
+    def txn(self, bus: int, addr: int, nbytes: int, *payload: int) -> list[int] | None:
+        if bus not in TRAY_POWER_BUS.values() or (addr, nbytes, tuple(payload)) not in TRAY_POWER_ALLOWED:
+            raise ValueError(f"tray power: refusing bus 0x{bus:02x} addr 0x{addr:02x} {nbytes} {payload}")
+        argv = self.base + ["raw", "0x06", "0x52", f"0x{bus:02x}", f"0x{addr:02x}", f"0x{nbytes:02x}"]
+        argv += [f"0x{b:02x}" for b in payload]
+        try:
+            cp = self.runner(argv)
+        except (OSError, subprocess.SubprocessError) as e:
+            self.errors.append(repr(e))
+            return None
+        if cp.returncode != 0:
+            self.errors.append(((cp.stderr or cp.stdout or "").strip().splitlines() or [f"rc {cp.returncode}"])[0])
+            return None
+        if nbytes == 0:
+            return []
+        got = _parse_raw_bytes(cp.stdout or "", nbytes)
+        if got is None:
+            self.errors.append(f"unparsed reply {cp.stdout!r}")
+        else:
+            self.reads_ok += 1
+        return got
+
+    def hsc(self, bus: int, addr: int) -> dict:
+        """One HSC's latched status, or the reads that failed. One retry per read."""
+
+        def read(nbytes: int, code: int) -> list[int] | None:
+            return self.txn(bus, addr, nbytes, code) or self.txn(bus, addr, nbytes, code)
+
+        word, inp, iout = read(2, HSC_STATUS_WORD), read(1, HSC_STATUS_INPUT), read(1, HSC_STATUS_IOUT)
+        return {
+            "status_word": None if word is None else word[0] | word[1] << 8,  # low byte first
+            "status_input": None if inp is None else inp[0],
+            "status_iout": None if iout is None else iout[0],
+        }
+
+    def _stable(self, once) -> str | None:
+        """Read until two in a row agree (the CPLD bus is shared with the BMC's own polling)."""
+        prev = None
+        for _ in range(TRAY_POWER_MAX_READS):
+            v = once()
+            if v is not None and v == prev:
+                return v
+            prev = v
+        return None
+
+    def cpld(self, bus: int) -> dict:
+        def reg(r: int):
+            got = self.txn(bus, TRAY_POWER_CPLD_ADDR, 1, r)
+            return None if got is None else f"{got[0]:02x}"
+
+        def dbg(r: int):
+            if self.txn(bus, TRAY_POWER_CPLD_ADDR, 0, CPLD_DBG_INDEX, r) is None:
+                return None
+            return reg(CPLD_DBG_DATA)
+
+        return {
+            "reg1e": self._stable(lambda: reg(CPLD_REG_ALIVE)),
+            "dbg5f": self._stable(lambda: dbg(CPLD_DBG_PG)),
+            "dbg58": self._stable(lambda: dbg(CPLD_DBG_POWER)),
+        }
+
+
+def tray_power_check(tray: int, hscs: dict, cpld: dict) -> Check:
+    """One tray's Check from its HSC reads ({addr: hsc()}) and CPLD read (cpld())."""
+    where = f"tray {tray} ({tray_bdf_range(tray)})"
+    findings, unread, data = [], [], {"tray": tray, "bdf_range": tray_bdf_range(tray), "hsc": {}, "cpld": dict(cpld)}
+    for addr, st in sorted(hscs.items()):
+        key = f"0x{addr:02x}"
+        word, inp, iout = st.get("status_word"), st.get("status_input"), st.get("status_iout")
+        if word is None or inp is None:
+            unread.append(f"HSC {key}")
+            data["hsc"][key] = dict(st)
+            continue
+        faults, set_bits = decode_hsc_status(word, inp, iout)
+        data["hsc"][key] = dict(st, faults=faults, bits=set_bits)
+        if faults:
+            findings.append(
+                f"HSC {key}: {', '.join(faults)} latched (STATUS_WORD 0x{word:04x}, STATUS_INPUT 0x{inp:02x})"
+            )
+    state, text = decode_cpld_power(cpld.get("reg1e"), cpld.get("dbg5f"), cpld.get("dbg58"))
+    data["cpld"].update(state=state, text=text)
+    if state in CPLD_FEED_FAULTS:
+        findings.append(f"CPLD: {state}: {text} (reg 0x1E={cpld['reg1e']} dbg 0x5F={cpld['dbg5f']})")
+    elif state == "UNREAD":
+        unread.append("CPLD")
+
+    name = f"tray{tray}_12v_feed"
+    if findings:
+        lines = [f"{where}: check {TRAY_POWER_HINT}"] + findings
+        if unread:
+            lines.append(f"not read: {', '.join(unread)}")
+        return Check(name=name, status=FAIL, details="\n".join(lines), data=data, ip="board")
+    if unread:
+        return Check(name=name, status=WARN, details=f"{where}: not read: {', '.join(unread)}", data=data, ip="board")
+    if state == "OTHER":
+        return Check(name=name, status=WARN, details=f"{where}: CPLD {text}", data=data, ip="board")
+    extra = f"; CPLD {text}" if state != "HEALTHY" else ""
+    return Check(name=name, status=PASS, details=f"{where}: no 12 V latch set{extra}", data=data, ip="board")
+
+
+def run_tray_power(tier: str, phase: Phase, dry_run: bool, runner=None) -> None:
+    """Read and judge every tray's 12 V feed latches into `phase`."""
+    if not TIER_TRAY_POWER.get(tier, False):
+        phase.add(Check(name="tray_12v_feed", status=SKIP, details=f"not run at tier {tier}", ip="board"))
+        return
+    if dry_run:
+        phase.add(Check(name="tray_12v_feed", status=SKIP, details="(dry) ipmitool raw 0x06 0x52 reads", ip="board"))
+        return
+    reader = TrayPowerReader(runner)
+    checks = []
+    for tray, bus in sorted(TRAY_POWER_BUS.items()):
+        hscs = {addr: reader.hsc(bus, addr) for addr in TRAY_POWER_HSC_ADDRS}
+        checks.append(tray_power_check(tray, hscs, reader.cpld(bus)))
+    if reader.reads_ok == 0:
+        # No route at all (no ipmitool, no sudo, no BMC): one SKIP, not four WARNs.
+        first = reader.errors[0] if reader.errors else "no reply"
+        phase.add(Check(name="tray_12v_feed", status=SKIP, details=f"not read: {first}", ip="board"))
+        return
+    for c in checks:
+        phase.add(c)
+        _emit_result(c.name, c.status)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2630,6 +2927,11 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     ap.add_argument(
+        "--skip-tray-power",
+        action="store_true",
+        help="Skip the tray 12 V feed latch reads (hot-swap controllers and tray CPLDs, pre_reboot only).",
+    )
+    ap.add_argument(
         "--skip-sys-triage",
         action="store_true",
         help="Skip the sys-triage bundle collection entirely.",
@@ -2683,6 +2985,7 @@ def run_diag(
     qsfp_tool_path: str | None = None,
     qsfp_descriptor: Path | None = None,
     qsfp_gating: bool = False,
+    skip_tray_power: bool = False,
     skip_sys_triage: bool = False,
     sys_triage_path: str | None = None,
     bmc_ip: str | None = None,
@@ -2738,6 +3041,25 @@ def run_diag(
     snap_phase.rollup()
     report["phases"]["snapshot"] = asdict(snap_phase)
     print_phase_summary("snapshot", report["phases"]["snapshot"])
+
+    # Phase 1b: tray 12 V feed latches. Read before anything that could reset
+    # or re-power a tray, which would clear them.
+    if TIER_TRAY_POWER.get(tier, False):
+        tray_power_phase = Phase(name="tray_power", gates=False)
+        t0 = time.time()
+        if skip_tray_power:
+            tray_power_phase.add(Check(name="tray_12v_feed", status=SKIP, details="--skip-tray-power", ip="board"))
+        else:
+            try:
+                run_tray_power(tier, tray_power_phase, dry_run)
+            except Exception as e:
+                tray_power_phase.error = repr(e)
+                tray_power_phase.add(Check(name="tray_12v_feed", status=SKIP, details=repr(e), ip="board"))
+        tray_power_phase.duration_s = time.time() - t0
+        if any(c.status != SKIP for c in tray_power_phase.checks):
+            tray_power_phase.rollup()
+        report["phases"]["tray_power"] = asdict(tray_power_phase)
+        print_phase_summary("tray_power", report["phases"]["tray_power"])
 
     # Where every phase drops its raw tool output. Derived once: the reset
     # and gtest phases both write here, and collect_run_artifacts() attaches
@@ -3036,6 +3358,7 @@ def main() -> int:
         qsfp_tool_path=args.qsfp_tool_path,
         qsfp_descriptor=args.qsfp_descriptor,
         qsfp_gating=args.qsfp_gating,
+        skip_tray_power=args.skip_tray_power,
         skip_sys_triage=args.skip_sys_triage,
         sys_triage_path=args.sys_triage_path,
         bmc_ip=args.bmc_ip,
