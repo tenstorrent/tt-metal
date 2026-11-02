@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     fabric2d_setup_error,
     get_ep_mesh_composer,
     get_ep_mesh_mapper,
+    get_sp_mesh_composer,
     mesh_shard_dims,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, TtCombineModule
@@ -879,19 +880,8 @@ class TtMoe(LightweightModule):
             return
         try:
             # The gate output is TP-replicated (the logits all-reduce), so concat on tensor dim 0 over the
-            # SP axis and collapse the TP replicas -- the same composition
-            # TtMoEGatePrefill._compose_logits_to_host uses.
-            composer = ttnn.create_mesh_composer(
-                self.mesh_device,
-                config=ttnn.MeshComposerConfig(
-                    dims=(0, -1) if self.sp_axis == 0 else (-1, 0),
-                    mesh_shape_override=(
-                        ttnn.MeshShape(self.mesh_device.shape[0], 1)
-                        if self.sp_axis == 0
-                        else ttnn.MeshShape(1, self.mesh_device.shape[1])
-                    ),
-                ),
-            )
+            # SP axis and collapse the TP replicas.
+            composer = get_sp_mesh_composer(self.mesh_device, self.sp_axis)
             host_indices = ttnn.to_torch(indices, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
             host_scores = ttnn.to_torch(scores, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
             sp_factor = int(self.mesh_device.shape[self.sp_axis])
