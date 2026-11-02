@@ -5,6 +5,7 @@
 #include "unary_backward_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -241,22 +242,28 @@ ttsl::hash::hash_t UnaryBackwardDeviceOperation::compute_program_hash(
     const auto& grad_output = tensor_args.grad_output;
 
     // args carries op_type, so entries for two different gradients can never collide.
-    //
-    // Hash TensorSpec since the Metal 2.0 TensorParameter match compares each bound tensor's whole
-    // spec, so the key has to be at least that strict.
-    operation::Hash hash =
-        operation::hash_operation<UnaryBackwardDeviceOperation>(args, grad_output.tensor_spec(), input.tensor_spec());
-
-    // args only carries the requested output_dtype/output_memory_config; when the caller
-    // supplies its own output tensor that is what the factory actually binds, sizing the
-    // destination CB from its dtype and baking a TensorAccessorArgs for its buffer into the
-    // writer's compile-time args. Neither can be refreshed on a cache hit, so key on the
-    // tensor that is really used.
-    if (tensor_args.preallocated_input_grad.has_value()) {
-        hash = ttsl::hash::hash_objects(hash, tensor_args.preallocated_input_grad->tensor_spec());
-    }
-
-    return hash;
+    // Each tensor is keyed as Metal 2.0 matches it under match_padded_shape_only: its whole TensorLayout
+    // plus its padded shape. Its memory config carries the shard spec: the factory sizes globally
+    // allocated CBs from the shard shape and takes its core ranges from the shard grid, none of which a
+    // cache hit can refresh. Its padded shape, not just the volume, matters because a sharded buffer's
+    // TensorAccessorArgs bake its shape in pages into compile-time args and the row-major path bakes in
+    // the row width. Its layout selects tile or row-major kernels. The rest of the layout (Alignment
+    // included) is keyed because Metal 2.0 requires it to match exactly on every cache hit (#59915). The
+    // logical shape is left out: the factory works only from the padded shape.
+    const auto padded_key = [](const Tensor& tensor) {
+        return tt::tt_metal::experimental::hash_tensorspec_with_relaxation(
+            tensor.tensor_spec(), {.match_padded_shape_only = true});
+    };
+    // args only carries the requested output_dtype/output_memory_config; when the caller supplies its
+    // own output tensor that is what the factory actually binds, sizing the destination CB from its
+    // dtype and baking a TensorAccessorArgs for its buffer into the writer's compile-time args, so key
+    // on the tensor that is really used.
+    const auto& preallocated = tensor_args.preallocated_input_grad;
+    return operation::hash_operation<UnaryBackwardDeviceOperation>(
+        args,
+        padded_key(input),
+        padded_key(grad_output),
+        preallocated.has_value() ? std::optional<std::uint64_t>{padded_key(*preallocated)} : std::nullopt);
 }
 
 Tensor launch_unary_backward(
