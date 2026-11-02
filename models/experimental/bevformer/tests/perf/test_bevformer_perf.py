@@ -32,6 +32,7 @@ from models.experimental.bevformer.tests.common import (
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
+from models.experimental.bevformer.tt.tt_head import box_preds_to_torch
 
 PCC_THRESHOLD = 0.99
 NUM_PROFILED_FRAMES = int(os.environ.get("BEVFORMER_PERF_FRAMES", "1"))
@@ -41,7 +42,8 @@ if NUM_PROFILED_FRAMES not in (1, 2):
 
 def _check(expected, tt_outputs):
     """``tt_outputs`` are the detector's outputs followed by its detections."""
-    tt_cls_scores, tt_bbox_preds, tt_bev = (ttnn.to_torch(t).float() for t in tt_outputs[:3])
+    tt_cls_scores, tt_bev = (ttnn.to_torch(t).float() for t in (tt_outputs[0], tt_outputs[2]))
+    tt_bbox_preds = box_preds_to_torch(tt_outputs[1]).float()
     tt_topk = tuple(ttnn.to_torch(t) for t in tt_outputs[3][:4])
     check_detector_outputs(expected, (tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk), PCC_THRESHOLD)
 

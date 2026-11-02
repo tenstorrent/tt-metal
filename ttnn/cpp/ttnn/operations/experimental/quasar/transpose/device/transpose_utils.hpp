@@ -22,12 +22,14 @@ std::optional<tt::tt_metal::ShardSpec> adjust_shard_spec_to_shape(
 // Default keeps pre-existing tile-aligned synth; Tile/RowMajor let transpose opt in per input layout.
 enum class OutputTiling : uint8_t { Default, Tile, RowMajor };
 
-// Build a sharded spec over the compute grid from the post-transform shape.
+// Build a sharded spec from the post-transform shape over the compute grid, or over the DRAM bank grid
+// for a DRAM output (DRAM shard grids are in bank coordinates, so every core must have y == 0).
 tt::tt_metal::ShardSpec generate_transpose_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,
     std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt,
-    OutputTiling output_tiling = OutputTiling::Default);
+    OutputTiling output_tiling = OutputTiling::Default,
+    tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::L1);
 
 }  // namespace ttnn::operations::experimental::quasar::transpose_op
