@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <span>
 #include <tt-metalium/work_split.hpp>
@@ -48,7 +49,15 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
     // --- Dataflow buffer ---
-    uint32_t num_input_tiles = 2;
+    // Quasar's single NoC charges the full read latency at every barrier and its DM harts are issue-bound on
+    // 2 KB transfers, so there one barrier covers a batch of tiles and the ring holds two batches. The batch
+    // bookkeeping costs a few dozen DM instructions, so cores with only a handful of tiles keep the one-tile
+    // path. WH/BH always keep it, which leaves their kernels and buffers unchanged.
+    constexpr uint32_t min_tiles_per_core_to_batch = 8;
+    const uint32_t max_tiles_per_core = std::max(num_tiles_per_core_group_1, num_tiles_per_core_group_2);
+    const bool batch_tiles = device->arch() == tt::ARCH::QUASAR && max_tiles_per_core >= min_tiles_per_core_to_batch;
+    const uint32_t tiles_per_batch = batch_tiles ? std::clamp<uint32_t>(max_tiles_per_core, 1, 32) : 1;
+    uint32_t num_input_tiles = 2 * tiles_per_batch;
 
     DataflowBufferSpec dfb_in{
         .unique_id = TILE_IN,
@@ -100,9 +109,10 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 
     KernelSpec reader{
         .unique_id = TILE_READER,
-        .source =
-            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-            "reader_unary_unpad_dims_interleaved_start_id.cpp",
+        .source = batch_tiles ? "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+                                "reader_unary_unpad_dims_interleaved_batched.cpp"
+                              : "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+                                "reader_unary_unpad_dims_interleaved_start_id.cpp",
         .dfb_bindings =
             {
                 DFBBinding{
@@ -125,12 +135,12 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
                     .accessor_name = "src",
                 },
             },
-        .compile_time_args = {{"num_dims", num_dims}},
+        .compile_time_args = {{"num_dims", num_dims}, {"tiles_per_batch", tiles_per_batch}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"start_id", "num_tiles"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/batch_tiles),
         .advanced_options =
             {
                 // Per-core: the id_per_dim seed.
@@ -142,9 +152,10 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 
     KernelSpec writer{
         .unique_id = TILE_WRITER,
-        .source =
-            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-            "writer_unary_interleaved_start_id.cpp",
+        .source = batch_tiles ? "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+                                "writer_unary_interleaved_batched.cpp"
+                              : "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+                                "writer_unary_interleaved_start_id.cpp",
         .dfb_bindings =
             {
                 DFBBinding{
@@ -160,11 +171,12 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
                     .accessor_name = "dst",
                 },
             },
+        .compile_time_args = {{"tiles_per_batch", tiles_per_batch}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/batch_tiles),
     };
 
     // Reader per-core: start_id, num_tiles, and the id_per_dim seed.

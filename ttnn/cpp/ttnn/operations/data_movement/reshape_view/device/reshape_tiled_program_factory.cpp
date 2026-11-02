@@ -6,6 +6,8 @@
 
 #include <cmath>
 #include <numeric>
+#include <string>
+#include <vector>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -345,110 +347,121 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
 
     // Resource names.
-    const KernelSpecName READER{"reader"};
-    const KernelSpecName WRITER{"writer"};
-    const DFBSpecName MAPPING{"mapping"};  // reader-produces / writer-consumes mapping-page FIFO
-    const DFBSpecName IN_TILES{"in_tiles"};  // reader-produces / writer-consumes input-tile FIFO
-                                             // (distinct from tensor::input, the input tensor)
-    const ScratchpadSpecName WORKING{"working"};  // writer-private L1 scratch page
+    // One reader/writer hart pair saturates on this map-driven copy, and the input tiles a page needs are not a
+    // fixed stride, so Quasar runs independent pairs per cluster over disjoint page ranges rather than one
+    // multi-threaded pair. WH/BH keep the single pair.
+    const bool split_pairs = device->arch() == tt::ARCH::QUASAR;
+    const uint32_t num_pairs = split_pairs ? 3 : 1;
     const TensorParamName INPUT_T{"input"};
     const TensorParamName MAPPING_T{"map"};  // the op-owned page-mapping tensor
     const TensorParamName OUTPUT_T{"output"};
 
     ProgramSpec spec;
     spec.name = "reshape_view_tiled";
-
-    // DFBs (placement derived from bindings; no core_ranges). The mapping metadata DFB stages
-    // mapping pages on the fly; the input DFB stages input tiles. The working buffer is a
-    // writer-private L1 scratch page (formerly a self-loop DFB the writer filled and drained;
-    // that FIFO synchronized nothing and is rejected on Quasar) — now a Scratchpad.
-    spec.dataflow_buffers = {
-        DataflowBufferSpec{
-            .unique_id = MAPPING,
-            .entry_size = mapping_page_size_bytes,
-            .num_entries = reader_dfb_len,
-            .data_format_metadata = mapping_dataformat,
-        },
-        DataflowBufferSpec{
-            .unique_id = IN_TILES,
-            .entry_size = input_tile_size_bytes,
-            .num_entries = reader_dfb_len,
-            .data_format_metadata = input_dfb_data_format,
-        },
-    };
-    spec.scratchpads = {
-        ScratchpadSpec{
-            .unique_id = WORKING,
-            .size_per_node = output_tile_size_bytes,  // entry_size * num_entries (1)
-        },
-    };
-
-    KernelSpec reader{
-        .unique_id = READER,
-        .source = "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp",
-        .dfb_bindings =
-            {
-                DFBBinding{
-                    .dfb_spec_name = MAPPING, .accessor_name = "mapping", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = IN_TILES, .accessor_name = "in_tiles", .endpoint_type = DFBEndpointType::PRODUCER},
-            },
-        .tensor_bindings =
-            {
-                TensorBinding{.tensor_parameter_name = INPUT_T, .accessor_name = "input"},
-                TensorBinding{.tensor_parameter_name = MAPPING_T, .accessor_name = "map"},
-            },
-        .compile_time_args =
-            {
-                {"Max_Map_Size_Bytes", mapping_page_size_bytes},
-                {"Tile_size_bytes", input_tile_size_bytes},
-            },
-        .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
-        .hw_config = create_reader_datamovement_config(),
-    };
-
-    KernelSpec writer{
-        .unique_id = WRITER,
-        .source = "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp",
-        .dfb_bindings =
-            {
-                DFBBinding{
-                    .dfb_spec_name = MAPPING, .accessor_name = "mapping", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
-                    .dfb_spec_name = IN_TILES, .accessor_name = "in_tiles", .endpoint_type = DFBEndpointType::CONSUMER},
-            },
-        .scratchpad_bindings =
-            {
-                ScratchpadBinding{.scratchpad_spec_name = WORKING, .accessor_name = "working"},
-            },
-        .tensor_bindings =
-            {
-                TensorBinding{.tensor_parameter_name = OUTPUT_T, .accessor_name = "output"},
-            },
-        .compile_time_args =
-            {
-                {"Tile_size_bytes", input_tile_size_bytes},
-                {"Max_Map_Entries", max_map_entries},
-                {"element_sz_bytes", tt::datum_size(output_dfb_data_format)},
-            },
-        .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page"}},
-        .hw_config = create_writer_datamovement_config(),
-    };
-
-    spec.kernels = {reader, writer};
     spec.tensor_parameters = {
         TensorParameter{.unique_id = INPUT_T, .spec = input_mt.tensor_spec()},
         TensorParameter{.unique_id = MAPPING_T, .spec = mapping_owned.tensor_spec()},
         TensorParameter{.unique_id = OUTPUT_T, .spec = output_mt.tensor_spec()},
     };
-    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
+    WorkUnitSpec work_unit{.name = "main", .target_nodes = all_cores};
+    std::vector<KernelRunArgs> reader_kras;
+    std::vector<KernelRunArgs> writer_kras;
 
-    // Per-node runtime args. The run-args table is keyed name-first (name -> node -> value);
-    // AddRuntimeArgsForNode builds that from the per-core loop below.
-    KernelRunArgs reader_kra{.kernel = READER};
-    KernelRunArgs writer_kra{.kernel = WRITER};
+    for (uint32_t k = 0; k < num_pairs; ++k) {
+        const std::string suffix = k == 0 ? "" : "_" + std::to_string(k);
+        const KernelSpecName READER{"reader" + suffix};
+        const KernelSpecName WRITER{"writer" + suffix};
+        const DFBSpecName MAPPING{"mapping" + suffix};         // reader-produces / writer-consumes mapping-page FIFO
+        const DFBSpecName IN_TILES{"in_tiles" + suffix};       // reader-produces / writer-consumes input-tile FIFO
+        const ScratchpadSpecName WORKING{"working" + suffix};  // writer-private L1 scratch page
 
-    uint32_t page_idx_start = 0, page_idx_end = 0;
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = MAPPING,
+            .entry_size = mapping_page_size_bytes,
+            .num_entries = reader_dfb_len,
+            .data_format_metadata = mapping_dataformat,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN_TILES,
+            .entry_size = input_tile_size_bytes,
+            .num_entries = reader_dfb_len,
+            .data_format_metadata = input_dfb_data_format,
+        });
+        spec.scratchpads.push_back(ScratchpadSpec{
+            .unique_id = WORKING,
+            .size_per_node = output_tile_size_bytes,  // entry_size * num_entries (1)
+        });
+
+        spec.kernels.push_back(KernelSpec{
+            .unique_id = READER,
+            .source =
+                "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp",
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = MAPPING,
+                        .accessor_name = "mapping",
+                        .endpoint_type = DFBEndpointType::PRODUCER},
+                    DFBBinding{
+                        .dfb_spec_name = IN_TILES,
+                        .accessor_name = "in_tiles",
+                        .endpoint_type = DFBEndpointType::PRODUCER},
+                },
+            .tensor_bindings =
+                {
+                    TensorBinding{.tensor_parameter_name = INPUT_T, .accessor_name = "input"},
+                    TensorBinding{.tensor_parameter_name = MAPPING_T, .accessor_name = "map"},
+                },
+            .compile_time_args =
+                {
+                    {"Max_Map_Size_Bytes", mapping_page_size_bytes},
+                    {"Tile_size_bytes", input_tile_size_bytes},
+                },
+            .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
+            .hw_config = create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/split_pairs),
+        });
+
+        spec.kernels.push_back(KernelSpec{
+            .unique_id = WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp",
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = MAPPING,
+                        .accessor_name = "mapping",
+                        .endpoint_type = DFBEndpointType::CONSUMER},
+                    DFBBinding{
+                        .dfb_spec_name = IN_TILES,
+                        .accessor_name = "in_tiles",
+                        .endpoint_type = DFBEndpointType::CONSUMER},
+                },
+            .scratchpad_bindings =
+                {
+                    ScratchpadBinding{.scratchpad_spec_name = WORKING, .accessor_name = "working"},
+                },
+            .tensor_bindings =
+                {
+                    TensorBinding{.tensor_parameter_name = OUTPUT_T, .accessor_name = "output"},
+                },
+            .compile_time_args =
+                {
+                    {"Tile_size_bytes", input_tile_size_bytes},
+                    {"Max_Map_Entries", max_map_entries},
+                    {"element_sz_bytes", tt::datum_size(output_dfb_data_format)},
+                },
+            .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page"}},
+            .hw_config = create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/split_pairs),
+        });
+
+        work_unit.kernels.push_back(READER);
+        work_unit.kernels.push_back(WRITER);
+        reader_kras.push_back(KernelRunArgs{.kernel = READER});
+        writer_kras.push_back(KernelRunArgs{.kernel = WRITER});
+    }
+    spec.work_units = {std::move(work_unit)};
+
+    uint32_t page_idx_start = 0;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
@@ -458,22 +471,32 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
         } else {
             continue;
         }
-        page_idx_end += increment;
 
-        AddRuntimeArgsForNode(
-            reader_kra.runtime_arg_values,
-            c,
-            {{"start_output_page_idx", page_idx_start}, {"end_output_page_idx", page_idx_end}});
-        AddRuntimeArgsForNode(
-            writer_kra.runtime_arg_values,
-            c,
-            {{"start_output_page", page_idx_start}, {"end_output_page", page_idx_end}});
+        // The core's page range is dealt out to the pairs in contiguous chunks; the first `increment % num_pairs`
+        // pairs take one page more.
+        uint32_t chunk_start = page_idx_start;
+        for (uint32_t k = 0; k < num_pairs; ++k) {
+            const uint32_t chunk = increment / num_pairs + (k < increment % num_pairs ? 1 : 0);
+            const uint32_t chunk_end = chunk_start + chunk;
+            AddRuntimeArgsForNode(
+                reader_kras[k].runtime_arg_values,
+                c,
+                {{"start_output_page_idx", chunk_start}, {"end_output_page_idx", chunk_end}});
+            AddRuntimeArgsForNode(
+                writer_kras[k].runtime_arg_values,
+                c,
+                {{"start_output_page", chunk_start}, {"end_output_page", chunk_end}});
+            chunk_start = chunk_end;
+        }
 
         page_idx_start += increment;
     }
 
     ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_kra), std::move(writer_kra)};
+    for (uint32_t k = 0; k < num_pairs; ++k) {
+        run_args.kernel_run_args.push_back(std::move(reader_kras[k]));
+        run_args.kernel_run_args.push_back(std::move(writer_kras[k]));
+    }
     run_args.tensor_args = {
         {INPUT_T, TensorArgument{input_mt}},
         {MAPPING_T, TensorArgument{mapping_owned}},
