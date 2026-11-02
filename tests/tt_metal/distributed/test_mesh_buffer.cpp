@@ -39,6 +39,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "env_lib.hpp"
 #include "hostdevcommon/common_values.hpp"
@@ -221,7 +222,7 @@ TEST_F(MeshBufferViewTest, RejectsInvalidPlacements) {
         ThrowsMessage<std::runtime_error>(HasSubstr("device coordinate is outside the mesh")));
     invalid = valid;
     for (auto& [core, span] : invalid.per_device_spans.at(coord).per_node_spans) {
-        span.address = mesh_device_->get_device(coord)->l1_size_per_core();
+        span.address = tt::tt_metal::internal::get_device(*mesh_device_, coord)->l1_size_per_core();
     }
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
@@ -249,7 +250,7 @@ TEST_F(MeshBufferViewBoundsTest, RespectsAllocatorRegions) {
     using ::testing::HasSubstr;
     using ::testing::ThrowsMessage;
     const MeshCoordinate coord(0, 0);
-    auto* device = mesh_device_->get_device(coord);
+    auto* device = tt::tt_metal::internal::get_device(*mesh_device_, coord);
     const auto& allocator = device->allocator();
     const DeviceAddr base = allocator->get_base_allocator_addr(HalMemType::L1);
     const DeviceAddr end = base + allocator->get_bank_size(BufferType::L1);
@@ -368,6 +369,17 @@ TEST_F(MeshBufferViewTest, DistinctCoreAddressesPreserveBacking) {
     view.reset();
     ReadShard(mesh_device_->mesh_command_queue(), readback, owner, coord);
     EXPECT_EQ(readback, expected);
+}
+
+TEST_F(MeshBufferTestSuite, CreateOnSingleDeviceSetsAddress) {
+    constexpr DeviceAddr page_size = 1024;
+    const DeviceLocalBufferConfig local{.page_size = page_size, .buffer_type = BufferType::L1};
+    const MeshCoordinate coord = mesh_device_->get_view().get_local_mesh_coord_range().start_coord();
+    auto mesh_buffer = experimental::per_core_allocation::create_on_single_device(
+        ReplicatedBufferConfig{.size = 4 * page_size}, local, mesh_device_.get(), coord);
+    const DeviceAddr device_address = mesh_buffer->get_device_buffer(coord)->address();
+    EXPECT_NE(device_address, 0);
+    EXPECT_EQ(mesh_buffer->address(), device_address);
 }
 
 TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {
@@ -528,7 +540,7 @@ TEST_F(MeshBufferTest2x4, GetDeviceBufferForEveryLocalDevice) {
             }
             Buffer* device_buffer = buffer->get_device_buffer(coord);
             ASSERT_NE(device_buffer, nullptr);
-            EXPECT_EQ(device_buffer->device(), mesh_device_->get_device(coord));
+            EXPECT_EQ(device_buffer->device(), tt::tt_metal::internal::get_device(*mesh_device_, coord));
             EXPECT_EQ(device_buffer->address(), buffer->address());
             EXPECT_EQ(device_buffer->size(), buffer->device_local_size());
             EXPECT_EQ(device_buffer->page_size(), buffer->page_size());
@@ -1713,7 +1725,7 @@ TEST_F(MeshBufferTestSuite, EnqueueProgramAfterPinnedMemoryWriteRerunsCorrectly)
     std::vector<uint16_t> input(single_tile_size / sizeof(uint16_t), 1);
     EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buffer, input, /*blocking=*/true);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*this->mesh_device_);
     auto kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/full_grid_eltwise_device_reuse.cpp",

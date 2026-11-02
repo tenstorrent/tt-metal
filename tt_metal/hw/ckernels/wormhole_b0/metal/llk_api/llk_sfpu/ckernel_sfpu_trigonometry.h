@@ -78,11 +78,19 @@ static const float PI_4 = 0.7853981852531433f;
 static const float FRAC_1_PI = 0.31830987334251404f;
 static const float FRAC_2_PI = 0.6366197466850281f;
 
+// Quadratic initial estimate of 1/|x| for x normalised to [-2, -1]: k2 + x * (k1 + x * k0).
+// The coefficients are not fp16/bf16-representable, so as immediates each costs an SFPLOADI pair
+// per row; the caller loads them into LRegs once per call and passes them in.
+static constexpr float TAN_RECIP_SEED_K0 = 0.3232325017452239990234375f;
+static constexpr float TAN_RECIP_SEED_K1 = 1.4545459747314453125f;
+static constexpr float TAN_RECIP_SEED_K2 = 2.121212482452392578125f;
+
 template <bool is_fp32_dest_acc_en>
-static sfpi::vFloat sfpu_tan(sfpi::vFloat x, sfpi::vInt i);
+static sfpi::vFloat sfpu_tan(sfpi::vFloat x, sfpi::vInt i, sfpi::vFloat k0, sfpi::vFloat k1, sfpi::vFloat k2);
 
 template <>
-sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
+sfpi_inline sfpi::vFloat sfpu_tan<true>(
+    sfpi::vFloat a, sfpi::vInt i, sfpi::vFloat k0, sfpi::vFloat k1, sfpi::vFloat k2) {
     sfpi::vFloat s = a * a;
 
     // tan(x) for x in [-PI/4, PI/4]
@@ -105,10 +113,6 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
         s = t * a + s;
 
         // Approximate reciprocal of -r using quadratic initial estimate.
-        const float k0 = 0.3232325017452239990234375f;
-        const float k1 = 1.4545459747314453125f;
-        const float k2 = 2.121212482452392578125f;
-
         sfpi::vInt scale_bits = ~sfpi::as<sfpi::vInt>(r);
         t = k1 + k0 * negative_x;
         sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(scale_bits), 0);
@@ -131,7 +135,8 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
 }
 
 template <>
-sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
+sfpi_inline sfpi::vFloat sfpu_tan<false>(
+    sfpi::vFloat a, sfpi::vInt i, sfpi::vFloat k0, sfpi::vFloat k1, sfpi::vFloat k2) {
     sfpi::vFloat s = a * a;
 
     // tan(x) for x in [-PI/4, PI/4]
@@ -144,10 +149,6 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
 
     v_if(i < 0) {
         // Approximate reciprocal of -r using quadratic initial estimate.
-        const float k0 = 0.3232325017452239990234375f;
-        const float k1 = 1.4545459747314453125f;
-        const float k2 = 2.121212482452392578125f;
-
         sfpi::vFloat negative_x = sfpi::copyman(-1.0f, r);
         t = k1 + k0 * negative_x;
         sfpi::vInt scale_bits = ~sfpi::as<sfpi::vInt>(r);
@@ -171,6 +172,11 @@ inline void calculate_tangent() {
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
 
+    // Reciprocal-seed coefficients for the pole branch, loaded once per call instead of per row (see sfpu_tan).
+    const sfpi::vFloat k0 = TAN_RECIP_SEED_K0;
+    const sfpi::vFloat k1 = TAN_RECIP_SEED_K1;
+    const sfpi::vFloat k2 = TAN_RECIP_SEED_K2;
+
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vInt i;
@@ -190,8 +196,6 @@ inline void calculate_tangent() {
         // Shift mantissa bits back; j is now round(v / (PI/2)) in fp32.
         j += -rounding_bias;
 
-        i <<= 31;
-
         // Four-stage Cody-Waite reduction; a = v - j * (PI/2).
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
         sfpi::vFloat a = v + j * P0;
@@ -200,7 +204,11 @@ inline void calculate_tangent() {
         a = a + j * sfpi::vConstFloatPrgm0;
         a = a + j * sfpi::vConstFloatPrgm1;
 
-        a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
+        // Issued here so the shift fills a NOP slot in the Cody-Waite MAD chain's shadow
+        // instead of sitting after the SFPADDI, where nothing needs a filler.
+        i <<= 31;
+
+        a = sfpu_tan<is_fp32_dest_acc_en>(a, i, k0, k1, k2);
 
         if constexpr (!is_fp32_dest_acc_en) {
             a = sfpi::convert<sfpi::vFloat16b>(a, sfpi::RoundMode::Nearest);

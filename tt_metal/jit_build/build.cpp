@@ -466,6 +466,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DDISABLE_RELAXED_MEMORY_ORDERING ";
     }
 
+    if (this->arch_ == tt::ARCH::BLACKHOLE && rtoptions.get_l1_ecc_halt_enabled()) {
+        this->defines_ += "-DL1_ECC_HALT ";
+    }
+
     if (rtoptions.get_gathering_enabled()) {
         this->defines_ += "-DENABLE_GATHERING ";
     }

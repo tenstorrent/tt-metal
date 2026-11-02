@@ -50,6 +50,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     moe_fabric_payload,
     torus_xy_device_params,
 )
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
@@ -241,9 +243,8 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, recentered to CI run 39783366880 / job 119942061826: high_bw_all_gather's fabric program
-    # takes every chunk 1.4-2.7% under the previous centre (CI run 39456857459 / job 118751643362).
-    (78, 11, 10): [0.410, 0.408, 0.415, 0.412, 0.420, 0.421, 0.417, 0.419, 0.427, 0.431, 0.436],
+    # Scaled-FP8 KV cache, fabric2d MoE transport. CI run 41205106009 / job 124580284086.
+    (78, 11, 10): [0.388, 0.386, 0.392, 0.390, 0.397, 0.396, 0.392, 0.394, 0.400, 0.405, 0.411],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -1961,6 +1962,10 @@ def run_chunked_transformer_updated(
         tp_shard_kv=tp_shard_kv,
         **({"sparse_kv_cache_format": cache_format} if has_indexer else {}),
     )
+    # Kimi-K3's KDA carries live only in the engine's slabs, which the runner hands the model at compile();
+    # this harness builds the model itself, so it attaches them here, once: a reused model keeps its slabs.
+    if isinstance(transformer, TtKimiK3Transformer) and transformer.kda_states is None:
+        attach_kda_states(mesh_device, transformer, sp_axis=sp_axis, tp_axis=tp_axis)
 
     # Production overlap qualification asks this full-model harness to prove that the requested profile
     # reached every eligible indexer layer. This is opt-in so ordinary model/perf sweeps keep their existing
@@ -2172,7 +2177,7 @@ def run_chunked_transformer_updated(
         if kda_states is None:
             return
         for slot in range(kda_states.num_slots):
-            kda_states.reset(slot)
+            kda_states.zero_slot(slot)
         ttnn.synchronize_device(mesh_device)
         logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) {reason}")
 
