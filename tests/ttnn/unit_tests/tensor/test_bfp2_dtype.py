@@ -197,6 +197,22 @@ def test_bfp2_device_typecast_sharded_same_dtype(device):
     assert torch.equal(ttnn.to_torch(result), x)
 
 
+def test_bfp2_to_memory_config_dram_l1_round_trip(device):
+    # Interleaved DRAM <-> L1 moves fall back to ttnn.copy.
+    x = _ternary((64, 128))
+    dram_tensor = ttnn.from_torch(
+        x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    l1_tensor = ttnn.to_memory_config(dram_tensor, ttnn.L1_MEMORY_CONFIG)
+    back = ttnn.to_memory_config(l1_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+    assert l1_tensor.dtype == ttnn.bfloat2_b
+    assert l1_tensor.memory_config().buffer_type == ttnn.BufferType.L1
+    assert torch.equal(ttnn.to_torch(l1_tensor), x)
+    assert torch.equal(ttnn.to_torch(back), x)
+
+
 def test_bfp2_add_integer_to_bfp2(device):
     # Binary ops convert their result to the requested dtype through the same typecast kernel.
     x = _ternary((64, 64)).abs().to(torch.int32)
