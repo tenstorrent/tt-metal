@@ -38,8 +38,8 @@ export PERF_RUN_TAG="p0"
 export LLK_WINDOW_HASH=1
 STOP_AT="${LLK_STOP_AT:-}"
 if [[ -n "$STOP_AT" ]]; then
-  # Compiling takes about a third of the time of measuring; it gets 40 % of what is left.
-  export LLK_STOP_AT=$(( $(date +%s) + (STOP_AT - $(date +%s)) * 2 / 5 ))
+  # Compiling takes about twice as long as measuring; it gets 60 % of what is left.
+  export LLK_STOP_AT=$(( $(date +%s) + (STOP_AT - $(date +%s)) * 3 / 5 ))
 fi
 echo "stage2-time: compile start $(date +%s)"
 pytest "${PYTEST_EXTRA[@]}" --compile-producer -n 10 --junitxml="pytest-report-placement-1-compile.xml" "${FILES[@]}" || STATUS=1

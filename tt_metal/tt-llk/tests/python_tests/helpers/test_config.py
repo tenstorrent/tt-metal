@@ -1281,6 +1281,7 @@ class TestConfig:
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
             "variant_id",
+            "unshifted_variant_id",
             "runtime_arguments_struct",
             "runtime_format",
             "passed_templates",
@@ -1357,15 +1358,19 @@ class TestConfig:
             *src_include_append,
         ]
 
-        # Each code position links its own ELFs; position 0 keeps the id it always had.
-        shift = (
-            [f"<<code-shift>>{TestConfig.CODE_SHIFT}"] if TestConfig.CODE_SHIFT else []
+        parts = temp_str + ["<<search-dirs>>"] + search_dirs
+        # Each code position links its own ELFs; position 0 keeps the id it always had. The object cache keys on
+        # the position-0 id, so all positions share the objects.
+        self.unshifted_variant_id = sha256(str(" | ".join(parts)).encode()).hexdigest()
+        self.variant_id = (
+            sha256(
+                str(
+                    " | ".join(parts + [f"<<code-shift>>{TestConfig.CODE_SHIFT}"])
+                ).encode()
+            ).hexdigest()
+            if TestConfig.CODE_SHIFT
+            else self.unshifted_variant_id
         )
-        self.variant_id = sha256(
-            str(
-                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + shift)
-            ).encode()
-        ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
         """Flags for brisc/coverage. Process-wide ``INCLUDES`` only.
@@ -1737,7 +1742,9 @@ class TestConfig:
         head = compile_command[: compile_command.index("-x")]
         root = str(TestConfig.ARTEFACTS_DIR)
         key = [
-            token.replace(root, "<artefacts>")
+            token.replace(root, "<artefacts>").replace(
+                self.variant_id, self.unshifted_variant_id
+            )
             for token in head
             if not token.startswith(CODE_SHIFT_FLAG)
         ]
