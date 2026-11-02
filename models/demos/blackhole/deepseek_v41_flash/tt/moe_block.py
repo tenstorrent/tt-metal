@@ -85,10 +85,24 @@ class _TailDecode(TTMoEDecode):
             optional_cross_device_semaphore=self.buffers.combine_global_semaphore,
         )
         ttnn.deallocate(l1_out)
-        red = moe_tail(combine, tt_scores, tt_indices, self.expert_state.tt_expert_mapping, self._col)
+        fold_in_tail = (
+            self.fold is not None
+            and os.environ.get("DSV41_TAIL_FOLD", "0")
+            == "1"  # call-time arm: the fold add inside the tail kernel (one op less)
+            and self.fold.dtype == ttnn.bfloat16
+            and self.fold.layout == ttnn.TILE_LAYOUT
+        )
+        red = moe_tail(
+            combine,
+            tt_scores,
+            tt_indices,
+            self.expert_state.tt_expert_mapping,
+            self._col,
+            fold=self.fold if fold_in_tail else None,
+        )
         if d_i:
             ttnn.deallocate(i_t)
-        if self.fold is not None:
+        if self.fold is not None and not fold_in_tail:
             red2 = ttnn.add(red, self.fold, dtype=ttnn.bfloat16)
             ttnn.deallocate(red)
             red = red2

@@ -148,6 +148,20 @@ void kernel_main() {
         noc.async_write_barrier();
     }
 #endif
+#ifdef TAIL_FOLD
+    {  // DSV41_TAIL_FOLD=1: the shared-expert partial (bf16 TILE [1,1,T,H], same tile ids as the output) rides along:
+       // TPC tiles into cb CB_FOLD for the compute kernel's final add
+        constexpr auto fold_args = TensorAccessorArgs<col_args.next_compile_time_args_offset()>();
+        const auto foldA = TensorAccessor(fold_args, get_common_arg_val<uint32_t>(5), 2048);
+        experimental::CB fb(CB_FOLD);
+        fb.reserve_back(TPC);
+        for (uint32_t j = 0; j < TPC; ++j) {
+            noc.async_read(foldA, fb, 2048, {.page_id = j0 + j, .offset_bytes = 0}, {.offset_bytes = j * 2048});
+        }
+        noc.async_read_barrier();
+        fb.push_back(TPC);
+    }
+#endif
     act.push_back(K * TPC);
     scb.push_back(K);
 }

@@ -52,7 +52,10 @@ def _v2():
     return os.environ.get("DSV41_MOE_TAIL_V2", "0") == "1"
 
 
-def moe_tail(combine, scores, indices, mapping, col, n_cores=80):
+def moe_tail(combine, scores, indices, mapping, col, n_cores=80, fold=None):
+    fold_on = (
+        fold is not None
+    )  # DSV41_TAIL_FOLD=1: out = bf16(bf16(sum) + fold) in the kernel (fold bf16 TILE [1,1,T,H])
     sh = [int(v) for v in combine.shape]
     K, T, H = sh[0], sh[-2], sh[-1]
     assert T <= 32 and H % 32 == 0
@@ -83,7 +86,7 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80):
         _cb(core_set, S, K, 2048, bf),
         _cb(core_set, TMP, 1, (tmp_bytes + 63) // 64 * 64, bf),
         _cb(core_set, O, tpc, 2048, bf),
-    ]
+    ] + ([_cb(core_set, 3, tpc, 2048, bf), _cb(core_set, 4, tpc, 2048, bf)] if fold_on else [])
     sc_page, idx_page, row_page = K * 2, K * 2, H * 2
 
     def kern(name, ct, cfg, common):
@@ -98,6 +101,12 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80):
             defines=(
                 ([("TAIL_DBG", "1")] if os.environ.get("DSV41_TAIL_DBG") and name == "moe_tail_reader.cpp" else [])
                 + ([("TAIL_V2", "1")] if v2 and name == "moe_tail_reader.cpp" else [])
+                + ([("TAIL_FOLD", "1"), ("CB_FOLD", "3")] if fold_on and name == "moe_tail_reader.cpp" else [])
+                + (
+                    [("TAIL_FOLD", "1"), ("CB_FOLD", "3"), ("CB_MID", "4")]
+                    if fold_on and name == "moe_tail_compute.cpp"
+                    else []
+                )
             ),
         )
 
@@ -108,7 +117,8 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80):
         + _acc(scores)
         + _acc(indices)
         + _acc(mapping)
-        + _acc(col),
+        + _acc(col)
+        + (_acc(fold) if fold_on else []),
         ttnn.ReaderConfigDescriptor(),
         [
             combine.buffer_address(),
@@ -116,7 +126,8 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80):
             indices.buffer_address(),
             mapping.buffer_address(),
             col.buffer_address(),
-        ],
+        ]
+        + ([fold.buffer_address()] if fold_on else []),
     )
     writer = kern("moe_tail_writer.cpp", [O, tpc] + _acc(out), ttnn.WriterConfigDescriptor(), [out.buffer_address()])
     compute = kern(
@@ -141,10 +152,12 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80):
                 tuple(_acc(indices)),
                 tuple(_acc(mapping)),
                 tuple(_acc(col)),
+                fold_on,
+                tuple(_acc(fold)) if fold_on else (),
                 tuple(_acc(out)),
             )
         )
         & ((1 << 40) - 1)
     )
-    ttnn.generic_op([combine, scores, indices, mapping, col, out], prog)
+    ttnn.generic_op([combine, scores, indices, mapping, col] + ([fold] if fold_on else []) + [out], prog)
     return out
