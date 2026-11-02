@@ -200,22 +200,14 @@ class TtVADHead:
             if self.use_pe:
                 self.ego_map_pos_mlp = ttnn.linear
 
-        # select_and_pad_pred_map fast-path cache. On cold call we test
-        # whether every map score sits below `map_thresh` (i.e. no valid
-        # map vectors); if so, the entire host-side .item() + boolean-mask
-        # loop collapses to producing a (1, 1, D) zero output, which the
-        # fast path reproduces without any host syncs. None until first
-        # call resolves it; True / False thereafter.
-        self._sap_pred_map_all_zero_cache = None
-
         # select_and_pad_pred_map does a data-dependent host-side filter (.item()
         # + to_torch + boolean-mask gather + from_torch/zeros pad) whenever any
         # map vector passes map_thresh — unavoidable host syncs that block Metal
-        # Trace capture. Its inputs (map_query/score/pos, motion_pos) are fully
-        # deterministic across warm calls, so when `_sap_use_cache` is set the
-        # function caches its final output once (populated by the compile-warmup
-        # pass, outside capture) and returns device-side clones thereafter. The
-        # flag defaults off, so the eager (non-trace) path is unchanged.
+        # Trace capture. When `_sap_use_cache` is set the function caches its
+        # final output once (populated by the compile-warmup pass, outside
+        # capture) and returns device-side clones thereafter. The selection
+        # depends on the frame, so the cache is valid only when every replay
+        # sees the warmup input. The flag defaults off.
         self._sap_use_cache = False
         self._sap_sel_cache = None
 
@@ -922,18 +914,14 @@ class TtVADHead:
         map_max_score = ttnn.unsqueeze(map_max_score, 0)
         map_idx = map_max_score > map_thresh
 
-        # On cold call, resolve whether every map vector's max-class score
-        # is below `map_thresh` (qnum=0 everywhere). The `.item()` host sync
-        # only fires once; warm calls reuse the cached bool and skip the
-        # original loop entirely.
-        if self._sap_pred_map_all_zero_cache is None:
-            self._sap_pred_map_all_zero_cache = int(ttnn.sum(map_idx).item()) == 0
+        # The selected count depends on this frame's scores, so it is read back every call.
+        no_map_selected = int(ttnn.sum(map_idx).item()) == 0
 
-        if self._sap_pred_map_all_zero_cache and map_score.shape[0] == 1:
+        if no_map_selected and map_score.shape[0] == 1:
             # Fast path: replicate the (B=1, batch_max_pnum=1, D) zero-output
             # the original `else` branch in the per-batch loop produced when
-            # `valid_pnum == 0`, but entirely on device (no `.item()`, no
-            # to_torch / from_torch, no host loop). Trace-replay friendly.
+            # `valid_pnum == 0`, with no to_torch / from_torch and no host loop.
+            # The count check above still syncs, so this is not trace-safe.
             dim = map_query.shape[-1]
             selected_map_query = self._const_zeros((1, 1, dim), dtype=ttnn.bfloat16)
             selected_map_pos = self._const_zeros((1, 1, 2), dtype=ttnn.bfloat16)
