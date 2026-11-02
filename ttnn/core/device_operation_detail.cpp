@@ -317,9 +317,8 @@ std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
     if (first_time) {
         log_warning(
             tt::LogOp,
-            "{}: the result takes the union of the operand topologies instead of the caller-owned tensor's own label: "
-            "{}. The per-device results differ, so the caller's handle now reads as sharded (logged once per process "
-            "for this op)",
+            "{}: the caller's tensor takes the union of the operand labels instead of its own: {} (logged once per "
+            "process for this op)",
             op_name,
             reason);
     }
