@@ -152,12 +152,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.13"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.02"}]' || '[{"arch":"blackhole","threshold":"0.02"},{"arch":"wormhole","threshold":"0.13"}]') }}
+        arch: ${{ fromJSON((inputs.arch == '' || inputs.arch == 'all') && '["blackhole","wormhole"]' || format('["{0}"]', inputs.arch)) }}
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
       run_types: ${{ inputs.run_types || 'L1_TO_L1' }}
-      threshold: ${{ matrix.threshold }}
+      # One threshold for both arches and every module, as in the merge gate; stage 2 (Decide) uses the same.
+      threshold: "0.02"
       min_cycles: "30"
       fail_on_regression: false
       measure_result: >-
@@ -226,19 +227,31 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Download the stage-1 Blackhole report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
         with:
           pattern: llk-perf-gate-report-blackhole
           merge-multiple: true
           path: reports/blackhole
           run-id: ${{ steps.source.outputs.run }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download the stage-1 Wormhole report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: llk-perf-gate-report-wormhole
+          merge-multiple: true
+          path: reports/wormhole
+          run-id: ${{ steps.source.outputs.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check for stage-1 regressions
         id: any
         run: |
           # Header plus at least one row; with none, there is nothing to re-measure and no data to download.
-          if [ "$(wc -l < reports/blackhole/perf_gate_report.regressions.csv 2>/dev/null || echo 0)" -gt 1 ]; then
-            echo "blackhole=true" >> "$GITHUB_OUTPUT"
-          fi
+          for ARCH in blackhole wormhole; do
+            if [ "$(wc -l < "reports/${ARCH}/perf_gate_report.regressions.csv" 2>/dev/null || echo 0)" -gt 1 ]; then
+              echo "${ARCH}=true" >> "$GITHUB_OUTPUT"
+            fi
+          done
       - name: Download the PR head's Blackhole data
         if: steps.any.outputs.blackhole == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -248,14 +261,22 @@ jobs:
           path: head/blackhole
           run-id: ${{ steps.source.outputs.run }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download the PR head's Wormhole data
+        if: steps.any.outputs.wormhole == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-wormhole-*-head
+          merge-multiple: true
+          path: head/wormhole
+          run-id: ${{ steps.source.outputs.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Pick the tests
         id: plan
         env:
           CAP: ${{ steps.source.outputs.cap }}
         run: |
-          # Blackhole only: same-code Wormhole runs are not repeatable yet (#62044).
           ARCHES=()
-          for ARCH in blackhole; do
+          for ARCH in blackhole wormhole; do
             CANDIDATES="reports/${ARCH}/perf_gate_report.regressions.csv"
             [ -f "$CANDIDATES" ] || continue
             mkdir -p "nodes/${ARCH}"
@@ -274,6 +295,13 @@ jobs:
           path: |
             nodes/blackhole/nodes.txt
             nodes/blackhole/nodes.over
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        if: hashFiles('nodes/wormhole/nodes.txt') != ''
+        with:
+          name: placement-nodes-wormhole
+          path: |
+            nodes/wormhole/nodes.txt
+            nodes/wormhole/nodes.over
 
   placement-measure-head:
     name: "Stage 2: measure the PR head on ${{ matrix.arch }} at 5 code positions"
