@@ -715,3 +715,35 @@ def test_update_cache_preserves_fp32_neighbors(fp32_dest_acc_en, head_dim, devic
         expected[:, :, index, :] = 3.0
         assert torch.equal(ttnn.to_torch(cache_tt), expected)
     assert device.num_program_cache_entries() - entries_before == 1
+
+
+def _height_sharded_on(device, host_tensor, num_cores, shard_height=32):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_spec = ttnn.ShardSpec(grid, [shard_height, host_tensor.padded_shape[-1]], ttnn.ShardOrientation.ROW_MAJOR)
+    return host_tensor.to(
+        device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    )
+
+
+@pytest.mark.parametrize("op", ["fill", "update"])
+def test_cache_rejects_shard_grid_with_more_cores_than_shards(device, op, expect_error):
+    # Each grid core gets one shard of work, so extra cores would write past the input into the cache.
+    cache = ttnn.from_torch(torch.ones(2, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    x = ttnn.from_torch(torch.randn(1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    x = _height_sharded_on(device, x, num_cores=2)
+    with expect_error(RuntimeError, "one core per shard"):
+        if op == "fill":
+            ttnn.fill_cache(cache, x, 0)
+        else:
+            ttnn.update_cache(cache, x, 3)
+
+
+def test_fill_cache_one_core_per_shard_matches(device):
+    base = torch.ones(2, 1, 64, 64)
+    x = torch.randn(1, 1, 32, 64)
+    cache = ttnn.from_torch(base, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    xs = _height_sharded_on(device, ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), num_cores=1)
+    ttnn.fill_cache(cache, xs, 0)
+    expected = base.clone()
+    expected[0:1, :, 0:32, :] = x.bfloat16().float()
+    assert torch.equal(ttnn.to_torch(cache).float(), expected)
