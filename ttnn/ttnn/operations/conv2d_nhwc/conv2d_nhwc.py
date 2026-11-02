@@ -99,9 +99,13 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],  # bf8b activations: TILE refinement (Refinement 7)
+    # bf8b activations (TILE only; bf8b x ROW_MAJOR is INVALID in feature_spec): untilized to bf16
+    # in-kernel before the gather (Refinement 7, technique 1).
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
     "weight_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],  # mixed precision piped through the matmul
-    "layout": [ttnn.ROW_MAJOR_LAYOUT],
+    # TILE (Refinement 7): the window's tile-rows are untilized in-kernel (sharded: own shard in
+    # place + halo tile-rows, once per kernel; DRAM: per m-block); the output is packed as tiles.
+    "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     "bias_mode": ["with_bias", "no_bias"],
     "activation": ["none", "relu"],  # relu: packer ReLU on the final output pack (technique 4)
     "channel_alignment": ["tile_aligned"],
@@ -120,7 +124,11 @@ SUPPORTED = {
 # 3. EXCLUSIONS — none in Phase 0 (one-dtype rectangle: no mixed precision)
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    # Depthwise reads per-channel-tile window sticks (R0: only the core's channel tiles); the TILE
+    # window untilize is not wired into the R11 structure. No golden TILE cell is depthwise.
+    {"layout": ttnn.TILE_LAYOUT, "groups_mode": "depthwise"},
+]
 
 # Axes that prepare_* can see (no layout / activation / bias presence).
 _PREPARE_AXES = (
@@ -160,9 +168,17 @@ def _spatial(input_tensor, input_spatial):
         return N, H, W, C_in
     if len(shape) != 4:
         raise ValueError(f"conv2d_nhwc: expected a 4-D [N,H,W,C] input, got {shape}")
-    if input_tensor.layout == ttnn.TILE_LAYOUT:
-        raise ValueError("conv2d_nhwc: a TILE activation must be passed flattened with input_spatial")
     return shape[0], shape[1], shape[2], C_in
+
+
+def _check_tile_4d(input_tensor, input_spatial, W, W_out):
+    """A 4-D TILE input is the flattened stick matrix only when no tile straddles an image row:
+    W and W_out tile multiples. Otherwise it must be passed flattened with input_spatial."""
+    if input_tensor.layout == ttnn.TILE_LAYOUT and input_spatial is None and (W % 32 or W_out % 32):
+        raise ValueError(
+            "conv2d_nhwc: a 4-D TILE activation needs W and W_out multiples of 32; "
+            "pass it flattened [1,1,N*H*W,C] with input_spatial"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +217,7 @@ def validate(
     eff_k = dilation * (kernel_size - 1) + 1
     if H + 2 * padding < eff_k or W + 2 * padding < eff_k:
         raise ValueError("conv2d_nhwc: kernel larger than the padded input")
+    _check_tile_4d(input_tensor, input_spatial, W, (W + 2 * padding - eff_k) // stride + 1)
     if bias is not None and int(bias.shape[-1]) != C_out:
         raise ValueError("conv2d_nhwc: bias C_out does not match the weight")
     geo = conv_geometry(
@@ -410,6 +427,7 @@ def conv2d_nhwc(
         dtype=input_tensor.dtype,
         weight_dtype=weight_tensor.dtype,
         activation=_canon_activation(activation),
+        tile_in=input_tensor.layout == ttnn.TILE_LAYOUT,
     )
     if slices is not None:
         shard_h = int(in_mc.shard_spec.shape[0])

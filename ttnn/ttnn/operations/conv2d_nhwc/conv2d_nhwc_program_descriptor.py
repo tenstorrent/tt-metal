@@ -109,6 +109,10 @@ SPLIT_GATHER = False
 # window from far-away halo into the resident shard. The weight multicast then spans every input
 # core (the ones holding no output shard receive only).
 HEIGHT_ALIGN_OUTPUT = True
+# R9 (technique 3): a 1x1 stride-1 TILE conv whose output tile-rows are its own shard's tile-rows uses
+# the shard's tiles as the matmul in0 directly (HEIGHT) / as the multicast source (BLOCK / WIDTH): no
+# untilize, gather or tilize. False = the general TILE path (untilize -> gather -> tilize).
+TILE_DIRECT_IN0 = True
 # Compute config policy, per (activation dtype, weight dtype): the single source for the
 # descriptor's ComputeConfigDescriptor, the DEST capacity used by the subblock rule and the
 # accumulator (partials) page format. The public signature takes no compute_kernel_config,
@@ -117,12 +121,15 @@ COMPUTE_POLICY = {
     # dtype: (math_fidelity, fp32_dest_acc_en) — weight dtype keyed below when it matters.
     ttnn.float32: (ttnn.MathFidelity.HiFi4, True),
     ttnn.bfloat16: (ttnn.MathFidelity.HiFi2, True),
+    # bf8b activations (TILE only) untilize to bf16 before the gather: the bf16 policy.
+    ttnn.bfloat8_b: (ttnn.MathFidelity.HiFi2, True),
 }
 # (activation dtype, weight dtype) overrides of COMPUTE_POLICY. bf16 x bf8b runs at LoFi: the bf8b
 # weight mantissa (7 bits) is what LoFi's single fidelity phase consumes, it is the fidelity the
 # ResNet50 reference runs at, and fp32 DEST still accumulates K exactly (Refinement 6 changelog).
 COMPUTE_POLICY_BY_WEIGHT = {
     (ttnn.bfloat16, ttnn.bfloat8_b): (ttnn.MathFidelity.LoFi, True),
+    (ttnn.bfloat8_b, ttnn.bfloat8_b): (ttnn.MathFidelity.LoFi, True),
 }
 
 
@@ -148,6 +155,7 @@ CB_OUT_SHARD = 9  # R4/R5: zero-copy view of the output shard (untilize target)
 CB_ACT_SEND = 10  # R4/R5: own-slice tilized K-blocks awaiting the row multicast
 CB_ACT_WINDOW2 = 11  # R3 split gather: the writer RISC's halo window (odd m-blocks)
 CB_ACT_RM2 = 12  # R3 split gather: the writer RISC's RM im2col (odd m-blocks)
+CB_WIN_TILES = 13  # TILE input: the window's tile-rows (DRAM) / halo tile-rows (sharded) awaiting untilize
 
 _ML = ttnn.TensorMemoryLayout
 K_EXCHANGE_LAYOUTS = (_ML.BLOCK_SHARDED, _ML.WIDTH_SHARDED)
@@ -160,6 +168,12 @@ def _div_up(a, b):
 def tile_bytes(dtype):
     """Bytes of one 32x32 tile of `dtype` (bf8b: 64 B exponents + 1024 B mantissas)."""
     return {ttnn.float32: 4096, ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088}[dtype]
+
+
+def rm_dtype(dtype):
+    """Format of the row-major im2col pipeline (window, im2col rows, tilized in0): a bf8b TILE
+    activation untilizes to bf16 (technique 1); other dtypes are carried as-is."""
+    return ttnn.bfloat16 if dtype == ttnn.bfloat8_b else dtype
 
 
 def _divisors(n):
@@ -289,6 +303,12 @@ def _window_bounds(pix0, pix1, *, H, W, H_out, W_out, kH, kW, padding, stride, d
     return row_lo, row_hi, col_lo, last_hi, W, 0, W - 1
 
 
+def _window_tile_rows(pix0, pix1, **kw):
+    """TILE input: input tile-rows [lo, hi] (32 flattened sticks each) holding an m-block's window."""
+    lo, hi = _window_stick_range(pix0, pix1, **kw)
+    return lo // TILE, hi // TILE
+
+
 def _window_sticks(pix0, pix1, **kw):
     row_lo, row_hi, col_lo, last_hi, win_w, _, _ = _window_bounds(pix0, pix1, **kw)
     return (row_hi - row_lo) * win_w + (last_hi - col_lo) + 1
@@ -315,6 +335,7 @@ def select_blocking(
     dtype,
     weight_dtype,
     activation="none",
+    tile_in=False,
 ):
     _, _, dst_tiles, acc_dtype = compute_policy(dtype, weight_dtype)
     geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=elem_bytes)
@@ -355,8 +376,15 @@ def select_blocking(
             for b in range(_div_up(m_tiles, bm)):
                 t0 = m_start + b * bm
                 t1 = min(t0 + bm, m_start + m_tiles)
-                best = max(best, _window_sticks(t0 * TILE, min(t1 * TILE, M) - 1, **win_kw))
+                if tile_in:  # technique 2: whole input tile-rows, untilized per m-block
+                    lo, hi = _window_tile_rows(t0 * TILE, min(t1 * TILE, M) - 1, **win_kw)
+                    best = max(best, (hi - lo + 1) * TILE)
+                else:
+                    best = max(best, _window_sticks(t0 * TILE, min(t1 * TILE, M) - 1, **win_kw))
         return best
+
+    T_in = tile_bytes(dtype)
+    c_tiles = tap_width // TILE
 
     def footprint(bm, bk, bn, win):
         if dw:  # bk = taps * bn: one tilized tile-row, DW_WEIGHT_DEPTH tap-weight blocks
@@ -371,6 +399,7 @@ def select_blocking(
             )
         return (
             win * tap_width * elem_bytes
+            + (win // TILE * c_tiles * T_in if tile_in else 0)  # TILE: the window's tiles
             + ACT_RM_DEPTH * bk * T
             + bm * bk * T
             + WEIGHT_DEPTH * bk * bn * T_w
@@ -465,6 +494,10 @@ def select_blocking(
         "T_w": T_w,
         "T_acc": T_acc,
         "footprint": footprint(bm, bk, bn, window_sticks_max),
+        "tile_in": tile_in,
+        "win_c_tiles": c_tiles if tile_in else 0,
+        "win_tile_rows": window_sticks_max // TILE if tile_in else 0,
+        "halo_tile_rows": window_sticks_max // TILE if tile_in else 0,
     }
 
 
@@ -522,6 +555,7 @@ def select_blocking_sharded(
     dtype,
     weight_dtype,
     activation="none",
+    tile_in=False,
 ):
     """Regimes R4 (BLOCK) / R5 (WIDTH): the shard pins the core split.
 
@@ -554,7 +588,8 @@ def select_blocking_sharded(
         g_m = _div_up(M_t, core_m_tiles)
     # WIDTH output shards are exactly M rows tall: a partial last tile-row is staged and
     # copied (writer) instead of untilized in place. BLOCK shards are allocated whole.
-    out_tail = memory_layout == _ML.WIDTH_SHARDED and M % TILE != 0
+    # A TILE output shard is whole tile-rows: no tail.
+    out_tail = memory_layout == _ML.WIDTH_SHARDED and M % TILE != 0 and not tile_in
 
     T = TILE * TILE * elem_bytes
     T_w = weight_tile_bytes
@@ -611,7 +646,41 @@ def select_blocking_sharded(
             return max(ACT_RM_DEPTH, ACT_RM_KBLOCKS * bm)
         return ACT_RM_KBLOCKS * bm if deep else ACT_RM_DEPTH
 
+    # TILE input (technique 1): each core untilizes ONE contiguous range of input tile-rows, once
+    # per kernel: the union of its whole m range's window and its own shard. Its own tile-rows come
+    # from the resident shard (zero-copy); the rest (halo) are fetched as tiles from the owning shards.
+    T_in = tile_bytes(dtype)
+    c_tiles = tap_width // TILE
+
+    def own_range(r):
+        if memory_layout == _ML.WIDTH_SHARDED:
+            return 0, NHW
+        c = out_shards[r]
+        return c * shard_h, min(NHW, (c + 1) * shard_h)
+
+    def tile_windows():
+        wins = []
+        for r in range(g_m):
+            lo, hi = _window_stick_range(r * core_m_tiles * TILE, min((r + 1) * core_m_tiles * TILE, M) - 1, **win_kw)
+            own_lo, own_hi = own_range(r)
+            own_t0, own_t1 = own_lo // TILE, _div_up(own_hi, TILE)
+            u0, u1 = min(lo // TILE, own_t0), max(hi // TILE + 1, own_t1)
+            wins.append((u0, own_t0 - u0, own_t1 - own_t0, u1 - own_t1))  # (first, before, own, after)
+        return wins
+
     def footprint(bm, bk, halo, deep=False, roles=1):
+        if tile_in:
+            wins = tile_windows()
+            win_rows = max(b + o + a for _, b, o, a in wins)
+            halo_rows = max(max(b + a for _, b, _, a in wins), 1)
+            # The RM window replaces the per-block halo scratch; plus the halo tile staging.
+            halo = 0
+            extra = win_rows * TILE * tap_width * elem_bytes + halo_rows * c_tiles * T_in
+        else:
+            extra = 0
+        return extra + _footprint(bm, bk, halo, deep, roles)
+
+    def _footprint(bm, bk, halo, deep=False, roles=1):
         if dw:  # bk = taps * nt_s (bn = the whole slice: the output shard row)
             return (
                 max(halo, 1) * tap_width * elem_bytes
@@ -623,7 +692,7 @@ def select_blocking_sharded(
                 + (nt_s * T if out_tail else 0)
             )
         return (
-            roles * max(halo, 1) * tap_width * elem_bytes
+            roles * (max(halo, 1) if not tile_in else 0) * tap_width * elem_bytes
             + roles * rm_rows(bm, deep) * bk * T
             + (send_depth(bk) * bm * bk * T if act_mcast else 0)
             + (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk * T
@@ -687,7 +756,7 @@ def select_blocking_sharded(
     choice = None
     roles = 1
     if weights_resident and HEIGHT_SINGLE_K_PIPELINE:
-        if SPLIT_GATHER:
+        if SPLIT_GATHER and not tile_in:  # TILE: one untilized window per core, gathered by the reader
             choice = walk_single_k(SHARDED_CB_BUDGET_BYTES, 2)
             roles = 2 if choice else 1
         choice = choice or walk_single_k(SHARDED_CB_BUDGET_BYTES)
@@ -704,6 +773,23 @@ def select_blocking_sharded(
         raise UnsupportedAxisValue("conv2d_nhwc: sharded K-exchange blocks do not fit L1")
     bm, bk, halo = choice
     bn = nt_s
+    kbps_ = 1 if dw else slice_k_tiles // bk
+    # R9: in0 = the shard's tiles. Needs whole-tile im2col == the shard (1x1, s1, p0), one K-block per
+    # slice (a K-block = bm whole shard tile-rows x the slice's channel tiles) and output tile-row r
+    # on the core holding input tile-row r (shard height = core_m_tiles tile-rows, shard r -> output r).
+    direct_in0 = (
+        TILE_DIRECT_IN0
+        and tile_in
+        and not dw
+        and kH == 1
+        and kW == 1
+        and stride == 1
+        and padding == 0
+        and kbps_ == 1
+        and bk * TILE == tap_width
+        and core_m_tiles * TILE == shard_h
+        and out_shards == list(range(g_m))
+    )
     sb_w = max(d for d in _divisors(bn) if d <= dst_tiles)
     sb_h = max(d for d in _divisors(bm) if d * sb_w <= dst_tiles)
     kbps = 1 if dw else slice_k_tiles // bk
@@ -765,7 +851,7 @@ def select_blocking_sharded(
         "kblocks_per_slice": kbps,
         "num_k_blocks": kbps if dw else S * kbps,
         "num_n_blocks": 1,
-        "window_sticks_max": max(halo, 1),
+        "window_sticks_max": max(b + o + a for _, b, o, a in tile_windows()) * TILE if tile_in else max(halo, 1),
         "out_tail": out_tail,
         "out_subblock_h": sb_h,
         "out_subblock_w": sb_w,
@@ -775,6 +861,12 @@ def select_blocking_sharded(
         "footprint": footprint(bm, bk, halo, deep_rm, roles),
         "num_gather_roles": roles,
         "out_shards": out_shards,
+        "tile_in": tile_in,
+        "direct_in0": direct_in0,
+        "win_c_tiles": c_tiles if tile_in else 0,
+        "tile_windows": tile_windows() if tile_in else None,
+        "win_tile_rows": max(b + o + a for _, b, o, a in tile_windows()) if tile_in else 0,
+        "halo_tile_rows": max(max(b + a for _, b, _, a in tile_windows()), 1) if tile_in else 0,
     }
 
 
@@ -797,7 +889,8 @@ def output_memory_config(plan, input_memory_config):
         shape = [p["core_m_tiles"] * TILE, width]
     else:
         grid = spec.grid
-        shape = [p["M"], width]
+        # A TILE output shard is whole tile-rows.
+        shape = [p["M_t"] * TILE if p.get("tile_in") else p["M"], width]
     return ttnn.MemoryConfig(p["memory_layout"], ttnn.BufferType.L1, ttnn.ShardSpec(grid, shape, spec.orientation))
 
 
@@ -869,8 +962,16 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     weight_block_tiles = p["weight_k_rows"] * bn
     # Tilized in0 resident in cb_act_tiles: the m-block (dense) or DW_ACT_TILE_ROWS tile-rows (R11).
     act_tile_pages = (p["act_tile_rows"] or bm) * bk
-    act_dtype = input_tensor.dtype
+    act_dtype = rm_dtype(input_tensor.dtype)  # the RM im2col pipeline's format
     w_dtype = weight_tensor.dtype
+    tile_in = p.get("tile_in", False)  # TILE activation in and out (techniques 1 / 2)
+    T_in = tile_bytes(input_tensor.dtype)
+    T_out = tile_bytes(output_tensor.dtype) if tile_in else p["T"]  # output page: tile, or RM tile-row slab
+    c_tiles = p.get("win_c_tiles", 0)
+    direct_in0 = p.get("direct_in0", False)  # R9: shard tiles are in0 (no window / im2col / tilize)
+    # R9: the RM pipeline's CBs are idle (one page each); in0 tiles keep the input's format.
+    rm_pages = (lambda n: 1) if direct_in0 else (lambda n: n)
+    in0_dtype, T_in0 = (input_tensor.dtype, T_in) if direct_in0 else (act_dtype, p["T"])
     eb = p["elem_bytes"]
     # BLOCK COL_MAJOR: the transposed grid — a K-exchange group (one shard row) is a grid
     # column and a weight-multicast group (one channel slice) is a grid row.
@@ -928,21 +1029,28 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     tap_bytes = p["tap_width"] * eb
     cbs = [
         # R0: the DRAM window; R4/R5: the halo sticks (window minus the resident shard).
-        _cb(CB_ACT_WINDOW, act_dtype, tap_bytes, p["window_sticks_max"], cores),
-        _cb(CB_ACT_RM, act_dtype, p["T"], p["act_rm_rows"] * bk, cores),
+        # TILE: the untilized window (compute -> reader), one tile-row = c_tiles RM tile pages.
+        _cb(CB_ACT_WINDOW, act_dtype, p["T"], rm_pages(p["win_tile_rows"] * c_tiles), cores)
+        if tile_in
+        else _cb(CB_ACT_WINDOW, act_dtype, tap_bytes, p["window_sticks_max"], cores),
+        _cb(CB_ACT_RM, act_dtype, p["T"], rm_pages(p["act_rm_rows"] * bk), cores),
         # Weight multicast landing slot: same address on every weight-group core (incl. sinks).
         _cb(CB_WEIGHT_TILES, w_dtype, p["T_w"], p["weight_depth"] * weight_block_tiles, weight_group),
         # Multicast landing zone: same address on every group core (incl. sinks).
+        # R9 HEIGHT: in0 is the shard itself (cb_in_shard): this CB is idle.
         _cb(
             CB_ACT_TILES,
-            act_dtype,
-            p["T"],
-            (ACT_RECV_DEPTH if act_mcast else 1) * act_tile_pages,
+            in0_dtype,
+            T_in0,
+            (ACT_RECV_DEPTH if act_mcast else 1) * act_tile_pages if (act_mcast or not direct_in0) else 1,
             mcast_cores if act_mcast else cores,
         ),
     ]
     if act_mcast:
-        cbs.append(_cb(CB_ACT_SEND, act_dtype, p["T"], p["act_send_depth"] * bm * bk, cores))
+        cbs.append(_cb(CB_ACT_SEND, act_dtype, p["T"], rm_pages(p["act_send_depth"] * bm * bk), cores))
+    if tile_in:
+        # Window (R0) / halo (sharded) tile-rows in the input's format, reader -> compute untilize.
+        cbs.append(_cb(CB_WIN_TILES, input_tensor.dtype, T_in, rm_pages(p["halo_tile_rows"] * c_tiles), cores))
     gather_roles = p.get("num_gather_roles", 1)
     if gather_roles > 1:
         cbs.append(_cb(CB_ACT_WINDOW2, act_dtype, tap_bytes, p["window_sticks_max"], cores))
@@ -952,15 +1060,20 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         full_rows = p["core_m_tiles"] - (1 if p["out_tail"] else 0)
         if full_rows > 0:
             out_cb = ttnn.cb_descriptor_from_sharded_tensor(
-                CB_OUT_SHARD, output_tensor, total_size=full_rows * bn * p["T"], core_ranges=cores
+                CB_OUT_SHARD, output_tensor, total_size=full_rows * bn * T_out, core_ranges=cores
             )
-            # Tile-sized pages: one untilized tile-row (bn pages) = 32 output-shard sticks.
+            # Tile-sized pages: one untilized tile-row (bn pages) = 32 output-shard sticks; TILE:
+            # the output tiles themselves (TileRowMajor partials = the shard's tile order).
             out_cb.format_descriptors = [
-                ttnn.CBFormatDescriptor(buffer_index=CB_OUT_SHARD, data_format=output_tensor.dtype, page_size=p["T"])
+                ttnn.CBFormatDescriptor(buffer_index=CB_OUT_SHARD, data_format=output_tensor.dtype, page_size=T_out)
             ]
             cbs.append(out_cb)
         if p["out_tail"]:
             cbs.append(_cb(CB_OUT_RM, output_tensor.dtype, p["T"], bn, cores))
+    elif tile_in:
+        # R0 TILE output: bias / copy pack one row group (sb_h x bn tiles) at a time; the writer
+        # drains per tile-row. Two row groups = double-buffered.
+        cbs.append(_cb(CB_OUT_RM, output_tensor.dtype, T_out, max(OUT_RM_DEPTH, 2 * p["out_subblock_h"]) * bn, cores))
     else:
         cbs.append(_cb(CB_OUT_RM, output_tensor.dtype, p["T"], OUT_RM_DEPTH * bn, cores))
     partial_formats = [ttnn.CBFormatDescriptor(buffer_index=CB_PARTIALS, data_format=acc_dtype, page_size=p["T_acc"])]
@@ -1004,6 +1117,11 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         bn,
         1 if p.get("tap_major", False) else 0,
         gather_roles,
+        1 if tile_in else 0,
+        CB_WIN_TILES,
+        c_tiles,
+        p["win_tile_rows"],
+        1 if direct_in0 else 0,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     # The writer carries the same gather args (its own window / rm CBs) for the split gather.
@@ -1035,6 +1153,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         p["weight_k_rows"],
         1 if p.get("weights_resident", False) else 0,
         p.get("weight_chunk_rows", 1),
+        1 if tile_in else 0,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -1077,6 +1196,13 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         1 if p.get("weights_resident", False) else 0,
         CB_ACT_RM2,
         gather_roles,
+        1 if tile_in else 0,
+        CB_WIN_TILES,
+        CB_ACT_WINDOW,
+        CB_IN_SHARD,
+        c_tiles,
+        p["win_tile_rows"],
+        1 if direct_in0 else 0,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -1122,6 +1248,9 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             for c in col:
                 v = device.worker_core_from_logical_core(c)
                 reader_args += [v.x, v.y]
+        tile_win = list(p["tile_windows"][mi]) if (tile_in and kx) else [0, 0, 0, 0]
+        if tile_in and kx:
+            reader_args += tile_win  # first tile-row, halo-before / own / halo-after tile-row counts
         reader_rt[xy.x][xy.y] = reader_args
         writer_rt[xy.x][xy.y] = [
             w_addr,
@@ -1135,7 +1264,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             0,  # not a sink
             1 if mi == 0 else 0,  # weight_mcast: grid row 0 reads the column's weights
         ] + (reader_args if gather_roles > 1 else [])
-        compute_rt[xy.x][xy.y] = [num_m_blocks, ni]
+        compute_rt[xy.x][xy.y] = [num_m_blocks, ni] + tile_win[1:]
     for xy in sink_cores:
         # Receive-only: every round of every m-block (WIDTH: one m range for the whole group).
         writer_rt[xy.x][xy.y] = [0, 0, 0, 0, p["M_t"], _div_up(p["M_t"], bm), 0, 0, 1, 0]

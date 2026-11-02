@@ -71,7 +71,22 @@ constexpr bool tap_major = get_compile_time_arg_val(GATHER_CT_BASE + 23) != 0;
 // cb_act_rm) and the writer (BRISC, odd m-blocks, its own window / rm CBs: this header's CB ids are
 // the instance's). 1 = the reader gathers every m-block.
 constexpr uint32_t num_gather_roles = get_compile_time_arg_val(GATHER_CT_BASE + 24);
-constexpr auto input_args = TensorAccessorArgs<GATHER_CT_BASE + 25>();
+// TILE input (techniques 1 / 2): the gather reads an RM window that compute untilized from input
+// tile-rows into cb_act_window (one contiguous run of whole tile-rows: stick s at
+// (s - first_tile_row * 32) * tap_bytes). The reader supplies the tiles in cb_win_tiles:
+//   sharded : once per kernel — pushes the resident own shard (zero-copy, compute untilizes it in
+//             place) and fetches the halo tile-rows from their owning shards, one read per owner run.
+//   DRAM    : per m-block — the window's tile-rows (win_tile_rows nominal) via the TensorAccessor.
+constexpr bool tile_in = get_compile_time_arg_val(GATHER_CT_BASE + 25) != 0;
+constexpr uint32_t cb_win_tiles = get_compile_time_arg_val(GATHER_CT_BASE + 26);
+constexpr uint32_t win_c_tiles = get_compile_time_arg_val(GATHER_CT_BASE + 27);    // tiles per tile-row
+constexpr uint32_t win_tile_rows = get_compile_time_arg_val(GATHER_CT_BASE + 28);  // DRAM: per m-block
+// R9 (technique 3, 1x1 stride-1 TILE): the shard's tiles ARE in0 — the reader only publishes the
+// resident shard (consumer: compute's matmul on HEIGHT, the writer's act multicast on BLOCK / WIDTH).
+constexpr bool direct_in0 = get_compile_time_arg_val(GATHER_CT_BASE + 29) != 0;
+constexpr auto input_args = TensorAccessorArgs<GATHER_CT_BASE + 30>();
+// The gather reads a contiguous stick source (resident shard + halo, or the untilized TILE window).
+constexpr bool contiguous_src = k_exchange || tile_in;
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t tap_bytes = tap_width * elem_bytes;
@@ -526,6 +541,12 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
     const int32_t own_lo = k_exchange ? static_cast<int32_t>(get_arg_val<uint32_t>(rt_base + 8)) : 0;
     const int32_t own_hi = k_exchange ? static_cast<int32_t>(get_arg_val<uint32_t>(rt_base + 9)) : 0;
     const uint32_t shard_base = k_exchange ? get_read_ptr(cb_in_shard) : 0;
+    if constexpr (direct_in0) {
+        const uint32_t pages = num_m_blocks * block_m_tiles * block_k_tiles;  // whole shard tile-rows
+        cb_reserve_back(cb_in_shard, pages);
+        cb_push_back(cb_in_shard, pages);
+        return;
+    }
 
     // fetch_sticks: flattened sticks [p, q) of this channel slice from their owning shards
     // (same L1 address on every core), one NoC read per owner run.
@@ -552,6 +573,55 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
     const int32_t wo_int_lo = (padding + stride - 1) / stride;
     const int32_t wo_int_num = static_cast<int32_t>(W) - static_cast<int32_t>(kW) + padding;
     const int32_t wo_int_hi = wo_int_num >= 0 ? wo_int_num / stride : -1;
+
+    // TILE: the untilized window as a contiguous stick source from stick `first_stick` on.
+    auto tile_window_src = [&](int32_t first_stick) {
+        const uint32_t base = get_read_ptr(cb_act_window);
+        return ShardSource{base, base, first_stick, 0x7fffffff, first_stick, 0x7fffffff, 0};
+    };
+    ShardSource tile_src{};
+    [[maybe_unused]] uint32_t tile_win_pages = 0;
+    if constexpr (tile_in && k_exchange) {
+        // ---- fetch_tile_window (technique 1): own shard in place + halo tile-rows, once ----
+        constexpr uint32_t tile_rows_per_shard = shard_h >= TILE_DIM ? shard_h / TILE_DIM : 1;  // RM: unused
+        const uint32_t tw = rt_base + 10 + 2 * num_col_shards;
+        const uint32_t first_tr = get_arg_val<uint32_t>(tw + 0);
+        const uint32_t n_before = get_arg_val<uint32_t>(tw + 1);
+        const uint32_t n_own = get_arg_val<uint32_t>(tw + 2);
+        const uint32_t n_after = get_arg_val<uint32_t>(tw + 3);
+        const uint32_t in_tile_bytes = get_tile_size(cb_win_tiles);
+        const uint32_t row_bytes = win_c_tiles * in_tile_bytes;
+        // The resident shard is the own tile-rows' source: publish it to compute (no copy).
+        cb_reserve_back(cb_in_shard, n_own * win_c_tiles);
+        cb_push_back(cb_in_shard, n_own * win_c_tiles);
+        // Tile-rows [p, q) from their owning shards (same L1 address on every core), one read per run.
+        auto fetch_tile_rows = [&](uint32_t p, uint32_t q, uint32_t dst) {
+            while (p < q) {
+                const uint32_t r = p / tile_rows_per_shard;
+                uint32_t e = (r + 1) * tile_rows_per_shard;
+                e = e < q ? e : q;
+                const uint32_t nx = get_arg_val<uint32_t>(rt_base + 10 + 2 * r);
+                const uint32_t ny = get_arg_val<uint32_t>(rt_base + 11 + 2 * r);
+                const uint32_t src = shard_base + (p - r * tile_rows_per_shard) * row_bytes;
+                noc_async_read(get_noc_addr(nx, ny, src), dst, (e - p) * row_bytes);
+                dst += (e - p) * row_bytes;
+                p = e;
+            }
+        };
+        const uint32_t halo_pages = (n_before + n_after) * win_c_tiles;
+        if (halo_pages > 0) {
+            cb_reserve_back(cb_win_tiles, halo_pages);
+            const uint32_t dst = get_write_ptr(cb_win_tiles);
+            fetch_tile_rows(first_tr, first_tr + n_before, dst);
+            const uint32_t own_end = first_tr + n_before + n_own;
+            fetch_tile_rows(own_end, own_end + n_after, dst + n_before * row_bytes);
+            noc_async_read_barrier();
+            cb_push_back(cb_win_tiles, halo_pages);
+        }
+        tile_win_pages = (n_before + n_own + n_after) * win_c_tiles;
+        cb_wait_front(cb_act_window, tile_win_pages);
+        tile_src = tile_window_src(static_cast<int32_t>(first_tr * TILE_DIM));
+    }
 
     for (uint32_t m_block = role; m_block < num_m_blocks; m_block += num_gather_roles) {
         const uint32_t t0 = m_tile_start + m_block * block_m_tiles;
@@ -593,7 +663,27 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
         }
         WindowSource window_src{window_base, row_lo, col_lo, win_w};
         ShardSource shard_src{};
-        if constexpr (!k_exchange) {
+        if constexpr (tile_in && k_exchange) {
+            shard_src = tile_src;
+        } else if constexpr (tile_in) {
+            // ---- fetch_tile_window (technique 2): the m-block's window tile-rows from DRAM ----
+            const uint32_t in_tile_bytes = get_tile_size(cb_win_tiles);
+            const auto input = TensorAccessor(input_args, input_addr, in_tile_bytes);
+            const uint32_t tr_lo = static_cast<uint32_t>(row_lo * static_cast<int32_t>(W) + col_lo) / TILE_DIM;
+            const uint32_t tr_hi = static_cast<uint32_t>(row_hi * static_cast<int32_t>(W) + last_hi) / TILE_DIM;
+            cb_reserve_back(cb_win_tiles, win_tile_rows * win_c_tiles);
+            uint32_t dst = get_write_ptr(cb_win_tiles);
+            for (uint32_t tr = tr_lo; tr <= tr_hi; ++tr) {
+                for (uint32_t ct = 0; ct < win_c_tiles; ++ct) {
+                    noc_async_read(input.get_noc_addr(tr * win_c_tiles + ct), dst, in_tile_bytes);
+                    dst += in_tile_bytes;
+                }
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_win_tiles, win_tile_rows * win_c_tiles);
+            cb_wait_front(cb_act_window, win_tile_rows * win_c_tiles);
+            shard_src = tile_window_src(static_cast<int32_t>(tr_lo * TILE_DIM));
+        } else if constexpr (!k_exchange) {
             const auto input = TensorAccessor(input_args, input_addr);
             for (int32_t row = row_lo; row <= row_hi; ++row) {
                 const int32_t c0 = row == row_lo ? col_lo : mid_lo;
@@ -642,11 +732,11 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
                     if (tile >= t1) {
                         // Ragged block tail: tile-row past the core's range.
                         zero_run(zeros_noc, dst_base, TILE_DIM * im2col_row_bytes);
-                    } else if constexpr (tap_major && k_exchange) {
+                    } else if constexpr (tap_major && contiguous_src) {
                         gather_tile_row_taps(zeros_noc, shard_src, k0, tile * TILE_DIM, dst_base, padding);
                     } else if constexpr (tap_major) {
                         gather_tile_row_taps(zeros_noc, window_src, k0, tile * TILE_DIM, dst_base, padding);
-                    } else if constexpr (k_exchange) {
+                    } else if constexpr (contiguous_src) {
                         gather_tile_row(
                             zeros_noc,
                             shard_src,
@@ -678,6 +768,12 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
                 }
             }
         }
+        if constexpr (tile_in && !k_exchange) {
+            cb_pop_front(cb_act_window, win_tile_rows * win_c_tiles);  // compute untilizes the next window
+        }
+    }
+    if constexpr (tile_in && k_exchange) {
+        cb_pop_front(cb_act_window, tile_win_pages);
     }
 }
 

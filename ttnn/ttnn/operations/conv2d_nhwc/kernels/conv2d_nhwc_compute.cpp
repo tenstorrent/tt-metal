@@ -33,6 +33,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 constexpr uint32_t cb_act_rm = get_compile_time_arg_val(0);
 constexpr uint32_t cb_weight_tiles = get_compile_time_arg_val(1);
@@ -82,6 +83,22 @@ constexpr uint32_t resident_weight_tiles = num_k_blocks * weight_kblock_tiles;
 constexpr uint32_t cb_act_rm2 = get_compile_time_arg_val(28);
 constexpr uint32_t num_gather_roles = get_compile_time_arg_val(29);
 constexpr uint32_t tilize_blocks_per_row = block_k_tiles / tilize_w;
+// TILE activation (Refinement 7). In: untilize_window — the window's input tile-rows -> RM sticks in
+// cb_act_window for the reader's gather (bf8b -> bf16). Sharded (technique 1): once per kernel,
+// halo-before tile-rows (cb_win_tiles), the resident own shard in place (cb_in_shard, zero-copy),
+// halo-after (cb_win_tiles). DRAM (technique 2): per m-block, win_tile_rows from cb_win_tiles.
+// Out: store_tiles — the final pack (bias add, or a copy) writes tiles straight into the output
+// (shard, or cb_out_rm for the R0 writer) instead of untilizing.
+constexpr bool tile_io = get_compile_time_arg_val(30) != 0;
+constexpr uint32_t cb_win_tiles = get_compile_time_arg_val(31);
+constexpr uint32_t cb_act_window = get_compile_time_arg_val(32);
+constexpr uint32_t cb_in_shard = get_compile_time_arg_val(33);
+constexpr uint32_t win_c_tiles = get_compile_time_arg_val(34);
+constexpr uint32_t win_tile_rows = get_compile_time_arg_val(35);
+// R9 (technique 3): in0 is the shard's tiles — HEIGHT: cb_in_shard directly; BLOCK / WIDTH: the
+// writer multicasts shard K-blocks into cb_act_tiles. No untilize / tilize.
+constexpr bool direct_in0 = get_compile_time_arg_val(36) != 0;
+constexpr uint32_t cb_in0 = (direct_in0 && !act_mcast) ? cb_in_shard : cb_act_tiles;
 
 constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
 constexpr uint32_t in1_num_subblocks = block_n_tiles / out_subblock_w;
@@ -114,7 +131,9 @@ struct TilizeKBlock {
         }
     }
     ALWI void tilize_kblock(uint32_t block) const {
-        if constexpr (!act_mcast) {
+        if constexpr (direct_in0) {
+            return;
+        } else if constexpr (!act_mcast) {
             PACK((llk_pack_reconfig_l1_acc(0)));
             if (num_gather_roles > 1 && (m_block & 1)) {
                 tilize<tilize_w, cb_act_rm2, cb_act_tiles>(block_m_tiles * tilize_blocks_per_row);
@@ -163,9 +182,46 @@ ALWI void untilize_store(bool last_block) {
     }
 }
 
+template <uint32_t cb_src>
+ALWI void untilize_rows(uint32_t rows) {
+    if (rows > 0) {
+        untilize<win_c_tiles, cb_src, cb_act_window>(rows);
+    }
+}
+
+// store_tiles (TILE out): the m-block's bm x bn output tiles, TileRowMajor = the output's tile order.
+template <bool with_bias>
+ALWI void bias_and_store_tiles(CircularBuffer& partials, CircularBuffer& bias, uint32_t n_block) {
+    constexpr uint32_t cb_out_tiles = k_exchange ? cb_out_shard : cb_out_rm;
+    if constexpr (fuse_relu) {
+        pack_relu_config(ReluConfig::zero());
+    }
+    if constexpr (with_bias) {
+        CircularBuffer out_tiles(cb_out_tiles);
+        add_bias_bcast_rows<BiasBroadcast::RowBroadcast, OutputCBLayout::TileRowMajor>(
+            partials,
+            bias,
+            out_tiles,
+            BiasAddShape::of(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_n_tiles),
+            {},
+            n_block * block_n_tiles);
+    } else {
+        DataflowBuffer src(cb_partials);
+        DataflowBuffer dst(cb_out_tiles);
+        copy<input(cb_partials), output(cb_out_tiles)>(IterationShape::tiles(block_out_tiles), src, dst);
+    }
+    if constexpr (fuse_relu) {
+        pack_relu_config(ReluConfig::none());
+    }
+}
+
 template <bool with_bias>
 ALWI void bias_and_untilize(
     CircularBuffer& partials, CircularBuffer& bias, CircularBuffer& biased, uint32_t n_block, bool last_block) {
+    if constexpr (tile_io) {
+        bias_and_store_tiles<with_bias>(partials, bias, n_block);
+        return;
+    }
     if constexpr (with_bias) {
         if constexpr (fuse_relu) {
             pack_relu_config(ReluConfig::zero());
@@ -236,10 +292,10 @@ void kernel_main() {
     if constexpr (depthwise) {
         compute_kernel_hw_startup(cb_act_tiles, cb_weight_tiles, cb_partials);
     } else {
-        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_tiles, cb_weight_tiles, cb_partials);
+        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_weight_tiles, cb_partials);
     }
 
-    CircularBuffer act_tiles(cb_act_tiles);
+    CircularBuffer act_tiles(cb_in0);
     CircularBuffer weight_tiles(cb_weight_tiles);
     CircularBuffer partials(cb_partials);
     CircularBuffer bias(cb_bias_tiles);
@@ -273,7 +329,16 @@ void kernel_main() {
     } else {
         const auto shape = MatmulBlockShape::of(
             in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, num_k_blocks);
+        if constexpr (tile_io && k_exchange && !direct_in0) {
+            // untilize_window (technique 1): the core's whole window, once.
+            untilize_rows<cb_win_tiles>(get_arg_val<uint32_t>(2));
+            untilize_rows<cb_in_shard>(get_arg_val<uint32_t>(3));
+            untilize_rows<cb_win_tiles>(get_arg_val<uint32_t>(4));
+        }
         for (uint32_t m_block = 0; m_block < num_m_blocks; ++m_block) {
+            if constexpr (tile_io && !k_exchange) {
+                untilize_rows<cb_win_tiles>(win_tile_rows);  // untilize_window (technique 2), per m-block
+            }
             for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
                 // conv_matmul_block: caller owns the accumulator's single reserve / push.
                 partials.reserve_back(block_out_tiles);

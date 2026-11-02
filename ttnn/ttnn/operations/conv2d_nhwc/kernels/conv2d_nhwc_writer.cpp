@@ -60,7 +60,10 @@ constexpr bool weights_resident = get_compile_time_arg_val(22) != 0;
 constexpr uint32_t weight_chunk_rows = get_compile_time_arg_val(23);
 constexpr uint32_t WEIGHT_CHUNK_LEAD = 2;  // chunks whose reads are in flight ahead of the multicast
 constexpr uint32_t MAX_WEIGHT_TRIDS = 15;  // read transaction ids 1..15
-constexpr auto weight_args = TensorAccessorArgs<24>();
+// TILE output (Refinement 7): R0 drains tiles (page = output tile (m, n)) instead of RM rows;
+// sharded outputs are packed as tiles into the shard by compute (nothing to do here).
+constexpr bool tile_out = get_compile_time_arg_val(24) != 0;
+constexpr auto weight_args = TensorAccessorArgs<25>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
 // Split gather (R3): the reader's gather compile-time args follow (this instance's own window / rm
@@ -303,9 +306,11 @@ void kernel_main() {
                     cb_reserve_back(cb_act_tiles, act_block_tiles);
                     const uint32_t landing = get_write_ptr(cb_act_tiles);  // identical on every group core
                     if (owner == my_slice) {
-                        cb_wait_front(cb_act_send, act_block_tiles);
-                        act_sender->send(get_read_ptr(cb_act_send), landing, act_block_bytes);
-                        cb_pop_front(cb_act_send, act_block_tiles);
+                        // R9: the own K-block is the resident shard's tiles (published by the reader).
+                        constexpr uint32_t cb_src = conv_gather::direct_in0 ? conv_gather::cb_in_shard : cb_act_send;
+                        cb_wait_front(cb_src, act_block_tiles);
+                        act_sender->send(get_read_ptr(cb_src), landing, act_block_bytes);
+                        cb_pop_front(cb_src, act_block_tiles);
                     } else {
                         act_receiver->receive(owner);  // round = owner -> sender phase
                     }
@@ -331,6 +336,24 @@ void kernel_main() {
                 continue;
             }
 
+            if constexpr (tile_out) {
+                // ---- store_tile_block: drain bm tile-rows of bn output tiles (pages tile*N_t + n) ----
+                const uint32_t out_tile_bytes = get_tile_size(cb_out_rm);
+                for (uint32_t t = 0; t < block_m_tiles; ++t) {
+                    cb_wait_front(cb_out_rm, block_n_tiles);
+                    const uint32_t tile = t0 + t;
+                    if (tile < t1) {
+                        uint32_t src = get_read_ptr(cb_out_rm);
+                        for (uint32_t j = 0; j < block_n_tiles; ++j) {
+                            noc_async_write(src, output.get_noc_addr(tile * N_t + n0 + j), out_tile_bytes);
+                            src += out_tile_bytes;
+                        }
+                        noc_async_writes_flushed();
+                    }
+                    cb_pop_front(cb_out_rm, block_n_tiles);
+                }
+                continue;
+            }
             // ---- untilize_store_block: drain bm tile-rows ----
             const uint32_t col_offset_bytes = n0 * TILE_DIM * elem_bytes;
             for (uint32_t t = 0; t < block_m_tiles; ++t) {
