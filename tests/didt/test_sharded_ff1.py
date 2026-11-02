@@ -30,7 +30,7 @@ GELU = True
     indirect=["mesh_device"],
 )
 def test_reproduce_matmul_2d_hang(mesh_device, ff1_hang_dummy_param, didt_workload_iterations):
-    test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, -1, None, False)
+    test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, -1, None, False, False)
 
 
 @pytest.mark.parametrize(
@@ -49,7 +49,7 @@ def test_reproduce_matmul_2d_hang(mesh_device, ff1_hang_dummy_param, didt_worklo
 )
 def test_specific_chip_reproduce_matmul_2d_hang(mesh_device, logical_chip_index, didt_workload_iterations):
     test_specific_chip_ff1_matmul(
-        mesh_device, logical_chip_index, GELU, MATH_FIDELITY, didt_workload_iterations, -1, None, False
+        mesh_device, logical_chip_index, GELU, MATH_FIDELITY, didt_workload_iterations, -1, None, False, False
     )
 
 
@@ -66,7 +66,9 @@ def test_determinism(mesh_device, didt_workload_iterations, determinism_check_in
     if determinism_check_interval == -1:
         determinism_check_interval = 1
 
-    test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, determinism_check_interval, None, False)
+    test_ff1_matmul(
+        mesh_device, GELU, MATH_FIDELITY, didt_workload_iterations, determinism_check_interval, None, False, False
+    )
 
 
 @pytest.mark.parametrize(
@@ -97,5 +99,6 @@ def test_determinism_specific_chip(
         didt_workload_iterations,
         determinism_check_interval,
         None,
+        False,
         False,
     )

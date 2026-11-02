@@ -1033,6 +1033,13 @@ def pytest_addoption(parser):
         help="Run didt workload iterations back-to-back, syncing devices only on determinism-check iterations",
     )
     parser.addoption(
+        "--didt-static-activations",
+        action="store_true",
+        default=False,
+        help="Place one activation tensor directly in its memory config and keep it resident for the whole didt run, "
+        "instead of staging 10 activation tensors in DRAM and re-sharding a new one on every determinism check",
+    )
+    parser.addoption(
         "--grid-size",
         action="store",
         default=None,
@@ -1071,6 +1078,12 @@ def determinism_check_interval(request):
 @pytest.fixture
 def didt_back_to_back(request):
     return request.config.getoption("--didt-back-to-back")
+
+
+# Indicates whether didt tests keep a single activation tensor resident instead of rotating activations
+@pytest.fixture
+def didt_static_activations(request):
+    return request.config.getoption("--didt-static-activations")
 
 
 # Indicated the number of workload iterations to run within didt tests

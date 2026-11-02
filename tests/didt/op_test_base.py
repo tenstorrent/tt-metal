@@ -33,6 +33,7 @@ class OpTestBase:
         determinism_check_enabled=False,
         determinism_check_interval=False,
         sync_every_iteration=True,
+        static_activations=False,
     ):
         self.mesh_device = mesh_device
         # This will be removed once we rebase onto new main with the new open_mesh_device API
@@ -55,6 +56,7 @@ class OpTestBase:
         self.determinism_check_enabled = determinism_check_enabled
         self.determinism_check_interval = determinism_check_interval
         self.sync_every_iteration = sync_every_iteration
+        self.static_activations = static_activations
 
         # Weights and activations tensors are needed for subclasses to run the operation
         self.activations = None
@@ -76,11 +78,12 @@ class OpTestBase:
         return torch.randn(shape)
 
     def generate_tt_activations_from_torch(self, torch_tensor):
+        # Static activations are placed directly in their target memory config instead of being staged in DRAM
         return ttnn.from_torch(
             torch_tensor,
             dtype=self.activation.dtype,
             layout=self.activation.layout,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.activation.mem_config if self.static_activations else ttnn.DRAM_MEMORY_CONFIG,
             device=self.mesh_device,
             mesh_mapper=self.from_torch_mesh_mapper,
         )
@@ -122,7 +125,8 @@ class OpTestBase:
             a_shape = self.activation.shape
 
             num_activation_tensors = 1
-            if self.determinism_check_enabled:
+            # Static activations keep one activation tensor resident in its memory config for the whole run
+            if self.determinism_check_enabled and not self.static_activations:
                 # If we are running determinism checks, we want to switch activation tensors
                 # every time we complete an iteration of a determinism check, to confirm that
                 # device is producing new results, and not just reusing an already existing buffer
@@ -155,16 +159,22 @@ class OpTestBase:
                 num_nd_outputs = [0] * num_devices
                 reference_out = [None for _ in range(num_activation_tensors)]
                 for act in range(num_activation_tensors):
-                    self.activations = self.convert_activations_to_memory_config(a_t[act])
+                    if self.static_activations:
+                        self.activations = a_t[act]
+                    else:
+                        self.activations = self.convert_activations_to_memory_config(a_t[act])
                     output = self.run_device_operation()
                     reference_out[act] = list(pool.map(ttnn.to_torch, ttnn.get_device_tensors(output.cpu())))
                     output.deallocate(True)
-                    if self.activation.mem_config.buffer_type == ttnn.BufferType.L1:
+                    if self.activation.mem_config.buffer_type == ttnn.BufferType.L1 and not self.static_activations:
                         self.deallocate_activations()
 
             current_act_tensor = 0
             out = [None] * num_devices
-            self.activations = self.convert_activations_to_memory_config(a_t[0])
+            if self.static_activations:
+                self.activations = a_t[0]
+            else:
+                self.activations = self.convert_activations_to_memory_config(a_t[0])
 
             logger.info("Starting iterations")
             for i in range(self.loop_count):
@@ -199,11 +209,12 @@ class OpTestBase:
                             logger.info(f"Device {device_idx} PCC: {pcc}")
                             num_nd_outputs[output_id] += 1
 
-                    current_act_tensor = (current_act_tensor + 1) % num_activation_tensors
-                    logger.info("Switching activation tensor for new determinism iterations...")
-                    if self.activation.mem_config.buffer_type == ttnn.BufferType.L1:
-                        self.deallocate_activations()
-                    self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
+                    if not self.static_activations:
+                        current_act_tensor = (current_act_tensor + 1) % num_activation_tensors
+                        logger.info("Switching activation tensor for new determinism iterations...")
+                        if self.activation.mem_config.buffer_type == ttnn.BufferType.L1:
+                            self.deallocate_activations()
+                        self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
 
                 out.deallocate(True)
 
