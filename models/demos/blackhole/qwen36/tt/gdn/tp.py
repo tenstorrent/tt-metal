@@ -1790,7 +1790,10 @@ class TPGatedDeltaNet:
             ttnn.deallocate(out_r)
             out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
             ttnn.deallocate(out_n)
-        gated = _silu_mul(out_f, z, _L1)
+        # BONSAI_NATIVE: the exact-ternary out-proj reads bf16, so the gate emits it (no separate typecast op)
+        _bf = (ttnn.bfloat16 if getattr(self, "_native_out", None) is not None and B <= tpc.TILE_SIZE
+               and os.environ.get("BONSAI_GDN_GATE_BF16", "1") == "1" else None)
+        gated = _silu_mul(out_f, z, _L1, dtype=_bf)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 
