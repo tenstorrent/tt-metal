@@ -131,6 +131,8 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     const uint32_t pages_per_row = tt::div_up(stick_bytes, in_raw_page_size);
     const uint32_t last_page_bytes = stick_bytes - (pages_per_row - 1) * in_raw_page_size;
 
+    const bool shared_stick_reader = !column_2d && !compact_reader;
+    KernelDescriptor stick_reader;
     KernelDescriptor reader;
     reader.core_ranges = core_range;
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -147,9 +149,12 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
         TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
         reader.emplace_common_runtime_args({in_buf});
     } else {
-        reader.kernel_source = kStickReaderPath;
-        TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
-        reader.named_compile_time_args = {
+        stick_reader.kernel_source = kStickReaderPath;
+        stick_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        stick_reader.core_ranges = core_range;
+        stick_reader.config = ReaderConfigDescriptor{};
+        TensorAccessorArgs(*in_buf).append_to(stick_reader.compile_time_args);
+        stick_reader.named_compile_time_args = {
             {"mode", kStickReaderModeTileRow},
             {"cb_id", kCbIn},
             {"stick_bytes", stick_bytes},
@@ -236,7 +241,7 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
             if (compact_reader) {
                 reader.emplace_runtime_args(core, {rows, first_stick * pages_per_row});
             } else {
-                reader.emplace_runtime_args(
+                stick_reader.emplace_runtime_args(
                     core,
                     {in_buf,
                      rows,
@@ -254,7 +259,7 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     emit_group(cg1, tiles_per_core_1);
     emit_group(cg2, tiles_per_core_2);
 
-    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(shared_stick_reader ? stick_reader : reader));
     desc.kernels.push_back(std::move(compute));
     desc.kernels.push_back(std::move(writer));
     return desc;
