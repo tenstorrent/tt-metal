@@ -10,6 +10,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "tilize.hpp"
+#include "tilize_force.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
@@ -49,5 +50,27 @@ void bind_tilize(nb::module_& mod) {
         nb::arg("use_low_perf") = false,
         nb::arg("tile") = tt::tt_metal::Tile(),  // default to 32x32 tile
         nb::arg("sub_core_grids") = nb::none());
+
+    // Verification-only: pin the implementation. Deliberately not registered under ttnn.*.
+    mod.def(
+        "tilize_force_native",
+        &tilize_force_native,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("use_low_perf") = false,
+        nb::arg("tile") = tt::tt_metal::Tile(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>());
+    mod.def(
+        "tilize_force_codegen",
+        &tilize_force_codegen,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>());
 }
 }  // namespace ttnn::operations::data_movement::detail

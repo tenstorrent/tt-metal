@@ -13,25 +13,47 @@
 
 namespace ttnn::prim {
 
+namespace {
+
+namespace codegen = ttnn::operations::data_movement::tilize_codegen;
+
+// Answering the support question for a host tensor would dereference a null device, so the structural
+// preconditions are asserted first.
+void require_allocated_device_input(const Tensor& input) {
+    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to tilize need to be on device!");
+    TT_FATAL(input.is_allocated(), "Operands to tilize need to be allocated in buffers on device!");
+}
+
+}  // namespace
+
 void TilizeCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // supported_by_codegen() answers for a host tensor too, so the structural preconditions are
-    // asserted first; otherwise output allocation fails on a null device instead of this error.
-    TT_FATAL(tensor_args.input.storage_type() == ttnn::StorageType::DEVICE, "Operands to tilize need to be on device!");
-    TT_FATAL(tensor_args.input.is_allocated(), "Operands to tilize need to be allocated in buffers on device!");
+    const auto& input = tensor_args.input;
+    require_allocated_device_input(input);
     TT_FATAL(
-        ttnn::operations::data_movement::tilize_codegen::supported_by_codegen(
-            tensor_args.input, operation_attributes.output_mem_config),
+        codegen::supported_by_codegen(input, operation_attributes.output_mem_config, operation_attributes.output_dtype),
         "TilizeCodegenDeviceOperation invoked for a case not supported by the codegen implementation");
+    const auto unsupported_control = codegen::unsupported_execution_control(
+        operation_attributes.use_multicore,
+        operation_attributes.use_low_perf,
+        input.tensor_spec().tile(),
+        operation_attributes.sub_core_grids);
+    TT_FATAL(
+        !unsupported_control.has_value(),
+        "The codegen tilize runs on the full compute grid with the default tile and cannot honour {}",
+        unsupported_control.value_or(""));
 }
 
 TilizeCodegenDeviceOperation::spec_return_value_t TilizeCodegenDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
+    const auto& input = tensor_args.input;
     return TensorSpec(
-        tensor_args.input.logical_shape(),
+        input.logical_shape(),
         TensorLayout(
-            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config));
+            operation_attributes.output_dtype,
+            PageConfig(Layout::TILE, input.tensor_spec().tile()),
+            operation_attributes.output_mem_config));
 }
 
 TilizeCodegenDeviceOperation::tensor_return_value_t TilizeCodegenDeviceOperation::create_output_tensors(
@@ -46,7 +68,9 @@ Tensor tilize_codegen(
     bool use_multicore,
     bool use_low_perf,
     bool preserve_logical_shape,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const codegen::TilizeCodegenPlan& plan) {
+    require_allocated_device_input(input);
     return ttnn::device_operation::launch<TilizeCodegenDeviceOperation>(
         TilizeCodegenOperationAttributes{
             .output_mem_config = std::move(output_mem_config),
@@ -54,7 +78,8 @@ Tensor tilize_codegen(
             .use_multicore = use_multicore,
             .use_low_perf = use_low_perf,
             .preserve_logical_shape = preserve_logical_shape,
-            .sub_core_grids = sub_core_grids},
+            .sub_core_grids = sub_core_grids,
+            .plan = plan},
         TilizeCodegenTensorArgs{.input = input});
 }
 

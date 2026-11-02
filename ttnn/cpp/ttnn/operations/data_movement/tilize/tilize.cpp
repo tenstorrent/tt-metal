@@ -4,6 +4,9 @@
 
 #include "tilize.hpp"
 
+#include "tilize_force.hpp"
+#include "codegen/tilize_codegen_device_operation.hpp"
+#include "codegen/tilize_codegen_supported.hpp"
 #include "device/tilize_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -11,6 +14,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
 using namespace tt::tt_metal;
 
@@ -38,11 +42,28 @@ MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize, const std::optiona
         .operation = std::move(base_tilize)});
 }
 
-}  // namespace ttnn::operations::data_movement
+namespace {
 
-namespace ttnn {
+// A zero-volume input has nothing to tilize. Legacy tolerated the resulting empty program, but the
+// Metal 2.0 spec validator rejects it (no work cores -> the output DFB has no producer), so
+// short-circuit to a correctly-shaped empty output the way the sibling tilize_with_val_padding does.
+ttnn::Tensor tilize_empty_output(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    const tt::tt_metal::Tile& tile) {
+    TensorSpec spec(
+        input_tensor.logical_shape(),
+        TensorLayout(
+            output_dtype.value_or(input_tensor.dtype()),
+            PageConfig(Layout::TILE, tile),
+            memory_config.value_or(input_tensor.memory_config())));
+    return create_device_tensor(spec, input_tensor.device());
+}
 
-ttnn::Tensor tilize(
+// The existing native implementation, unconditionally. Calls the native prim directly rather than
+// re-entering ttnn::tilize, so a call already routed to native cannot be routed a second time.
+ttnn::Tensor tilize_native(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -50,17 +71,8 @@ ttnn::Tensor tilize(
     bool use_low_perf,
     tt::tt_metal::Tile tile,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // A zero-volume input has nothing to tilize. Legacy tolerated the resulting empty program, but the
-    // Metal 2.0 spec validator rejects it (no work cores -> the output DFB has no producer), so
-    // short-circuit to a correctly-shaped empty output the way the sibling tilize_with_val_padding does.
     if (input_tensor.physical_volume() == 0) {
-        TensorSpec spec(
-            input_tensor.logical_shape(),
-            TensorLayout(
-                output_dtype.value_or(input_tensor.dtype()),
-                PageConfig(Layout::TILE, tile),
-                memory_config.value_or(input_tensor.memory_config())));
-        return create_device_tensor(spec, input_tensor.device());
+        return tilize_empty_output(input_tensor, memory_config, output_dtype, tile);
     }
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -132,7 +144,114 @@ ttnn::Tensor tilize(
             sub_core_grids);
     };
 
-    return ttnn::operations::data_movement::build_ndiml_tilize(base_tilize, sub_core_grids)(input_tensor);
+    return build_ndiml_tilize(base_tilize, sub_core_grids)(input_tensor);
+}
+
+}  // namespace
+
+namespace detail {
+
+ttnn::Tensor tilize_force_native(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    bool use_multicore,
+    bool use_low_perf,
+    tt::tt_metal::Tile tile,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return tilize_native(input_tensor, memory_config, output_dtype, use_multicore, use_low_perf, tile, sub_core_grids);
+}
+
+ttnn::Tensor tilize_force_codegen(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype) {
+    using tilize_codegen::plan_codegen;
+    using tilize_codegen::supported_by_codegen;
+
+    // Normalize exactly as the routed entry does, so a rank>4 input reaches the planner and the
+    // prim as the squeezed 4D tensor rather than the raw one.
+    auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
+        const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
+        const DataType dtype = output_dtype.value_or(normalized_input.dtype());
+        TT_FATAL(
+            supported_by_codegen(normalized_input, output_mem_config, dtype),
+            "tilize_force_codegen invoked for a case the codegen implementation does not support. This entry never "
+            "falls back to native. Use ttnn::tilize if you want the case routed.");
+        const auto plan = plan_codegen(normalized_input, output_mem_config, dtype);
+        TT_FATAL(
+            plan.has_value(),
+            "tilize_force_codegen invoked for a case the codegen implementation does not support (requires "
+            "ROW_MAJOR interleaved input and output in the default 32x32 tile, dtype bfloat16, float32, uint32, "
+            "int32 or uint16 (bfloat16 may convert to int32), tile-aligned height and width, and a column-chunked "
+            "CB plan that fits the L1 free now). This entry never falls back to native, because a forced leg that "
+            "quietly served native would make any comparison against native vacuous. Use ttnn::tilize if you want "
+            "the case routed.");
+        return ttnn::prim::tilize_codegen(
+            normalized_input,
+            output_mem_config,
+            dtype,
+            /*use_multicore=*/true,
+            /*use_low_perf=*/false,
+            /*preserve_logical_shape=*/false,
+            /*sub_core_grids=*/std::nullopt,
+            *plan);
+    };
+
+    return build_ndiml_tilize(dispatch, /*sub_core_grids=*/std::nullopt)(input_tensor);
+}
+
+}  // namespace detail
+
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+ttnn::Tensor tilize(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    bool use_multicore,
+    bool use_low_perf,
+    tt::tt_metal::Tile tile,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    using ttnn::operations::data_movement::tilize_native;
+    using ttnn::operations::data_movement::tilize_codegen::is_demoted;
+    using ttnn::operations::data_movement::tilize_codegen::plan_codegen;
+    using ttnn::operations::data_movement::tilize_codegen::supported_by_codegen;
+    using ttnn::operations::data_movement::tilize_codegen::supported_execution_controls;
+
+    if (input_tensor.physical_volume() == 0) {
+        return ttnn::operations::data_movement::tilize_empty_output(input_tensor, memory_config, output_dtype, tile);
+    }
+
+    const bool controls_ok = supported_execution_controls(use_multicore, use_low_perf, tile, sub_core_grids);
+
+    // Route on the normalized (squeezed to 4D) tensor, the one native would see. The plan is sized against
+    // the L1 free now, so nullopt (out of scope or no room for the CBs) falls back to native.
+    auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
+        const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
+        const DataType dtype = output_dtype.value_or(normalized_input.dtype());
+        if (ttnn::operations::data_movement::codegen_supported_on_arch(normalized_input) && controls_ok &&
+            supported_by_codegen(normalized_input, output_mem_config, dtype)) {
+            if (const auto plan = plan_codegen(normalized_input, output_mem_config, dtype);
+                plan.has_value() && !is_demoted(normalized_input, *plan)) {
+                return ttnn::prim::tilize_codegen(
+                    normalized_input,
+                    output_mem_config,
+                    dtype,
+                    use_multicore,
+                    use_low_perf,
+                    /*preserve_logical_shape=*/false,
+                    sub_core_grids,
+                    *plan);
+            }
+        }
+        return tilize_native(
+            normalized_input, memory_config, output_dtype, use_multicore, use_low_perf, tile, sub_core_grids);
+    };
+
+    return ttnn::operations::data_movement::build_ndiml_tilize(dispatch, sub_core_grids)(input_tensor);
 }
 
 }  // namespace ttnn

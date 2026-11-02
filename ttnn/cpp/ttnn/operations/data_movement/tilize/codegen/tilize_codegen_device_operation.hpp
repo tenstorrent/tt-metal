@@ -14,6 +14,7 @@
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/types.hpp"
 #include "tilize_codegen_program_factory.hpp"
+#include "tilize_codegen_supported.hpp"
 
 namespace ttnn::prim {
 
@@ -28,6 +29,7 @@ struct TilizeCodegenOperationAttributes {
     bool use_low_perf = false;
     bool preserve_logical_shape = false;
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+    ttnn::operations::data_movement::tilize_codegen::TilizeCodegenPlan plan;
 };
 
 using TilizeCodegenTensorReturnValue = Tensor;
@@ -54,6 +56,7 @@ Tensor tilize_codegen(
     bool use_multicore,
     bool use_low_perf,
     bool preserve_logical_shape,
-    const std::optional<CoreRangeSet>& sub_core_grids);
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const ttnn::operations::data_movement::tilize_codegen::TilizeCodegenPlan& plan);
 
 }  // namespace ttnn::prim
