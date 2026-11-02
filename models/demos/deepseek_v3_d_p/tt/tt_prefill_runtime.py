@@ -601,6 +601,11 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+    def _first_rank_past_layer_0(self) -> bool:
+        """A first rank that starts mid-model: only the runner's PREFILL_PP_LAYER_OFFSET (capacity probes)
+        builds one. It takes tokens, so nothing upstream sends what a later stage normally receives."""
+        return self.config.is_first_rank and self.config.first_layer_idx > 0
+
     def _make_partial_placeholder(self) -> ttnn.Tensor:
         """Trace buffer for the upstream drafter partial: the hidden-only placeholder, which is the partial's
         shape whenever the hidden is a single plane. A model sending more planes overrides this."""
@@ -896,7 +901,7 @@ class TtPrefillRuntime:
         dflash = self.config.dflash_enabled
         if dflash:
             self.drafter.reset()
-            if not self.config.is_first_rank:
+            if not self.config.is_first_rank or self._first_rank_past_layer_0():
                 self.drafter.import_partial(self._trace_partial_in, owned=False)
         model_input = self._trace_input
         union = ids_block = None
@@ -1014,6 +1019,10 @@ class TtPrefillRuntime:
             self._trace_partial_in = self._make_partial_placeholder()
         else:
             self._trace_input = self.make_chunk_input([0] * chunk)
+            if self.config.dflash_enabled and self._first_rank_past_layer_0():
+                # Capacity probes only (the runner's PREFILL_PP_LAYER_OFFSET): no upstream rank sends a drafter
+                # partial, so the capture imports this placeholder instead.
+                self._trace_partial_in = self._make_partial_placeholder()
         if self.config.mtp_levels and self.config.is_first_rank:
             self._trace_mtp_tokens = self.make_mtp_tokens_input([0] * (chunk + self._num_mtp_tokens()))
         if self.mtp_predictor is not None:
@@ -1269,6 +1278,8 @@ class TtPrefillRuntime:
                 model_input, partial = self._unpack_activation(input_tensor)
                 ttnn.deallocate(input_tensor)
                 self.drafter.import_partial(partial)
+            elif self._first_rank_past_layer_0():
+                self.drafter.import_partial(self._make_partial_placeholder())
         elif self.config.mtp_levels:
             mtp_union, model_input, mtp_ids_block = self._mtp_prepare_input(input_tensor, mtp_tokens)
             mtp_owns_input = self.config.is_first_rank
