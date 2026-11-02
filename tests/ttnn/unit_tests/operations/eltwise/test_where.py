@@ -1330,7 +1330,7 @@ def test_where_scalar_row_major_both_sharded_broadcast(device):
     assert torch.equal(ttnn.to_torch(out), expected)
 
 
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bfp8", "bfp4"])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b], ids=["bfp8", "bfp4", "bfp2"])
 @pytest.mark.parametrize(
     "c_shape, t_shape, f_shape, condition",
     [
