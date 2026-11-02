@@ -233,9 +233,10 @@ def _versim_set_tensix_soft_reset(value, location="0,0", device_id=0):
     x, y = coordinate.to("noc0")
     # Simulator cluster descriptors are generated with noc_translation disabled, so
     # noc0 coordinates are already the translated ones UMD expects here.
-    core = tt_umd.CoreCoord(x, y, tt_umd.CoreType.TENSIX, tt_umd.CoordSystem.TRANSLATED)
+    core = tt_umd.CoreCoord(x, y, tt_umd.CoreType.TENSIX, tt_umd.CoordSystem.NOC0)
 
     tt_device = _versim_tt_device(device_id)
+    tt_umd.set_thread_noc_id(tt_umd.NocId.NOC0)  # the 2x2 Versim grid has no NOC1 map
     if value:
         tt_device.assert_risc_reset(core, tt_umd.RiscType.ALL)
     else:
