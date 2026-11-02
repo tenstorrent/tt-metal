@@ -5,7 +5,8 @@
 Galaxy (SP8xTP4) runs K3's prefill chunk and is gated. LoudBox (SP2xTP4, 1280 tokens) and QuietBox (SP1xTP4, 640
 tokens) run the same walk at Galaxy's TP width and 640 rows per chip, so every per-chip shape matches Galaxy's and only
 the SP axis is shorter. QuietBox cannot split TP in two instead: at a 3584-wide shard the read needs more L1 per core
-than a core has. They report without gating until they have CI references.
+than a core has. Its four chips ring only on 1D fabric, which wraps mesh axis 0, so QuietBox opens 4x1 and puts TP on
+axis 0, as KDA's QuietBox perf tests do. They report without gating until they have CI references.
 
 The walk starts where the last pipeline rank starts (24/24/24/21 over 4 Galaxies), with the sealed snapshots the
 upstream ranks hand over. Two layer kinds cover what AttnRes costs across the model:
@@ -61,7 +62,7 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
 )
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
-    torus_x_device_params,
+    fabric_1d_device_params,
     torus_xy_device_params,
     tp_axis_is_wrapped,
 )
@@ -275,12 +276,18 @@ _TRACE_REGION_SIZE = 128 * 1024 * 1024
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="SP2xTP4-fabric-2d",
         ),
-        # QuietBox's four chips as one TP ring, as the model's QuietBox tests open them; the SP axis is one chip.
+        # QuietBox's four chips as one TP ring. Its 2x2 wiring cannot realize a 2D torus-X 1x4 ring, so it takes
+        # 1D ring fabric, which wraps axis 0, as KDA's QuietBox perf tests do; the SP axis is one chip.
         pytest.param(
-            (1, 4),
-            torus_x_device_params(l1_small_size=L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE, **EXACT_BOX),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="SP1xTP4-torus-x",
+            (4, 1),
+            fabric_1d_device_params(
+                fabric_config=ttnn.FabricConfig.FABRIC_1D_RING,
+                l1_small_size=L1_SMALL_SIZE,
+                trace_region_size=_TRACE_REGION_SIZE,
+                **EXACT_BOX,
+            ),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="SP1xTP4-ring",
         ),
     ],
     indirect=True,
@@ -288,7 +295,9 @@ _TRACE_REGION_SIZE = 128 * 1024 * 1024
 def test_attn_res_layer_perf(mesh_device, device_params, mode):
     """Gate the AttnRes end-to-end time of a boundary layer and an ordinary layer on LoudBox, QuietBox and Galaxy,
     and report their device time."""
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
+    # A 4x1 mesh is QuietBox's 1D ring, which wraps axis 0, so TP goes there; every other mesh is SP x TP.
+    tp_axis = 0 if tuple(mesh_device.shape)[1] == 1 else 1
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=1 - tp_axis, tp_axis=tp_axis)
     layout = f"SP{op.sp_factor}xTP{op.tp_factor}"
     report_only = layout in _REPORT_ONLY_LAYOUTS
     if layout == _GALAXY:
