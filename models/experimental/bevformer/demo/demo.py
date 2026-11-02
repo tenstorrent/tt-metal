@@ -330,9 +330,10 @@ def run_demo(args):
             end_to_end_start = time.perf_counter()
             images, metas, token = load_frame(index)
             tt_image = to_conv_layout(images, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            prepared = tt_model.prepare_frame(metas, prepared)
 
+            # Preparing the frame projects the cameras on device and queues their visible counts' readback.
             device_start = time.perf_counter()
+            prepared = tt_model.prepare_frame(metas, prepared)
             cls_scores, bbox_preds, next_bev = tt_model(tt_image, prepared, prev_bev=prev_bev)
             compacted = detect_frame(cls_scores, bbox_preds)
             ttnn.synchronize_device(device)
