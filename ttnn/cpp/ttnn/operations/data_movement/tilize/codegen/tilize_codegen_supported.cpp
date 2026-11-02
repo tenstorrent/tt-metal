@@ -83,9 +83,7 @@ uint32_t column_blocks(uint32_t wt, uint32_t max_blocks) {
     return 1;
 }
 
-// Most column blocks worth cutting a tile row into. Narrow DRAM fragments read inefficiently, so a few-row
-// DRAM tensor gets wide blocks on few cores. A cut that would use fewer than kMinSplitCores keeps the full
-// grid. Without a DRAM stick read to amortize (L1 input) or with a conversion, only the grid bounds the cut.
+// Narrow DRAM fragments read inefficiently, so a few-row DRAM tensor gets wide blocks on few cores.
 uint32_t max_column_blocks(const TilizeGeometry& g, uint32_t elem_size, uint32_t grid_cores, bool fragment_limited) {
     const uint32_t grid_blocks = grid_cores / g.tile_rows;
     if (!fragment_limited) {
@@ -104,7 +102,6 @@ uint32_t max_column_blocks(const TilizeGeometry& g, uint32_t elem_size, uint32_t
     return g.tile_rows * capped < kMinSplitCores ? grid_blocks : capped;
 }
 
-// Everything about a case that does not depend on how much L1 is free.
 struct Geometry : TilizeGeometry {
     uint32_t row_cores = 0;
     uint32_t in_tile_bytes = 0;
@@ -127,8 +124,6 @@ std::optional<Geometry> analyze(
         return std::nullopt;
     }
 
-    // The tile size, page count and row pitch below are all 32x32 quantities; a transposed tile would
-    // additionally permute the datums, which nothing here configures.
     if (!is_default_tile(input.tensor_spec().tile())) {
         return std::nullopt;
     }
@@ -156,12 +151,9 @@ std::optional<Geometry> analyze(
     return g;
 }
 
-// Fits the column chunk, buffering depth and write batch to `usable_l1` bytes per core, less the output's
-// pending reservation. The route does not depend on the budget; nullopt means not even a one-tile chunk fits.
 std::optional<TilizeCodegenPlan> plan_for_budget(const Geometry& g, uint64_t usable_l1) {
     const uint64_t budget = usable_l1 > g.pending_l1_output_bytes ? usable_l1 - g.pending_l1_output_bytes : 0;
 
-    // Bytes of every CB for a chunk of `chunk` tiles held `depth` chunks deep; the conversion CB holds one chunk.
     auto cb_bytes = [&](uint64_t chunk, uint64_t depth, uint64_t out_depth_tiles) {
         return depth * chunk * g.in_tile_bytes + out_depth_tiles * g.out_tile_bytes +
                (g.convert ? chunk * g.in_tile_bytes : 0);
@@ -193,8 +185,7 @@ std::optional<TilizeCodegenPlan> plan_for_budget(const Geometry& g, uint64_t usa
         depth = kSingleBuffered;
     }
 
-    // A core with at most one tile row writes at most block_wt tiles. Batching waits on two batches at once, so
-    // it is used only when that whole block fits the output CB without wrapping the FIFO.
+    // Batching waits on two batches at once, so use it only when the whole block fits without wrapping the FIFO.
     uint32_t write_batch = 1;
     uint32_t cb_out_depth = depth * chunk_wt;
     if (!multi_row_per_core && !minimal_work) {
@@ -227,7 +218,6 @@ TilizeGeometry tilize_geometry(const Tensor& input, DataType output_dtype) {
     g.wt = width / TILE_WIDTH;
     g.tile_rows = input.logical_shape().volume() / width / TILE_HEIGHT;
     g.convert = output_dtype != input.dtype();
-    g.bfloat16_input = input.dtype() == DataType::BFLOAT16;
     if (g.tile_rows < grid_cores && g.wt >= kColumn2DMinWt) {
         const bool fragment_limited =
             !g.convert && input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -243,11 +233,9 @@ TilizeGeometry tilize_geometry(const Tensor& input, DataType output_dtype) {
 }
 
 bool uses_compact_reader(const TilizeGeometry& geometry, const TilizeCodegenPlan& plan) {
-    return geometry.route == TilizeRoute::Row && !geometry.convert && geometry.bfloat16_input &&
-           plan.num_col_chunks == 1 && geometry.wt <= kCompactReaderMaxWt;
+    return geometry.route == TilizeRoute::Row && plan.num_col_chunks == 1 && geometry.wt <= kCompactReaderMaxWt;
 }
 
-// The chunk, depth and batch fields are frontier-derived, so the plan is part of the program cache key.
 std::optional<TilizeCodegenPlan> plan_codegen(
     const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config, DataType output_dtype) {
     const auto geometry = analyze(input, output_mem_config, output_dtype);
@@ -291,8 +279,7 @@ bool supported_execution_controls(
     return !unsupported_execution_control(use_multicore, use_low_perf, tile, sub_core_grids).has_value();
 }
 
-// Perf-only and routing-only. Entries must come from device kernel durations, never end-to-end timing;
-// none have been measured as demoted, so every supported case stays on this path.
+// Entries must come from device kernel durations, never end-to-end timing.
 bool is_demoted(
     const Tensor& /*input*/, const tt::tt_metal::MemoryConfig& /*output_mem_config*/, DataType /*output_dtype*/) {
     return false;

@@ -48,15 +48,11 @@ constexpr uint32_t kCbOut = tt::CBIndex::c_16;
 // Tiles the conversion kernel holds in DEST at once; fits the fp32 half-sync DEST.
 constexpr uint32_t kTypecastBlockTiles = 4;
 
-// Mirrors the mode and sequencer ids of the shared stick reader.
 constexpr uint32_t kStickReaderModeTileRow = 1;
 constexpr uint32_t kSeqIdentity = 0;
-// Named args the shared reader looks up in branches this program does not select; the JIT build needs
-// every name it references to exist. `elem_size` is bound to the real element size because the unselected
-// pad branch instantiates fill_with_val<elem_size>, which static_asserts 2 or 4.
+// Placeholders for named args in unselected branches of the shared reader; the JIT build needs every name
+// to exist. `elem_size` stays real: the unselected pad branch instantiates fill_with_val<elem_size>.
 constexpr uint32_t kUnusedNamedArg = 0;
-// The tile-row mode never reads `batch`, reads `nabatch` sticks per barrier, and only hoists the CB write
-// pointer in the low-L1 variant, which this program does not offer.
 constexpr uint32_t kReaderBatch = 1;
 constexpr uint32_t kReaderSticksPerBarrier = 4;
 constexpr uint32_t kReaderHoistCbWritePtr = 0;
@@ -126,11 +122,6 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     }
     desc.cbs.push_back(make_cb(kCbOut, out_format, plan.cb_out_depth, out_cb_page_size, core_range));
 
-    // One row is `pages_per_row` buffer pages; for interleaved row-major that is a single stick per page.
-    const auto in_raw_page_size = static_cast<uint32_t>(in_buf->page_size());
-    const uint32_t pages_per_row = tt::div_up(stick_bytes, in_raw_page_size);
-    const uint32_t last_page_bytes = stick_bytes - (pages_per_row - 1) * in_raw_page_size;
-
     const bool shared_stick_reader = !column_2d && !compact_reader;
     KernelDescriptor stick_reader;
     KernelDescriptor reader;
@@ -145,7 +136,7 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
         reader.emplace_common_runtime_args({in_buf});
     } else if (compact_reader) {
         reader.kernel_source = kCompactReaderPath;
-        reader.compile_time_args = {kCbIn, TILE_HEIGHT, pages_per_row, in_raw_page_size, last_page_bytes, geometry.wt};
+        reader.compile_time_args = {kCbIn, TILE_HEIGHT, stick_bytes, geometry.wt};
         TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
         reader.emplace_common_runtime_args({in_buf});
     } else {
@@ -210,7 +201,6 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     };
 
     if (column_2d) {
-        // Row-major core order: core i owns tile row i / num_col_blocks and column block i % num_col_blocks.
         const auto cores = corerange_to_cores(core_range, std::nullopt, true);
         for (uint32_t i = 0; i < cores.size(); ++i) {
             const uint32_t tile_row = i / geometry.num_col_blocks;
@@ -239,7 +229,7 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
             const uint32_t rows = std::min(rows_per_core, geometry.tile_rows - assigned);
             const uint32_t first_stick = assigned * TILE_HEIGHT;
             if (compact_reader) {
-                reader.emplace_runtime_args(core, {rows, first_stick * pages_per_row});
+                reader.emplace_runtime_args(core, {rows, first_stick});
             } else {
                 stick_reader.emplace_runtime_args(
                     core,

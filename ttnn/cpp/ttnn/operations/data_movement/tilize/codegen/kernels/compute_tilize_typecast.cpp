@@ -2,12 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused val-padding transform: RM BF16 -> TILE BF16 -> numeric TILE INT32.
-//
-// CT args:
-// [cb_in, cb_mid, cb_out, num_col_chunks, chunk_Wt, BLOCK,
-//  in_data_format, out_data_format]
-// RT args: [num_tile_rows]
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -33,9 +27,8 @@ void kernel_main() {
     CircularBuffer cb_mid_exp(cb_mid);
     CircularBuffer cb_out_exp(cb_out);
 
-    // Hardware startup is not safe mid-kernel: re-run per chunk on WH, it
-    // corrupted the last tiles packed for the previous chunk. Per-chunk
-    // operand switches go through reconfig instead.
+    // Hardware startup mid-kernel corrupted the last tiles packed for the previous chunk on WH, so
+    // per-chunk operand switches use reconfig.
     compute_kernel_hw_startup(cb_in, cb_mid);
     bool first = true;
     for (uint32_t b = 0; b < num_tile_rows; ++b) {

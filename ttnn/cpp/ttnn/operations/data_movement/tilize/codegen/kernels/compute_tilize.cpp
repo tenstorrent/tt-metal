@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Tilize compute kernel: tilize_block per tile-row chunk.
-//
-// When num_col_chunks == 1: processes chunk_Wt == Wt tiles per tile-row.
-// When num_col_chunks >  1: processes chunk_Wt tiles per chunk, repeated
-//   num_col_chunks times per tile-row. Total tiles = chunk_Wt * num_col_chunks.
 #include <cstdint>
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tilize.h"

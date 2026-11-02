@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Block tilize reader: reads a rectangular sub-block of RM sticks from DRAM.
-//
-// Each core handles a (num_tile_rows x block_Wt) region of the tensor.
-// Reads partial sticks starting at col_byte_offset within each stick.
-// Supports sub-block column chunking when block_Wt exceeds L1.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -18,10 +13,10 @@ void kernel_main() {
     uint32_t start_stick = get_arg_val<uint32_t>(1);
     uint32_t col_byte_offset = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t num_col_chunks = get_compile_time_arg_val(0);  // sub-blocks per tile-row
-    constexpr uint32_t H_per_tile = get_compile_time_arg_val(1);      // TILE_H (32)
-    constexpr uint32_t chunk_Wt = get_compile_time_arg_val(2);        // tiles per sub-block
-    constexpr uint32_t elem_w_bytes = get_compile_time_arg_val(3);    // TILE_W * elem_size
+    constexpr uint32_t num_col_chunks = get_compile_time_arg_val(0);
+    constexpr uint32_t H_per_tile = get_compile_time_arg_val(1);
+    constexpr uint32_t chunk_Wt = get_compile_time_arg_val(2);
+    constexpr uint32_t elem_w_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t aligned_page_size = get_compile_time_arg_val(4);
     constexpr auto src_args = TensorAccessorArgs<5>();
 
