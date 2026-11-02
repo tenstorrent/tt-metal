@@ -80,7 +80,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool head_major_output,
-    bool head_major_input) {
+    bool head_major_input,
+    bool fused_gating) {
     TT_FATAL(!use_qk_l2norm, "fused_recurrent_gated_delta_rule: use_qk_l2norm not done here; L2-normalize q/k on host");
 
     auto* dev = q_in.device();
@@ -117,8 +118,11 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // decay = exp(g); beta as-is (already sigmoid'd). exp is elementwise, so it commutes with the
     // layout change; doing it here keeps it on the compact [B,T,H] form (2 tiles at decode rather
     // than 48 padded pages).
-    ttnn::Tensor decay = ttnn::exp(as_f32(g_in));         // [B,T,H], unchanged layout
-    ttnn::Tensor beta = as_f32(beta_in);                  // [B,T,H]
+    // fused_gating (QWEN36_1C_GDN_GB, decode): g_in is the raw a|b row [1,1,2HV] and beta_in the constants row
+    // [1,1,2HV] (-exp(A_log) | dt_bias); the kernel computes decay and beta, so no exp and no scalar relayout here.
+    TT_FATAL(!fused_gating || T == 1, "fused_recurrent_gated_delta_rule: fused_gating is decode-only (T == 1)");
+    ttnn::Tensor decay = fused_gating ? as_f32(g_in) : ttnn::exp(as_f32(g_in));  // [B,T,H], unchanged layout
+    ttnn::Tensor beta = as_f32(beta_in);                                          // [B,T,H]
 
     // Per-token layout: each (head, token) its own zero-padded tile-block.
     //   q/k [BH*T,1,K], v [BH*T,1,V], decay/beta [BH*T,1,1].
@@ -133,8 +137,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // decay/beta must be per-scalar tiles [BH*T,1,1] so bcast_scalar reads element [0,0]. At T == 1
     // that is one reshape each (see headvec_scalars); the values are 48 floats, the cost is the
     // crossing, not the arithmetic.
-    decay = headvec_scalars(decay, B, T, HV);
-    beta = headvec_scalars(beta, B, T, HV);
+    if (!fused_gating) {
+        decay = headvec_scalars(decay, B, T, HV);
+        beta = headvec_scalars(beta, B, T, HV);
+    }
 
     // Initial state [B,HV,K,V] -> [BH,K,V] fp32 TILE. Always provide (zeros if absent) so the reader
     // always reads S (it takes the unconditional path; there is no in-kernel zeroing). Traced callers
@@ -176,7 +182,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         want_state && !output_per_token_state,
         output_per_token_state,
         out_mem,
-        kernel_cfg);
+        kernel_cfg,
+        fused_gating);
     const ttnn::Tensor& o_pt = res[0];  // [BH*T, 1, V]
     const ttnn::Tensor& st = res[1];    // [BH*T,K,V] per-token, else [BH,K,V]
 

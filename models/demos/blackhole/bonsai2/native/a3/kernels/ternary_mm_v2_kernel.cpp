@@ -37,6 +37,7 @@
 #ifdef TRISC_MATH
 #include "sfpi.h"
 #include "llk_math_eltwise_sfpu_common.h"
+#include "ckernel_sfpu_silu.h"
 #endif
 #endif
 
@@ -102,6 +103,19 @@ inline void zero_slots(uint32_t nslots) {
 
 // slot 1 row 0 *= slot 2 row 0. A unit is 4 rows of the even (unit 2q) or odd (unit 2q+1)
 // columns of a face, so row 0 of faces 0/1 needs units 0, 1, 8, 9.
+// silu on row 0 of slot 1 only (units 0, 1, 8, 9): the stock calculate_silu body (same sigmoid, same
+// constants, fp32 DST) on the 4 units that carry data, not all 32 (silu_tile was 12.6 of gate|up's 114.5 us)
+inline void silu_row0() {
+    using namespace ckernel::sfpu;
+    HoistedIf<false> c0 = EXP_21F_C0, c1 = EXP_21F_C1, c2 = EXP_21F_C2;
+    HoistedIf<true> neg_ln2_hi = EXP_FP32_NEG_LN2_HI, p0 = EXP_FP32_P0;
+    constexpr float p1 = EXP_FP32_P1;
+#pragma GCC unroll 4
+    for (uint32_t i : {0u, 1u, 8u, 9u}) {
+        sfpi::vFloat x = sfpi::dst_reg[U + i];
+        sfpi::dst_reg[U + i] = x * _sfpu_sigmoid_prgm_<true>(x, c0, c1, c2, neg_ln2_hi, p0, p1);
+    }
+}
 inline void mul_row0() {
 #pragma GCC unroll 4
     for (uint32_t i : {0u, 1u, 8u, 9u}) {
@@ -124,10 +138,15 @@ template <uint32_t G0, uint32_t N, uint32_t ACC, uint32_t SBASE, uint32_t TI>
 struct Groups {
     static inline void run() {
         Groups<G0, N - 1, ACC, SBASE, TI>::run();
+        constexpr uint32_t dbg = get_named_compile_time_arg_val("tm_dbg");  // timing only: 1 no SFPU, 2 no matmul
         cb_wait_front(cb_in1, 32);
-        custom_mm_block<CustomMmDestLayout::Default, false>(cb_in0, cb_in1, (G0 + N - 1) * 32, 0, 0, 32);
+        if constexpr (!(dbg & 2)) {
+            custom_mm_block<CustomMmDestLayout::Default, false>(cb_in0, cb_in1, (G0 + N - 1) * 32, 0, 0, 32);
+        }
         cb_pop_front(cb_in1, 32);
-        MATH((sfpu_section([] { scale_acc<G0 + N - 1, ACC, SBASE, TI>(); })));
+        if constexpr (!(dbg & 1)) {
+            MATH((sfpu_section([] { scale_acc<G0 + N - 1, ACC, SBASE, TI>(); })));
+        }
     }
 };
 template <uint32_t G0, uint32_t ACC, uint32_t SBASE, uint32_t TI>
@@ -305,13 +324,27 @@ void kernel_main() {
             if constexpr (gu) {
                 column<2, 3 + s_tiles>((n * cols + 1) % tail_t);
             }
+            constexpr uint32_t edbg = get_named_compile_time_arg_val("tm_dbg");  // timing only: 4 no silu/mul, 8 no reduce
+            if constexpr (!(edbg & 8)) {
             sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
             sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(1);
+            }
             if constexpr (gu) {
+                if constexpr (!(edbg & 8)) {
                 sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(2);
+                }
+                if constexpr (!(edbg & 4)) {
                 silu_tile_init();
-                silu_tile(1);
-                MATH((sfpu_section([] { mul_row0(); })));
+                if constexpr (edbg & 16) {  // the old full-tile silu, for an A/B
+                    silu_tile(1);
+                    MATH((sfpu_section([] { mul_row0(); })));
+                } else {
+                    MATH((sfpu_section([] {
+                        silu_row0();
+                        mul_row0();
+                    })));
+                }
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
