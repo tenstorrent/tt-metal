@@ -6,14 +6,19 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "cross_entropy_test_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.hpp"
 #include "test_utils/random_data.hpp"
 
 class CrossEntropyForwardTest : public ::testing::Test {
@@ -203,4 +208,36 @@ TEST_F(CrossEntropyForwardTest, NIGHTLY_CrossEntropyForward_Huge_Forward) {
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+}
+
+namespace {
+
+using namespace ttml::test_utils::cross_entropy;
+
+void expect_loss_matches(const ttnn::Tensor& result, const LaunchTensors& in, const std::string& launch) {
+    const auto expected = calculate_cross_entropy_loss(in.input_values, in.target_values);
+    const auto actual = ttml::core::to_xtensor(result);
+    ASSERT_EQ(actual.shape(), expected.shape()) << launch;
+    EXPECT_TRUE(xt::allclose(actual, expected, 3e-2F, 1e-2F)) << launch;
+}
+
+}  // namespace
+
+TEST_F(CrossEntropyForwardTest, CrossEntropyForward_CacheHitFreshTensors_TwoCoreGroups) {
+    run_cache_hit_fresh_tensors(
+        /*W=*/157U,
+        [](const LaunchTensors& in) { return ttml::metal::cross_entropy_fw(in.input, in.target); },
+        expect_loss_matches);
+}
+
+// Preallocated outputs start at -1, which no loss can be.
+TEST_F(CrossEntropyForwardTest, CrossEntropyForward_PreallocatedOutput_CacheHit) {
+    run_preallocated_output_cache_hits(
+        /*W=*/61U,
+        /*output_width=*/1U,
+        /*sentinel=*/-1.0F,
+        [](const LaunchTensors& in, const std::optional<ttnn::Tensor>& output) {
+            return ttnn::prim::ttml_cross_entropy_fw(in.input, in.target, output);
+        },
+        expect_loss_matches);
 }

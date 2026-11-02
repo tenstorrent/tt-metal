@@ -5,7 +5,7 @@ import inspect
 import math
 from dataclasses import dataclass
 from itertools import product
-from typing import Iterator, List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple, Union
 
 import pytest
 from helpers.tile_shape import construct_tile_shape
@@ -19,7 +19,7 @@ from .constraints import (
     is_valid_quasar_packer_conversion,
     is_valid_quasar_unpack_to_dest,
 )
-from .data_format_inference import effective_dest_acc
+from .data_format_inference import _dest_acc_flag, effective_dest_acc
 from .format_config import (
     DataFormat,
     FormatConfig,
@@ -60,6 +60,18 @@ DEST_SYNC_TILE_LIMITS = {
     DestSync.Half: 8,
     DestSync.Full: 16,
 }
+
+
+def max_dest_tiles(
+    dest_acc: Union[bool, DestAccumulation], dest_sync: DestSync = DestSync.Half
+) -> int:
+    """Tiles one Dest section holds: DEST_SYNC_TILE_LIMITS[dest_sync], halved at a 32-bit Dest."""
+    return DEST_SYNC_TILE_LIMITS[dest_sync] // (2 if _dest_acc_flag(dest_acc) else 1)
+
+
+def quasar_dest_sync_modes(*, is_perf: bool = False) -> List[DestSync]:
+    """Dest sync modes a Quasar test sweeps: Half only for perf runs, else Half and Full."""
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def format_combination_sweep(
@@ -851,9 +863,7 @@ def calculate_edgecase_dest_indices(
 
 
 def get_max_dst_index(dest_sync: DestSync, dest_acc: bool, result_tiles: int) -> int:
-    capacity_divisor = 2 if dest_acc else 1
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
-    return max(max_tiles - result_tiles, 0)
+    return max(max_dest_tiles(dest_acc, dest_sync) - result_tiles, 0)
 
 
 def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shape=None):
@@ -873,8 +883,7 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
         List of input dimensions
     """
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
 
     if tile_shape is None:
         tile_shape = construct_tile_shape()
@@ -911,8 +920,7 @@ def generate_reduced_input_dimensions(
     # wrap back to the first bank is covered and not just the initial switch.
     num_dest_sections = 3
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
 
     if tile_shape is None:
         tile_shape = construct_tile_shape()
@@ -1010,8 +1018,7 @@ def generate_perf_input_dimensions(
     if tile_shape is None:
         tile_shape = construct_tile_shape()
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
     tile_rows = tile_shape.total_row_dim()
     tile_cols = tile_shape.total_col_dim()
 
@@ -1080,12 +1087,9 @@ def get_num_blocks_and_num_tiles_in_block(
     # dest_acc=Yes does.
     dest_acc = effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
 
-    capacity_divisor = (
-        2
-        if (dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit())
-        else 1
+    max_tiles_in_dest = max_dest_tiles(
+        dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit(), dest_sync
     )
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
 
     # Here we make an assumption that dense tiling is used,
     # meaning that the input matrix is fully covered by tiles without any padding or partial tiles.
