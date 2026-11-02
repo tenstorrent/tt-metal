@@ -443,6 +443,8 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
             tensor_args.input_v->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
             tensor_args.gathered_k.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "dynamic_local_n requires interleaved Q/K/V and gathered buffers");
+}
+
 std::optional<tt::tt_metal::TensorSpec> optional_spec(const std::optional<Tensor>& tensor) {
     return tensor.has_value() ? std::optional<tt::tt_metal::TensorSpec>{tensor->tensor_spec()} : std::nullopt;
 }
