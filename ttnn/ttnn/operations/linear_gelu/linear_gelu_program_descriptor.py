@@ -3,10 +3,11 @@
 
 """linear_gelu ProgramDescriptor: regime R1 (weight-stationary 2D grid).
 
-m (token tile rows) over grid rows, n (output tiles) over grid columns. Each column's row-0 core reads the
-column's W slice (plus the bias as the 25th K tile row) chunk by chunk and multicasts it down the column into
-cb_weight_resident, where it stays for every row-block. x row-blocks are read per core. One K-block of
-k_ext_tiles accumulates in fp32 DEST; GELU runs on the packer before each subblock is packed.
+m (token tile rows) over logical rows, n (output tiles) over logical columns; logical rows are the grid rows, or the
+grid columns when that fills more cores (short m). One core per logical column (staggered) reads the column's W
+slice (plus the bias as the 25th K tile row) chunk by chunk and multicasts it along the column into
+cb_weight_resident, where it stays for every row-block. x row-blocks are multicast along each logical row. One
+K-block of k_ext_tiles accumulates in fp32 DEST; GELU runs on the packer before each subblock is packed.
 """
 
 from __future__ import annotations
@@ -26,9 +27,17 @@ N_TILES = FFN // TILE
 # x/W K tiles plus the bias K tile (x side: the ones tile).
 K_EXT_TILES = K_TILES + 1
 
-BLOCK_W = 3
+# W chunk width (n tiles per mcast round). 1 measured fastest at every shape: the first chunk (25 tiles) lands
+# 3x sooner than at 3, which is the fill latency in front of all compute, and the finest n split also fills the grid
+# best. The 4-tile fp32 DEST is still filled by a 4x1 subblock.
+BLOCK_W = 1
+# W sender of logical column g is row g mod active_rows (diagonal) instead of row 0, so the DRAM read streams of
+# the senders do not share one grid line's NoC links.
+W_SENDER_STAGGER = True
 ACT_DEPTH = 2
-OUT_DEPTH = 2
+# cb_output_tiles depth in (block_h x block_w) n-blocks. At BLOCK_W = 1 the writer needs 6 (24 pages at block_h = 4,
+# as at block_w 3 x depth 2) to ride out DRAM write latency: depth 2 measured 143..146 us at 8x512 DRAM out vs 138.7.
+OUT_DEPTH = 6
 CB_BUDGET_BYTES = 900 * 1024
 # Same tanh GELU either way: 0 = 0.5x(1 + tanh(u)) with the FP32 accurate tanh, 1 = x / (1 + exp(-2u)) (exact
 # identity, ~22 vs ~38 SFPU ops). 1 measured PCC / rel RMS identical to 0 on golden inputs; the SFPU GELU binds the op.
@@ -53,16 +62,41 @@ class Blocking:
     active_cols: int
     block_h: int
     dest_tiles: int
+    block_w: int
+    # Logical rows (m) on physical grid columns (x) instead of grid rows (y): fills more cores when m is short.
+    transposed: bool
 
 
 def _div_up(a, b):
     return -(-a // b)
 
 
-def _footprint_bytes(block_h, core_n_tiles_max, tile_bytes):
+def _footprint_bytes(block_h, core_n_tiles_max, block_w, tile_bytes):
     fixed = (K_EXT_TILES * core_n_tiles_max + 1) * tile_bytes
-    per_row = (ACT_DEPTH * K_EXT_TILES + OUT_DEPTH * BLOCK_W) * tile_bytes
+    per_row = (ACT_DEPTH * K_EXT_TILES + OUT_DEPTH * block_w) * tile_bytes
     return fixed + block_h * per_row
+
+
+def _candidate(tensor_m_tiles, block_w, m_slots, n_slots, tile_bytes):
+    """Split m over m_slots grid lines and N_TILES / block_w n-blocks over n_slots; None if the W slice won't fit."""
+    n_blocks = N_TILES // block_w
+    core_n_blocks = _div_up(n_blocks, n_slots)
+    core_n_tiles_max = block_w * core_n_blocks
+    core_m_tiles = _div_up(tensor_m_tiles, m_slots)
+    fixed = _footprint_bytes(0, core_n_tiles_max, block_w, tile_bytes)
+    per_row = _footprint_bytes(1, core_n_tiles_max, block_w, tile_bytes) - fixed
+    max_block_h = (CB_BUDGET_BYTES - fixed) // per_row
+    if max_block_h < 1:
+        return None
+    return dict(
+        core_m_tiles=core_m_tiles,
+        active_rows=_div_up(tensor_m_tiles, core_m_tiles),
+        core_n_blocks=core_n_blocks,
+        core_n_tiles_max=core_n_tiles_max,
+        active_cols=_div_up(n_blocks, core_n_blocks),
+        block_h=min(core_m_tiles, max_block_h),
+        block_w=block_w,
+    )
 
 
 def select_blocking(input_tensor, compute_kernel_config):
@@ -72,38 +106,33 @@ def select_blocking(input_tensor, compute_kernel_config):
     tile_bytes = ttnn.tile_size(ttnn.bfloat16)
 
     assert N_TILES % BLOCK_W == 0
-    n_blocks = N_TILES // BLOCK_W
-    core_n_blocks = _div_up(n_blocks, grid.x)
-    core_n_tiles_max = BLOCK_W * core_n_blocks
-    active_cols = _div_up(n_blocks, core_n_blocks)
-
-    core_m_tiles = _div_up(tensor_m_tiles, grid.y)
-    active_rows = _div_up(tensor_m_tiles, core_m_tiles)
-
-    fixed = _footprint_bytes(0, core_n_tiles_max, tile_bytes)
-    per_row = _footprint_bytes(1, core_n_tiles_max, tile_bytes) - fixed
-    max_block_h = (CB_BUDGET_BYTES - fixed) // per_row
-    if max_block_h < 1:
-        raise RuntimeError(
-            f"linear_gelu: W slice of {core_n_tiles_max} tiles on a {grid.x}x{grid.y} grid does not fit "
-            f"{CB_BUDGET_BYTES} B of CBs"
-        )
-    block_h = min(core_m_tiles, max_block_h)
+    # Orientation by output tiles per core (the per-tile GELU binds); ties keep m on grid rows.
+    best = None
+    for transposed in (False, True):
+        m_slots, n_slots = (grid.x, grid.y) if transposed else (grid.y, grid.x)
+        cand = _candidate(tensor_m_tiles, BLOCK_W, m_slots, n_slots, tile_bytes)
+        if cand is None:
+            continue
+        tiles = cand["core_m_tiles"] * cand["core_n_tiles_max"]
+        if best is None or tiles < best[0]:
+            best = (tiles, transposed, cand)
+    if best is None:
+        raise RuntimeError(f"linear_gelu: no W slice split fits {CB_BUDGET_BYTES} B of CBs on a {grid.x}x{grid.y} grid")
+    _, transposed, cand = best
     # fp32 DEST halves the half-sync DEST capacity.
     dest_tiles = 4 if compute_kernel_config.fp32_dest_acc_en else 8
-    return Blocking(
-        tensor_m_tiles, core_m_tiles, active_rows, core_n_blocks, core_n_tiles_max, active_cols, block_h, dest_tiles
-    )
+    return Blocking(tensor_m_tiles=tensor_m_tiles, dest_tiles=dest_tiles, transposed=transposed, **cand)
 
 
-def _subblock(rows, dest_tiles):
-    """Largest-area (sb_h, sb_w) with sb_h | rows, sb_w | BLOCK_W, area <= dest_tiles; larger sb_h on ties."""
+def _subblock(rows, block_w, dest_tiles, area_divides=None):
+    """Largest-area (sb_h, sb_w) with sb_h | rows, sb_w | block_w, area <= dest_tiles (and area | area_divides when
+    given); larger sb_h on ties."""
     best = (1, 1)
     for sb_h in range(1, rows + 1):
         if rows % sb_h:
             continue
-        for sb_w in range(1, BLOCK_W + 1):
-            if BLOCK_W % sb_w or sb_h * sb_w > dest_tiles:
+        for sb_w in range(1, block_w + 1):
+            if block_w % sb_w or sb_h * sb_w > dest_tiles or (area_divides and area_divides % (sb_h * sb_w)):
                 continue
             if (sb_h * sb_w, sb_h) > (best[0] * best[1], best[0]):
                 best = (sb_h, sb_w)
@@ -125,23 +154,24 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
     blocking = select_blocking(input_tensor, compute_kernel_config)
     tile_bytes = ttnn.tile_size(ttnn.bfloat16)
     block_h = blocking.block_h
+    block_w = blocking.block_w
+    transposed = blocking.transposed
 
-    rect = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(blocking.active_cols - 1, blocking.active_rows - 1))
-    cores = ttnn.CoreRangeSet([rect])
+    def phys(row, col):
+        return (row, col) if transposed else (col, row)
 
-    cbs = [
-        _cb(CB_ACTIVATION_BLOCK, ACT_DEPTH * block_h * K_EXT_TILES, tile_bytes, cores),
-        _cb(CB_WEIGHT_RESIDENT, K_EXT_TILES * blocking.core_n_tiles_max, tile_bytes, cores),
-        _cb(CB_OUTPUT_TILES, OUT_DEPTH * block_h * BLOCK_W, tile_bytes, cores),
-        _cb(CB_BIAS_ONES_TILE, 1, tile_bytes, cores),
-    ]
+    last_x, last_y = phys(blocking.active_rows - 1, blocking.active_cols - 1)
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(last_x, last_y))])
+    # A logical column (W group) is a physical column, or a physical row when transposed; x groups are the other.
+    col_order = ttnn.McastCoreOrder.RowMajor if transposed else ttnn.McastCoreOrder.ColumnMajor
+    row_order = ttnn.McastCoreOrder.ColumnMajor if transposed else ttnn.McastCoreOrder.RowMajor
 
     reader_ct = [
         CB_ACTIVATION_BLOCK,
         CB_WEIGHT_RESIDENT,
         CB_BIAS_ONES_TILE,
         block_h,
-        BLOCK_W,
+        block_w,
         K_TILES,
         K_EXT_TILES,
         N_TILES,
@@ -150,24 +180,27 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
     for tensor in (input_tensor, weight, bias):
         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
     seq = list(input_tensor.shape)[-2]
-    writer_ct = [CB_OUTPUT_TILES, block_h, BLOCK_W, N_TILES, tile_bytes, _div_up(seq, TILE), seq % TILE]
+    writer_ct = [CB_OUTPUT_TILES, block_h, block_w, N_TILES, tile_bytes, _div_up(seq, TILE), seq % TILE]
     writer_ct.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
-    compute_ct = [CB_ACTIVATION_BLOCK, CB_WEIGHT_RESIDENT, CB_OUTPUT_TILES, block_h, BLOCK_W, K_EXT_TILES, GELU_FAST]
+    compute_ct = [CB_ACTIVATION_BLOCK, CB_WEIGHT_RESIDENT, CB_OUTPUT_TILES, block_h, block_w, K_EXT_TILES, GELU_FAST]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     core_n_tiles = blocking.core_n_tiles_max
-    sb_h, sb_w = _subblock(block_h, blocking.dest_tiles)
+    sb_h, sb_w = _subblock(block_h, block_w, blocking.dest_tiles)
     for row in range(blocking.active_rows):
         row_start = row * blocking.core_m_tiles
         rows = min(blocking.core_m_tiles, blocking.tensor_m_tiles - row_start)
         last_block_h = rows - (_div_up(rows, block_h) - 1) * block_h
-        tail_sb_h, tail_sb_w = _subblock(last_block_h, blocking.dest_tiles)
+        # cb_output_tiles drains one subblock as one contiguous span. Every nominal block leaves the ring at a
+        # multiple of block_h * block_w, so a tail area dividing it can never straddle the ring end.
+        tail_sb_h, tail_sb_w = _subblock(last_block_h, block_w, blocking.dest_tiles, block_h * block_w)
         for col in range(blocking.active_cols):
             n_tile_start = col * core_n_tiles
-            num_n_blocks = min(core_n_tiles, N_TILES - n_tile_start) // BLOCK_W
-            reader_rt[col][row] = [
+            num_n_blocks = min(core_n_tiles, N_TILES - n_tile_start) // block_w
+            x, y = phys(row, col)
+            reader_rt[x][y] = [
                 input_tensor.buffer_address(),
                 weight.buffer_address(),
                 bias.buffer_address(),
@@ -177,7 +210,7 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
                 num_n_blocks,
                 row,
             ]
-            writer_rt[col][row] = [
+            writer_rt[x][y] = [
                 output.buffer_address(),
                 row_start,
                 rows,
@@ -188,7 +221,13 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
                 tail_sb_h,
                 tail_sb_w,
             ]
-            compute_rt[col][row] = [rows, num_n_blocks, sb_h, sb_w, tail_sb_h, tail_sb_w]
+            compute_rt[x][y] = [rows, num_n_blocks, sb_h, sb_w, tail_sb_h, tail_sb_w]
+    cbs = [
+        _cb(CB_ACTIVATION_BLOCK, ACT_DEPTH * block_h * K_EXT_TILES, tile_bytes, cores),
+        _cb(CB_WEIGHT_RESIDENT, K_EXT_TILES * blocking.core_n_tiles_max, tile_bytes, cores),
+        _cb(CB_OUTPUT_TILES, OUT_DEPTH * block_h * block_w, tile_bytes, cores),
+        _cb(CB_BIAS_ONES_TILE, 1, tile_bytes, cores),
+    ]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "linear_gelu_reader.cpp"),
@@ -213,14 +252,17 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
     )
 
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
-    # One group per grid column (ColumnMajor order, group = the column's active rows); row 0 sends.
+    # One group per logical column (group = its active rows).
     w_mcast = ttnn.Mcast(
         device,
         ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True),
         cores,
         blocking.active_rows,
-        ttnn.McastFixedSenderConfig(sender_index=0),
-        ttnn.McastCoreOrder.ColumnMajor,
+        ttnn.McastFixedSenderConfig(
+            sender_index=0,
+            placement=ttnn.McastSenderPlacement.Staggered if W_SENDER_STAGGER else ttnn.McastSenderPlacement.Uniform,
+        ),
+        col_order,
     )
     w_mcast.attach(descriptor, W_MCAST_PREFIX, [reader], 0)
     # R2: x row-blocks are shared by a grid row; one group per row, the sender rotates with the row-block.
@@ -230,7 +272,7 @@ def create_program_descriptor(input_tensor, weight, bias, output, compute_kernel
         cores,
         blocking.active_cols,
         ttnn.McastRotatingSenderConfig(),
-        ttnn.McastCoreOrder.RowMajor,
+        row_order,
     )
     x_mcast.attach(descriptor, X_MCAST_PREFIX, [reader], w_mcast.next_semaphore_id())
     descriptor.kernels = [reader, writer, compute]
