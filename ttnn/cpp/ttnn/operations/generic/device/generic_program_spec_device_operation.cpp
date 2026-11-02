@@ -401,17 +401,6 @@ ttsl::hash::hash_t hash_run_args_schema(const m2::ProgramSpec& spec) {
     return hash;
 }
 
-// The PrefetcherPipes a program's run args supply. Metal ties a program to the first pipe of each parameter and
-// rejects a different one later, so a call with other pipes needs its own cache entry.
-ttsl::hash::hash_t hash_prefetcher_pipes(const m2::ProgramSpec& spec, const m2::ProgramRunArgs& run_args) {
-    ttsl::hash::hash_t hash = 0;
-    for (const auto& parameter : spec.advanced_options.prefetcher_pipe_parameters) {
-        const auto pipe = run_args.advanced_options.prefetcher_pipe_args.get(parameter.unique_id);
-        hash = ttsl::hash::hash_objects(hash, pipe.has_value() ? *pipe->get().identity() : 0);
-    }
-    return hash;
-}
-
 }  // namespace
 
 ttsl::hash::hash_t compute_program_spec_hash(const m2::ProgramSpec& spec) {
@@ -489,8 +478,7 @@ ttsl::hash::hash_t GenericProgramSpecDeviceOperation::compute_program_hash(
         const ttsl::hash::hash_t spec_hash = operation_attributes.custom_program_hash.has_value()
                                                  ? *operation_attributes.custom_program_hash
                                                  : compute_program_spec_hash(spec);
-        hash = ttsl::hash::hash_objects(
-            hash, program.range, spec_hash, hash_run_args_schema(spec), hash_prefetcher_pipes(spec, *program.run_args));
+        hash = ttsl::hash::hash_objects(hash, program.range, spec_hash, hash_run_args_schema(spec));
     }
     return hash;
 }
@@ -515,7 +503,7 @@ GenericProgramSpecDeviceOperation::ProgramFactory::create_mesh_workload_artifact
     return artifacts;
 }
 
-const tt::tt_metal::experimental::ProgramRunArgs&
+tt::tt_metal::experimental::ProgramRunArgs
 GenericProgramSpecDeviceOperation::ProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
