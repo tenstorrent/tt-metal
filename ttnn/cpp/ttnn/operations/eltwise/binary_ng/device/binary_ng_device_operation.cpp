@@ -383,6 +383,15 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             "If both output dtype and output tensor provided dtype should match");
     }
 
+    // TILE inputs take the tile path, which writes whole tiles by tile index; a ROW_MAJOR output buffer
+    // has one row per page, so those writes land in the wrong place.
+    if (output_tensor.has_value() && input_tensor_a.layout() == Layout::TILE) {
+        TT_FATAL(
+            output_tensor->layout() == Layout::TILE,
+            "Output tensor must be TILE when the inputs are TILE, got {}",
+            output_tensor->layout());
+    }
+
     TT_FATAL(
         input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
         "First operand to eltwise binary must have TILE or ROW_MAJOR layout, got {}",

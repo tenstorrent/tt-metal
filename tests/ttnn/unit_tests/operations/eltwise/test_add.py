@@ -521,3 +521,13 @@ def test_add_scalar_sharded_output_grid_differs_from_input(device):
     tt_out = ttnn.add(tt_a, 1.5, memory_config=c_mem)
 
     assert_with_pcc(torch_a + 1.5, ttnn.to_torch(tt_out), 0.999)
+
+
+@pytest.mark.parametrize("op", [ttnn.add, ttnn.subtract, ttnn.multiply])
+def test_binary_tile_inputs_reject_row_major_output_tensor(device, op, expect_error):
+    # TILE inputs are written tile by tile, so a ROW_MAJOR output buffer would receive tiles at row-page offsets.
+    a = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Output tensor must be TILE when the inputs are TILE"):
+        op(a, b, output_tensor=out)
