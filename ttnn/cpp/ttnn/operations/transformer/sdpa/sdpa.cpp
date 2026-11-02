@@ -245,7 +245,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
-    const std::optional<ttnn::Tensor>& k_expand_weight) {
+    const std::optional<ttnn::Tensor>& k_expand_weight,
+    uint32_t kv_window_parts) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -314,11 +315,17 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         logical_n_tensor,
         logical_l_tensor,
         kv_valid_end_tensor,
-        k_expand_weight);
+        k_expand_weight,
+        kv_window_parts);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
+}
+
+std::vector<uint32_t> ring_joint_kv_window_shape(
+    const std::vector<uint32_t>& local_kv_shape, uint32_t k_chunk_size, uint32_t kv_window_parts) {
+    return ttnn::prim::ring_joint_kv_window_shape(local_kv_shape, k_chunk_size, kv_window_parts);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(

@@ -140,7 +140,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     // Metadata path only: global real-token count, so attention stops at the tile holding the last real token.
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
     // MLA expanded K: W_UK per head (see the ring_joint_scaled_dot_product_attention docstring).
-    const std::optional<ttnn::Tensor>& k_expand_weight = std::nullopt);
+    const std::optional<ttnn::Tensor>& k_expand_weight = std::nullopt,
+    // Rotating KV window slots per ring direction, 0 = off (see the docstring).
+    uint32_t kv_window_parts = 0);
+
+// The rotating KV window's gathered buffer for a local K or V cache of shape [b, h, n, d] (kv_window_parts > 0):
+// [1, h, window rows, d]. Shared by every layer with the same shapes.
+std::vector<uint32_t> ring_joint_kv_window_shape(
+    const std::vector<uint32_t>& local_kv_shape, uint32_t k_chunk_size, uint32_t kv_window_parts);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

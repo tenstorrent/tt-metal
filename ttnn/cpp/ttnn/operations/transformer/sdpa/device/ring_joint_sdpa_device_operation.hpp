@@ -32,6 +32,11 @@ struct RingJointSDPADeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
 };
 
+// The rotating KV window's gathered buffer for a local K or V cache [b, h, n, d]: [1, h, window rows, d]
+// (ring_attention_kv_window.hpp), its parts sized for any K split.
+std::vector<uint32_t> ring_joint_kv_window_shape(
+    const std::vector<uint32_t>& local_kv_shape, uint32_t k_chunk_size, uint32_t kv_window_parts);
+
 RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -76,6 +81,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
     // MLA expanded K: W_UK per head, [1, NH, nope, latent] (RingJointSDPAInputs::k_expand_weight).
-    const std::optional<ttnn::Tensor>& k_expand_weight = std::nullopt);
+    const std::optional<ttnn::Tensor>& k_expand_weight = std::nullopt,
+    // Rotating KV window slots per ring direction (RingJointSDPAParams::kv_window_parts), 0 = off.
+    uint32_t kv_window_parts = 0);
 
 }  // namespace ttnn::prim

@@ -20,6 +20,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_slice_readiness.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_kv_window.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_all_gather_metadata.hpp"
 #include "../ring_joint_ksplit.hpp"  // relative, so its chunked_prefill_utils.hpp is the same file this kernel includes
 
@@ -455,7 +456,13 @@ void kernel_main() {
     // logical_nt); the metadata path narrows it below exactly as the gather does on device. Slice readiness only.
     uint32_t gather_slice_rows = get_arg_val<uint32_t>(argidx++);
     constexpr bool slice_readiness = get_named_compile_time_arg_val("slice_readiness") == 1;
-    RingSDPAOpReceiverT<slice_readiness> fused_op_receiver(true /* wait_for_op_signal */, argidx);
+    // Rotating KV window (ring_attention_kv_window.hpp), 0 slots = off: remote chunks are read from the window's slots,
+    // and this core publishes how far it got so the gather can reuse them.
+    constexpr uint32_t kv_window_parts = get_named_compile_time_arg_val("kv_window_parts");
+    constexpr uint32_t kv_window_cap_rows = get_named_compile_time_arg_val("kv_window_cap_rows");
+    constexpr bool kv_window = kv_window_parts > 0;
+    static_assert(!kv_window || slice_readiness);
+    RingSDPAOpReceiverT<slice_readiness, kv_window> fused_op_receiver(true /* wait_for_op_signal */, argidx);
 
     // Rotated Q split: first runtime arg past the fused-op signaler block. Captured here because
     // argidx is final at this point; the compile-time sizes are derived below with the other CT args.
@@ -566,6 +573,41 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t donated_steps = donation ? get_arg_val<uint32_t>(donation_args) : 0;
     [[maybe_unused]] const uint32_t donation_visits = donation ? get_arg_val<uint32_t>(donation_args + 1) & 0xFF : 0;
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
+
+    // Window progress: the units of each gather direction this core is done with, and the diametric parts. A core moves
+    // past a unit only once its reads of it have completed (each chunk's read ends with a barrier) and it will not read
+    // it again: a home as it moves through its band and at the end of each step; a spare, which revisits slots for
+    // other homes and bands, past whole slices below the earliest one its remaining visits read and, on a slice's last
+    // piece, up to that piece.
+    namespace kvw = ttnn::ring_attention_all_gather;
+    constexpr uint32_t kKvDiamIter = 0xFFFFFFFFu;
+    [[maybe_unused]] uint32_t kv_done[2] = {0, 0};
+    [[maybe_unused]] uint32_t kv_diam_done = 0;
+    [[maybe_unused]] const auto kv_publish = [&]() {
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            get_semaphore(get_named_compile_time_arg_val("kv_window_progress_sem"))) =
+            kvw::kv_window_progress(kv_done[0], kv_done[1], kv_diam_done);
+    };
+    // Done with every unit of gather direction ag_dir before part `part` of the slice whose units start at unit_base.
+    [[maybe_unused]] const auto kv_release =
+        [&](uint32_t ag_dir, uint32_t unit_base, uint32_t part) __attribute__((noinline)) {
+            uint32_t& done = unit_base == kKvDiamIter ? kv_diam_done : kv_done[ag_dir];
+            const uint32_t units = (unit_base == kKvDiamIter ? 0 : unit_base) + part;
+            if (units > done) {
+                done = units;
+                kv_publish();
+            }
+        };
+    // A remote chunk's place in its slot: computed out of line, once per chunk.
+    [[maybe_unused]] const auto kv_locate =
+        [&](uint32_t chunk, uint32_t num_chunks, uint32_t key) __attribute__((noinline)) {
+            return kvw::kv_window_locate(chunk, num_chunks, ksplit_count, Sk_chunk_t, gather_slice_rows, key);
+        };
+    if constexpr (kv_window) {
+        // A spare never reads the diametric slice.
+        kv_diam_done = donation_visits > 0 ? kvw::kKvWindowDone : 0;
+        kv_publish();
+    }
 
     // Common runtime args: metadata block first when present, then the logical-length pair.
     constexpr uint32_t logical_length_common_arg_base =
@@ -921,8 +963,16 @@ void kernel_main() {
     // every iteration's ID and direction is kept; only an iteration's first use advances the sequencer. A slice is read
     // with readiness waits only while it is still the latest one returned in its direction (an earlier one is full).
     ASSERT(sdpa_ring_iterations <= ring_joint::kMaxRingIterations);
+    // Window mode: this launch's slots, the window cut into parts of its slices' size, as the gather cuts it.
+    [[maybe_unused]] const kvw::KvWindowLayout kv_layout =
+        kv_window
+            ? kvw::kv_window_layout(gather_slice_rows, ksplit_count, Sk_chunk_t, kv_window_parts, kv_window_cap_rows)
+            : kvw::KvWindowLayout{};
     uint32_t iter_ring_ids[ring_joint::kMaxRingIterations];
     uint32_t iter_dirs[ring_joint::kMaxRingIterations];
+    // Window mode: an iteration's first unit in its direction (k * parts for the k-th slice received there), or
+    // kKvDiamIter for the diametric slice.
+    [[maybe_unused]] uint32_t iter_units[ring_joint::kMaxRingIterations];
     uint32_t latest_iter_in_dir[2] = {0, 0};
     uint32_t known_ring_iters = 0;
     uint32_t ring_dir = 0;
@@ -934,6 +984,26 @@ void kernel_main() {
             loop_steps = get_arg_val<uint32_t>(donation_args + 1) >> 8;
         }
     }
+    // A spare at the start of a step: whole slices below the earliest one its remaining gathered visits (from
+    // `first_visit`) read, every slot once none remain.
+    [[maybe_unused]] const auto kv_spare_release = [&](uint32_t first_visit) {
+        uint32_t earliest = kvw::kKvWindowDone;
+        for (uint32_t v = first_visit; v < donation_visits; ++v) {
+            const uint32_t first_step = get_arg_val<uint32_t>(donation_args + 2 + v) & 0xFF;
+            if (first_step != 0) {
+                earliest = std::min(earliest, first_step);
+            }
+        }
+        if (earliest == kvw::kKvWindowDone) {
+            kv_done[0] = kv_done[1] = kv_diam_done = kvw::kKvWindowDone;
+            kv_publish();
+        } else {
+            // Remote steps come kInterleavePieces per direction per slice pair (ring_joint_ksplit.hpp).
+            const uint32_t first_slice = (earliest - 1) / (2 * ring_joint::kInterleavePieces);
+            kv_release(0, 0, first_slice * kvw::kReadinessParts);
+            kv_release(1, 0, first_slice * kvw::kReadinessParts);
+        }
+    };
     [[maybe_unused]] uint32_t visit = 0;
     [[maybe_unused]] uint32_t visit_step = 0;
     for (uint32_t loop_step = 0; loop_step < loop_steps; ++loop_step) {
@@ -952,6 +1022,10 @@ void kernel_main() {
                 if (++visit_step == ((packed >> 8) & 0xFF)) {
                     ++visit;
                     visit_step = 0;
+                }
+                if constexpr (kv_window) {
+                    // Before waiting on this step's slice, so the gather can deliver it.
+                    kv_spare_release(visit_step == 0 ? visit - 1 : visit);
                 }
             }
         }
@@ -990,19 +1064,38 @@ void kernel_main() {
             ring_id = ring_index;
         } else {
             while (known_ring_iters <= ring_iter) {
+                const uint32_t transport_id = fused_op_receiver.get_next_ring_id_and_sync();
                 iter_ring_ids[known_ring_iters] =
                     ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                        fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+                        transport_id, mesh_rows, mesh_cols, snake_orientation);
                 iter_dirs[known_ring_iters] = fused_op_receiver.last_dir;
+                if constexpr (kv_window) {
+                    iter_units[known_ring_iters] =
+                        known_ring_iters > 0 && fused_op_receiver.split_forwarding_enabled &&
+                                transport_id == fused_op_receiver.split_shard_id
+                            ? kKvDiamIter
+                            : (fused_op_receiver.seq.received[fused_op_receiver.last_dir] - (known_ring_iters > 0)) *
+                                  kvw::kReadinessParts;
+                }
                 latest_iter_in_dir[fused_op_receiver.last_dir] = known_ring_iters;
                 ++known_ring_iters;
             }
             ring_id = iter_ring_ids[ring_iter];
             ring_dir = iter_dirs[ring_iter];
         }
+        // Window mode: the slot ring this iteration's slice lands in (the receiver's direction 0 is gather direction
+        // 1), and the units of earlier pieces, which this core is done with.
+        [[maybe_unused]] const uint32_t kv_ag_dir = 1 - ring_dir;
+        [[maybe_unused]] const uint32_t kv_unit_base = kv_window && ring_iter > 0 ? iter_units[ring_iter] : 0;
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (!ring_iter_is_active) {
+            if constexpr (kv_window) {
+                // No core reads this slice.
+                if (ring_iter > 0 && donation_visits == 0) {
+                    kv_release(kv_ag_dir, kv_unit_base, kvw::kReadinessParts);
+                }
+            }
             continue;
         }
         // Compute consumes one sink tile for each real Q only when it normalizes on the
@@ -1032,14 +1125,14 @@ void kernel_main() {
         // K split: this core's slice of the iteration's local K chunks, as compute derives it. Idle cores in a split
         // row use the row's index too, since they must skip exactly the chunks the row's multicast skips.
         // Progressive readiness (ring_attention_slice_readiness.hpp): a remote slice lands in parts. Which part holds a
-        // chunk is the sender's split of its slice for this device, computed as the sender does, so a chunk is read
-        // early only if the sender sent it before that part's marker.
+        // chunk is the sender's split of its slice, computed as the sender does, so a chunk is read early only if the
+        // sender sent it before that part's marker.
         [[maybe_unused]] const uint32_t readiness_num_chunks =
-            slice_readiness
-                ? ttnn::ring_attention_all_gather::readiness_split_chunks(
-                      gather_slice_rows, dense_causal_skip ? q_local_padded_Nt : 0, ring_id > ring_index, Sk_chunk_t)
-                : 0;
+            slice_readiness ? ttnn::ring_attention_all_gather::readiness_split_chunks(gather_slice_rows, Sk_chunk_t)
+                            : 0;
         ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
+        // Window mode: the part a home is done with once this step's reads complete.
+        [[maybe_unused]] uint32_t kv_step_end_part = 0;
         if constexpr (ksplit_enabled) {
             const uint32_t num_valid = ring_joint::ksplit_valid_local_k_chunks<
                 kv_pad_rotation_enabled,
@@ -1051,6 +1144,25 @@ void kernel_main() {
             const ring_joint::KSplitRange band_range = ring_joint::ksplit_band_range(
                 slice_readiness ? readiness_num_chunks : num_valid, num_valid, step_band, ksplit_count, ring_id);
             ksplit_k_range = ring_joint::interleaved_piece(band_range, istep.piece, istep.pieces);
+            if constexpr (kv_window) {
+                // After this step a home reads this slice's band only from its next piece's first chunk on (within a
+                // band, parts grow with the chunk), and nothing once its last piece is done. A spare on a slice's last
+                // piece releases at once up to that piece's first chunk: it walks its gathered visits in slot order
+                // (ring_joint_donation.hpp), and a slot fixes the band and piece, so its later reads of this slice are
+                // this same piece. (An earlier piece's slot may be followed by another band's lower parts.)
+                const bool kv_spare_now = donation_visits > 0 && ring_iter > 0 && istep.piece + 1 == istep.pieces;
+                const uint32_t kv_chunk = kv_spare_now ? ksplit_k_range.begin
+                                          : istep.piece + 1 < istep.pieces
+                                              ? ring_joint::interleaved_piece(band_range, istep.piece + 1, istep.pieces).begin
+                                              : band_range.end;
+                kv_step_end_part = kv_chunk < band_range.end
+                                       ? ttnn::ring_attention_all_gather::readiness_part_of(
+                                             kv_chunk, readiness_num_chunks, ksplit_count, ring_id)
+                                       : kvw::kReadinessParts;
+                if (kv_spare_now) {
+                    kv_release(kv_ag_dir, kv_unit_base, kv_step_end_part);
+                }
+            }
             if constexpr (donation) {
                 // The home's whole row group skips this slot together, so its multicast skips it too.
                 if (step - (donated_steps & 0xFF) < (donated_steps >> 8)) {
@@ -1288,6 +1400,7 @@ void kernel_main() {
                 // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;
                 uint32_t end_seq_tile;
+                [[maybe_unused]] uint32_t remote_part = 0;
                 uint32_t source_valid_kv_tiles = kv_local_padded_Nt;
                 if constexpr (!chunked_enabled) {
                     const uint32_t source_start_tile = source_ring_id * kv_local_padded_Nt;
@@ -1303,6 +1416,18 @@ void kernel_main() {
                     const uint32_t local_k_start_tile = source_k_chunk * Sk_chunk_t;
                     k_slice = Slice(kv_batch, nk, local_k_start_tile, local_k_start_tile + Sk_chunk_t, 0, DHt);
                     end_seq_tile = source_valid_kv_tiles;
+                } else if constexpr (kv_window) {
+                    // The chunk's part, packed in that part's slot (ring_attention_kv_window.hpp).
+                    const kvw::KvWindowChunk loc = kv_locate(source_k_chunk, readiness_num_chunks, ring_id);
+                    const uint32_t slot_row = kv_unit_base == kKvDiamIter
+                                                  ? kv_layout.diam_row(loc.part)
+                                                  : kv_layout.rot_row(kv_ag_dir, kv_unit_base + loc.part);
+                    k_slice = Slice(0, nk, slot_row + loc.row, slot_row + loc.row + Sk_chunk_t, 0, DHt);
+                    end_seq_tile = slot_row + loc.row_end;
+                    remote_part = loc.part;
+                    if (donation_visits == 0) {
+                        kv_release(kv_ag_dir, kv_unit_base, loc.part);
+                    }
                 } else {
                     uint32_t gathered_start_tile = source_ring_id * kv_local_padded_Nt + source_k_chunk * Sk_chunk_t;
                     if constexpr (has_sliding_window) {
@@ -1347,8 +1472,9 @@ void kernel_main() {
                     if (!source_is_local && latest_iter_in_dir[ring_dir] == ring_iter) {
                         fused_op_receiver.wait_part(
                             ring_dir,
-                            ttnn::ring_attention_all_gather::readiness_part_of(
-                                source_k_chunk, readiness_num_chunks, ksplit_count, ring_id));
+                            kv_window ? remote_part
+                                      : ttnn::ring_attention_all_gather::readiness_part_of(
+                                            source_k_chunk, readiness_num_chunks, ksplit_count, ring_id));
                     }
                 }
 
@@ -1582,7 +1708,7 @@ void kernel_main() {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
                     const Slice v_slice(
-                        v_single_slot ? 0 : k_slice.d0,
+                        v_single_slot && source_is_local ? 0 : k_slice.d0,
                         nv,
                         k_slice.d2_start,
                         k_slice.d2_end,
@@ -1684,6 +1810,15 @@ void kernel_main() {
                 }
             }
         }
+        if constexpr (kv_window) {
+            if (ring_iter > 0 && donation_visits == 0) {
+                kv_release(kv_ag_dir, kv_unit_base, kv_step_end_part);
+            }
+        }
+    }
+    if constexpr (kv_window) {
+        kv_done[0] = kv_done[1] = kv_diam_done = kvw::kKvWindowDone;
+        kv_publish();
     }
     synchronize_halo();
     if constexpr (k_expand) {

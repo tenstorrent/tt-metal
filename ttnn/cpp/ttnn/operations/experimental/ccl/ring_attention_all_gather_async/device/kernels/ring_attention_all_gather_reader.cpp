@@ -13,6 +13,7 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_slice_readiness.hpp"
+#include "ring_attention_kv_window.hpp"
 #include "ring_attention_rank_mapping.hpp"
 #include "ring_attention_prefetch_utils.hpp"
 #include <algorithm>
@@ -49,11 +50,14 @@ enum CompileTimeArg : uint32_t {
     kPrefetchPackets,
     // Trace-safe cache-slot select.
     kHasSlotMetadata,
-    // Slice readiness (ring_attention_slice_readiness.hpp): K-split band count (0 = off), K chunk tile rows and the
-    // newest-slab tiles a lower-ranked receiver masks.
+    // Slice readiness (ring_attention_slice_readiness.hpp): K-split band count (0 = off) and K chunk tile rows.
     kSliceReadinessBands,
     kSliceReadinessChunkTiles,
-    kSliceReadinessTruncateTiles,
+    // Rotating KV window (ring_attention_kv_window.hpp): parts per direction at the largest slice (0 = off), tile rows
+    // of such a part and the progress semaphore this reader publishes its relays in.
+    kKvWindowParts,
+    kKvWindowCapRows,
+    kKvWindowProgressSem,
     kNumFixedCompileTimeArgs,
 };
 
@@ -84,8 +88,12 @@ constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 constexpr bool has_slot_metadata = get_compile_time_arg_val(kHasSlotMetadata);
 constexpr uint32_t slice_readiness_bands = get_compile_time_arg_val(kSliceReadinessBands);
 constexpr uint32_t slice_readiness_chunk_tiles = get_compile_time_arg_val(kSliceReadinessChunkTiles);
-constexpr uint32_t slice_readiness_truncate_tiles = get_compile_time_arg_val(kSliceReadinessTruncateTiles);
 constexpr bool slice_readiness_enabled = slice_readiness_bands > 0;
+constexpr uint32_t kv_window_parts = get_compile_time_arg_val(kKvWindowParts);
+constexpr uint32_t kv_window_cap_rows = get_compile_time_arg_val(kKvWindowCapRows);
+constexpr uint32_t kv_window_progress_sem = get_compile_time_arg_val(kKvWindowProgressSem);
+constexpr bool kv_window = kv_window_parts > 0;
+static_assert(!kv_window || (slice_readiness_enabled && split_forwarding_enabled && fuse_op));
 static_assert(
     !slice_readiness_enabled || (output_bank_owned_schedule && !partial_readiness_enabled),
     "slice readiness needs the bank-owned schedule and excludes midpoint partial readiness");
@@ -103,7 +111,7 @@ static_assert(
 // CB depth must be >= 2 * prefetch_packets * packet_size_in_pages (see program_factory cb_num_pages).
 constexpr uint32_t prefetch_packets = get_compile_time_arg_val(kPrefetchPackets);
 
-template <bool physically_contiguous, typename Accessor>
+template <bool physically_contiguous, typename Accessor, typename IdleFn = PrefetchNoIdle>
 FORCE_INLINE void prefetch_bank_owned_slices(
     const Noc& noc,
     CircularBuffer& cb_output,
@@ -114,7 +122,8 @@ FORCE_INLINE void prefetch_bank_owned_slices(
     uint32_t output_page_base,
     uint32_t valid_pages,
     uint32_t first_bank,
-    uint32_t bank_stride) {
+    uint32_t bank_stride,
+    const IdleFn& idle = {}) {
     ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
         output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
     const auto next_packet = [&](uint32_t& pages_to_read) {
@@ -127,7 +136,7 @@ FORCE_INLINE void prefetch_bank_owned_slices(
             input_tensor_page_size,
             packet_size_in_pages,
             prefetch_packets>(
-            noc, cb_output, schedule.packets_remaining, cb_fifo_limit, cb_fifo_size, accessor, next_packet);
+            noc, cb_output, schedule.packets_remaining, cb_fifo_limit, cb_fifo_size, accessor, next_packet, idle);
     } else {
         prefetch_batch_read_packets<input_tensor_page_size, packet_size_in_pages, prefetch_packets>(
             noc,
@@ -137,7 +146,8 @@ FORCE_INLINE void prefetch_bank_owned_slices(
             cb_fifo_size,
             accessor,
             next_packet,
-            [](uint32_t first_page_id, uint32_t page) { return first_page_id + page * num_dram_banks; });
+            [](uint32_t first_page_id, uint32_t page) { return first_page_id + page * num_dram_banks; },
+            idle);
     }
 }
 
@@ -235,7 +245,10 @@ struct ReadinessMarkerForwarder {
 
 // A full slice in readiness parts, in the writer's send order (write_slice_in_parts), polling for upstream markers
 // between ranges. `from_output` reads a relayed slice back from the gathered output, else the local input slice.
-template <bool from_output, typename AddrGens>
+// Window mode (kv_window): a relayed part is read from tile row source_row(p) of this device's window and goes to row
+// dest_row(p) of the downstream's, both packed in send order; before_part(p) waits for it to land, after_part(p) runs
+// once it has been read. bank_offset / bank_stride select this direction's half of a split diametric slice.
+template <bool from_output, typename AddrGens, typename RowFn, typename DestRowFn, typename PartFn, typename DoneFn>
 FORCE_INLINE void prefetch_slice_in_parts(
     const Noc& noc,
     CircularBuffer& cb_output,
@@ -252,19 +265,38 @@ FORCE_INLINE void prefetch_slice_in_parts(
     const std::array<uint32_t, num_inputs>& input_valid_pages,
     const std::array<uint32_t, num_inputs>& worker_link,
     uint32_t slice_tensor_rank,
-    uint32_t num_chunks) {
+    uint32_t num_chunks,
+    uint32_t bank_offset,
+    uint32_t bank_stride,
+    const RowFn& source_row,
+    const DestRowFn& dest_row,
+    const PartFn& before_part,
+    const DoneFn& after_part) {
+    const auto idle = [&]() { markers.poll(); };
     for (uint32_t part = 0; part < ttnn::ring_attention_all_gather::kReadinessParts; ++part) {
+        if constexpr (kv_window) {
+            before_part(part);
+        }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             const uint32_t row_pages = input_tensor_Wt[input_idx];
             const uint32_t input_pages_per_batch_head = row_pages * input_tensor_Ht[input_idx];
             const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
             const uint32_t valid_rows = input_valid_pages[input_idx] / row_pages;
-            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                const uint32_t output_page_base =
+            const uint32_t heads = input_batch_head_count[input_idx];
+            for (uint32_t bh_idx = 0; bh_idx < heads; ++bh_idx) {
+                uint32_t output_page_base =
                     bh_idx * output_pages_per_batch_head + slice_tensor_rank * input_pages_per_batch_head;
-                const uint32_t source_page_base =
+                uint32_t source_page_base =
                     from_output ? output_page_base : input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
-                for (uint32_t range = 0; range <= slice_readiness_bands; ++range) {
+                // Window mode: the part's ranges pack from the slot's first row, in send order.
+                uint32_t slot_row = 0;
+                if constexpr (kv_window) {
+                    output_page_base = (bh_idx * output_tensor_Ht[input_idx] + dest_row(part)) * row_pages;
+                    if constexpr (from_output) {
+                        source_page_base = (bh_idx * output_tensor_Ht[input_idx] + source_row(part)) * row_pages;
+                    }
+                }
+                for (uint32_t range = 0; range < slice_readiness_bands; ++range) {
                     const auto rows = ttnn::ring_attention_all_gather::readiness_rows(
                         num_chunks,
                         slice_readiness_bands,
@@ -276,20 +308,41 @@ FORCE_INLINE void prefetch_slice_in_parts(
                     if (rows.end <= rows.begin) {
                         continue;
                     }
-                    prefetch_bank_owned_slices<from_output>(
-                        noc,
-                        cb_output,
-                        cb_fifo_limit,
-                        cb_fifo_size,
-                        source_addrgens[input_idx],
-                        source_page_base + rows.begin * row_pages,
-                        output_page_base + rows.begin * row_pages,
-                        (rows.end - rows.begin) * row_pages,
-                        worker_link[input_idx],
-                        num_links);
+                    const uint32_t dest_row = kv_window ? slot_row : rows.begin;
+                    const uint32_t source_row = kv_window && from_output ? slot_row : rows.begin;
+                    slot_row += rows.end - rows.begin;
+                    if constexpr (kv_window) {
+                        prefetch_bank_owned_slices<from_output>(
+                            noc,
+                            cb_output,
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            source_addrgens[input_idx],
+                            source_page_base + source_row * row_pages,
+                            output_page_base + dest_row * row_pages,
+                            (rows.end - rows.begin) * row_pages,
+                            worker_link[input_idx] + bank_offset,
+                            bank_stride,
+                            idle);
+                    } else {
+                        prefetch_bank_owned_slices<from_output>(
+                            noc,
+                            cb_output,
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            source_addrgens[input_idx],
+                            source_page_base + source_row * row_pages,
+                            output_page_base + dest_row * row_pages,
+                            (rows.end - rows.begin) * row_pages,
+                            worker_link[input_idx] + bank_offset,
+                            bank_stride);
+                    }
                     markers.poll();
                 }
             }
+        }
+        if constexpr (kv_window) {
+            after_part(part);
         }
     }
 }
@@ -430,20 +483,43 @@ void kernel_main() {
         if (split_forwarding_enabled && direction == 1) {
             slices++;
         }
-        readiness_markers.total = split_forwarding_enabled
+        // Window mode sends the diametric half in parts too.
+        readiness_markers.total = split_forwarding_enabled && !kv_window
                                       ? (slices - 1) * ttnn::ring_attention_all_gather::kReadinessParts + 1
                                       : slices * ttnn::ring_attention_all_gather::kReadinessParts;
     }
+    namespace kvw = ttnn::ring_attention_all_gather;
+    constexpr uint32_t kvw_parts = kvw::kReadinessParts;
+    // Window mode: how far this reader has relayed this direction's units, for the credit master. It tracks no other.
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* kv_progress = nullptr;
+    const auto kv_publish = [&](uint32_t units) {
+        if constexpr (kv_window) {
+            *kv_progress = kvw::kv_window_progress(
+                direction == 0 ? units : kvw::kKvWindowDone,
+                direction == 1 ? units : kvw::kKvWindowDone,
+                kvw::kKvWindowDone);
+        }
+    };
+    if constexpr (kv_window) {
+        kv_progress = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(kv_window_progress_sem));
+        kv_publish(0);
+    }
+    // This launch's slots: the window cut into parts of its own slices' size (every input has the same rows).
+    [[maybe_unused]] const kvw::KvWindowLayout kv_layout = kv_window ? kvw::kv_window_layout(
+                                                                           input_valid_pages[0] / input_tensor_Wt[0],
+                                                                           slice_readiness_bands,
+                                                                           slice_readiness_chunk_tiles,
+                                                                           kv_window_parts,
+                                                                           kv_window_cap_rows)
+                                                                     : kvw::KvWindowLayout{};
+    const auto kv_rot_row = [&](uint32_t first_unit) {
+        return [&, first_unit](uint32_t part) { return kv_layout.rot_row(direction, first_unit + part); };
+    };
+    const auto kv_no_part = [](uint32_t) {};
 
     // Read the local slice into the packet CB before sending it over Fabric.
     if constexpr (slice_readiness_enabled) {
-        // In the writer's order, split as the receiving neighbor's K bands are (writer direction 1 sends toward lower
-        // transport ranks). Upstream markers are forwarded as they land meanwhile.
-        const uint32_t receiver_transport_rank =
-            direction == 1 ? (my_transport_rank + ring_size - 1) % ring_size : (my_transport_rank + 1) % ring_size;
-        const uint32_t receiver_tensor_rank =
-            ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                receiver_transport_rank, mesh_rows, mesh_cols, snake_orientation);
+        // In the writer's order; upstream markers are forwarded as they land meanwhile.
         prefetch_slice_in_parts<false>(
             noc_obj,
             cb_output,
@@ -461,10 +537,13 @@ void kernel_main() {
             worker_link,
             my_tensor_rank,
             ttnn::ring_attention_all_gather::readiness_split_chunks(
-                input_valid_pages[0] / input_tensor_Wt[0],
-                slice_readiness_truncate_tiles,
-                my_tensor_rank > receiver_tensor_rank,
-                slice_readiness_chunk_tiles));
+                input_valid_pages[0] / input_tensor_Wt[0], slice_readiness_chunk_tiles),
+            0,
+            num_links,
+            kv_rot_row(0),
+            kv_rot_row(0),
+            kv_no_part,
+            kv_no_part);
     } else {
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
@@ -584,7 +663,7 @@ void kernel_main() {
         const uint32_t next_slice = slices_received + 1;
         if constexpr (partial_readiness_enabled) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2 - 1);
-        } else if constexpr (slice_readiness_enabled) {
+        } else if constexpr (slice_readiness_enabled && !kv_window) {
             // Forward the rest of this slice's parts as they land; it must be whole before it is relayed.
             const bool split_half = split_forwarding_enabled && next_slice == slices_expected;
             readiness_markers.wait_through(
@@ -631,15 +710,8 @@ void kernel_main() {
             (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
             // The last slice we relay is the diametric shard of our downstream neighbor
             const bool is_split_forwarded_slice = split_forwarding_enabled && (slices_received == writes_expected);
-            if (slice_readiness_enabled && !is_split_forwarded_slice) {
-                // A full slice in readiness parts, split as the downstream neighbor's K bands are, while the next
-                // slice's parts are forwarded as they land.
-                const uint32_t receiver_transport_rank = direction == 1
-                                                             ? (my_transport_rank + ring_size - 1) % ring_size
-                                                             : (my_transport_rank + 1) % ring_size;
-                const uint32_t receiver_tensor_rank =
-                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                        receiver_transport_rank, mesh_rows, mesh_cols, snake_orientation);
+            if (slice_readiness_enabled && (kv_window || !is_split_forwarded_slice)) {
+                // A full slice in readiness parts, while the next slice's parts are forwarded as they land.
                 prefetch_slice_in_parts<true>(
                     noc_obj,
                     cb_output,
@@ -657,10 +729,17 @@ void kernel_main() {
                     worker_link,
                     sender_tensor_rank,
                     ttnn::ring_attention_all_gather::readiness_split_chunks(
-                        input_valid_pages[0] / input_tensor_Wt[0],
-                        slice_readiness_truncate_tiles,
-                        sender_tensor_rank > receiver_tensor_rank,
-                        slice_readiness_chunk_tiles));
+                        input_valid_pages[0] / input_tensor_Wt[0], slice_readiness_chunk_tiles),
+                    is_split_forwarded_slice ? direction * num_links : 0,
+                    is_split_forwarded_slice ? 2 * num_links : num_links,
+                    // Window mode relays each part as soon as it has landed: this slice is unit k = next_slice - 1.
+                    kv_rot_row((next_slice - 1) * kvw_parts),
+                    [&](uint32_t part) {
+                        return is_split_forwarded_slice ? kv_layout.diam_row(part)
+                                                        : kv_rot_row(next_slice * kvw_parts)(part);
+                    },
+                    [&](uint32_t part) { readiness_markers.wait_through((next_slice - 1) * kvw_parts + part + 1); },
+                    [&](uint32_t part) { kv_publish((next_slice - 1) * kvw_parts + part + 1); });
                 continue;
             }
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
@@ -778,6 +857,7 @@ void kernel_main() {
     if constexpr (slice_readiness_enabled) {
         readiness_markers.finish();
     }
+    kv_publish(kvw::kKvWindowDone);
     // Flush non-posted atomics from op_signaler before kernel exit (mirrors the writer's barrier).
     if constexpr (fuse_op) {
         noc_obj.async_atomic_barrier();

@@ -47,6 +47,9 @@ struct RingJointSDPAParams {
     bool circular_kv_cache = false;
     // Internal structural ratio, derived from Q/KV sequence distributions.
     uint32_t kv_stripe_split = 1;
+    // Rotating KV window (ring_attention_kv_window.hpp): slots per ring direction for the gathered K/V, 0 = buffers
+    // that hold every gathered slice. The gathered buffers are then window-shaped (ring_joint_kv_window_shape).
+    uint32_t kv_window_parts = 0;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -132,6 +135,7 @@ struct RingJointSDPAParams {
         "sliding_window_size",
         "circular_kv_cache",
         "kv_stripe_split",
+        "kv_window_parts",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -154,6 +158,7 @@ struct RingJointSDPAParams {
             std::cref(sliding_window_size),
             std::cref(circular_kv_cache),
             std::cref(kv_stripe_split),
+            std::cref(kv_window_parts),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }

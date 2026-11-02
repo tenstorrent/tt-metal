@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <type_traits>
 
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
@@ -63,6 +64,21 @@ FORCE_INLINE void prefetch_batch_read_tiles(
     }
 }
 
+// The default for the packet readers' `idle`: block in reserve_back. Any other callable runs while the CB is full.
+struct PrefetchNoIdle {
+    void operator()() const {}
+};
+
+template <typename IdleFn>
+FORCE_INLINE void prefetch_reserve(CircularBuffer& cb_output, uint32_t pages, const IdleFn& idle) {
+    if constexpr (!std::is_same_v<IdleFn, PrefetchNoIdle>) {
+        while (!cb_output.pages_reservable_at_back(pages)) {
+            idle();
+        }
+    }
+    cb_output.reserve_back(pages);
+}
+
 // Read an arbitrary packet sequence while preserving one prefetch window across logical slice boundaries.
 // next_packet returns the first logical page id and writes the number of physically contiguous pages in that packet.
 template <
@@ -70,7 +86,8 @@ template <
     uint32_t packet_size_in_pages,
     uint32_t prefetch_packets,
     typename Accessor,
-    typename NextPacketFn>
+    typename NextPacketFn,
+    typename IdleFn = PrefetchNoIdle>
 FORCE_INLINE void prefetch_batch_read_physically_contiguous_packets(
     const Noc& noc,
     CircularBuffer& cb_output,
@@ -78,11 +95,12 @@ FORCE_INLINE void prefetch_batch_read_physically_contiguous_packets(
     uint32_t cb_fifo_limit,
     uint32_t cb_fifo_size,
     const Accessor& accessor,
-    NextPacketFn&& next_packet) {
+    NextPacketFn&& next_packet,
+    const IdleFn& idle = {}) {
     uint32_t packets_read = 0;
     while (packets_read < total_packets) {
         const uint32_t batch_packets = std::min(total_packets - packets_read, prefetch_packets);
-        cb_output.reserve_back(batch_packets * packet_size_in_pages);
+        prefetch_reserve(cb_output, batch_packets * packet_size_in_pages, idle);
         uint32_t l1_write_addr = cb_output.get_write_ptr();
         for (uint32_t packet = 0; packet < batch_packets; ++packet) {
             if (l1_write_addr >= cb_fifo_limit) {
@@ -115,7 +133,8 @@ template <
     uint32_t prefetch_packets,
     typename Accessor,
     typename NextPacketFn,
-    typename PacketPageIdFn>
+    typename PacketPageIdFn,
+    typename IdleFn = PrefetchNoIdle>
 FORCE_INLINE void prefetch_batch_read_packets(
     const Noc& noc,
     CircularBuffer& cb_output,
@@ -124,11 +143,12 @@ FORCE_INLINE void prefetch_batch_read_packets(
     uint32_t cb_fifo_size,
     const Accessor& accessor,
     NextPacketFn&& next_packet,
-    PacketPageIdFn&& packet_page_id) {
+    PacketPageIdFn&& packet_page_id,
+    const IdleFn& idle = {}) {
     uint32_t packets_read = 0;
     while (packets_read < total_packets) {
         const uint32_t batch_packets = std::min(total_packets - packets_read, prefetch_packets);
-        cb_output.reserve_back(batch_packets * packet_size_in_pages);
+        prefetch_reserve(cb_output, batch_packets * packet_size_in_pages, idle);
         uint32_t l1_write_addr = cb_output.get_write_ptr();
         for (uint32_t packet = 0; packet < batch_packets; ++packet) {
             uint32_t pages_to_read = 0;

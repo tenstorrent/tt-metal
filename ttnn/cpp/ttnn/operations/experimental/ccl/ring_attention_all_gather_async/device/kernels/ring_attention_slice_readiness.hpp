@@ -6,8 +6,8 @@
 // own and the ones it relays, in parts with a marker after each) and its fused ring-joint SDPA consumer (which waits
 // for a chunk's part, not the whole slice). The slice's K chunks are split into bands like the consumer's K split, and
 // part p is the p-th of kReadinessParts equal shares of every band, so every band has work as soon as part 0 lands.
-// The last part also carries the tail of rows past the split chunks. The diametric slice of split forwarding is sent
-// whole, with one marker.
+// Every receiver splits a slice the same way. The diametric slice of split forwarding is sent whole, with one marker
+// (in parts too with the rotating KV window, ring_attention_kv_window.hpp).
 //
 // The consumer decides which part holds a chunk from the sender's split, never its own K split: a disagreement between
 // the two can only cost overlap, not read data early.
@@ -20,7 +20,7 @@ namespace ttnn::ring_attention_all_gather {
 
 // Parts per full slice: one marker each. More parts let a ring step start sooner after its slice starts landing, at the
 // cost of a marker, a write barrier and shorter DRAM bursts per part.
-constexpr uint32_t kReadinessParts = 4;
+constexpr uint32_t kReadinessParts = 8;
 
 // [begin, end) of chunks or rows.
 struct ChunkRange {
@@ -49,14 +49,9 @@ inline uint32_t band_begin(uint32_t num_chunks, uint32_t bands, uint32_t band, u
     return band * (num_chunks / bands) + extras_before;
 }
 
-// K chunks the sender splits into bands for one receiver. A receiver ranked below the sender masks the sender's newest
-// slab entirely (dense causal skip, truncate_tiles > 0), so the split leaves it out; those rows still travel in the
-// tail of the last part, since they are relayed on to devices that need them.
-inline uint32_t readiness_split_chunks(
-    uint32_t valid_rows, uint32_t truncate_tiles, bool receiver_masks_newest_slab, uint32_t chunk_tiles) {
-    const uint32_t dropped = receiver_masks_newest_slab ? truncate_tiles : 0;
-    const uint32_t split_rows = valid_rows > dropped ? valid_rows - dropped : 0;
-    return (split_rows + chunk_tiles - 1) / chunk_tiles;
+// K chunks a slice of valid_rows rows splits into bands.
+inline uint32_t readiness_split_chunks(uint32_t valid_rows, uint32_t chunk_tiles) {
+    return (valid_rows + chunk_tiles - 1) / chunk_tiles;
 }
 
 // Chunks of `part` in `band` of a split of `num_chunks` K chunks into `bands` (slice of tensor rank `key`).
@@ -82,10 +77,9 @@ inline uint32_t readiness_part_of(uint32_t chunk, uint32_t num_chunks, uint32_t 
     return part;
 }
 
-// Row ranges of `part` in sending order, for one input of `valid_rows` rows: range r < bands is band r's share, range
-// r == bands is the tail past the split chunks (last part only). Over all parts every row in
-// [0, valid_rows) is covered exactly once. The gather reader and writer both walk the slice as
-// `for (r = 0; r <= bands; ++r)` over these, which keeps their page order identical.
+// Row ranges of `part` in sending order, for one input of `valid_rows` rows: range r is band r's share. Over all parts
+// every row in [0, valid_rows) is covered exactly once. The gather reader and writer both walk the slice as
+// `for (r = 0; r < bands; ++r)` over these, which keeps their page order identical.
 inline RowRange readiness_rows(
     uint32_t num_chunks,
     uint32_t bands,
@@ -95,9 +89,6 @@ inline RowRange readiness_rows(
     uint32_t range,
     uint32_t key) {
     const auto clamp = [valid_rows](uint32_t rows) { return rows < valid_rows ? rows : valid_rows; };
-    if (range == bands) {
-        return part + 1 < kReadinessParts ? RowRange{0, 0} : RowRange{clamp(num_chunks * chunk_tiles), valid_rows};
-    }
     const ChunkRange chunks = readiness_chunks(num_chunks, bands, range, part, key);
     return {clamp(chunks.begin * chunk_tiles), clamp(chunks.end * chunk_tiles)};
 }

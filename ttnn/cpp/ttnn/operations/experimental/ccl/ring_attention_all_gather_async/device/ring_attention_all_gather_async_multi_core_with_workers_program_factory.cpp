@@ -4,6 +4,7 @@
 
 #include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_slice_readiness.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_kv_window.hpp"
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -163,6 +164,18 @@ void record_all_gather_semaphore_arg_slots(
         first_kernel_idx + ag_detail::kWriterBackwardKernelOffset,
         kWriterSemaphoreArg,
         kBackwardSemaphoreIdx);
+    record_semaphore_arg_slot(
+        patch,
+        program,
+        first_kernel_idx + ag_detail::kWriterForwardKernelOffset,
+        kWriterCreditSemaphoreArg,
+        kBackwardSemaphoreIdx);
+    record_semaphore_arg_slot(
+        patch,
+        program,
+        first_kernel_idx + ag_detail::kWriterBackwardKernelOffset,
+        kWriterCreditSemaphoreArg,
+        kForwardSemaphoreIdx);
 }
 
 std::vector<uint32_t> semaphore_addresses(const std::vector<GlobalSemaphore>& semaphores) {
@@ -881,10 +894,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         TT_FATAL(
             num_targets_forward > 0 && num_targets_backward > 0,
             "Slice readiness requires active traffic in both ring directions");
-        TT_FATAL(
-            slice_readiness.truncate_tiles <= input_tensor[0].padded_shape()[2] / tt::constants::TILE_HEIGHT,
-            "Slice readiness truncation ({} tiles) exceeds the gathered slice",
-            slice_readiness.truncate_tiles);
         TT_FATAL(!partial_readiness_enabled, "Slice readiness and midpoint partial readiness are exclusive");
         TT_FATAL(output_bank_owned_schedule, "Slice readiness currently requires the bank-owned packet schedule");
         TT_FATAL(slice_readiness.chunk_tiles > 0, "Slice readiness needs the consumer's K chunk size");
@@ -898,6 +907,38 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             TT_FATAL(
                 tensor.padded_shape()[2] == input_tensor[0].padded_shape()[2],
                 "Slice readiness needs every gathered input to have the same rows");
+        }
+    }
+    const bool kv_window = slice_readiness.kv_window_parts > 0;
+    if (kv_window) {
+        namespace kvw = ttnn::ring_attention_all_gather;
+        TT_FATAL(slice_readiness.bands > 0, "The rotating KV window needs slice readiness");
+        TT_FATAL(
+            split_forwarding_enabled && ring_size % 2 == 0 && ring_size > 2,
+            "The rotating KV window needs split forwarding on an even ring");
+        TT_FATAL(
+            slice_readiness.kv_window_parts > kvw::kReadinessParts,
+            "A rotating KV window of {} parts per direction deadlocks with {} parts per slice",
+            slice_readiness.kv_window_parts,
+            kvw::kReadinessParts);
+        for (uint32_t i = 0; i < output_tensor.size(); ++i) {
+            const auto& shape = output_tensor[i].padded_shape();
+            const uint32_t row_pages = shape[3] / tt::constants::TILE_WIDTH;
+            TT_FATAL(
+                shape[0] == 1 && shape[2] == kvw::kv_window_rows(
+                                                 slice_readiness.kv_window_parts, slice_readiness.kv_window_cap_rows) *
+                                                 tt::constants::TILE_HEIGHT,
+                "Rotating KV window output {} has shape {}, not the window's",
+                i,
+                shape);
+            // Slots start at whole K chunks of every region, so a slot starts on one DRAM bank and a relay's source
+            // and destination pages share banks.
+            TT_FATAL(
+                (slice_readiness.chunk_tiles * row_pages) % num_dram_banks == 0 &&
+                    (slice_readiness.kv_window_cap_rows * row_pages) % num_dram_banks == 0,
+                "Rotating KV window slots of {}-tile chunks x {} tiles do not start on one DRAM bank",
+                slice_readiness.chunk_tiles,
+                row_pages);
         }
     }
     if (partial_readiness_enabled) {
@@ -1056,6 +1097,33 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         }
     }
 
+    // Rotating KV window: a link-0 writer polls every consumer's progress word (the fused op's cores, then the window
+    // direction's readers) into this scratch, one L1-aligned word each. The readers publish theirs in the consumers'
+    // progress semaphore, registered here under the same id.
+    const uint32_t kv_window_scratch_cb_index = tt::CB::c_in4;
+    if (kv_window) {
+        TT_FATAL(fused_op_signaler_sender_workers.has_value(), "The rotating KV window needs a fused consumer");
+        const uint32_t scratch_bytes = (fused_op_signaler_sender_workers->num_fused_op_cores_to_signal + num_links) *
+                                       tt::tt_metal::hal::get_l1_alignment();
+        for (const auto& core_ranges : {sender_forward_core_ranges, sender_backward_core_ranges}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = scratch_bytes,
+                .core_ranges = core_ranges,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(kv_window_scratch_cb_index),
+                    .data_format = tt::DataFormat::RawUInt32,
+                    .page_size = scratch_bytes,
+                }}},
+            });
+        }
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = slice_readiness.kv_window_progress_sem,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = sender_forward_core_ranges.merge(sender_backward_core_ranges),
+            .initial_value = 0,
+        });
+    }
+
     // Tensor Info
     const uint32_t num_inputs = input_tensor.size();
     // Even-ring split-forwarding: the caller owns the protocol decision (a fused consumer must implement
@@ -1098,7 +1166,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(has_slot_metadata),  // kHasSlotMetadata
             slice_readiness.bands,                     // kSliceReadinessBands
             slice_readiness.chunk_tiles,               // kSliceReadinessChunkTiles
-            slice_readiness.truncate_tiles,            // kSliceReadinessTruncateTiles
+            slice_readiness.kv_window_parts,           // kKvWindowParts
+            slice_readiness.kv_window_cap_rows,        // kKvWindowCapRows
+            slice_readiness.kv_window_progress_sem,    // kKvWindowProgressSem
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
@@ -1155,7 +1225,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             num_dram_banks,                                     // kNumDramBanks
             slice_readiness.bands,                              // kSliceReadinessBands
             slice_readiness.chunk_tiles,                        // kSliceReadinessChunkTiles
-            slice_readiness.truncate_tiles,                     // kSliceReadinessTruncateTiles
+            slice_readiness.kv_window_parts,                    // kKvWindowParts
+            slice_readiness.kv_window_cap_rows,                 // kKvWindowCapRows
+            slice_readiness.kv_window_progress_sem,             // kKvWindowProgressSem
+            kv_window_scratch_cb_index,                         // kKvWindowScratchCb
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,
@@ -1221,8 +1294,21 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Inline equivalent of AllGatherFusedOpSignaler::init_all_gather for the descriptor
     // pattern. The original init_all_gather mutates a Program; here we instead append
     // to `desc.semaphores` and update the signaler's noc-coord and semaphore-id state
-    // directly. Semaphore IDs are sequential and start at the current desc.semaphores.size().
+    // directly. A semaphore takes the lowest id free on every core of its range (ids are per core, and the parent
+    // op's own semaphores on other cores need not count against the limit).
     if (fuse_op) {
+        const auto free_semaphore_id = [&](const CoreRangeSet& cores) {
+            constexpr uint32_t kSemaphoresPerCore = 16;
+            for (uint32_t id = 0; id < kSemaphoresPerCore; ++id) {
+                const bool used = std::any_of(desc.semaphores.begin(), desc.semaphores.end(), [&](const auto& sem) {
+                    return sem.id == id && sem.core_type == tt::CoreType::WORKER && sem.core_ranges.intersects(cores);
+                });
+                if (!used) {
+                    return id;
+                }
+            }
+            TT_THROW("Ring attention all-gather: no semaphore id left on its worker cores");
+        };
         auto sender_workers_backward = corerange_to_cores(sender_backward_core_ranges, std::nullopt, true);
 
         auto init_all_gather_descriptor =
@@ -1232,7 +1318,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 // Mirror AllGatherFusedOpSignaler::init_all_gather: only allocate the sync semaphore
                 // when there is more than one worker core (otherwise no inter-worker sync is needed).
                 if (worker_cores.size() > 1) {
-                    const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
+                    const uint32_t sem_id = free_semaphore_id(workers_range);
                     desc.semaphores.push_back(SemaphoreDescriptor{
                         .id = sem_id,
                         .core_type = tt::CoreType::WORKER,
@@ -1384,6 +1470,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_args.push_back(ring_size);
         writer_args.push_back(static_cast<uint32_t>(
             semaphore.at(sem_index).address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
+        // The other direction's semaphore, unused on this core: a rotating KV window's credit word.
+        const uint32_t other_sem_index =
+            is_forward ? ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kBackwardSemaphoreIdx
+                       : ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kForwardSemaphoreIdx;
+        writer_args.push_back(static_cast<uint32_t>(
+            semaphore.at(other_sem_index).address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
         writer_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; ++input_idx) {
             writer_args.push_back(output_tensor[input_idx].buffer());
@@ -1420,9 +1512,26 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                     1,
                     /*pack_receiver_coords=*/true);
             } else {
-                // Backward writers never issue the local-slice signal, but retain the writer ABI.
+                // Backward writers never issue the local-slice signal, but retain the writer ABI (the worker count
+                // matches the coordinates it pushes, so the fused op's cores parse for the window's credit master).
                 fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
-                    writer_extra_args, 1, 0, 0, /*pack_receiver_coords=*/true);
+                    writer_extra_args,
+                    static_cast<uint32_t>(forward_signaler_cores.size()),
+                    0,
+                    0,
+                    /*pack_receiver_coords=*/true);
+            }
+        }
+        if (kv_window) {
+            // Link 0's writer returns the other direction's window credits: that direction's worker cores, whose
+            // readers it polls and whose upstream twins it credits.
+            const auto& window_workers = is_forward ? backward_workers : forward_workers;
+            writer_extra_args.push_back(placement.link == 0 ? static_cast<uint32_t>(window_workers.size()) : 0u);
+            if (placement.link == 0) {
+                for (const auto& worker : window_workers) {
+                    const CoreCoord noc = mesh_device->worker_core_from_logical_core(worker.core);
+                    writer_extra_args.push_back(static_cast<uint32_t>(noc.x | noc.y << 16));
+                }
             }
         }
         writer_args.append(writer_extra_args);

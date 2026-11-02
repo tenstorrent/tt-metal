@@ -64,7 +64,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
-    const std::optional<ttnn::Tensor>& k_expand_weight) {
+    const std::optional<ttnn::Tensor>& k_expand_weight,
+    uint32_t kv_window_parts) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -107,7 +108,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_cache_num_layers,
         kv_cache_layer_idx,
         kv_valid_end_tensor,
-        k_expand_weight);
+        k_expand_weight,
+        kv_window_parts);
     return outputs;
 }
 
@@ -743,6 +745,11 @@ void bind_sdpa(nb::module_& mod) {
                 core expands K per head in the kernel, K_h = [c_kv @ W_UK_h^T | k_pe], so Q is un-absorbed
                 [q_nope | q_pe] and QK runs nope + rope wide. nope / 64 must be a power of two (whole tile rows per
                 head-pair core). Requires one shared K head and a separate per-head V.
+            kv_window_parts (int, optional): Rotating KV window. 0 (default): persistent_output_buffer_k / _v hold
+                every gathered slice. Otherwise each ring direction lands its slices' readiness parts in this many
+                slots (more than the parts per slice), reused as the attention moves on, and the persistent buffers
+                take ttnn.transformer.ring_joint_kv_window_shape of the local K / V shapes. Expanded K on a ring
+                only.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -812,7 +819,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
         nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
-        nb::arg("k_expand_weight").noconvert() = nb::none());
+        nb::arg("k_expand_weight").noconvert() = nb::none(),
+        nb::arg("kv_window_parts") = 0);
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
@@ -883,6 +891,17 @@ void bind_sdpa(nb::module_& mod) {
               - Attention output [b x nqh x N/num_devices x head_dim_v] (N/S rows under split KV).
               - Streaming statistics scratch [b x nqh x 2*N/num_devices x 1] (2*N/S rows under split KV).
         )doc";
+
+    ttnn::bind_function<"ring_joint_kv_window_shape", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Shape of a rotating KV window's gathered buffer (ring_joint_scaled_dot_product_attention kv_window_parts) for
+        a local K or V cache of shape [b, h, n, d]: [1, h, window rows, d].
+        )doc",
+        &ttnn::transformer::ring_joint_kv_window_shape,
+        nb::arg("local_kv_shape"),
+        nb::arg("k_chunk_size"),
+        nb::arg("kv_window_parts"));
 
     ttnn::bind_function<"ring_mla", "ttnn.transformer.">(
         mod,

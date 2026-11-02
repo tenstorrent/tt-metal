@@ -23,6 +23,8 @@ namespace ring_attention_all_gather_async_dynamic {
 inline constexpr uint32_t kReaderForwardKernelIdx = 0;
 inline constexpr uint32_t kReaderSemaphoreArg = 2;
 inline constexpr uint32_t kWriterSemaphoreArg = 4;
+// The other direction's semaphore, a rotating KV window's credit word.
+inline constexpr uint32_t kWriterCreditSemaphoreArg = 5;
 inline constexpr uint32_t kForwardSemaphoreIdx = 1;
 inline constexpr uint32_t kBackwardSemaphoreIdx = 0;
 // Sliding-window halo kernels carry semaphores[2] in reader arg 0 and writer arg 2.
@@ -133,8 +135,12 @@ struct RingAttentionRankMapping {
 struct RingAttentionSliceReadiness {
     uint32_t bands = 0;
     uint32_t chunk_tiles = 0;
-    // Tiles of the newest slab a lower-ranked receiver masks entirely (its dense causal skip), left out of the split.
-    uint32_t truncate_tiles = 0;
+    // Rotating KV window (kernels/ring_attention_kv_window.hpp), off when kv_window_parts == 0: parts per direction at
+    // the largest slice, tile rows of such a part (the output tensors are window-shaped) and the consumers' progress
+    // semaphore, which the gather registers on its own cores too.
+    uint32_t kv_window_parts = 0;
+    uint32_t kv_window_cap_rows = 0;
+    uint32_t kv_window_progress_sem = 0;
 };
 
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
@@ -202,8 +208,8 @@ namespace ring_attention_all_gather_async_detail {
 constexpr uint32_t kReaderRuntimeArgHeaderCount = 3;
 constexpr uint32_t kReaderReadySemaphoreFieldOffset = 2;
 // All-gather writer runtime-arg layout: [0]=dim, [1]=sem_noc0_x, [2]=sem_noc0_y, [3]=ring_size,
-// [4]=out_ready_sem, followed by one tensor-descriptor block per gathered input.
-constexpr uint32_t kWriterRuntimeArgHeaderCount = 5;
+// [4]=out_ready_sem, [5]=the other direction's semaphore, followed by one tensor-descriptor block per gathered input.
+constexpr uint32_t kWriterRuntimeArgHeaderCount = 6;
 constexpr uint32_t kWriterReadySemaphoreFieldOffset = 4;
 // Per-input scalar fields: Wt, Ht, out_Wt, out_Ht, batch_head_size,
 // input_batch_base (offset 5), valid_pages_per_batch_head (offset 6), and worker link (offset 7).

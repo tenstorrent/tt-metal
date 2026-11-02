@@ -931,6 +931,7 @@ def call_sdpa(
     circular_kv_cache=False,
     kv_valid_end_tensor=None,
     k_expand_weight=None,
+    kv_window_parts=0,
 ):
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
@@ -969,6 +970,7 @@ def call_sdpa(
         circular_kv_cache=circular_kv_cache,
         kv_valid_end_tensor=kv_valid_end_tensor,
         k_expand_weight=k_expand_weight,
+        kv_window_parts=kv_window_parts,
     )
     return tt_out
 
@@ -1854,6 +1856,8 @@ def run_ring_joint_sdpa_chunked(
     v_single_slot: bool = None,
     trace_replay_measure=None,
     chunk_valid_rows: int = None,
+    kv_window_parts: int = 0,
+    kv_window_local_rows: int = None,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -2267,6 +2271,32 @@ def run_ring_joint_sdpa_chunked(
             return out[:, :, :expected_q_len, :]
 
         def create_persistent_buffers(seq_len, kv_buffer_batch):
+            if kv_window_parts:
+                # Rotating KV window: slot rings sized from the local cache rows, not the gathered sequence.
+                local_rows = kv_window_local_rows or seq_len // mesh_config.sp_size
+                window_k_chunk = qk_configs[0][1]
+                assert all(k == window_k_chunk for _, k in qk_configs), "one window shape per K chunk size"
+                k_window = ttnn.transformer.ring_joint_kv_window_shape(
+                    [kv_buffer_batch, nhk, local_rows, d_k], window_k_chunk, kv_window_parts
+                )
+                v_window = ttnn.transformer.ring_joint_kv_window_shape(
+                    [1, nhv, local_rows, d_v], window_k_chunk, kv_window_parts
+                )
+                buffers = []
+                for shape, dims in ((k_window, persistent_k_shard_dims), (v_window, kv_persistent_shard_dims)):
+                    buffers.append(
+                        ttnn.from_torch(
+                            torch.zeros(*shape),
+                            dtype=kv_dtype,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=mesh_device,
+                            mesh_mapper=ttnn.ShardTensor2dMesh(
+                                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims
+                            ),
+                        )
+                    )
+                fence_persistent_buffers(mesh_device)
+                return tuple(buffers)
             persistent_output_buffer_k = ttnn.from_torch(
                 torch.zeros(kv_buffer_batch, nhk, seq_len, d_k),
                 dtype=kv_dtype,
@@ -2569,6 +2599,7 @@ def run_ring_joint_sdpa_chunked(
                     attention_sink=tt_attention_sink,
                     circular_kv_cache=circular_kv_cache,
                     k_expand_weight=tt_w_uk,
+                    kv_window_parts=kv_window_parts,
                 )
             except Exception as exc:
                 op_name = "ring_mla" if use_ring_mla else "SDPA"
@@ -4179,6 +4210,70 @@ def test_ring_joint_attention_chunked_expanded_k_short_prompt_accuracy(model_nam
         persistent_buffer_mode="reuse_max",
         chunk_indices=[0],
         chunk_valid_rows=valid_rows,
+    )
+
+
+# Rotating KV window (kv_window_parts): the fewest live slots (one slice and a part) and a window as long as a
+# direction's units (no reuse), which isolates slot addressing from slot reuse.
+KV_WINDOW_PARTS = pytest.mark.parametrize("kv_window_parts", [9, 24], ids=["window9", "window24"])
+
+
+@pytest.mark.timeout(1800)
+@KV_WINDOW_PARTS
+@pytest.mark.parametrize("model_name", ["kimi_k3_expanded_k", "kimi_k2_7_expanded_k"])
+def test_ring_joint_attention_chunked_expanded_k_kv_window_accuracy(model_name, kv_window_parts):
+    """Kimi K3 / K2.7 production attention with the gathered K / V in rotating windows, on one oversized cache as
+    ttMLA calls the op (the window needs chunked prefill): every chunk against the full-sequence reference."""
+    q_chunk, k_chunk, k_splits = expanded_k_production_chunks(model_name)
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        EXPANDED_K_CHUNKED_MODEL_CONFIGS[model_name],
+        chunk_size=CHUNKED_PREFILL_CHUNK_SIZE,
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        k_splits=k_splits,
+        reuse_kv_buffer=True,
+        persistent_buffer_mode="reuse_max",
+        kv_window_parts=kv_window_parts,
+    )
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("model_name", ["kimi_k3_expanded_k", "kimi_k2_7_expanded_k"])
+def test_ring_joint_attention_chunked_expanded_k_kv_window_determinism(model_name):
+    """The rotating window's production attention run 3 times per chunk on one reused window: bit-exact."""
+    q_chunk, k_chunk, k_splits = expanded_k_production_chunks(model_name)
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        EXPANDED_K_CHUNKED_MODEL_CONFIGS[model_name],
+        chunk_size=CHUNKED_PREFILL_CHUNK_SIZE,
+        qk_configs=[(q_chunk, k_chunk)],
+        num_iterations=3,
+        k_splits=k_splits,
+        reuse_kv_buffer=True,
+        persistent_buffer_mode="reuse_max",
+        kv_window_parts=9,
+    )
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("valid_rows", [640, 2240], ids=["one_slab", "partial_slabs"])
+@pytest.mark.parametrize("model_name", ["kimi_k3_expanded_k", "kimi_k2_7_expanded_k"])
+def test_ring_joint_attention_chunked_expanded_k_kv_window_short_prompt_accuracy(model_name, valid_rows):
+    """A prompt shorter than one chunk in the rotating window: empty parts still carry markers and credits."""
+    q_chunk, k_chunk, k_splits = expanded_k_production_chunks(model_name)
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        EXPANDED_K_CHUNKED_MODEL_CONFIGS[model_name],
+        chunk_size=CHUNKED_PREFILL_CHUNK_SIZE,
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        k_splits=k_splits,
+        reuse_kv_buffer=True,
+        persistent_buffer_mode="reuse_max",
+        chunk_indices=[0],
+        chunk_valid_rows=valid_rows,
+        kv_window_parts=9,
     )
 
 

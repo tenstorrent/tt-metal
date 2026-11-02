@@ -21,7 +21,9 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_kv_window.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_geometry.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
@@ -121,7 +123,9 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args,
     // Single-slot gather writes one cache slot to gathered slot 0, so allow a batch-1 output.
     bool allow_single_slot_output,
-    std::optional<uint32_t> compact_gather_dim_minimum) {
+    std::optional<uint32_t> compact_gather_dim_minimum,
+    // A rotating KV window's buffers are window-shaped; the caller checks their shape.
+    bool kv_window) {
     const auto& input_tensors = tensor_args.input_tensor;
     TT_FATAL(
         !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
@@ -184,6 +188,9 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
                 "Output tensor {} memory config should match output_mem_config",
                 i);
 
+            if (kv_window) {
+                continue;
+            }
             auto output_shape = output_tensor.logical_shape();
             auto expected_output_shape = input_tensors[i].logical_shape();
             expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
@@ -657,7 +664,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args,
         indexed_kv_cache_active(args, tensor_args),
-        compact_gather_dim_minimum);
+        compact_gather_dim_minimum,
+        args.kv_window_parts > 0);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -727,8 +735,60 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto N_local_q = q_shape[2];
     const auto N_local_kv = tensor_args.local_kv_seq_len();
     const auto gathered_buffer_n = k_shape[2];
-    const auto N_global =
-        (args.has_sliding_window() || args.kv_stripe_split > 1) ? N_local_kv * args.ring_size : gathered_buffer_n;
+    const bool kv_window = args.kv_window_parts > 0;
+    const auto N_global = (args.has_sliding_window() || args.kv_stripe_split > 1 || kv_window)
+                              ? N_local_kv * args.ring_size
+                              : gathered_buffer_n;
+    if (kv_window) {
+        // Rotating KV window (ring_attention_kv_window.hpp): only the expanded-K ring gather lands slices in parts.
+        namespace kvw = ttnn::ring_attention_all_gather;
+        TT_FATAL(
+            tensor_args.has_k_expand() && has_input_v && has_gathered_v,
+            "The rotating KV window needs expanded K (k_expand_weight) with a separate V");
+        TT_FATAL(
+            ag.topology == ttnn::ccl::Topology::Ring && !ag.full_mesh && args.ring_size % 2 == 0 && args.ring_size > 2,
+            "The rotating KV window needs an even axis ring of more than two devices");
+        TT_FATAL(
+            !args.has_sliding_window() && args.kv_stripe_split == 1 && !has_joint_tensors,
+            "The rotating KV window supports neither sliding attention, split KV nor joint tensors");
+        TT_FATAL(
+            tensor_args.is_chunked(args.kv_stripe_split),
+            "The rotating KV window needs chunked prefill (Q shorter than the local KV cache)");
+        TT_FATAL(
+            (args.ring_size / 2) * kvw::kReadinessParts < kvw::kKvWindowDone,
+            "Ring size {} has too many window units per direction",
+            args.ring_size);
+        const auto window_shape = [&](const ttnn::Tensor& local) {
+            const auto& shape = local.logical_shape();
+            return ring_joint_kv_window_shape(
+                {static_cast<uint32_t>(shape[0]),
+                 static_cast<uint32_t>(shape[1]),
+                 static_cast<uint32_t>(shape[2]),
+                 static_cast<uint32_t>(shape[3])},
+                args.get_k_chunk_size(),
+                args.kv_window_parts);
+        };
+        const auto expect_shape = [&](const ttnn::Tensor& gathered, const ttnn::Tensor& local, const char* name) {
+            // A window sized for a longer cache (whole parts of it) also fits.
+            const auto expected = window_shape(local);
+            const auto& got = gathered.logical_shape();
+            const uint32_t part_rows_unit = kvw::kv_window_rows(args.kv_window_parts, 1) * tt::constants::TILE_HEIGHT;
+            TT_FATAL(
+                got[0] == expected[0] && got[1] == expected[1] && got[3] == expected[3] && got[2] >= expected[2] &&
+                    got[2] % part_rows_unit == 0,
+                "Rotating KV window: gathered {} must have ring_joint_kv_window_shape [{}, {}, {}, {}] (or one of a "
+                "longer "
+                "cache), got {}",
+                name,
+                expected[0],
+                expected[1],
+                expected[2],
+                expected[3],
+                got);
+        };
+        expect_shape(gathered_input_tensor_k, tensor_args.input_k, "K");
+        expect_shape(tensor_args.gathered_v.value(), tensor_args.input_v.value(), "V");
+    }
     const auto L = has_joint_tensors ? joint_q_shape[2] : 0;
     const auto DH = q_shape[3];
     const uint32_t v_local_seq =
@@ -997,18 +1057,19 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // Single-slot gather writes cache slot kv_cache_batch_idx to gathered slot 0: a batch-1 buffer
         // is the efficient shape; a full-batch buffer is also accepted (only slot 0 is used).
         TT_FATAL(
-            k_shape[0] == 1 || k_shape[0] == K_cache_batch,
+            kv_window || k_shape[0] == 1 || k_shape[0] == K_cache_batch,
             "Gathered K batch must be 1 (single-slot gather) or match input K cache batch {}. Got gathered K: {}",
             K_cache_batch,
             k_shape[0]);
         TT_FATAL(
-            v_shape[0] == 1 || v_shape[0] == V_cache_batch,
+            kv_window || v_shape[0] == 1 || v_shape[0] == V_cache_batch,
             "Gathered V batch must be 1 (single-slot gather) or match input V cache batch {}. Got gathered V: {}",
             V_cache_batch,
             v_shape[0]);
     } else {
-        TT_FATAL(k_shape[0] == B, "K batch size must match Q. Got Q: {}, K: {}", B, k_shape[0]);
-        TT_FATAL(v_shape[0] == B, "V batch size must match Q. Got Q: {}, V: {}", B, v_shape[0]);
+        // A window's leading dim is 1, checked above.
+        TT_FATAL(kv_window || k_shape[0] == B, "K batch size must match Q. Got Q: {}, K: {}", B, k_shape[0]);
+        TT_FATAL(kv_window || v_shape[0] == B, "V batch size must match Q. Got Q: {}, V: {}", B, v_shape[0]);
     }
     if (has_joint_tensors) {
         TT_FATAL(
@@ -1292,6 +1353,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.joint_is_sharded(),
         args.ring_size,
         args.kv_stripe_split,
+        args.kv_window_parts,
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
@@ -1363,7 +1425,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
     const uint32_t N_local = q_shape[2];
-    const uint32_t N_global = gathered_k_shape[2];
+    // A rotating window holds parts of slices, not the gathered sequence.
+    const uint32_t N_global =
+        args.kv_window_parts > 0 ? tensor_args.local_kv_seq_len() * args.ring_size : gathered_k_shape[2];
     const bool has_joint_tensors =
         tensor_args.joint_q.has_value() || tensor_args.joint_k.has_value() || tensor_args.joint_v.has_value();
     const uint32_t L = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0;
@@ -1425,6 +1489,28 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }
 
+std::vector<uint32_t> ring_joint_kv_window_shape(
+    const std::vector<uint32_t>& local_kv_shape, uint32_t k_chunk_size, uint32_t kv_window_parts) {
+    namespace kvw = ttnn::ring_attention_all_gather;
+    TT_FATAL(local_kv_shape.size() == 4, "The rotating KV window needs a rank-4 K/V cache shape");
+    TT_FATAL(
+        kv_window_parts > kvw::kReadinessParts,
+        "kv_window_parts must exceed the {} parts per slice (fewer deadlock the ring)",
+        kvw::kReadinessParts);
+    TT_FATAL(
+        k_chunk_size > 0 && k_chunk_size % tt::constants::TILE_HEIGHT == 0,
+        "k_chunk_size must be a positive multiple of the tile height");
+    const uint32_t rows = kvw::kv_window_slot_rows_bound(
+        tt::div_up(local_kv_shape[2], tt::constants::TILE_HEIGHT),
+        ring_joint::kKSplitMaxCount,
+        k_chunk_size / tt::constants::TILE_HEIGHT);
+    return {
+        1,
+        local_kv_shape[1],
+        kvw::kv_window_rows(kv_window_parts, rows) * tt::constants::TILE_HEIGHT,
+        local_kv_shape[3]};
+}
+
 RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -1467,7 +1553,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_n_tensor,
     const std::optional<ttnn::Tensor>& logical_l_tensor,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
-    const std::optional<ttnn::Tensor>& k_expand_weight) {
+    const std::optional<ttnn::Tensor>& k_expand_weight,
+    const uint32_t kv_window_parts) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1691,6 +1778,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         sliding_window_size,
         circular_kv_cache,
         resolved_kv_stripe_split);
+    operation_attributes.kv_window_parts = kv_window_parts;
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

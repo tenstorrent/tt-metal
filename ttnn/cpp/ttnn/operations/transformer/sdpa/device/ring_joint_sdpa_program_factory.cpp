@@ -6,6 +6,7 @@
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/ring_joint_ksplit.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_kv_window.hpp"
 #include "kernels/ring_mla_packing_plan.hpp"
 #include "kernels/sliding_window_geometry.hpp"
 #include "kernels/sliding_window_work_plan.hpp"
@@ -1490,6 +1491,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Progressive slice readiness (ring_joint_plan::slice_readiness_enabled).
     const bool slice_readiness = ring_joint_plan::slice_readiness_enabled(args, tensor_args);
     sdpa_fused_op_signaler->slice_readiness = slice_readiness;
+    // Rotating KV window (ring_attention_kv_window.hpp): lands slices in parts, so it needs progressive readiness.
+    const bool kv_window = args.kv_window_parts > 0;
+    TT_FATAL(!kv_window || slice_readiness, "The rotating KV window needs progressive slice readiness");
+    // Each core reads a gathered chunk once (one Q chunk per core), so it can release a part once it moves past it.
+    TT_FATAL(!kv_window || max_q_per_core == 1, "The rotating KV window needs one Q chunk per core");
     // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
     // restore CBs, so no bf16 running sum spans the whole prefix.
     const bool seg_accum =
@@ -2345,7 +2351,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                   ksplit_count,
                   total_q_chunks,
                   num_q_chunks,
-                  ring_size)
+                  ring_size,
+                  /*arrival_order=*/kv_window)
             : ring_joint::DonationPlan{};
     const bool donation = donation_plan.enabled;
     auto is_spare = [&](uint32_t core_idx) { return donation && !donation_plan.visits[core_idx].empty(); };
@@ -2920,6 +2927,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Slot donation: a spare's count of partials its homes have pulled (ring_joint_ksplit.hpp).
     const uint32_t donation_pulled_sem_id =
         donation ? add_ring_joint_semaphore(desc, core_grid_set, 0, "slot donation") : 0;
+    // Rotating KV window: each consumer's progress word, polled by the gather's credit master. The gather registers
+    // the same id on its cores for its readers' progress.
+    const uint32_t kv_window_progress_sem_id =
+        kv_window ? add_ring_joint_semaphore(desc, core_grid_set, 0, "KV window progress") : 0;
 
     // Build static MHA/shared-K V head chains. GQA uses KV-head-grouped chains instead.
     if (use_head_chain && build_kv_chains) {
@@ -3284,6 +3295,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_rotated_q_split ||
         (enable_kv_chains && ((k_uses_batch_chain && k_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)));
     compute_kernel.named_compile_time_args.emplace_back("padded_q_slots", padded_q_slots_enabled ? 1u : 0u);
+    reader_kernel.named_compile_time_args.emplace_back("kv_window_parts", args.kv_window_parts);
+    // The window holds kv_window_rows(parts, cap rows) rows.
+    const uint32_t kv_window_cap_rows =
+        kv_window ? gathered_padded_Nt / ttnn::ring_attention_all_gather::kv_window_rows(args.kv_window_parts, 1) : 0u;
+    reader_kernel.named_compile_time_args.emplace_back("kv_window_cap_rows", kv_window_cap_rows);
+    reader_kernel.named_compile_time_args.emplace_back("kv_window_progress_sem", kv_window_progress_sem_id);
     reader_kernel.named_compile_time_args.emplace_back(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
     reader_kernel.named_compile_time_args.emplace_back(
@@ -3845,10 +3862,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             sdpa_fused_op_signaler->split_forwarding_enabled,
             /*partial_readiness_enabled=*/false,
             rank_mapping,
-            // The gather splits each slice like its receiver's K bands: a receiver ranked below the sender masks
-            // the sender's newest slab (one Q slab of the chunk) under the dense causal skip.
+            // The gather splits each slice like its receiver's K bands.
             slice_readiness
-                ? RingAttentionSliceReadiness{ksplit_count, Sk_chunk_t, dense_causal_skip ? kv_region_Nt : 0u}
+                ? RingAttentionSliceReadiness{.bands = ksplit_count, .chunk_tiles = Sk_chunk_t, .kv_window_parts = args.kv_window_parts, .kv_window_cap_rows = kv_window_cap_rows, .kv_window_progress_sem = kv_window_progress_sem_id}
                 : RingAttentionSliceReadiness{});
     }
 

@@ -77,7 +77,8 @@ inline DonationPlan make_donation_plan(
     uint32_t ksplit_count,
     uint32_t total_q_chunks,
     uint32_t q_chunks_per_head,
-    uint32_t ring_iterations) {
+    uint32_t ring_iterations,
+    bool arrival_order = false) {
     DonationPlan plan;
     const uint32_t num_cores = grid_x * grid_y;
     const uint32_t slots = slot_count(ring_iterations);
@@ -140,7 +141,9 @@ inline DonationPlan make_donation_plan(
     if (groups_per_band * ksplit_count > slots - 1) {
         return plan;
     }
-    // Items: within a group, heads in order; spares walk them in slot order.
+    // Items: within a group, heads in order; spares walk them in slot order. With arrival_order (a rotating KV window,
+    // which reuses a gathered slot once its last reader moves on) a spare takes each gathered item about when its
+    // slice arrives, slot s some s slots into the walk, and fills the waits with local items.
     struct Item {
         uint32_t head, band, slot;
     };
@@ -173,13 +176,37 @@ inline DonationPlan make_donation_plan(
             plan.spare_peer[spares[2 * p + r]] = spares[2 * p + 1 - r];
         }
     }
+    std::vector<std::vector<Item>> pair_items(spare_pairs);
     for (uint32_t j = 0; j < item_list.size(); ++j) {
-        const Item& item = item_list[j];
-        const uint32_t p = j % spare_pairs;
-        for (uint32_t r = 0; r < 2; ++r) {
-            const uint32_t unit = 2 * item.head + r;
-            plan.visits[spares[2 * p + r]].push_back({item.slot, unit, item.band, home_core(unit, item.band)});
-            plan.visitor[home_core(unit, item.band)] = spares[2 * p + r];
+        pair_items[j % spare_pairs].push_back(item_list[j]);
+    }
+    if (arrival_order) {
+        // Visit t starts about t slots into the walk: take the earliest gathered item that has arrived by then, else a
+        // local one, else the earliest gathered one (and wait for it).
+        for (auto& items : pair_items) {
+            std::vector<Item> local, remote, order;
+            for (const Item& item : items) {
+                (item.slot == 0 ? local : remote).push_back(item);
+            }
+            size_t next_local = 0, next_remote = 0;
+            for (uint32_t t = 0; t < items.size(); ++t) {
+                const bool remote_ready = next_remote < remote.size() && remote[next_remote].slot <= t;
+                if (remote_ready || next_local == local.size()) {
+                    order.push_back(remote[next_remote++]);
+                } else {
+                    order.push_back(local[next_local++]);
+                }
+            }
+            items = std::move(order);
+        }
+    }
+    for (uint32_t p = 0; p < spare_pairs; ++p) {
+        for (const Item& item : pair_items[p]) {
+            for (uint32_t r = 0; r < 2; ++r) {
+                const uint32_t unit = 2 * item.head + r;
+                plan.visits[spares[2 * p + r]].push_back({item.slot, unit, item.band, home_core(unit, item.band)});
+                plan.visitor[home_core(unit, item.band)] = spares[2 * p + r];
+            }
         }
     }
     plan.enabled = true;
