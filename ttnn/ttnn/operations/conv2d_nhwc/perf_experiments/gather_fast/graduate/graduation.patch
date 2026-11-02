@@ -1,0 +1,120 @@
+--- kernels/conv2d_nhwc_gather.hpp	2026-11-02 19:40:08.461715085 +0000
++++ perf_experiments/gather_fast/graduate/conv2d_nhwc_gather.hpp	2026-11-02 20:44:22.571369188 +0000
+@@ -141,9 +141,75 @@
+ // Every im2col gather source (window / halo scratch, resident shard, MEM_ZEROS) is in this
+ // core's own L1, so the gather issues stateful reads against the local NoC xy, set once per
+ // m-block after the (remote) window / halo fetch: a per-read cost of a few register writes.
+-FORCE_INLINE void set_local_read_state() { noc_async_read_set_state(get_noc_addr(0)); }
++//
++// Interior-pixel runs alternate two NoC-0 command buffers on the reader (NCRISC): its read buffer and
++// its register-write buffer, which the reader never uses for writes. The run's reads are back-to-back
++// local reads of one length, so each cmd buf is armed once (length + local read state) and an issue
++// is poll + 3 register writes; polling one buffer overlaps the other's request in flight. Measured
++// (perf_experiments/gather_fast): ~13% less gather work than one buffer. Raw NoC cmd-buf API on
++// purpose — no helper issues a strided run of fixed-length local reads on two cmd buffers.
++// The BRISC split-gather instance (R3) keeps one buffer: its cmd buffers serve the writer's writes.
++#if defined(COMPILE_FOR_NCRISC)
++constexpr bool dual_cmd_buf = true;
++#else
++constexpr bool dual_cmd_buf = false;
++#endif
++constexpr uint32_t run_cmd_buf_b = NCRISC_WR_REG_CMD_BUF;
++// Set once per m-block, after the remote window / halo fetch. Re-arm (call again) after any
++// register write / semaphore op on NCRISC_WR_REG_CMD_BUF, which rewrites its NOC_CTRL.
++FORCE_INLINE void set_local_read_state() {
++    noc_async_read_set_state(get_noc_addr(0));
++    if constexpr (dual_cmd_buf) {
++        const uint32_t coord = (uint32_t)(get_noc_addr(0) >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
++        while (!noc_cmd_buf_ready(noc_index, run_cmd_buf_b));
++        NOC_CMD_BUF_WRITE_REG(
++            noc_index,
++            run_cmd_buf_b,
++            NOC_CTRL,
++            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1));
++        NOC_CMD_BUF_WRITE_REG(noc_index, run_cmd_buf_b, NOC_TARG_ADDR_MID, 0x0);
++        NOC_CMD_BUF_WRITE_REG(noc_index, run_cmd_buf_b, NOC_TARG_ADDR_COORDINATE, coord);
++        NOC_CMD_BUF_WRITE_REG(noc_index, run_cmd_buf_b, NOC_RET_ADDR_MID, 0x0);
++        NOC_CMD_BUF_WRITE_REG(noc_index, run_cmd_buf_b, NOC_RET_ADDR_COORDINATE, coord);
++    }
++}
+ FORCE_INLINE void local_read(uint32_t src, uint32_t dst, uint32_t bytes) { noc_async_read_with_state(src, dst, bytes); }
+ 
++FORCE_INLINE void run_issue(uint32_t buf, uint32_t src, uint32_t dst) {
++    while (!noc_cmd_buf_ready(noc_index, buf));
++    NOC_CMD_BUF_WRITE_REG(noc_index, buf, NOC_RET_ADDR_LO, dst);
++    NOC_CMD_BUF_WRITE_REG(noc_index, buf, NOC_TARG_ADDR_LO, src);
++    NOC_CMD_BUF_WRITE_REG(noc_index, buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
++}
++FORCE_INLINE void run_set_len(uint32_t buf, uint32_t bytes) {
++    while (!noc_cmd_buf_ready(noc_index, buf));
++    NOC_CMD_BUF_WRITE_REG(noc_index, buf, NOC_AT_LEN_BE, bytes);
++}
++// `run` local reads of `bytes`: the source advances `step`, the destination `dst_step` per read.
++FORCE_INLINE void local_read_run(uint32_t a, uint32_t d, uint32_t bytes, uint32_t step, uint32_t dst_step, uint32_t run) {
++    if (!dual_cmd_buf || bytes > NOC_MAX_BURST_SIZE) {
++        for (uint32_t j = 0; j < run; ++j) {
++            local_read(a, d, bytes);
++            a += step;
++            d += dst_step;
++        }
++        return;
++    }
++    run_set_len(read_cmd_buf, bytes);
++    run_set_len(run_cmd_buf_b, bytes);
++    uint32_t j = 0;
++    for (; j + 1 < run; j += 2) {
++        run_issue(read_cmd_buf, a, d);
++        run_issue(run_cmd_buf_b, a + step, d + dst_step);
++        a += 2 * step;
++        d += 2 * dst_step;
++    }
++    if (j < run) {
++        run_issue(read_cmd_buf, a, d);
++    }
++    noc_reads_num_issued[noc_index] += run;  // the barrier counts responses over both buffers
++}
++
+ FORCE_INLINE void zero_run(uint64_t, uint32_t dst, uint32_t bytes) {
+     while (bytes > 0) {
+         const uint32_t chunk = bytes < MEM_ZEROS_SIZE ? bytes : MEM_ZEROS_SIZE;
+@@ -470,8 +536,8 @@
+         const int32_t h_base = static_cast<int32_t>(ho) * stride - padding;
+         const int32_t w_base = static_cast<int32_t>(wo) * stride - padding;
+         uint32_t run = 1;
+-        if (fast_ok && h_base >= 0 && h_base + eff_kH <= static_cast<int32_t>(H) &&
+-            static_cast<int32_t>(wo) >= wo_int_lo && static_cast<int32_t>(wo) <= wo_int_hi) {
++        // Padding kernel rows do not leave the fast path: their segments are zero-filled for the run.
++        if (fast_ok && static_cast<int32_t>(wo) >= wo_int_lo && static_cast<int32_t>(wo) <= wo_int_hi) {
+             run = static_cast<uint32_t>(wo_int_hi) + 1 - wo;
+             run = run < TILE_DIM - r ? run : TILE_DIM - r;
+             run = run < M - pix ? run : M - pix;
+@@ -481,14 +547,24 @@
+                 const int32_t w_first = w_base + seg.tap[i];
+                 const uint32_t bytes = seg.bytes[i];
+                 uint32_t d = dst + seg.dst[i];
++                const int32_t h = h_base + seg.kh[i];
++                if (h < 0 || h >= static_cast<int32_t>(H)) {
++                    // Padding kernel row: zeros for the whole run (one contiguous zero run when the
++                    // segment is the whole im2col row, else one per pixel).
++                    if (bytes == im2col_row_bytes) {
++                        zero_run(zeros_noc, d, run * im2col_row_bytes);
++                    } else {
++                        for (uint32_t j = 0; j < run; ++j) {
++                            zero_run(zeros_noc, d, bytes);
++                            d += im2col_row_bytes;
++                        }
++                    }
++                    continue;
++                }
+                 uint32_t a;
+                 if (src.run_addr(
+                         row, w_first, w_first + static_cast<int32_t>(run - 1) * stride + seg.span[i], seg.chan[i], a)) {
+-                    for (uint32_t j = 0; j < run; ++j) {
+-                        local_read(a, d, bytes);
+-                        a += step;
+-                        d += im2col_row_bytes;
+-                    }
++                    local_read_run(a, d, bytes, step, im2col_row_bytes, run);
+                 } else {
+                     for (uint32_t j = 0; j < run; ++j) {
+                         src.read(row, w_first + static_cast<int32_t>(j) * stride, seg.chan[i], d, bytes);

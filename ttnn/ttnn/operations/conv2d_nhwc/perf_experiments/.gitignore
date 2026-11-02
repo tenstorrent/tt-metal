@@ -1,0 +1,6 @@
+logs/
+*/logs/
+*/prof/
+*.csv
+*.tracy
+__pycache__/
