@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kimi-K3 prefilled in 5120-token chunks, carried across all 102400 tokens of the 100k trace.
+"""Kimi-K3 prefilled in 5120- and 2560-token chunks, carried across 56320 tokens of the traces.
 
 The depth ladder proves one chunk. This proves the thing a chunk cannot: that the KDA recurrent
 carry survives the boundary between chunks and still equals the model's own, twenty times in a row.
@@ -9,15 +9,17 @@ That is the part of Kimi-K3 with genuine cross-chunk state — AttnRes has none,
 reductions is over the hidden dimension and the token axis is a free batch axis, so each chunk opens
 a fresh walk while the KDA carries advance.
 
-5120 is not a chosen number. `ttnn.TILE_SIZE(32) * KDA_SUMMARY_GROUP_CHUNKS(20) * SP(8)` is both the
-chunk size and the shortest sequence the KDA recurrence accepts on this mesh, so it is the only
-chunk size available here.
+Two chunk sizes. The KDA recurrence's shortest sequence on this mesh is `ttnn.TILE_SIZE(32) *
+summary_group_chunks * SP(8)`, and `kimi_k3_program_config` picks the group per local length: 20 at 640
+rows per chip (5120 tokens) and 10 at 320 (2560). Both cover the same 56320 tokens, so each is held to the
+same golden at the same bars, and `test_chunk_sizes_agree` compares the two runs' KV and KDA carries
+directly.
 
 Two oracles, and the second is the one that matters:
 
   * each chunk's residual stream against `decoder_output_layer_0` over that window;
   * the KDA recurrent carry at every boundary against `kda_recurrent_state_layer_0`, which the trace
-    snapshots every 640 tokens — so a 5120-token boundary is snapshot row `8k - 1`. A run that
+    snapshots every 640 tokens — so the boundary after token t is snapshot row `t / 640 - 1`. A run that
     silently restarted its recurrence each chunk would still pass the first oracle on chunk 0 and
     drift afterwards; this one fails immediately at the first boundary.
 
@@ -29,6 +31,8 @@ Twenty chunks also covers the standing memory gate: device DRAM is sampled after
 must not grow, which is what would catch the KDA carries or the walk's per-block batches leaking.
 """
 
+import gc
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -62,9 +66,11 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_i
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_natural, unrotate_cache_layer
 
-CHUNK = 5120
-# 11 chunks is 56320 tokens — the "55k" leg, and past the 10-chunk mark the memory gate wants.
-NUM_CHUNKS = 11
+# 56320 tokens — the "55k" leg: 11 chunks of 5120 or 22 of 2560, both past the 10-chunk mark the memory
+# gate wants. A 2560-token chunk is 320 rows per chip on SP=8: whole tiles for MLA, MoE and AttnRes, and the
+# KDA recurrence's tuned group of 10 (kimi_k3_program_config).
+CHUNK_SIZES = [5120, 2560]
+TOTAL_LEN = 56320
 # Two depths, because the two traces cover different halves and neither covers both.
 #
 #   5  on the 100k trace: it snapshots the KDA recurrent state every 640 tokens, so the carry can be
@@ -76,7 +82,6 @@ NUM_CHUNKS = 11
 #      12, which is where the sealed set first has two blocks. It carries no KDA snapshots, so the
 #      carry oracle is the depth-5 case's job.
 DEPTHS = [5, 24]
-TOTAL_LEN = CHUNK * NUM_CHUNKS  # the KV cache must span every chunk, not just one
 DEEP_TRACE_FROM = 12
 SNAPSHOT_STRIDE = 640
 
@@ -91,7 +96,7 @@ SNAPSHOT_STRIDE = 640
 # and the same value as the corresponding one-shot rung — chunking itself costs nothing.
 SHALLOW_OUTPUT_PCC = 0.99
 DEEP_OUTPUT_PCC = 0.98
-# The carry is a 5120-step bf16 recurrence per chunk compounded across chunks, and it is compared
+# The carry is a chunk-long bf16 recurrence per chunk compounded across chunks, and it is compared
 # against a snapshot the model wrote in fp32; the ladder's own KDA output sits at 0.9999.
 CARRY_PCC = 0.99
 # Same shallow-layer bar the depth ladder uses for the KV cache.
@@ -121,11 +126,20 @@ def _dram_bytes(mesh_device):
     return view.total_bytes_allocated_per_bank * view.num_banks
 
 
-# Same weight-loading floor as the depth ladder, then eleven chunks of real work on top of it.
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
-@pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
-def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers):
+@dataclass
+class ChunkedRun:
+    """What one chunked prefill leaves behind: its golden-comparison failures, the DRAM footprint after every
+    chunk, and the end state (natural-order KV rows per MLA slot, raw KDA carry shards per KDA layer)."""
+
+    failures: list
+    footprints: list
+    kv_rows: dict = field(default_factory=dict)
+    kda_carries: dict = field(default_factory=dict)
+
+
+def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedRun:
+    """Prefill `num_chunks` chunks of `chunk_len` tokens through `num_layers` layers, scoring every chunk against
+    the golden trace as it goes."""
     tp_shard_kv = True
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M if num_layers >= DEEP_TRACE_FROM else TRACE_100K)
@@ -173,7 +187,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         KimiK3Config,
         _model_state_dict(checkpoint, num_layers, root, cache),
         num_layers=num_layers,
-        seq_len=CHUNK,
+        seq_len=chunk_len,
         residual_factory=residual_factory,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
@@ -219,15 +233,15 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     failures = []
     per_chunk_layer_pccs = {}
 
-    for chunk in range(NUM_CHUNKS):
-        start = chunk * CHUNK
+    for chunk in range(num_chunks):
+        start = chunk * chunk_len
         if chunk == 0:
             # Only at the head of a request: a carry summarizes the prefix behind it, so zeroing it
             # between chunks is precisely the bug this test exists to catch.
             model.reset_streams()
 
         tokens_tt = prepare_prefill_input_tensor(
-            trace.token_ids(CHUNK, start)[0].tolist(),
+            trace.token_ids(chunk_len, start)[0].tolist(),
             mesh_device,
             tuple(mesh_device.shape)[SP_AXIS],
             False,
@@ -250,7 +264,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         layer_pccs = {
             idx: float(
                 str(
-                    comp_pcc(trace.decoder_output(idx, start, start + CHUNK), captured[idx], output_pcc_bar)[1]
+                    comp_pcc(trace.decoder_output(idx, start, start + chunk_len), captured[idx], output_pcc_bar)[1]
                 ).split()[-1]
             )
             for idx in range(num_layers)
@@ -287,12 +301,12 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
                 ],
                 dim=-1,
             ).float()
-            want_conv = golden_conv[(start + CHUNK) // SNAPSHOT_STRIDE - 1].reshape(history, -1)
+            want_conv = golden_conv[(start + chunk_len) // SNAPSHOT_STRIDE - 1].reshape(history, -1)
             conv_pcc = float(str(comp_pcc(want_conv, got_conv, CARRY_PCC)[1]).split()[-1])
 
         carry_pcc = float("nan")
         if golden_carry is not None:
-            row = (start + CHUNK) // SNAPSHOT_STRIDE - 1
+            row = (start + chunk_len) // SNAPSHOT_STRIDE - 1
             want_carry = golden_carry[row].transpose(-1, -2)
             carry = read_slab_layer(mesh_device, slabs, 0, 0)
             got_carry = _compose_carry(mesh_device, carry.recurrent)
@@ -313,7 +327,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
 
         footprints.append(_dram_bytes(mesh_device))
         logger.info(
-            f"  chunk {chunk:2d} [{start:6d}:{start + CHUNK:6d}]  worst-layer {output_pcc:.6f} "
+            f"  chunk {chunk:2d} [{start:6d}:{start + chunk_len:6d}]  worst-layer {output_pcc:.6f} "
             f"(L{min(layer_pccs, key=layer_pccs.get)})  "
             f"carry {carry_pcc:.6f}  conv {conv_pcc:.6f}  dram {footprints[-1] / 2**20:8.1f} MiB"
         )
@@ -328,9 +342,9 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     # error sits, and quoting only the final chunk hides whether degradation is progressive or
     # saturates after the first few chunks — which is the difference between something that will
     # keep getting worse at 1M tokens and something that will not.
-    sampled = (0, NUM_CHUNKS // 2, NUM_CHUNKS - 1)
+    sampled = (0, num_chunks // 2, num_chunks - 1)
     logger.info(
-        "  per-layer PCC by context length: " + "  ".join(f"chunk {c} = {(c + 1) * CHUNK} tok" for c in sampled)
+        "  per-layer PCC by context length: " + "  ".join(f"chunk {c} = {(c + 1) * chunk_len} tok" for c in sampled)
     )
     for idx in sorted(per_chunk_layer_pccs[0]):
         seal = "  <- seal" if idx % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
@@ -339,25 +353,58 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
 
     # The KV slabs, after every chunk has been written. This is where a stale or misindexed slab
     # shows: within one chunk MLA reads back what it just wrote and can be self-consistent while
-    # wrong, but across 11 chunks the cache is the only record of the prefix and chunk 10's
+    # wrong, but across many chunks the cache is the only record of the prefix and the last chunk's
     # attention depends on all of it. The device cache is indexed by rank-local MLA slot and the
     # golden by model layer — the schedule owns that mapping.
+    kv_rows = {}
+    filled = num_chunks * chunk_len
     if kvpe is not None:
         cache, stripes = gather_cache_natural(kvpe.storage, mesh_device, tp_shard_kv)
-        positions = blockcyclic_positions(stripes, CHUNK, TOTAL_LEN)
+        positions = blockcyclic_positions(stripes, chunk_len, TOTAL_LEN)
         for slot, model_layer in enumerate(model.schedule.mla_layer_ids[: model.schedule.num_mla_layers]):
+            device_rows = unrotate_cache_layer(cache[slot], positions, TOTAL_LEN)[:filled]
+            kv_rows[model_layer] = device_rows.float()
             if not trace.has_kv_cache(model_layer):
                 continue
-            device_rows = unrotate_cache_layer(cache[slot], positions, TOTAL_LEN)
-            golden_rows = trace.kv_cache(model_layer, 0, TOTAL_LEN)
+            golden_rows = trace.kv_cache(model_layer, 0, filled)
             # NoPE: the second half carries no rotation to re-base.
             pcc_nope, pcc_pe = cache_half_pccs(golden_rows, device_rows, KimiK3Config.KV_LORA_RANK, pe_interleave=False)
             logger.info(
-                f"  KV slot {slot} (model layer {model_layer}) over {TOTAL_LEN} tokens: "
+                f"  KV slot {slot} (model layer {model_layer}) over {filled} tokens: "
                 f"lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
             )
             if min(pcc_nope, pcc_pe) < KV_CACHE_PCC:
                 failures.append(f"KV slot {slot} (layer {model_layer}) {min(pcc_nope, pcc_pe):.6f}")
+
+    # Every KDA layer's end-of-prefill carry, as its raw per-chip shards: the same layout on both chunk sizes, so
+    # test_chunk_sizes_agree can compare them without composing.
+    kda_carries = {}
+    if slabs is not None:
+        for layer_idx in slabs.layer_ids:
+            carry = read_slab_layer(mesh_device, slabs, 0, layer_idx)
+            kda_carries[layer_idx] = {
+                name: torch.cat(
+                    [ttnn.to_torch(t).float().flatten() for t in ttnn.get_device_tensors(getattr(carry, name))]
+                )
+                for name in ("recurrent", "convolution")
+            }
+            deallocate_state(carry)
+        slabs.deallocate()
+    # A second model may be built in this process (test_chunk_sizes_agree); its MoE registers its own overlap
+    # sub-device managers, so this one's go now.
+    model.release_sub_device_managers()
+    return ChunkedRun(failures, footprints, kv_rows, kda_carries)
+
+
+# Same weight-loading floor as the depth ladder, then 56320 tokens of real work on top of it.
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+@pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
+@pytest.mark.parametrize("chunk_len", CHUNK_SIZES, ids=[f"c{n}" for n in CHUNK_SIZES])
+def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers, chunk_len):
+    num_chunks = TOTAL_LEN // chunk_len
+    run = _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks)
+    footprints, failures = run.footprints, run.failures
 
     # The carries and the walk's per-block batches are the two new allocation surfaces; both are
     # supposed to be steady-state after the first chunk warms the pools.
@@ -365,9 +412,56 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     growth = max(steady) - min(steady)
     logger.info(
         f"  DRAM after chunk 1: {min(steady) / 2**20:.1f} MiB, "
-        f"drift over {NUM_CHUNKS - 1} chunks: {growth / 2**20:.1f} MiB"
+        f"drift over {num_chunks - 1} chunks: {growth / 2**20:.1f} MiB"
     )
-    if slabs is not None:
-        slabs.deallocate()
-    assert growth == 0, f"device DRAM grew {growth} bytes across chunks 1..{NUM_CHUNKS - 1}: {footprints}"
+    assert growth == 0, f"device DRAM grew {growth} bytes across chunks 1..{num_chunks - 1}: {footprints}"
     assert not failures, "chunked prefill diverged from the model: " + "; ".join(failures)
+
+
+# The same 10240 tokens prefilled as 2 chunks of 5120 and as 4 of 2560 through the 5-layer checkpoint (KDA
+# layers with the golden carry, and MLA layer 3). The two runs differ only in where the chunk boundaries fall,
+# so their KV and KDA carries should agree to rounding: MLA attends over the same prefix either way, but the
+# MoE sees different tokens per call and KDA's grouped scan sums 10-chunk instead of 20-chunk groups, so the
+# floating-point order differs. Bit-exact equality is logged, not required.
+AGREE_TOKENS = 10240
+AGREE_NUM_LAYERS = 5
+AGREE_KV_PCC = 0.999
+AGREE_CARRY_PCC = 0.999
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+def test_chunk_sizes_agree(mesh_device, device_params):
+    runs = {}
+    for chunk_len in CHUNK_SIZES:
+        runs[chunk_len] = _prefill_chunked(mesh_device, AGREE_NUM_LAYERS, chunk_len, AGREE_TOKENS // chunk_len)
+        gc.collect()
+    reference, other = (runs[size] for size in CHUNK_SIZES)
+    failures = [f"c{size}: {f}" for size, run in runs.items() for f in run.failures]
+
+    def score(label, want, got, bar):
+        exact = torch.equal(want, got)
+        pcc = 1.0 if exact else float(str(comp_pcc(want, got, bar)[1]).split()[-1])
+        logger.info(
+            f"  {label}: c{CHUNK_SIZES[0]} vs c{CHUNK_SIZES[1]} pcc={pcc:.6f} "
+            f"max|diff|={(want - got).abs().max().item():.4g} exact={exact}"
+        )
+        if pcc < bar:
+            failures.append(f"{label} pcc {pcc:.6f} < {bar}")
+
+    assert reference.kv_rows.keys() == other.kv_rows.keys() and reference.kv_rows, "no MLA KV to compare"
+    for layer in sorted(reference.kv_rows):
+        want, got = reference.kv_rows[layer], other.kv_rows[layer]
+        split = KimiK3Config.KV_LORA_RANK
+        score(f"KV layer {layer} lora", want[:, :split], got[:, :split], AGREE_KV_PCC)
+        score(f"KV layer {layer} rope", want[:, split:], got[:, split:], AGREE_KV_PCC)
+    assert reference.kda_carries.keys() == other.kda_carries.keys() and reference.kda_carries, "no KDA carry"
+    for layer in sorted(reference.kda_carries):
+        for name in ("recurrent", "convolution"):
+            score(
+                f"KDA layer {layer} {name}",
+                reference.kda_carries[layer][name],
+                other.kda_carries[layer][name],
+                AGREE_CARRY_PCC,
+            )
+    assert not failures, "prefill at 2560-token chunks disagrees with 5120: " + "; ".join(failures)

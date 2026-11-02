@@ -645,6 +645,17 @@ MLA_SDPA_CONFIG = {
             "chunked_only": True,
         },
     ],
+    # 2.5k total seq_len → 320 per device on 8x4. Kimi-K3 only: the same 96-head candidate as 640, with the K chunk
+    # at the whole local chunk (the 640 entry's sweep saturates by k=256). Without it K3 falls back to the k=32
+    # default, which costs ~0.0035 PCC at 640.
+    320: [
+        {
+            "q_chunk_size": 32,
+            "k_chunk_size": 320,
+            "num_heads": 96,
+            "chunked_only": True,
+        },
+    ],
 }
 
 
