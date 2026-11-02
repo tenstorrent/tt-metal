@@ -199,21 +199,56 @@ void kernel_main() {
         // so we must wait for all num_receive increments to guarantee every
         // child's histogram is finalized before reading.
         gather_sem.wait_min(num_receive);
+        // cores-for-prefill: all children are read concurrently (one slot of output_page_size each in cb_gather_tmp)
+        // and merged in ONE pass over the histogram. The sequential read + barrier + add per child cost 4.1 us each and
+        // the tree depth made the 64-core reduction 90 us.
         for (uint32_t level = 0; level < num_receive; level++) {
             uint32_t child_noc_x = get_arg_val<uint32_t>(7 + level * 2);
             uint32_t child_noc_y = get_arg_val<uint32_t>(7 + level * 2 + 1);
-
             noc.async_read(
                 UnicastEndpoint{},
-                CoreLocalMem<uint32_t>(tmp_addr),
+                CoreLocalMem<uint32_t>(tmp_addr + level * output_page_size),
                 output_page_size,
                 {.noc_x = child_noc_x, .noc_y = child_noc_y, .addr = out_addr},
                 {});
-            noc.async_read_barrier();
-
+        }
+        noc.async_read_barrier();
+        if (num_receive > 0) {
             volatile tt_l1_ptr uint32_t* remote_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tmp_addr);
-            for (uint32_t i = 0; i < n_routed_experts; i++) {
-                local_hist[i] += remote_hist[i];
+            const uint32_t stride_words = output_page_size / sizeof(uint32_t);
+            // 8 words at a time: the loads of a group are issued back to back (the volatile load latency is
+            // overlapped), then the adds, then the stores (~14 -> ~3 cycles per word per child)
+            constexpr uint32_t G = 8;
+            uint32_t i = 0;
+            for (; i + G <= n_routed_experts; i += G) {
+                uint32_t acc[G];
+#pragma GCC unroll 8
+                for (uint32_t j = 0; j < G; ++j) {
+                    acc[j] = local_hist[i + j];
+                }
+                for (uint32_t level = 0; level < num_receive; level++) {
+                    volatile tt_l1_ptr uint32_t* src = remote_hist + level * stride_words + i;
+                    uint32_t v[G];
+#pragma GCC unroll 8
+                    for (uint32_t j = 0; j < G; ++j) {
+                        v[j] = src[j];
+                    }
+#pragma GCC unroll 8
+                    for (uint32_t j = 0; j < G; ++j) {
+                        acc[j] += v[j];
+                    }
+                }
+#pragma GCC unroll 8
+                for (uint32_t j = 0; j < G; ++j) {
+                    local_hist[i + j] = acc[j];
+                }
+            }
+            for (; i < n_routed_experts; i++) {
+                uint32_t acc = local_hist[i];
+                for (uint32_t level = 0; level < num_receive; level++) {
+                    acc += remote_hist[level * stride_words + i];
+                }
+                local_hist[i] = acc;
             }
         }
 

@@ -280,6 +280,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = reader_ct;
     reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+    if (const char* wr = std::getenv("DSV41_SDPA_WINDOW_RUN"); wr != nullptr && wr[0] == '1') {
+        reader_desc.defines.emplace_back(
+            "SDPA_WINDOW_RUN",
+            "1");  // cores-for-prefill: strided-run read of the window chunk (see dataflow/sparse_sdpa_gather.hpp)
+    }
 
     tt::tt_metal::KernelDescriptor writer_desc;
     writer_desc.kernel_source = kdir + "dataflow/sparse_sdpa_writer.cpp";
@@ -287,6 +292,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = writer_ct;
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+    if (const char* wr = std::getenv("DSV41_SDPA_WINDOW_RUN"); wr != nullptr && wr[0] == '1') {
+        writer_desc.defines.emplace_back("SDPA_WINDOW_RUN", "1");
+    }
 
     // Order matches get_compute_kernel_config_args: (fidelity, approx_mode, fp32_dest_acc, packer_l1_acc,
     // dst_full_sync). packer_l1_acc has no ComputeConfigDescriptor field for this op (no L1 packer accum), so

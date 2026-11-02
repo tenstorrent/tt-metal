@@ -144,7 +144,7 @@ void kernel_main() {
         bool last = false;
         while (!last) {
             kreq_cb.wait_front(1);
-            uint32_t base, split, dst_l1, scale_dst_l1 = 0;
+            uint32_t base, split, dst_l1, scale_dst_l1 = 0, run_p1 = 0;
             {
                 volatile tt_l1_ptr uint32_t* request =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
@@ -152,6 +152,7 @@ void kernel_main() {
                 split = request[sparse_sdpa::gather_request::SPLIT];
                 last = request[sparse_sdpa::gather_request::IS_LAST] != 0;
                 dst_l1 = request[sparse_sdpa::gather_request::DST_L1];
+                run_p1 = request[sparse_sdpa::gather_request::RUN];
                 if constexpr (scaled_kv) {
                     scale_dst_l1 = request[sparse_sdpa::gather_request::SCALE_DST_L1];
                 }
@@ -168,6 +169,11 @@ void kernel_main() {
                     noc, kv, dst_l1, idx_ptr, base, 0, split, packed_row_bytes, kv_batch_page_offset);
                 sparse_sdpa::scatter_packed_scales<scale_blocks>(
                     dst_l1, scale_dst_l1, 0, split, packed_row_bytes, latent_row_bytes);
+            } else if (run_p1 != 0) {
+                // window-run fast path decided by the reader (strided per-bank runs); this RISC reads the lower half of
+                // the bank groups
+                sparse_sdpa::window_run_gather(
+                    noc, kv, dst_l1, kv_batch_page_offset + run_p1 - 1, 2 * split, k_row_bytes, 0, NUM_DRAM_BANKS / 2);
             } else {
                 sparse_sdpa::trid_ring_gather<
                     block_cyclic,

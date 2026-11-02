@@ -48,7 +48,9 @@ constexpr uint32_t SPLIT = 1;
 constexpr uint32_t IS_LAST = 2;
 constexpr uint32_t DST_L1 = 3;
 constexpr uint32_t SCALE_DST_L1 = 4;
-constexpr uint32_t WORD_COUNT = 5;
+constexpr uint32_t RUN =
+    5;  // window-run fast path: first page + 1 of the consecutive-page window chunk, 0 = not a run (cores-for-prefill)
+constexpr uint32_t WORD_COUNT = 6;
 constexpr uint32_t PAGE_BYTES = align_cb_page(WORD_COUNT * sizeof(uint32_t));
 }  // namespace gather_request
 

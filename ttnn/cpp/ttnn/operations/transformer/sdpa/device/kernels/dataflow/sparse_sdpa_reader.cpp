@@ -205,6 +205,16 @@ void kernel_main() {
                 // them on ITS NoC into the same reserved cb_k_rm L1 (shared on-core), then acks via cb_kack -- each
                 // link then carries half the gather traffic.
                 const uint32_t half = valid >> 1;
+                uint32_t run_p0 = 0;
+                bool window_run = false;
+#ifdef SDPA_WINDOW_RUN
+                if constexpr (!block_cyclic) {
+                    // the first chunk of a row is its sliding window = k_chunk consecutive pages: strided per-bank runs
+                    // instead of k_chunk single-row requests (this RISC reads the upper half of the bank groups, the
+                    // writer the lower half)
+                    window_run = base == 0 && valid == k_chunk && sparse_sdpa::window_run(idx_ptr, 0, k_chunk, run_p0);
+                }
+#endif
                 kreq_cb.reserve_back(1);
                 {
                     volatile tt_l1_ptr uint32_t* request =
@@ -213,17 +223,30 @@ void kernel_main() {
                     request[sparse_sdpa::gather_request::SPLIT] = half;
                     request[sparse_sdpa::gather_request::IS_LAST] = chunk == n_active - 1;
                     request[sparse_sdpa::gather_request::DST_L1] = k_write_ptr;
+                    request[sparse_sdpa::gather_request::RUN] = window_run ? run_p0 + 1 : 0;
                 }
                 kreq_cb.push_back(1);
-                // Reader gathers its half [half, valid) on its NoC (depth-4 trid ring, shared helper).
-                sparse_sdpa::trid_ring_gather<
-                    block_cyclic,
-                    bc_chunk_local,
-                    bc_sp,
-                    bc_shard_stride_gap,
-                    bc_slab_stride_gap,
-                    sparse_sdpa::K_TRID_RING>(
-                    noc, kv, k_write_ptr, idx_ptr, base, half, valid, k_row_bytes, kv_batch_page_offset);
+                if (window_run) {
+                    sparse_sdpa::window_run_gather(
+                        noc,
+                        kv,
+                        k_write_ptr,
+                        kv_batch_page_offset + run_p0,
+                        k_chunk,
+                        k_row_bytes,
+                        NUM_DRAM_BANKS / 2,
+                        NUM_DRAM_BANKS);
+                } else {
+                    // Reader gathers its half [half, valid) on its NoC (depth-4 trid ring, shared helper).
+                    sparse_sdpa::trid_ring_gather<
+                        block_cyclic,
+                        bc_chunk_local,
+                        bc_sp,
+                        bc_shard_stride_gap,
+                        bc_slab_stride_gap,
+                        sparse_sdpa::K_TRID_RING>(
+                        noc, kv, k_write_ptr, idx_ptr, base, half, valid, k_row_bytes, kv_batch_page_offset);
+                }
                 kack_cb.wait_front(1);  // writer's half landed in cb_k_rm L1
                 kack_cb.pop_front(1);
                 // Zero-fill the sentinel suffix: masked-key scores become a defined 0 (compute adds -inf).

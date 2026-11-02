@@ -101,4 +101,60 @@ FORCE_INLINE void trid_ring_gather(
     experimental::set_read_trid(noc, 0);  // restore untagged
 }
 
+// ---- window-run fast path (cores-for-prefill, DSV41_SDPA_WINDOW_RUN)
+// -------------------------------------------------------------------------------------- The first K chunk of a prefill
+// query row is its sliding window: k_chunk CONSECUTIVE pool pages (p0, p0 + 1, ...). Interleaved DRAM pages p, p + NB,
+// p + 2 NB ... are adjacent in one bank (NB = NUM_DRAM_BANKS), so the chunk is read as NB strided runs of k_chunk / NB
+// pages (one NoC request each, 8 KB) instead of k_chunk single-page requests: the gather is bound by the chip-wide
+// request rate, not by bytes. The rows land in cb_k_rm grouped by bank instead of by position; the attention is
+// invariant to the order of the keys inside a chunk. Returns true (and the first page) when idx[base .. base + n) is a
+// run of consecutive pages.
+FORCE_INLINE bool window_run(volatile tt_l1_ptr uint32_t* idx_ptr, uint32_t base, uint32_t n, uint32_t& p0) {
+    p0 = idx_ptr[base];
+    for (uint32_t k = 1; k < n; ++k) {
+        if (idx_ptr[base + k] != p0 + k) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Reads the run's bank groups g in [g_lo, g_hi) (group g = pages p0 + g, p0 + g + NB, ... < p0 + n) into dst_l1, group
+// after group.
+template <typename Accessor>
+FORCE_INLINE void window_run_gather(
+    Noc& noc,
+    const Accessor& kv,
+    uint32_t dst_l1,
+    uint32_t page0,
+    uint32_t n,
+    uint32_t k_row_bytes,
+    uint32_t g_lo,
+    uint32_t g_hi) {
+    constexpr uint32_t NB = NUM_DRAM_BANKS;
+    constexpr uint32_t MAX_PAGES =
+        8192 / 512;  // single NoC packet; rows are 512 B (fp8) or 1 KB (bf16): bounded below by the byte size
+    const UnicastEndpoint local_l1;
+    uint32_t row = 0;
+    for (uint32_t g = 0; g < g_hi; ++g) {
+        const uint32_t cnt = (g < n) ? (n - g + NB - 1) / NB : 0;
+        if (g >= g_lo && cnt > 0) {
+            uint32_t done = 0;
+            const uint32_t per = 8192 / k_row_bytes;  // pages per request
+            while (done < cnt) {
+                const uint32_t m = (cnt - done < per) ? (cnt - done) : per;
+                noc.async_read(
+                    kv,
+                    local_l1,
+                    m * k_row_bytes,
+                    {.page_id = page0 + g + done * NB},
+                    {.addr = dst_l1 + (row + done) * k_row_bytes});
+                done += m;
+            }
+        }
+        row += cnt;
+    }
+    noc.async_read_barrier();
+}
+
 }  // namespace sparse_sdpa

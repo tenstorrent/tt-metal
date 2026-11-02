@@ -91,7 +91,8 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
 
     // CB 3: gather temp buffer (collector reads remote histograms here)
     uint32_t cb_gather_tmp = tt::CBIndex::c_3;
-    add_cb(cb_gather_tmp, output_page_size, output_page_size, output_cb_data_format);
+    // (cores-for-prefill: one slot per child of the tree, at most log2(num_cores) children)
+    add_cb(cb_gather_tmp, 8 * output_page_size, output_page_size, output_cb_data_format);
 
     // CB 4: expert dispatch table (INT32, one value per expert; negative = absent, non-negative = present)
     tt::DataFormat mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::INT32);
