@@ -51,7 +51,7 @@ struct GenericProgramSpecDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
-        static const tt::tt_metal::experimental::ProgramRunArgs& override_runtime_arguments(
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,

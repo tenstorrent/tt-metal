@@ -103,14 +103,13 @@ struct static_fn_return<R (*)(A...) noexcept> {
     using type = R;
 };
 
-// True iff T has a single static override_runtime_arguments returning ProgramRunArgs, by value or by
-// const reference. Keyed on the return type, not presence, so the legacy void-returning
-// override_runtime_arguments (some matmul factories) doesn't match. The requires-wrap makes any
-// ill-formed step leave it unsatisfied.
+// True iff T has a single static override_runtime_arguments returning ProgramRunArgs. Keyed on the
+// return type, not presence, so the legacy void-returning override_runtime_arguments (some matmul
+// factories) doesn't match. The requires-wrap makes any ill-formed step leave it unsatisfied.
 template <typename T>
 concept HasSpecRuntimeArgsOverride = requires {
     requires std::same_as<
-        std::remove_cvref_t<typename static_fn_return<decltype(&T::override_runtime_arguments)>::type>,
+        typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
         tt::tt_metal::ProgramRunArgs>;
 };
 }  // namespace detail
@@ -125,8 +124,7 @@ concept HasSpecRuntimeArgsOverride = requires {
 //       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
 //       const ttnn::MeshCoordinateRange& range);
 // One Program backs a whole range, so the override is called once per range and takes the range
-// rather than a coordinate: what it returns applies to every device the range covers. It may return
-// a const reference to run args that outlive the call, which the adapter then does not copy.
+// rather than a coordinate: what it returns applies to every device the range covers.
 template <typename T>
 concept MeshWorkloadSpecFactoryConcept = requires {
     &T::create_mesh_workload_artifacts;
