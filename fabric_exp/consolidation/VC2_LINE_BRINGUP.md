@@ -644,3 +644,15 @@ Readings (measured unless marked):
 - Several busy VCs share one router's per-packet capacity: the link's total at small sizes rises by ~9% with a second
   or third VC at today's windows and ~27% with doubled windows; at 4352 B the wire caps it. Native fan-in through VCs
   removes the mux core and its hop, but does not multiply a router's small-packet capacity.
+
+## Line VCs on 1D fabrics, host side (2026-11-02)
+
+Census: VC2_LINE_1D_VCS.md; design (reviewed and approved with its four recommendations) and implementation:
+LINE_VCS_HOST_DESIGN.md (§9: as implemented, the checks, what the router side needs). Host only, offline checks only:
+`TT_METAL_FABRIC_LINE_VCS=N` (1..3) makes VC0 .. N-1 line VCs on Linear and Ring fabrics; per-VC routing modes
+(`builder_config::VcRouting`) with one validation table; new format-neutral named args for v4 (`VC<n>_SERVICED`,
+`VC<n>_ROUTES_AS_LINE`, `RX_CH_<r>_FORWARDS_ON_VC`, `NUM_TRANSACTION_IDS_PER_RECEIVER_CHANNEL`,
+`SENDER_CH_<i>_IS_WORKER_CHANNEL`); the worker API per VC. Checks: unit tests 73/73; mock captures at N = 1..3 (P150
+Linear and Ring, Galaxy ring) pass every arg check (`line_vcs_dump_check.py`); existing configs identical (871/871
+images of configs built on both sides; inputs identical in 36 of 38 cases, the other two only log noise). The router does
+not compile N >= 2 yet (its gate and its own transaction-ID rule), as expected until its side lands.

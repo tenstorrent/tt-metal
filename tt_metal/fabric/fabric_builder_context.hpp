@@ -56,8 +56,16 @@ struct IntermeshVCConfig {
     // VC2 routes like 1D along one mesh axis: each cardinal router gets a second VC2 sender channel (forwarding, fed by
     // the router facing the opposite way on its chip) and VC2's receiver forwards straight on.
     bool vc2_line = false;
+    // Every VC's routing mode within the fabric's header format (builder_config::VcRouting), set and validated once per
+    // fabric (FabricBuilderContext::compute_intermesh_vc_config): what decides a VC's channels, worker channel, line
+    // routing and bubble flow control. The flags above stay what they were (VC1 inter-mesh, the VC2 options).
+    builder_config::VcRoutings vc_routing = {
+        builder_config::VcRouting::FULL_2D, builder_config::VcRouting::OFF, builder_config::VcRouting::OFF};
 
     IntermeshVCConfig() = default;
+
+    bool vc_present(size_t vc) const { return vc_routing.at(vc) != builder_config::VcRouting::OFF; }
+    bool vc_routes_as_line(size_t vc) const { return vc_routing.at(vc) == builder_config::VcRouting::LINE; }
 
     static IntermeshVCConfig disabled() {
         return IntermeshVCConfig();
@@ -101,6 +109,15 @@ struct IntermeshVCConfig {
     // interface array (their own VC1 steps are compiled out — see vc1_serviced_for).
     bool vc0_crossover_to_vc1_for(bool is_inter_mesh) const { return is_inter_mesh && requires_vc1_full_mesh; }
 };
+
+// Each VC's routing mode from the fabric's format (the topology's) and options: on 2D fabrics VC0 routes with turns,
+// VC1 is the inter-mesh VC where the mesh graph has intermesh links, VC2 a neighbour exchange or a line by the VC2
+// options; on 1D fabrics VC0 .. line_vcs-1 are line VCs (TT_METAL_FABRIC_LINE_VCS).
+builder_config::VcRoutings vc_routings_of(const IntermeshVCConfig& config, Topology topology, int line_vcs);
+
+// The one table of valid VC combinations (fabric_exp/consolidation/LINE_VCS_HOST_DESIGN.md §2); TT_FATAL on any other.
+void validate_vc_routings(
+    const IntermeshVCConfig& config, Topology topology, FabricTensixConfig tensix_config, tt::ARCH arch);
 
 /**
  * FabricBuilderContext

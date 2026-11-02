@@ -364,11 +364,13 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // Non-express meshes keep the heuristic untouched.
     // This router's producer-slot mapping, shared by every VC's derivation.
     const builder::RouterProducerSlots producer_slots(
-        builder::routing_direction_to_eth_direction(location.direction), vc_shape.sender_counts);
+        builder::routing_direction_to_eth_direction(location.direction),
+        vc_shape.sender_counts,
+        intermesh_config.vc_routing);
     // The policy is a per-router fact: express enablement is mesh-wide, so it is selected once,
     // not per VC. Its facts arrive bound from the chip scope (the queries were bound in the
     // FabricBuilder constructor; the capabilities were classified at discovery).
-    const NonExpressInjectionPolicy non_express_policy(topology, eth_direction);
+    const NonExpressInjectionPolicy non_express_policy(topology, eth_direction, intermesh_config.vc_routing);
     const ExpressInjectionPolicy express_policy(
         chip_facts.protected_ring_queries,
         chip_facts.per_direction_capabilities,
@@ -385,7 +387,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         // derivation classifies a VC1 intermesh landing's first protected egress as an acquisition,
         // which is the correct classification, but VC1 runs unguarded today -- so emitting the flag
         // there would demand a bubble the rest of the stack does not provide.
-        auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(vc, intermesh_config.vc2_line)
+        auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(intermesh_config.vc_routing[vc])
                                       ? compute_sender_channel_injection_flags(producer_slots, vc, injection_policy)
                                       : std::vector<bool>(num_channels_in_vc, false);
         // Flatten into router-level vector
@@ -734,7 +736,9 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
     // this router (as producer) feeds is read off the same mapping the injection-flag derivation
     // names producers from, so placement and naming cannot drift apart.
     const builder::RouterProducerSlots downstream_slots(
-        downstream_router.get_eth_direction(), downstream_router.vc_shape_.sender_counts);
+        downstream_router.get_eth_direction(),
+        downstream_router.vc_shape_.sender_counts,
+        fabric_context_.get_builder_context().get_intermesh_vc_config().vc_routing);
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         const auto& targets = turns_by_vc_[vc];

@@ -171,8 +171,13 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
             }
         }
     } else {
-        // For 1D: single downstream connection (only VC0 supported)
-        TT_FATAL(vc_idx == 0, "VC1 is not supported for 1D routing");
+        // For 1D: a single downstream connection per VC (VC0, and a 1D fabric's other line VCs,
+        // TT_METAL_FABRIC_LINE_VCS).
+        TT_FATAL(
+            this->downstream_edms_connected_by_vc.at(vc_idx).size() <= 1,
+            "1D routing has at most one downstream connection per VC; VC{} has {}",
+            vc_idx,
+            this->downstream_edms_connected_by_vc.at(vc_idx).size());
         uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
         bool has_connection = mask != 0;
 

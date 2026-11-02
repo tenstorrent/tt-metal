@@ -42,7 +42,7 @@ inline constexpr std::size_t MAX_MCAST_INJECTIONS = 5;
 struct ConnectionKey {
     RoutingDirection direction;
     uint32_t link_idx;
-    uint8_t vc_id = 0;  // 0=VC0, 2=VC2
+    uint8_t vc_id = 0;  // 0=VC0; 2=VC2; 1 or 2: a 1D fabric's line VC
     chan_id_t eth_chan = 0;
 
     bool use_vc2() const { return vc_id == 2; }

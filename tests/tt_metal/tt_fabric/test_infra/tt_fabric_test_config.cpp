@@ -147,10 +147,9 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
     }
     if (pattern_yaml["vc_id"]) {
         config.vc_id = parse_scalar<uint8_t>(pattern_yaml["vc_id"]);
-        TT_FATAL(
-            config.vc_id.value() == 0 || config.vc_id.value() == 2,
-            "vc_id must be 0 or 2, got {}",
-            config.vc_id.value());
+        // VC0, VC2, or on a 1D fabric any of its line VCs (fabric_setup line_vcs); the connection API checks the fabric
+        // has it.
+            TT_FATAL(config.vc_id.value() <= 2, "vc_id must be 0, 1 or 2, got {}", config.vc_id.value());
     }
     if (pattern_yaml["stream"]) {
         config.stream = parse_stream(pattern_yaml["stream"]);
@@ -241,10 +240,9 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     }
     if (sender_yaml["vc_id"]) {
         config.vc_id = parse_scalar<uint8_t>(sender_yaml["vc_id"]);
-        TT_FATAL(
-            config.vc_id.value() == 0 || config.vc_id.value() == 2,
-            "vc_id must be 0 or 2, got {}",
-            config.vc_id.value());
+        // VC0, VC2, or on a 1D fabric any of its line VCs (fabric_setup line_vcs); the connection API checks the fabric
+        // has it.
+            TT_FATAL(config.vc_id.value() <= 2, "vc_id must be 0, 1 or 2, got {}", config.vc_id.value());
     }
 
     const auto& patterns_yaml = sender_yaml["patterns"];
@@ -537,6 +535,12 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
     if (fabric_setup_yaml["vc2_line"]) {
         fabric_setup.vc2_line = parse_scalar<bool>(fabric_setup_yaml["vc2_line"]);
         fabric_setup.use_vc2 = fabric_setup.use_vc2 || fabric_setup.vc2_line;
+    }
+    if (fabric_setup_yaml["line_vcs"]) {
+        fabric_setup.line_vcs = parse_scalar<uint32_t>(fabric_setup_yaml["line_vcs"]);
+        TT_FATAL(
+            fabric_setup.line_vcs >= 1 && fabric_setup.line_vcs <= 3, "line_vcs must be 1 to 3, got {}",
+            fabric_setup.line_vcs);
     }
 
     return fabric_setup;
@@ -1450,10 +1454,9 @@ HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const Y
 
     if (pattern_yaml["vc_id"]) {
         config.vc_id = parse_scalar<uint8_t>(pattern_yaml["vc_id"]);
-        TT_FATAL(
-            config.vc_id.value() == 0 || config.vc_id.value() == 2,
-            "vc_id must be 0 or 2, got {}",
-            config.vc_id.value());
+        // VC0, VC2, or on a 1D fabric any of its line VCs (fabric_setup line_vcs); the connection API checks the fabric
+        // has it.
+            TT_FATAL(config.vc_id.value() <= 2, "vc_id must be 0, 1 or 2, got {}", config.vc_id.value());
     }
 
     return config;
@@ -3652,6 +3655,9 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TestFabricSetup
     }
     if (config.vc2_line) {
         out << YAML::Key << "vc2_line" << YAML::Value << true;
+    }
+    if (config.line_vcs > 1) {
+        out << YAML::Key << "line_vcs" << YAML::Value << config.line_vcs;
     }
     out << YAML::EndMap;
 }

@@ -138,5 +138,28 @@ TEST(DirectionSlotBijectionTest, ProducerSlotsRoundTripsAndNeverNamesFacing) {
     EXPECT_FALSE(narrow.channel_for(0, builder::direction_from_compact_index(EAST, 2)).has_value());
 }
 
+
+// A 1D fabric's line VCs: each VC's channel 0 is its worker and channel 1 is fed by the router facing the other way;
+// the default (2D) routing keeps VC1 the inter-mesh VC without a worker.
+TEST(DirectionSlotBijectionTest, LineVcProducerSlots) {
+    using builder_config::VcRouting;
+    const builder_config::VcRoutings line_vcs = {VcRouting::LINE, VcRouting::LINE, VcRouting::LINE};
+    for (const auto facing : {EAST, WEST}) {
+        const builder::RouterProducerSlots slots(facing, {2, 2, 2}, line_vcs);
+        const auto opposite = facing == EAST ? WEST : EAST;
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            EXPECT_EQ(slots.worker_channel(vc), std::optional<uint32_t>{0}) << "VC" << vc;
+            EXPECT_EQ(slots.producer_at(vc, 1), std::optional{opposite}) << "VC" << vc;
+            EXPECT_EQ(slots.channel_for(vc, opposite), std::optional<uint32_t>{1}) << "VC" << vc;
+            const auto producers = slots.producer_slots(vc);
+            ASSERT_EQ(producers.size(), 1u) << "VC" << vc;
+            EXPECT_EQ(producers[0].channel, 1u);
+            EXPECT_EQ(producers[0].producer, opposite);
+        }
+    }
+    const builder::RouterProducerSlots two_d(EAST, {4, 3, 1});
+    EXPECT_FALSE(two_d.worker_channel(1).has_value());
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric

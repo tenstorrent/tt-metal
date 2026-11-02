@@ -84,29 +84,35 @@ public:
         eth_chan_directions producer;
     };
 
-    // Per router, not per VC: the ranking depends only on facing, and the VC contributes only the
-    // worker offset. Takes this router's own sender counts so slot ranges are its, not the family
-    // max's.
-    RouterProducerSlots(
-        eth_chan_directions facing, const std::array<uint32_t, builder_config::MAX_NUM_VCS>& sender_counts);
+    // The VC routing modes the two-argument form assumes: VC0 with turns, VC1 the inter-mesh VC, VC2 a line where it
+    // has a forwarding channel (a neighbour-mode VC2 has only its worker, which the line rule gives too).
+    static constexpr builder_config::VcRoutings default_routing = {
+        builder_config::VcRouting::FULL_2D, builder_config::VcRouting::INTER_MESH, builder_config::VcRouting::LINE};
 
-    // Channel 0 on a VC whose channel 0 is worker-type (VC0 always; VC2 when this router has a VC2
-    // sender); nullopt on VC1, which has no worker. Whether that channel carries an injection
-    // guard is not decided here.
+    // Per router, not per VC: the ranking depends only on facing, and the VC contributes its worker offset and whether
+    // it routes as a line (its routing mode). Takes this router's own sender counts so slot ranges are its, not the
+    // family max's.
+    RouterProducerSlots(
+        eth_chan_directions facing,
+        const std::array<uint32_t, builder_config::MAX_NUM_VCS>& sender_counts,
+        const builder_config::VcRoutings& routing = default_routing);
+
+    // Channel 0 on a VC whose mode has a worker channel (VC0 always; VC2; a 1D fabric's line VCs); nullopt on the
+    // inter-mesh VC1, which has no worker. Whether that channel carries an injection guard is not decided here.
     std::optional<uint32_t> worker_channel(uint32_t vc) const;
 
     // The producer feeding `channel` on `vc`, or nullopt: the worker slot and a channel this router
-    // does not have have no producer. VC2's one forwarding channel (line mode: channel 1, after its
-    // worker) is fed by the router facing the opposite way; neighbour-mode VC2 has only its worker.
+    // does not have have no producer. A line VC's one forwarding channel (channel 1, after its
+    // worker) is fed by the router facing the opposite way; a neighbour-mode VC has only its worker.
     std::optional<eth_chan_directions> producer_at(uint32_t vc, uint32_t channel) const;
 
     // The channel `producer` feeds on `vc`, or nullopt for the facing direction itself, a producer
-    // with no slot on the VC (on VC2 all but the opposite direction), or a slot this router does
+    // with no slot on the VC (on a line VC all but the opposite direction), or a slot this router does
     // not have.
     std::optional<uint32_t> channel_for(uint32_t vc, eth_chan_directions producer) const;
 
     // Only the producer slots this router actually has (bounded by its own count), in eth order;
-    // on VC2 at most the opposite direction's (line mode).
+    // on a line VC at most the opposite direction's.
     ttsl::SmallVector<Slot, 4> producer_slots(uint32_t vc) const;
 
     uint32_t sender_count(uint32_t vc) const;
@@ -114,9 +120,15 @@ public:
 private:
     eth_chan_directions facing_;
     std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_counts_;
+    builder_config::VcRoutings routing_;
 
-    static constexpr uint32_t worker_offset(uint32_t vc) { return vc == 1 ? 0 : 1; }  // the ONE place the VC rule lives
-    // VC2 routes as a line: its one producer is the direction opposite the facing (none for Z).
+    // The ONE place the VC rule lives: a VC whose mode has a worker channel starts its forwarding channels after it.
+    uint32_t worker_offset(uint32_t vc) const { return builder_config::vc_routing_has_worker(routing_[vc]) ? 1 : 0; }
+    // A VC that routes straight on (line) or not at all past its worker (neighbour).
+    bool routes_straight(uint32_t vc) const {
+        return routing_[vc] == builder_config::VcRouting::LINE || routing_[vc] == builder_config::VcRouting::NEIGHBOUR;
+    }
+    // A line VC's one producer is the direction opposite the facing (none for Z).
     std::optional<eth_chan_directions> line_producer() const;
 };
 

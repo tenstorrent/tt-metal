@@ -45,7 +45,17 @@ RE = WT + "/runtime/sfpi/compiler/bin/riscv-tt-elf-readelf"
 # VC2 line mode cases: VC2 on, line mode on (TT_METAL_FABRIC_VC2_LINE), on the P150x8 2D mesh and the Galaxy 2D mesh,
 # both ERISC modes.
 VC2L = {"TT_METAL_ENABLE_FABRIC_VC2": "1", "TT_METAL_FABRIC_VC2_LINE": "1"}
+# Line VCs on 1D fabrics (TT_METAL_FABRIC_LINE_VCS, LINE_VCS_HOST_DESIGN.md): P150x8 Linear and Ring, the Galaxy as a
+# ring, N = 2 and 3 (N = 1 is bh_1d, bh_ring, glx_ring). The host's arg dump (TT_FABRIC_EXP_DUMP_ARGS, one JSON line per
+# router ERISC) goes to COV/argdump/<case>.jsonl; the router does not compile these configs until its side lands.
+def line_vcs(n, case, extra=None):
+    return {"TT_METAL_FABRIC_LINE_VCS": str(n), "TT_FABRIC_EXP_DUMP_ARGS": f"{COV}/argdump/{case}.jsonl",
+            "TT_FABRIC_EXP_LOG_SLOTS": "1", **(extra or {})}
 cov.CASES.update({
+    **{f"{c}_lvc{n}": (desc, cov.test_yaml(topo), line_vcs(n, f"{c}_lvc{n}"), False)
+       for c, desc, topo in (("bh_1d", cov.BH, "Linear"), ("bh_ring", cov.BH, "Ring"), ("glx_ring", cov.GLX, "Ring"))
+       for n in (1, 2, 3)},
+    "bh_ring_lvc3_1erisc": (cov.BH, cov.test_yaml("Ring"), line_vcs(3, "bh_ring_lvc3_1erisc", cov.ONE), False),
     "bh_2d_vc2line": (cov.BH, cov.test_yaml("Mesh"), VC2L, False),
     "bh_2d_vc2line_1erisc": (cov.BH, cov.test_yaml("Mesh"), {**VC2L, **cov.ONE}, False),
     "bh_2d_vc2line_allinstr": (cov.BH, cov.test_yaml("Mesh", cov.TRIM), {**VC2L, **cov.ALL_INSTR}, False),

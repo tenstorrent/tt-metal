@@ -36,7 +36,12 @@ public:
 // preservation of the standing decision is the whole point of this class.
 class NonExpressInjectionPolicy : public InjectionPolicy {
 public:
-    NonExpressInjectionPolicy(Topology topology, eth_chan_directions facing);
+    // `routing`: the fabric's VC routing modes; a VC participates if it runs bubble flow control
+    // (builder_config::bubble_flow_control_enabled_on_vc). The default is the 2D one (VC1 inter-mesh).
+    NonExpressInjectionPolicy(
+        Topology topology,
+        eth_chan_directions facing,
+        const builder_config::VcRoutings& routing = builder::RouterProducerSlots::default_routing);
 
     bool participates(uint32_t vc) const override;
     bool worker_is_injection(uint32_t vc) const override;
@@ -45,6 +50,7 @@ public:
 private:
     Topology topology_;
     eth_chan_directions facing_;
+    builder_config::VcRoutings routing_;
 };
 
 // The express derivation, which the axis-turn heuristic cannot represent: at an express node the

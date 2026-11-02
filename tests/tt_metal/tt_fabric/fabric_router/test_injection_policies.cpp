@@ -81,5 +81,25 @@ TEST(InjectionPoliciesTest, NonExpressVc2WorkerIsGuarded) {
     EXPECT_EQ(compute_sender_channel_injection_flags(slots, /*vc=*/2, policy), std::vector<bool>({true}));
 }
 
+
+// Which VCs take part follows their routing mode: a 1D ring's line VC1 does (bubble flow control on its ring), the
+// inter-mesh VC1 does not.
+TEST(InjectionPoliciesTest, NonExpressParticipationFollowsVcRouting) {
+    using builder_config::VcRouting;
+    const builder_config::VcRoutings line_vcs = {VcRouting::LINE, VcRouting::LINE, VcRouting::LINE};
+    const NonExpressInjectionPolicy line_ring(Topology::Ring, EAST, line_vcs);
+    EXPECT_TRUE(line_ring.participates(0));
+    EXPECT_TRUE(line_ring.participates(1));
+    EXPECT_TRUE(line_ring.participates(2));
+    const NonExpressInjectionPolicy default_ring(Topology::Ring, EAST);
+    EXPECT_TRUE(default_ring.participates(0));
+    EXPECT_FALSE(default_ring.participates(1));
+    const NonExpressInjectionPolicy line_linear(Topology::Linear, EAST, line_vcs);
+    EXPECT_FALSE(line_linear.participates(1));  // Linear marks no injection channels
+    const builder::RouterProducerSlots slots(EAST, {2, 2, 2}, line_vcs);
+    // The worker injects, the forwarding channel is transit.
+    EXPECT_EQ(compute_sender_channel_injection_flags(slots, 1, line_ring), (std::vector<bool>{true, false}));
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric

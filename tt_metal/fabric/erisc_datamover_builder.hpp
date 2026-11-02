@@ -277,7 +277,10 @@ struct FabricEriscDatamoverConfig {
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
-    FabricEriscDatamoverConfig(const FabricContext& fabric_context, Topology topology);
+    FabricEriscDatamoverConfig(
+        const FabricContext& fabric_context,
+        Topology topology,
+        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc);
 };
 
 struct FabricRiscConfig {

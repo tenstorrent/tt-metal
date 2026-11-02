@@ -225,6 +225,7 @@ int main(int argc, char** argv) {
     // sets them to these or to its own fabric_setup's, so one group's VC2 does not carry over to the next.
     const bool env_enable_fabric_vc2 = tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_vc2();
     const bool env_fabric_vc2_line = tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_vc2_line();
+    const int env_fabric_line_vcs = tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_line_vcs();
     for (auto& test_config : raw_test_configs) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
@@ -263,6 +264,8 @@ int main(int argc, char** argv) {
             env_enable_fabric_vc2 || test_config.fabric_setup.use_vc2);
         tt::tt_metal::MetalContext::instance().rtoptions().set_fabric_vc2_line(
             env_fabric_vc2_line || test_config.fabric_setup.vc2_line);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fabric_line_vcs(
+            std::max(env_fabric_line_vcs, static_cast<int>(test_config.fabric_setup.line_vcs)));
 
         log_info(
             tt::LogTest,

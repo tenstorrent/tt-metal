@@ -260,9 +260,12 @@ RouterVcShape router_vc_shape(
     // created on 1D. That oddity is preserved, not fixed -- consumers already tolerate counts
     // exceeding created channels. Whether any 1D configuration should ever set requires_vc1 is a
     // separate question, deliberately out of scope here.
-    if (requires_vc2) {
+    // A 1D fabric's line VCs (VcRouting::LINE on VC1 and VC2) count like the flags.
+    const bool vc1_line_1d = vc_config && !is_2D_topology(topology) && vc_config->vc_routes_as_line(1);
+    const bool vc2_line_1d = vc_config && !is_2D_topology(topology) && vc_config->vc_routes_as_line(2);
+    if (requires_vc2 || vc2_line_1d) {
         shape.num_vcs = 3;
-    } else if (requires_vc1) {
+    } else if (requires_vc1 || vc1_line_1d) {
         shape.num_vcs = 2;
     } else {
         shape.num_vcs = 1;
@@ -276,8 +279,13 @@ RouterVcShape router_vc_shape(
         // 1D counts from the config accessor: Linear/Ring are worker plus one forwarding peer,
         // NeighborExchange is worker-only. NeighborExchange takes this arm too, so a literal 2
         // would move it -- the accessor exists precisely because three topologies land here.
-        // No VC1 or VC2 channels are ever created, independent of the num_vcs answer above.
+        // VC1 and VC2 have channels only as line VCs (TT_METAL_FABRIC_LINE_VCS): each as VC0, a worker and its
+        // forwarding peer, and a receiver.
         vc0_senders = builder_config::get_num_used_sender_channel_count(topology);
+        vc1_senders = vc1_line_1d ? vc0_senders : 0;
+        vc2_senders = vc2_line_1d ? vc0_senders : 0;
+        vc1_receivers = vc1_line_1d ? 1 : 0;
+        vc2_receivers = vc2_line_1d ? 1 : 0;
     } else {
         // VC0: worker + wired producers, by family. The chip's Z-port role adds nothing on
         // VC0: an intermesh boundary's VC0 receiver forwards nowhere, so no from-boundary
@@ -400,7 +408,12 @@ RouterTurnSet turn_set_for_router(
     // role INTERMESH_BOUNDARY cannot occur in a valid configuration -- and get_router_connection_pairs
     // emits no Z pairs in 1D, so such a target would be unestablishable anyway.
     if (topology == Topology::Linear || topology == Topology::Ring) {
-        turn_set[0].push_back(ConnectionTarget(0, get_opposite_direction(facing)));
+        // Every line VC the same way (VC1 and VC2 when they are line VCs, TT_METAL_FABRIC_LINE_VCS).
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            if (vc == 0 || (vc_config && vc_config->vc_routes_as_line(vc))) {
+                turn_set[vc].push_back(ConnectionTarget(vc, get_opposite_direction(facing)));
+            }
+        }
         return turn_set;
     }
 

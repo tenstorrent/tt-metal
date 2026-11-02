@@ -5,6 +5,7 @@
 #include "tt_metal/fabric/fabric_vc2_connection.hpp"
 
 #include <tt_stl/fmt.hpp>
+#include <array>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -29,11 +30,12 @@
 namespace tt::tt_fabric {
 
 template <typename ProgramOrDescriptor>
-void append_fabric_vc2_connection_rt_args(
+void append_fabric_connection_rt_args_on_vc(
     const FabricContext& fabric_context,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     const uint32_t link_idx,
+    const uint32_t vc,
     ProgramOrDescriptor& worker_program_or_desc,
     const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args) {
@@ -45,12 +47,13 @@ void append_fabric_vc2_connection_rt_args(
 
     const auto& control_plane = fabric_context.get_control_plane();
     const auto& builder_context = fabric_context.get_builder_context();
+    const auto& vc_config = builder_context.get_intermesh_vc_config();
     TT_FATAL(
-        builder_context.requires_vc2(),
-        "VC2 connection requested but VC2 is not enabled. "
-        "VC2 requires: 2D fabric topology (Mesh/Torus), multi-mesh configuration, Blackhole architecture, "
-        "no UDM/mux extension mode, and TT_METAL_ENABLE_FABRIC_VC2 runtime option. "
-        "Current topology may not meet these conditions.");
+        vc < builder_config::MAX_NUM_VCS && vc_config.vc_present(vc) &&
+            builder_config::vc_routing_has_worker(vc_config.vc_routing[vc]),
+        "A worker connection on VC{} needs a VC with a worker channel on this fabric: VC2 (TT_METAL_ENABLE_FABRIC_VC2, "
+        "2D, Blackhole, no UDM/mux extension) or a 1D fabric's line VC (TT_METAL_FABRIC_LINE_VCS)",
+        vc);
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
     // Resolve forwarding direction (same logic as public API)
@@ -143,7 +146,7 @@ void append_fabric_vc2_connection_rt_args(
         worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0);
     }
 
-    // Resolve VC2 sender channel addresses via explicit SenderWorkerAdapterSpec
+    // Resolve the worker channel addresses via explicit SenderWorkerAdapterSpec
     const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
 
     ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
@@ -156,49 +159,54 @@ void append_fabric_vc2_connection_rt_args(
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be FabricStaticSizedChannelsAllocator");
 
-    // VC2 sender is at the last flat index: after all VC0 and VC1 senders.
-    // Used for flat edm_config arrays (indexed across all VCs).
+    // The VC's worker channel is its first sender channel; its flat index (edm_config arrays, indexed across all VCs)
+    // comes after every lower VC's channels.
     const auto num_vc0_senders = static_channel_allocator->get_num_sender_channels(0);
     const auto num_vc1_senders = static_channel_allocator->get_num_sender_channels(1);
     const auto num_vc2_senders = static_channel_allocator->get_num_sender_channels(2);
-    const auto vc2_sender_channel_flat = num_vc0_senders + num_vc1_senders;
+    const std::array<size_t, builder_config::MAX_NUM_VCS> num_senders = {
+        num_vc0_senders, num_vc1_senders, num_vc2_senders};
+    size_t worker_channel_flat = 0;
+    for (size_t lower = 0; lower < vc; ++lower) {
+        worker_channel_flat += num_senders[lower];
+    }
     const auto total_sender_channels = num_vc0_senders + num_vc1_senders + num_vc2_senders;
 
     log_trace(
         tt::LogFabric,
-        "VC2 flat index diagnostic: vc0_senders={}, vc1_senders={}, vc2_senders={}, "
+        "Worker channel flat index diagnostic: vc0_senders={}, vc1_senders={}, vc2_senders={}, "
         "vc2_flat_idx={}, total_senders={}, config.num_used_sender_channels={}",
         num_vc0_senders,
         num_vc1_senders,
         num_vc2_senders,
-        vc2_sender_channel_flat,
+        worker_channel_flat,
         total_sender_channels,
         edm_config.num_used_sender_channels);
     TT_FATAL(
-        vc2_sender_channel_flat < edm_config.num_used_sender_channels,
-        "VC2 flat index {} is out of bounds for edm_config arrays (num_used_sender_channels={}). "
+        worker_channel_flat < edm_config.num_used_sender_channels,
+        "Worker channel flat index {} is out of bounds for edm_config arrays (num_used_sender_channels={}). "
         "Allocator counts: vc0={}, vc1={}, vc2={}",
-        vc2_sender_channel_flat,
+        worker_channel_flat,
         edm_config.num_used_sender_channels,
         num_vc0_senders,
         num_vc1_senders,
         num_vc2_senders);
-    TT_FATAL(num_vc2_senders > 0, "VC2 connection requested but allocator reports 0 VC2 sender channels");
+    TT_FATAL(num_senders[vc] > 0, "VC{} connection requested but allocator reports 0 VC{} sender channels", vc, vc);
 
-    // Cross-check: verify the addresses at the VC2 flat index are non-zero
+    // Cross-check: verify the addresses at the worker channel flat index are non-zero
     TT_FATAL(
-        edm_config.sender_channels_connection_semaphore_address[vc2_sender_channel_flat] != 0,
-        "VC2 connection_semaphore_address is 0 at flat index {}. "
-        "This indicates the config did not allocate L1 for the VC2 sender channel.",
-        vc2_sender_channel_flat);
+        edm_config.sender_channels_connection_semaphore_address[worker_channel_flat] != 0,
+        "Worker channel connection_semaphore_address is 0 at flat index {}. "
+        "This indicates the config did not allocate L1 for the worker channel.",
+        worker_channel_flat);
     TT_FATAL(
-        edm_config.sender_channels_worker_conn_info_base_address[vc2_sender_channel_flat] != 0,
-        "VC2 worker_conn_info_base_address is 0 at flat index {}.",
-        vc2_sender_channel_flat);
+        edm_config.sender_channels_worker_conn_info_base_address[worker_channel_flat] != 0,
+        "Worker channel worker_conn_info_base_address is 0 at flat index {}.",
+        worker_channel_flat);
     TT_FATAL(
-        edm_config.sender_channels_local_flow_control_semaphore_address[vc2_sender_channel_flat] != 0,
-        "VC2 flow_control_semaphore_address is 0 at flat index {}.",
-        vc2_sender_channel_flat);
+        edm_config.sender_channels_local_flow_control_semaphore_address[worker_channel_flat] != 0,
+        "Worker channel flow_control_semaphore_address is 0 at flat index {}.",
+        worker_channel_flat);
 
     // Dump ALL sender channel addresses so we can see the full picture
     for (size_t i = 0; i < total_sender_channels; i++) {
@@ -210,44 +218,45 @@ void append_fabric_vc2_connection_rt_args(
             edm_config.sender_channels_worker_conn_info_base_address[i],
             edm_config.sender_channels_local_flow_control_semaphore_address[i],
             edm_config.sender_channels_buffer_index_semaphore_address[i],
-            (i == vc2_sender_channel_flat) ? " <-- VC2" : "");
+            (i == worker_channel_flat) ? " <-- worker channel" : "");
     }
 
-    // VC2 has exactly one sender channel at VC-relative index 0.
-    // The allocator's 2D API requires (vc_id=2, channel_id=0).
-    static constexpr size_t vc2_id = 2;
-    static constexpr size_t vc2_channel_idx = 0;
+    // The worker channel is the VC's channel 0 (VC-relative), as the allocator indexes it.
+    const size_t worker_vc = vc;
+    static constexpr size_t worker_channel_in_vc = 0;
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = fabric_router_virtual_core.x,
         .edm_noc_y = fabric_router_virtual_core.y,
-        .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(vc2_id, vc2_channel_idx),
+        .edm_buffer_base_addr =
+            static_channel_allocator->get_sender_channel_base_address(worker_vc, worker_channel_in_vc),
         .num_buffers_per_channel =
-            static_channel_allocator->get_sender_channel_number_of_slots(vc2_id, vc2_channel_idx),
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[vc2_sender_channel_flat],
+            static_channel_allocator->get_sender_channel_number_of_slots(worker_vc, worker_channel_in_vc),
+        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[worker_channel_flat],
         .edm_connection_handshake_addr =
-            edm_config.sender_channels_connection_semaphore_address[vc2_sender_channel_flat],
+            edm_config.sender_channels_connection_semaphore_address[worker_channel_flat],
         .edm_worker_location_info_addr =
-            edm_config.sender_channels_worker_conn_info_base_address[vc2_sender_channel_flat],
+            edm_config.sender_channels_worker_conn_info_base_address[worker_channel_flat],
         .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[vc2_sender_channel_flat],
+        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[worker_channel_flat],
         .edm_direction = router_direction};
 
-    log_trace(tt::LogFabric, "VC2 connection. edm_buffer_base_addr: {}", edm_connection.edm_buffer_base_addr);
-    log_trace(tt::LogFabric, "\tVC2 connection. num_buffers_per_channel: {}", edm_connection.num_buffers_per_channel);
-    log_trace(tt::LogFabric, "\tVC2 connection. edm_l1_sem_addr: {}", edm_connection.edm_l1_sem_addr);
+    log_trace(tt::LogFabric, "Worker connection. edm_buffer_base_addr: {}", edm_connection.edm_buffer_base_addr);
+    log_trace(
+        tt::LogFabric, "\tWorker connection. num_buffers_per_channel: {}", edm_connection.num_buffers_per_channel);
+    log_trace(tt::LogFabric, "\tWorker connection. edm_l1_sem_addr: {}", edm_connection.edm_l1_sem_addr);
     log_trace(
         tt::LogFabric,
-        "\tVC2 connection. edm_connection_handshake_addr: {}",
+        "\tWorker connection. edm_connection_handshake_addr: {}",
         edm_connection.edm_connection_handshake_addr);
     log_trace(
         tt::LogFabric,
-        "\tVC2 connection. edm_worker_location_info_addr: {}",
+        "\tWorker connection. edm_worker_location_info_addr: {}",
         edm_connection.edm_worker_location_info_addr);
-    log_trace(tt::LogFabric, "\tVC2 connection. buffer_size_bytes: {}", edm_connection.buffer_size_bytes);
+    log_trace(tt::LogFabric, "\tWorker connection. buffer_size_bytes: {}", edm_connection.buffer_size_bytes);
     log_trace(
-        tt::LogFabric, "\tVC2 connection. buffer_index_semaphore_id: {}", edm_connection.buffer_index_semaphore_id);
-    log_trace(tt::LogFabric, "\tVC2 connection. edm_direction: {}", static_cast<int>(edm_connection.edm_direction));
+        tt::LogFabric, "\tWorker connection. buffer_index_semaphore_id: {}", edm_connection.buffer_index_semaphore_id);
+    log_trace(tt::LogFabric, "\tWorker connection. edm_direction: {}", static_cast<int>(edm_connection.edm_direction));
     append_worker_to_fabric_edm_sender_rt_args(
         edm_connection,
         worker_flow_control_semaphore_id,
@@ -256,7 +265,39 @@ void append_fabric_vc2_connection_rt_args(
         worker_args);
 }
 
+template <typename ProgramOrDescriptor>
+void append_fabric_vc2_connection_rt_args(
+    const FabricContext& fabric_context,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    const uint32_t link_idx,
+    ProgramOrDescriptor& worker_program_or_desc,
+    const tt::tt_metal::CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args) {
+    append_fabric_connection_rt_args_on_vc(
+        fabric_context, src_fabric_node_id, dst_fabric_node_id, link_idx, 2, worker_program_or_desc, worker_core,
+        worker_args);
+}
+
 // Explicit template instantiations
+template void append_fabric_connection_rt_args_on_vc<tt::tt_metal::Program>(
+    const FabricContext&,
+    const FabricNodeId&,
+    const FabricNodeId&,
+    uint32_t,
+    uint32_t,
+    tt::tt_metal::Program&,
+    const tt::tt_metal::CoreCoord&,
+    std::vector<uint32_t>&);
+template void append_fabric_connection_rt_args_on_vc<tt::tt_metal::ProgramDescriptor>(
+    const FabricContext&,
+    const FabricNodeId&,
+    const FabricNodeId&,
+    uint32_t,
+    uint32_t,
+    tt::tt_metal::ProgramDescriptor&,
+    const tt::tt_metal::CoreCoord&,
+    std::vector<uint32_t>&);
 template void append_fabric_vc2_connection_rt_args<tt::tt_metal::Program>(
     const FabricContext&,
     const FabricNodeId&,
@@ -265,7 +306,6 @@ template void append_fabric_vc2_connection_rt_args<tt::tt_metal::Program>(
     tt::tt_metal::Program&,
     const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&);
-
 template void append_fabric_vc2_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
     const FabricContext&,
     const FabricNodeId&,
@@ -274,5 +314,4 @@ template void append_fabric_vc2_connection_rt_args<tt::tt_metal::ProgramDescript
     tt::tt_metal::ProgramDescriptor&,
     const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&);
-
 }  // namespace tt::tt_fabric

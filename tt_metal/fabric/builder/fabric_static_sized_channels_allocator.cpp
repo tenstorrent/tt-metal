@@ -12,6 +12,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <algorithm>
+#include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <numeric>
@@ -689,6 +690,61 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             return;
         }
         default: break;
+    }
+
+    // A 1D fabric with several line VCs (TT_METAL_FABRIC_LINE_VCS; fabric_exp/consolidation/LINE_VCS_HOST_DESIGN.md):
+    // every line VC has a worker channel, a forwarding channel and a receiver, at one row of depths so a receiver's
+    // depth matches at both ends of a link. Each VC gets an equal share of the slots: the receiver the largest power of
+    // 2 within half of it (the receiver ring's index arithmetic is cheapest so), the forwarding channel half of the
+    // rest, the worker the remainder; at 82 slots, 2 VCs get 13/12/16 each and 3 VCs 10/9/8.
+    // TT_FABRIC_EXP_SLOTS_1D_VCS=worker,forwarding,receiver overrides the row.
+    if ((topology == Topology::Linear || topology == Topology::Ring) &&
+        (num_used_sender_channels_per_vc[1] > 0 || num_used_sender_channels_per_vc[2] > 0)) {
+        const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
+        size_t line_vcs = 0;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            TT_FATAL(
+                num_used_sender_channels_per_vc[vc] == 0 ||
+                    (num_used_sender_channels_per_vc[vc] == 2 && num_used_receiver_channels_per_vc[vc] == 1),
+                "1D line VC{}: expected a worker channel, a forwarding channel and a receiver channel",
+                vc);
+            line_vcs += num_used_sender_channels_per_vc[vc] > 0 ? 1 : 0;
+        }
+        const size_t per_vc = slot_capacity / line_vcs;
+        size_t receiver = std::bit_floor(per_vc / 2);
+        size_t forwarding = (per_vc - receiver) / 2;
+        size_t worker = per_vc - receiver - forwarding;
+        if (const char* row = std::getenv("TT_FABRIC_EXP_SLOTS_1D_VCS"); row != nullptr) {
+            TT_FATAL(
+                std::sscanf(row, "%zu,%zu,%zu", &worker, &forwarding, &receiver) == 3,
+                "TT_FABRIC_EXP_SLOTS_1D_VCS={}: expected worker,forwarding,receiver",
+                row);
+        }
+        TT_FATAL(
+            worker > 0 && forwarding > 0 && receiver > 0 && worker <= MAX_CHANNEL_BUFFER_SLOTS &&
+                forwarding <= MAX_CHANNEL_BUFFER_SLOTS && receiver <= MAX_CHANNEL_BUFFER_SLOTS &&
+                line_vcs * (worker + forwarding + receiver) <= slot_capacity,
+            "1D line VCs: {} VCs of {} worker, {} forwarding and {} receiver slots do not fit {} slots (at most {} per "
+            "channel)",
+            line_vcs,
+            worker,
+            forwarding,
+            receiver,
+            slot_capacity,
+            MAX_CHANNEL_BUFFER_SLOTS);
+        const uint32_t worker_channel = get_worker_connected_sender_channel();
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            if (num_used_sender_channels_per_vc[vc] == 0) {
+                continue;
+            }
+            num_sender_buffer_slots_per_vc[vc].fill(forwarding);
+            num_remote_sender_buffer_slots_per_vc[vc].fill(forwarding);
+            num_sender_buffer_slots_per_vc[vc][worker_channel] = worker;
+            num_remote_sender_buffer_slots_per_vc[vc][worker_channel] = worker;
+            num_receiver_buffer_slots_per_vc[vc].fill(receiver);
+            num_remote_receiver_buffer_slots_per_vc[vc].fill(receiver);
+        }
+        return;
     }
 
     // Default case: Configure buffer slots with per-VC options

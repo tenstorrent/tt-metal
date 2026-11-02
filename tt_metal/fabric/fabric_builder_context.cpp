@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <enchantum/enchantum.hpp>
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
@@ -41,7 +42,68 @@ bool fabric_has_intermesh_z_edge(const MeshGraph& mesh_graph) {
     return false;
 }
 
+
 }  // namespace
+
+// Each VC's routing mode (builder_config::VcRouting) from the fabric's format and options: on 2D fabrics VC0 routes
+// with turns, VC1 is the inter-mesh VC where the mesh graph has intermesh links, VC2 is a neighbour exchange or a line
+// by the VC2 options; on 1D fabrics VC0 .. N-1 are line VCs (TT_METAL_FABRIC_LINE_VCS).
+builder_config::VcRoutings vc_routings_of(const IntermeshVCConfig& config, Topology topology, int line_vcs) {
+    using builder_config::VcRouting;
+    if (is_2D_topology(topology)) {
+        return {
+            VcRouting::FULL_2D,
+            config.requires_vc1 ? VcRouting::INTER_MESH : VcRouting::OFF,
+            !config.requires_vc2 ? VcRouting::OFF : config.vc2_line ? VcRouting::LINE : VcRouting::NEIGHBOUR};
+    }
+    return {
+        VcRouting::LINE,
+        line_vcs >= 2 ? VcRouting::LINE : VcRouting::OFF,
+        line_vcs >= 3 ? VcRouting::LINE : VcRouting::OFF};
+}
+
+// The one table of valid VC combinations (LINE_VCS_HOST_DESIGN.md §2): each VC's mode must be one its fabric's format
+// offers, and a 1D fabric with more than one line VC needs what its line VCs need.
+void validate_vc_routings(
+    const IntermeshVCConfig& config, Topology topology, FabricTensixConfig tensix_config, tt::ARCH arch) {
+    using builder_config::VcRouting;
+    const bool is_2d = is_2D_topology(topology);
+    const auto& routing = config.vc_routing;
+    const auto offered = [is_2d](size_t vc, VcRouting mode) {
+        if (is_2d) {
+            switch (vc) {
+                case 0: return mode == VcRouting::FULL_2D;
+                case 1: return mode == VcRouting::OFF || mode == VcRouting::INTER_MESH;
+                default: return mode == VcRouting::OFF || mode == VcRouting::NEIGHBOUR || mode == VcRouting::LINE;
+            }
+        }
+        return vc == 0 ? mode == VcRouting::LINE : mode == VcRouting::OFF || mode == VcRouting::LINE;
+    };
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        TT_FATAL(
+            offered(vc, routing[vc]),
+            "VC{} cannot route as {} on a {} fabric ({})",
+            vc,
+            enchantum::to_string(routing[vc]),
+            is_2d ? "2D" : "1D",
+            enchantum::to_string(topology));
+    }
+    if (!is_2d && config.vc_present(1)) {
+        TT_FATAL(
+            topology == Topology::Linear || topology == Topology::Ring,
+            "Several line VCs need a forwarding channel per VC: a Linear or Ring fabric, not {}",
+            enchantum::to_string(topology));
+        TT_FATAL(!config.requires_vc1, "A 1D fabric has no inter-mesh VC1, so VC1 can be a line VC");
+        TT_FATAL(
+            tensix_config == FabricTensixConfig::DISABLED,
+            "Several line VCs and the fabric's tensix extension ({}) cannot be combined",
+            enchantum::to_string(tensix_config));
+        TT_FATAL(arch == tt::ARCH::BLACKHOLE, "Several line VCs are brought up on Blackhole only");
+    }
+    TT_FATAL(
+        !config.vc_present(2) || is_2d || config.vc_present(1), "A 1D fabric's line VCs are VC0 .. N-1: VC2 needs VC1");
+}
+
 
 StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id) const {
     const auto& control_plane = fabric_context_.get_control_plane();
@@ -122,7 +184,9 @@ void FabricBuilderContext::compute_max_channel_counts() {
     };
 
     // Always have MESH routers
-    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
+    // VCs past VC0: the inter-mesh VC1, VC2, a 1D fabric's line VCs (TT_METAL_FABRIC_LINE_VCS).
+    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2 ||
+                                      intermesh_vc_config_.vc_present(1) || intermesh_vc_config_.vc_present(2);
     possible_shapes.push_back(router_vc_shape(
         topology,
         RoutingDirection::N,
@@ -418,6 +482,13 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
                 *mesh_id);
         }
     }
+
+    const Topology topology = fabric_context_.get_fabric_topology();
+    config.vc_routing = vc_routings_of(config, topology, fabric_context_.get_rtoptions().get_fabric_line_vcs());
+    // VC2's flag also covers a 1D fabric's third line VC (its channels and credit transport follow it).
+    config.requires_vc2 = config.requires_vc2 || config.vc_present(2);
+    validate_vc_routings(
+        config, topology, fabric_context_.get_fabric_tensix_config(), fabric_context_.get_hal().get_arch());
 
     return config;
 }

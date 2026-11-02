@@ -272,5 +272,49 @@ TEST(StreamAssignmentTest, InactiveConsumersEmitTheSentinel) {
     EXPECT_EQ(values["MULTI_RISC_TEARDOWN_SYNC_STREAM_ID"], 31u);
 }
 
+
+// Three line VCs on a 1D fabric: every VC's channels, receiver and one downstream get registers of their own (VC2's
+// worker pinned as in 2D line mode), the flat bases follow the 1D counts, and nothing collides.
+TEST(StreamAssignmentTest, ThreeLineVcsOn1D) {
+    CreditTransportPlan plan{};
+    plan.vc0_uses_counters = true;
+    plan.vc1_uses_counters = true;
+    plan.vc2_uses_counters = true;
+    const StreamPlacementInputs line_vcs{
+        .max_sender_counts = {2, 2, 2},
+        .max_receiver_counts = {1, 1, 1},
+        .vc2_present = true,
+        .tensix_relay_present = false};
+    const auto a = make_stream_assignment(stream_requirements(line_vcs, plan));
+    EXPECT_EQ(a.sender_flat_base(1), 2u);
+    EXPECT_EQ(a.sender_flat_base(2), 4u);
+    std::map<std::string, uint32_t> args;
+    for (const auto& [name, value] : a.named_args()) {
+        args[name] = value;
+    }
+    EXPECT_EQ(args.at("SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"), 30u);  // VC2's worker: pinned
+    for (const auto* name :
+         {"SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID",
+          "SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID",
+          "SENDER_CHANNEL_2_FREE_SLOTS_STREAM_ID",
+          "SENDER_CHANNEL_3_FREE_SLOTS_STREAM_ID",
+          "SENDER_CHANNEL_5_FREE_SLOTS_STREAM_ID",
+          "TO_RECEIVER_0_PKTS_SENT_ID",
+          "TO_RECEIVER_1_PKTS_SENT_ID",
+          "TO_RECEIVER_2_PKTS_SENT_ID",
+          "VC2_FREE_SLOTS_FROM_DOWNSTREAM_STREAM_ID"}) {
+        EXPECT_LT(args.at(name), 30u) << name;
+    }
+    std::set<uint32_t> ids;
+    size_t allocated = 0;
+    for (const auto& [name, value] : args) {
+        if (value < 30u && name.find("SYNC") == std::string::npos) {
+            ids.insert(value);
+            allocated++;
+        }
+    }
+    EXPECT_EQ(ids.size(), allocated);
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric

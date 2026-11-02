@@ -11,8 +11,9 @@
 
 namespace tt::tt_fabric {
 
-NonExpressInjectionPolicy::NonExpressInjectionPolicy(Topology topology, eth_chan_directions facing) :
-    topology_(topology), facing_(facing) {
+NonExpressInjectionPolicy::NonExpressInjectionPolicy(
+    Topology topology, eth_chan_directions facing, const builder_config::VcRoutings& routing) :
+    topology_(topology), facing_(facing), routing_(routing) {
     const bool is_ew = builder::is_east_or_west(facing);
     const bool is_ns = builder::is_north_or_south(facing);
     const bool is_z = facing == eth_chan_directions::Z;
@@ -23,9 +24,10 @@ NonExpressInjectionPolicy::NonExpressInjectionPolicy(Topology topology, eth_chan
 }
 
 bool NonExpressInjectionPolicy::participates(uint32_t vc) const {
-    // VC1 carries intermesh traffic with no bubble flow control; Linear/Mesh mark no injection
-    // channels at all.
-    return vc != 1 && topology_ != Topology::Linear && topology_ != Topology::Mesh;
+    // The VCs that run bubble flow control (not the inter-mesh VC1, not a neighbour exchange); Linear/Mesh mark no
+    // injection channels at all.
+    return vc < builder_config::MAX_NUM_VCS && builder_config::bubble_flow_control_enabled_on_vc(routing_[vc]) &&
+           topology_ != Topology::Linear && topology_ != Topology::Mesh;
 }
 
 bool NonExpressInjectionPolicy::worker_is_injection(uint32_t /*vc*/) const {

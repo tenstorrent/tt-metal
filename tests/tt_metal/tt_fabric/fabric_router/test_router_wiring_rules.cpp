@@ -263,4 +263,112 @@ TEST_F(RouterWiringRulesTest, InvalidQueries_Throw) {
     EXPECT_THROW((void)boundary.flat_receiver_id(1, 5), std::exception);
 }
 
+
+// Line VCs on 1D fabrics (TT_METAL_FABRIC_LINE_VCS, LINE_VCS_HOST_DESIGN.md): every line VC gets VC0's 1D shape (a
+// worker and a forwarding channel, a receiver) and turns straight on only.
+TEST_F(RouterWiringRulesTest, LineVcsOn1DShapeAndTurns) {
+    for (const auto topology : {Topology::Linear, Topology::Ring}) {
+        for (const int line_vcs : {2, 3}) {
+            auto config = IntermeshVCConfig::disabled();
+            config.vc_routing = vc_routings_of(config, topology, line_vcs);
+            config.requires_vc2 = config.vc_present(2);  // as compute_intermesh_vc_config sets it
+            for (const auto facing : {RoutingDirection::E, RoutingDirection::W}) {
+                const auto archetype = router_archetype(topology, facing, chip_with_z(std::nullopt), false, &config);
+                EXPECT_EQ(archetype.shape.num_vcs, static_cast<uint32_t>(line_vcs));
+                for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+                    const bool line = vc < static_cast<uint32_t>(line_vcs);
+                    EXPECT_EQ(archetype.shape.sender_counts[vc], line ? 2u : 0u) << "VC" << vc;
+                    EXPECT_EQ(archetype.shape.receiver_counts[vc], line ? 1u : 0u) << "VC" << vc;
+                    if (line) {
+                        EXPECT_EQ(archetype.shape.flat_sender_id(vc, 0), 2 * vc);
+                        ASSERT_EQ(archetype.turns[vc].size(), 1u) << "VC" << vc;
+                        EXPECT_EQ(archetype.turns[vc][0].target_vc, vc);
+                        EXPECT_EQ(archetype.turns[vc][0].target_direction, get_opposite_direction(facing));
+                    } else {
+                        EXPECT_TRUE(archetype.turns[vc].empty()) << "VC" << vc;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Each VC's routing mode from the format (the topology) and the options.
+TEST_F(RouterWiringRulesTest, VcRoutingsFromFormatAndOptions) {
+    using builder_config::VcRouting;
+    using Routings = builder_config::VcRoutings;
+    auto config = IntermeshVCConfig::disabled();
+    EXPECT_EQ(vc_routings_of(config, Topology::Linear, 1), (Routings{VcRouting::LINE, VcRouting::OFF, VcRouting::OFF}));
+    EXPECT_EQ(vc_routings_of(config, Topology::Ring, 3), (Routings{VcRouting::LINE, VcRouting::LINE, VcRouting::LINE}));
+    EXPECT_EQ(
+        vc_routings_of(config, Topology::Mesh, 3), (Routings{VcRouting::FULL_2D, VcRouting::OFF, VcRouting::OFF}));
+    config = IntermeshVCConfig::full_mesh();
+    config.requires_vc2 = true;
+    EXPECT_EQ(
+        vc_routings_of(config, Topology::Mesh, 1),
+        (Routings{VcRouting::FULL_2D, VcRouting::INTER_MESH, VcRouting::NEIGHBOUR}));
+    config.vc2_line = true;
+    EXPECT_EQ(
+        vc_routings_of(config, Topology::Torus, 1),
+        (Routings{VcRouting::FULL_2D, VcRouting::INTER_MESH, VcRouting::LINE}));
+}
+
+// The validation table: every combination it offers passes, every other one is refused.
+TEST_F(RouterWiringRulesTest, VcRoutingValidationTable) {
+    using builder_config::VcRouting;
+    const auto check = [](builder_config::VcRoutings routing,
+                          Topology topology,
+                          bool requires_vc1 = false,
+                          FabricTensixConfig tensix = FabricTensixConfig::DISABLED,
+                          tt::ARCH arch = tt::ARCH::BLACKHOLE) {
+        auto config = requires_vc1 ? IntermeshVCConfig::full_mesh() : IntermeshVCConfig::disabled();
+        config.vc_routing = routing;
+        validate_vc_routings(config, topology, tensix, arch);
+    };
+    constexpr auto OFF = VcRouting::OFF;
+    constexpr auto LINE = VcRouting::LINE;
+    constexpr auto FULL_2D = VcRouting::FULL_2D;
+    // Offered.
+    EXPECT_NO_THROW(check({FULL_2D, OFF, OFF}, Topology::Mesh));
+    EXPECT_NO_THROW(check({FULL_2D, VcRouting::INTER_MESH, LINE}, Topology::Mesh, true));
+    EXPECT_NO_THROW(check({FULL_2D, OFF, VcRouting::NEIGHBOUR}, Topology::Torus));
+    EXPECT_NO_THROW(check({LINE, OFF, OFF}, Topology::NeighborExchange));
+    EXPECT_NO_THROW(check({LINE, LINE, OFF}, Topology::Linear));
+    EXPECT_NO_THROW(check({LINE, LINE, LINE}, Topology::Ring));
+    EXPECT_NO_THROW(check({LINE, OFF, OFF}, Topology::Linear, false, FabricTensixConfig::MUX));
+    // Modes the format does not offer.
+    EXPECT_ANY_THROW(check({LINE, OFF, OFF}, Topology::Mesh));
+    EXPECT_ANY_THROW(check({FULL_2D, LINE, OFF}, Topology::Mesh));
+    EXPECT_ANY_THROW(check({FULL_2D, OFF, VcRouting::INTER_MESH}, Topology::Mesh));
+    EXPECT_ANY_THROW(check({FULL_2D, OFF, OFF}, Topology::Linear));
+    EXPECT_ANY_THROW(check({LINE, VcRouting::INTER_MESH, OFF}, Topology::Linear));
+    EXPECT_ANY_THROW(check({LINE, OFF, VcRouting::NEIGHBOUR}, Topology::Ring));
+    // What several line VCs need.
+    EXPECT_ANY_THROW(check({LINE, OFF, LINE}, Topology::Linear));
+    EXPECT_ANY_THROW(check({LINE, LINE, OFF}, Topology::NeighborExchange));
+    EXPECT_ANY_THROW(check({LINE, LINE, OFF}, Topology::Linear, true));
+    EXPECT_ANY_THROW(check({LINE, LINE, OFF}, Topology::Ring, false, FabricTensixConfig::MUX));
+    EXPECT_ANY_THROW(check({LINE, LINE, OFF}, Topology::Ring, false, FabricTensixConfig::UDM));
+    EXPECT_ANY_THROW(
+        check({LINE, LINE, OFF}, Topology::Ring, false, FabricTensixConfig::DISABLED, tt::ARCH::WORMHOLE_B0));
+}
+
+// NoC transaction IDs per receiver channel: within the 16 IDs, a power of 2, today's counts for one to three channels.
+TEST_F(RouterWiringRulesTest, TransactionIdsPerReceiverChannel) {
+    using builder_config::transaction_ids_per_receiver_channel;
+    EXPECT_EQ(transaction_ids_per_receiver_channel(1, false), 16u);
+    EXPECT_EQ(transaction_ids_per_receiver_channel(1, true), 8u);
+    EXPECT_EQ(transaction_ids_per_receiver_channel(2, true), 8u);
+    EXPECT_EQ(transaction_ids_per_receiver_channel(2, false), 4u);
+    EXPECT_EQ(transaction_ids_per_receiver_channel(3, true), 4u);
+    EXPECT_EQ(transaction_ids_per_receiver_channel(3, false), 4u);
+    for (size_t channels = 1; channels <= 3; ++channels) {
+        for (const bool deadlock_avoidance : {false, true}) {
+            const uint32_t ids = transaction_ids_per_receiver_channel(channels, deadlock_avoidance);
+            EXPECT_LE(channels * ids, 16u);
+            EXPECT_EQ(ids & (ids - 1), 0u);
+        }
+    }
+}
+
 }  // namespace tt::tt_fabric

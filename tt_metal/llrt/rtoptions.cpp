@@ -106,6 +106,7 @@ enum class EnvVarID {
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
     TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
     TT_METAL_FABRIC_VC2_LINE,                           // VC2 line mode (1D routing along a mesh axis)
+    TT_METAL_FABRIC_LINE_VCS,                           // line VCs on 1D fabrics (1..3)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
@@ -820,6 +821,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (neighbour exchange)
         // Usage: export TT_METAL_FABRIC_VC2_LINE=1
         case EnvVarID::TT_METAL_FABRIC_VC2_LINE: this->fabric_vc2_line = true; break;
+
+        // TT_METAL_FABRIC_LINE_VCS The number of line VCs on a 1D fabric (Linear, Ring): VC0 .. N-1 each get a worker
+        // channel, a forwarding channel and a receiver channel, and route straight on with 1D headers. Ignored on 2D
+        // fabrics, whose VCs are set as before. Default: 1 (VC0 only) Usage: export TT_METAL_FABRIC_LINE_VCS=3
+        case EnvVarID::TT_METAL_FABRIC_LINE_VCS:
+            this->fabric_line_vcs = std::stoi(value);
+            TT_FATAL(
+                this->fabric_line_vcs >= 1 && this->fabric_line_vcs <= 3,
+                "TT_METAL_FABRIC_LINE_VCS={}: a 1D fabric has 1 to 3 line VCs",
+                value);
+            break;
 
         // TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH
         // EXPERIMENTAL: Enables VC1 inter-mesh pass-through routing (e.g. A->B->C), where inter-mesh

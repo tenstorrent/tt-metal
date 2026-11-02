@@ -1,0 +1,10 @@
+bh_1d_lvc1: N=1 line, 80 router ERISCs on 40 routers, downstreams opened {0: 40, 1: 40}, slot row as today: all checks pass
+bh_1d_lvc2: N=2 line, 12 router ERISCs on 6 routers, downstreams opened {0: 6, 1: 6}, slot row (13, 12, 16): all checks pass
+bh_1d_lvc3: N=3 line, 12 router ERISCs on 6 routers, downstreams opened {0: 6, 1: 6}, slot row (10, 9, 8): all checks pass
+bh_ring_lvc1: N=1 ring, 80 router ERISCs on 40 routers, downstreams opened {0: 40, 1: 40}, slot row as today: all checks pass
+bh_ring_lvc2: N=2 ring, 12 router ERISCs on 6 routers, downstreams opened {0: 6, 1: 6}, slot row (13, 12, 16): all checks pass
+bh_ring_lvc3: N=3 ring, 12 router ERISCs on 6 routers, downstreams opened {0: 6, 1: 6}, slot row (10, 9, 8): all checks pass
+bh_ring_lvc3_1erisc: N=3 ring, 6 router ERISCs on 6 routers, downstreams opened {1: 6}, slot row (10, 9, 8): all checks pass
+glx_ring_lvc1: N=1 ring, 512 router ERISCs on 256 routers, downstreams opened {0: 256, 1: 256}, slot row as today: all checks pass
+glx_ring_lvc2: N=2 ring, 16 router ERISCs on 8 routers, downstreams opened {0: 8, 1: 8}, slot row (13, 12, 16): all checks pass
+glx_ring_lvc3: N=3 ring, 16 router ERISCs on 8 routers, downstreams opened {0: 8, 1: 8}, slot row (10, 9, 8): all checks pass

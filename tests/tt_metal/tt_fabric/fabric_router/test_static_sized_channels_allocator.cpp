@@ -99,5 +99,38 @@ TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {
     EXPECT_EQ(allocator.get_receiver_channel_number_of_slots(0, 0), 8);
 }
 
+
+// A 1D fabric's line VCs (TT_METAL_FABRIC_LINE_VCS): one row for every line VC, an equal share of the 82 slots at
+// 4,448 B each: the receiver the largest power of 2 within half of it, forwarding half of the rest, the worker the
+// remainder.
+TEST(FabricStaticSizedChannelsAllocatorTest, LineVcsOn1DShareTheSlots) {
+    constexpr size_t channel_buffer_size = 4448;
+    constexpr size_t available_space = 82 * channel_buffer_size;
+    const std::vector<MemoryRegion> memory_regions = {{0, available_space}};
+    struct Row {
+        size_t line_vcs, worker, forwarding, receiver;
+    };
+    for (const auto topology : {Topology::Linear, Topology::Ring}) {
+        for (const Row row : {Row{2, 13, 12, 16}, Row{3, 10, 9, 8}}) {
+            const size_t vc2 = row.line_vcs == 3 ? 1 : 0;
+            const std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels = {2, 2, 2 * vc2};
+            const std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels = {1, 1, vc2};
+            const FabricStaticSizedChannelsAllocator allocator(
+                topology,
+                silicon_options(),
+                sender_channels,
+                receiver_channels,
+                channel_buffer_size,
+                available_space,
+                memory_regions);
+            for (size_t vc = 0; vc < row.line_vcs; ++vc) {
+                EXPECT_EQ(allocator.get_sender_channel_number_of_slots(vc, 0), row.worker) << "VC" << vc;
+                EXPECT_EQ(allocator.get_sender_channel_number_of_slots(vc, 1), row.forwarding) << "VC" << vc;
+                EXPECT_EQ(allocator.get_receiver_channel_number_of_slots(vc, 0), row.receiver) << "VC" << vc;
+            }
+        }
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric

@@ -347,12 +347,14 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
             // The first-hop neighbor is invariant per ConnectionKey and was recorded on
             // the Connection at registration time.
             const auto& neighbor_node_id = conn.next_hop_dst;
-            if (key.use_vc2()) {
-                append_fabric_vc2_connection_rt_args(
+            if (key.vc_id != 0) {
+                // VC2, or a 1D fabric's line VC: the VC's worker channel.
+                append_fabric_connection_rt_args_on_vc(
                     tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context(),
                     fabric_node_id,
                     neighbor_node_id,
                     key.link_idx,
+                    key.vc_id,
                     program_handle,
                     core,
                     rt_args);

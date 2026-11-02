@@ -378,6 +378,7 @@ class RunTimeOptions {
     // Enable fabric VC2 (neighbour exchange, single-hop)
     bool enable_fabric_vc2 = false;
     bool fabric_vc2_line = false;  // VC2's mode: line mode (true) or neighbour exchange
+    int fabric_line_vcs = 1;       // line VCs on 1D fabrics: VC0 .. N-1 (TT_METAL_FABRIC_LINE_VCS)
 
     // EXPERIMENTAL: Enable VC1 inter-mesh pass-through routing (A->B->C). Not deadlock-safe.
     bool enable_fabric_mesh_pass_through = false;
@@ -942,6 +943,8 @@ public:
     void set_enable_fabric_vc2(bool enable) { enable_fabric_vc2 = enable; }
     bool get_fabric_vc2_line() const { return fabric_vc2_line; }
     void set_fabric_vc2_line(bool enable) { fabric_vc2_line = enable; }
+    int get_fabric_line_vcs() const { return fabric_line_vcs; }
+    void set_fabric_line_vcs(int count) { fabric_line_vcs = count; }
 
     // EXPERIMENTAL: Fabric VC1 inter-mesh pass-through enable (A->B->C). Not deadlock-safe.
     bool get_enable_fabric_mesh_pass_through() const { return enable_fabric_mesh_pass_through; }

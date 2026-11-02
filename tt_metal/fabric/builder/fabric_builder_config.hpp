@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <array>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -110,12 +111,46 @@ static constexpr uint32_t num_mesh_directions_2d = 4;
 // the host cannot include the device constant.
 static constexpr uint32_t bubble_flow_control_protected_receiver_min_slots = 2;
 
-// VC0 uses bubble flow control, and VC2 in line mode (its rings on torus axes, VC2_LINE_BRINGUP.md). VC1's intermesh
-// dependency graph has no bubble proof for arbitrary cross-mesh patterns, so its senders remain unguarded; neighbour-mode
-// VC2 forwards nothing, so it has no ring to guard. Injection flags and protected-slot validation must share this
-// predicate. First-level ACK goes with it per VC (VC1's ACK paths do not fit in the ACTIVE_ETH kernel config window, see
-// ENABLE_FIRST_LEVEL_ACK_VC1 in erisc_datamover_builder.cpp).
-constexpr bool bubble_flow_control_enabled_on_vc(uint32_t vc, bool vc2_line) { return vc == 0 || (vc == 2 && vc2_line); }
+// A VC's routing mode, within the fabric's header format: the topology's, fabric-wide (Linear, Ring and
+// NeighborExchange route with 1D headers, Mesh and Torus with 2D ones). The host sets one per VC
+// (FabricBuilderContext's VC config) and validates the combination; the router follows the per-VC facts the host
+// derives from it (fabric_exp/consolidation/LINE_VCS_HOST_DESIGN.md).
+enum class VcRouting : uint8_t {
+    OFF,         // no channels
+    FULL_2D,     // 2D routing with turns (VC0 on 2D fabrics)
+    LINE,        // straight on: a worker channel, one forwarding channel, a receiver that forwards straight on
+                 // (every VC on 1D fabrics; VC2 in line mode on 2D fabrics)
+    NEIGHBOUR,   // one hop: a worker channel, a receiver that only delivers (VC2's default on 2D fabrics)
+    INTER_MESH,  // VC1 on multi-mesh 2D fabrics: forwarding channels only, carries the traffic crossed over from
+                 // VC0 or VC2 at the intermesh routers
+};
+using VcRoutings = std::array<VcRouting, MAX_NUM_VCS>;
+
+// Whether a VC in this mode has a worker channel (its first sender channel).
+constexpr bool vc_routing_has_worker(VcRouting routing) {
+    return routing == VcRouting::FULL_2D || routing == VcRouting::LINE || routing == VcRouting::NEIGHBOUR;
+}
+
+// Bubble flow control runs on the VCs that route with turns or as lines (on ring and torus axes): VC0, VC2 in line
+// mode, every line VC of a 1D fabric. VC1's intermesh dependency graph has no bubble proof for arbitrary cross-mesh
+// patterns, so its senders remain unguarded; a neighbour-mode VC forwards nothing, so it has no ring to guard.
+// Injection flags and protected-slot validation must share this predicate. First-level ACK goes with it per VC (VC1's
+// inter-mesh ACK paths do not fit in the ACTIVE_ETH kernel config window, see ENABLE_FIRST_LEVEL_ACK_VC1 in
+// erisc_datamover_builder.cpp).
+constexpr bool bubble_flow_control_enabled_on_vc(VcRouting routing) {
+    return routing == VcRouting::FULL_2D || routing == VcRouting::LINE;
+}
+
+// NoC transaction IDs per receiver channel (the v4 router's rule, emitted for it as
+// NUM_TRANSACTION_IDS_PER_RECEIVER_CHANNEL): the NoC's 16 IDs shared by a router's receiver channels, each channel's
+// count a power of 2 (router_completions.hpp): one channel 16, or 8 under deadlock avoidance; two channels 8 under
+// deadlock avoidance, else 4; three channels 4.
+constexpr uint32_t transaction_ids_per_receiver_channel(size_t num_receiver_channels, bool deadlock_avoidance) {
+    if (num_receiver_channels == 1) {
+        return deadlock_avoidance ? 8 : 16;
+    }
+    return deadlock_avoidance && num_receiver_channels <= 2 ? 8 : 4;
+}
 
 uint32_t get_sender_channel_count(bool is_2D_routing);
 

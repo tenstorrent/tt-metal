@@ -291,7 +291,8 @@ public:
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
             reliability_mode != current_fabric_reliability_mode_ ||
             fabric_setup.max_packet_size != current_max_packet_size_ || trimming != current_channel_trimming_ ||
-            fabric_setup.use_vc2 != current_use_vc2_ || fabric_setup.vc2_line != current_vc2_line_) {
+            fabric_setup.use_vc2 != current_use_vc2_ || fabric_setup.vc2_line != current_vc2_line_ ||
+            fabric_setup.line_vcs != current_line_vcs_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
@@ -385,6 +386,7 @@ public:
         current_channel_trimming_ = {};
         current_use_vc2_ = false;
         current_vc2_line_ = false;
+        current_line_vcs_ = 1;
         are_devices_open_ = false;
     }
 
@@ -2023,6 +2025,7 @@ private:
     ChannelTrimmingSettings current_channel_trimming_{};
     bool current_use_vc2_{false};
     bool current_vc2_line_{false};
+    uint32_t current_line_vcs_{1};
     // Env-derived trimming rtoptions state, captured once before any test-driven modification
     // (see snapshot_trimming_rtoptions / resolve_channel_trimming_settings).
     struct TrimmingRtOptionsSnapshot {
@@ -2143,6 +2146,7 @@ private:
         current_max_packet_size_ = fabric_setup.max_packet_size;
         current_use_vc2_ = fabric_setup.use_vc2;
         current_vc2_line_ = fabric_setup.vc2_line;
+        current_line_vcs_ = fabric_setup.line_vcs;
         are_devices_open_ = true;
     }
 
