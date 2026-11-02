@@ -394,10 +394,25 @@ class TestConfig:
                 if runner_temp
                 else TestConfig.DEFAULT_ARTEFACTS_PATH.parent
             )
-            return base / f"tt-llk-hardware-free-{run_id}"
-        if runner_temp:
-            return Path(runner_temp) / "tt-llk-build"
-        return TestConfig.DEFAULT_ARTEFACTS_PATH
+            root = base / f"tt-llk-hardware-free-{run_id}"
+        elif runner_temp:
+            root = Path(runner_temp) / "tt-llk-build"
+        else:
+            root = TestConfig.DEFAULT_ARTEFACTS_PATH
+        # A gathering build compiles every kernel and the shared firmware differently, and the
+        # artefact cache is keyed by variant, not by compile options: keep it in its own tree.
+        if TestConfig.gathering_build():
+            root = root / "gathering"
+        return root
+
+    @staticmethod
+    def gathering_build() -> bool:
+        """The same switch tt-metal's JIT build honours: the LLK tests must run in the gathering
+        configuration tt-metal ships. ENABLE_GATHERING leaves Blackhole instruction gathering on
+        at boot (boot.h) and brackets every replay-buffer record with disable/enable_gathering
+        (ckernel::load_replay_buf). Wormhole has no gathering; Quasar ignores the define.
+        """
+        return os.environ.get("TT_METAL_ENABLE_GATHERING") == "1"
 
     @staticmethod
     def setup_paths(sources_path: Path):
@@ -1429,14 +1444,13 @@ class TestConfig:
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
 
-        # The same switch tt-metal's JIT build honours: the LLK tests must run in the gathering
-        # configuration tt-metal ships. ENABLE_GATHERING leaves Blackhole instruction gathering on
-        # at boot (boot.h) and brackets every replay-buffer record with disable/enable_gathering
-        # (ckernel::load_replay_buf). The compiler's own replay optimisation turns unrolled SFPU
-        # loops into records it never brackets, so it is off in this build. Wormhole has no
-        # gathering; Quasar ignores the define.
-        if os.environ.get("TT_METAL_ENABLE_GATHERING") == "1":
-            OPTIONS_COMPILE += "-DENABLE_GATHERING -mno-tt-tensix-optimize-replay "
+        if TestConfig.gathering_build():
+            # Every RISC, the shared firmware included, so boot.h leaves gathering on everywhere.
+            # The compiler's own replay optimisation turns unrolled SFPU loops into records it
+            # never brackets, so it is off in this build.
+            gathering_options = "-DENABLE_GATHERING -mno-tt-tensix-optimize-replay "
+            OPTIONS_COMPILE += gathering_options
+            NON_COVERAGE_OPTIONS_COMPILE += gathering_options
 
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 

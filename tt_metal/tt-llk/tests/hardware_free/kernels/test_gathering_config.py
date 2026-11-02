@@ -544,13 +544,23 @@ GATHERING_BUILD_VARIANTS = [
         "math",
     ),
     (
-        "reduce_block_max_row (reduce_custom / reduce_runtime_custom)",
+        "reduce_block_max_row (reduce_custom)",
         "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float16_b-block_ct_dim:1-num_faces:4]",
         "math",
     ),
     (
         "reduce_block_max_row fp32 Dest",
         "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float32-block_ct_dim:1-num_faces:4]",
+        "math",
+    ),
+    (
+        "reduce_block_max_row runtime (reduce_runtime_custom)",
+        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float16_b-block_ct_dim:1-num_faces:4]",
+        "math",
+    ),
+    (
+        "reduce_block_max_row runtime fp32 Dest",
+        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float32-block_ct_dim:1-num_faces:4]",
         "math",
     ),
     (
@@ -745,6 +755,10 @@ def test_kernel_replay_records_are_gathering_bracketed(
 
     python_tests = TestConfig.LLK_ROOT / "tests" / "python_tests"
     env = dict(os.environ, TT_METAL_ENABLE_GATHERING="1", RUNNER_TEMP=str(tmp_path))
+    # An ordinary --compile-producer session in a private build tree, not another hardware-free
+    # session (that would build under its own run id instead of RUNNER_TEMP/tt-llk-build).
+    env.pop("LLK_HARDWARE_FREE", None)
+    env.pop("LLK_HARDWARE_FREE_RUN_ID", None)
     # No xdist: one variant, and the build directory is private to this test.
     build = subprocess.run(
         [
@@ -766,7 +780,10 @@ def test_kernel_replay_records_are_gathering_bracketed(
         build.returncode == 0
     ), f"{kernel}: the gathering build of {node_id} failed:\n{build.stdout[-4000:]}\n{build.stderr[-2000:]}"
 
-    elf_dirs = sorted((tmp_path / "tt-llk-build" / "sources").glob("*/*/elf"))
+    # The gathering configuration builds into its own tree (TestConfig.resolve_artefacts_path).
+    elf_dirs = sorted(
+        (tmp_path / "tt-llk-build" / "gathering" / "sources").glob("*/*/elf")
+    )
     assert elf_dirs, f"{kernel}: no ELF directory produced under {tmp_path}"
     recording_elf_records = 0
     unbracketed = []

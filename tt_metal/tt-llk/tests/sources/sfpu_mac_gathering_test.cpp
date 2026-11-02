@@ -7,7 +7,9 @@
 // kernel directly), so this driver only instantiates the init that records the replay
 // buffer. Build-only: test_gathering_config.py inspects the math ELF and never runs it.
 
+#ifndef ENABLE_GATHERING
 #define ENABLE_GATHERING
+#endif
 
 #include <cstdint>
 
