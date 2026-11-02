@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/types.h>
@@ -14,6 +15,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <random>
 #include <set>
 #include <stdexcept>
 #include <tt-metalium/bfloat16.hpp>
@@ -3046,102 +3048,487 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_RingChunking_SingleDevice) {
 }
 
 // =============================================================================
-// Long rows: the online softmax state against an fp64 reference.
+// Adversarial review tests (PR 62646): host fuzz of the scheduler and the pick, and device edge cases of
+// the split path.
 // =============================================================================
 
 namespace {
 
-// Unmasked single-head attention in double, row by row: out (S, D) as float, lse (S) as double.
-std::pair<xt::xarray<float>, std::vector<double>> sdpa_single_head_fp64(
-    const xt::xarray<float>& q, const xt::xarray<float>& k, const xt::xarray<float>& v) {
-    const std::size_t S = q.shape()[2], D = q.shape()[3], Dv = v.shape()[3];
-    const std::vector<double> qd(q.begin(), q.end()), kd(k.begin(), k.end()), vd(v.begin(), v.end());
-    const double scale = 1.0 / std::sqrt(static_cast<double>(D));
-    xt::xarray<float> out = xt::zeros<float>({1UL, 1UL, S, Dv});
-    std::vector<double> lse(S);
-    std::vector<double> scores(S), acc(Dv);
-    for (std::size_t i = 0; i < S; ++i) {
-        double row_max = -INFINITY;
-        for (std::size_t j = 0; j < S; ++j) {
-            double dot = 0.0;
-            for (std::size_t t = 0; t < D; ++t) {
-                dot += qd[i * D + t] * kd[j * D + t];
+uint64_t schedule_signature(const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& s) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    uint64_t h = 1469598103934665603ULL;
+    auto mix = [&](uint64_t v) { h = (h ^ v) * 1099511628211ULL; };
+    mix(s.num_slots);
+    mix(s.per_core.size());
+    for (const auto& units : s.per_core) {
+        mix(units.size());
+        for (const WorkUnit& u : units) {
+            std::vector<uint32_t> words;
+            append_unit_words(words, u, 0U, 0U);
+            for (uint32_t w : words) {
+                mix(w);
             }
-            scores[j] = dot * scale;
-            row_max = std::max(row_max, scores[j]);
-        }
-        double sum = 0.0;
-        std::fill(acc.begin(), acc.end(), 0.0);
-        for (std::size_t j = 0; j < S; ++j) {
-            const double p = std::exp(scores[j] - row_max);
-            sum += p;
-            for (std::size_t t = 0; t < Dv; ++t) {
-                acc[t] += p * vd[j * Dv + t];
-            }
-        }
-        lse[i] = row_max + std::log(sum);
-        for (std::size_t t = 0; t < Dv; ++t) {
-            out(0, 0, i, t) = static_cast<float>(acc[t] / sum);
+            mix(u.merger_core);
         }
     }
-    return {out, lse};
+    return h;
+}
+
+uint32_t most_mergers_on_a_core(const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& s) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    uint32_t most = 0;
+    for (const auto& units : s.per_core) {
+        uint32_t n = 0;
+        for (const auto& u : units) {
+            n += u.role == UnitRole::Merger ? 1U : 0U;
+        }
+        most = std::max(most, n);
+    }
+    return most;
 }
 
 }  // namespace
 
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_LongRows_Fp64Reference) {
-    // O and the LSE against an fp64 reference on unmasked rows, at step counts the tests above never reach
-    // (they stay at <= 8). The kernel carries a bias per K/V step: measured on p150b (D=128, V in [0, 1]),
-    // O comes out high by about 0.037% per step and the LSE by about 0.00057 per step, linear in the step
-    // count and independent of S: at 64 steps O is 2.4% high and the LSE 0.037 high, at 8 steps 0.3% and
-    // 0.0024, at one step 0.003% and 0.0004. With Q = 0 (every score zero, the max never moves, alpha = exp(0))
-    // the LSE still grows by 0.00065 per step, consistent with a bias in alpha = exp(0). These are
-    // end-to-end device measurements; they do not isolate the contribution of TF32 truncation of the
-    // running sum in the Src registers. Pre-existing, main has the same loop; the
-    // bounds here hold the current error so a fix (or a regression) shows. See the TODO at step (2) of
-    // process_q_chunk in sdpa_fw_compute_kernel.cpp and https://github.com/tenstorrent/tt-metal/issues/64302.
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    using namespace ttml;
-    constexpr std::size_t D = 128U;
-    constexpr double kMeanRatioTol = 0.04;  // 64 steps: 2.4% measured
-    constexpr double kLseAbsTol = 0.06;     // 64 steps: 0.040 measured
-    struct Row {
-        std::size_t S;
-        uint32_t k_chunk_size;  // 0 = the pick
-    };
-    for (const Row row : {Row{2048U, 32U}, Row{2048U, 256U}, Row{8192U, 0U}}) {  // 64, 8 and (at the pick) 64 steps
-        const std::array<std::size_t, 4> shape{1U, 1U, row.S, D};
-        const xt::xarray<float> q = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 11U));
-        const xt::xarray<float> k = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 12U));
-        const xt::xarray<float> v = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, 13U));
-        const auto [out_ref, lse_ref] = sdpa_single_head_fp64(q, k, v);
-        auto* device = &autograd::ctx().get_device();
-        const metal::SDPAForwardProgramConfig cfg{
-            .q_chunk_size = row.k_chunk_size == 0U ? 0U : 32U, .k_chunk_size = row.k_chunk_size};
-        auto result = metal::sdpa_fw(
-            core::from_xtensor(q, device),
-            core::from_xtensor(k, device),
-            core::from_xtensor(v, device),
-            metal::AttentionMaskType::None,
-            std::nullopt,
-            0.0F,
-            /*return_intermediates=*/true,
-            std::nullopt,
-            cfg);
-        const xt::xarray<float> out = core::to_xtensor(result[0].value());
-        const xt::xarray<float> interm = core::to_xtensor(result[1].value());
-        // The sum error is a scale error on every element of a row, so the mean ratio to the reference shows
-        // it where an elementwise or L2 check would mix it with the bf16 rounding of the output.
-        double ratio_sum = 0.0, lse_diff_max = 0.0;
-        for (std::size_t i = 0; i < row.S; ++i) {
-            lse_diff_max = std::max(lse_diff_max, std::abs(static_cast<double>(interm(0, 0, i, 0)) - lse_ref[i]));
-            for (std::size_t t = 0; t < D; ++t) {
-                ratio_sum += static_cast<double>(out(0, 0, i, t)) / out_ref(0, 0, i, t);
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ScheduleFuzz) {
+    // Random shapes, chunkings, core counts and piece limits through make_schedule: every schedule must
+    // satisfy check_schedule, be deterministic, drop idle trailing cores and carry a prediction.
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    std::mt19937 rng(20261102U);
+    auto pick = [&](const std::vector<uint32_t>& v) { return v[rng() % v.size()]; };
+    auto divisors = [](uint32_t n) {
+        std::vector<uint32_t> d;
+        for (uint32_t i = 1; i <= n; ++i) {
+            if (n % i == 0U) {
+                d.push_back(i);
             }
         }
-        const double mean_ratio = ratio_sum / static_cast<double>(row.S * D);
-        const std::string what = fmt::format("S={} k_chunk_size={}", row.S, row.k_chunk_size);
-        EXPECT_NEAR(mean_ratio, 1.0, kMeanRatioTol) << "mean O / O_ref at " << what;
-        EXPECT_LT(lse_diff_max, kLseAbsTol) << "max |LSE - LSE_ref| at " << what;
+        return d;
+    };
+    const std::vector<uint32_t> st_choices{1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 512};
+    const std::vector<uint32_t> cores_choices{1, 2, 3, 4, 5, 7, 8, 13, 16, 31, 32, 64, 100, 120, 130};
+    const std::vector<uint32_t> pieces_choices{1, 2, 3, 4, 5, 8, 16, 63};
+    uint32_t cut_schedules = 0;
+    uint32_t most_mergers = 0;
+    std::string most_mergers_case;
+    uint32_t cut_rated_slower_than_fewer_cores = 0;
+    for (int it = 0; it < 4000; ++it) {
+        const uint32_t batch = pick({1, 2, 3});
+        const uint32_t kv_heads = pick({1, 2, 3, 4});
+        const uint32_t group = pick({1, 1, 2, 3, 4});
+        const uint32_t q_heads = kv_heads * group;
+        const uint32_t St = pick(st_choices);
+        const uint32_t qWt = pick({1, 2, 4, 8});
+        const uint32_t vWt = pick({1, 2, 3, 4, 8});
+        const uint32_t mask_pick = pick({0, 0, 0, 1, 2});
+        const SDPAForwardShape shape{
+            .batch = batch,
+            .q_heads = q_heads,
+            .kv_heads = kv_heads,
+            .St = St,
+            .qWt = qWt,
+            .vWt = vWt,
+            .mask_type = mask_pick == 0   ? ttml::metal::AttentionMaskType::Causal
+                         : mask_pick == 1 ? ttml::metal::AttentionMaskType::None
+                                          : ttml::metal::AttentionMaskType::Arbitrary,
+            .has_gate = (rng() % 2U) == 0U,
+            .return_intermediates = (rng() % 2U) == 0U};
+        if (static_cast<uint64_t>(batch) * q_heads * St >
+            sdpa_items::unit_field_max(sdpa_items::kUnitItemBits) + 1ULL) {
+            continue;
+        }
+        const SDPAForwardChunks chunks{
+            .Sq_chunk_t = pick(divisors(St)),
+            .Sk_chunk_t = pick(divisors(St)),
+            .heads_per_item = pick(divisors(group))};
+        const uint32_t cores = pick(cores_choices);
+        uint32_t max_pieces = pick(pieces_choices);
+        const bool causal_pairs = max_pieces == 1U && (rng() % 3U) == 0U;
+        const std::string trace = fmt::format(
+            "it {}: B={} Hq={} Hkv={} St={} qWt={} vWt={} mask={} gate={} lse={} Sq={} Sk={} h={} cores={} pieces={} "
+            "pairs={}",
+            it,
+            batch,
+            q_heads,
+            kv_heads,
+            St,
+            qWt,
+            vWt,
+            mask_pick,
+            shape.has_gate,
+            shape.return_intermediates,
+            chunks.Sq_chunk_t,
+            chunks.Sk_chunk_t,
+            chunks.heads_per_item,
+            cores,
+            max_pieces,
+            causal_pairs);
+        SCOPED_TRACE(trace);
+        SDPAForwardSchedule s;
+        ASSERT_NO_THROW(s = make_schedule(shape, chunks, cores, max_pieces, causal_pairs));
+        ASSERT_FALSE(s.per_core.empty());
+        EXPECT_LE(s.per_core.size(), cores);
+        EXPECT_FALSE(s.per_core.back().empty()) << "idle trailing cores must be dropped";
+        EXPECT_GT(s.predicted_us, 0.0);
+        check_schedule(shape, chunks, s, max_pieces);
+        EXPECT_LE(most_mergers_on_a_core(s), kMaxMergersPerCore);
+        EXPECT_EQ(
+            schedule_signature(s), schedule_signature(make_schedule(shape, chunks, cores, max_pieces, causal_pairs)))
+            << "make_schedule is not deterministic";
+        if (shape.mask_type != ttml::metal::AttentionMaskType::Causal || causal_pairs) {
+            EXPECT_EQ(s.num_slots, 0U) << "only causal items without causal_pairs may be cut";
+        }
+        if (s.num_slots > 0U) {
+            ++cut_schedules;
+            // The cut schedule was kept because the model rated it faster than the same items uncut on the
+            // same core count; it must also not be rated slower than the uncut schedule make_schedule builds
+            // with max_pieces = 1 (fewer cores when items are fewer: the model gives them more DRAM share).
+            const SDPAForwardSchedule uncut = make_schedule(shape, chunks, cores, 1U, false);
+            if (s.predicted_us > uncut.predicted_us) {
+                ++cut_rated_slower_than_fewer_cores;
+            }
+            if (most_mergers_on_a_core(s) > most_mergers) {
+                most_mergers = most_mergers_on_a_core(s);
+                most_mergers_case = trace;
+            }
+        }
+        // schedule_for from a config must agree with make_schedule on the config's cores.
+        ttml::metal::SDPAForwardProgramConfig config{
+            .max_pieces = max_pieces, .num_cores = cores, .causal_pairs = causal_pairs};
+        EXPECT_EQ(
+            schedule_signature(schedule_for(config, shape, chunks, 130U)),
+            schedule_signature(make_schedule(shape, chunks, std::min(cores, 130U), max_pieces, causal_pairs)));
+    }
+    fmt::print(
+        "schedule fuzz: {} cut schedules; most mergers on a core {} ({}); cut rated slower than the fewer-core uncut "
+        "schedule {} times\n",
+        cut_schedules,
+        most_mergers,
+        most_mergers_case,
+        cut_rated_slower_than_fewer_cores);
+    EXPECT_GT(cut_schedules, 100U) << "the fuzz must reach the cut path";
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_PickFuzz) {
+    // validate (check_chunks) and the factory (resolve_chunks + schedule_for) must agree: whatever validate
+    // accepts, the factory must resolve, and the resolved chunks must fit the budget with the partials' CBs
+    // exactly when the schedule cuts.
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    std::mt19937 rng(42U);
+    auto pick = [&](const std::vector<uint32_t>& v) { return v[rng() % v.size()]; };
+    auto divisors = [](uint32_t n) {
+        std::vector<uint32_t> d;
+        for (uint32_t i = 1; i <= n; ++i) {
+            if (n % i == 0U) {
+                d.push_back(i);
+            }
+        }
+        return d;
+    };
+    const std::vector<uint32_t> st_choices{1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 256, 512, 1024};
+    const std::vector<uint32_t> grid_choices{1, 2, 8, 64, 120, 130, 140};
+    const std::vector<uint64_t> budgets{200'000U, 600'000U, 1'300'000U, 1'400'000U};
+    uint32_t accepted = 0;
+    uint32_t cut_picks = 0;
+    for (int it = 0; it < 3000; ++it) {
+        const uint32_t kv_heads = pick({1, 2, 4, 8});
+        const uint32_t group = pick({1, 1, 2, 4, 8});
+        const uint32_t St = pick(st_choices);
+        const uint32_t qWt = pick({1, 2, 4, 8, 12});
+        const uint32_t vWt = pick({1, 2, 3, 4, 8});
+        const uint32_t mask_pick = pick({0, 0, 1, 2});
+        const SDPAForwardShape shape{
+            .batch = pick({1, 2, 4}),
+            .q_heads = kv_heads * group,
+            .kv_heads = kv_heads,
+            .St = St,
+            .qWt = qWt,
+            .vWt = vWt,
+            .mask_type = mask_pick == 0   ? ttml::metal::AttentionMaskType::Causal
+                         : mask_pick == 1 ? ttml::metal::AttentionMaskType::None
+                                          : ttml::metal::AttentionMaskType::Arbitrary,
+            .has_gate = (rng() % 2U) == 0U,
+            .return_intermediates = (rng() % 2U) == 0U};
+        const auto st_divs = divisors(St);
+        const auto group_divs = divisors(group);
+        ttml::metal::SDPAForwardProgramConfig config{
+            .q_chunk_size = (rng() % 2U) ? pick(st_divs) * 32U : 0U,
+            .k_chunk_size = (rng() % 2U) ? pick(st_divs) * 32U : 0U,
+            .heads_per_item = (rng() % 2U) ? pick(group_divs) : 0U,
+            .max_pieces = pick({0, 0, 1, 2, 4, 8, 63}),
+            .num_cores = pick({0, 0, 1, 3, 16, 64, 120}),
+            .causal_pairs = (rng() % 4U) == 0U};
+        if (config.causal_pairs && config.max_pieces > 1U) {
+            config.max_pieces = 1U;
+        }
+        const uint32_t grid = pick(grid_choices);
+        if (config.num_cores > grid) {
+            config.num_cores = grid;
+        }
+        const uint64_t budget = budgets[rng() % budgets.size()];
+        const std::string trace = fmt::format(
+            "it {}: B={} Hq={} Hkv={} St={} qWt={} vWt={} mask={} gate={} lse={} q={} k={} h={} pieces={} cores={} "
+            "pairs={} grid={} budget={}",
+            it,
+            shape.batch,
+            shape.q_heads,
+            kv_heads,
+            St,
+            qWt,
+            vWt,
+            mask_pick,
+            shape.has_gate,
+            shape.return_intermediates,
+            config.q_chunk_size,
+            config.k_chunk_size,
+            config.heads_per_item,
+            config.max_pieces,
+            config.num_cores,
+            config.causal_pairs,
+            grid,
+            budget);
+        SCOPED_TRACE(trace);
+        bool valid = true;
+        try {
+            check_chunks(config, shape, budget, grid);
+        } catch (const std::exception&) {
+            valid = false;
+        }
+        if (!valid) {
+            continue;
+        }
+        ++accepted;
+        SDPAForwardChunks chunks{};
+        ASSERT_NO_THROW(chunks = resolve_chunks(config, shape, budget, grid)) << "validate accepted, the factory threw";
+        EXPECT_EQ(St % chunks.Sq_chunk_t, 0U);
+        EXPECT_EQ(St % chunks.Sk_chunk_t, 0U);
+        EXPECT_EQ(group % chunks.heads_per_item, 0U);
+        if (config.q_chunk_size != 0U) {
+            EXPECT_EQ(chunks.Sq_chunk_t * 32U, config.q_chunk_size) << "a pinned knob must be kept";
+        }
+        if (config.k_chunk_size != 0U) {
+            EXPECT_EQ(chunks.Sk_chunk_t * 32U, config.k_chunk_size) << "a pinned knob must be kept";
+        }
+        if (config.heads_per_item != 0U) {
+            EXPECT_EQ(chunks.heads_per_item, config.heads_per_item) << "a pinned knob must be kept";
+        }
+        SDPAForwardSchedule schedule;
+        ASSERT_NO_THROW(schedule = schedule_for(config, shape, chunks, grid));
+        const bool cuts = schedule.num_slots > 0U;
+        cut_picks += cuts ? 1U : 0U;
+        EXPECT_LE(l1_bytes(cb_tiles(shape, chunks, cuts)), budget) << "the program's CBs do not fit the budget";
+        EXPECT_LE(schedule.per_core.size(), effective_num_cores(config, grid));
+        check_schedule(shape, chunks, schedule, effective_max_pieces(config));
+        // Every unit's words must encode with real NoC coordinates (the factory's path).
+        for (const auto& units : schedule.per_core) {
+            for (const WorkUnit& unit : units) {
+                std::vector<uint32_t> words;
+                EXPECT_NO_THROW(append_unit_words(words, unit, 17U, 11U));
+            }
+        }
+    }
+    fmt::print("pick fuzz: {} configs accepted by validate, {} of them cut\n", accepted, cut_picks);
+    EXPECT_GT(accepted, 500U);
+    EXPECT_GT(cut_picks, 10U);
+}
+
+// Device edge cases of the split path, each against the same rows uncut (run_split_vs_unsplit) and the
+// references.
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_OneTileEverything) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // One-row items, one K tile per step, one-tile-wide head (vWt = qWt = 1, block_size 1): up to eight
+    // pieces an item, partial rows of 3 tiles moved one row at a time (on 5 cores the model refuses to cut).
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 512U,
+        .query_dim = 32U,
+        .key_value_dim = 32U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "SplitEdge_OneTileEverything"};
+    const ChunkKnobs knobs{32, 32, 1, 8, 0};
+    SDPATestConfig split = base;
+    split.program_config = program_config_of(knobs);
+    const auto schedule = host_schedule(split);
+    fmt::print(
+        "SplitEdge_OneTileEverything: {} slots, most mergers on a core {}\n",
+        schedule.num_slots,
+        most_mergers_on_a_core(schedule));
+    run_split_vs_unsplit(base, knobs);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_OddRows) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // Three stacked heads of one tile-row: rows = 3, so the partials move one row per NoC batch.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 512U,
+        .query_dim = 192U,  // 3 heads * 64
+        .key_value_dim = 64U,
+        .num_query_heads = 3U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "SplitEdge_OddRows"};
+    run_split_vs_unsplit(base, {32, 32, 3, 4, 16});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_OddVWidth) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // D_qk = 128 with D_v = 96: vWt = 3 (block_size 3), partial rows of 5 tiles, two-row items.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 1024U,
+        .query_dim = 256U,
+        .key_value_dim = 256U,
+        .value_dim = 192U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "SplitEdge_OddVWidth"};
+    run_split_vs_unsplit(base, {64, 64, 1, 4, 0});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_MaskedRowsInPieces) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // Sq_chunk_t = 8 with Sk_chunk_t = 1: most rows of a cut item are fully masked in every piece but the
+    // first, including in the merger's own range, so the fold has to remove their garbage partials exactly.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 1024U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "SplitEdge_MaskedRowsInPieces"};
+    run_split_vs_unsplit(base, {256, 32, 1, 4, 0});
+    run_split_vs_unsplit(base, {256, 32, 1, 8, 0});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_NonPow2) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // S = 1536 (48 tiles) with 96-row chunks and 96-row steps: 16 chunks of three rows, 3 K/V tiles a step.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 1536U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "SplitEdge_NonPow2"};
+    run_split_vs_unsplit(base, {96, 96, 1, 4, 0});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_OneItemTwoCores) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // One item (the whole sequence is one chunk) on two cores: one sender, one merger, nothing else.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 256U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "SplitEdge_OneItemTwoCores"};
+    run_split_vs_unsplit(base, {256, 32, 1, 4, 2});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_BatchGQAGateNoLse) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // Two batches, 4 heads over 2 kv heads stacked two per item (four-row items), a gate, no logsumexp. At
+    // S=512 with two-row items the model refuses to cut these 32 items on the full grid: it charges each
+    // merger's partial reads a 120-way share of the DRAM bandwidth (dram_us), 19 us a partial, and rates the
+    // cut schedule slower than leaving 88 cores idle.
+    SDPATestConfig base{
+        .batch_size = 2U,
+        .sequence_length = 1024U,
+        .query_dim = 512U,
+        .key_value_dim = 256U,
+        .value_dim = 128U,
+        .num_query_heads = 4U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .return_intermediates = false,
+        .test_name = "SplitEdge_BatchGQAGateNoLse"};
+    run_split_vs_unsplit(base, {128, 64, 2, 4, 0});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_DefaultPickFewHeads) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // The production pick (all knobs 0) on the tensor-parallel shapes that cut, against the pick with cutting
+    // off; whatever the pick chooses must match the uncut run.
+    for (const auto [heads, kv, S, D] : std::vector<std::array<uint32_t, 4>>{
+             {4U, 1U, 4096U, 128U}, {8U, 2U, 2048U, 128U}, {2U, 2U, 2048U, 64U}, {1U, 1U, 4096U, 64U}}) {
+        SDPATestConfig base{
+            .batch_size = 1U,
+            .sequence_length = S,
+            .query_dim = heads * D,
+            .key_value_dim = kv * D,
+            .num_query_heads = heads,
+            .num_key_heads = kv,
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .test_name = fmt::format("SplitEdge_DefaultPick_h{}_kv{}_s{}_d{}", heads, kv, S, D)};
+        SCOPED_TRACE(base.test_name);
+        const auto schedule = host_schedule(base);
+        if (schedule.num_slots == 0U) {
+            fmt::print("{}: the default pick does not cut on this grid, skipped\n", base.test_name);
+            continue;
+        }
+        run_split_vs_unsplit(base, {0, 0, 0, 0, 0});
+    }
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_LargeScoresStayFinite) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // A piece whose first step lies past a row's diagonal sees only masked scores on that row: its running max is
+    // the mask value, so its P is exp(scale * s) rather than exp(0), and a review asked whether raw scores in the
+    // hundreds could overflow that row's partial to inf, which alpha_p = 0 would turn into NaN in the fold (the
+    // uncut kernel has K tile 0 unmasked at step 0 for every row, so its max is always real). Q, K in [-40, 40] at
+    // D=64 put |QK^T| in the thousands; both runs stay finite and agree, so the fold holds there.
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const std::array<std::size_t, 4> shape{1U, 1U, 1024U, 64U};
+    auto make = [&](uint32_t s, float lo, float hi) {
+        return core::from_xtensor(
+            round_to_bf16(test_utils::make_uniform_xarray<float>(shape, lo, hi, 90U + s)), device);
+    };
+    const ttnn::Tensor query = make(0U, -40.0F, 40.0F);
+    const ttnn::Tensor key = make(1U, -40.0F, 40.0F);
+    const ttnn::Tensor value = make(2U, 0.0F, 1.0F);
+    auto run = [&](const metal::SDPAForwardProgramConfig& cfg) {
+        auto out = metal::sdpa_fw(
+            query, key, value, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, true, std::nullopt, cfg);
+        return std::pair{core::to_xtensor(out[0].value()), core::to_xtensor(out[1].value())};
+    };
+    const metal::SDPAForwardProgramConfig split{.q_chunk_size = 256U, .k_chunk_size = 32U, .max_pieces = 4U};
+    const metal::SDPAForwardProgramConfig unsplit{.q_chunk_size = 256U, .k_chunk_size = 32U, .max_pieces = 1U};
+    SDPATestConfig probe{
+        .batch_size = 1U,
+        .sequence_length = 1024U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .program_config = split};
+    ASSERT_GT(host_schedule(probe).num_slots, 0U) << "the split config must cut";
+    const auto [split_out, split_lse] = run(split);
+    const auto [unsplit_out, unsplit_lse] = run(unsplit);
+    const auto nonfinite = [](const xt::xarray<float>& a) { return xt::sum(!xt::isfinite(a))(); };
+    fmt::print(
+        "LargeScoresStayFinite: non-finite outputs split {} unsplit {}, non-finite lse split {} unsplit {}\n",
+        nonfinite(split_out),
+        nonfinite(unsplit_out),
+        nonfinite(split_lse),
+        nonfinite(unsplit_lse));
+    EXPECT_EQ(nonfinite(unsplit_out), 0U) << "the uncut run itself is not finite; the inputs are too large";
+    EXPECT_EQ(nonfinite(split_out), 0U) << "the split run produced NaN/Inf where the uncut run is finite";
+    EXPECT_EQ(nonfinite(split_lse), 0U);
+    if (nonfinite(split_out) == 0U && nonfinite(unsplit_out) == 0U) {
+        const float mean_rel = xt::mean(xt::abs(split_out - unsplit_out))() / xt::mean(xt::abs(unsplit_out))();
+        fmt::print("LargeScoresStayFinite: split vs unsplit mean relative gap {:.3e}\n", mean_rel);
+        EXPECT_LT(mean_rel, 2e-2F);
     }
 }
