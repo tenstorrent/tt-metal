@@ -50,8 +50,12 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 E = ttnn.experimental
+
+# The root WorkUnitSpec holds 3 DM kernels; Quasar allows up to 6 per node, Blackhole 2.
+pytestmark = pytest.mark.skipif(not is_quasar(), reason="Needs Quasar's up to 6 DM kernels per node")
 
 M, K = 8, 128
 KT = K // 32
