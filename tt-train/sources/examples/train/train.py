@@ -346,7 +346,6 @@ def generate(
     prompt: str,
     max_new_tokens: int,
     sequence_length: int,
-    mask: ttml.autograd.Tensor | None,
     temperature: float = 1.0,
     top_k: int = 0,
 ) -> tuple[str, float, float]:
@@ -380,17 +379,14 @@ def generate(
 
     vocab_size = tokenizer.vocab_size
     # Built lazily on the first step (the padded logit width is only known after a forward) and
-    # reused across steps; it survives the per-step reset_graph below like `mask` does.
+    # reused across steps; it is a plain ttnn tensor, so the per-step reset_graph below leaves it alone.
     pad_mask: Any | None = None
     start = time.time()
     first_token_s = 0.0
     for step in range(max_new_tokens):
         model_input = ttml.autograd.create_tensor(input_ttnn, requires_grad=False)
-        # Clone the mask each step; the autograd graph reset below invalidates prior tensors.
-        mask_for_model = (
-            None if mask is None else ttml.autograd.create_tensor(ttnn.clone(mask.get_value()), requires_grad=False)
-        )
-        logits = model(model_input, mask_for_model)
+        # No mask: the fused SDPA applies the causal mask itself, and DeepSeek's MLA takes none.
+        logits = model(model_input, None)
 
         last_logits = _extract_last_step_logits(logits)
         if pad_mask is None and last_logits.get_value().shape[3] > vocab_size:
@@ -782,14 +778,12 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     ]
     print_header(f"{model_cfg.model_type} - inference", sections)
 
-    # No mask: the fused SDPA applies the causal mask itself, and DeepSeek's MLA takes none.
     text, elapsed, first_token_s = generate(
         model,
         tokenizer,
         args.prompt,
         args.max_new_tokens,
         seq_len,
-        mask=None,
         temperature=args.temperature,
         top_k=args.top_k,
     )
