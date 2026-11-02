@@ -266,3 +266,42 @@
 - Issues encountered: a `shard_h / 32` division by zero on ROW_MAJOR HEIGHT (shard_h < 32) broke the reader build; guarded.
 - Tests added: `test_conv2d_nhwc_tile.py` (8 placements × {bf8b, bf16} with relu, plus the 4-D TILE accept / refuse case); `test_conv2d_nhwc_perf_probe.py::test_perf_probe_tile_1x1` (R9 A/B).
 - Not done / findings: the DRAM TILE path does not overlap the next m-block's untilize with the current matmul (compute untilizes at m-block start). The R0 window is whole tile-rows, so ρ is a little above the RM column-clipped window. Neither was measured or optimized here.
+
+## Refinement 8 — Channel alignment, dilation, grouped convs
+- Date: 2026-11-02
+- What was done:
+  - SUPPORTED: `channel_alignment` += `c_in_unaligned`, `c_out_unaligned`, `both_unaligned`; `dilation_mode` += `dilated`; `groups_mode` += `grouped`. EXCLUSIONS unchanged (TILE × depthwise).
+  - **C_in unaligned**: the K tap stays C_in rounded up to the L1 granule (prepare already zero-padded those weight rows). Pad lanes are made zero so a stale NaN never meets a zero weight:
+    - R0 RM, tap not a DRAM-alignment multiple (e.g. C_in = 3 bf16, 16 B tap vs a 64 B DRAM read alignment on BH): each stick is read into a pre-zeroed, DRAM-aligned staging half (`cb_stick_stage`) and copied into the packed window. The two halves overlap the next chunk's DRAM reads with the copies.
+    - R0 direct reads with a short stick: the window is zeroed once.
+    - Sharded / TILE: the gather now has a source stick stride (`src_bytes`) separate from the K tap. A HEIGHT shard may be wider than C_in (SDXL conv_in shard width 8 for C_in = 4); a TILE window's sticks are whole tile columns (C_in = 4 → 32). Taps are then read one at a time.
+  - **C_out unaligned**: the R0 RM writer writes only the valid columns of the last n-slice (output page = C_out·elem_bytes). Weight / bias column tile padding is zero in prepare. Sharded outputs untilize into a shard whose width is whole tiles (technique 5, as for the over-wide BLOCK slices).
+  - **Dilation**: compile-time `DIL` in the gather. Kernel-row h offsets and tap stick offsets scale by DIL, the band splits into per-tap reads, and the interior fast path uses the effective kernel extent. Depthwise reads per tap. Window bounds already took d. New: an R0 block inside one output row fetches only its kH kernel rows (the d = 18 fp32 256-channel cell did not fit L1 with all d(kH−1)+1 rows).
+  - **Grouped**:
+    - Native per-group on R0 (`native_groups`: C_out/g and C_in/g whole tiles, group channel offset DRAM-aligned). The core split keeps each core's n range inside one group. The core reads only its group's C_in/g channels of each stick (`win_chan_offset`, as depthwise), and K is one group's. The prepared weight is `[K_g, C_out]` (column c's rows are its own group's), the same matrix the per-group conv needs: no extra weight bytes. This covers AlexNet conv4/5, g = 3 with 32 channels/group, asymmetric g = 2 and the strided g = 2 / 4 cells.
+    - Everything else (HEIGHT / BLOCK / WIDTH, and groups that are not whole tiles: ResNeXt g = 32 with 4 ch/group, AlexNet conv2 with 48, g = 4 / 8 with 16) runs as a dense conv over a block-diagonal weight built in prepare. **Waste: g× the MACs and weight bytes** of a per-group conv (32× for ResNeXt g = 32; these are small convs: 28×28×128 runs in 37.6 µs).
+  - Reused: the R0 / sharded gather, the window / halo fetch, every compute path, the writer's column-tile zero fill, depthwise's `win_chan_offset`. Added: `cb_stick_stage`, gather CT args (`DIL`, staging, `window_zero_bytes`, `src_bytes`, `in_row_tiles`), writer CT `C_out`, host `native_groups`, a dilated-row window.
+- Accuracy achieved: every cell at its golden dtype gate (fp32 PCC ≥ 0.999 / rel-RMS ≤ 0.02; bf16 0.995 / 0.05; bf8b 0.99 / 0.10). This includes the atrous + grouped fp32 loose case, the half-tile / 1.5-tile depthwise cells, the C_in = 1 / 3 starters, and SDXL conv_in / conv_out (HEIGHT bf16 × bf8b, BLOCK bf16, DRAM TILE).
+- Golden test progress:
+  - Refinement 8 cells (`-k "c_in_unaligned or c_out_unaligned or both_unaligned or dilated or grouped"`): 936 passed, 0 failed (skips are INVALID bf8b × RM).
+  - Regression slices: sharded tile-aligned + all loose cases 398 passed; interleaved tile-aligned (strided / depthwise / k5 / k7 / p1) 620 passed; 0 failed.
+  - Unit directory: 143 passed + `test_conv2d_nhwc_r8.py` 22 passed.
+- Perf (BH p150b, per-core max kernel cycles at 1350 MHz; one run each):
+  - Guards are unchanged within noise: interleaved bf16 relu 101.6k → 103.3k; ResNet layer1 HEIGHT 38.8k → 38.8k; SDXL L1 BLOCK bf16 × bf8b 257k → 259k; depthwise interleaved 56×56×128 46.4k → 46.4k.
+  - New cells:
+    - SDXL conv_in HEIGHT: 45.3 µs (achievable 15.0 µs).
+    - SDXL conv_out HEIGHT: 55.4 µs (achievable 43.6 µs).
+    - SDXL conv_out BLOCK (8×8, 40-channel slices): 1.51 ms.
+    - ResNet conv1 224×224×3 k7 s2: 382 µs interleaved, 83.5 µs HEIGHT.
+    - AlexNet conv5 (native g = 2): 32.6 µs.
+- Issues encountered:
+  - BH DRAM reads must land at the source's 64 B alignment, which the 16 B-granule window cannot honour (hence the staging).
+  - The native-group core split could exceed the grid (fixed: the m split shrinks).
+  - The d = 18 window overflowed L1 (fixed with the dilated-row window).
+  - The remote JIT compile server failed with an SFPI toolchain mismatch (`__xtt_vector8`); all runs compiled locally (`TT_METAL_JIT_SERVER_ENDPOINT` unset).
+- Findings (not follow-ups; perf work for the BLOCK / perf refinements):
+  - The SDXL conv_out BLOCK cell walks to bk = 1 (96 K-blocks per m-block). `cb_act_rm` is one whole m-block deep (`ACT_RM_KBLOCKS·bm` tile-rows) at bm = 32, so it is handshake-bound. A smaller bm with a larger bk would cut the rounds.
+  - ResNet conv1 interleaved is DRAM-request bound: 98 cores × ~1.8k one-stick reads, ~3.6× halo re-read. Same finding as Refinement 4's depthwise; HEIGHT runs it 4.6× faster.
+- Tests added:
+  - `test_conv2d_nhwc_r8.py`: 22 cases, one per kernel path × axis value.
+  - `test_conv2d_nhwc.py::test_conv2d_nhwc_rejects_unsupported_dilation` became `test_conv2d_nhwc_rejects_excluded_cell` (TILE × depthwise), since dilation is now supported.

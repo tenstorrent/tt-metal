@@ -331,6 +331,10 @@ def _window_tile_rows(pix0, pix1, **kw):
 
 def _window_sticks(pix0, pix1, **kw):
     row_lo, row_hi, col_lo, last_hi, win_w, _, _ = _window_bounds(pix0, pix1, **kw)
+    hw_out = kw["H_out"] * kw["W_out"]
+    if kw["dilation"] > 1 and pix0 // kw["W_out"] == pix1 // kw["W_out"] and pix0 // hw_out == pix1 // hw_out:
+        # R0 dilated block inside one output row: only its kH kernel rows (the reader's dil_rows).
+        return kw["kH"] * win_w
     return (row_hi - row_lo) * win_w + (last_hi - col_lo) + 1
 
 
@@ -377,8 +381,15 @@ def select_blocking(
     n_budget = max(1, num_cores // g_m)
     # Native groups: a core's n range lies in one group (core_n_tiles divides the group's tiles).
     group_n_tiles = (C_out // groups) // TILE if native_group else N_t
-    core_n_tiles = next((d for d in _divisors(group_n_tiles) if N_t // d <= n_budget), max(_divisors(group_n_tiles)))
+    core_n_tiles = next((d for d in _divisors(group_n_tiles) if N_t // d <= n_budget), group_n_tiles)
     g_n = N_t // core_n_tiles
+    if g_m * g_n > num_cores:
+        # Native groups with more groups than the m split leaves cores for: one group per core
+        # column, the m split shrinks to fit.
+        if g_n > num_cores:
+            raise UnsupportedAxisValue(f"conv2d_nhwc: {g_n} channel groups exceed the {num_cores}-core grid")
+        core_m_tiles = _div_up(M_t, num_cores // g_n)
+        g_m = _div_up(M_t, core_m_tiles)
 
     T = TILE * TILE * elem_bytes  # act / out tile bytes
     T_w = weight_tile_bytes  # weight / bias tile bytes (weight_dtype)

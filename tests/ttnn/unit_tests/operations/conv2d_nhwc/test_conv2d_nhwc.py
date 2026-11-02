@@ -126,33 +126,33 @@ def test_conv2d_nhwc_flattened_input_spatial(device, input_shape, C_out, k, padd
     _run(device, input_shape, C_out, k, padding, with_bias=True, flattened=True)
 
 
-def test_conv2d_nhwc_rejects_unsupported_dilation(device, expect_error):
-    """Outside SUPPORTED -> NotImplementedError naming the dilation axis (validate() gate).
-    (Was the stride axis; strided convs were added to SUPPORTED by the verifier.)"""
+def test_conv2d_nhwc_rejects_excluded_cell(device, expect_error):
+    """An EXCLUSIONS cell -> NotImplementedError (validate() gate). Was the dilation axis, then
+    added to SUPPORTED by Refinement 8; TILE x depthwise is the remaining excluded cell."""
     torch.manual_seed(42)
-    x = torch.randn(1, 8, 8, 32, dtype=torch.float32)
+    x = torch.randn(1, 1, 64, 32, dtype=torch.float32)
     tt_x = ttnn.from_torch(
         x,
-        dtype=ttnn.float32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    w = torch.randn(32, 32, 3, 3, dtype=torch.float32)
-    with expect_error(NotImplementedError, "dilation"):
-        tt_w = prepare_conv2d_weights(
-            w,
-            kernel_size=3,
-            stride=1,
-            padding=2,
-            groups=1,
-            dilation=2,
-            input_dtype=ttnn.float32,
-            weight_dtype=ttnn.float32,
-            input_memory_config=tt_x.memory_config(),
-            device=device,
-        )
-        conv2d_nhwc(tt_x, tt_w, 3, padding=2, dilation=2)
+    w = torch.randn(32, 1, 3, 3, dtype=torch.float32)
+    tt_w = prepare_conv2d_weights(
+        w,
+        kernel_size=3,
+        stride=1,
+        padding=1,
+        groups=32,
+        dilation=1,
+        input_dtype=ttnn.bfloat16,
+        weight_dtype=ttnn.bfloat16,
+        input_memory_config=tt_x.memory_config(),
+        device=device,
+    )
+    with expect_error(NotImplementedError, "depthwise"):
+        conv2d_nhwc(tt_x, tt_w, 3, padding=1, groups=32, input_spatial=(1, 8, 8))
 
 
 @pytest.mark.parametrize(

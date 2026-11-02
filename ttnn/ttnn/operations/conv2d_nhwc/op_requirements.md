@@ -198,7 +198,7 @@ No SUPPORTED change.
 
 **Outcome**: landed. All 167 TILE golden cells pass (19 `C_in = 4` cells xfail on `c_in_unaligned`, Refinement 8), and so do the 5 in-SUPPORTED TILE model-placement cases (ResNet50 bf8b TILE + relu ×4, SDXL DRAM-TILE downsample). DRAM TILE runs on R0 with per-m-block tile-row windows, not an in-op HEIGHT placement. R9 cuts the ResNet 1×1 TILE cases by 22% (HEIGHT) and 35% (BLOCK) vs the general TILE path. TILE × depthwise is an EXCLUSION (no golden cell).
 
-### [ ] Refinement 8 — Channel alignment, dilation, grouped convs
+### [x] Refinement 8 — Channel alignment, dilation, grouped convs
 
 **Goal**: add `"c_in_unaligned"`, `"c_out_unaligned"`, `"both_unaligned"` to `SUPPORTED["channel_alignment"]`, `"dilated"` to `SUPPORTED["dilation_mode"]`, and `"grouped"` to `SUPPORTED["groups_mode"]`, natively on every built path (interleaved, HEIGHT, BLOCK, WIDTH; ROW_MAJOR and TILE; dense and depthwise).
 - **Channel alignment**: `tap_width` and `band_tiles` already encode the K padding. The reader zero-fills each window stick's pad lanes once (a zero weight times a stale NaN is NaN). The writer writes only C_out columns: the last n-slice's partial stick, and the RM output page is `C_out·elem_bytes`. C_out tile padding is zero in prepare.
@@ -215,6 +215,10 @@ No SUPPORTED change.
 - Bundled as one refinement because all three are gather / prepare-K-order changes on the same code.
 
 **Done when**: every golden cell with these axis values that is otherwise inside SUPPORTED passes (the atrous + grouped loose case, the half-tile depthwise cells, the `C_in = 1` / `C_in = 3` starters). 0 loud categories.
+
+**Outcome**: landed. All three axes are in SUPPORTED on every built path. All 936 golden cells with these values pass, plus the SDXL conv_in / conv_out loose cases; no regressions. Grouped convs run per group on R0 when the groups are whole tiles. Otherwise they run as a block-diagonal dense conv, at g× the MACs (changelog). Perf findings (not follow-ups):
+- SDXL conv_out BLOCK (1.51 ms) walks to bk = 1.
+- ResNet conv1 interleaved (382 µs, vs 83 µs HEIGHT) is DRAM-request bound.
 
 ### [ ] Refinement 9 — Speed up the perf-flagged ResNet50 BLOCK convs
 

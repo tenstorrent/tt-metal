@@ -194,3 +194,19 @@ The RM pipeline CBs (`cb_act_window`, `cb_act_rm`, `cb_act_tiles`, `cb_act_send`
 Footprint additions (TILE): sharded `+ win_tile_rows·32·tap_width·elem_bytes + halo_tile_rows·c_tiles·T_in` (replacing the per-block RM halo scratch); R0 `+ win_tile_rows·c_tiles·T_in` (the window term becomes whole tile-rows).
 
 Data movement (TILE): sharded input as before (shard resident; halo once per kernel as whole tile-rows, one NoC read per owner run); DRAM TILE input `g_n · ρ_tile` crossings (ρ over whole window tile-rows per m-block); output 1. R9: the input never leaves L1 on HEIGHT, and is multicast once along the row on BLOCK/WIDTH.
+
+## Refinement 8 — channel alignment, dilation, grouped convs
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_stick_stage` (14) | `2 · stage_row_sticks` (page = `stage_stride` = C_in·elem_bytes rounded up to the DRAM read alignment; `stage_row_sticks = min(STAGE_ROW_STICKS = 64, W)`). R0 RM only, only when `tap_bytes` is not a DRAM-alignment multiple (unaligned C_in). | one half (`stage_row_sticks` sticks) receives DRAM reads while the other half is copied into `cb_act_window` | `{m: streams (per window row chunk); n: streams; k: absent; g: spans → 1}` | input dtype (copied, not computed) | reader (DRAM reads) | reader (L1→L1 copies into the window) | per window chunk | Cannot be the window itself: a DRAM read must land at the source's alignment (64 B on BH), while window sticks are packed at `tap_bytes` (16 B granule) so a kernel-row band stays one contiguous run. Zeroed once, so the copies carry zero pad lanes into the window. ≤ 2·64·64 B = 8 KiB. |
+
+Other deltas (no new CB):
+- `cb_act_window` slot = `src_bytes` (the source stick: `tap_bytes` on R0 RM; the HEIGHT shard stick, which may be wider than the granule-padded C_in; the TILE window's whole tile columns). Direct-read R0 windows with `stick_bytes < tap_bytes` are zeroed once at kernel start (`window_zero_bytes`).
+- Dilated R0 block inside one output row: the window holds only its `kH` kernel rows (`kH · win_w` sticks instead of `(d(kH−1)+1) · win_w`). This is what lets the d = 18 fp32 256-channel cell fit.
+- Grouped: native groups on R0 shrink K to one group's `kH·band(C_in/g)`; the window stick is the group's `C_in/g` channels. Block-diagonal groups (sharded, or groups that are not whole tiles) are the dense footprint over all of C_in.
+
+### Data-movement budget (Refinement 8)
+- input (R0, native groups): `g_n · ρ` as before, but each core reads only its group's `C_in/g` channels of each stick (`1/g` of the bytes). Unaligned C_in: same crossings; each stick also costs one L1→L1 copy.
+- input (R0, dilated, block inside one output row): `kH` input rows per output row instead of `d(kH−1)+1`.
+- weight: unchanged. Native groups read `[K_g, C_out]` (`1/g` of a block-diagonal weight). Block-diagonal reads `g`× the per-group bytes.

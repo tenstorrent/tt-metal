@@ -152,21 +152,30 @@ FORCE_INLINE void zero_run(uint64_t, uint32_t dst, uint32_t bytes) {
     }
 }
 
-// R0 source: the clipped DRAM window copy. Stick (row, w) -> (row - row0) * win_w + (w - col_lo).
+// R0 source: the clipped DRAM window copy. Stick (row, w) -> (row - row0) / row_step * win_w + (w - col_lo).
+// row_step = DIL for a dilated block inside one output row (only its kH kernel rows are fetched).
 struct WindowSource {
     uint32_t base;
     int32_t row0;
     int32_t col_lo;
     int32_t win_w;
+    int32_t row_step;
+    FORCE_INLINE int32_t window_row(int32_t row) const {
+        if constexpr (DIL == 1) {
+            return row - row0;
+        } else {
+            return (row - row0) / row_step;
+        }
+    }
     // `bytes` starting at channel byte `chan_byte` of stick (row, w); contiguous across sticks.
     FORCE_INLINE void read(int32_t row, int32_t w, uint32_t chan_byte, uint32_t dst, uint32_t bytes) const {
-        const int32_t stick = (row - row0) * win_w + (w - col_lo);
+        const int32_t stick = window_row(row) * win_w + (w - col_lo);
         local_read(base + static_cast<uint32_t>(stick) * src_bytes + chan_byte, dst, bytes);
     }
     // Address of stick (row, w_first) + chan_byte; a run of sticks [w_first, w_end) of one input
     // row is affine in w inside the window copy, so this always succeeds.
     FORCE_INLINE bool run_addr(int32_t row, int32_t w_first, int32_t, uint32_t chan_byte, uint32_t& a) const {
-        a = base + static_cast<uint32_t>((row - row0) * win_w + (w_first - col_lo)) * src_bytes + chan_byte;
+        a = base + static_cast<uint32_t>(window_row(row) * win_w + (w_first - col_lo)) * src_bytes + chan_byte;
         return true;
     }
 };
@@ -734,7 +743,15 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
             mid_lo = 0;
             mid_hi = Wi - 1;
         }
-        WindowSource window_src{window_base, row_lo, col_lo, win_w};
+        // Dilated block inside one output row (R0 RM): fetch only its kH kernel rows (raw_lo + kh*DIL),
+        // window row kh; rows between the taps are never read (mirrors host _window_sticks).
+        const bool dil_rows = DIL > 1 && !tile_in && n0 == n1 && ho0 == ho1;
+        WindowSource window_src{
+            window_base,
+            dil_rows ? static_cast<int32_t>(n0 * H) + raw_lo : row_lo,
+            col_lo,
+            win_w,
+            dil_rows ? dilation : 1};
         ShardSource shard_src{};
         if constexpr (tile_in && k_exchange) {
             shard_src = tile_src;
@@ -761,10 +778,16 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
         } else if constexpr (!k_exchange) {
             const auto input = TensorAccessor(input_args, input_addr);
             [[maybe_unused]] uint32_t half = 0;
-            for (int32_t row = row_lo; row <= row_hi; ++row) {
-                const int32_t c0 = row == row_lo ? col_lo : mid_lo;
-                const int32_t c1 = row == row_hi ? last_hi : mid_hi;
-                uint32_t dst = window_base + static_cast<uint32_t>((row - row_lo) * win_w + (c0 - col_lo)) * src_bytes;
+            const int32_t row_first = dil_rows ? window_src.row0 : row_lo;
+            const int32_t row_last = dil_rows ? window_src.row0 + dilation * static_cast<int32_t>(kH - 1) : row_hi;
+            for (int32_t row = row_first; row <= row_last; row += window_src.row_step) {
+                if (dil_rows && (row < static_cast<int32_t>(n0 * H) || row >= static_cast<int32_t>((n0 + 1) * H))) {
+                    continue;  // a padding kernel row: never read
+                }
+                const int32_t c0 = (row == row_lo || dil_rows) ? col_lo : mid_lo;
+                const int32_t c1 = (row == row_hi || dil_rows) ? last_hi : mid_hi;
+                uint32_t dst =
+                    window_base + static_cast<uint32_t>(window_src.window_row(row) * win_w + (c0 - col_lo)) * src_bytes;
                 uint32_t s = static_cast<uint32_t>(row) * W + static_cast<uint32_t>(c0);
                 if constexpr (stage_stride == 0) {
                     for (int32_t c = c0; c <= c1; ++c, ++s) {
