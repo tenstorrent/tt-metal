@@ -13,7 +13,6 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     device_config,
     row_grid,
     ROW_GRIDS,
-    NOT_WRITTEN,
     REFERENCE,
     P150_AND_RING,
     random_patches,
@@ -28,7 +27,6 @@ from models.experimental.kimi_k3_moonvit_v2.tt.patch_embed import TT_Patch_Embed
 @P150_AND_RING
 @REFERENCE
 @ROW_GRIDS
-@NOT_WRITTEN
 def test_patch_embed(mesh_device, sp_axis, num_links, config, reference, size):
     config = device_config(config, sp_axis)
     grid = row_grid(size, sp_axis)

@@ -60,5 +60,11 @@ class TT_Patch_Embed(Module):
         self.pos_emb_weight = torch.load(Path(directory) / f"{prefix}pos_emb.weight.pt")
 
     def forward(self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor) -> ttnn.Tensor:
-        """patches [1, 1, S/sp, padded_patch_dim], pos_emb [1, 1, S/sp, hidden] -> [1, 1, S/sp, hidden]."""
-        raise NotImplementedError("TT_Patch_Embed.forward")
+        """patches [1, 1, S/sp, padded_patch_dim], pos_emb [1, 1, S/sp, hidden] -> [1, 1, S/sp, hidden].
+
+        `patches` and `pos_emb` are left allocated: they are the caller's (per-image `DeviceInput`s
+        in the full model)."""
+        x = self.proj(patches)
+        out = ttnn.add(x, pos_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x)
+        return out

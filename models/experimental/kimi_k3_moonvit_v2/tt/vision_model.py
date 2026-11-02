@@ -56,7 +56,19 @@ class TT_MoonViT_Encoder(Module):
         )
 
     def forward(self, x: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor) -> ttnn.Tensor:
-        raise NotImplementedError("TT_MoonViT_Encoder.forward")
+        """`MoonViT3dEncoder.forward`: every block, then the final norm. [1, 1, rows, hidden_size] ->
+        the same shape. Each block's output is freed once the next has read it; `x` is left
+        allocated: the caller owns it."""
+        h = x
+        for block in self.blocks:
+            out = block(h, rope, logical_n)
+            if h is not x:
+                ttnn.deallocate(h)
+            h = out
+        out = self.final_layernorm(h)
+        if h is not x:
+            ttnn.deallocate(h)
+        return out
 
 
 class TT_MoonViT_Vision_Tower(Module):
