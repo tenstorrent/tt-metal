@@ -31,7 +31,7 @@ mkdir -p "$LLK_OBJ_CACHE"
 mapfile -t FILES < <(cut -d: -f1 "$NODE_LIST" | sort -u)
 PYTEST_EXTRA=(-q --override-ini=log_cli=false -m "perf and not accuracy" --timeout=120 --node-list="$NODE_LIST")
 STATUS=0
-export LLK_CODE_SHIFTS="0 4 20 36 52"
+export LLK_CODE_SHIFTS="0 4 24 44 60"
 export RUNNER_TEMP="$TEMP_ROOT/placement"
 # The first position's reports go to perf_data/runs/p0; PerfConfig writes the others to p<shift>.
 export PERF_RUN_TAG="p0"

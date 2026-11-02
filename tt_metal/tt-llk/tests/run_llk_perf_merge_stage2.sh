@@ -57,7 +57,7 @@ measure() {
   for x in "$2"/tests/python_tests/pytest-report-placement-*.xml; do
     [[ -f $x ]] && mv "$x" "$OUT/stage2.junit-$1-$(basename "$x")"
   done
-  for d in "$2"/perf_data/runs/p{0,4,20,36,52}; do
+  for d in "$2"/perf_data/runs/p{0,4,24,44,60}; do
     [[ -d $d ]] && mv "$d" "$d-1"
   done
   # Both sides run the PR's node ids; a test the base does not have (renamed, new) is skipped there.
