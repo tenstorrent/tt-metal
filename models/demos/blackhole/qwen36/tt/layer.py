@@ -85,6 +85,11 @@ class Qwen36DecoderLayer:
         self.args = args
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1)
+        if os.environ.get("BONSAI_NATIVE") == "pq2_0" and self.num_devices == 1:
+            # The ternary decode stack's defaults (counted 2026-11-01 19:13 with these, see agentA/runs/e2e_c3_*);
+            # an explicit =0 still turns each off.
+            for _f in ("QWEN36_1C_GDN_RECT", "QWEN36_1C_GDN_HMI", "QWEN36_1C_CONV_HM", "QWEN36_1C_GDN_TRIM", "QWEN36_1C_GDN_HMO"):
+                os.environ.setdefault(_f, "1")
         self.is_full_attention = args.is_full_attention_layer(layer_num)
         # QWEN36_TP1_GDN=1: on one chip, run GDN layers with TPGatedDeltaNet at TP=1 instead of Qwen36GatedDeltaNet.
         self._tp1_gdn = self.num_devices == 1 and not self.is_full_attention and os.environ.get("QWEN36_TP1_GDN") == "1"
