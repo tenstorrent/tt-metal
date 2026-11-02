@@ -25,6 +25,7 @@
 // matmul helper leaves packer L1 accumulation on after K-block >= 1 (op_design.md Key Risks).
 
 #include <cstdint>
+#include <type_traits>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -72,6 +73,11 @@ constexpr uint32_t taps = get_compile_time_arg_val(25);
 // come out in K order, tile-row by tile-row.
 constexpr uint32_t tilize_w = get_compile_time_arg_val(26);
 static_assert(block_k_tiles % tilize_w == 0, "a K-block is whole tilize blocks");
+// R3 (HEIGHT): all num_k_blocks weight K-blocks are resident in cb_weight_tiles (the writer pushes
+// them once); the matmul reads K-block j at tile offset j * bk * bn (in1 NoWaitNoPop + base offset).
+constexpr bool weights_resident = get_compile_time_arg_val(27) != 0;
+constexpr uint32_t weight_kblock_tiles = block_k_tiles * block_n_tiles;
+constexpr uint32_t resident_weight_tiles = num_k_blocks * weight_kblock_tiles;
 constexpr uint32_t tilize_blocks_per_row = block_k_tiles / tilize_w;
 
 constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
@@ -96,6 +102,13 @@ struct TilizeKBlock {
         tilize<tilize_w, cb_act_rm, cb_act_send>(block_m_tiles * tilize_blocks_per_row);
     }
     ALWI void operator()(uint32_t block, uint32_t, bool) const {
+        tilize_kblock(block);
+        if constexpr (weights_resident) {
+            // in1 is NoWaitNoPop: the resident weights must have landed (idempotent after the first).
+            cb_wait_front(cb_weight_tiles, resident_weight_tiles);
+        }
+    }
+    ALWI void tilize_kblock(uint32_t block) const {
         if constexpr (!act_mcast) {
 #ifdef ABL_TILIZE
             for (uint32_t t = 0; t < block_m_tiles; ++t) {
@@ -122,6 +135,13 @@ struct TilizeKBlock {
         }
     }
 };
+
+// Resident weights: K-block j's in1 starts j * bk * bn tiles into the fronted region.
+struct ResidentIn1Offset {
+    ALWI uint32_t operator()(uint32_t block) const { return block * weight_kblock_tiles; }
+};
+using In1Offset = std::conditional_t<weights_resident, ResidentIn1Offset, NoIn1BaseOffset>;
+constexpr InputPolicy in1_policy = weights_resident ? InputPolicy::NoWaitNoPop : InputPolicy::WaitAndPopPerKBlock;
 
 // untilize_store: `rows` tile-rows of cb_src -> the output (shard, or cb_out_rm), with a
 // WIDTH shard's partial last tile-row staged in cb_out_rm (tail) for the writer.
@@ -261,9 +281,11 @@ void kernel_main() {
                 for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
                     TilizeKBlock{my_slice}(kb, 0, false);
                     cb_wait_front(cb_act_tiles, block_m_tiles * block_k_tiles);
-                    cb_wait_front(cb_weight_tiles, block_k_tiles * block_n_tiles);
                     cb_pop_front(cb_act_tiles, block_m_tiles * block_k_tiles);
-                    cb_pop_front(cb_weight_tiles, block_k_tiles * block_n_tiles);
+                    if constexpr (!weights_resident) {
+                        cb_wait_front(cb_weight_tiles, block_k_tiles * block_n_tiles);
+                        cb_pop_front(cb_weight_tiles, block_k_tiles * block_n_tiles);
+                    }
                 }
                 if (false)
 #endif
@@ -274,14 +296,14 @@ void kernel_main() {
                         OutputCBLayout::TileRowMajor,
                         matmul_config::InitMode::ShortAfterPreKBlock,
                         InputPolicy::WaitAndPopPerKBlock,
-                        InputPolicy::WaitAndPopPerKBlock,
+                        in1_policy,
                         NoPostCompute,
                         TilizeKBlock,
                         NoPostKBlock,
                         0,
                         NoKBlockInnerDimFn,
                         NoIn0Source,
-                        NoIn1BaseOffset,
+                        In1Offset,
                         true>(
                         act_tiles,
                         weight_tiles,
@@ -291,7 +313,11 @@ void kernel_main() {
                         {},
                         TilizeKBlock{my_slice},
                         block_n_tiles,
-                        block_n_tiles);
+                        block_n_tiles,
+                        {},
+                        {},
+                        {},
+                        In1Offset{});
                 partials.push_back(block_out_tiles);
                 PACK((llk_pack_reconfig_l1_acc(0)));
 
@@ -302,5 +328,8 @@ void kernel_main() {
 
     if constexpr (has_bias) {
         bias.pop_front(core_n_tiles);
+    }
+    if constexpr (weights_resident) {
+        weight_tiles.pop_front(resident_weight_tiles);
     }
 }

@@ -82,6 +82,15 @@ DW_CORE_M_TILES_MIN = 1
 # pixels along an output row are one NoC read (not one read per pixel per kernel-row band).
 # bk becomes a whole number of taps. Enabled on HEIGHT (R3) placements.
 TAP_MAJOR_GATHER = True
+# R3 (HEIGHT): keep the whole weight slice resident in cb_weight_tiles (read + multicast once,
+# before the first m-block) when it fits, instead of streaming SHARDED_WEIGHT_DEPTH K-blocks per
+# m-block. Every HEIGHT core needs all of it, and the per-K-block read -> multicast rounds are
+# strictly serial on the sender (no act exchange to hide them behind).
+WEIGHTS_RESIDENT = True
+# R3 with resident weights: one K-block per m-block + a whole-m-block-deep cb_act_rm, largest bm
+# that fits SHARDED_CB_BUDGET_BYTES (gather of m-block i+1 overlaps compute of i). False / no fit:
+# the K-blocked whole-shard walk below.
+HEIGHT_SINGLE_K_PIPELINE = True
 # Compute config policy, per (activation dtype, weight dtype): the single source for the
 # descriptor's ComputeConfigDescriptor, the DEST capacity used by the subblock rule and the
 # accumulator (partials) page format. The public signature takes no compute_kernel_config,
@@ -469,6 +478,9 @@ def _halo_sticks(lo, hi, own_lo, own_hi):
     return before + after
 
 
+import os as _os  # ABLATION-TEMP
+
+
 def select_blocking_sharded(
     *,
     N,
@@ -554,10 +566,10 @@ def select_blocking_sharded(
     def send_depth(bk):
         return min(ACT_SEND_DEPTH, slice_k_tiles // bk)
 
-    def rm_rows(bm):
-        return max(ACT_RM_DEPTH, ACT_RM_KBLOCKS * bm) if act_mcast else ACT_RM_DEPTH
+    def rm_rows(bm, deep=False):
+        return max(ACT_RM_DEPTH, ACT_RM_KBLOCKS * bm) if (act_mcast or deep) else ACT_RM_DEPTH
 
-    def footprint(bm, bk, halo):
+    def footprint(bm, bk, halo, deep=False):
         if dw:  # bk = taps * nt_s (bn = the whole slice: the output shard row)
             return (
                 max(halo, 1) * tap_width * elem_bytes
@@ -570,10 +582,10 @@ def select_blocking_sharded(
             )
         return (
             max(halo, 1) * tap_width * elem_bytes
-            + rm_rows(bm) * bk * T
+            + rm_rows(bm, deep) * bk * T
             + (send_depth(bk) * bm * bk * T if act_mcast else 0)
             + (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk * T
-            + SHARDED_WEIGHT_DEPTH * bk * nt_s * T_w
+            + (slice_k_tiles if weights_resident else SHARDED_WEIGHT_DEPTH * bk) * nt_s * T_w
             + bm * nt_s * T_acc
             + (nt_s * T_w if has_bias else 0)
             + (nt_s * T if out_tail else 0)
@@ -588,6 +600,7 @@ def select_blocking_sharded(
         and dilation == 1
         and tap_width % TILE == 0
     )
+    weights_resident = WEIGHTS_RESIDENT and memory_layout == _ML.HEIGHT_SHARDED and not dw
     k_divs_desc = (
         [taps * nt_s]
         if dw
@@ -599,12 +612,29 @@ def select_blocking_sharded(
         # largest bk: every K-block is one multicast handshake + one partials pass (technique 8).
         for bm in sorted(_divisors(core_m_tiles), reverse=True):
             halo = halo_max(bm)
-            bk = next((d for d in k_divs_desc if footprint(bm, d, halo) <= budget), None)
+            _fbk = int(_os.environ.get("CONV2D_NHWC_BK", "0"))  # ABLATION-TEMP
+            bk = next((d for d in k_divs_desc if footprint(bm, d, halo) <= budget and (not _fbk or d <= _fbk)), None)
             if bk is not None:
                 return bm, bk, halo
         return None
 
-    choice = walk(SHARDED_CB_BUDGET_BYTES) or walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
+    def walk_single_k(budget):
+        # R3 with resident weights: extra m-blocks re-read nothing, so take the whole K as ONE
+        # K-block (the matmul accumulates in DEST: no packer-L1 partials passes, one tilize ->
+        # matmul switch per m-block) and make cb_act_rm one whole m-block deep, so the reader
+        # gathers m-block i+1 while compute works on m-block i. Largest bm that fits.
+        for bm in sorted(_divisors(core_m_tiles), reverse=True):
+            halo = halo_max(bm)
+            if footprint(bm, slice_k_tiles, halo, True) <= budget:
+                return bm, slice_k_tiles, halo
+        return None
+
+    deep_rm = False
+    choice = None
+    if weights_resident and HEIGHT_SINGLE_K_PIPELINE and not _os.environ.get("CONV2D_NHWC_NOSK"):  # ABLATION-TEMP
+        choice = walk_single_k(SHARDED_CB_BUDGET_BYTES)
+        deep_rm = choice is not None and not _os.environ.get("CONV2D_NHWC_NODEEP")  # ABLATION-TEMP
+    choice = choice or walk(SHARDED_CB_BUDGET_BYTES) or walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
     if not choice:
         raise UnsupportedAxisValue("conv2d_nhwc: sharded K-exchange blocks do not fit L1")
     bm, bk, halo = choice
@@ -620,15 +650,20 @@ def select_blocking_sharded(
         "tap_major": tap_major,
         "tilize_w": tap_tiles if tap_major else bk,
         "act_send_depth": send_depth(bk),
-        "act_rm_rows": rm_rows(bm),
-        "weight_depth": DW_WEIGHT_DEPTH if dw else SHARDED_WEIGHT_DEPTH,
+        "act_rm_rows": rm_rows(bm, deep_rm),
+        # Resident: the CB holds every K-block (depth = the K-block count).
+        "weight_depth": DW_WEIGHT_DEPTH if dw else (slice_k_tiles // bk if weights_resident else SHARDED_WEIGHT_DEPTH),
+        "weights_resident": weights_resident,
         # Every grid row must run the same number of m-blocks (= column multicast rounds).
         # Depthwise weights are a few tap tiles per slice: each core reads its own.
         # HEIGHT (R1): every core needs the same weights (dense and depthwise): one group.
         "weight_mcast": WEIGHT_MCAST
         and (memory_layout == _ML.HEIGHT_SHARDED or (memory_layout == _ML.BLOCK_SHARDED and not dw))
         and g_m > 1
-        and len({_div_up(min(core_m_tiles, M_t - r * core_m_tiles), bm) for r in range(g_m)}) == 1,
+        # Resident weights are multicast once, before any m-block: no per-m-block rounds to match.
+        and (
+            weights_resident or len({_div_up(min(core_m_tiles, M_t - r * core_m_tiles), bm) for r in range(g_m)}) == 1
+        ),
         "memory_layout": memory_layout,
         "slice_width": cw,
         "shard_h": shard_h,
@@ -670,7 +705,7 @@ def select_blocking_sharded(
         "T": T,
         "T_w": T_w,
         "T_acc": T_acc,
-        "footprint": footprint(bm, bk, halo),
+        "footprint": footprint(bm, bk, halo, deep_rm),
     }
 
 
@@ -746,6 +781,28 @@ def _core_range_set(coords):
 def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, output_tensor, plan, grid):
     p = plan
     bm, bk, bn = p["block_m_tiles"], p["block_k_tiles"], p["block_n_tiles"]
+    if _os.environ.get("CONV2D_NHWC_PLAN"):  # ABLATION-TEMP
+        print(
+            "PLAN",
+            {
+                k: p.get(k)
+                for k in (
+                    "block_m_tiles",
+                    "block_k_tiles",
+                    "num_k_blocks",
+                    "act_rm_rows",
+                    "window_sticks_max",
+                    "footprint",
+                    "weight_mcast",
+                    "tap_major",
+                    "weights_resident",
+                    "out_subblock_h",
+                    "out_subblock_w",
+                    "core_m_tiles",
+                    "g_m",
+                )
+            },
+        )  # ABLATION-TEMP
     has_bias = p["has_bias"]
     kx = p.get("k_exchange", False)  # sharded R4/R5 placement (shard input, shard output)
     act_mcast = p.get("act_mcast", False)  # K exchange across > 1 channel slice
@@ -887,6 +944,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         1 if weight_mcast else 0,
         p["weight_depth"],
         p["weight_k_rows"],
+        1 if p.get("weights_resident", False) else 0,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -925,6 +983,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         1 if dw else 0,
         p["taps"],
         p.get("tilize_w", bk),
+        1 if p.get("weights_resident", False) else 0,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -1020,8 +1079,6 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         runtime_args=compute_rt,
         config=ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=fp32_acc),
     )
-    import os as _os  # ABLATION-TEMP
-
     _abl = [d for d in _os.environ.get("CONV2D_NHWC_ABLATE", "").split(",") if d]  # ABLATION-TEMP
     if _abl:  # ABLATION-TEMP
         for _k in (reader, writer, compute):  # ABLATION-TEMP

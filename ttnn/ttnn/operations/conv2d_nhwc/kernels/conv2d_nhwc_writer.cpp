@@ -51,7 +51,11 @@ constexpr uint32_t weight_lead = weight_depth - 2;
 // Weight K-rows per K-block: bk (dense) or the kH*kW taps (R11 depthwise: tile (tap, ct) of the
 // prepared [taps*32, C_out] weight, row 0 = the tap's per-channel weights).
 constexpr uint32_t weight_k_rows = get_compile_time_arg_val(21);
-constexpr auto weight_args = TensorAccessorArgs<22>();
+// R3 (HEIGHT): the whole weight slice (num_k_blocks K-blocks) is resident in cb_weight_tiles for
+// the kernel's life — read (and multicast) once, before the first m-block, as ONE transfer instead
+// of a serial read -> multicast round per K-block per m-block. Compute reads it in place.
+constexpr bool weights_resident = get_compile_time_arg_val(22) != 0;
+constexpr auto weight_args = TensorAccessorArgs<23>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
 constexpr auto act_channel = dataflow_kernel_lib::McastArgs<
@@ -126,6 +130,9 @@ void kernel_main() {
 
     // ---- load_bias_slice ----
     if constexpr (has_bias) {
+#ifdef ABL_WZONE
+        DeviceZoneScopedN("BIAS");
+#endif
         const auto bias = TensorAccessor(bias_args, bias_addr);
         const uint32_t bias_tile_bytes = get_tile_size(cb_bias_tiles);
         cb_reserve_back(cb_bias_tiles, core_n_tiles);
@@ -142,6 +149,54 @@ void kernel_main() {
         cb_push_back(cb_bias_tiles, core_n_tiles);
     }
 
+    constexpr uint32_t weight_block_tiles = weight_k_rows * block_n_tiles;
+    // read_weight_block: K-block k_block's bk x bn weight tiles (columns from n0) into dst, no
+    // barrier. Column tiles >= N_t (slice padding) are zero-filled.
+    auto read_weight_block = [&](uint32_t k_block, uint32_t n0, uint32_t dst) {
+        uint32_t row_page = kblock_first_row(k_block) * N_t + n0;
+        for (uint32_t kk = 0; kk < weight_k_rows; ++kk) {
+            for (uint32_t j = 0; j < block_n_tiles; ++j) {
+                if (n0 + j < N_t) {
+                    noc_async_read(weights.get_noc_addr(row_page + j), dst, weight_tile_bytes);
+                } else {
+                    zero_fill(zeros_noc, dst, weight_tile_bytes);
+                }
+                dst += weight_tile_bytes;
+            }
+            row_page += N_t;
+        }
+    };
+
+    // ---- load_resident_weights (R3): every K-block once, one multicast, before any m-block ----
+    if constexpr (weights_resident) {
+#ifdef ABL_WZONE
+        DeviceZoneScopedN("WRES");
+#endif
+        constexpr uint32_t total_tiles = num_k_blocks * weight_block_tiles;
+        cb_reserve_back(cb_weight_tiles, total_tiles);
+        const uint32_t slot = get_write_ptr(cb_weight_tiles);  // lockstep across the group
+        if (reads_weights) {
+            {
+#ifdef ABL_WZONE
+                DeviceZoneScopedN("WREAD");
+#endif
+                for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
+                    read_weight_block(k_block, n_tile_start, slot + k_block * weight_block_bytes);
+                }
+                noc_async_read_barrier();
+            }
+#ifdef ABL_WZONE
+            DeviceZoneScopedN("WSEND");
+#endif
+            if constexpr (weight_mcast) {
+                weight_sender->send(slot, slot, num_k_blocks * weight_block_bytes);  // self-excluded
+            }
+        } else {
+            weight_receiver->receive();
+        }
+        cb_push_back(cb_weight_tiles, total_tiles);
+    }
+
     const uint32_t m_tile_end = m_tile_start + m_tiles_this_core;
     for (uint32_t m_block = 0; m_block < num_m_blocks; ++m_block) {
         const uint32_t t0 = m_tile_start + m_block * block_m_tiles;
@@ -154,24 +209,11 @@ void kernel_main() {
             // reads without waiting; land_weights: barrier, column multicast / receive, push.
             // R4/R5 runs the act exchange of a K-block between the two, so the weight DRAM
             // latency overlaps the row handshake instead of serializing ahead of it.
-            constexpr uint32_t weight_block_tiles = weight_k_rows * block_n_tiles;
             auto issue_weights = [&](uint32_t k_block) {
                 cb_reserve_back(cb_weight_tiles, weight_block_tiles);
                 const uint32_t weight_slot = get_write_ptr(cb_weight_tiles);  // lockstep across the column
                 if (reads_weights) {
-                    uint32_t dst = weight_slot;
-                    uint32_t row_page = kblock_first_row(k_block) * N_t + n0;
-                    for (uint32_t kk = 0; kk < weight_k_rows; ++kk) {
-                        for (uint32_t j = 0; j < block_n_tiles; ++j) {
-                            if (n0 + j < N_t) {
-                                noc_async_read(weights.get_noc_addr(row_page + j), dst, weight_tile_bytes);
-                            } else {
-                                zero_fill(zeros_noc, dst, weight_tile_bytes);
-                            }
-                            dst += weight_tile_bytes;
-                        }
-                        row_page += N_t;
-                    }
+                    read_weight_block(k_block, n0, weight_slot);
                 }
                 return weight_slot;
             };
@@ -190,7 +232,8 @@ void kernel_main() {
             // Weight block w is issued before act block w - weight_lead and landed after it; its
             // slot frees when compute is done with w - weight_depth (= the act block 2 back, the
             // same gate as the double-buffered landing reserve).
-            uint32_t w_next = 0;
+            // Resident weights: nothing to stream (w_next starts past the last K-block).
+            uint32_t w_next = weights_resident ? num_k_blocks : 0;
             for (; w_next < weight_lead && w_next < num_k_blocks; ++w_next) {
                 land_weights(issue_weights(w_next));
             }
