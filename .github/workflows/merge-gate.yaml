@@ -699,9 +699,10 @@ jobs:
       measure_result: ${{ needs.llk-perf-merge-gate-measure.result }}
       # Stage 2 and the gate compare against the same baseline read; without it, the gate reads the warehouse.
       stage2_baseline_artifact: llk-perf-stage2-baseline
-      # Report-only, stage 2 included. To block, set this to true and add both
-      # llk-perf-merge-gate jobs to optional-jobs in Merge Gate Status.
+      # A regression is report-only, stage 2 included. A measurement that did not complete,
+      # a missing baseline or a comparison that did not finish fails the job, and blocks the merge.
       fail_on_regression: false
+      fail_without_baseline: true
       # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
       slack: false
       slack_on_pass: false
@@ -860,16 +861,19 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
 
-    # The LLK perf merge gate is in needs, so the queue waits for its verdict, but not
-    # in optional-jobs while it is report-only, so its failure does not block a merge.
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-measure, llk-perf-merge-gate]
+    # LLK perf merge gate: llk-perf-merge-gate fails only when it did not measure and compare
+    # (a regression is report-only), so it is in optional-jobs. Skipped (no LLK perf input
+    # changed) is OK. The changes job is there too: when it fails, the gate skips.
+    # llk-perf-merge-gate-measure is not: the gate already fails on a measuring leg that did not
+    # complete, and a failed warehouse upload or report-only stage 2 must not block.
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate-measure, llk-perf-merge-gate]
     runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
