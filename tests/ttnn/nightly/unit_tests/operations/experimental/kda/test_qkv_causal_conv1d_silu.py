@@ -28,6 +28,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     qkv_to_device,
     qkv_device_inputs,
+    qkv_host_inputs,
     qkv_reference,
 )
 
@@ -723,6 +724,24 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_widths(
     with expect_error(RuntimeError, message):
         _run(
             input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=sum(widths), actual_start=zero_actual_start
+        )
+
+
+def test_qkv_causal_conv1d_silu_rejects_channels_not_segment_aligned(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
+) -> None:
+    """96 channels are tile aligned but cannot form whole 64-channel tail segments, so no history layout exists."""
+    widths = (32, 32, 32)
+    inputs, history, taps = qkv_host_inputs(widths=widths, sequence=32)
+    with expect_error(RuntimeError, r"Q\+K\+V must be a multiple of 64"):
+        _run(
+            qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+            # Hand-built: the [1, K-1, W] rows, since convolution_tail_to_device_layout refuses 96 channels.
+            qkv_to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+            tuple(qkv_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps),
+            widths=widths,
+            channel_chunk_size=sum(widths),
+            actual_start=zero_actual_start,
         )
 
 
