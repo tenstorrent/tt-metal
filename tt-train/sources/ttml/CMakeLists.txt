@@ -552,7 +552,10 @@ install(
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
 # Device kernels are JIT-compiled from paths relative to the tt-metalium root, so an installed
-# ttml needs the kernel sources and the headers they include under that root.
+# ttml needs the kernel sources and the headers they include under that root. They ship in
+# ttml-validation only because ttml_tests is the sole packaged consumer (the ttml component is
+# excluded from CPACK_COMPONENTS_ALL); a ttml runtime package must ship them itself.
+# TODO: move them to a runtime component (https://github.com/tenstorrent/tt-metal/issues/63795).
 install(
     DIRECTORY
         ${CMAKE_CURRENT_SOURCE_DIR}/metal/
