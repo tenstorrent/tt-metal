@@ -521,3 +521,31 @@ def test_generic_op_cache_keys_io_tensor_layouts(device):
     )
     assert list(explicit.padded_shape) == [1, 1, 64, 32]
     assert run(explicit, [1, 1, 64, 32]) == 1
+
+
+def test_generic_op_hash_global_cb_identity(device):
+    """generic_op keys which global CB a CB descriptor uses, not just whether it has one (#59915): a cache hit
+    does not re-point a global CB, so two global CBs with identical attributes must give different hashes,
+    while reusing the same global CB keeps the hash."""
+    sender_receiver_mapping = [
+        (ttnn.CoreCoord(1, 1), ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 1), ttnn.CoreCoord(2, 2))]))
+    ]
+    page_size = 2 * 1024
+    # Both stay alive for the whole test, so they have different addresses.
+    global_cb_a = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 4 * page_size)
+    global_cb_b = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 4 * page_size)
+
+    def descriptor_hash(global_cb):
+        receiver_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 1), ttnn.CoreCoord(2, 2))])
+        cb = ttnn.CBDescriptor(
+            total_size=4 * page_size,
+            core_ranges=receiver_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=page_size)
+            ],
+        )
+        cb.set_global_circular_buffer(global_cb)
+        return ttnn.compute_program_descriptor_hash(ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=[cb]))
+
+    assert descriptor_hash(global_cb_a) == descriptor_hash(global_cb_a)
+    assert descriptor_hash(global_cb_a) != descriptor_hash(global_cb_b)
