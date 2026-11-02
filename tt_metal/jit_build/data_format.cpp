@@ -64,10 +64,13 @@ ExpPrecision get_exp_precision(DataFormat data_format) {
 DataFormat check_consistent_format_across_buffers(std::span<const DataFormat> data_format) {
     DataFormat last_valid_format = DataFormat::Invalid;
     for (const auto& format : data_format) {
-        // Special case where Float32 can pair with any exponent precision, skip checking
+        // Special case where Float32 can pair with any exponent precision, skip checking.
+        // Integer formats carry no exponent at all, so they pair with either precision for the same
+        // reason, and every integer format is listed here.
         if ((format == DataFormat::Float32) || (format == DataFormat::RawUInt32) || (format == DataFormat::UInt32) ||
             (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8) || (format == DataFormat::UInt16) ||
-            (format == DataFormat::Int16) || (format == DataFormat::UInt8) || (format == DataFormat::Int32)) {
+            (format == DataFormat::UInt8) || (format == DataFormat::Int32) || (format == DataFormat::Int8) ||
+            (format == DataFormat::Int16)) {
             continue;
         }
 
@@ -290,6 +293,8 @@ DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::UInt8;
         } else if (data_format == DataFormat::Int8) {
             pack_src_format = DataFormat::Int8;
+        } else if (data_format == DataFormat::Int16) {
+            pack_src_format = DataFormat::Int16;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", data_format);
         }
