@@ -109,7 +109,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_RuntimeArgsSchemaSucceeds) {
 TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgsOfEveryKindSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"count"};
-    spec.kernels[0].runtime_arg_schema.runtime_array_args = {{.name = "addrs", .size = 4}};
+    spec.kernels[0].runtime_arg_schema.runtime_array_args = {{.name = "x", .size = 4}};
     spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "dims", .size = 2}};
     spec.kernels[0].compile_time_array_args = {{"page_sizes", {64, 128, 256}}};
 
@@ -129,13 +129,13 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidArrayArgIdentifierFails) {
 TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgScalarCollisionFails) {
     // Arrays share the args:: namespace with the scalars.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"addrs"};
-    spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "addrs", .size = 2}};
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"x"};
+    spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "x", .size = 2}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("naming collision: 'addrs' is declared as both a named RTA and a CRTA array")));
+            ::testing::HasSubstr("naming collision: 'x' is declared as both a named RTA and a CRTA array")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgCtaArrayCollisionFails) {

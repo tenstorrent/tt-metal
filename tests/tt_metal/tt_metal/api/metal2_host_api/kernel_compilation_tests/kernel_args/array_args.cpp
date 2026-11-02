@@ -37,15 +37,15 @@ struct AsTemplateArg {
     static constexpr uint32_t value = N;
 };
 static_assert(AsTemplateArg<get_arg(args::page_sizes)[1]>::value == 128u);
-static_assert(decltype(get_arg(args::sem_addrs))::size() == 4u);
+static_assert(decltype(get_arg(args::x))::size() == 4u);
 static_assert(decltype(get_arg(args::dims))::size() == 2u);
 
 void kernel_main() {
     volatile uint32_t sink = get_arg(args::count) + get_arg(args::shape_scale);
 
-    auto addrs = get_arg(args::sem_addrs);
-    for (uint32_t i = 0; i < addrs.size(); ++i) {
-        sink = sink + addrs[i];
+    auto xs = get_arg(args::x);
+    for (uint32_t i = 0; i < xs.size(); ++i) {
+        sink = sink + xs[i];
     }
     for (uint32_t d : get_arg(args::dims)) {
         sink = sink + d;
@@ -64,7 +64,7 @@ void DeclareArrayArgs(KernelSpec& kernel) {
     kernel.runtime_arg_schema = {
         .runtime_arg_names = {"count"},
         .common_runtime_arg_names = {"shape_scale"},
-        .runtime_array_args = {{.name = "sem_addrs", .size = 4}},
+        .runtime_array_args = {{.name = "x", .size = 4}},
         .common_runtime_array_args = {{.name = "dims", .size = 2}},
     };
     kernel.advanced_options.num_runtime_varargs = 1;
@@ -121,7 +121,7 @@ TT_KERNEL void entry(uint32_t count) { (void)count; }
 )"};
     dm_kernel.runtime_arg_schema = {
         .runtime_arg_names = {"count"},
-        .runtime_array_args = {{.name = "sem_addrs", .size = 4}},
+        .runtime_array_args = {{.name = "x", .size = 4}},
     };
 
     EXPECT_THAT(

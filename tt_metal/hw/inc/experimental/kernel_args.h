@@ -99,9 +99,9 @@ FORCE_INLINE constexpr T get_arg(CtaVal<T> arg) {
 // An array argument holds N elements, read by index. As with scalar arguments, kernel code
 // is the same whether the array is dispatched as an RTA, a CRTA, or a CTA:
 //
-//   auto addrs = get_arg(args::sem_addrs);
-//   for (uint32_t i = 0; i < addrs.size(); ++i) { use(addrs[i]); }
-//   for (uint32_t addr : get_arg(args::sem_addrs)) { use(addr); }
+//   auto counts = get_arg(args::tile_counts);
+//   for (uint32_t i = 0; i < counts.size(); ++i) { use(counts[i]); }
+//   for (uint32_t count : get_arg(args::tile_counts)) { use(count); }
 //
 // get_arg() returns a *view* of the array for every kind: a small object that refers to the
 // elements where they already are, and reads one only when it is indexed. A view is cheap to

@@ -655,10 +655,11 @@ void kernel_main() {
 // ============================================================================
 //
 // A DM kernel and a compute kernel on one node each copy every array element, in order, into their own
-// L1 report region, next to a scalar and a vararg of each runtime kind:
+// report scratchpad, next to a scalar and a vararg of each runtime kind:
 //     [ x0 x1 x2 | d0 d1 | p0 p1 p2 | count | vararg0 | common vararg0 ]
 // x is an RTA array, d a CRTA array and p a CTA array. Every value is a distinct sentinel, so an offset
-// error on either the host or the device side shows up as one slot reading another's value.
+// error on either the host or the device side shows up as one slot reading another's value. The host
+// reads each scratchpad back at its allocated address.
 //
 // Two phases:
 //   SET    — SetProgramRunArgs installs everything; every slot must read its own value.
@@ -669,7 +670,7 @@ constexpr const char* kArrayArgsReadbackSource = R"(
 #include "experimental/kernel_args.h"
 void kernel_main() {
 #if !defined(COMPILE_FOR_TRISC) || defined(TRISC_PACK)
-    auto* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::report_addr));
+    auto report = Scratchpad<uint32_t>(scratch::report);
     uint32_t i = 0;
     auto x = get_arg(args::x);
     for (uint32_t k = 0; k < x.size(); ++k) {
@@ -692,37 +693,41 @@ TEST_F(ProgramSpecHWTest, ArrayArgsReadbackSetAndPartialUpdate) {
     auto mesh_device = devices_.at(0);
     const NodeCoord node{0, 0};
     constexpr uint32_t kReportWords = 11;
-    const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
-    // Same schema on both kernels; `tag` makes every value distinct per kernel.
-    auto declare = [](KernelSpec& kernel, uint32_t tag) {
+    // Same schema on both kernels; `tag` makes every value distinct per kernel. Each kernel writes into
+    // its own scratchpad, named after the kernel.
+    struct Reader {
+        const char* name;
+        uint32_t tag;
+    };
+    const Reader readers[] = {{.name = "dm", .tag = 0xD0000000u}, {.name = "compute", .tag = 0xC0000000u}};
+    auto declare = [](KernelSpec& kernel, const Reader& reader) {
         kernel.source = KernelSpec::SourceCode{kArrayArgsReadbackSource};
-        kernel.compile_time_array_args = {{"p", {tag + 0x700, tag + 0x701, tag + 0x702}}};
+        kernel.scratchpad_bindings = {
+            {.scratchpad_spec_name = ScratchpadSpecName{reader.name}, .accessor_name = "report"}};
+        kernel.compile_time_array_args = {{"p", {reader.tag + 0x700, reader.tag + 0x701, reader.tag + 0x702}}};
         kernel.runtime_arg_schema = {
-            .runtime_arg_names = {"report_addr", "count"},
+            .runtime_arg_names = {"count"},
             .runtime_array_args = {{.name = "x", .size = 3}},
             .common_runtime_array_args = {{.name = "d", .size = 2}},
         };
         kernel.advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 1, .num_common_runtime_varargs = 1};
     };
-    struct Reader {
-        const char* name;
-        uint32_t tag;
-        uint32_t report_addr;
-    };
-    const Reader readers[] = {
-        {.name = "dm", .tag = 0xD0000000u, .report_addr = l1_base},
-        {.name = "compute", .tag = 0xC0000000u, .report_addr = l1_base + 64},
-    };
 
     auto dm = MakeMinimalGen1DMKernel("dm", DataMovementProcessor::RISCV_0);
-    declare(dm, readers[0].tag);
+    declare(dm, readers[0]);
     auto compute = MakeMinimalGen1ComputeKernel("compute");
-    declare(compute, readers[1].tag);
+    declare(compute, readers[1]);
 
     ProgramSpec spec;
     spec.name = "array_args_readback";
     spec.kernels = {dm, compute};
+    for (const Reader& reader : readers) {
+        spec.scratchpads.push_back(ScratchpadSpec{
+            .unique_id = ScratchpadSpecName{reader.name},
+            .size_per_node = kReportWords * sizeof(uint32_t),
+        });
+    }
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"dm", "compute"})};
 
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
@@ -730,17 +735,25 @@ TEST_F(ProgramSpecHWTest, ArrayArgsReadbackSetAndPartialUpdate) {
     workload.add_program(device_range, MakeProgramFromSpec(*mesh_device, spec));
     Program& program = workload.get_programs().at(device_range);
 
-    // Clear both report regions, then launch, blocking.
+    // A kernel's report scratchpad, allocated by MakeProgramFromSpec.
+    auto report_address = [&](const Reader& reader) {
+        return program.impl()
+            .get_kernel_by_spec_name(reader.name)
+            ->scratchpad_binding_handles()
+            .at(0)
+            .allocated_address;
+    };
+    // Clear both report scratchpads, then launch, blocking.
     auto launch = [&]() {
         for (const Reader& reader : readers) {
             std::vector<uint32_t> zeros(kReportWords, 0u);
-            slow_dispatch::WriteToL1(*mesh_device, node, reader.report_addr, zeros);
+            slow_dispatch::WriteToL1(*mesh_device, node, report_address(reader), zeros);
         }
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
     };
     auto read_report = [&](const Reader& reader) {
         std::vector<uint32_t> report;
-        slow_dispatch::ReadFromL1(*mesh_device, node, reader.report_addr, kReportWords * sizeof(uint32_t), report);
+        slow_dispatch::ReadFromL1(*mesh_device, node, report_address(reader), kReportWords * sizeof(uint32_t), report);
         return report;
     };
 
@@ -749,8 +762,7 @@ TEST_F(ProgramSpecHWTest, ArrayArgsReadbackSetAndPartialUpdate) {
     for (const Reader& reader : readers) {
         ProgramRunArgs::KernelRunArgs args{
             .kernel = KernelSpecName{reader.name},
-            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
-                node, {{"report_addr", reader.report_addr}, {"count", reader.tag + 0x800}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"count", reader.tag + 0x800}}),
         };
         args.runtime_array_arg_values["x"][node] = {reader.tag + 0x100, reader.tag + 0x101, reader.tag + 0x102};
         args.common_runtime_array_arg_values["d"] = {reader.tag + 0x200, reader.tag + 0x201};
