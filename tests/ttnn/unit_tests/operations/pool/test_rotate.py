@@ -390,6 +390,37 @@ def test_data_types(device, dtype):
     assert comparison_passed, f"Data type test failed for {dtype}"
 
 
+@pytest.mark.parametrize("angle", [0.0, 90.0])
+@pytest.mark.parametrize(
+    "dtype, max_mean_rel_err",
+    [
+        # fp32 must be computed with a 32-bit Dest; a 16-bit Dest gives about 2.8e-3 here.
+        (ttnn.float32, 1.5e-3),
+        # bf16 control
+        (ttnn.bfloat16, 1e-2),
+    ],
+)
+def test_bilinear_float32_precision(device, angle, dtype, max_mean_rel_err):
+    """Bilinear rotation by multiples of 90 degrees selects exact pixels, so only the math precision is measured."""
+    torch.manual_seed(0)
+
+    input_shape = (1, 32, 32, 32)
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input_nhwc = torch.rand(input_shape, dtype=torch_dtype) + 0.5
+
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, interpolation_mode="bilinear")
+
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
+    ttnn_output = ttnn.rotate(ttnn_input, angle=angle, interpolation_mode="bilinear")
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    ref = torch_output_nhwc.double()
+    mean_rel_err = ((ttnn_output_torch.double() - ref).abs().mean() / ref.abs().mean()).item()
+    logger.info(f"mean relative error {mean_rel_err}")
+    assert mean_rel_err < max_mean_rel_err, f"mean relative error {mean_rel_err} for {dtype} angle {angle}"
+
+
 # ============================================================================
 # Edge Cases
 # ============================================================================

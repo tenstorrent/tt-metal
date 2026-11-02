@@ -326,3 +326,43 @@ def test_bcast_hw_sharded_multi_row_col(device, orientation):
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
     logger.info(pcc_msg)
     assert passing, pcc_msg
+
+
+@pytest.mark.parametrize(
+    "dtype, max_mean_rel_err",
+    [
+        # fp32 operands must be computed with a 32-bit Dest; a 16-bit Dest gives about 2.7e-3 (add) and 5e-3 (mul).
+        (ttnn.float32, {ttnn.BcastOpMath.ADD: 1.2e-3, ttnn.BcastOpMath.MUL: 2.5e-3}),
+        # bf16 control: unchanged behaviour, only bf16 rounding.
+        (ttnn.bfloat16, {ttnn.BcastOpMath.ADD: 1e-2, ttnn.BcastOpMath.MUL: 1e-2}),
+    ],
+)
+@pytest.mark.parametrize("op", [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.MUL])
+@pytest.mark.parametrize("dim", [ttnn.BcastOpDim.H, ttnn.BcastOpDim.W, ttnn.BcastOpDim.HW])
+def test_bcast_float32_precision(device, dim, op, dtype, max_mean_rel_err):
+    torch.manual_seed(0)
+    N, C, H, W = 2, 1, 64, 128
+    b_shape = {
+        ttnn.BcastOpDim.H: [1, 1, 32, W],
+        ttnn.BcastOpDim.W: [1, 1, H, 32],
+        ttnn.BcastOpDim.HW: [1, 1, 32, 32],
+    }[dim]
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    a_torch = torch.rand([N, C, H, W], dtype=torch_dtype)
+    b_torch = torch.rand(b_shape, dtype=torch_dtype)
+
+    if dim == ttnn.BcastOpDim.H:
+        b_ref = b_torch[:, :, :1, :]
+    elif dim == ttnn.BcastOpDim.W:
+        b_ref = b_torch[:, :, :, :1]
+    else:
+        b_ref = b_torch[:, :, :1, :1]
+    ref = (a_torch.double() + b_ref.double()) if op == ttnn.BcastOpMath.ADD else (a_torch.double() * b_ref.double())
+
+    a_tt = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    b_tt = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    out = ttnn.to_torch(ttnn.bcast(a_tt, b_tt, op, dim)).double()
+
+    mean_rel_err = ((out - ref).abs().mean() / ref.abs().mean()).item()
+    logger.info(f"mean relative error {mean_rel_err}")
+    assert mean_rel_err < max_mean_rel_err[op], f"mean relative error {mean_rel_err} for {dtype} {op} {dim}"
