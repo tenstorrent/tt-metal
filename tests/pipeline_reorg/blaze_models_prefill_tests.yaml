@@ -592,7 +592,6 @@
     glm_dsa_mla() (
       export MESH_DEVICE=TG
       export GLM52_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
-      export DS_SPARSE_FABRIC=fabric2d
       # Still GLM-5.2, not GLM-5.3: this compares against a cached MLACPU reference and only GLM-5.2 has a
       # populated one. Same architecture and random weights, so it covers the GLM-5.3 sparse path too.
       # GLM-5.2 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. The glm_5_2 variant sweep at the
