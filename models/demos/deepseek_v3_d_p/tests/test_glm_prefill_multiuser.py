@@ -838,8 +838,14 @@ def test_glm_packed_pipeline_matches_one_rank(variant, config_only, mesh_device,
                         )
         assert not failures, f"[pipeline] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
-        # Releases each model's sub-device managers too (and the D2H service a traced rank holds); the D2H
-        # service's device-side teardown needs the mesh still open.
+        # Every rank's traces first: each is released under the sub-device managers it was captured with, and the
+        # models on this one mesh share TT_CCL's sparse-MLA overlap manager, which the first release_trace() below
+        # removes. (In the runner each rank is its own process.) controller.release() is idempotent.
+        for r in ranks:
+            if r._controller is not None:
+                r._controller.release()
+        # Then each model's sub-device managers (and the D2H service a traced rank holds, whose device-side
+        # teardown needs the mesh still open).
         for r in ranks + ([ref] if ref is not None else []):
             r.release_trace()
         d2h = None
