@@ -98,80 +98,102 @@ ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }  // namespace detail
 #endif
 
-#ifndef ARCH_QUASAR
+// Quasar: Int32 only (the wrappers static_assert UInt32/UInt16 away). Native Int32 Dest is two's complement
+// (unpack-to-dest copies the L1 bits), so SIGN_MAGNITUDE_FORMAT keeps its default; an Int8 operand the FPU
+// promoted into a 32-bit Dest is sign-magnitude and compares the same only while it is non-negative.
 template <DataFormat data_format>
 ALWI void eq_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_eq_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+#else
     MATH((detail::eq_int_tile_dispatch<SfpuType::eq, data_format>(idst0, idst1, odst)));
+#endif
 }
 
 template <DataFormat data_format>
 ALWI void ne_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_ne_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+#else
     MATH((detail::eq_int_tile_dispatch<SfpuType::ne, data_format>(idst0, idst1, odst)));
-}
 #endif
+}
 
-#ifndef ARCH_QUASAR
 template <DataFormat data_format>
 ALWI void lt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_lt_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+#else
     MATH((detail::rel_int_tile_dispatch<SfpuType::lt, data_format>(idst0, idst1, odst)));
-}
 #endif
+}
 
 template <DataFormat data_format>
 ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
-    // Int8 copy_tile + fp32_dest_acc FPU writes sign-magnitude Int32 into dest.
-    // Native Int32 tiles use 2's-comp dest and keep SIGN_MAGNITUDE_FORMAT=false.
-    MATH((llk_math_eltwise_binary_sfpu_gt_int<APPROX, data_format, 8 /*ITERATIONS*/, true /*SIGN_MAGNITUDE_FORMAT*/>(
-        idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_gt_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
 #else
     MATH((detail::rel_int_tile_dispatch<SfpuType::gt, data_format>(idst0, idst1, odst)));
 #endif
 }
 
-#ifndef ARCH_QUASAR
 template <DataFormat data_format>
 ALWI void le_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_le_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+#else
     MATH((detail::rel_int_tile_dispatch<SfpuType::le, data_format>(idst0, idst1, odst)));
+#endif
 }
 
 template <DataFormat data_format>
 ALWI void ge_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_ge_int<APPROX, data_format, 8 /*ITERATIONS*/>(idst0, idst1, odst)));
+#else
     MATH((detail::rel_int_tile_dispatch<SfpuType::ge, data_format>(idst0, idst1, odst)));
-}
 #endif
+}
 
 /**
  * The following functions initialize the relational operations. They should be invoked prior to calling the execution
  * API. Please refer to execution API documentation to find out more about the relational operations.
  */
-#ifndef ARCH_QUASAR
 template <DataFormat data_format>
 ALWI void eq_int_tile_init() {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_eq_int_init<APPROX, data_format>()));
+#else
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for eq_int. Supported data formats are: Int32, UInt32, UInt16");
     MATH((SFPU_BINARY_INIT(eq_int)));
+#endif
 }
 
 template <DataFormat data_format>
 ALWI void ne_int_tile_init() {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_ne_int_init<APPROX, data_format>()));
+#else
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for ne_int. Supported data formats are: Int32, UInt32, UInt16");
     MATH((SFPU_BINARY_INIT(ne_int)));
-}
 #endif
+}
 
-#ifndef ARCH_QUASAR
 template <DataFormat data_format>
 ALWI void lt_int_tile_init() {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_lt_int_init<APPROX, data_format>()));
+#else
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for lt_int. Supported data formats are: Int32, UInt32, UInt16");
     MATH((SFPU_BINARY_INIT(lt_int)));
-}
 #endif
+}
 
 template <DataFormat data_format>
 ALWI void gt_int_tile_init() {
@@ -185,22 +207,28 @@ ALWI void gt_int_tile_init() {
 #endif
 }
 
-#ifndef ARCH_QUASAR
 template <DataFormat data_format>
 ALWI void le_int_tile_init() {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_le_int_init<APPROX, data_format>()));
+#else
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for le_int. Supported data formats are: Int32, UInt32, UInt16");
     MATH((SFPU_BINARY_INIT(le_int)));
+#endif
 }
 
 template <DataFormat data_format>
 ALWI void ge_int_tile_init() {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_ge_int_init<APPROX, data_format>()));
+#else
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for ge_int. Supported data formats are: Int32, UInt32, UInt16");
     MATH((SFPU_BINARY_INIT(ge_int)));
-}
 #endif
+}
 
 }  // namespace ckernel
