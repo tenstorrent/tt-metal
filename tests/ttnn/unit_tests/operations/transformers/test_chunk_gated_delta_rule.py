@@ -301,6 +301,22 @@ def test_gated_delta_attn_seq_honors_math_fidelity(device, num_chunks):
     assert hifi4[1] < 0.5 * hifi2[1], f"final_state: HiFi4 {hifi4[1]} not below HiFi2 {hifi2[1]}"
 
 
+def test_gated_delta_attn_seq_requires_fp32_dest(device, expect_error):
+    """The kernel and its buffers are Float32, so a 16-bit Dest is rejected rather than run."""
+    inputs, initial_state = _gated_delta_attn_seq_inputs(1, 1, True, seed=7)
+
+    def dev(t):
+        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    config = ttnn.init_device_compute_kernel_config(device.arch(), fp32_dest_acc_en=False)
+    with expect_error(RuntimeError, "requires compute_kernel_config.fp32_dest_acc_en = true"):
+        ttnn.transformer.gated_delta_attn_seq(
+            **{name: dev(t) for name, t in inputs.items()},
+            initial_state=dev(initial_state),
+            compute_kernel_config=config,
+        )
+
+
 def _const_tiles(device, chunk_size=CHUNK):
     """The op's constant tiles (mirrors qwen36 fused_chunk.build_fused_const_tiles).
 
