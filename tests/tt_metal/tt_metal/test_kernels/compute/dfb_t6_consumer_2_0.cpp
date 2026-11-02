@@ -14,13 +14,12 @@
 // one without reading the ring or writing dest (there is no output DFB).
 //
 // Because there is no output DFB, the payload can't be checked through DRAM the
-// way the DM consumer's is. Instead the consuming thread (UNPACK, or trisc3 when
-// the host put the consumer there) folds each entry it drains into an FNV-1a
-// digest and reports it to an L1 scratch region, so the host can verify both the
-// bytes and the delivery order of every entry. Digests are laid out as
-// [consumer_idx][drain_index], one uint32_t each; the host seeds the region with
-// a sentinel so a slot the kernel never reached is distinguishable from a wrong
-// value.
+// way the DM consumer's is. Instead the consuming thread folds each entry it drains
+// into an FNV-1a digest and reports it to an L1 scratch region, so the host can
+// verify both the bytes and the delivery order of every entry. Digests are laid
+// out as [consumer_idx][drain_index], one uint32_t each; the host seeds the
+// region with a sentinel so a slot the kernel never reached is distinguishable
+// from a wrong value.
 //
 // Flow per test invocation:
 //   1. DM producer kernel writes data into the DFB L1 ring (NoC read from DRAM).
@@ -58,8 +57,8 @@ void kernel_main() {
     // no fifo state and reads share as 1, so acquire/release stays per tile to match PACK's count.
     const uint32_t share = dfb.get_consumer_share();
 
-    // The consuming TRISC owns the read cursor: trisc0 by default, trisc3 when the host put the
-    // consumer there. One such thread per Neo, so the Neo's thread id keys its slice of the digest region.
+    // Only the consuming TRISC takes the digests. One such thread per Neo, so the Neo's thread id keys its
+    // slice of the digest region.
     constexpr bool i_consume = ckernel::TRISC_ID == (consumer_on_trisc3 ? 3u : 0u);
     const uint32_t entry_bytes = dfb.get_entry_size();
     const uint32_t words_per_entry = entry_bytes / sizeof(uint32_t);
@@ -76,7 +75,7 @@ void kernel_main() {
         dfb.wait_front(share);
         for (uint32_t j = 0; j < share; ++j) {
             acquire_dst();
-            // TEN-4746: the unpack orders pop_front after wait_front; one per tile, a no-op on MATH/PACK/trisc3.
+            // TEN-4746: the unpack orders pop_front after wait_front; one per tile, a no-op except on UNPACK.
             ckernel::dummy_unpack(dfb.get_id());
             release_dst();
         }
@@ -94,8 +93,8 @@ void kernel_main() {
             // which says nothing about this entry (and leaves drain index 0 unprotected entirely).
             // dummy_unpack reads nothing from L1, so it neither supplies nor disturbs the bytes hashed
             // here -- it serves only to prove the entry landed.
-            // On trisc3 there is no UNPACR: its wait_front polls the counter from the RISC, so the entry
-            // is in L1 when it returns, and tensix_sync() has nothing to wait for.
+            // A consuming thread that drives no unpacker needs none of this: its wait_front polls the counter
+            // from the RISC, so the entry is in L1 when it returns and tensix_sync() has nothing to wait for.
             // get_read_ptr() is in 16B units on both arches, hence the << 4 (cf. dfb_t6_intra_2_0.cpp).
             ckernel::tensix_sync();
             const uint32_t share_base = dfb.get_read_ptr() << 4;

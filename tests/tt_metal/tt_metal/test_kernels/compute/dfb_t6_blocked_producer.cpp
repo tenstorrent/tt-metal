@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Metal 2.0 (declarative API) Tensix-side BLOCKED producer (TRISC -> DFB -> DM).
-// The host pre-fills the ring; this kernel posts credits, one block per reserve/push, and the
-// producing thread (PACK, or trisc3 when the host put the producer there) stamps word 0 of every
-// entry it pushes with its thread id, so the host can see which thread pushed it.
+// The host pre-fills the ring; this kernel posts credits, one block per reserve/push. The producing thread
+// also stamps word 0 of every entry it pushes with its thread id, so the host can see which thread pushed it.
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/common.h"  // for dummy_pack (TEN-4746 no-write pack ordering)
@@ -35,8 +34,7 @@ void kernel_main() {
         // without modifying the payload.
         ckernel::dummy_pack(dfb::out);
         if constexpr (i_produce) {
-            // tensix_sync blocks this RISC until that pack retired, so the stores below cannot land
-            // before the space was free. On trisc3 the reserve_back already blocked the RISC.
+            // Make sure the space is free before storing: tensix_sync waits for the pack queued behind reserve_back.
             ckernel::tensix_sync();
             const uint32_t block_base = dfb.get_write_ptr() << 4;
             for (uint32_t j = 0; j < block_size; ++j) {

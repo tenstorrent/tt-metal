@@ -368,7 +368,7 @@ inline void DataflowBuffer<Pap, Cap>::reserve_back_impl(uint16_t num_entries) {
     ASSERT(num_entries == get_producer_share() || !share_strict);
 #if DFB_TRISC_CAN_PRODUCE
     if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_PRODUCER_ROLE) == 0) {
-        return;  // another TRISC produces this DFB
+        return;  // another TRISC produces for this DFB
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_for_free_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
@@ -397,7 +397,7 @@ inline void DataflowBuffer<Pap, Cap>::push_back_impl(uint16_t num_entries) {
     ASSERT(num_entries == get_producer_share() || !share_strict);
 #if DFB_TRISC_CAN_PRODUCE
     if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_PRODUCER_ROLE) == 0) {
-        return;  // another TRISC produces this DFB
+        return;  // another TRISC produces for this DFB
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_push_tiles<DFB_PACK_DONE_WAIT_MASK, Pap, Cap>(logical_dfb_id_, num_entries);
@@ -430,7 +430,7 @@ inline void DataflowBuffer<Pap, Cap>::wait_front_impl(uint16_t num_entries) {
     ASSERT(num_entries == get_consumer_share() || !share_strict);
 #if DFB_TRISC_CAN_CONSUME
     if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_CONSUMER_ROLE) == 0) {
-        return;  // another TRISC consumes this DFB
+        return;  // another TRISC consumes for this DFB
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
@@ -456,7 +456,7 @@ inline void DataflowBuffer<Pap, Cap>::pop_front_impl(uint16_t num_entries) {
     ASSERT(num_entries == get_consumer_share() || !share_strict);
 #if DFB_TRISC_CAN_CONSUME
     if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_CONSUMER_ROLE) == 0) {
-        return;  // another TRISC consumes this DFB
+        return;  // another TRISC consumes for this DFB
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_pop_tiles<DFB_UNPACK_DONE_WAIT_MASK, Pap, Cap>(logical_dfb_id_, num_entries);
@@ -538,7 +538,6 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_tile_address(uint32_t tile_index) 
     uint32_t address = 0;
 #if defined(UCK_CHLKC_UNPACK)
     {
-        // The front of a DFB trisc3 consumes is on trisc3, out of reach of this unpack-thread read.
         ASSERT((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_ROLE_CONSUMER_T3) == 0);
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         // Linear (front + tile_index * stride), no wrap. Safe because wait_front(n) must
@@ -568,7 +567,6 @@ T DataflowBuffer<Pap, Cap>::read_tile_value(uint32_t tile_index, uint32_t elemen
     T value = T{};
 #if defined(UCK_CHLKC_UNPACK)
     {
-        // The front of a DFB trisc3 consumes is on trisc3, out of reach of this unpack-thread read.
         ASSERT((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_ROLE_CONSUMER_T3) == 0);
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         // Same linear addressing as get_tile_address: the wait_front window does not wrap.

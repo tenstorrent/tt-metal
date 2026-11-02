@@ -17,10 +17,7 @@
 
 namespace tt::tt_metal {
 
-// legacy intra-Tensix self-loop harness + test. pack_on_trisc3 / unpack_on_trisc3 move that side of
-// the self-looped DFB from trisc2 / trisc0 to trisc3 (RISC-side data touches); both at
-// once put the whole loop on trisc3. Besides the data check, the kernel traces the entry address of
-// every push and pop so the host can see that each pop read the entry the matching push wrote.
+// legacy intra-Tensix self-loop harness + test
 static void run_intra_tensix_dfb_program(
     distributed::MeshDevice& mesh_device,
     uint32_t entry_size,
@@ -322,9 +319,8 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     EXPECT_EQ(live.capacity[self_rc.config.intra_shadow_tc_id], 0u);
 }
 
-// Metal 2.0 C3: unpack and pack keep their DFBs to the DM kernels while trisc3 bridges two intra-Neo
-// DFBs between them (DM -> in -> pack -> mid -> trisc3 -> back -> unpack -> out -> DM). Each of the
-// two intra DFBs is produced by a different thread, so each thread programs its own remapper pair.
+// Metal 2.0 C3 double-relu: DM -> in -> relu -> mid -> trisc3 -> back -> relu -> out -> DM. pack produces mid and
+// trisc3 produces back, so each thread programs its own remapper pair.
 TEST_F(UnitMeshFixture, C3_2_0_DMTriscTrisc3TriscDM_DoubleRelu) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "C3 INTRA-scope DFBs require Quasar";
@@ -438,7 +434,7 @@ TEST_F(UnitMeshFixture, C3_2_0_DMTriscTrisc3TriscDM_DoubleRelu) {
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
 
-    // The two intra DFBs must each get their own remapper pair; pack programs mid's and trisc3 back's.
+    // Finalize early so the host can check both DFBs' thread masks and remapper pairs before launch.
     program.impl().finalize_dataflow_buffer_configs();
     auto mid_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_MID));
     auto back_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_BACK));
@@ -754,10 +750,7 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     }
 }
 
-// T1: pure INTRA must not corrupt DM-visible overlay tile counters 0-15. pack_on_trisc3 /
-// unpack_on_trisc3 move the push or the pop side (or both) to trisc3. With the push side there,
-// trisc3 programs the remapper alias itself and its pushes must still count once and never leak
-// into the overlay pool.
+// T1: pure INTRA must not corrupt DM-visible overlay tile counters 0-15.
 static void run_intra_overlay_isolation(
     distributed::MeshDevice& device, bool pack_on_trisc3 = false, bool unpack_on_trisc3 = false) {
     if (device.arch() != ARCH::QUASAR) {

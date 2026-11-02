@@ -12,20 +12,17 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #include "llk_io.h"
 
-// Which packer PUSH_TILES waits on before it posts the credit: packer 0 on the pack thread. trisc3 has
-// no packer op in its DFB path yet, so it waits for none; switch it to packer 1 (0x2) once it packs
-// through PACK1.
+// Packers that must finish before PUSH_TILES posts the credit; a thread that drives no packer waits for none.
 #if defined(UCK_CHLKC_ISOLATE_SFPU)
 constexpr std::uint8_t DFB_PACK_DONE_WAIT_MASK = 0x0;
 #else
 constexpr std::uint8_t DFB_PACK_DONE_WAIT_MASK = 0x1;
 #endif
 
-// Block until counter tc_id has room for num_tiles. The pack thread stalls its Tensix stream (WAIT_FREE);
-// trisc3 has no pack op in its DFB path yet, so it polls the counter from the RISC instead.
+// Wait for num_tiles of free space on counter tc_id: WAIT_FREE when a packer follows, a RISC poll when none does.
 inline void dfb_trisc_wait_for_free(const std::int32_t num_tiles, const std::uint32_t tc_id) {
 #if defined(UCK_CHLKC_ISOLATE_SFPU)
-    ckernel::tensix_sync();  // retire this thread's earlier PUSH_TILES so the poll does not count space they took
+    ckernel::tensix_sync();  // let this thread's earlier PUSH_TILES finish before reading the counter
     while ((ckernel::trisc::tile_counters[tc_id].f.acked & 0xFFFFu) < static_cast<std::uint32_t>(num_tiles)) {
     }
 #else
@@ -55,7 +52,7 @@ inline void llk_wait_for_free_tiles(const std::int32_t dfb_id, const std::int32_
             dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
         dfb_trisc_wait_for_free(num_tiles, tc_id);
     }
-    // trisc3 issues no WAIT_FREE or PACR for the guard.
+    // The RISC poll issues no WAIT_FREE, so there is no guard to arm.
 #if !defined(UCK_CHLKC_ISOLATE_SFPU)
     // TEN-4746: arm this dfb; a real pack (PACR) on it must clear this before the matching push.
     LLK_TDMA_GUARD_NOTE_WAIT(dfb_id);
