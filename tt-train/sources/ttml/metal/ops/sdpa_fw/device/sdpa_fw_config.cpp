@@ -175,7 +175,7 @@ SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChun
         .output = rows * shape.vWt,
         .reduction_scaler = 1U,
         .matmul_reduce = 1U,
-        .partial = with_partials ? sdpa_fw_items::kPartialCbRows * partial_tiles_per_row(shape) : 0U,
+        .partial = with_partials ? sdpa_items::kPartialCbRows * partial_tiles_per_row(shape) : 0U,
         .alpha = with_partials ? rows : 0U};
 }
 
@@ -248,7 +248,7 @@ void append_unit_words(
 }
 
 uint32_t partial_tiles_per_row(const SDPAForwardShape& shape) {
-    return sdpa_fw_items::partial_row_tiles(shape.vWt);
+    return sdpa_items::partial_row_tiles(shape.vWt);
 }
 
 uint32_t effective_max_pieces(const SDPAForwardProgramConfig& config) {
@@ -614,7 +614,7 @@ void check_chunks(
     // Items are numbered in a 20-bit field of the work list; one tile-row of one head is the most items.
     const uint64_t max_items = static_cast<uint64_t>(shape.batch) * shape.q_heads * shape.St;
     TT_FATAL(
-        max_items <= sdpa_fw_items::unit_field_max(sdpa_fw_items::kUnitItemBits) + 1ULL,
+        max_items <= sdpa_items::unit_field_max(sdpa_items::kUnitItemBits) + 1ULL,
         "batch * heads * sequence tile-rows ({}) exceeds the work list's item range",
         max_items);
     const SDPAForwardChunks user = user_chunks(config, shape);
