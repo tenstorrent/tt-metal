@@ -107,7 +107,7 @@ Resulting Phase 0 grid on p100a (110 cores):
 | 4x512, 8x256 | 64 | 2 | 6 x 18 | 108 | 11 / 10 | 44 (41.9) |
 | 2x512, 4x256 | 32 | 1 | 3 x 36 | 108 | 11 / 10 | 22 (20.9) |
 
-Logical core `l = n_group*grid_m + m_group`, laid row-major (x fastest) over the compute grid: an N-group's `grid_m` cores are **consecutive**, which is the receiver-group shape `ttnn.Mcast` partitions (`mcast.hpp:119-131`, "equal consecutive groups") for the deferred W multicast.
+Logical core `l = m_group*grid_n + n_group` (Refinement 1), laid row-major (x fastest) over the compute grid: an M-group's `grid_n` cores are **consecutive**, which is the receiver-group shape `ttnn.Mcast` partitions (`mcast.hpp:119-131`, "equal consecutive groups") for the built R3 x multicast. Ordering choice: R3 was built first and measured as the 2x512 / 4x512 win (x was the binding resource there), so M-groups got the consecutive layout. N-groups are now strided by `grid_n`, so R2 (W multicast) cannot reuse the same `Mcast` partition. Options for R2: one `Mcast` per N-group on its own core set (arbitrary core set, `grid_n` channels on disjoint semaphores), or a selection-function constraint that makes the logical grid a physical `grid_n x grid_m` rectangle so both channels are 1-D lines (`mcast_topology`), which needs `grid_n <= grid.x` and `grid_m <= grid.y`. Consecutive groups on an 11-wide grid are generally not rectangles, so R3 uses a fixed sender per group (`McastSenderPlacement.Staggered`: group g's injector is its core `g % grid_n`), not a rotating one: `McastRotatingSenderConfig` requires rectangular groups (`mcast.cpp:89`).
 
 ### Buffer-depth knobs
 
@@ -145,14 +145,14 @@ Minimum (named boundary: each tensor crosses its storage tier once): x once, W+b
 |--------|--------|-----------|-------|---------------------------|--------------------------|
 | R1 2D output-stationary, unicast reads | **built** | every supported call (selection function always returns a grid) | `block_m x N_c` outputs, K' in `k_block` steps | W+bias cross DRAM `grid_m * num_blocks_this_core` times (12x at 8x512) - above minimum because W is reuse-shared across M-groups; x crosses the NoC `grid_n` times (9x, L1 source, 0 DRAM in Phase 0); tables `grid_n_qk` times per row; outputs once | per block: one `matmul_block_init` + reconfig, one K-loop fill/drain, one L1-acc enable/disable, one epilogue init (eltwise mul-acc or copy), one partials reserve/push; bigger `block_m` also cuts W re-crossings (`num_blocks_this_core`) |
 | R2 W multicast within each N-group (R1 + broadcast of the reuse-shared operand) | **deferred** - stepping stone: layers onto R1's reader without touching compute, CBs or the selection function; R1 is the correctness baseline the semaphore protocol is debugged against | `weight` in DRAM (always) | same as R1 | W+bias cross DRAM once (3.5 MiB at every shape) vs 12x (42.5 MiB) in R1; adds one multicast per K-block per N-group (`k_block*N_c` tiles to `grid_m` receivers) | per K-block multicast + semaphore round trip amortized over `k_block*N_c` tiles; bigger `k_block` = fewer rounds |
-| R3 x multicast within each M-group | **deferred** - required only for `buffer_type = DRAM` (TARGET), where R1 re-reads x from DRAM `grid_n` times; with x in L1 (Phase 0) the re-read never crosses DRAM | `buffer_type == DRAM` (or measured win at L1) | same as R1 | x crosses its tier once vs `grid_n` (9x = 56.6 MiB at 8x512) | per K-block multicast amortized over `block_m*k_block` tiles |
+| R3 x multicast within each M-group | **built (Refinement 1)**, always on (both x placements): with x in L1 it removes the `grid_n` L1-bank re-reads that bound R1 (2x512 206 -> 93 us); with x in DRAM it removes the `grid_n` DRAM crossings | always | same as R1 | x crosses its tier once vs `grid_n` (9x = 56.6 MiB at 8x512) | per K-block multicast amortized over `block_m*k_block` tiles |
 | R4 W-slice resident, x streamed per M-block | **deferred** - only reachable when `num_blocks_this_core > 1`, i.e. `ceil(Mt/grid_m) > block_m_cap`, which needs `S % 32 != 0` with tiny S and large B (e.g. B*St > 1400); no tile_aligned shape (Mt <= 128) and no INPUTS row (max Mt = 130 -> 11 rows/core) reaches it | `num_blocks_this_core > 1` | `block_m x N_c` with in1 retained (`InputPolicy::WaitAndRetainOnLastBlock`, `matmul_block_helpers.hpp:68-77`, `num_k_blocks = 1`) | R1 re-crosses W per block; R4 holds `25*N_c` W tiles (400 KiB at N_c=8) and crosses W once per core | removes the per-block W crossing term |
 | R5 split `hidden_k` across cores + combine | **rejected** - superseded by R1+R2: independent axes give 36*Mt (row, head) units (4608 at 8x512) >> 110 cores, and a 2-way K split moves `Mt*72` fp32 partials (37.7 MB at 8x512) through the NoC to save ~21.6 MB of ingress; the K' slice already streams in 5 K-blocks, so residency gains nothing | - | - | +37.7 MB cross-core per extra K split | - |
 | R6 1D token split (all 72 N tiles per core) | **rejected** - superseded by R1: each core must ingest all of W (1728 tiles, 3.5 MiB) vs 200 tiles in R1; with multicast a single injector serializes 3.5 MiB to 108 receivers | - | - | W per core 8.6x R1's | - |
 | R7 1D head split | **rejected** - superseded by R1: at most 36 head-granular cores (one third of the grid); each core ingests all of x (6.3 MB) | - | - | x per core = whole x | - |
 | R8 separate bias epilogue (`add_bias_bcast_rows`) | **rejected** - superseded by the bias K-tile in R1: the fold costs 1 extra K step per output tile (1/25 of the matmul); the epilogue costs a full Float32 unpack+FPU+pack pass over every output tile and, on q/k, a second Float32 hand-off into rotary | - | - | same bytes; more compute passes | - |
 
-Regime selection: R1 is the only built regime; no predicate is evaluated in Phase 0. When R2/R3/R4 are built, the selector is host-side on `(weight/x buffer_type, num_blocks_this_core)` and each gets a regime-pinned test (R4 needs a shape with `num_blocks_this_core > 1`, e.g. (B,S)=(64,33) at a reduced `cb_budget_bytes`).
+Regime selection: R1 (W unicast) + R3 (x multicast) is the only built configuration; no predicate is evaluated. When R2/R3/R4 are built, the selector is host-side on `(weight/x buffer_type, num_blocks_this_core)` and each gets a regime-pinned test (R4 needs a shape with `num_blocks_this_core > 1`, e.g. (B,S)=(64,33) at a reduced `cb_budget_bytes`).
 
 ### Traffic ranking
 
@@ -162,7 +162,7 @@ Per-core ingress for an `rows x N_c` output block is `25*(rows + N_c)` tiles; th
 |------|-------|----------------|------------------|-------|
 | 1 | 2D (M x heads) + W mcast + x mcast (R1+R2+R3) | W 1x, bias 1x | x 1x (mcast), W 1x mcast, outputs 1x | minimum; two multicast channels |
 | 2 | 2D + W mcast (R1+R2) | W 1x | x 9x unicast from L1 banks (56.6 MB) | Phase 0 x is in L1, so 0 DRAM for x |
-| 3 | **2D unicast (R1, built)** | W 12x (42.5 MB), bias 12x | x 9x (56.6 MB) | stepping stone for 2 and 1 |
+| 3 | 2D unicast (R1, superseded by R1+R3) | W 12x (42.5 MB), bias 12x | x 9x (56.6 MB) | stepping stone for 2 and 1 |
 | 4 | 2D + K split (R5) | as 3 | +37.7 MB fp32 partials | rejected |
 | 5 | 1D tokens (R6) | W 108x unicast / 1x mcast | W 3.5 MiB into every core | rejected |
 | 6 | 1D heads (R7) | W 1x | x 36x (226 MB) | rejected, under-fills grid |
@@ -240,7 +240,7 @@ Deferred inter-Tensix contracts (kept reachable by R1's structure):
 | Row | Contract |
 |-----|----------|
 | R2 W multicast | `ttnn.Mcast` (`mcast.hpp:119-131`) over the `grid_n` consecutive N-groups (`receiver_group_size = grid_m`), `McastRotatingSenderConfig` so the K-blocks' DRAM reads spread across the group's cores (catalog `shared_input_reuse`: single injector serializes); kernel side `McastArgs` `sender(noc).send()` / `receiver(noc).receive(round)` (`mcast_args.hpp:41-47`); round = K-block index; payload = one `cb_weight_block` K-block (`k_block*N_c` tiles) written to the same CB offset on every receiver; the CB contract (depth 2, K-block quantum) is unchanged |
-| R3 x multicast | second `Mcast` on disjoint semaphores (`next_semaphore_id()`), receivers = the `grid_n` cores of an M-group (stride `grid_m` in logical order: irregular set -> `McastConfig.irregular_receiver_set_mode`, or reorder logical cores to make M-groups consecutive and N-groups strided once R2's grouping is measured); payload = one `cb_activation_block` K-block |
+| R3 x multicast (built) | `ttnn.Mcast` on the reader (NOC_0, semaphores from id 0; R2 attaches at `next_semaphore_id()`), receiver groups = the `grid_n` consecutive cores of an M-group (irregular sets, up to 3 rectangles each), fixed staggered sender, handshake on (the landing slot is a double-buffered CB slot). Per round (= K-block): every core reserves its `cb_activation_block` slot; the sender reads the `rows*x_cols` x tiles plus the ones column into it and multicasts the leading `rows*k_block` tiles to the same address; receivers `receive(round)`; all push. CB contract, compute kernel and selection function unchanged. Tables stay unicast. |
 | Sharded placement | out of TARGET (memory_layout is INTERLEAVED only) |
 
 TARGET axis mapping:
@@ -248,7 +248,7 @@ TARGET axis mapping:
 | TARGET value | Cost class | What changes |
 |--------------|-----------|--------------|
 | alignment = h_non_aligned | knob-turn | writer pad-row zeroing; all geometry already `ceil`-based; rows are independent so non-finite x padding cannot leak into valid rows |
-| buffer_type = DRAM (x) | knob-turn for correctness (TensorAccessor is placement-agnostic); perf needs R3 | none in kernels |
+| buffer_type = DRAM (x) | supported (Refinement 1) through R3 | none beyond R3 |
 | out_buffer_type = DRAM | knob-turn | output allocation only |
 | table_buffer_type = DRAM | knob-turn | none in kernels |
 

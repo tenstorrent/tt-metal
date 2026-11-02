@@ -2,3 +2,5 @@
 {"event":"test_run","result":"pass","detail":"acceptance 12/12 dev+prod","ts":"2026-11-02T13:23:59+00:00"}
 {"event":"perf_finding","detail":"R1 bound by x unicast re-read (ablation: no-read MM 21us vs 185us at 2x512); h_c sweep never beats stock; next: R3 x mcast + R2 W mcast","ts":"2026-11-02T13:23:59+00:00"}
 {"event":"golden_blocker","detail":"golden helpers.py:165 passes packer_l1_acc to ComputeConfigDescriptor -> TypeError (design Key Risk); 8 default-config golden cells pass","ts":"2026-11-02T13:23:59+00:00"}
+{"event":"fix_applied","refinement":1,"what":"R3 x multicast per M-group: M-group-consecutive core order, fixed staggered sender (rotating needs rectangular groups, mcast.cpp:89)","ts":"2026-11-02T13:52:55+00:00"}
+{"event":"test_run","refinement":1,"unit":"17/17","golden_slice":"42/42 (17 x-DRAM)","perf_us_xL1":{"8x512":265.4,"4x512":144.7,"2x512":93.4},"perf_us_xDRAM":{"8x512":272.1,"2x512":91.9},"ablation_8x512":{"W_stubbed":134.1,"x_stubbed":276.7},"ts":"2026-11-02T13:52:55+00:00"}

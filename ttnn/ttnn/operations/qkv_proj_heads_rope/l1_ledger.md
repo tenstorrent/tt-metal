@@ -48,20 +48,20 @@ By construction `footprint_bytes <= cb_budget_bytes` for every `(block_m, N_c)` 
 
 ## Data-movement budget
 
-Chosen split: 2D (token_rows x head_cols), regime R1 (unicast). Counted at 8x512 (grid 12 x 9, 108 cores; x / cos / sin / q / k / v in L1, W / bias in DRAM).
+Chosen split: 2D (token_rows x head_cols), regime R1 (W unicast) + R3 (x multicast within each M-group, Refinement 1). Counted at 8x512 (grid 12 x 9, 108 cores; x / cos / sin / q / k / v in L1, W / bias in DRAM).
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| x (6.29 MB) | 0 | L1-resident (Phase 0 `buffer_type = L1`); with `buffer_type = DRAM` it becomes `grid_n` = 9 crossings until R3 | `grid_n` = 9 unicast re-reads from L1 banks = 56.6 MB (x is reuse-shared across N-groups) |
+| x (6.29 MB) | 0 (L1) / 1 (DRAM) | read once per M-group by the group's sender (R3); `buffer_type = DRAM` therefore crosses DRAM once | 6.29 MB read by the 12 senders + one multicast per K-block per M-group (`rows*k_block` tiles to `grid_n - 1` = 8 receivers; 6.29 MB delivered per receiver column, 50.3 MB landed in total over multicast instead of 56.6 MB of unicast reads) |
 | W (3.54 MB) | `grid_m * num_blocks_this_core` = 12 (42.5 MB) | reuse-shared across the 12 M-groups, unicast per core; read once per core because the whole per-core row range is one block | 0 (direct DRAM -> core) |
 | bias (0.15 MB, 72 full tiles) | 12 (1.77 MB) | rides in the W stream (K tile 24) | 0 |
 | cos, sin (0.13 MB used) | 0 | L1-resident (`table_buffer_type = L1`) | each q/k core reads 4 tiles per valid row: 72 cores x 11 rows x 4 x 2 KiB = 6.5 MB vs a 0.13 MB minimum (reuse-shared across q/k N-groups and images; small in absolute terms) |
 | q, k, v (3 x 6.29 MB) | 0 (L1 outputs) / 1 each (DRAM outputs) | written once, by the core that computed them | 18.9 MB written once |
 | partials | 0 | core-local | none; 5 Float32 L1-acc packs per output tile stay in the core's own L1 (88 x 4 KiB x 5 = 1.8 MB per core, local) |
 
-Totals per tier at 8x512: DRAM reads 44.3 MB (W + bias); NoC L1<->L1 82.0 MB (x 56.6 + tables 6.5 + outputs 18.9); core-local L1 1.8 MB/core of L1-acc traffic.
+Totals per tier at 8x512: DRAM reads 44.3 MB (W + bias; +6.3 MB with x in DRAM); NoC L1<->L1 31.7 MB of unicast (x sender reads 6.3 + tables 6.5 + outputs 18.9) plus the x multicast; core-local L1 1.8 MB/core of L1-acc traffic.
 
-> Cheapest-traffic split considered: 2D + W multicast + x multicast (R1+R2+R3) - DRAM 3.7 MB instead of 44.3 MB (-40.6 MB), x NoC 6.3 MB delivered by multicast instead of 56.6 MB unicast (-50.3 MB), adding two multicast channels (one W K-block of `k_block*N_c` tiles per N-group per round, one x K-block of `block_m*k_block` tiles per M-group per round). Implemented: R1, 2D unicast. Deferred because R1 is the stepping stone both multicasts layer onto without changing the compute kernel, the CB contracts (the multicast payload is exactly one cb_weight_block / cb_activation_block K-block) or the selection function; logical core order already makes each N-group's receivers consecutive for `ttnn.Mcast` (`op_design.md`, Dataflow Strategy).
+> Cheapest-traffic split considered: 2D + W multicast + x multicast (R1+R2+R3) - DRAM 3.7 MB instead of 44.3 MB (-40.6 MB), x NoC 6.3 MB delivered by multicast instead of 56.6 MB unicast (-50.3 MB), adding two multicast channels (one W K-block of `k_block*N_c` tiles per N-group per round, one x K-block of `block_m*k_block` tiles per M-group per round). Implemented: R1 + R3 (x multicast, Refinement 1); R2 still deferred. Originally deferred because R1 is the stepping stone both multicasts layer onto without changing the compute kernel, the CB contracts (the multicast payload is exactly one cb_weight_block / cb_activation_block K-block) or the selection function; logical core order already makes each N-group's receivers consecutive for `ttnn.Mcast` (`op_design.md`, Dataflow Strategy).
 
 ### Measured (R1 built, Blackhole p100a, default config, x/tables/outputs in L1)
 
@@ -93,3 +93,16 @@ stalls in the epilogue (68 -> 40 us).
 At 2x512 (h_c = 1, grid 3x36): x L1 189.5 us, x DRAM 221.1 us. Output and table placement are
 traffic-neutral under R1; x in DRAM adds the `grid_n` DRAM re-crossings counted above, which is why
 `buffer_type = DRAM` ships with R3 (x multicast) rather than alone.
+
+### Measured (R1 + R3 built, Refinement 1, Blackhole p100a, default config)
+
+| (B,S) | 8x512 | 16x256 | 32x128 | 8x384 | 4x512 | 8x256 | 2x512 | 4x256 |
+|-------|-------|--------|--------|-------|-------|-------|-------|-------|
+| x in L1, device us | 265.4 | 267.3 | 269.8 | 252.5 | 144.7 | 146.6 | 93.4 | 96.6 |
+| R1 (before), device us | 278.6 | 278.1 | 275.2 | 252.4 | 215.4 | 212.8 | 206.0 | 204.7 |
+
+x in DRAM (q/k/v and tables in L1): 8x512 272.1 us (+2.5% vs x in L1; R1 was 316.7), 4x512 146.7 us,
+2x512 91.9 us (R1 221.1). Ablation at 8x512: stubbing the W reads drops 265 -> 134 us, stubbing the
+whole x path (no reads, no multicast) leaves it at 277 us (2x512: 93 -> 88 us). x is off the critical
+path; the W unicast re-read (`grid_m` = 12 DRAM crossings) is the binding resource, which is R2
+(Refinement 3).

@@ -5,6 +5,7 @@
 DURATION per op from the profiler CSV. Production placement: x, tables, q/k/v in L1; tables cut to S."""
 
 import pytest
+import ttnn
 
 from ttnn.operations.qkv_proj_heads_rope import qkv_proj_heads_rope
 
@@ -28,4 +29,16 @@ def test_qkv_proj_heads_rope_perf(device, batch, seq, stock_us, target_us):
     x, w, b, cos, sin = make_inputs(batch, seq, seq)
     tensors = device_inputs(device, x, w, b, cos, sin)
     outputs = qkv_proj_heads_rope(*tensors)
+    check_outputs(outputs, reference(x, w, b, cos, sin))
+
+
+# x in DRAM (R3 multicast reads each x K-block once per M-group); compare against the L1 rows above.
+DRAM_X_ROWS = [(8, 512), (4, 512), (2, 512)]
+
+
+@pytest.mark.parametrize("batch, seq", DRAM_X_ROWS, ids=[f"{b}x{s}" for b, s in DRAM_X_ROWS])
+def test_qkv_proj_heads_rope_perf_x_dram(device, batch, seq):
+    x, w, b, cos, sin = make_inputs(batch, seq, seq)
+    tensors = device_inputs(device, x, w, b, cos, sin, x_memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    outputs = qkv_proj_heads_rope(*tensors, memory_config=ttnn.L1_MEMORY_CONFIG)
     check_outputs(outputs, reference(x, w, b, cos, sin))

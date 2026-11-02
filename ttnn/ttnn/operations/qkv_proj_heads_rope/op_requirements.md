@@ -39,7 +39,7 @@
 - **Golden baseline**: 25 supported_pass (17 `test_op` + 8 loose), 175 xfail_expected, 0 loud (harness-patched run)
 - **Perf**: 200-283 us on the eight flagged rows vs stock 75-246 us. Slower than stock everywhere; R1 is DM-bound on the x unicast re-read.
 
-### [ ] Refinement 1 - x multicast within each M-group (regime R3) + `buffer_type = DRAM`
+### [x] Refinement 1 - x multicast within each M-group (regime R3) + `buffer_type = DRAM`
 
 **Goal**: add `ttnn.BufferType.DRAM` to `SUPPORTED["buffer_type"]` (x placement) through the
 design's deferred regime R3: each M-group's `grid_n` cores share x rows, so one core reads each x
@@ -68,6 +68,8 @@ golden cell passes; device ns at 8x512 with x in DRAM is within 5% of x in L1; 8
 improves on the 279 us R1 baseline (the ledger ablation says x reads are most of the K-loop); no
 regression on 2x512 / 4x512 / 8x384 (the h_c = 1 / 2 / 4 grid classes); acceptance + golden green;
 `l1_ledger.md` data-movement budget and regime table updated (R3 built).
+
+**Outcome**: R3 built with a fixed staggered sender per M-group (rotating senders need rectangular groups; consecutive M-groups on the 11-wide grid are not). x in L1: 8x512 279 -> 265 us, 4x512 215 -> 145 us, 2x512 206 -> 93 us, 8x384 252 -> 252 us (flat). x in DRAM: 8x512 272 us (+2.5% vs L1), 2x512 92 us. 17/17 DRAM-x golden cells pass. Ablation at 8x512: stubbing W reads gives 134 us, stubbing the x path gives 277 us, so the W unicast re-read (12 DRAM crossings) now binds. That is Refinement 3 (R2). Core order is now M-group-consecutive; R2 needs per-N-group `Mcast` objects or a rectangular grid constraint (see `op_design.md`, Work distribution).
 
 ### [ ] Refinement 2 - Non-aligned S (`h_non_aligned`) + DRAM outputs and tables
 
