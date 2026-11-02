@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -25,6 +26,46 @@ L1_TILE = ConvInputSpec(ttnn.BufferType.L1, ttnn.TILE_LAYOUT)
 
 def conv_output_size(size: int, kernel: int, stride: int, padding: int) -> int:
     return (size + 2 * padding - kernel) // stride + 1
+
+
+# One op's L1 working set may take at most this fraction of the grid's total L1; the rest is left
+# for halo and circular buffers and for tensors that other ops keep alive.
+L1_BUDGET_FRACTION = 8
+BF16_BYTES = 2
+
+
+def l1_budget_bytes(device) -> int:
+    l1 = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    return l1.num_banks * l1.total_bytes_per_bank // L1_BUDGET_FRACTION
+
+
+def exceeds_l1_budget(device, num_elements: int) -> bool:
+    """Whether bf16 data of this size is too large for the device's L1 and has to live in DRAM.
+
+    The full grid keeps every activation in L1. On a reduced grid the L1 left is too small,
+    so those activations go to DRAM and the conv and pool ops slice through them.
+    """
+    return num_elements * BF16_BYTES > l1_budget_bytes(device)
+
+
+def interleaved_memory_config(l1_budget: int, num_elements: int) -> ttnn.MemoryConfig:
+    """L1 for a bf16 interleaved intermediate that fits the L1 budget, DRAM otherwise."""
+    return ttnn.DRAM_MEMORY_CONFIG if num_elements * BF16_BYTES > l1_budget else ttnn.L1_MEMORY_CONFIG
+
+
+def padded_volume(tensor: ttnn.Tensor) -> int:
+    return math.prod(tensor.padded_shape)
+
+
+def add_memory_config(device, num_elements: int, first_input_spec: ConvInputSpec) -> ttnn.MemoryConfig | None:
+    """Output placement of an elementwise add.
+
+    The add follows its first operand's placement unless told otherwise, so a DRAM operand or an
+    output that does not fit sends the result to DRAM; otherwise it stays sharded in L1.
+    """
+    if first_input_spec.buffer_type == ttnn.BufferType.DRAM or exceeds_l1_budget(device, num_elements):
+        return ttnn.DRAM_MEMORY_CONFIG
+    return None
 
 
 class TtRTDetrConvEncoder:
@@ -119,9 +160,6 @@ class TtRTDetrResNetBackBone:
 
 
 class TtRTDetrResNetEmbeddings:
-    # max_pool2d writes its output height-sharded in L1.
-    output_spec = L1_ROW_MAJOR
-
     def __init__(self, config, parameters, device, dtype, batch_size: int, input_height: int, input_width: int):
         self.device = device
         self.dtype = dtype
@@ -161,6 +199,12 @@ class TtRTDetrResNetEmbeddings:
         self.output_height = conv_output_size(height, kernel=3, stride=2, padding=1)
         self.output_width = conv_output_size(width, kernel=3, stride=2, padding=1)
 
+        # max_pool2d writes its output height-sharded in L1 unless it is sent to DRAM.
+        self.pool_in_dram = exceeds_l1_budget(
+            device, batch_size * self.output_height * self.output_width * self.embedding_size
+        )
+        self.output_spec = DRAM_ROW_MAJOR if self.pool_in_dram else L1_ROW_MAJOR
+
     def __call__(
         self,
         pixel_values: ttnn.Tensor,
@@ -191,8 +235,10 @@ class TtRTDetrResNetEmbeddings:
             padding=[1, 1],
             dilation=[1, 1],
             ceil_mode=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.pool_in_dram else None,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=self.dtype,
+            config_tensor_in_dram=self.pool_in_dram,
         )
 
         return pixel_values, self.output_height, self.output_width
@@ -316,9 +362,6 @@ class TtRTDetrResNetStage:
 
 
 class TtRTDetrResNetBottleNeckLayer:
-    # The residual add of two sharded L1 operands stays sharded in L1.
-    output_spec = L1_TILE
-
     def __init__(
         self,
         config,
@@ -370,6 +413,12 @@ class TtRTDetrResNetBottleNeckLayer:
         self.output_height = height
         self.output_width = width
 
+        # The residual add keeps its tiled output sharded in L1 unless it is sent to DRAM.
+        self.add_memory_config = add_memory_config(
+            device, batch_size * height * width * out_channels, first_input_spec=self.layers[-1].output_spec
+        )
+        self.output_spec = DRAM_TILE if self.add_memory_config is not None else L1_TILE
+
         if "shortcut" in parameters:
             self.shortcut = TtRTDetrResNetShortcut(
                 config=config,
@@ -414,7 +463,12 @@ class TtRTDetrResNetBottleNeckLayer:
         else:
             shortcut = residual
 
-        x = ttnn.add(main, shortcut, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+        x = ttnn.add(
+            main,
+            shortcut,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
+            memory_config=self.add_memory_config,
+        )
 
         return x, main_height, main_width
 
@@ -441,11 +495,13 @@ class TtRTDetrResNetShortcut:
         self.out_channels = out_channels
         self.downsample = downsample
 
+        self.pool_in_dram = False
         if downsample:
             input_height = conv_output_size(input_height, kernel=2, stride=2, padding=0)
             input_width = conv_output_size(input_width, kernel=2, stride=2, padding=0)
-            # avg_pool2d writes a sharded tiled output in L1.
-            input_spec = L1_TILE
+            # avg_pool2d writes a tiled output sharded in L1 unless it is sent to DRAM.
+            self.pool_in_dram = exceeds_l1_budget(device, batch_size * input_height * input_width * in_channels)
+            input_spec = DRAM_TILE if self.pool_in_dram else L1_TILE
 
         self.projection = TtRTDetrResNetConvLayer(
             config=config,
@@ -485,8 +541,10 @@ class TtRTDetrResNetShortcut:
                 count_include_pad=True,
                 divisor_override=None,
                 deallocate_input=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if self.pool_in_dram else None,
                 dtype=self.dtype,
                 output_layout=ttnn.TILE_LAYOUT,
+                config_tensor_in_dram=self.pool_in_dram,
             )
             input_height = conv_output_size(input_height, kernel=2, stride=2, padding=0)
             input_width = conv_output_size(input_width, kernel=2, stride=2, padding=0)
@@ -540,8 +598,24 @@ class TtRTDetrResNetConvLayer:
         else:
             raise ValueError(f"Unsupported activation {activation}")
 
+        # An L1 conv holds its whole input, its output and its weight blocks in L1 at once;
+        # past the budget the conv runs from and to DRAM instead.
+        self.run_in_dram = exceeds_l1_budget(
+            device,
+            batch_size * input_height * input_width * in_channels
+            + batch_size * self.output_height * self.output_width * out_channels
+            + kernel_size[0] * kernel_size[1] * in_channels * out_channels,
+        )
+        # A conv only slices through DRAM when its input is in DRAM, so an L1 input is moved there
+        # first; otherwise the whole sharded output would still be built in L1.
+        self.move_input_to_dram = self.run_in_dram and input_spec.buffer_type == ttnn.BufferType.L1
+        if self.move_input_to_dram:
+            self.conv_input_spec = ConvInputSpec(ttnn.BufferType.DRAM, input_spec.layout)
+        else:
+            self.conv_input_spec = input_spec
+
         is_matmul_conv = kernel_size == (1, 1) and stride == (1, 1) and padding == (0, 0)
-        is_sliced_conv = input_spec.buffer_type == ttnn.BufferType.DRAM and not is_matmul_conv
+        is_sliced_conv = self.conv_input_spec.buffer_type == ttnn.BufferType.DRAM and not is_matmul_conv
 
         shard_layout, output_layout = None, None
         if out_channels <= 256:
@@ -550,10 +624,14 @@ class TtRTDetrResNetConvLayer:
         else:
             shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
             output_layout = ttnn.TILE_LAYOUT
-        if is_sliced_conv:
+        if is_sliced_conv or self.run_in_dram:
             # Whether a DRAM conv is sliced depends on the grid, and so does its output layout
             # unless pinned. Pinning it keeps the next conv's prepared weights valid on any grid.
             output_layout = ttnn.TILE_LAYOUT
+        if self.run_in_dram and is_matmul_conv:
+            # A 1x1 conv runs its matmul straight from interleaved DRAM only when it picks its own
+            # sharding; a fixed shard layout would shard the whole input into L1 first.
+            shard_layout = None
 
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=dtype,
@@ -561,7 +639,10 @@ class TtRTDetrResNetConvLayer:
             output_layout=output_layout,
             shard_layout=shard_layout,
             reshard_if_not_optimal=True,
+            config_tensors_in_dram=self.run_in_dram,
         )
+        # Sliced convs always write to DRAM; only the 1x1 matmul path needs to be told.
+        self.output_memory_config = ttnn.DRAM_MEMORY_CONFIG if self.run_in_dram and not is_sliced_conv else None
         # bf16 dest accumulation over the deep stage-4 reductions drops the
         # backbone output below the reference tolerance.
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -571,7 +652,7 @@ class TtRTDetrResNetConvLayer:
             packer_l1_acc=False,
         )
 
-        if is_sliced_conv:
+        if is_sliced_conv or self.run_in_dram:
             self.output_spec = DRAM_TILE
         elif is_matmul_conv or shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
             self.output_spec = L1_TILE
@@ -581,7 +662,7 @@ class TtRTDetrResNetConvLayer:
         self._prepare_weights(parameters, config.batch_norm_eps)
 
     def _prep_input_memory_config(self) -> ttnn.MemoryConfig:
-        if self.input_spec.buffer_type == ttnn.BufferType.DRAM:
+        if self.conv_input_spec.buffer_type == ttnn.BufferType.DRAM:
             return ttnn.DRAM_MEMORY_CONFIG
         # With reshard_if_not_optimal the conv derives its own sharding from the shapes, so weight
         # preparation only reads that the input is sharded in L1 and how its channels are aligned.
@@ -611,7 +692,7 @@ class TtRTDetrResNetConvLayer:
 
         conv_kwargs = {
             "input_memory_config": self._prep_input_memory_config(),
-            "input_layout": self.input_spec.layout,
+            "input_layout": self.conv_input_spec.layout,
             "in_channels": self.in_channels,
             "out_channels": self.out_channels,
             "batch_size": self.batch_size,
@@ -654,6 +735,8 @@ class TtRTDetrResNetConvLayer:
         self, x: ttnn.Tensor, batch_size: int, input_height: int, input_width: int
     ) -> tuple[ttnn.Tensor, int, int]:
         self._check_input(x, batch_size, input_height, input_width)
+        if self.move_input_to_dram:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
         x, (output_height, output_width) = ttnn.conv2d(
             input_tensor=x,
@@ -673,6 +756,7 @@ class TtRTDetrResNetConvLayer:
             groups=1,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
+            memory_config=self.output_memory_config,
         )
 
         return x, output_height, output_width

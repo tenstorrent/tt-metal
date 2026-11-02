@@ -11,6 +11,7 @@ from models.demos.vision.detection.rtdetr.tt.backbone import (
     L1_TILE,
     ConvInputSpec,
     TtRTDetrResNetConvLayer,
+    add_memory_config,
 )
 
 
@@ -282,9 +283,6 @@ class TtRTDetrHybridEncoder:
 
 
 class TtRTDetrRepVggBlock:
-    # The add of two sharded L1 conv outputs stays sharded in L1.
-    output_spec = L1_TILE
-
     def __init__(
         self,
         config,
@@ -334,6 +332,14 @@ class TtRTDetrRepVggBlock:
             **conv_input,
         )
 
+        # The add keeps its tiled output sharded in L1 unless it is sent to DRAM.
+        self.add_memory_config = add_memory_config(
+            device,
+            batch_size * input_height * input_width * hidden_channels,
+            first_input_spec=self.conv1.output_spec,
+        )
+        self.output_spec = DRAM_TILE if self.add_memory_config is not None else L1_TILE
+
     def __call__(
         self,
         hidden_states: ttnn.Tensor,
@@ -343,7 +349,12 @@ class TtRTDetrRepVggBlock:
     ) -> tuple[ttnn.Tensor, int, int]:
         hidden_states_1, output_height, output_width = self.conv1(hidden_states, batch_size, input_height, input_width)
         hidden_states_2, _, _ = self.conv2(hidden_states, batch_size, input_height, input_width)
-        hidden_states = ttnn.add(hidden_states_1, hidden_states_2, activations=[self.activation])
+        hidden_states = ttnn.add(
+            hidden_states_1,
+            hidden_states_2,
+            activations=[self.activation],
+            memory_config=self.add_memory_config,
+        )
 
         return hidden_states, output_height, output_width
 
@@ -412,8 +423,13 @@ class TtRTDetrCSPRepLayer:
             self.bottlenecks.append(bottleneck)
             bottleneck_spec = bottleneck.output_spec
 
-        # The add of the two branches stays sharded in L1.
-        self.output_spec = L1_TILE
+        # The add keeps its tiled output sharded in L1 unless it is sent to DRAM.
+        self.add_memory_config = add_memory_config(
+            device,
+            batch_size * self.conv1.output_height * self.conv1.output_width * hidden_channels,
+            first_input_spec=bottleneck_spec,
+        )
+        self.output_spec = DRAM_TILE if self.add_memory_config is not None else L1_TILE
         self.conv3 = None
         if hidden_channels != out_channels:
             self.conv3 = TtRTDetrConvNormLayer(
@@ -450,7 +466,7 @@ class TtRTDetrCSPRepLayer:
 
         hidden_states_2, _, _ = self.conv2(hidden_states, batch_size, input_height, input_width)
 
-        hidden_states = ttnn.add(hidden_states_1, hidden_states_2)
+        hidden_states = ttnn.add(hidden_states_1, hidden_states_2, memory_config=self.add_memory_config)
 
         if self.conv3 is not None:
             hidden_states, output_height, output_width = self.conv3(
