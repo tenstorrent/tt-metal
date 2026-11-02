@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "metal/ttnn_all_includes.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttml::metal::ops::chunk_gated_delta_rule_fw::device {
 

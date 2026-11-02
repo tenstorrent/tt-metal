@@ -7,6 +7,8 @@
 #include <cmath>
 
 #include "device/chunk_gated_delta_rule_fw_device_operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace ttml::metal {
 

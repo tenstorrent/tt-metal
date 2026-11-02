@@ -55,7 +55,7 @@ std::vector<std::optional<ttnn::Tensor>> chunk_gated_delta_rule_bw(
     const auto kernel_config = ttnn::init_device_compute_kernel_config(
         q.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
