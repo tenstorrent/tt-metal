@@ -28,3 +28,37 @@
 - **Tests added**:
   - `test_conv2d_nhwc.py`: strided and wide-row column-clip cases; the stride rejection check moved to dilation.
   - `test_conv2d_nhwc_precision_baseline.py`.
+
+## Refinement 1 — BLOCK_SHARDED + WIDTH_SHARDED placement (regimes R4 / R5)
+- **Date**: 2026-11-02
+- **What was done**: `SUPPORTED["memory_layout"] += BLOCK_SHARDED, WIDTH_SHARDED`, implemented natively. One `generic_op` dispatch; the output keeps the input's TensorMemoryLayout in L1.
+  - **Reused**: the R0 reader gather, the compute tilize → `matmul_block` (packer L1 acc) → bias → untilize chain, the writer's weight/bias K-block fill, and all R0 CBs.
+  - **Input**: the shard is consumed in place through `cb_in_shard` (`cb_descriptor_from_sharded_tensor`). The gather takes a source policy (`WindowSource` for R0, `ShardSource` for R4/R5). Halo sticks outside the resident shard come from the same-column shards, one NoC read per owner run, into the reused `cb_act_window`. WIDTH has no halo.
+  - **K exchange**: K order is `[slice][kh][kw × slice_width]` (technique 6, in `prepare_conv2d_weights` via `channel_slices(input_memory_config)`). Each core gathers and tilizes only its own slice into `cb_act_send`. The writer multicasts each K-block into `cb_act_tiles` of every core in the group with `ttnn.Mcast` + `McastArgs`: a rotating sender, phase = slice, double-buffered landing, one handshake per K-block. Group = one grid row (BLOCK) or all cores (WIDTH).
+    - A WIDTH core set spanning grid rows multicasts over its bounding rectangle, with the extra cores as receive-only sinks: the helper's rotating mode needs rectangular groups.
+    - With S = 1 there is no exchange.
+  - **Technique 5**: column tiles at or beyond N_t (`S·ceil(N_t/S)` padding) are zero-filled by the writer for both weights and bias. Prepared tensors stay C_out wide, so `conv2d_nhwc` can still read C_out from the weight.
+  - **Output**: untilized straight into the output shard (`cb_out_shard`, zero-copy, tile-sized pages).
+    - BLOCK: `core_m_tiles·32` rows × `ceil(N_t/S)·32` columns per core.
+    - WIDTH: ttnn requires the shard height to be exactly M, so a partial last tile-row is staged in `cb_out_rm` and the writer copies only its valid rows.
+  - **Perf structure**:
+    - BLOCK weights are read once per grid column and multicast down it (second channel, fixed sender at row 0).
+    - Barriers are batched per K-block (weights) and per tile-row (gather).
+    - `select_blocking_sharded` pins bn to the slice and walks bm (whole shard first) and bk (the largest divisor of the slice's K that fits).
+    - Knob `OWN_PREFETCH`: tilize the whole own slice at m-block start. It is taken only when it fits at the whole-shard bm.
+  - **Measured** (fp32, device per-core kernel max, AICLK 1350):
+    - SDXL 64×64×640 3×3, pinned 10×10 BLOCK: 2,531 µs, against 8,810 µs for the same conv interleaved (R0).
+    - Weight column multicast on vs off: 2,531 vs 2,544 µs (neutral).
+    - 28×28×256 BLOCK with own prefetch: 80.1 → 77.1 µs.
+    - Forcing prefetch on SDXL (bm → 1): 9.3 ms. That is why it is gated.
+- **Accuracy achieved**: PCC ≥ 0.999 and rel-RMS ≤ 0.02 on every BLOCK/WIDTH case (fp32 tolerance), same tf32 behaviour as R0. Shapes: 7×7×512, 14×14×256 s2, 14×14×1024→2048 1×1 s2, 32×32×1280 s2 (WIDTH); 8×8×64, 2×14×14×128, 28×28×256 (s1, s2), 56×56×128, 64×64×640 s2, 32×32×256→320, and the pinned 10×10 64×64×640 (BLOCK).
+- **Golden test progress**: all 18 BLOCK/WIDTH cells inside SUPPORTED pass (9 shapes × bias on/off). The slice also included 2 interleaved representatives (pass), 0 failures and 0 XPASS. The other BLOCK/WIDTH cells are xfail (dtype, dilation, groups, TILE, relu) or INVALID skips.
+- **Issues encountered**:
+  - The multicast channel must be configured on NOC_1, because `WriterConfigDescriptor` uses the preferred DRAM-write NoC.
+  - Rotating multicast needs rectangular groups and S > 1, hence the WIDTH sinks and the S = 1 bypass.
+  - WIDTH output shards cannot be taller than M, hence the tail staging.
+  - The device profiler's aggregate `DEVICE KERNEL DURATION` was corrupted by start-time skew (~336 s). Per-core durations from `profile_log_device.csv` were used instead.
+  - Remaining headroom for Refinement 3 on the SDXL shape (fp32): bk = 3 under the 768 KiB budget gives 60 K-blocks with subblock 1×2 (bm = 13 is prime). The just-in-time owner gather sits on the critical path when prefetch does not fit.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/conv2d_nhwc/test_conv2d_nhwc_sharded.py`: 15 cases (BLOCK and WIDTH, ragged rows, uneven C_out over slices, a WIDTH group spanning two grid rows with a ragged tail, strided, 1×1, pinned 10×10).
+  - `test_conv2d_nhwc_perf_probe.py`: profiling probes.

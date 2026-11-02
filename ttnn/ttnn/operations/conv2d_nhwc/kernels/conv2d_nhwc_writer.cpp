@@ -8,6 +8,8 @@
 //   weight K-block fill  : per (m-block, n-block), num_k_blocks K-blocks of bk x bn weight tiles
 //                          (row-major [k][n] in cb_weight_tiles), double-buffered. Column tiles
 //                          >= N_t (the R4/R5 slice padding, technique 5) are zero-filled.
+//                          R4 with weight_mcast: only the grid-row-0 core of each column reads
+//                          DRAM and multicasts the K-block down its column (one read per column).
 //   act_exchange (R4/R5) : per K-block j, the owner of slice j / kblocks_per_slice multicasts its
 //                          tilized cb_act_send block into cb_act_tiles of every core in its group
 //                          (grid row / all WIDTH cores, itself included); the others receive it.
@@ -42,12 +44,16 @@ constexpr uint32_t cb_act_tiles = get_compile_time_arg_val(15);
 constexpr uint32_t kblocks_per_slice = get_compile_time_arg_val(16);
 constexpr bool has_out_tail = get_compile_time_arg_val(17) != 0;  // WIDTH shard, M % 32 != 0
 constexpr bool act_mcast = get_compile_time_arg_val(18) != 0;     // > 1 channel slice
-constexpr auto weight_args = TensorAccessorArgs<19>();
+constexpr bool weight_mcast = get_compile_time_arg_val(19) != 0;  // BLOCK: weights down each column
+constexpr auto weight_args = TensorAccessorArgs<20>();
 [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
 constexpr auto act_channel = dataflow_kernel_lib::McastArgs<
     get_named_compile_time_arg_val("act_mcast_ct_offset"),
     get_named_compile_time_arg_val("act_mcast_rt_offset")>();
+constexpr auto weight_channel = dataflow_kernel_lib::McastArgs<
+    get_named_compile_time_arg_val("w_mcast_ct_offset"),
+    get_named_compile_time_arg_val("w_mcast_rt_offset")>();
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t out_row_bytes = block_n_tiles * TILE_DIM * elem_bytes;
@@ -72,6 +78,7 @@ void kernel_main() {
     const uint32_t n_tile_start = get_arg_val<uint32_t>(6);
     const uint32_t my_slice = get_arg_val<uint32_t>(7);  // R4/R5: this core's channel slice
     const bool is_sink = get_arg_val<uint32_t>(8) != 0;  // receive-only rectangle filler (WIDTH)
+    const bool reads_weights = !weight_mcast || get_arg_val<uint32_t>(9) != 0;  // column's weight reader
 
     const auto weights = TensorAccessor(weight_args, weight_addr);
     const auto output = TensorAccessor(output_args, output_addr);
@@ -81,6 +88,9 @@ void kernel_main() {
     auto act_sender = act_channel.optional_sender(noc);
     auto act_receiver = act_channel.optional_receiver(noc);
     [[maybe_unused]] const uint32_t act_block_bytes = act_block_tiles * get_tile_size(cb_act_tiles);
+    auto weight_sender = weight_channel.optional_sender(noc);
+    auto weight_receiver = weight_channel.optional_receiver(noc);
+    const uint32_t weight_block_bytes = block_k_tiles * block_n_tiles * weight_tile_bytes;
 
     // ---- sink: keep the group's landing-slot cadence and acks, nothing else ----
     if constexpr (act_mcast) {
@@ -126,20 +136,28 @@ void kernel_main() {
             // ---- weight K-blocks for this (m, n) block ----
             for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {
                 cb_reserve_back(cb_weight_tiles, block_k_tiles * block_n_tiles);
-                uint32_t dst = get_write_ptr(cb_weight_tiles);
-                uint32_t row_page = k_block * block_k_tiles * N_t + n0;
-                for (uint32_t kk = 0; kk < block_k_tiles; ++kk) {
-                    for (uint32_t j = 0; j < block_n_tiles; ++j) {
-                        if (n0 + j < N_t) {
-                            noc_async_read(weights.get_noc_addr(row_page + j), dst, weight_tile_bytes);
-                        } else {
-                            zero_fill(zeros_noc, dst, weight_tile_bytes);
+                const uint32_t weight_slot = get_write_ptr(cb_weight_tiles);  // lockstep across the column
+                if (reads_weights) {
+                    uint32_t dst = weight_slot;
+                    uint32_t row_page = k_block * block_k_tiles * N_t + n0;
+                    for (uint32_t kk = 0; kk < block_k_tiles; ++kk) {
+                        for (uint32_t j = 0; j < block_n_tiles; ++j) {
+                            if (n0 + j < N_t) {
+                                noc_async_read(weights.get_noc_addr(row_page + j), dst, weight_tile_bytes);
+                            } else {
+                                zero_fill(zeros_noc, dst, weight_tile_bytes);
+                            }
+                            dst += weight_tile_bytes;
                         }
-                        dst += weight_tile_bytes;
+                        row_page += N_t;
                     }
-                    row_page += N_t;
+                    noc_async_read_barrier();
+                    if constexpr (weight_mcast) {
+                        weight_sender->send(weight_slot, weight_slot, weight_block_bytes);  // self-excluded
+                    }
+                } else {
+                    weight_receiver->receive();
                 }
-                noc_async_read_barrier();
                 cb_push_back(cb_weight_tiles, block_k_tiles * block_n_tiles);
 
                 // ---- act_exchange: K-block k_block's in0, from its slice owner ----

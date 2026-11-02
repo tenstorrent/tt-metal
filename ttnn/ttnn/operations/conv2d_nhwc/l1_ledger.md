@@ -62,3 +62,36 @@ Total bytes, DRAM tier: `g_n·ρ·|in| + g_m·nb_m·|W| + g_m·|b| + |out|`. NoC
 > Example, 14×14×256→512 fp32: DRAM falls from ≈ 5.6 MiB + 22.5 MiB to 0.2 MiB + 4.5 MiB.
 > Implemented: **R0 (m×n split, DRAM window, per-core weight reads)**.
 > Deferred because R1/R3/R7 are layered onto R0's unchanged CB set and gather code (only the window-fill and weight-fill sources change), and they arrive with the sharded-HEIGHT refinement (R3). That refinement pins the multicast receiver group and halo neighbours that R7 then reuses for interleaved inputs. R0 is the stepping stone, not a dead end: no R0 buffer or loop is discarded when they land.
+
+---
+
+# L1 Ledger addendum: Refinement 1 — regimes R4 (BLOCK_SHARDED) / R5 (WIDTH_SHARDED)
+
+Block axes: `m` (bm = a divisor of `core_m_tiles`; whole shard by default), `n` (bn = `nt_s = ceil(N_t/S)`, the whole output-shard row: pinned, the untilize writes shard sticks directly), `k` (bk = a divisor of the slice's `kH·band_tiles`, the largest that fits — each K-block is one multicast handshake), `S` = channel slices (BLOCK grid columns / WIDTH cores). `tap_width` = the shard's slice width; K order `[slice][kh][kw × slice_width]`, each (slice, kh) band padded to `band_tiles` tiles.
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_in_shard` (8) | the input shard (zero-copy, `cb_descriptor_from_sharded_tensor`) | whole shard | `{m: pinned by the shard; k: the core's channel slice}` | input dtype (stick pages) | — (tensor) | reader (gather reads in place; remote cores' halo reads) | kernel | Is the tensor; no CB bytes allocated. Never re-read through a TensorAccessor. |
+| `cb_act_window` (0, reused) | `halo_max` sticks (≥ 1) | the m-block's window sticks outside the resident shard | `{m: spans → halo(bm); n: streams; k: streams}` | input dtype | reader | reader (private) | per m-block | Same CB index/role as R0's window, now holding only the halo (one NoC read per owning same-column shard run). WIDTH: 0 sticks (1-page stub). |
+| `cb_act_rm` (1) | `2·bk` | `bk` | as R0, own slice only | input dtype | reader | compute (tilize) | per tile-row | unchanged from R0 |
+| `cb_act_send` (10) | `act_send_depth·bm·bk`; depth = `kblocks_per_slice` with own-slice prefetch (only taken at the whole-shard bm), else `ACT_SEND_DEPTH` = 1 | own tilized K-blocks not yet multicast | `{m: spans → bm; k: spans → bk × depth}` | input dtype | compute (tilize) | writer (multicast source) | per own K-block | Cannot alias `cb_act_tiles`: the owner's own block is in flight (send) while the previous received block is still being matmul'd. Only allocated when S > 1. |
+| `cb_act_tiles` (4) | `ACT_RECV_DEPTH·bm·bk` (= 2) when S > 1, else `bm·bk` | `bm·bk` (in0 of the current K-block) | `{m: spans → bm; k: spans → bk}` | input dtype | writer (multicast landing, every group core incl. WIDTH sinks) / compute tilize when S = 1 | compute (matmul in0) | per K-block | Double-buffered so the next block's multicast overlaps the current matmul. Allocated on the multicast rectangle (WIDTH sinks included) so the landing address is identical. |
+| `cb_weight_tiles` (2) | `2·bk·bn` | `bk·bn` | as R0 (column tiles ≥ N_t zero-filled in-kernel, technique 5) | weight dtype | writer (BLOCK, g_m > 1: row-0 DRAM read + column multicast; others receive) | compute | per K-block | unchanged sizing; landing address lockstep down the column |
+| `cb_bias_tiles` (3) | `nt_s` | `nt_s` | as R0 (tiles ≥ N_t zero-filled) | weight dtype | writer | compute | kernel | unchanged |
+| `cb_partials` / `cb_biased` (5/6) | `bm·bn` | `bm·bn` | as R0 | Float32 | compute | compute | per m-block | alias pair, unchanged |
+| `cb_out_shard` (9) | the output shard's full tile-rows (zero-copy) | — | `{m: spans → core_m_tiles; n: spans → nt_s}` | output dtype, tile-sized pages (bn pages = 32 shard sticks) | compute (untilize) | — (tensor) | kernel | Is the output tensor; no CB bytes. |
+| `cb_out_rm` (7, reused) | `bn` (WIDTH with `M % 32 ≠ 0` only) | the partial last tile-row | — | output dtype | compute (untilize) | writer (copies the valid rows into the shard) | once | A WIDTH output shard is exactly M rows tall, so the last partial tile-row cannot be untilized in place. |
+
+Footprint `F = max(halo,1)·tap·eb + 2·bk·T + [S>1]·depth_send·bm·bk·T + depth_recv·bm·bk·T + 2·bk·nt_s·T_w + bm·nt_s·T_acc + has_bias·nt_s·T_w + out_tail·nt_s·T`, chosen under `CB_BUDGET_BYTES` (768 KiB) then the hard cap. Input and output shards live in L1 on top of F.
+
+Measured (fp32, SDXL 64×64×640→640 3×3, pinned 10×10 BLOCK, shard (410, 64)): bm = 13, bk = 3, 60 K-blocks, F = 702,208 B (over the 618,992 B bf16 production peak — fp32 tiles are 2× the bytes; Refinement 3 re-solves this at bf16 × bf8b).
+
+## Data-movement budget (R4 / R5)
+
+| Tensor | DRAM crossings | Cross-core traffic added |
+|--------|----------------|--------------------------|
+| input | 0 (L1 resident) | halo: `(ρ_halo − 1)·|in|`-ish same-column NoC reads (BLOCK only); the own slice is read in place |
+| im2col | — | each core's tilized slice multicast to the S−1 others in its group: `(S−1)·|im2col slice|` per group |
+| weight | BLOCK g_m > 1: 1 per grid column per m-block (row-0 read + column multicast); WIDTH/single row: 1 per core | column multicast `(g_m − 1)·|W column slice|` |
+| bias | 1 per core | none |
+| output | 0 (written into the L1 output shard; WIDTH tail rows copied core-locally) | none |

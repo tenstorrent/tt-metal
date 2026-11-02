@@ -27,7 +27,7 @@
 - **Compute config**: module constants `MATH_FIDELITY = HiFi4`, `FP32_DEST_ACC_EN = True` (single source; `DST_TILES` and the accumulator page format derive from it)
 - **Golden baseline**: 172 supported_pass, 0 supported_fail / xpass_drift / xfail_wrong_mode; 2262 xfail_expected; 1104 invalid_skipped (per `verifier_report.json`)
 
-### [ ] Refinement 1 — BLOCK_SHARDED + WIDTH_SHARDED placement (regimes R4 / R5)
+### [x] Refinement 1 — BLOCK_SHARDED + WIDTH_SHARDED placement (regimes R4 / R5)
 
 **Goal**: add `ttnn.TensorMemoryLayout.BLOCK_SHARDED` and `ttnn.TensorMemoryLayout.WIDTH_SHARDED` to `SUPPORTED["memory_layout"]`, natively. Output keeps the input's TensorMemoryLayout in L1. This is a **scheme-change**: the input-channel (K) axis is split over grid x, so each core's im2col slice has to reach every core in its grid row.
 - **Input**: each core's (stick range, channel slice) shard is consumed in place through a shard-backed CB (`ttnn.cb_descriptor_from_sharded_tensor`). Never read a core's own shard back through a `TensorAccessor`. The halo rows of the window come over the NoC from the same-column neighbours' shards (BLOCK only; WIDTH holds every stick). Derive the per-core map from `input_tensor.shard_spec()`. Shards are ragged and can span several grid rows (harness `_build_memory_config`, and the pinned `extras` geometries such as 10×10 and 8×8).

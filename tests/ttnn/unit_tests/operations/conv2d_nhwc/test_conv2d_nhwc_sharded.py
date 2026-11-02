@@ -30,6 +30,8 @@ def _ceil(a, b):
 
 
 def _sharded_config(memory_layout, shape, device, shard_shape=None, core_grid=None):
+    if memory_layout == ML.INTERLEAVED:
+        return ttnn.DRAM_MEMORY_CONFIG
     N, H, W, C = shape
     grid = device.compute_with_storage_grid_size()
     rows, c_tiles = N * H * W, C // 32

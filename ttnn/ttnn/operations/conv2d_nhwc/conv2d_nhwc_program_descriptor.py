@@ -42,6 +42,11 @@ WEIGHT_DEPTH = 2  # cb_weight_tiles depth, in (bk x bn) K-blocks
 OUT_RM_DEPTH = 2  # cb_out_rm depth, in (1 tile-row x bn) quanta
 ACT_SEND_DEPTH = 1  # R4/R5 cb_act_send depth, in own (bm x bk) K-blocks (tilized, awaiting multicast)
 ACT_RECV_DEPTH = 2  # R4/R5 cb_act_tiles depth, in received (bm x bk) K-blocks (double-buffered multicast)
+# R4/R5: tilize the whole own slice per m-block up front (send depth = slice K-blocks) so all
+# owners gather concurrently; taken only when it fits at the whole-shard block (28x28x256 BLOCK
+# fp32: 80.1 -> 77.2 us).
+OWN_PREFETCH = True
+WEIGHT_MCAST = True  # R4: read each weight K-block once per grid column and multicast it down the column
 BK_FLOOR = 4  # bk >= min(K_t, BK_FLOOR) on the first walk (perf lamp L7)
 # Compute config: one source for the descriptor, the DEST capacity used by the
 # subblock rule and the accumulator page format.
@@ -374,11 +379,14 @@ def select_blocking_sharded(
     # S == 1: the core owns all of K — no exchange; compute tilizes straight into in0 (as R0).
     act_mcast = S > 1
 
-    def footprint(bm, bk, halo):
+    def send_depth(bk, prefetch):
+        return slice_k_tiles // bk if prefetch else ACT_SEND_DEPTH
+
+    def footprint(bm, bk, halo, prefetch=False):
         return (
             max(halo, 1) * tap_width * elem_bytes
             + ACT_RM_DEPTH * bk * T
-            + (ACT_SEND_DEPTH * bm * bk * T if act_mcast else 0)
+            + (send_depth(bk, prefetch) * bm * bk * T if act_mcast else 0)
             + (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk * T
             + WEIGHT_DEPTH * bk * nt_s * T_w
             + bm * nt_s * T_acc
@@ -388,18 +396,25 @@ def select_blocking_sharded(
 
     k_divs_desc = sorted(_divisors(slice_k_tiles), reverse=True)
 
-    def walk(budget):
-        for bm in sorted(_divisors(core_m_tiles), reverse=True):
+    def walk(budget, prefetch=False):
+        # Prefetch is taken only at the whole-shard block: shrinking bm to make room for it
+        # re-streams the weights per m-block (measured 3.7x slower on SDXL L1 3x3, fp32).
+        bms = [core_m_tiles] if prefetch else sorted(_divisors(core_m_tiles), reverse=True)
+        for bm in bms:
             halo = halo_max(bm)
-            bk = next((d for d in k_divs_desc if footprint(bm, d, halo) <= budget), None)
+            bk = next((d for d in k_divs_desc if footprint(bm, d, halo, prefetch) <= budget), None)
             if bk is not None:
-                return bm, bk, halo
+                return bm, bk, halo, prefetch
         return None
 
-    choice = walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
-    if choice is None:
+    choice = (
+        (OWN_PREFETCH and act_mcast and walk(CB_BUDGET_BYTES, prefetch=True))
+        or walk(CB_BUDGET_BYTES)
+        or walk(l1_cap_bytes)
+    )
+    if not choice:
         raise NotImplementedError("conv2d_nhwc: sharded K-exchange blocks do not fit L1")
-    bm, bk, halo = choice
+    bm, bk, halo, own_prefetch = choice
     bn = nt_s
     sb_w = max(d for d in _divisors(bn) if d <= DST_TILES)
     sb_h = max(d for d in _divisors(bm) if d * sb_w <= DST_TILES)
@@ -408,6 +423,13 @@ def select_blocking_sharded(
         **geo,
         "k_exchange": True,
         "act_mcast": act_mcast,
+        "own_prefetch": own_prefetch,
+        "act_send_depth": send_depth(bk, own_prefetch),
+        # Every grid row must run the same number of m-blocks (= column multicast rounds).
+        "weight_mcast": WEIGHT_MCAST
+        and memory_layout == _ML.BLOCK_SHARDED
+        and g_m > 1
+        and len({_div_up(min(core_m_tiles, M_t - r * core_m_tiles), bm) for r in range(g_m)}) == 1,
         "memory_layout": memory_layout,
         "slice_width": cw,
         "shard_h": shard_h,
@@ -446,7 +468,7 @@ def select_blocking_sharded(
         "T": T,
         "T_w": T_w,
         "T_acc": T_acc,
-        "footprint": footprint(bm, bk, halo),
+        "footprint": footprint(bm, bk, halo, own_prefetch),
     }
 
 
@@ -521,6 +543,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
     has_bias = p["has_bias"]
     kx = p.get("k_exchange", False)  # sharded R4/R5 placement (shard input, shard output)
     act_mcast = p.get("act_mcast", False)  # K exchange across > 1 channel slice
+    weight_mcast = p.get("weight_mcast", False)  # BLOCK: one DRAM weight read per grid column
     act_dtype = input_tensor.dtype
     w_dtype = weight_tensor.dtype
     eb = p["elem_bytes"]
@@ -558,7 +581,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         _cb(CB_ACT_TILES, act_dtype, p["T"], (ACT_RECV_DEPTH if act_mcast else 1) * bm * bk, mcast_cores),
     ]
     if act_mcast:
-        cbs.append(_cb(CB_ACT_SEND, act_dtype, p["T"], ACT_SEND_DEPTH * bm * bk, cores))
+        cbs.append(_cb(CB_ACT_SEND, act_dtype, p["T"], p["act_send_depth"] * bm * bk, cores))
     if kx:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_IN_SHARD, input_tensor, core_ranges=cores))
         full_rows = p["core_m_tiles"] - (1 if p["out_tail"] else 0)
@@ -636,6 +659,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         p.get("kblocks_per_slice", 1),
         1 if p.get("out_tail", False) else 0,
         1 if act_mcast else 0,
+        1 if weight_mcast else 0,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -669,6 +693,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         CB_OUT_SHARD,
         1 if p.get("out_tail", False) else 0,
         1 if act_mcast else 0,
+        1 if p.get("own_prefetch", False) else 0,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -707,11 +732,12 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             n_tile_start,
             ni,
             0,  # not a sink
+            1 if mi == 0 else 0,  # weight_mcast: grid row 0 reads the column's weights
         ]
         compute_rt[xy.x][xy.y] = [num_m_blocks, ni]
     for xy in sink_cores:
         # Receive-only: every round of every m-block (WIDTH: one m range for the whole group).
-        writer_rt[xy.x][xy.y] = [0, 0, 0, 0, p["M_t"], _div_up(p["M_t"], bm), 0, 0, 1]
+        writer_rt[xy.x][xy.y] = [0, 0, 0, 0, p["M_t"], _div_up(p["M_t"], bm), 0, 0, 1, 0]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "conv2d_nhwc_reader.cpp"),
@@ -748,7 +774,22 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             ttnn.McastCoreOrder.RowMajor,
         )
         mcast.attach(descriptor, "act_mcast", [writer], 0)
+        next_sem = mcast.next_semaphore_id()
     else:
         ttnn.attach_absent_mcast(writer, "act_mcast")
+        next_sem = 0
+    if weight_mcast:
+        # Weights: groups = grid columns (column-major), fixed sender = the row-0 core.
+        w_mcast = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
+            cores,
+            p["g_m"],
+            ttnn.McastFixedSenderConfig(sender_index=0),
+            ttnn.McastCoreOrder.ColumnMajor,
+        )
+        w_mcast.attach(descriptor, "w_mcast", [writer], next_sem)
+    else:
+        ttnn.attach_absent_mcast(writer, "w_mcast")
     descriptor.kernels = [reader, writer, compute]
     return descriptor

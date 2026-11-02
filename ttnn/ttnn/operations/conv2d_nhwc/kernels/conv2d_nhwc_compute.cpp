@@ -48,6 +48,9 @@ constexpr uint32_t kblocks_per_slice = get_compile_time_arg_val(18);
 constexpr uint32_t cb_out_shard = get_compile_time_arg_val(19);
 constexpr bool out_tail = get_compile_time_arg_val(20) != 0;
 constexpr bool act_mcast = get_compile_time_arg_val(21) != 0;  // R4/R5 with > 1 channel slice
+// R4/R5: tilize ALL own-slice K-blocks at the m-block's first K-block (cb_act_send holds the
+// whole own slice), so every core's gather runs concurrently instead of in owner turn order.
+constexpr bool own_prefetch = get_compile_time_arg_val(22) != 0;
 
 constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
 constexpr uint32_t in1_num_subblocks = block_n_tiles / out_subblock_w;
@@ -65,6 +68,13 @@ struct TilizeKBlock {
         if constexpr (!act_mcast) {
             PACK((llk_pack_reconfig_l1_acc(0)));
             tilize<block_k_tiles, cb_act_rm, cb_act_tiles>(block_m_tiles);
+        } else if constexpr (own_prefetch) {
+            if (block == 0) {
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                for (uint32_t b = 0; b < kblocks_per_slice; ++b) {
+                    tilize<block_k_tiles, cb_act_rm, cb_act_send>(block_m_tiles);
+                }
+            }
         } else {
             if (block == 0 && my_slice == 0) {
                 PACK((llk_pack_reconfig_l1_acc(0)));
