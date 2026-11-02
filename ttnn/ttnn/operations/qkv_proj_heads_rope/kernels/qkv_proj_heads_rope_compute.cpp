@@ -1,16 +1,23 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// qkv_proj_heads_rope compute: per block, project_block (matmul_block over K' = hidden + bias tile into
-// Float32 L1-accumulated partials), then the epilogue per valid row: rotate_block on q/k cores
-// (two DEST-accumulated FPU muls per output tile), convert_block (copy + pack to bf16) on v cores.
-// Output rows alternate between cb_out_tiles (writer, NoC1) and cb_out_tiles_noc0 (reader, NoC0) when
-// out_write_nocs == 2.
+// qkv_proj_heads_rope compute: per block, project_block (matmul_block over K-blocks 0..n-2 of K' = hidden +
+// bias tile into Float32 L1-accumulated partials), then the last K-block one row at a time, each row's
+// epilogue following it: rotate_block on q/k cores (two DEST-accumulated FPU muls per output tile),
+// convert_block (copy + pack to bf16) on v cores. Output rows alternate between cb_out_tiles (writer, NoC1)
+// and cb_out_tiles_noc0 (reader, NoC0) when out_write_nocs == 2.
 //
-// Raw calls: pack_reconfig_l1_acc(0) after each block - no helper exposes the L1-acc disable
-// (matmul_block leaves it enabled after the last K-block); the epilogue chains' setup (reconfig +
-// mul_init / copy_init) once per block, which InitReconfigOwner::Caller hands to the caller so it is not
-// repeated per row x head.
+// Perf 1 (measured, 8x512: 106.3 -> 100.5 us): running the last K-block per row lets each row's epilogue and
+// store overlap the rest of the K-loop instead of bursting after it. The last K-block is raw LLK because
+// compute_kernel_lib::matmul_block sets llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1), so a per-row call
+// carrying only the last K-block would overwrite the partials of K-blocks 0..n-2, and it has no per-row hook
+// between subblock packs. The matmul of row r + LAST_K_LEAD runs before the epilogue of row r, so the
+// epilogue's unpack does not wait on that row's final pack (lead 0: 102.1, 1: 100.5, 2: 100.3 us).
+//
+// Raw calls: pack_reconfig_l1_acc(0/1) around the per-row last K-block - no helper exposes the L1-acc
+// toggle; the epilogue chains' setup (reconfig + mul_init / copy_init) once per row (the last-K matmul init
+// between rows reprograms unpack and math), which InitReconfigOwner::Caller hands to the caller so it is not
+// repeated per head.
 
 #include <cstdint>
 
@@ -62,7 +69,19 @@ void kernel_main() {
     DataflowBuffer table_dfb(cb_rotary_table);
     DataflowBuffer out_dfb(cb_out_tiles);
 
-    constexpr auto shape = MatmulBlockShape::of(block_m / sb_h, n_tiles / sb_w, sb_h, sb_w, k_block, num_k_blocks);
+    static_assert(num_k_blocks >= 2, "the last K-block is split off the helper's K-loop");
+    constexpr auto shape = MatmulBlockShape::of(block_m / sb_h, n_tiles / sb_w, sb_h, sb_w, k_block, num_k_blocks - 1);
+    // Last K-block runs one row at a time: widest divisor of n_tiles that fits the host's DEST subblock.
+    constexpr uint32_t row_sb_w = [] {
+        uint32_t w = sb_h * sb_w < n_tiles ? sb_h * sb_w : n_tiles;
+        while (n_tiles % w) {
+            --w;
+        }
+        return w;
+    }();
+    constexpr uint32_t LAST_K_LEAD = 1;
+    constexpr uint32_t act_block_tiles = block_m * k_block;
+    constexpr uint32_t weight_block_tiles = k_block * n_tiles;
 
     // rotate_block: walk grid(2 out tiles, 2 terms). A = partials of one head (Row: base + term),
     // B = the row's table slot [cos_lo, -sin_lo, sin_hi, cos_hi] (Block: base + 2*out + term), summed in DEST.
@@ -128,10 +147,67 @@ void kernel_main() {
         }
     };
 
+    // Last K-block of one row: accumulate onto the partials K-blocks 0..n-2 left in L1 (the row's partials
+    // sit at the CB write pointer, which advances one row per push).
+    auto last_k_row = [&](uint32_t row) {
+        reconfig_data_format(cb_weight_block, cb_activation_block);
+        ckernel::matmul_block_init(cb_activation_block, cb_weight_block, false, row_sb_w, 1, k_block);
+        pack_reconfig_data_format(cb_matmul_partials);
+        pack_reconfig_l1_acc(1);
+        for (uint32_t col = 0; col < n_tiles; col += row_sb_w) {
+            tile_regs_acquire();
+            for (uint32_t inner = 0; inner < k_block; ++inner) {
+                ckernel::matmul_block(
+                    cb_activation_block,
+                    cb_weight_block,
+                    row * k_block + inner,
+                    inner * n_tiles + col,
+                    0,
+                    false,
+                    row_sb_w,
+                    1,
+                    k_block);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t c = 0; c < row_sb_w; ++c) {
+                pack_tile<true>(c, cb_matmul_partials, col + c);
+            }
+            tile_regs_release();
+        }
+        partials.push_back(n_tiles);
+        pack_reconfig_l1_acc(0);
+    };
+
+    auto epilogue_setup = [&]() {
+        if (is_rotary) {
+            reconfig_data_format(cb_matmul_partials, cb_rotary_table);
+            mul_init(cb_matmul_partials, cb_rotary_table, true);
+        } else {
+            reconfig_data_format_srca(cb_matmul_partials);
+            copy_init(cb_matmul_partials);
+        }
+        pack_reconfig_data_format(cb_out_tiles);
+    };
+
+    auto epilogue_row_routed = [&](uint32_t row) {
+        if (is_rotary) {
+            cb_wait_front(cb_rotary_table, (row + 1 < seq_tiles ? row + 1 : seq_tiles) * table_tiles_per_row);
+        }
+        partials.wait_front((row + 1) * n_tiles);
+        if constexpr (out_write_nocs == 2) {
+            if (row & 1) {
+                DataflowBuffer out_noc0_dfb(cb_out_tiles_noc0);
+                epilogue_row(row, RotaryPackNoc0{out_noc0_dfb}, ConvertPackNoc0{out_noc0_dfb});
+                return;
+            }
+        }
+        epilogue_row(row, RotaryPack{out_dfb}, ConvertPack{out_dfb});
+    };
+
     for (uint32_t block_row = 0; block_row < core_rows; block_row += block_m) {
         const uint32_t rows = (core_rows - block_row) < block_m ? (core_rows - block_row) : block_m;
 
-        // project_block: the whole nominal block accumulates in place (caller-owned pack target).
         {
             MaybeDeviceZoneScope("compute_partials_reserve");
             partials.reserve_back(partials_tiles);
@@ -156,43 +232,37 @@ void kernel_main() {
                 NoIn1BaseOffset,
                 true>(activation, weight, partials, partials, shape, {}, {}, n_tiles, n_tiles);
         }
-        partials.push_back(partials_tiles);
-        pack_reconfig_l1_acc(0);
 
-        // The epilogue chains' one-time setup, once per block (InitReconfigOwner::Caller): both output
-        // CBs are bf16, so one pack reconfig serves either.
-        if (is_rotary) {
-            reconfig_data_format(cb_matmul_partials, cb_rotary_table);
-            mul_init(cb_matmul_partials, cb_rotary_table, true);
-        } else {
-            reconfig_data_format_srca(cb_matmul_partials);
-            copy_init(cb_matmul_partials);
-        }
-        pack_reconfig_data_format(cb_out_tiles);
-
-        // Table slot j holds the block's sequence position (block start + j) % seq_tiles.
-        const uint32_t table_tiles = (rows < seq_tiles ? rows : seq_tiles) * table_tiles_per_row;
+        // Last K-block interleaved with the epilogue: matmul row r + LAST_K_LEAD, then the epilogue of row r.
         {
-            MaybeDeviceZoneScope("compute_epilogue_wait");
-            if (is_rotary) {
-                cb_wait_front(cb_rotary_table, table_tiles);
-            }
-            partials.wait_front(partials_tiles);
+            MaybeDeviceZoneScope("compute_last_k_wait");
+            activation.wait_front(act_block_tiles);
+            weight.wait_front(weight_block_tiles);
         }
-        // Occupancy: the pack elements reserve cb_out_tiles / cb_out_tiles_noc0 per row.
-        MaybeDeviceZoneScope("compute_epilogue");
+        // Occupancy: per-row table / partials waits and the output-CB reserves sit inside.
+        MaybeDeviceZoneScope("compute_last_k_epilogue");
+        const uint32_t lead = rows < LAST_K_LEAD ? rows : LAST_K_LEAD;
+        for (uint32_t row = 0; row < lead; ++row) {
+            last_k_row(row);
+        }
         for (uint32_t row = 0; row < rows; ++row) {
-            if constexpr (out_write_nocs == 2) {
-                if (row & 1) {
-                    DataflowBuffer out_noc0_dfb(cb_out_tiles_noc0);
-                    epilogue_row(row, RotaryPackNoc0{out_noc0_dfb}, ConvertPackNoc0{out_noc0_dfb});
-                    continue;
-                }
+            if (row + lead < rows) {
+                last_k_row(row + lead);
             }
-            epilogue_row(row, RotaryPack{out_dfb}, ConvertPack{out_dfb});
+            epilogue_setup();
+            epilogue_row_routed(row);
         }
+        // Nominal rows past `rows` are never consumed; push them so the block's pop balances.
+        if (rows < block_m) {
+            partials.push_back((block_m - rows) * n_tiles);
+        }
+        activation.pop_front(act_block_tiles);
+        weight.pop_front(weight_block_tiles);
+
+        partials.wait_front(partials_tiles);
         partials.pop_front(partials_tiles);
         if (is_rotary) {
+            const uint32_t table_tiles = (rows < seq_tiles ? rows : seq_tiles) * table_tiles_per_row;
             cb_pop_front(cb_rotary_table, table_tiles);
         }
     }
