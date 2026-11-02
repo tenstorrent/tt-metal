@@ -184,13 +184,38 @@ def test_a_clip_named_once_is_recalled_by_its_key(encoded):
     assert recalled.text == REFERENCE_TEXT
 
 
-def test_each_cloning_mode_keeps_its_own_entry(encoded, expect_error):
+def _voice_only(info):
+    return info | {"x_vector_only_mode": [True]}
+
+
+def test_a_voice_only_clip_has_no_codes_to_recall(encoded, expect_error):
     cache = stage_inputs.ReferenceCache()
     cache.reference(_named(_info(encoded, prompt={"icl_mode": False})))
 
-    assert cache.reference(_by_key_only(_info(encoded), key="clip-a") | {"x_vector_only_mode": [True]}).codes is None
-    with expect_error(ValueError, "no such clip was encoded"):
+    assert cache.reference(_voice_only(_by_key_only(_info(encoded)))).codes is None
+    with expect_error(ValueError, "encoded for voice-only cloning, without codes"):
         cache.reference(_by_key_only(_info(encoded)))
+
+
+def test_a_voice_only_request_keeps_the_clips_codes(encoded):
+    cache = stage_inputs.ReferenceCache()
+    first = cache.reference(_named(_info(encoded)))
+    cache.reference(_named(_info(encoded, prompt={"icl_mode": False})))
+
+    assert torch.equal(cache.reference(_by_key_only(_info(encoded))).codes, first.codes)
+    assert cache.reference(_voice_only(_by_key_only(_info(encoded)))).codes is None
+
+
+def test_a_clip_used_in_both_modes_counts_once_against_the_bound(encoded):
+    # The server keeps as many clips as the bound and sends their keys alone in either mode.
+    cache = stage_inputs.ReferenceCache(max_entries=2)
+    for key in ("a", "b"):
+        cache.reference(_named(_info(encoded), key))
+        cache.reference(_named(_info(encoded, prompt={"icl_mode": False}), key))
+
+    for key in ("a", "b"):
+        assert cache.reference(_by_key_only(_info(encoded), key)).codes is not None
+        assert cache.reference(_voice_only(_by_key_only(_info(encoded), key))).codes is None
 
 
 def test_a_key_the_cache_never_saw_is_refused(encoded, expect_error):
