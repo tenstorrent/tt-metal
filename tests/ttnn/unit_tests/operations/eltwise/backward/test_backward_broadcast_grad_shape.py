@@ -59,6 +59,9 @@ BINARY_OPS = {
     "addalpha_bw": (lambda a, b: a + 2.5 * b, lambda g, a, b, **kw: ttnn.addalpha_bw(g, a, b, 2.5, **kw)),
     "subalpha_bw": (lambda a, b: a - 2.5 * b, lambda g, a, b, **kw: ttnn.subalpha_bw(g, a, b, 2.5, **kw)),
     "div_bw": (torch.div, ttnn.div_bw),
+    "remainder_bw": (torch.remainder, ttnn.remainder_bw),
+    "squared_difference_bw": (lambda a, b: (a - b) ** 2, ttnn.squared_difference_bw),
+    "bias_gelu_bw": (lambda a, b: torch.nn.functional.gelu(a + b), ttnn.bias_gelu_bw),
 }
 
 # Ops that take are_required_outputs and preallocated input_grad / other_grad.

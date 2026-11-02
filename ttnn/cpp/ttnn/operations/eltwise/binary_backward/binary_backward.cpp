@@ -562,6 +562,7 @@ std::vector<Tensor> remainder_bw(
     Tensor result_div = ttnn::div(input_a, other, false, "floor", std::nullopt, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor), result_div, std::nullopt, output_mem_config);
     grad.emplace_back(grad_b);
+    operations::binary_backward::detail::reduce_grads_to_operand_shapes(grad, input_a, other, output_mem_config);
     return grad;
 }
 
@@ -601,6 +602,7 @@ std::vector<Tensor> squared_difference_bw(
     grad.emplace_back(grad_a);
     Tensor grad_b = ttnn::multiply(grad_a, -1, std::nullopt, output_mem_config);
     grad.emplace_back(grad_b);
+    operations::binary_backward::detail::reduce_grads_to_operand_shapes(grad, input_a, other, output_mem_config);
     return grad;
 }
 
@@ -760,6 +762,8 @@ std::vector<Tensor> bias_gelu_bw(
     if (gelu_result[0].has_value()) {
         grad_tensor_res.push_back(gelu_result[0].value());
         grad_tensor_res.push_back(gelu_result[0].value());
+        operations::binary_backward::detail::reduce_grads_to_operand_shapes(
+            grad_tensor_res, input_a, input_b, output_mem_config);
     }
     return grad_tensor_res;
 }
