@@ -39,7 +39,7 @@ using tt::tt_metal::experimental::MakeMeshWorkloadFromSpec;
 using tt::tt_metal::experimental::SetProgramRunArgs;
 
 TEST_F(ScratchpadOverrideSlowTest, ScratchpadPlacementOverrideGuardedAccess) {
-    // Kernels write only on reserved nodes and leave storage on the extra node untouched.
+    // Kernels write only on selected nodes and leave memory on the excluded node untouched.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = sp_test::MakeGuardedScratchpadSpecForTest();
     auto workload = MakeMeshWorkloadFromSpec(fixture_device, spec);

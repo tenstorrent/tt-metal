@@ -92,6 +92,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideDoesNotChangeKernelHash) {
     // Changing only scratchpad placement preserves the kernel hash.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = MakeMinimalValidProgramSpec();
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
     spec.kernels[0].scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
     auto original = MakeProgramFromSpec(fixture_device, spec);

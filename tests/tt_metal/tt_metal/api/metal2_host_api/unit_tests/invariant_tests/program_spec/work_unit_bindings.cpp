@@ -401,14 +401,14 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverridePrivacyAppliesOnlyOnReserved
     // Multiple bindings on an excluded node do not require sharing permission.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = MakeMinimalValidProgramSpec();
-    spec.scratchpads = {ScratchpadSpec{
-        .unique_id = ScratchpadSpecName{"pad"},
-        .size_per_node = 64,
-        .advanced_options = {.override_placement = CoreRangeSet(CoreRange({1, 0}))}}};
-    // Both kernels bind the spec on {0,0}, where it has no storage.
+    spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
+    spec.kernels.push_back(MakeMinimalGen2DMKernel("selected"));
+    // The DM and compute kernels share a binding only on the excluded node {0,0}.
     for (auto& kernel : spec.kernels) {
         kernel.scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
     }
+    spec.work_units.push_back(MakeMinimalWorkUnit("selected", NodeCoord{1, 0}, {"selected"}));
+    spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
 
@@ -419,7 +419,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverridePrivacyRejectsSharedReserved
     spec.scratchpads = {ScratchpadSpec{
         .unique_id = ScratchpadSpecName{"pad"},
         .size_per_node = 64,
-        .advanced_options = {.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}))}}};
+        .advanced_options = {.override_placement = CoreRangeSet(CoreRange({0, 0}))}}};
     for (auto& kernel : spec.kernels) {
         kernel.scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
     }
