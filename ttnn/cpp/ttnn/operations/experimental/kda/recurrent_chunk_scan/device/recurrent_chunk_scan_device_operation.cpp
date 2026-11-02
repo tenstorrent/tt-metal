@@ -230,8 +230,7 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
     const std::optional<Tensor>& actual_end,
-    bool packed_head,
-    std::optional<uint32_t> sequence_parallel_size) {
+    bool packed_head) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -247,7 +246,6 @@ std::vector<Tensor> recurrent_chunk_scan(
             .mode = mode,
             .packed_head = packed_head,
             .sequence_parallel_axis = sequence_parallel_axis,
-            .sequence_parallel_size = sequence_parallel_size,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         RecurrentChunkScanInputs{

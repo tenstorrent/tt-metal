@@ -204,8 +204,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
         device,
         attrs.sequence_parallel_axis,
         attrs.local_rows,
-        dataflow_kernel_name,
-        attrs.sequence_parallel_size);
+        dataflow_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim

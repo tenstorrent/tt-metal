@@ -25,7 +25,6 @@ from models.demos.glm53_flash.tt.ttkda.config import (
     KDAProgramConfig,
     decay_projection_program_config,
     l1_when_it_fits,
-    sp_size_kwargs,
     tuned_projection_matmul_configs,
 )
 from models.demos.glm53_flash.tt.ttkda.recurrence import KDARecurrence
@@ -163,14 +162,17 @@ class ttKDA:
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
         # ``sequence_parallel_size``: the ranks of one chronology along the SP axis; the mesh extent by default.
-        # 1 on a multi-row mesh = every row runs its own sequence (one prompt per row), with the single-rank
-        # paths below and the ops told the size explicitly (their kernels bind it from the mesh otherwise).
+        # 1 on a multi-row mesh = every row runs its own sequence (one prompt per row) through the single-rank
+        # host paths below. The ttnn ops stay stock: their kernels bind ``sp_rank`` / ``sp_size`` from the mesh
+        # and derive a chunk's segment from its absolute bounds (first rank = start // local_rows, the final
+        # owner from the end), so a row-local chronology reaches them as row r's slice ``[r rows, r rows + valid)``
+        # of the global chronology (``TtKDA.local_bounds``): rank r is the first and final owner of its own
+        # interval and no other row contributes.
         self.sequence_parallel_size = mesh_extent if sequence_parallel_size is None else int(sequence_parallel_size)
         if self.sequence_parallel_size < 1 or mesh_extent % self.sequence_parallel_size:
             raise ValueError(
                 f"sequence_parallel_size {self.sequence_parallel_size} must divide the SP axis extent {mesh_extent}"
             )
-        self._explicit_sp_size = None if sequence_parallel_size is None else self.sequence_parallel_size
         if active_seq_len <= 0 or active_seq_len % (self.sequence_parallel_size * KDA_CHUNK_SIZE):
             raise ValueError("active_seq_len must give a positive tile-aligned local physical length")
         self.active_seq_len_local = active_seq_len // self.sequence_parallel_size
@@ -289,7 +291,7 @@ class ttKDA:
             mesh_device,
             program_config.recurrence,
             sequence_parallel_axis=self.sequence_parallel_axis,
-            sequence_parallel_size=self._explicit_sp_size,
+            sequence_parallel_size=self.sequence_parallel_size,
             local_rows=self.active_seq_len_local,
             heads=self.config.num_heads,
             key_dim=self.config.head_k_dim,
@@ -495,6 +497,11 @@ class ttKDA:
         nonnegative, 32-aligned position. No device-to-host value validation is
         performed. Pass an explicit zero-valued tensor for a zero-start call.
 
+        With ``sequence_parallel_size=1`` on a multi-row mesh both bounds are
+        row-sharded scalars holding row r's slice of the global chronology,
+        ``[r rows, r rows + valid)`` (``TtKDA.local_bounds``); ``actual_end``
+        is then required (without it the kernels take the chunk for the first
+        segment of a chronology spanning every row).
         Optional ``actual_end`` is a replicated device scalar defining the
         exclusive global valid end. The interval is nonempty and no larger than
         the constructed capacity; the end need not be 32-aligned. Omission means
@@ -524,7 +531,6 @@ class ttKDA:
             exchange_semaphores=self._history_exchange.semaphores,
             actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
-            **sp_size_kwargs(ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry, self._explicit_sp_size),
             memory_config=self.qkv_memory_config,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)

@@ -533,14 +533,10 @@ class GLM53MeshModel:
         ttnn.deallocate(ids_dev)
         kda = next((dec for dec in self.layers if dec.is_kda), None)  # the chronology scalars live on a KDA layer
         attn = kda._require_weights().attn if kda is not None else None
-        ends = tuple(s0 + n for s0, n in zip(starts, valids))
-        info = WaveInfo(
-            T=T,
-            starts=starts,
-            valids=valids,
-            start_t=attn.scalar_rows(starts, "wave_start") if attn is not None else None,
-            end_t=attn.scalar_rows(ends, "wave_end") if attn is not None else None,
-        )
+        # the KDA chronology of a wave: row r's chunk is its own slice of the global chronology (never the
+        # absolute chunk start: ``TtKDA.local_bounds``)
+        start_t, end_t = attn.local_bounds(T, valids) if attn is not None else (None, None)
+        info = WaveInfo(T=T, starts=starts, valids=valids, start_t=start_t, end_t=end_t)
         for dec in self.layers:
             out = dec.prefill_wave_forward(streams, user=int(call.user), wave=info)
             ttnn.deallocate(streams)

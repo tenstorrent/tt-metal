@@ -43,7 +43,6 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
     const std::optional<Tensor>& actual_end,
-    bool packed_head = false,
-    std::optional<uint32_t> sequence_parallel_size = std::nullopt);
+    bool packed_head = false);
 
 }  // namespace ttnn::experimental::prim

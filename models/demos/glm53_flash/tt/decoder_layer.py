@@ -40,7 +40,8 @@ class WaveInfo:
     """A wave's per-row chunk geometry for one layer call (``doc/mesh/row_ownership.md`` mechanism (a)): every mesh
     row runs its own chunk of ``T`` padded rows; ``starts[r]`` / ``valids[r]`` are row r's absolute chunk start and
     valid row count (0 on an idle row: pad tokens, results discarded); ``start_t`` / ``end_t`` the row-sharded KDA
-    chronology scalars of ``(start, start + valid)`` (``TtKDA.scalar_rows``)."""
+    chronology scalars of row r's slice ``[r T, r T + valid)`` of the global chronology (``TtKDA.local_bounds``: the
+    stock ttnn ops make rank r the owner of its own interval; the absolute chunk start enters nothing)."""
 
     T: int
     starts: tuple[int, ...]

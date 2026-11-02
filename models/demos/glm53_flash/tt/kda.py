@@ -432,8 +432,8 @@ class TtKDA(LightweightModule):
         return ch["tensors"][role]
 
     def scalar_rows(self, values: tuple[int, ...], role: str) -> ttnn.Tensor:
-        """A wave's per-row ``actual_start`` / ``actual_end`` (``doc/mesh/row_ownership.md``): one value per mesh row,
-        ``[1, 1, 1, 1]`` uint32 on every chip of that row. ONE persistent row-sharded tensor per role on the mesh
+        """A wave's per-row ``actual_start`` / ``actual_end`` (``doc/mesh/row_ownership.md``; the values come from
+        ``local_bounds``): one value per mesh row, ``[1, 1, 1, 1]`` uint32 on every chip of that row. ONE persistent row-sharded tensor per role on the mesh
         (``GLMMesh.chrono``, next to ``chrono_scalar``'s replicated pair), allocated on first use (before the first
         trace capture: the wave warm-up) and rewritten in place only when the values change."""
         if role not in ("wave_start", "wave_end"):
@@ -463,6 +463,28 @@ class TtKDA(LightweightModule):
             ttnn.copy_host_to_device_tensor(host, ch["row_tensors"][role])
             ch["row_values"][role] = vals
         return ch["row_tensors"][role]
+
+    def local_bounds(self, T: int, valids) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The row-local prefill's chronology scalars (``prefill_forward(..., local=True)``): row r's chunk of ``T``
+        physical rows holds ``valids[r]`` valid rows (0 on an idle row). The stock ttnn chronology ops bind every
+        row's kernels as rank r of a ``rows``-rank chronology (``sp_rank`` / ``sp_size`` from the mesh shape) and
+        derive a chunk's segment from its absolute bounds: the first rank is ``start // local_rows``, the final
+        owner follows from the end, a start off a row boundary splits a segment. Row r's own sequence is therefore
+        described as the slice ``[r T, r T + valids[r])`` of the global chronology: rank r is the first and final
+        owner of its own unsplit interval, the other rows' kernels never contribute to it (the conv history
+        exchange still runs its ring barrier, every rank its own owner), and an idle row is an empty interval.
+        The chunk-relative position is always 0 here: KDA has no positional encoding, the carried state supplies
+        the history (see ``prefill_forward``). Returns the ``wave_start`` / ``wave_end`` tensors of ``scalar_rows``."""
+        rows = self.mesh.rows
+        vals = tuple(int(v) for v in valids)
+        if T <= 0 or T % ttnn.TILE_SIZE:
+            raise ValueError(f"local bounds: T {T} must be a positive multiple of {ttnn.TILE_SIZE}")
+        if len(vals) != rows or any(v < 0 or v > T for v in vals):
+            raise ValueError(f"local bounds: {len(vals)} valid counts for {rows} rows, each within [0, {T}]: {vals}")
+        return (
+            self.scalar_rows(tuple(r * T for r in range(rows)), "wave_start"),
+            self.scalar_rows(tuple(r * T + v for r, v in enumerate(vals)), "wave_end"),
+        )
 
     # ------------------------------------------------------------------ state
     def allocate_state(self, batch_size: int = 1) -> KdaState:
@@ -602,8 +624,9 @@ class TtKDA(LightweightModule):
     def prefill_layer(self, active_seq_len: int, local: bool = False) -> ttKDA:
         """ttKDA instance for one physical (32-aligned) chunk length; weights are shared. ``local``: a row-local
         scan on a multi-row mesh (every row runs its own sequence of ``active_seq_len`` rows: a wave of per-row
-        prompts, doc/mesh/galaxy_throughput_plan.md A1) through ttKDA's ``sequence_parallel_size=1``; the default
-        is the sequence-parallel scan over the rows (one prompt, ``active_seq_len`` global rows)."""
+        prompts, doc/mesh/galaxy_throughput_plan.md A1) through ttKDA's host-side ``sequence_parallel_size=1`` (the
+        single-rank scan paths on the stock ttnn ops; the bounds carry the row-local chronology, ``local_bounds``);
+        the default is the sequence-parallel scan over the rows (one prompt, ``active_seq_len`` global rows)."""
         if active_seq_len % ttnn.TILE_SIZE:
             raise ValueError(f"active_seq_len must be a multiple of {ttnn.TILE_SIZE}, got {active_seq_len}")
         local = bool(local) and self.mesh.rows > 1
@@ -672,8 +695,11 @@ class TtKDA(LightweightModule):
         On a multi-row mesh ttKDA is sequence-parallel over the rows: ``x`` is this row's slab
         (row r holds rows [r*T/rows, (r+1)*T/rows) of the chunk, T = rows * T_phys_local) and the
         returned carries are replicated over the rows (TP-sharded heads as in decode). ``local``: every row
-        runs its own chunk of ``x.shape[1]`` rows (a wave of per-row prompts; row-sharded ``actual_start`` /
-        ``actual_end``) and returns its own carry."""
+        runs its own chunk of ``x.shape[1]`` rows (a wave of per-row prompts) and returns its own carry; both
+        bounds are then the row-sharded scalars of ``local_bounds`` (row r's slice of the global chronology)."""
+        local = bool(local) and self.mesh.rows > 1
+        if local and actual_end is None:
+            raise ValueError("the row-local prefill needs both bounds from TtKDA.local_bounds (actual_end is None)")
         layer = self.prefill_layer(x.shape[1] if local else x.shape[1] * self.mesh.rows, local=local)
         tiled_in = state.convolution.layout == ttnn.TILE_LAYOUT
         if tiled_in:  # ttKDA reads / writes the row-major [B, taps, W] history

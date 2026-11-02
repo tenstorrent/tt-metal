@@ -1,19 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""ttKDA row-local prefill on a multi-row mesh (``TtKDA.prefill_forward(..., local=True)``: ttnn's
-``sequence_parallel_size=1`` on the chronology ops): every mesh row runs ITS OWN prompt of ``T`` rows (the wave
-of per-row prompts, doc/mesh/galaxy_throughput_plan.md A1), the mesh stays (rows, 4) for the TP columns.
-
-Checks on (rows, 4): (i) each row's output and final carries against HF on that row's prompt (rows must not
-contaminate each other), (ii) row 0's local output against the sequence-parallel path's output for the same
-prompt (the two scans agree within bf16 ulps). Needs a ttnn with the ``sequence_parallel_size`` argument
-(branch arg/kda_sequence_parallel_size); the test skips on an older ttnn.
-
+"""ttKDA row-local prefill on a multi-row mesh (``TtKDA.prefill_forward(..., local=True)`` on the STOCK ttnn
+chronology ops: the bounds of ``TtKDA.local_bounds`` describe row r's prompt as its own slice ``[r T, r T + T)`` of
+the global chronology, so rank r is the first and final owner of its own interval): every mesh row runs ITS OWN
+prompt of ``T`` rows (the wave of per-row prompts, doc/mesh/galaxy_throughput_plan.md A1), the mesh stays (rows, 4)
+for the TP columns. Checks on (rows, 4): (i) each row's output and final carries against HF on that row's prompt
+(rows must not contaminate each other), (ii) row 0's local output against the sequence-parallel path's output for
+the same prompt (the two scans agree within bf16 ulps).
     GLM53_MESH_SHAPE=8,4 pytest models/demos/glm53_flash/tests/test_mesh_local_kda.py -s
 """
 from __future__ import annotations
 
-import inspect
 import os
 
 import pytest
@@ -29,19 +26,6 @@ from models.demos.glm53_flash.tt.mesh import GLMMesh, mesh_device_params
 
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))
 T = int(os.environ.get("GLM53_LOCAL_T", "1024"))  # rows per row (one chunk per row)
-
-
-def _ttnn_has_sequence_parallel_size() -> bool:
-    """The registered op is a ``FastOperation`` whose signature is ``(*args, **kwargs)``; the nanobind call
-    method underneath carries the real signature in its docstring."""
-    op = ttnn.experimental.kda.prepare_chunk_recurrence
-    inner = getattr(op, "function", op)
-    texts = [getattr(o, "__doc__", "") or "" for o in (op, inner, getattr(type(inner), "__call__", None))]
-    try:
-        texts.append(str(inspect.signature(inner)))
-    except (TypeError, ValueError):
-        pass
-    return any("sequence_parallel_size" in t for t in texts)
 
 
 def _hf_run(hf, text, x):
@@ -76,8 +60,6 @@ def _carries(mesh, new_state, cfg):
 @pytest.mark.parametrize("device_params", [mesh_device_params(*MESH)], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 def test_local_kda_prefill_one_prompt_per_row_vs_hf(mesh_device, weights):
-    if not _ttnn_has_sequence_parallel_size():
-        pytest.skip("this ttnn's KDA ops have no sequence_parallel_size (branch arg/kda_sequence_parallel_size)")
     snapshot, text, raw = weights
     cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
     hf = _hf_linear_attention(snapshot, text, raw)
@@ -93,7 +75,7 @@ def test_local_kda_prefill_one_prompt_per_row_vs_hf(mesh_device, weights):
     # (i) every row its own prompt, row-locally
     x_dev = mesh.upload(torch.cat(xs, dim=0), ttnn.bfloat16, rows=0)  # [1, T, 4096] per row = that row's prompt
     state = tt.allocate_state(1)
-    y, new_state = tt.prefill_forward(x_dev, state, tt.scalar(0), None, local=True)
+    y, new_state = tt.prefill_forward(x_dev, state, *tt.local_bounds(T, (T,) * rows), local=True)
     out = mesh.to_host(y, rows=0).float()  # [rows, T, 4096]
     assert out.shape[0] == rows and out.shape[1] == T
     carries = _carries(mesh, new_state, cfg)

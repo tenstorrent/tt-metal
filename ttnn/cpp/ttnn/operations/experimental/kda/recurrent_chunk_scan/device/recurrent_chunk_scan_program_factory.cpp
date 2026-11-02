@@ -478,8 +478,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         device,
         attrs.sequence_parallel_axis,
         attrs.num_chunks * attrs.groups_per_head * tt::constants::TILE_HEIGHT,
-        reader_kernel_name,
-        attrs.sequence_parallel_size);
+        reader_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim

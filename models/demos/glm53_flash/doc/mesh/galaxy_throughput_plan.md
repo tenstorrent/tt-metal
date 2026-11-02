@@ -40,7 +40,7 @@ Release targets stay measured post-optimization points (one e2e run per row repo
 
 Workstream A changes the orchestration and attention layers (prefill only). B changes the decode custom ops and
 the expert / residual glue. C changes the prefill chunk's kernels and launch pattern. D changes the adapter and
-the catalog. Nothing changes outside `models/demos/glm53_flash` except step A0 (one ttnn attribute), flagged below.
+the catalog. Nothing changes outside `models/demos/glm53_flash`: step A0's ttnn attribute (2026-10-29) was retired on 2026-11-02, the row-local chronology is encoded in the bounds (`TtKDA.local_bounds`, below).
 
 ## 2. Workstream A: per-row prefill ownership (waves) = shape-static prefill
 
@@ -58,7 +58,7 @@ host integer of the prefill becomes a per-row device tensor, so one SPMD op sequ
 
 | step | file | change | status |
 |---|---|---|---|
-| A0 | ttnn `operations/experimental/kda/factory/chronology_binding.hpp` (+ the two program factories and their python bindings) | `sp_size` comes from `device.shape()[sequence_parallel_axis]`; add an optional `sequence_parallel_size` override (1 = every coordinate is rank 0 of a one-row scan). Backwards compatible | validated 2026-10-29 01:00 on the 8x4 (row-local KDA vs HF per row, SP vs local PCC 1.0); ttnn branch `arg/kda_sequence_parallel_size` (PR pending the push go), base port `_base` for this box |
+| A0 | ttnn `operations/experimental/kda/factory/chronology_binding.hpp` (+ the two program factories and their python bindings) | `sp_size` comes from `device.shape()[sequence_parallel_axis]`; add an optional `sequence_parallel_size` override (1 = every coordinate is rank 0 of a one-row scan). Backwards compatible | validated 2026-10-29 01:00 on the 8x4 (row-local KDA vs HF per row, SP vs local PCC 1.0); ttnn branch `arg/kda_sequence_parallel_size` (PR pending the push go), base port `_base` for this box; RETIRED 2026-11-02: no ttnn change. The stock ops derive a chunk's segment from its absolute bounds (first rank = start // local_rows, the final owner from the end), so `TtKDA.local_bounds` describes row r's chunk as the slice [rT, rT + valid) of the global chronology and rank r is its own first and final owner (the conv history exchange keeps its ring barrier, every rank its own owner) |
 | A1 | `tt/kda.py` | `prefill_layer(active_seq_len, local=True)`: ttKDA with SP size 1, `summary_group_chunks` over `W / 32`; `actual_start` / `actual_end` as row-sharded scalars | validated with A0 (`test_mesh_local_kda`, 2026-10-29) |
 | A2 | `tt/functional_decoder.py` | `next_start[row][user]`; a dummy KDA slot for idle rows; `prefill_forward(..., wave=WaveCall)` with per-row `(start, end)` tensors | done at the block level 2026-10-29 02:20 (wt_mesh 033017bba8b): per-row cursors, the eager wave forward with the on-device carry select; validated with layers 0-2 and 0-3 (heads2users, 4 users/row) |
 | A3 | `tt/dsa.py`, `tt/indexer.py` | the dense prefix read over the whole dense range [0, 2048) with a host-built mask over [start, 2048); a fixed dense query-row count per slab (superset rows, `_select_rows`); row-sharded page-table / pool views for `fill` at per-row starts (`_prefill_views_for(user, b0_per_row)`); the index maintenance's `start`-derived ints as tensors | dense half validated (chip 0, static vs dynamic PCC 1.0); the wave form (per-row views, per-row index maintenance, static attention with per-row starts) VALIDATED at the layer level on the (2,4) block 2026-10-29 01:55: wave vs slab bit-exact in the dense regime (both row orders) and in the sparse regime with per-row starts (446/452 continued rows bit-exact, the rest 1 ulp); the index half for 32-aligned (non-128) starts not started |
@@ -254,6 +254,6 @@ runs outside the queue; nothing pushed without the go.
 
 | decision | why | default if unanswered |
 |---|---|---|
-| A0: the ttnn KDA `sequence_parallel_size` override (outside the model dir) | without it there is no row-local KDA scan on a multi-row mesh, so no waves and no A3 benefit for the KDA layers | the patch is prepared on its own branch and not applied; A3 proceeds for the DSA / page-table side (it also serves the APC) |
+| A0: the ttnn KDA `sequence_parallel_size` override (outside the model dir) | without it there is no row-local KDA scan on a multi-row mesh, so no waves and no A3 benefit for the KDA layers | the patch is prepared on its own branch and not applied; A3 proceeds for the DSA / page-table side (it also serves the APC); RESOLVED 2026-11-02: no override, the bounds encode the row-local chronology (`TtKDA.local_bounds`); the ttnn files are back at main |
 | D3: the `mm_identifiers` plugin PR (#261) | APC with images | APC serves text hits from the plugin's `start_pos`; prompts with images are prefilled from 0 |
 | C12: bfp4 gate/up experts | 1/3 of the expert bytes on every decode step | REJECTED 2026-10-29: top-1 83.6 % (bar 85 %, bfp8 93.0 %) on the 45-layer 8x4 logits gate although the PCC bar passed (0.9838); stays bfp8 |

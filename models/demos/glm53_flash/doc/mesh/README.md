@@ -2315,3 +2315,19 @@ prefix on every row): the block case (d) re-runs over stale slot content. The 64
 321 s mean TTFT: one row per prompt walks 32 chunks of 2048 at 7-10 s each, against the SP path's 4 chunks of 16 K at
 ~12 s shared by 8 rows, so long prompts belong to SP whenever a slot index is free on every row; per-row ownership buys
 the decode capacity (32 distinct requests) at the cost of long-context TTFT when every index is busy.
+
+### 2026-11-02 05:00: the ttnn `sequence_parallel_size` override retired (nothing outside the model folder)
+
+The 2026-10-29 A0 override (43 ttnn / deepseek files on #63440: an optional `sequence_parallel_size` on the six
+chronology ops) is gone; the branch carries no file outside `models/demos/glm53_flash`. The row-local wave scan
+runs on the STOCK ops: their kernels bind `sp_rank` / `sp_size` from the mesh and derive a chunk's segment from its
+absolute bounds (`kda_chronology::derive_interval`: first rank = start // local_rows, the final owner from the end,
+a start off a row boundary splits a segment), so `TtKDA.local_bounds(T, valids)` describes row r's chunk as the
+slice `[rT, rT + valids[r])` of the global chronology: rank r is the first and final owner of its own unsplit
+interval, the other rows' kernels never contribute to it, an idle row is an empty interval. The only cross-row
+traffic left is the conv history exchange's ring barrier (every rank its own owner: the predecessor rows and the
+carry multicast land unread). ttKDA keeps a host-side `sequence_parallel_size=1` (the single-rank scan paths, the TP
+axis rule); the kwarg forwarding (`sp_size_kwargs`) and the test's ttnn feature gate are removed. The wave path
+(`mesh_model`) takes its chronology from `local_bounds` (never the absolute chunk start, which would split a segment
+at `start % T`). Validation queued on the stock runtime (`~/ashai/glm53/tt-metal` @73fb055f995, no override):
+`test_mesh_local_kda` on the (2,4) block and the 8x4, then the served c1 1 M needle (rows-independent waves).
