@@ -51,6 +51,9 @@
 #ifdef SITU_GLU
 #include "api/compute/situ_glu.h"
 #endif
+#ifdef SILU_GLU_FUSED
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fast_silu_glu_sfpu.h"
+#endif
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_compute_helpers.hpp"
 #include "api/debug/kernel_profiler.hpp"
 
@@ -91,9 +94,9 @@ constexpr bool kFp32DestAccEn = FP32_DEST_ACC_EN != 0;
 #define BINARY_ACT_INIT() situ_glu_tile_init()
 #define BINARY_ACT_TILE(g, u, o) situ_glu_tile(g, u, o)
 #elif defined(SILU_GLU_FUSED)
-// Op-local, in moe_fused_swiglu_compute_helpers.hpp; uses the fast sigmoid (MOE_SILU_FAST).
-#define BINARY_ACT_INIT() moe_silu_glu_tile_init()
-#define BINARY_ACT_TILE(g, u, o) moe_silu_glu_tile(g, u, o)
+// The same LUT sigmoid as unified_routed_expert_ffn, so both halves of the hybrid op agree.
+#define BINARY_ACT_INIT() fast_silu_glu_tile_init()
+#define BINARY_ACT_TILE(g, u, o) fast_silu_glu_tile(g, u, o)
 #endif
 #endif
 

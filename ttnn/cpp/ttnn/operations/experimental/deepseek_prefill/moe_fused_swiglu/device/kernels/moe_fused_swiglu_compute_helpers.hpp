@@ -52,25 +52,6 @@ inline void calculate_moe_silu_fast() {
     }
 }
 
-// silu(gate) * up with both operands already in DEST: the plain-SiLU twin of situ_glu / swiglu_oai,
-// so the fused fold_binary_act_blocked path serves SiLU too and the bf16 slice CBs drop out.
-template <bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_moe_silu_glu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
-    constexpr uint dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
-#pragma GCC unroll 4
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
-        sfpi::vFloat up = sfpi::dst_reg[up_tile_idx * dst_tile_size];
-        sfpi::vFloat result = moe_silu_fast_value<is_fp32_dest_acc_en>(gate) * up;
-        if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-        }
-        sfpi::dst_reg[out_tile_idx * dst_tile_size] = result;
-        sfpi::dst_reg++;
-    }
-}
-
-inline void moe_silu_glu_init() {}
 }  // namespace ckernel::sfpu
 #endif
 
@@ -84,22 +65,6 @@ ALWI void moe_silu_fast_tile_pack(uint32_t idst) {
         (is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC));
-}
-
-ALWI void moe_silu_glu_tile(uint32_t gate, uint32_t up, uint32_t out) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_moe_silu_glu,
-        (DST_ACCUM_MODE, 8 /* ITERATIONS */),
-        gate,
-        up,
-        out,
-        VectorMode::RC)));
-}
-
-ALWI void moe_silu_glu_tile_init() {
-    MATH((llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(sfpu::moe_silu_glu_init)));
 }
 }  // namespace ckernel
 
