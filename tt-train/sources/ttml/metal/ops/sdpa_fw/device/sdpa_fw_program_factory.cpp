@@ -13,6 +13,7 @@
 
 #include "metal/common/program_utils.hpp"
 #include "sdpa_fw_config.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 namespace {
 
@@ -55,35 +56,6 @@ const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 
 const std::string kHasGateDefKey = "HAS_GATE";
-
-// One matmul_block call produces a rectangle of output tiles (block_rows x block_cols) that must fit
-// in DST (dst_size tiles). The full output is rows x cols tiles, so the rectangle sides must divide
-// those. Take the biggest rectangle; between equal sizes take the wider one, so the tiles of one
-// output row are packed consecutively (the LLK unpacks min(rows, cols) + rows * cols tiles either way).
-struct MatmulBlockDims {
-    uint32_t block_rows;
-    uint32_t block_cols;
-};
-
-MatmulBlockDims pick_matmul_block_dims(uint32_t rows, uint32_t cols, uint32_t dst_size) {
-    MatmulBlockDims best{1U, 1U};
-    for (uint32_t block_rows = 1U; block_rows <= rows; ++block_rows) {
-        if (rows % block_rows != 0U) {
-            continue;
-        }
-        for (uint32_t block_cols = 1U; block_cols <= cols; ++block_cols) {
-            if (cols % block_cols != 0U || block_rows * block_cols > dst_size) {
-                continue;
-            }
-            const uint32_t tiles = block_rows * block_cols;
-            const uint32_t best_tiles = best.block_rows * best.block_cols;
-            if (tiles > best_tiles || (tiles == best_tiles && block_cols > best.block_cols)) {
-                best = {block_rows, block_cols};
-            }
-        }
-    }
-    return best;
-}
 
 }  // namespace
 
@@ -222,12 +194,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     constexpr bool fp32_dest_acc_en = true;
     const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
     const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
-    const auto qk_block = pick_matmul_block_dims(rows, Sk_chunk_t, dst_size);
-    const uint32_t qk_block_h = qk_block.block_rows;
-    const uint32_t qk_block_w = qk_block.block_cols;
-    const auto pv_block = pick_matmul_block_dims(rows, vWt, dst_size - 1U);
-    const uint32_t pv_block_h = pv_block.block_rows;
-    const uint32_t pv_block_w = pv_block.block_cols;
+    // The matmul rectangles come from ttnn's SDPA subblock search: the biggest h x w that fits DST and
+    // tiles the rows x cols output.
+    using ttnn::prim::detail::determine_largest_subblock_size;
+    const auto [qk_block_h, qk_block_w] = determine_largest_subblock_size(rows, Sk_chunk_t, dst_size);
+    const auto [pv_block_h, pv_block_w] = determine_largest_subblock_size(rows, vWt, dst_size - 1U);
     const uint32_t sm_block_size = dst_size;
 
     const auto data_format = input_data_format;
