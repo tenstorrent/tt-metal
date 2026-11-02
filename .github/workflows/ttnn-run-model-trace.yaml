@@ -61,7 +61,11 @@ jobs:
     outputs:
       arch: ${{ steps.derive.outputs.arch }}
       platform: ${{ steps.derive.outputs.platform }}
-      ci-version: ${{ steps.derive.outputs.ci_version }}
+      sku: ${{ steps.derive.outputs.sku }}
+      runs-on: ${{ steps.derive.outputs.runs_on }}
+      weights-cache-mode: ${{ steps.derive.outputs.weights_cache_mode }}
+      hf-mount: ${{ steps.derive.outputs.hf_mount }}
+      hf-offline: ${{ steps.derive.outputs.hf_offline }}
       matrix: ${{ steps.parse.outputs.matrix }}
       model-count: ${{ steps.parse.outputs.model_count }}
     steps:
@@ -195,35 +199,69 @@ jobs:
               print(f"  - {item['slug']}: {item['test_path']}{tag}")
           PY
 
-      - name: Derive arch from runner label
+      - name: Resolve runner pool and weights cache
         id: derive
         env:
           RUNNER_LABEL: ${{ inputs.runner-label }}
         run: |
-          RUNNER="$RUNNER_LABEL"
-          case "$RUNNER" in
-            P100a|P150b|BH-LoudBox)
-              ARCH="blackhole"
-              ;;
-            *)
-              ARCH="wormhole_b0"
-              ;;
-          esac
-          # CIv2 pool (tt-ubuntu-2204-<label>-viommu-stable) resolves HF weights
-          # via the in-cluster large file cache. Bare-metal labels run on CIv1
-          # with /mnt/MLPerf (Weka) instead.
-          case "$RUNNER" in
-            N150|N300|P100a|P150b)
-              CI_VERSION="civ2"
-              ;;
-            *)
-              CI_VERSION="civ1"
-              ;;
-          esac
-          echo "arch=$ARCH" >> $GITHUB_OUTPUT
-          echo "platform=Ubuntu 22.04" >> $GITHUB_OUTPUT
-          echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
-          echo "Derived arch=$ARCH ci_version=$CI_VERSION for runner=$RUNNER"
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          import yaml
+
+          # Run on the same pools (and weights mounts) as the model e2e pipeline, so any model
+          # that has CI coverage on a SKU finds its weights. The viommu CIv2 pools only see the
+          # large file cache, which lacks most HF checkpoints.
+          label_to_sku = {
+              "N150": "wh_n150",
+              "N300": "wh_n300",
+              "n300-llmbox": "wh_llmbox",
+              "P100a": "bh_p100",
+              "P150b": "bh_p150",
+              "BH-LoudBox": "bh_loudbox",
+          }
+          label = os.environ["RUNNER_LABEL"]
+          if label == "topology-6u":
+              sku = "topology-6u"
+              runs_on = ["topology-6u", "in-service", "bare-metal"]
+              mode = ""
+          else:
+              sku = label_to_sku[label]
+              with open(".github/sku_config.yaml") as f:
+                  entry = yaml.safe_load(f)["skus"].get(sku)
+              if not entry:
+                  print(f"::error::SKU {sku} (runner-label {label}) is missing from .github/sku_config.yaml")
+                  sys.exit(1)
+              runs_on = entry["runs_on"]
+              mode = entry.get("weights-cache-mode", "")
+
+          # Same host -> container mapping as models-e2e-tests-impl.yaml; HF lands at /mnt/MLPerf/huggingface.
+          if mode == "cloud-mlperf":
+              hf_mount, hf_offline = "/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro", "1"
+          elif mode == "yyz4-mnt-models":
+              hf_mount, hf_offline = "/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro", "1"
+          elif mode in ("local-disk", "lfc"):
+              hf_mount, hf_offline = "/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw", "0"
+          else:
+              hf_mount, hf_offline = "/mnt/MLPerf:/mnt/MLPerf:ro", "1"
+
+          arch = "blackhole" if label in ("P100a", "P150b", "BH-LoudBox") else "wormhole_b0"
+          outputs = {
+              "arch": arch,
+              "platform": "Ubuntu 22.04",
+              "sku": sku,
+              "runs_on": json.dumps(runs_on),
+              "weights_cache_mode": mode or "mlperf",
+              "hf_mount": hf_mount,
+              "hf_offline": hf_offline,
+          }
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              for k, v in outputs.items():
+                  f.write(f"{k}={v}\n")
+          print(json.dumps(outputs, indent=2))
+          PY
 
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
@@ -261,28 +299,22 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         TRACY_NO_INVARIANT_CHECK: 1
-        # CIv1 points HF at the Weka-backed cache; CIv2 resolves through TT_GH_CI_INFRA
-        # + LFC so HF_HOME is left unset (falls back to the container default).
-        HF_HOME: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
+        HF_HOME: /mnt/MLPerf/huggingface
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        # Shared read-only caches must stay offline: HF writes metadata on every lookup.
+        HF_HUB_OFFLINE: ${{ needs.validate-inputs.outputs.hf-offline }}
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: >-
-        --device /dev/tenstorrent
-        --device /dev/ipmi0
-        --privileged
-        ${{ needs.validate-inputs.outputs.ci-version == 'civ2' && '-e TT_GH_CI_INFRA=1' || '' }}
+        - ${{ needs.validate-inputs.outputs.hf-mount }}
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
         working-directory: /work
     timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
-    runs-on: >-
-      ${{
-        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-      }}
+    runs-on: ${{ fromJSON(needs.validate-inputs.outputs.runs-on) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -304,7 +336,8 @@ jobs:
           SLUG: ${{ matrix.slug }}
           RUNNER_LABEL: ${{ inputs.runner-label }}
           ARCH: ${{ needs.validate-inputs.outputs.arch }}
-          CI_VERSION: ${{ needs.validate-inputs.outputs.ci-version }}
+          SKU: ${{ needs.validate-inputs.outputs.sku }}
+          WEIGHTS_MODE: ${{ needs.validate-inputs.outputs.weights-cache-mode }}
           HF_MODEL: ${{ matrix.hf_model }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
           LOAD_DB: ${{ inputs.load-to-db }}
@@ -312,11 +345,6 @@ jobs:
           TIMEOUT: ${{ inputs.timeout-minutes }}
           TT_METAL_SHA: ${{ github.sha }}
         run: |
-          if [[ "$CI_VERSION" == "civ2" ]]; then
-            HF_SOURCE="LFC via TT_GH_CI_INFRA=1"
-          else
-            HF_SOURCE="/mnt/MLPerf (HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home)"
-          fi
           echo "::group::Trace Configuration (leg: $SLUG)"
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│                    Model Trace Configuration                │"
@@ -325,9 +353,9 @@ jobs:
           echo "│ Test Path:            $TEST_PATH"
           echo "│ Runner:               $RUNNER_LABEL"
           echo "│ Architecture:         $ARCH"
-          echo "│ CI version:           $CI_VERSION"
+          echo "│ SKU:                  $SKU"
           echo "│ HF_MODEL:             ${HF_MODEL:-(not set)}"
-          echo "│ HF weights source:    $HF_SOURCE"
+          echo "│ Weights cache:        $WEIGHTS_MODE (HF_HUB_CACHE=$HF_HUB_CACHE, offline=$HF_HUB_OFFLINE)"
           echo "│ Load to DB:           $LOAD_DB"
           echo "│ Run Validation:       $RUN_VALIDATION"
           echo "│ Extra Args:           ${EXTRA_ARGS:-(none)}"
@@ -336,39 +364,25 @@ jobs:
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
 
-      - name: Probe LFC for HF_MODEL (CIv2)
-        if: ${{ needs.validate-inputs.outputs.ci-version == 'civ2' && matrix.hf_model != '' }}
+      - name: Check HF_MODEL weights
+        if: ${{ matrix.hf_model != '' }}
         env:
           INPUT_HF_MODEL: ${{ matrix.hf_model }}
+          SKU: ${{ needs.validate-inputs.outputs.sku }}
         run: |
-          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
-          URL="${LFC_BASE}/${INPUT_HF_MODEL}/config.json"
-          echo "Probing LFC: $URL"
-          STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$URL" || echo "000")
-          echo "HTTP status: $STATUS"
-          if [[ "$STATUS" != "200" ]]; then
-            echo "::error::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS at $URL)."
-            echo "::error::Upload the weights to /mldata/model_checkpoints/pytorch/huggingface/${INPUT_HF_MODEL}/,"
-            echo "::error::or re-run this workflow on a CIv1 runner label (topology-6u, BH-LoudBox)"
-            echo "::error::where /mnt/MLPerf provides the weights."
-            exit 1
-          fi
-          echo "LFC has ${INPUT_HF_MODEL}"
-
-      - name: Verify CIv1 weights (MLPerf)
-        if: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && matrix.hf_model != '' }}
-        env:
-          INPUT_HF_MODEL: ${{ matrix.hf_model }}
-        run: |
-          if ! mountpoint -q /mnt/MLPerf; then
-            echo "::error::/mnt/MLPerf is not mounted on this CIv1 runner."
-            exit 1
-          fi
-          EXPECTED="/mnt/MLPerf/tt_dnn-models/${INPUT_HF_MODEL}"
-          if [[ -d "$EXPECTED" ]]; then
-            echo "Found CIv1 weights at $EXPECTED"
+          if [[ "$INPUT_HF_MODEL" == /* ]]; then
+            EXPECTED="$INPUT_HF_MODEL"
           else
-            echo "::warning::No CIv1 weights under $EXPECTED; HF loader will try HF_HOME cache and may fail if unpopulated."
+            EXPECTED="$HF_HUB_CACHE/models--${INPUT_HF_MODEL//\//--}"
+          fi
+          if [[ -d "$EXPECTED" ]]; then
+            echo "Found weights for $INPUT_HF_MODEL at $EXPECTED"
+          elif [[ "$HF_HUB_OFFLINE" == "1" ]]; then
+            echo "::error::$INPUT_HF_MODEL is not in the $SKU weights cache ($EXPECTED) and this cache is offline."
+            echo "::error::Pick a model that has CI coverage on this SKU, or a runner-label whose cache holds it."
+            exit 1
+          else
+            echo "::notice::$INPUT_HF_MODEL not cached at $EXPECTED; HF will download it into the per-runner cache."
           fi
 
       - name: Run model trace
@@ -692,20 +706,13 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: >-
-        --device /dev/tenstorrent
-        --device /dev/ipmi0
-        --privileged
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
         shell: bash
         working-directory: /work
     timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
-    runs-on: >-
-      ${{
-        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-      }}
+    runs-on: ${{ fromJSON(needs.validate-inputs.outputs.runs-on) }}
     env:
       REPORT_JSON: /work/model-op-report/model_op_report.json
       VECTOR_TAG: model-op-report
