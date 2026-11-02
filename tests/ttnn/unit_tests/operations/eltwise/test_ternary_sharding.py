@@ -2645,3 +2645,69 @@ def test_where_nd_sharded_preallocated_output(device, nd_sharded_inputs):
         output_tensor=out,
     )
     assert torch.equal(ttnn.to_torch(out), torch.where(torch_cond.bool(), torch_true, torch_false))
+
+
+def _same_cores_mem_config(kind, shape):
+    S, R, C = ttnn.ShardStrategy, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR
+    if kind in ("height_2x2", "block_2x2"):
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+        spec = ttnn.ShardSpec(grid, [shape[-2] // 2, shape[-1]], R)
+        layout = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if kind == "height_2x2" else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
+        return ttnn.MemoryConfig(layout, ttnn.BufferType.L1, spec)
+    grid8, grid24 = ttnn.CoreGrid(y=1, x=8), ttnn.CoreGrid(y=2, x=4)
+    return {
+        "height_8": lambda: ttnn.create_sharded_memory_config(shape, grid8, S.HEIGHT),
+        "width_8": lambda: ttnn.create_sharded_memory_config(shape, grid8, S.WIDTH),
+        "height_2x4_row": lambda: ttnn.create_sharded_memory_config(shape, grid24, S.HEIGHT, R),
+        "height_2x4_col": lambda: ttnn.create_sharded_memory_config(shape, grid24, S.HEIGHT, C),
+        "block_2x4": lambda: ttnn.create_sharded_memory_config(shape, grid24, S.BLOCK),
+    }[kind]()
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        (lambda a, b, **k: ttnn.where(ttnn.gtz(a), a, b, **k), lambda A, B: torch.where(A > 0, A, B)),
+        (lambda a, b, **k: ttnn.addcmul(a, a, b, value=0.5, **k), lambda A, B: A + 0.5 * A * B),
+        (lambda a, b, **k: ttnn.addcdiv(a, a, b, value=0.5, **k), lambda A, B: A + 0.5 * A / B),
+        (lambda a, b, **k: ttnn.lerp(a, b, a, **k), lambda A, B: A + A * (B - A)),
+    ],
+    ids=["where", "addcmul", "addcdiv", "lerp"],
+)
+@pytest.mark.parametrize(
+    "in_kind, out_kind",
+    [
+        ("height_8", "width_8"),
+        ("width_8", "height_8"),
+        ("height_2x4_row", "height_2x4_col"),
+        ("block_2x4", "height_2x4_row"),
+        ("height_2x2", "block_2x2"),
+        ("block_2x2", "height_2x2"),
+    ],
+)
+@pytest.mark.parametrize("output_given_as", ["output_tensor", "memory_config"])
+def test_ternary_output_sharded_differently_on_same_cores(device, op, in_kind, out_kind, output_given_as):
+    shape = (1, 1, 256, 256)
+    torch.manual_seed(0)
+    tt_op, torch_op = op
+    a_torch = torch.randn(shape).bfloat16()
+    b_torch = (torch.rand(shape) + 0.5).bfloat16()
+    in_mc, out_mc = _same_cores_mem_config(in_kind, shape), _same_cores_mem_config(out_kind, shape)
+    a = ttnn.from_torch(a_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    b = ttnn.from_torch(b_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    if output_given_as == "output_tensor":
+        out = ttnn.from_torch(
+            torch.zeros(shape).bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=out_mc,
+        )
+        tt_op(a, b, output_tensor=out)
+    else:
+        out = tt_op(a, b, memory_config=out_mc)
+    expected = torch_op(a_torch.float(), b_torch.float())
+    result = ttnn.to_torch(out).float()
+    torch.testing.assert_close(result, expected, rtol=0.02, atol=0.02)

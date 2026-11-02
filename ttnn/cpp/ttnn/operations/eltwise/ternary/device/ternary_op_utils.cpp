@@ -55,6 +55,11 @@ static bool has_empty_shards(const tt::tt_metal::TensorSpec& t, const tt::tt_met
     return num_shards < spec.grid.num_cores();
 }
 
+static bool shard_layout_matches(const tt::tt_metal::MemoryConfig& input, const tt::tt_metal::MemoryConfig& output) {
+    return input.shard_spec().has_value() && output.shard_spec().has_value() &&
+           *input.shard_spec() == *output.shard_spec() && input.memory_layout() == output.memory_layout();
+}
+
 // Check based on input specs and output memory config (two tensors, same shape and memory config).
 static bool is_native_L1_sharding(
     const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const tt::tt_metal::MemoryConfig& c) {
@@ -69,15 +74,12 @@ static bool is_native_L1_sharding(
         c.buffer_type() == BufferType::DRAM) {
         return false;
     }
-    // Check if output grid differs from input grids - if so, cannot use native sharding
+    // A sharded output must hold the same tiles per core as the inputs: same shard spec and memory layout
     if (c.is_sharded() && c.shard_spec().has_value()) {
-        const auto& out_grid = c.shard_spec()->grid;
-        if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value() &&
-            a.memory_config().shard_spec()->grid != out_grid) {
+        if (a.memory_config().shard_spec().has_value() && !shard_layout_matches(a.memory_config(), c)) {
             return false;
         }
-        if (b.memory_config().is_sharded() && b.memory_config().shard_spec().has_value() &&
-            b.memory_config().shard_spec()->grid != out_grid) {
+        if (b.memory_config().shard_spec().has_value() && !shard_layout_matches(b.memory_config(), c)) {
             return false;
         }
     }
@@ -125,21 +127,13 @@ bool is_native_L1_sharding(
             output_memory_config.buffer_type() == BufferType::DRAM) {
             return false;
         }
-        // Check if output grid differs from input grids - if so, cannot use native sharding
+        // Same tiles on every core as the inputs, see the two-tensor overload above
         if (output_memory_config.shard_spec().has_value()) {
-            const auto& out_grid = output_memory_config.shard_spec()->grid;
-            if (predicate_spec.memory_config().is_sharded() &&
-                predicate_spec.memory_config().shard_spec().has_value() &&
-                predicate_spec.memory_config().shard_spec()->grid != out_grid) {
-                return false;
-            }
-            if (true_spec->memory_config().is_sharded() && true_spec->memory_config().shard_spec().has_value() &&
-                true_spec->memory_config().shard_spec()->grid != out_grid) {
-                return false;
-            }
-            if (false_spec->memory_config().is_sharded() && false_spec->memory_config().shard_spec().has_value() &&
-                false_spec->memory_config().shard_spec()->grid != out_grid) {
-                return false;
+            for (const auto* spec : {&predicate_spec, &*true_spec, &*false_spec}) {
+                if (spec->memory_config().shard_spec().has_value() &&
+                    !shard_layout_matches(spec->memory_config(), output_memory_config)) {
+                    return false;
+                }
             }
         }
         if (predicate_spec.memory_config().is_sharded() &&
