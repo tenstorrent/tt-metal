@@ -343,6 +343,7 @@ class DSV41PrefillLayer:
 
     colsplit = False  # set by the model per chunk size (colsplit_active)
     vl_rows = None  # [1,1,n,1] fp32 tile of the column's own rows: 1 inside an image span (routing with bias_vl); set by the model per forward (DSV41_VISION=1), colsplit + unified MoE only
+    pad_rows = None  # [1,1,n,1] fp32 tile, 1 = own row of an idle prefill slot (DSV41_PF_MOE_PAD=1), set by the model per forward
     umoe = None  # tt/prefill_unified_moe.py DSV41UnifiedMoE (DSV41_PREFILL_MOE=unified), set by the model builder
 
     def _moe_unified(self, st, n8):
@@ -367,7 +368,7 @@ class DSV41PrefillLayer:
         else:
             overlap = None
         own = moe_cols(
-            self.umoe, L.moe.gate, hh_own, L.mesh_config, L.ccl, overlap=overlap, vl=self.vl_rows
+            self.umoe, L.moe.gate, hh_own, L.mesh_config, L.ccl, overlap=overlap, vl=self.vl_rows, pad=self.pad_rows
         )  # [1,1,n8*32,D]
         if overlap is not None:
             self._sh_pre = (
@@ -491,7 +492,7 @@ class DSV41PrefillLayer:
             ):  # shared expert on a sub-device concurrently with the dispatch (tt/moe_overlap.py), as in _moe_unified
                 ov = moe_overlap.SDOverlap.get(L.mesh_device)
                 overlap = (ov, lambda: box.append(ov.shared(L.shared, hh)))
-            ms = [moe_cols(self.umoe, L.moe.gate, hh, mc, cc, overlap=overlap, vl=self.vl_rows)]
+            ms = [moe_cols(self.umoe, L.moe.gate, hh, mc, cc, overlap=overlap, vl=self.vl_rows, pad=self.pad_rows)]
             _mark("moe+allgather")
         else:
             assert self.vl_rows is None, "image input (DSV41_VISION=1) needs the unified prefill MoE"

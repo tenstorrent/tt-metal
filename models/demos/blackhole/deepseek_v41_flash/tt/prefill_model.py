@@ -343,7 +343,41 @@ class DSV41PrefillModel:
         vl = ttnn.reshape(ttnn.to_layout(vl_dev, ttnn.TILE_LAYOUT), [1, 1, n_own, 1])
         return {"ov": ov, "vl": vl, "keep": ttnn.rsub(vl, 1.0)}
 
+    def _pad_rows(self, C):
+        """DSV41_PF_MOE_PAD=1 (default OFF): [1,1,n_own,1] fp32 tile of the column's own rows, 1 for the rows of a prefill slot that is NOT part of this replay (DynCtx.umask == 0; needs
+        DSV41_PF_UMASK=1 and the unified MoE), computed inside the trace from the persistent umask. The unified MoE routes such rows to the sentinel expert (n_routed_experts) so that
+        masked_bincount does not count them and dispatch drops them: an idle slot costs no expert / dispatch / combine work (lone user at Up=2).
+        """
+        um = getattr(self.dyn, "umask", None)
+        if um is None or os.environ.get("DSV41_PF_MOE_PAD", "0") != "1" or not self.cs:
+            return None
+        n_own = self.U * C // self.cols
+        key = (self.U, n_own)
+        cache = self.__dict__.setdefault("_pad_ones", {})
+        if key not in cache:  # created in the (eager) compile pass, before any capture
+            cache[key] = ttnn.ones(
+                [self.U, 1, n_own // self.U, 1], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.md
+            )
+        inactive = ttnn.typecast(ttnn.rsub(um, 1.0), ttnn.float32)  # [U,1,1,1]
+        pr = ttnn.multiply(cache[key], inactive)
+        ttnn.deallocate(inactive)
+        pad = ttnn.reshape(pr, [1, 1, n_own, 1])
+        return pad
+
     def forward_device(self, bufs, S, s0, C, hook=None, profile=False, dyn=False):
+        pad = self._pad_rows(C) if dyn else None
+        if pad is None:
+            return self._forward_device_vis(bufs, S, s0, C, hook, profile, dyn)
+        for _, pl in self.layers:
+            pl.pad_rows = pad
+        try:
+            return self._forward_device_vis(bufs, S, s0, C, hook, profile, dyn)
+        finally:
+            for _, pl in self.layers:
+                pl.pad_rows = None
+            ttnn.deallocate(pad)
+
+    def _forward_device_vis(self, bufs, S, s0, C, hook=None, profile=False, dyn=False):
         vb = bufs[2]
         if vb is None:
             return self._forward_device(bufs, S, s0, C, hook, profile, dyn)

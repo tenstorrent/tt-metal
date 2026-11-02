@@ -432,7 +432,7 @@ def reduce_scatter_tokens(part, cc, piece=None, mode=None, free=True):
     return out
 
 
-def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None, vl=None):
+def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None, vl=None, pad=None):
     """Routing of the gathered rows h [1,1,8n,D] (row order [column][own chunk][32]) -> (weights [8n,1,1,k] bf16 RM, indices [8n,1,1,k] uint16 RM, tensors to free).
     mode "full": router on every gathered row (8x the router work); "own": router on the own rows hh_own only + all-gather of the (fp32 packed) routing.
     """
@@ -460,6 +460,15 @@ def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None, vl=None):
         ix = ttnn.concat([p_[1] for p_ in parts], dim=0) if len(parts) > 1 else parts[0][1]
     f32 = lambda a: ttnn.typecast(ttnn.to_layout(ttnn.reshape(a, [1, 1, n, TOPK]), ttnn.TILE_LAYOUT), ttnn.float32)
     ixf, scf = f32(ix), f32(sc)
+    if (
+        pad is not None
+    ):  # DSV41_PF_MOE_PAD: rows of an idle slot -> sentinel expert (== NUM_ROUTED: not counted, dropped by dispatch), weight 0
+        keep = ttnn.rsub(pad, 1.0)
+        ixf2 = ttnn.add(ttnn.multiply(ixf, keep), ttnn.multiply(pad, float(NUM_ROUTED)))
+        scf2 = ttnn.multiply(scf, keep)
+        for t_ in (ixf, scf, keep):
+            ttnn.deallocate(t_)
+        ixf, scf = ixf2, scf2
     pk_t = ttnn.concat([ixf, scf], dim=3)  # fp32 tile [1,1,n,12]: expert ids (exact in fp32) | weights (bf16 values)
     # narrow tensors (<= 1 tile wide) are corrupted by the all-gather (blocks of 32 rows go missing): gather wide row-major pages instead,
     # 32 tokens x 12 values = 384 fp32 per page (n is a multiple of 32)
@@ -479,7 +488,7 @@ def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None, vl=None):
     return sc_all, ix_all, (sc, ix, ixf, scf)
 
 
-def moe_cols(um, gate, hh_own, mc, cc, overlap=None, vl=None):
+def moe_cols(um, gate, hh_own, mc, cc, overlap=None, vl=None, pad=None):
     """Column-split MoE of a whole chunk. hh_own [1,1,n,D] tile bf16: the (n = N/8) normed hidden rows THIS column owns (own 32-token chunks in order).
     Routes the own rows (router per 32 rows), all-gathers hidden + routing over the 8 columns (row order [column][own chunk][32]: dispatch does not
     care about the token order), runs the pipeline and reduce-scatters the column partial sums back -> [1,1,n,D] (own rows, same order).
@@ -487,7 +496,7 @@ def moe_cols(um, gate, hh_own, mc, cc, overlap=None, vl=None):
     """
     D = hh_own.shape[3]
     h = mc.allgather(hh_own, cc, axis=1, dim=2)
-    sc_all, ix_all, junk = route_cols(gate, hh_own, h, mc, cc, vl=vl)
+    sc_all, ix_all, junk = route_cols(gate, hh_own, h, mc, cc, vl=vl, pad=pad)
     x_rm = ttnn.reshape(ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT), [1, h.shape[2], D])
     ttnn.deallocate(h)
     part = um.forward(x_rm, sc_all, ix_all, overlap=overlap)

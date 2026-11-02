@@ -527,6 +527,22 @@ def test_chunk_probe(mesh_device):
             os.environ.get("PROBE_PROF_SORT", "cumulative")
         ).print_stats(60)
         log("PROBE BUILD PROFILE (host work of the window builds, cumulative):\n" + buf_.getvalue())
+    if (
+        os.environ.get("PROBE_TRACETIME") == "1"
+    ):  # pure device time of the captured chunk traces (back-to-back replays at the state left by the last window)
+        for nm_, tr_ in (("A", pm.dyn_trace), ("B", getattr(pm, "dyn_trace_b", None))):
+            if tr_ is None:
+                continue
+            ts_ = []
+            for _ in range(6):
+                ttnn.synchronize_device(md)
+                t_ = time.perf_counter()
+                ttnn.execute_trace(md, tr_, cq_id=0, blocking=False)
+                ttnn.synchronize_device(md)
+                ts_.append(time.perf_counter() - t_)
+            log(
+                f"PROBE TRACETIME {nm_} C={CHUNK} B={B}: min {min(ts_) * 1e3:.1f} ms, all {[round(x * 1e3, 1) for x in ts_]}"
+            )
     if oprec is not None:
         import json
 

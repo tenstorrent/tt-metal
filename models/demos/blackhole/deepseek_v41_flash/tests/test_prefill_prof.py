@@ -35,7 +35,7 @@ S0 = int(os.environ.get("PROF_S0", str(S - C)))
 LAYERS = [int(x) for x in os.environ.get("PROF_LAYERS", "0,1,2,3,14,20,21,24").split(",")]
 MODE = os.environ.get("PROF_MODE", "both")
 REPS = int(os.environ.get("PROF_REPS", "2"))
-BASE = "/mnt/tt-data/ssinghal/dsv4-prefill-s128"
+BASE = os.environ.get("PROF_BASE", "/mnt/tt-data/ssinghal/dsv4-chain-fixed")
 
 
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
@@ -112,7 +112,9 @@ def test_prefill_prof(mesh_device):
     if (
         os.environ.get("PROF_TOKENS", "real") == "real"
     ):  # real text (routing skew is realistic): a dumped prompt, rolled per user, tiled to S
-        base = torch.load("/mnt/tt-data/ssinghal/dsv4-prefill-s4096b1/tokens.pt")["prefill_tokens"].reshape(-1)
+        base = torch.load(
+            os.environ.get("PROF_TOKENS_FILE", "/mnt/tt-data/ssinghal/dsv4-logs/prefill_opt/tokens_128k.pt")
+        )["prefill_tokens"].reshape(-1)
         reps = -(-S // base.numel())
         base = base.repeat(reps)
         tokens = torch.stack([base.roll(u * 997)[:S] for u in range(B)])
