@@ -1,0 +1,151 @@
+# `kda_decode` — fused KDA single-token decode block (model-local `ttnn.generic_op`)
+
+One program for everything between the packed projection matmuls and `o_proj` of a GLM-5.3-Flash KDA layer
+(design 8.1): causal conv (kernel 4) + SiLU on the device-owned tile history, per-head L2 norms, the per-key-channel
+forget gate, beta and output gates, the gated delta-rule step on the recurrent state and the gated RMSNorm, packed
+as the bf16 TILE input of `o_proj`. Kernels: `kernels/{reader,writer,compute}_kda_decode.cpp`; launcher
+`op.py::KdaDecode`; torch reference `KdaDecode.golden`; test `tests/custom_ops/test_kda_decode.py`. Used by
+`tt/kda.py` (`GLM53_KDA_FUSED=1`, the default): the block is 5 ops (qkv matmul, two gate matmuls, this program, o_proj).
+
+Options (constructor `gates="pre"|"act"`, `placement="col"|"rect"`; `tt/kda.py` sets them from `GLM53_KDA_DECODE_V2=1`
+or `GLM53_KDA_DECODE_{GATES,PLACEMENT,FIDELITY}`; defaults = the path described below; `_agents/kda_roofline/STATUS.md`).
+With every option at its default (`KdaDecode.variant == "v1"`) the op launches today's sources
+`kernels/{reader,writer,compute}_kda_decode.cpp` with today's argument layouts, byte for byte; any non-default option
+(`variant == "v2"`) launches `kernels/reader_kda_decode_v2.cpp` + `compute_kda_decode_v2.cpp` (the writer is shared) with
+the extended layouts below. The default sources must stay untouched by the variant work: a long-running process that
+imported an older `op.py` compiles whatever is on disk, so an ABI change in the default file breaks it (seen 2026-10-26
+18:52 on the 8x4 queue: `get_ct_arg<11>()` out of range).
+
+* `gates="act"`: `gates` arrives activated, `[sigmoid(a (f + dt)) | sigmoid(og) | sigmoid(b)]` -- the channel constants
+  folded into the g2 matmul weights (`prearrange_gate_weights`: f columns scaled by `exp(A_log)` per head, an fp32 bias
+  row `a dt_bias`) and the sigmoid fused into that matmul. The program forms `decay = exp(lb * s_f)` (copy, scalar
+  multiply, exp instead of two row broadcasts + sigmoid + multiply + exp), `wg = s_og * w` (one row broadcast instead of
+  copy + sigmoid + broadcast) and takes the beta column as is; `chan_consts` is still passed but never read. Reader /
+  compute compile-time arg 11 (`GATES_ACT`) of the `_v2` sources; their reader's accessor block starts at 12.
+* `placement="rect"`: slots as `2 x h` core rectangles (`placement_rect`) whenever that gives more parts than the column
+  layout (16 slots on 12x10: 6 parts / 96 cores vs 5 / 80). Part 0 is the top-left core; parts `1..h-1` go down its
+  column, `h..2h-1` down the next column. The part-0 reader multicasts to two single-column rectangles (its own column
+  below itself, `n_a = parts - 1 - n_b` cores, and the second column, `n_b = h` cores: runtime args 15..19 =
+  `rb_x0, rb_y0, rb_x1, rb_y1, n_b`; the column layout passes zeros and is bit-for-bit today's behaviour). The writer's
+  gather (unicast to the part-0 core) and the compute kernel are placement-agnostic.
+* `KdaDecode(math_fidelity=HiFi2)`: the FPU fidelity of every matmul / broadcast in the program (default HiFi4).
+* `KdaDecode(gated=True)` (`variant == "gated"`; the speculative commit of `tt/spec_decode.py` under
+  `GLM53_SPEC_COMMIT=gated`, `_agents/spec_sp1/STATUS.md`): `kernels/reader_kda_decode_gated.cpp` +
+  `writer_kda_decode_gated.cpp` (the v2 reader / the default writer plus a per-user write gate) with the `_v2` compute
+  kernel. The call takes one more tensor, `gate [Bt, 32]` int32 ROW_MAJOR (page `tb` = the 32 users of tile row `tb`,
+  non-zero = write), read by the kernels at run time (a trace replays with any gate values): a gated-off user's recurrent
+  tiles are popped unwritten by the writer and its conv-history rows are kept by the part-0 reader (the shift is merged
+  row-wise in a scratch region: `cb_onw` grows by `GATED_SCRATCH_PAGES` = 19 fp32 pages after its Vt weight tiles = the
+  gate page (reader copy at +0, writer copy at +2048) + 9 Kt merged bf16 history tiles; all live users on = the plain
+  whole-tile shift, all off = no write); a gated-on user gets exactly the plain update. ABI: compile-time as v2 (`GATES_ACT`
+  at 11) + one more `TensorAccessorArgs` block (the gate) after the recurrent state's in the reader (9 blocks from 12)
+  and the writer (3 blocks from 7); runtime: the v2 reader vector + the gate address at 20 (21), the writer vector + the
+  gate address at 7 (8) (`READER_RT_GATED`, `WRITER_RT_GATED`, `*_RT_LEN["gated"]`). `golden_gated` is the torch
+  reference (`golden` with the per-user select).
+* `KdaDecode(fused_steps=T, fused_dry=...)` (`variant == "fused"`; the speculative loop under `GLM53_SPEC_COMMIT=fused`,
+  `_agents/spec_sp2/STATUS.md`): `kernels/{reader,writer,compute}_kda_decode_fused.cpp`. ONE launch on one tile row of
+  `R = B x T` candidate-major rows (row `j B + u` = user `u`, candidate `j`; `qkv [1, 1, R, 3 H K]`, `gates [1, 1, R, Wg]`,
+  `out [1, 1, R, H V]` against the `B`-slot `recurrent` / `conv_hist`) applies, per user, its candidates in order with the
+  recurrent state kept in L1 across the steps (read once, written at most once). The reader assembles the three conv
+  tap blocks of the R rows in the history CB (row `(j, u)` of tap `t` = history tap `j + t` of user `u` for `j + t < 3`,
+  else raw row `(j + t - 3, u)`; NoC row-run copies on the part-0 core, then the usual multicast), so the conv / norms /
+  gates / derived phases run once on the R-row block; the compute loops `(user, step)` with the state ping-ponged
+  through a two-slot loop CB (index 28 = the v1 / v2 `oq`; `qd . S` rides `cb_vread`), `r = j B + u` selecting the row,
+  the output block accumulating row `r` of every step. `fused_dry=True` (the verify): `T` steps per user, nothing
+  written. `fused_dry=False` (the commit): the step page `steps [Bt, 32]` int32 ROW_MAJOR (word `u` = `n_u`, the
+  candidates user `u` applies; 0 = untouched: no state read, no write) read at run time by the reader (its selector /
+  state stream; a copy handed to the compute as the first `cb_selT` page, read by the unpacker and broadcast to the
+  math / pack threads by mailbox) and the writer (one state write per user with `n_u > 0`, after its last step); the
+  part-0 reader writes the new history (row `u` of tap `i` = `x_{p_u + n_u + i - 3}`: tap block `n_u + i` row `u` for
+  `n_u + i < 3`, else raw row `(n_u + i - 3, u)`; merged in the scratch region = the `GATED_SCRATCH_PAGES` layout: the
+  step page at +0 / the writer's copy at +2048, then 9 Kt bf16 tiles = the live history tiles (the assembly source),
+  afterwards the merged tiles). The result equals the sequential launches' per user, bit for bit (`golden_fused`).
+  ABI: compile-time = the v2 scalars + `USERS, STEPS, DRY` at 12 / 13 / 14 (reader, compute; reader accessors from 15:
+  the v2 eight + the step page) and `[Kt, Vt, Bt, B, H, parts, HV_t, USERS, STEPS, DRY]` (writer; 3 accessor blocks from
+  10: out, recurrent, steps); `B` = R, `Bt` = 1 (`USERS x STEPS = B <= 32`, static-asserted by every kernel); runtime: the
+  v2 reader vector + the page address at 20 (21), the writer vector + the page address at 7 (8) (`READER_RT_FUSED`,
+  `WRITER_RT_FUSED`, `*_RT_LEN["fused"]`, `READER_CT_SCALARS["fused"] = 15`, `WRITER_CT_SCALARS["fused"] = 10`,
+  `COMPUTE_CT_LEN["fused"] = 15`). CBs: as v2 except `cb_onw` + `FUSED_SCRATCH_PAGES` (19 fp32 pages), `cb_selT` 3 pages,
+  index 28 `loop` = 2 kv fp32 pages (`CB_FUSED`); L1 per core 1.03 MB at parts = 5, 1.05 MB at 6 (`l1_bytes`).
+
+## Contract (all tensors interleaved DRAM/L1 on the same device; K = V = 128, conv kernel 4)
+
+| tensor | shape | dtype / layout | role |
+|---|---|---|---|
+| `qkv` | `[1, 1, B, 3*H*K]` | bf16 TILE | raw projections `[q \| k \| v]`, head-major inside a branch |
+| `gates` | `[1, 1, B, H*K + H*V + Hb]` | fp32 TILE | `[f pre-activation \| og pre-activation \| beta logits]`, `Hb = ceil(H/32)*32` |
+| `conv_hist` | `[3, B, 3*H*K]` | bf16 TILE | tap-major conv history (tap 0 oldest, tap 2 the previous token); **updated in place** (tap j+1 -> j, raw -> tap 2) |
+| `recurrent` | `[B, H, K, V]` | fp32 TILE | the recurrent state; **updated in place** |
+| `taps` | `[1, 1, 4, 3*H*K]` | bf16 TILE | conv taps, row j = tap j (row 3 multiplies the current token); bf16 like the checkpoint weight |
+| `chan_consts` | `[1, 1, 2, H*K]` | fp32 TILE | row 0 = `dt_bias`, row 1 = `exp(A_log)` per key channel |
+| `o_norm_w` | `[1, 1, 1, V]` | fp32 TILE | gated RMSNorm weight |
+| `selectors` | `[34*32, 32]` | bf16 TILE | `op.kda_selector_tiles()`: tile r < 32 = E_r^T (a 1 at (r, 0)), tile 32 all ones, tile 33 identity |
+| `out` | `[1, 1, B, H*V]` | bf16 TILE | **pre-allocated by the caller**; normed and gated, the `o_proj` input |
+
+Math per user b, head h (q, k L2-normalised, q scaled by K^-0.5): `S = diag(exp g) S; u = beta (v - k S);
+S += k^T u; o = q S; out = rmsnorm(o) * w * sigmoid(og)` with `g = lb * sigmoid(exp(A_log) (f + dt_bias))` per key
+channel, `beta = sigmoid(b)`. Padding rows of `qkv` / `gates` must be finite (zero when produced by ttnn matmuls on
+zero-padded inputs); rows of the history beyond `B` are never read for live users.
+
+Constructor: `KdaDecode(num_heads=H, head_dim=128, gate_lower_bound=-5.0, l2_eps=1e-6, norm_eps=1e-5,
+math_fidelity=HiFi4)`. Call: `op(qkv, gates, conv_hist, recurrent, taps, chan_consts, o_norm_w, selectors, out) -> out`.
+Buffer addresses are baked into the runtime args: under trace every io tensor must be persistent or allocated
+inside the trace (the model allocates `qkv` / `gates` / `out` inside its captured decode step). The same program
+runs on every device of a mesh (SPMD `ProgramDescriptor`); heads are the device's local heads.
+
+The layer keeps the history in this layout only on the block path (`TtKDA.conv_tiled`); `prefill_forward` converts
+to / from ttKDA's row-major `[B, 3, W]` at its boundary and `user_conv_state` / `write_user_conv_state` /
+`conv_history_torch` / `upload_conv_history` serve the per-user prefill hand-offs and the tests.
+
+## Program
+
+* Work items `(head h, user tile row tb, user part)`; `KdaDecode.placement` puts the `parts` cores of a
+  (head, row) slot in one column of the grid (the largest `parts` with `grid.x * (grid.y // parts) >= H * Bt`; 5 for
+  16 heads, 1 for 64 heads on the 12x10 grid, then one item per core round-robin). The live users of a tile row are
+  split evenly over the parts (`up = ceil(n_row / parts)`, users `[part*up, min((part+1)*up, n_row))`).
+* Reader: the part-0 core of a slot reads the slot's inputs once -- the 3 x (3 history + raw) tile blocks of the head,
+  the taps, the gate blocks, the channel constants, ~172 KB -- and multicasts them into the same CB addresses of
+  the other parts (ready / valid semaphores), then shifts the history in place from L1. Every part reads its
+  users' selector tile and state (the first user's with the item reads, overlapping the multicast wait).
+* Compute, per item on the whole 32-row block: conv + SiLU per branch (row broadcasts of the tap rows), L2 norms
+  (row sums by a matmul with the all-ones tile), `decay = exp(lb sigmoid(a (f + dt)))`, the beta column
+  (`gb . E_c^T`), `wg = sigmoid(og) * w`, then `kd = k decay`, `qd = q decay`, `qk = rowsum(q k)`, `kcol = k^T`,
+  `decT = decay^T`. SFPU work runs only over the live rows when the tile row has <= 16 users (faces 0 / 1 with
+  `ceil(rows / 2)` iterations per face, >= 2).
+* Per user r (no row lifting -- a whole-tile op's row r is user r's result): `dcol = decT . E_r^T`,
+  `vread = kd . S`, `oq = qd . S`, `u = beta_r e_r (col bcast) (v - vread)`, `S' = diag(decay_r) S + kcol (x) u`
+  (column broadcast of the decay column, then the rank-1 matmul accumulated onto it in DST: one pack per state
+  tile, straight to the writer), `o_r = oq_r + (q_r . k_r) u_r` accumulated at row r of the part's output block via
+  the projector matmuls `diag(e_r) oq + (q.k)_r diag(e_r) u`.
+* Writer: each user's state (in place); a part's output block goes to the slot's part-0 core (gather CB +
+  semaphore), whose compute sums the parts, applies the gated RMSNorm and packs the head's bf16 output tiles of
+  the tile row; the part-0 writer stores them.
+* Compile-time args, v1 (default sources) -- compute: `Kt, Vt, Bt, B, parts, lb, l2_eps, norm_eps, K^-0.5, 1/V,
+  it_half` (11; floats as uint32 bits); reader: `Kt, Vt, Bt, B, H, Wq_t, Wg_t, HK_t, HV_t, parts, ONES_PAGE` (11) +
+  `TensorAccessorArgs` of qkv, conv_hist, taps, gates, chan_consts, o_norm_w, selectors, recurrent (from index 11);
+  writer: `Kt, Vt, Bt, B, H, parts, HV_t` + accessors of out, recurrent. v2 (`_v2` sources): compute and reader append
+  `GATES_ACT` at index 11 (the reader's accessors from 12); the writer is unchanged. Runtime args per core, v1 --
+  reader: `item0, n_items, stride, <8 buffer addresses>, part-0 NoC x/y, last NoC x/y of the part-0 column` (15);
+  v2 reader: + `second-column NoC x0, y0, x1, y1, n_b` (20; `KdaDecode.READER_RT`, `READER_RT_LEN`); writer: `item0,
+  n_items, stride, out, recurrent addresses, part-0 NoC x/y`; compute: `item0, n_items, stride`. Semaphores 0..3
+  (ready, valid, the constant one, gather). The vectors are built by `compile_time_args` / `runtime_args_for_core`
+  (pure functions; `tests/custom_ops/test_kda_decode_host.py` checks both variants against their kernel sources
+  without a device).
+* CBs (indices 0..31, per core): see `KdaDecode.CB` and the compute kernel header; ~1 MB of L1 per core.
+
+## Measured (chip 3, real layer-4 weights, traced KDA layer `tests/test_kda_perf.py`, device time per step)
+
+| heads | users | `kda_decode` us | block ops | block device us | KDA layer ms/step |
+|---|---|---|---|---|---|
+| 16 (TP4 shard) | 4 | 70.7 (was 145) | 5 (was 6) | 199 | 0.248 (was 0.343) |
+| 16 (TP4 shard) | 32 | 257 (was 288) | 5 | 385 | 0.438 |
+
+With 16 heads the four matmuls are 128 us (qkv 77.5 us = 325 GB/s of bfp8 weights, o_proj 27 us = 310 GB/s, the
+two gate matmuls 23 us); the tilize is gone (TILE output). At B=32 the program moves the fp32 state twice (64 MB on
+a 16-head shard): 257 us is 250 GB/s, so its floor on this chip is ~200 us (the matmuls' 325 GB/s). Op-level
+correctness vs the torch golden: output / state PCC >= 0.999995 (B = 1/4/32/40, H = 16/64, multi-step, trace replay).
+
+Not yet measured (written device-free, 2026-10-26): `gates="act"` removes ~9 of the ~27 full-tile SFPU transcendental
+passes of the per-item fixed cost (estimate -10 us per item at any B) and `placement="rect"` cuts the B = 32 critical
+path from 7 to 6 users per part (estimate -33 us); `tests/test_kda_decode_v2_mesh.py` is the A/B (chip 0) and carries
+the (2,4) block decoder / e2e commands.

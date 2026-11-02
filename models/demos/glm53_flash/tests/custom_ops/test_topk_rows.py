@@ -1,0 +1,296 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""``custom_ops/topk_rows`` (per-row-bounded top-512, a model-local generic op) vs torch.topk over each row's own
+prefix: ids inside the row's bound and the score multiset equal (bf16 ties may reorder ids), for W = 1056 (fused
+body) and 262 176 (classic body, the 1 M-position pool width) with B = 1 / 4 / 8 / 32 rows; trace capture + replay
+with refreshed bounds and scores; timing vs the shared single-bound op.
+
+    TT_VISIBLE_DEVICES=0 pytest models/demos/glm53_flash/tests/custom_ops/test_topk_rows.py -s
+"""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.glm53_flash.custom_ops.topk_rows.op import SENTINEL, TopkRows
+
+K = 512
+
+
+def _check(scores: torch.Tensor, valid: torch.Tensor, ids: torch.Tensor) -> tuple[bool, int]:
+    """(ok, common ids) of device ids [B,1,1,K] vs the golden sets: in range and equal score multisets."""
+    ref = TopkRows.golden(scores, valid, K)
+    ok, common = True, 0
+    for b in range(scores.shape[0]):
+        n = int(valid[b])
+        got = ids[b, 0, 0].tolist()
+        exp = ref[b, 0, 0].tolist()
+        inr = all(0 <= i < n for i in got)
+        s_got = sorted(scores[b, 0, 0, got].float().tolist())
+        s_exp = sorted(scores[b, 0, 0, exp].float().tolist())
+        ok &= inr and s_got == s_exp
+        common += len(set(got) & set(exp))
+    return ok, common
+
+
+def _tensors(device, scores, valid):
+    s = ttnn.from_torch(scores, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    v = ttnn.from_torch(valid.reshape(-1, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    o = ttnn.zeros((scores.shape[0], 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return s, v, o
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("W", [1056, 262176])
+@pytest.mark.parametrize("B", [1, 4, 8, 32])
+def test_topk_rows_vs_golden(mesh_device, W, B):
+    op = TopkRows(mesh_device)
+    g = torch.Generator().manual_seed(W + B)
+    scores = torch.randn(B, 1, 1, W, generator=g).bfloat16()
+    valid = torch.randint(K, W + 1, (B,), generator=g)
+    valid[0] = W
+    valid[-1] = K
+    s_t, v_t, o_t = _tensors(mesh_device, scores, valid)
+    op(s_t, v_t, o_t)
+    ids = ttnn.to_torch(o_t).long()
+    ok, common = _check(scores, valid, ids)
+    logger.info(
+        f"topk_rows W={W} B={B}: per-row bounds respected and score multisets equal: {ok}; common ids {common}/{B * K}"
+    )
+    assert ok
+    # a second call on new scores / bounds reuses the program
+    scores2 = torch.randn(B, 1, 1, W, generator=g).bfloat16()
+    valid2 = torch.randint(K, W + 1, (B,), generator=g)
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(scores2, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), s_t)
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(valid2.reshape(-1, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), v_t
+    )
+    op(s_t, v_t, o_t)
+    ok2, _ = _check(scores2, valid2, ttnn.to_torch(o_t).long())
+    assert ok2
+    for t in (s_t, v_t, o_t):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 16 * 1024 * 1024, "l1_small_size": 32768}], indirect=True
+)
+def test_topk_rows_trace_replay(mesh_device):
+    W, B = 262176, 8
+    op = TopkRows(mesh_device)
+    g = torch.Generator().manual_seed(77)
+    scores = torch.randn(B, 1, 1, W, generator=g).bfloat16()
+    valid = torch.randint(K, W + 1, (B,), generator=g)
+    s_t, v_t, o_t = _tensors(mesh_device, scores, valid)
+    op(s_t, v_t, o_t)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    op(s_t, v_t, o_t)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    for step in range(3):
+        scores = torch.randn(B, 1, 1, W, generator=g).bfloat16()
+        valid = torch.randint(K, W + 1, (B,), generator=g)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(scores, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), s_t)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(valid.reshape(-1, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), v_t
+        )
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        ok, common = _check(scores, valid, ttnn.to_torch(o_t).long())
+        logger.info(f"trace replay {step}: ok {ok}, common ids {common}/{B * K}")
+        assert ok
+    ttnn.release_trace(mesh_device, tid)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_topk_rows_timing(mesh_device):
+    W = 262176
+    op = TopkRows(mesh_device)
+    g = torch.Generator().manual_seed(3)
+    for B in (1, 4, 8):
+        scores = torch.randn(B, 1, 1, W, generator=g).bfloat16()
+        valid = torch.full((B,), W, dtype=torch.int64)
+        s_t, v_t, o_t = _tensors(mesh_device, scores, valid)
+        one = ttnn.from_torch(
+            torch.tensor([W], dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+        )
+
+        def bench(fn, n=5):
+            fn()
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            for _ in range(n):
+                fn()
+            ttnn.synchronize_device(mesh_device)
+            return (time.perf_counter() - t0) / n * 1e3
+
+        t_rows = bench(lambda: op(s_t, v_t, o_t))
+        t_shared = bench(lambda: ttnn.experimental.topk_large_indices(s_t, k=K, valid_length_tensor=one))
+        t_per_user = sum(
+            bench(
+                lambda i=i: ttnn.experimental.topk_large_indices(
+                    ttnn.slice(s_t, [i, 0, 0, 0], [i + 1, 1, 1, W]), k=K, valid_length_tensor=one
+                )
+            )
+            for i in range(B)
+        )
+        logger.info(
+            f"topk W={W} B={B}: topk_rows (per-row bounds) {t_rows:.3f} ms; shared op one call {t_shared:.3f} ms; shared op per user {t_per_user:.3f} ms"
+        )
+        for t in (s_t, v_t, o_t, one):
+            ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("W,B", [(262400, 1), (262400, 8), (2560, 4)])
+def test_topk_rows_segmented(mesh_device, W, B):
+    """Two-stage top-512 (``segmented``): rows with -inf beyond each user's bound (as the masked scorer writes them), split
+    into S segments ranked on S cores, then the S*512 candidates merged and translated back to pool ids; vs torch over
+    the row's finite prefix (score multisets equal, ids inside the bound); timing vs the single-stage call."""
+    op = TopkRows(mesh_device)
+    S = op.segments_for(W)
+    assert S > 1, (W, S)
+    g = torch.Generator().manual_seed(W + 7 * B)
+    scores = torch.randn(B, 1, 1, W, generator=g).bfloat16()
+    valid = torch.randint(K, W + 1, (B,), generator=g)
+    valid[0] = W
+    valid[-1] = K
+    for b in range(B):
+        scores[b, 0, 0, int(valid[b]) :] = float("-inf")
+    seg = scores.reshape(B * S, 1, 1, W // S).contiguous()
+    seg_t = ttnn.from_torch(seg, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    ids1 = ttnn.zeros((B, 1, 1, S * K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    vals1 = ttnn.zeros((B, 1, 1, S * K), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    out_t = ttnn.zeros((B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op.segmented(seg_t, S, ids1, vals1, out_t)
+    ids = ttnn.to_torch(out_t).long()
+    ok, common = _check(scores, valid, ids)
+    # the stage-1 tables: every finite candidate's value must equal the score at its id
+    i1 = ttnn.to_torch(ids1).long().reshape(B, S, K)
+    v1 = ttnn.to_torch(vals1).float().reshape(B, S, K)
+    ok1 = True
+    for b in range(B):
+        for s_ in range(S):
+            for j in range(0, K, 37):
+                i = int(i1[b, s_, j])
+                if i != SENTINEL:
+                    ok1 &= (
+                        abs(float(scores[b, 0, 0, s_ * (W // S) + i]) - float(v1[b, s_, j])) < 1e-6
+                        or torch.isinf(v1[b, s_, j]).item()
+                    )
+    logger.info(
+        f"segmented topk W={W} B={B} S={S}: ok {ok}, stage-1 values consistent {ok1}, common ids {common}/{B * K}"
+    )
+    assert ok and ok1
+    full_t = ttnn.from_torch(scores, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    vr = ttnn.from_torch(
+        torch.full((B, 1), W, dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+    )
+
+    def bench(fn, n=5):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            fn()
+        ttnn.synchronize_device(mesh_device)
+        return (time.perf_counter() - t0) / n * 1e3
+
+    t_seg = bench(lambda: op.segmented(seg_t, S, ids1, vals1, out_t))
+    t_one = bench(lambda: op(full_t, vr, out_t))
+    logger.info(f"segmented topk W={W} B={B} S={S}: {t_seg:.3f} ms (two stages) vs single-stage {t_one:.3f} ms")
+    for t in (seg_t, ids1, vals1, out_t, full_t, vr):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("W,B", [(262400, 4), (262400, 8)])
+@pytest.mark.parametrize("phantom", ["cheap", "full"])
+def test_topk_rows_segmented_live_bound(mesh_device, W, B, phantom):
+    """``segmented(..., valid_rows=...)`` (the live-bound stage 1, custom_ops/sparse_bound.py): every segment row ranks the
+    user's live columns in it only (empty segments synthesized as -inf in L1), reading nothing beyond ``valid[u]``:
+    the stage-1 tables and the final ids must be BIT-IDENTICAL to the unbounded ``segmented`` call on the same rows.
+    The W = 262 400 geometry is the served 1 M build's: S = 5 segments of 52 480 columns = 103 chunks, the classic
+    body, whose merge / rebuild permute equal scores on every chunk: the partial segment replays the unbounded row's
+    trailing all--inf chunks as ``phantom`` chunks ("cheap": merge + rebuild only; "full": synthesized pages through
+    the whole path). The columns beyond each user's bound hold a finite MARKER here, not -inf: the bounded call must
+    not read them. On a mismatch the first differing slots per user / segment are logged."""
+    op = TopkRows(mesh_device)
+    S = op.segments_for(W)
+    assert S > 1, (W, S)
+    Wseg = W // S
+    g = torch.Generator().manual_seed(W + 11 * B)
+    scores = torch.randn(B, 1, 1, W, generator=g).bfloat16()
+    # users across the regimes: the dense minimum, inside segment 0, straddling segments 0/1 and 1/2, the full width
+    valid = torch.randint(K, 3 * Wseg, (B,), generator=g)
+    valid[0] = K
+    valid[1 % B] = Wseg + 1
+    valid[-1] = W if B > 2 else valid[-1]
+    masked = scores.clone()
+    for b in range(B):
+        masked[b, 0, 0, int(valid[b]) :] = float("-inf")
+    marked = scores.clone()
+    for b in range(B):
+        marked[b, 0, 0, int(valid[b]) :] = 9.0  # finite, larger than every real score: a read of it would rank
+    seg_ref = masked.reshape(B * S, 1, 1, Wseg).contiguous()
+    seg_b = marked.reshape(B * S, 1, 1, Wseg).contiguous()
+    ref_t = ttnn.from_torch(seg_ref, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    b_t = ttnn.from_torch(seg_b, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    v_t = ttnn.from_torch(valid.reshape(B, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    mk = lambda dt: ttnn.zeros((B, 1, 1, S * K), dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    ids1_r, vals1_r, ids1_b, vals1_b = mk(ttnn.uint32), mk(ttnn.float32), mk(ttnn.uint32), mk(ttnn.float32)
+    out_r = ttnn.zeros((B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    out_b = ttnn.zeros((B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op.segmented(ref_t, S, ids1_r, vals1_r, out_r)
+    op.segmented(b_t, S, ids1_b, vals1_b, out_b, valid_rows=v_t, phantom=phantom)
+    o_r, o_b = ttnn.to_torch(out_r).long(), ttnn.to_torch(out_b).long()
+    i_r, i_b = ttnn.to_torch(ids1_r).long().reshape(B, S, K), ttnn.to_torch(ids1_b).long().reshape(B, S, K)
+    v_r, v_b = ttnn.to_torch(vals1_r).float().reshape(B, S, K), ttnn.to_torch(vals1_b).float().reshape(B, S, K)
+    same_out, same_ids1, same_vals1 = torch.equal(o_r, o_b), torch.equal(i_r, i_b), torch.equal(v_r, v_b)
+    ok, common = _check(masked, valid, o_b)
+    logger.info(
+        f"segmented live bound W={W} B={B} S={S} phantom {phantom} valid {valid.tolist()}: out identical {same_out}, "
+        f"stage-1 ids identical {same_ids1}, stage-1 values identical {same_vals1}; vs torch ok {ok}, common ids "
+        f"{common}/{B * K}"
+    )
+    if not (same_out and same_ids1 and same_vals1):
+        for b in range(B):
+            for s_ in range(S):
+                d = (i_r[b, s_] != i_b[b, s_]).nonzero().flatten().tolist()
+                dv = (v_r[b, s_] != v_b[b, s_]).nonzero().flatten().tolist()
+                if d or dv:
+                    j = (d or dv)[0]
+                    logger.info(
+                        f"  user {b} segment {s_} (live {max(0, min(int(valid[b]) - s_ * Wseg, Wseg))}): {len(d)} ids / "
+                        f"{len(dv)} values differ, first slot {j}: ref id {int(i_r[b, s_, j])} val {float(v_r[b, s_, j]):.5g}"
+                        f" vs bounded id {int(i_b[b, s_, j])} val {float(v_b[b, s_, j]):.5g}; ids same as sets: "
+                        f"{set(i_r[b, s_].tolist()) == set(i_b[b, s_].tolist())}"
+                    )
+            do = (o_r[b, 0, 0] != o_b[b, 0, 0]).nonzero().flatten().tolist()
+            if do:
+                logger.info(
+                    f"  user {b} out: {len(do)} ids differ, first slot {do[0]}; same set "
+                    f"{set(o_r[b, 0, 0].tolist()) == set(o_b[b, 0, 0].tolist())}"
+                )
+    assert ok and same_out and same_ids1 and same_vals1
+
+    def bench(fn, n=5):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            fn()
+        ttnn.synchronize_device(mesh_device)
+        return (time.perf_counter() - t0) / n * 1e3
+
+    t_ref = bench(lambda: op.segmented(ref_t, S, ids1_r, vals1_r, out_r))
+    t_b = bench(lambda: op.segmented(b_t, S, ids1_b, vals1_b, out_b, valid_rows=v_t, phantom=phantom))
+    logger.info(
+        f"segmented live bound W={W} B={B} phantom {phantom}: {t_b:.3f} ms bounded vs {t_ref:.3f} ms unbounded (two stages)"
+    )
+    for t in (ref_t, b_t, v_t, ids1_r, vals1_r, ids1_b, vals1_b, out_r, out_b):
+        ttnn.deallocate(t)

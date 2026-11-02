@@ -1,0 +1,130 @@
+# `mhc_post_mix` -- fused exact fp32 mHC residual update (model-local `ttnn.generic_op`)
+
+One program for the post-block of a GLM-5.3-Flash hyper-connection wrap (`tt/mhc.py::TtMHCFast._post`):
+
+    out[t, j, c] = sum_i comb[t, i*n + j] * x[t, i, c] + post[t, j] * y[t, c]      streams   (n output streams)
+    out[t, c]    = (1/n) sum_j out[t, j, c]                                          collapse  (the LM head's mean)
+
+It replaces the composite post-block (block-diagonal matmul + `addcmul` + collapse masks, inexact at bf16 operand
+precision through the FPU) with SFPU fp32 arithmetic on operands unpacked straight into the fp32 dest, so the result
+matches the composite's exact fp32 chain to ~3e-8 relative rms (`tests/custom_ops/test_mhc_post_mix.py`).
+
+## Contract
+
+Two kernel generations share the op (`MhcPostMix(n, version=1|2)`; `GLM53_MHC_POST_KERNEL=1|2`):
+
+| tensor | shape (logical) | dtype / layout / memory | role |
+|---|---|---|---|
+| `x` | `[1,1,T,n*C]` | fp32 TILE interleaved | packed residual streams, stream i in columns `i*C:(i+1)*C` |
+| `y` | `[1,1,T,C]` | fp32 (v1) or fp32 / bf16 (v2) TILE interleaved | sublayer output (v2 reads the bf16 output directly) |
+| `post` | `[T,n]` (padded `[T,32]`) | fp32 TILE interleaved | `H_post` from `mhc_split_sinkhorn` (any row view with `T` rows); v2 also takes the lane layout `[T,32]` |
+| `comb` | `[T,n*n]` (padded `[T,32]`) | fp32 TILE interleaved | `H_res` (Sinkhorn), column `i*n+j = comb[i,j]`; v2 also takes the lane layout `[T,n*32]` |
+| `out` | `[1,1,T,n*C]` or `[1,1,T,C]` (collapse) | fp32 TILE interleaved | pre-allocated by the caller (`MhcPostMix.allocate_output`) |
+
+`T % 32 == 0`, `C % 32 == 0`, `n*n + n + 4 <= 32` (v1), `n in {2, 4}` (v2). Rows are independent (pad rows just
+produce garbage in their own rows), so the model passes its padded `Tp`-row views directly. Inputs are not
+modified. Works on a `MeshDevice` (same program on every device) and inside a trace (runtime args carry buffer
+addresses; all io tensors of a traced call are allocated inside the trace or persistent).
+
+Lane layout (v2 coefficient tiles, what the fused pre-block will emit; raw tiles are expanded on device once per
+token-tile otherwise): column group `m = (c // 16) * 2 + (c % 2)` of a 32-wide tile -- face `m // 2`, column
+parity `m % 2`, i.e. the 32 datums one SFPU slot load covers (4 rows x the 8 same-parity columns of a face,
+measured in `_logs/optmhc_probe_v2c.log`); the post tile holds `post[:, m]` in group `m`, tile `j` of comb holds
+`comb[:, i*n+j]` in group `i`. `tests/custom_ops/test_mhc_post_mix.py::expand_x8` is the host reference.
+
+Pre-mix mode (`MhcPostMix.h_mix(x, pre, out)`, v2 kernels with `HMODE`): `h[t, c] = sum_i pre[t, i] * x[t, i*C + c]`
+-- the sublayer input before its norm, exact fp32; `pre [T,n]` raw (padded tile, expanded on device like a post
+tile) or its lane layout `[T,32]`; `out [1,1,T,C]` fp32 (`allocate_h`). No y, one output tile per position.
+
+## Program
+
+Work unit = one (token-tile `r`, column-tile `c`) position, `R*Ct` of them dealt column-major over the compute grid
+(`split_work`, the first `R*Ct % ncores` cores take one more). Per core: reader (NCRISC) -> compute (TRISC) ->
+writer (BRISC).
+
+### v1 (`kernels/{reader,writer,compute}_mhc_post_mix.cpp`)
+
+| CB | tiles | content |
+|---|---|---|
+| `c_0` X | `2n` | the n stream tiles `x[r, i, c]` of a position (double buffered) |
+| `c_1` Y | 2 | `y[r, c]` fp32 |
+| `c_2` RAW | 2 | reader scratch: comb and post tiles of token-tile `r` |
+| `c_3` COL | `n*n+n` | coefficient column tiles (coefficient k in column 0 of every row), rebuilt per token-tile |
+| `c_4` BCAST | `n*n+n` | the same broadcast across 32 columns by the compute kernel (`unary_bcast<COL>`, 32-bit unpack-to-dest) |
+| `c_16` OUT | `2*(n or 1)` | output tiles of a position |
+
+Compile-time args: reader `[CB_X, CB_Y, CB_RAW, CB_COL, n, Ct] + TensorAccessorArgs(x, y, post, comb)`; writer
+`[CB_OUT, n, Ct, collapse] + TensorAccessorArgs(out)`; compute `[CB_X, CB_Y, CB_COL, CB_BCAST, CB_OUT, n, Ct,
+collapse, bits(1/n)]`. Runtime args per core: reader `[x, y, post, comb, start, count]`, writer `[out, start,
+count]`, compute `[start, count]` (addresses from `buffer_address()`). Compute config: HiFi4, `fp32_dest_acc_en`,
+`unpack_to_dest_mode = UnpackToDestFp32` for X, Y, COL, BCAST (required: the default path rounds fp32 operands to
+19 bits in SrcA). Per position the compute kernel copies the n stream tiles and y into the fp32 dest and, per
+output stream j, accumulates `sum_i bcast(comb[i,j]) * x_i + bcast(post[j]) * y` with SFPU `mul_binary_tile` /
+`add_binary_tile`; `collapse` accumulates all `n*n+n` products into one tile and scales by `1/n`.
+
+### v2 (`kernels/{reader,writer,compute}_mhc_post_mix_v2.cpp` + `kernels/mhc_sfpu_x8.h`)
+
+| CB | tiles | content |
+|---|---|---|
+| `c_0` X | `2n` | the n stream tiles of a position (fp32) |
+| `c_1` Y | 2 | `y[r, c]`, fp32 or bf16 (widened on unpack, exact) |
+| `c_2` RAW | 2 | raw comb + post tiles of token-tile `r` (EXPAND mode only) |
+| `c_3` COEF | `n+1` | lane-layout coefficient tiles of token-tile `r`: comb of streams 0..n-1, then post (built by the compute kernel from RAW, or read by the reader) |
+| `c_16` OUT | `2*(n or 1)` | output tiles of a position |
+
+Compile-time args: reader `[CB_X, CB_Y, CB_RAW, CB_COEF, n, Ct, expand] + TensorAccessorArgs(x, y, post, comb)`;
+writer as v1; compute `[CB_X, CB_Y, CB_RAW, CB_COEF, CB_OUT, n, Ct, collapse, bits(1/n), expand, hmode]`
+(reader gets `hmode` after `expand`). Runtime args as
+v1. Compute config: HiFi4, `fp32_dest_acc_en`, `dst_full_sync_en` (the whole 8-slot fp32 dest per acquire),
+`UnpackToDestFp32` for X, RAW, COEF (and Y when fp32); the compute kernel's own include dir is passed through
+`compiler_include_paths`. Dest slots: `0..n-1` x_i, `n` y, `n+1` the comb tile of the current stream, `n+2` post,
+`n+3` out. Per token-tile (EXPAND) the kernel copies the raw tiles in and runs `mhc_sfpu::expand_comb/expand_post`
+(mask + subvector rotate-add broadcasts, two chains interleaved) into dest slots 2..n+2, packing them to COEF. Per
+position it copies x_0..x_{n-1}, y and post into the resident slots once; per stream j it copies comb tile j and runs
+`mhc_sfpu::stream_mix` (per band: 4 accumulators in LREGs, one coefficient slot load + 4 data loads + 4 FMAs per
+term), packs `out`, and releases the dest WITHOUT clearing (`_llk_pack_dest_section_done_<..., false>`) so the
+operands stay for the next stream; `collapse` keeps accumulating across streams and scales by `1/n` on the last.
+
+## Work split (2026-10-26, `_agents/mhc_roofline/STATUS.md`)
+
+`MhcPostMix(split="extras")` (`GLM53_MHC_POST_SPLIT=extras`; v2 streams mode only): 128 positions over the 120 cores of
+a 12x10 grid leave 8 cores with two positions, which bound the op (~34 us for ~15 us of per-position work). The plan
+(`plan_positions` -> `delegate_units`, cached per shape) hands those cores' second positions to 32 one-position cores
+as (position, output stream) "extras" (runtime args `[n_extra, p, j, ...]` after each kernel's base args, kernels
+compiled with `MHC_MAX_EXTRA=4`): the same operand loads, one `stream_mix`, one output tile -- every output tile is
+still computed by exactly one core, so the result is bit-identical to the tile split. Critical path 12 -> 9 cost
+units; grids without two-position cores (13x10) and prefill shapes (1024 positions) keep the plain plan by
+construction. Collapse and h-mode never split (one output tile per position). The v2 reader and writer end with
+`noc_async_full_barrier()`.
+
+## Prefetch reader (P1, 2026-11-03): `MhcPostMix(prefetch="mcast")`, `GLM53_MHC_POST_PREFETCH=mcast` (default `off`)
+
+Measured (chip (0,0) of the 8x4, decode, fp32 in / out, 120 cores, 2026-11-03): 29.0-29.5 us per wrap at 4 and at 32
+users per row for ~4.3 MB of useful bytes (x 2 MB + y 256 KB + out 2 MB) = ~125 GB/s against a ~512 GB/s DRAM peak.
+The reader (`reader_mhc_post_mix_v2.cpp`) is not bound by the aggregate rate but by one DRAM bank: every core first
+reads the token-tile's coefficient tiles -- lane mode `n + 1` = 5 tiles (20 KB) per core, 120 cores = 2.4 MB of
+identical reads from 5 interleaved pages (comb pages 0..3 -> banks 0..3, post page 0 -> bank 0: bank 0 serves ~1 MB of
+them alone; EXPAND mode: 2 tiles, 960 KB all from bank 0) and only then its stream tiles. Bank 0 moves ~1.5 MB
+(coefficients + its 1/8 share of x, y, out) at ~64 GB/s = ~24 us while banks 4-7 idle, which with the per-core chain
+(read -> mix -> write, ~3 us of SFPU per position) and the launch is the 29 us.
+
+`kernels/reader_mhc_post_mix_v2_pf.cpp` (the compute and writer kernels are shared: every output tile is produced by
+the same core from the same operands in the same order, so the result is bit-identical to `off`):
+
+| step | what | bytes per core | in flight per core |
+|---|---|---|---|
+| 1 | the stream reads of the first `PF_DEPTH = 2` units go out before anything else: x pages `c, Ct + c, ...` and y page `c` interleave over all 8 banks | 4 x 4 KB + 2 KB (bf16 y) per unit: 18 KB (36 KB on a two-unit core) | 5 reads per unit (10 on a two-unit core) |
+| 2 | the coefficient tiles are read from DRAM once by the leader core (0,0) and NoC-multicast into the same CB address on every other core: a receiver resets its VALID flag, bumps the leader's READY counter (`noc_semaphore_inc`), the leader waits for all receivers, writes the payload (linked) then the VALID flag (unlinked: same path, ordered), the receiver waits and pushes; one multicast per grid rectangle (`mcast_rects`: the full columns + the partial column; corners swapped on NOC_1) | 20 KB (lane) / 8 KB (EXPAND) / 4 KB (h-mode) by L1 -> L1 multicast; the DRAM reads them once | 1 multicast of 20 KB + 1 flag per rectangle |
+| 3 | the units (positions, then the extras) are fetched `PF_DEPTH` at a time: one reserve, every read in flight, one barrier, one push (the X / Y double buffer holds exactly two units) | as step 1 | as step 1 |
+
+Predicted at the decode shape (120 cores, lane mode, bf16 y): DRAM traffic 2 MB x + 240 KB y + 20 KB coefficients +
+2 MB out, balanced over the 8 banks -> ~4.5 us to drain the reads and ~4 us the writes at the peak; the multicast
+handshake ~2-3 us hidden under the stream reads; ~3 us of SFPU per unit; the two-unit cores (8 of 120 in the `tile`
+split, the 32 extras recipients in `extras`) one unit more -> **~15 us per wrap (-14 us; x 90 wraps = -1.3 ms per
+step)** against the roofline's 8-10 us floor. One token-tile only (T = 32: one coefficient set per program, the CB
+holds exactly one): the op raises on `R > 1` with `prefetch="mcast"`; v2 only (`version=2`). Runtime args of the
+reader: the plain ones + the extras tail + `[is_leader, leader_noc_x, leader_noc_y, n_rects, (x_start, y_start,
+x_end, y_end, num_dests) x 2]` (`prefetch_args`); compile-time args `[.., expand, hmode, SEM_READY, SEM_VALID] +
+TensorAccessorArgs(x, y, post, comb)`; two semaphores (`SemaphoreDescriptor` 0 / 1 on the program's cores). Host
+coverage: `tests/test_mhc_roofline_host.py` (`mcast_rects` on six grids, the ABI, the knob); device A/B + traced
+timing: `tests/custom_ops/test_mhc_post_mix_prefetch.py`.
