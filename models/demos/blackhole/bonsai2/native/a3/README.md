@@ -30,7 +30,8 @@ once, never rewritten), `linear.TernaryLinear` (one projection), `mlp.TernaryMLP
 | six-flag control | 79.00 | 93.55 / 100.00 |
 | + exact-ternary MLP | 59.01 | 95.31 / 100.00 |
 | + GDN in/out (vs MLP-only 58.24, same session) | 49.43 | 95.70 / 100.00 |
-| all sites (dev, one run) | 44.75 | 95.51 / 100.00 |
+| all sites (counted, vs control 79.09) | 44.25 | 95.51 / 100.00 |
+| + A2b 256 B code tiles + rectangular workers (dev) | 39.62 | 95.51 / 100.00 |
 
 Op level (device us, real weights, PCC >= 0.99999 vs float64 cpu_ref): MLP 240 per layer (dense
 ~575), GDN [qkv|z] 79 (dense 259), ssm_out / attn_output 38 (91 / 102), attn qkv 71 (215),
@@ -40,6 +41,8 @@ LM head 1053 (3957). Engine at ~442 GB/s over all ternary bytes (86% of peak).
 
 - No persistent L1 buffers: they are reserved on every core and clash with large-CB ops.
 - Per-core compile-time args split a program into many kernel binaries; use runtime args.
+- Scattered worker sets cost ~6 us of dispatch gap per call inside a trace; use rectangles.
+- A2b: the unpacker's Force_shared_exp (exponent 127) reads 256 B code tiles from the tile base.
 - generic_op caches by structure: keep runtime-arg counts fixed; don't reuse a descriptor
   after freeing a tensor its CBs were built on.
 - An sfpi DST unit is 4 rows of even or odd columns.
