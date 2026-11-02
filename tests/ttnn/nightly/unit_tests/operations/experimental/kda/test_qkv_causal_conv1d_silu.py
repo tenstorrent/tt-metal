@@ -58,11 +58,6 @@ _PRODUCTION_CASES = (
 )
 
 
-def _history_shape(batch: int, width: int) -> tuple[int, int, int]:
-    """The tail on device: one 64-channel segment of three rows per page."""
-    return (batch, *convolution_tail_shape(3, width)[1:])
-
-
 def _qkv_causal_conv1d_silu_ops(
     input_tensor: torch.Tensor | ttnn.Tensor,
     history: torch.Tensor | ttnn.Tensor,
@@ -84,7 +79,7 @@ def _qkv_causal_conv1d_silu_ops(
 
     batch, sequence, width = input_tensor.shape
     if (
-        tuple(history.shape) != _history_shape(batch, width)
+        tuple(history.shape) != convolution_tail_shape(3, width)
         or any(tap.shape[-1] != width or math.prod(tap.shape) != width for tap in taps)
         or any(output.shape != (batch, sequence, output.shape[-1]) for output in outputs)
         or sum(output.shape[-1] for output in outputs) != width
