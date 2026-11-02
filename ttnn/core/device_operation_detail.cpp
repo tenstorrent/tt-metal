@@ -342,32 +342,40 @@ void apply_default_output_topologies(
     const std::vector<std::reference_wrapper<ttnn::Tensor>>& outputs,
     const std::vector<std::reference_wrapper<const ttnn::Tensor>>& inputs,
     std::string_view op_name) {
-    std::optional<std::pair<
-        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
-        tt::tt_metal::distributed::MeshShape>>
-        union_label;
+    // Every label is decided before any is applied: an in-place output is also an input the other outputs are checked
+    // against, and the checks must read the labels the tensors were launched with.
+    ttsl::SmallVector<std::optional<tt::tt_metal::TensorTopology>> kept(outputs.size());
     ttsl::SmallVector<const ttnn::Tensor*> operands;
-    for (const auto& output_ref : outputs) {
-        ttnn::Tensor& output = output_ref.get();
-        const void* buffer = device_buffer(output);
+    for (size_t i = 0; i < outputs.size(); ++i) {
+        const void* buffer = device_buffer(outputs[i].get());
+        if (buffer == nullptr) {
+            continue;
+        }
         const ttnn::Tensor* caller = nullptr;
         operands.clear();
         for (const auto& input_ref : inputs) {
             const ttnn::Tensor& input = input_ref.get();
-            if (buffer != nullptr && device_buffer(input) == buffer) {
-                if (caller == nullptr) {
-                    caller = &input;
-                }
-            } else {
+            if (device_buffer(input) != buffer) {
                 operands.push_back(&input);
+            } else if (caller == nullptr) {
+                caller = &input;
             }
         }
         if (caller != nullptr) {
-            if (auto label = caller_owned_output_topology(
-                    *caller, std::span<const ttnn::Tensor* const>(operands.data(), operands.size()), op_name)) {
-                output.update_tensor_topology(*label);
-                continue;
-            }
+            kept[i] = caller_owned_output_topology(
+                *caller, std::span<const ttnn::Tensor* const>(operands.data(), operands.size()), op_name);
+        }
+    }
+
+    std::optional<std::pair<
+        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+        tt::tt_metal::distributed::MeshShape>>
+        union_label;
+    for (size_t i = 0; i < outputs.size(); ++i) {
+        ttnn::Tensor& output = outputs[i].get();
+        if (kept[i].has_value()) {
+            output.update_tensor_topology(*kept[i]);
+            continue;
         }
         if (!union_label.has_value()) {
             union_label = compute_output_placements_and_shape(inputs);
