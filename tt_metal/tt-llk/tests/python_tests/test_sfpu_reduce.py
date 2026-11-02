@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -99,6 +99,7 @@ def get_supported_reduce_axioms(
 
 
 SFPU_REDUCE_PERF_SWEEP = dict(
+    # Float32 and Int32 are the formats ttnn routes to the SFPU reduce.
     formats=input_output_formats(
         [DataFormat.Float32, DataFormat.Int32],
         same=True,
@@ -150,9 +151,9 @@ def _sfpu_reduce_config_kwargs(
     reduce_pool,
     input_dimensions,
     tile_cnt,
+    *,
     src_A,
     src_B,
-    *,
     is_perf,
     loop_factor,
     twos_complement=False,
@@ -199,6 +200,8 @@ def _run_sfpu_reduce(
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
     if run_types is None:
+        if is_perf:
+            raise ValueError("run_types must be provided when is_perf=True")
         run_types = [PerfRunType.L1_TO_L1]
 
     configuration = create_test_or_perf_config(
@@ -219,8 +222,8 @@ def _run_functional_sfpu_reduce(
     reduce_pool,
     input_dimensions,
     tile_cnt,
-    src_A=None,
-    src_B=None,
+    src_A,
+    src_B,
     *,
     num_blocks,
     num_tiles_in_block,
@@ -233,8 +236,8 @@ def _run_functional_sfpu_reduce(
         reduce_pool,
         input_dimensions,
         tile_cnt,
-        src_A,
-        src_B,
+        src_A=src_A,
+        src_B=src_B,
         is_perf=False,
         loop_factor=1,
         twos_complement=twos_complement,
@@ -1095,7 +1098,7 @@ def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
         formats.input_format,
         formats.output_format,
         dest_acc,
-        on_wormhole=TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE,
+        on_wormhole=get_chip_architecture() == ChipArchitecture.WORMHOLE,
     ):
         unspecified = (
             torch.isnan(fold_is_nan.to(torch.float32))

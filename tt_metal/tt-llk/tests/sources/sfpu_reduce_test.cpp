@@ -22,6 +22,10 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
+// L1_TO_L1 is the functional path for this three-TRISC kernel. Perf runs may isolate the
+// unpack, math, or pack threads (or measure L1 congestion), but there is no separate SFPU thread.
+static_assert(PERF_RUN_TYPE != PerfRunType::SFPU_ISOLATE, "SFPU_ISOLATE requires a dedicated SFPU thread");
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -80,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _perf_unpack_loop_set_valid<true, false>(TILE_CNT * LOOP_FACTOR);
             return;
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -225,32 +229,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    ckernel::sfpu::calculate_reduce<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>(
-                        BLOCK_CT_DIM, BLOCK_RT_DIM);
+                    ckernel::sfpu::calculate_reduce<
+                        POOL_TYPE,
+                        REDUCE_DIM,
+                        static_cast<DataFormat>(formats.math),
+                        is_fp32_dest_acc_en,
+                        static_cast<DataFormat>(formats.pack_dst)>(BLOCK_CT_DIM, BLOCK_RT_DIM);
                     TTI_CLEARDVALID(1, 0);
                 }
             }
             _llk_math_eltwise_sfpu_done_();
-        }
-        else
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
-            {
-                _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
-                {
-                    LLK_ASSERT(
-                        (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                        "Block tile index exceeds maximum destination tiles");
-                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                        tile, formats.math, formats.math);
-                }
-
-                _llk_math_eltwise_sfpu_start_(0);
-                ckernel::sfpu::calculate_reduce<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>(BLOCK_CT_DIM, BLOCK_RT_DIM);
-                _llk_math_eltwise_sfpu_done_();
-                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-            }
         }
         PROFILER_SYNC();
     }
@@ -327,26 +315,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                             block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
-                }
-            }
-        }
-        else
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
-            {
-                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
-                {
-                    const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
-                    _llk_packer_wait_for_math_done_();
-                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
-                    {
-                        LLK_ASSERT(
-                            (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                            "Block tile index exceeds maximum destination tiles");
-                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                            block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
-                    }
-                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }
         }
