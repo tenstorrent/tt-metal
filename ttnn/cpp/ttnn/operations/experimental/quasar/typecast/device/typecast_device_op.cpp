@@ -8,6 +8,8 @@
 
 #include <tt-metalium/hal.hpp>
 
+#include <algorithm>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
@@ -134,14 +136,6 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             preallocated_output_tensor.value().device() == input_tensor.device(),
             "Typecast operation requires the preallocated output to be on the same device as the input.");
-        // The output takes the input's label, which describes it only if every device of the output is rewritten.
-        TT_FATAL(
-            preallocated_output_tensor.value().tensor_topology().mesh_coords() ==
-                input_tensor.tensor_topology().mesh_coords(),
-            "Typecast operation requires the preallocated output to be distributed over the same mesh coordinates "
-            "as the input ({} vs {} coordinates).",
-            preallocated_output_tensor.value().tensor_topology().mesh_coords().size(),
-            input_tensor.tensor_topology().mesh_coords().size());
     }
 }
 
@@ -167,9 +161,17 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
 
 std::vector<tt::tt_metal::TensorTopology> TypecastDeviceOperation::compute_output_topologies(
     const TypecastParams& /*args*/, const TypecastInputs& tensor_args) {
-    // The output, fresh or preallocated, holds a cast of the input's shards (validation requires the same mesh
-    // coordinates), so it takes the input's label.
-    return {tensor_args.input.tensor_topology()};
+    // As ttnn::prim::typecast: a fresh output and a preallocated one overwritten on every device take the input's
+    // label; one spanning other mesh coordinates is left to the framework default.
+    const Tensor& src = tensor_args.input;
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& src_coords = src.tensor_topology().mesh_coords();
+        const auto& dst_coords = tensor_args.preallocated_output->tensor_topology().mesh_coords();
+        if (!std::is_permutation(src_coords.begin(), src_coords.end(), dst_coords.begin(), dst_coords.end())) {
+            return {};
+        }
+    }
+    return {src.tensor_topology()};
 }
 
 bool TypecastDeviceOperation::skip_launch(
