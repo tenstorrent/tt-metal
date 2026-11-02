@@ -19,7 +19,7 @@ static constexpr uint32_t ACK_EQUALS_FANOUT = 0xFFFFFFFFu;
 // Internal lowering engine. Operation code and language bindings use Mcast.
 class McastImpl {
 public:
-    explicit McastImpl(const tt::tt_metal::IDevice& device, const McastConfig& cfg = {});
+    explicit McastImpl(const tt::tt_metal::distributed::MeshDevice& device, const McastConfig& cfg = {});
     void add_group(
         const tt::tt_metal::CoreRangeSet& receivers,
         std::vector<tt::tt_metal::CoreCoord> senders,
@@ -37,34 +37,20 @@ public:
         std::string_view prefix,
         std::span<const tt::tt_metal::experimental::KernelSpecName> targets) const;
 
-    void append_semaphores(tt::tt_metal::Program& program);
-
-    template <typename Args>
-    void append_compile_time_args_to(Args& destination) const {
-        require_program_bound_();
-        append_args_to_(destination, compile_time_args_(program_semaphore_ids_, argument_metadata_()));
-    }
-
-    template <typename Args>
-    void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
-        require_program_bound_();
-        append_args_to_(destination, runtime_args_(core, argument_metadata_()));
-    }
+    void attach(
+        tt::tt_metal::Program& program,
+        const tt::tt_metal::CoreRangeSet& cores,
+        tt::tt_metal::DataMovementConfig& config,
+        std::string_view prefix,
+        std::vector<std::pair<tt::tt_metal::CoreCoord, std::vector<uint32_t>>>& runtime_args);
+    // Senders and chain forwarders must issue their NoC traffic on the configured multicast NoC.
+    void check_kernel_noc_(const tt::tt_metal::CoreCoord& core, tt::tt_metal::NOC noc) const;
 
     const tt::tt_metal::CoreRangeSet& participating_cores() const;
     tt::tt_metal::CoreRangeSet sender_only_cores() const;
 
 private:
     friend class Mcast;
-
-    template <typename Args>
-    static void append_args_to_(Args& destination, const std::vector<uint32_t>& args) {
-        if constexpr (requires { destination.append(args); }) {
-            destination.append(args);
-        } else {
-            destination.insert(destination.end(), args.begin(), args.end());
-        }
-    }
 
     void prepare_topology_() const;
     void prepare_arguments_() const;
@@ -111,13 +97,13 @@ private:
             std::variant<PreparedMulticast, PreparedChain> transport = PreparedMulticast{};
         };
         void prepare_(
-            const tt::tt_metal::IDevice& device,
+            const tt::tt_metal::distributed::MeshDevice& device,
             const McastConfig& cfg,
             dataflow_kernel_lib::TransferMode transfer_mode,
             const tt::tt_metal::CoreRangeSet* handshake_cores) const;
         PreparedMulticast prepare_multicast_(
             const McastConfig& cfg, PreparedState& state, const tt::tt_metal::CoreRangeSet* handshake_cores) const;
-        PreparedChain prepare_chain_(const tt::tt_metal::IDevice& device, PreparedState& state) const;
+        PreparedChain prepare_chain_(const tt::tt_metal::distributed::MeshDevice& device, PreparedState& state) const;
         const PreparedState& prepared_state_() const;
         uint32_t sender_phase_(const tt::tt_metal::CoreCoord& core) const;
         uint32_t roles_for_core_(const tt::tt_metal::CoreCoord& core) const;
@@ -131,18 +117,18 @@ private:
     };
 
     void require_arguments_prepared_() const;
-    void require_program_bound_() const;
     void require_unbound_() const;
     uint32_t required_semaphores_() const;
     std::vector<uint32_t> compile_time_args_(
         const std::array<uint32_t, 3>& ids, const dataflow_kernel_lib::mcast_wire::ArgumentMetadata& metadata) const;
 
-    std::reference_wrapper<const tt::tt_metal::IDevice> device_;
+    std::reference_wrapper<const tt::tt_metal::distributed::MeshDevice> device_;
     mutable bool arguments_prepared_ = false;
     mutable bool topology_current_ = false;
     mutable tt::ARCH prepared_arch_{};
     mutable tt::tt_metal::CoreCoord prepared_device_grid_;
-    bool program_bound_ = false;
+    // The Program a direct-Program attachment bound this channel to; its semaphores live there.
+    const tt::tt_metal::Program* bound_program_ = nullptr;
     std::array<uint32_t, 3> program_semaphore_ids_{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
     mutable std::optional<uint32_t> descriptor_next_semaphore_id_;
     const Group* group_for_core_(const tt::tt_metal::CoreCoord& core) const;

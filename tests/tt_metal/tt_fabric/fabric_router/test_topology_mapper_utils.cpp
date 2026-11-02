@@ -571,4 +571,56 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SingleBHGalaxy_2x4Pipelin
     EXPECT_EQ(mapping_result.fabric_node_to_physical.size(), 32u);
 }
 
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RelaxedDeviceLevelZeroLink_Succeeds) {
+    // Three 1x2 meshes chained by device-level RELAXED connections (M0 D1 <-> M1 D0, M1 D1 <-> M2 D0) on a system
+    // where only two pairs are linked (100-101 <-> 102-103) and the third (104-105) is isolated. One connection
+    // must be left zero-link; the mesh on the linked pair next to it has physical exit nodes, but none toward
+    // the isolated pair. Zero-link tolerance (#56762) must hold for device-level connections too.
+    using namespace ::tt::tt_fabric;
+
+    auto psd = build_mock_psd(
+        std::vector<std::string>(6, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {1, 2}, {2, 3}, {4, 5}});
+    auto mgd = MeshGraphDescriptor{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+    channels { count: 1 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 0 } }
+    channels { count: 1 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+    const auto result = map_multi_mesh_to_physical(psd, mgd, config);
+    ASSERT_TRUE(result.success) << "device-level RELAXED connection must map with zero physical links: "
+                                << result.error_message;
+    EXPECT_EQ(result.fabric_node_to_physical.size(), 6u);
+    verify_bidirectional_consistency(result);
+    EXPECT_THAT(
+        mapped_asic_footprints(result, psd),
+        ::testing::UnorderedElementsAre(
+            std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}, std::set<uint64_t>{104, 105}));
+}
+
 }  // namespace tt::tt_metal::experimental::tt_fabric

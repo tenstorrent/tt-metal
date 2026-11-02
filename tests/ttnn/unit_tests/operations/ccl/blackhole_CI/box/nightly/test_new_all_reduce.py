@@ -9,7 +9,7 @@ from time import time
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.common.utility_functions import skip_for_n_or_less_dev
+from tt_py_test_utils_common.utility_functions import skip_for_n_or_less_dev
 
 from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 import (
     num_cores_to_rectangle_grid,
@@ -19,7 +19,7 @@ from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 

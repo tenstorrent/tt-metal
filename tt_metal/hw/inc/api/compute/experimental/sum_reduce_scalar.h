@@ -41,9 +41,10 @@ ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_init(icb); }
  * unspecified. Slots 0..num_tiles-1 of DEST are clobbered.
  *
  * num_tiles is bounded twice. The hard ceiling is 8: the shared reduce tail moves
- * dest[i] to SrcA through a switch that only covers i in 0..7 and no-ops above that,
- * so a 9th tile would be silently dropped from the sum. Below that, the acquired DEST
- * must also hold every copied tile until the reduce consumes it, which caps num_tiles
+ * dest[i] to SrcA through a switch that only covers i in 0..7; a 9th tile trips an
+ * LLK_ASSERT when TT_METAL_LLK_ASSERTS=1, otherwise it re-reduces the stale SrcA tile.
+ * Below that, the acquired DEST must also hold every copied tile until the reduce
+ * consumes it, which caps num_tiles
  * at get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>() --
  * 8 for half-sync/16-bit, 4 for half-sync/32-bit, 8 for full-sync/32-bit. Callers
  * pairing fp32 DEST with half-sync therefore get 4, not 8.
@@ -67,6 +68,10 @@ ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_init(icb); }
  */
 // clang-format on
 ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles, float scaler = 1.0f) {
+    constexpr uint32_t dest_capacity = get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
+    constexpr uint32_t max_tiles = dest_capacity < 8 ? dest_capacity : 8;
+    LLK_ASSERT(num_tiles <= max_tiles, "sum_reduce_scalar_tile: num_tiles exceeds min(8, DEST capacity)");
+
     // Step 1: Copy each input tile into its own DEST slot
     for (uint32_t i = 0; i < num_tiles; i++) {
         copy_tile(icb, i, i);

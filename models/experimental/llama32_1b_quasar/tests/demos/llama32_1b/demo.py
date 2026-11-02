@@ -33,7 +33,7 @@ LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when set, otherwise
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
 Reference artifact (``.refpt``): the accuracy test gates against the committed book
-reference at ``models/tt_transformers/tests/reference_outputs/<basename(HF_MODEL)>.refpt``
+reference at ``models/ttt_compat/tests/reference_outputs/<basename(HF_MODEL)>.refpt``
 (ground-truth real-text targets, PERF.md-comparable). The loader supports both the
 legacy half-split format and a metadata-rich format carrying ``prompt_len``.
 """
@@ -67,7 +67,7 @@ from models.experimental.llama32_1b_quasar.tests.demos.cleanup_utils import clea
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import encode_prompt_hf
+from models.ttt_compat.tt.common import encode_prompt_hf
 
 
 def _demo_num_layers() -> int | None:
@@ -264,8 +264,8 @@ def _ttnn_mesh_device_param_from_env() -> dict:
         "num_command_queues": 1,
     }
     # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without
-    # an explicit 1D fabric; the root conftest does not auto-enable it. Mirror the sibling
-    # models/common/models/llama32_1b/demo.py wiring: FABRIC_1D on any >1-device mesh.
+    # an explicit 1D fabric; the root conftest does not auto-enable it, so use FABRIC_1D on any
+    # >1-device mesh.
     if shape != (1, 1):
         param["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
     return param
@@ -331,7 +331,7 @@ def load_reference_data(hf_model_id: str):
     the legacy half-split book format.
     """
     name = hf_model_id.strip("/").split("/")[-1]
-    ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
+    ref_path = Path("models/ttt_compat/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
         pytest.skip(f"Reference file not found: {ref_path}")
 
@@ -344,7 +344,7 @@ def load_reference_data(hf_model_id: str):
 
 
 def load_input_prompts(batch_size: int) -> list[str]:
-    prompts_path = Path("models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json")
+    prompts_path = Path("models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json")
     if not prompts_path.exists():
         return ["What is the meaning of life?"] * batch_size
     with open(prompts_path) as f:

@@ -30,6 +30,7 @@
 #pragma once
 
 #include "rocc_instructions.hpp"
+#include "api/debug/assert.h"
 
 namespace overlay {
 
@@ -65,6 +66,10 @@ constexpr uint32_t CMDBUF_WR_RESP_VC = 13;
 constexpr uint32_t CMDBUF_MCAST_REQ_VC = 8;
 /* Multicast response virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
+/* Quasar-only: NIU write-path deadlock; read data and write acks must use different response VCs. */
+static_assert(
+    CMDBUF_RD_RESP_VC != CMDBUF_WR_RESP_VC && CMDBUF_RD_RESP_VC != CMDBUF_MCAST_RESP_VC,
+    "read data and write acks must use different response VCs");
 /* First of the 8 iDMA backend request virtual channels (CMDBUF_FIRST_IDMA_VC..+7).
  * Kept independent of CMDBUF_WR_REQ_VC so that moving the unicast write VC cannot
  * walk the iDMA VC-autoincrement range into the multicast request VCs. */
@@ -431,6 +436,12 @@ inline __attribute__((always_inline)) void setup_vcs_cmdbuf(NocVcs vcs) {
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(CMDBUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, resp_vc);
 }
 
+/* Quasar-only: NIU write-path deadlock; reads answer only on CMDBUF_RD_RESP_VC, writes and atomics never do. */
+constexpr bool resp_vc_range_ok(bool is_read, uint32_t first, uint32_t last) {
+    return is_read ? (first == CMDBUF_RD_RESP_VC && last == CMDBUF_RD_RESP_VC)
+                   : (last < CMDBUF_RD_RESP_VC || first > CMDBUF_RD_RESP_VC);
+}
+
 /*
  * @fn setup_wrapping_vcs_cmdbuf<CMDBUF>
  *
@@ -442,6 +453,15 @@ inline __attribute__((always_inline)) void setup_vcs_cmdbuf(NocVcs vcs) {
  */
 template <CmdBuf CMDBUF>
 inline __attribute__((always_inline)) void setup_wrapping_vcs_cmdbuf(const VcRange& req, const VcRange& resp = {}) {
+#if WATCHER_ASSERT_ENABLED
+    // Quasar-only: NIU write-path deadlock; the response VC range must follow the buffer's direction.
+    // Reads MISC, so program the buffer's direction (write_trans / atomic_trans) before calling this.
+    TT_ROCC_CMD_BUF_MISC_reg_u misc;
+    misc.val = __builtin_riscv_ttrocc_cmdbuf_rd_reg(CMDBUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8);
+    const bool is_read = !misc.f.write_trans && !misc.f.atomic_trans;        // atomics answer on the write-ack VC
+    ASSERT(resp.start <= resp.end && resp.offset <= resp.end - resp.start);  // the starting VC must be in range
+    ASSERT(resp_vc_range_ok(is_read, resp.start, resp.end));
+#endif
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         CMDBUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, req.start + req.offset);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(

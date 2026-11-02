@@ -16,9 +16,7 @@
 // Varargs (3 words per write, positional): bank_id, dst_offset, units_to_transfer
 //   (zero-padded by the host to a uniform per-kernel count; only the first num_writes*3 are read.)
 void kernel_main() {
-    constexpr bool write_to_dram = get_arg(args::interface_with_dram);
     constexpr uint32_t unit_size = get_arg(args::unit_size);
-    constexpr AllocatorBankType bank_type = write_to_dram ? AllocatorBankType::DRAM : AllocatorBankType::L1;
 
     uint32_t read_offset = get_arg(args::read_offset);
     uint32_t num_writes = get_arg(args::num_writes);
@@ -29,12 +27,11 @@ void kernel_main() {
 
     // The shard DFB borrows the local tensor's buffer; it is used here purely as an address source.
     DataflowBuffer shard_dfb(dfb::shard);
-    // The remote tensor is walked with raw bank addressing, so only its base address is needed.
+    // The remote tensor is walked by bank: host-computed (bank id, offset into the tensor) per transfer.
     TensorAccessor remote(tensor::remote);
     Noc noc;
-    AllocatorBank<bank_type> bank;
+    BankView bank(remote);
 
-    uint32_t dst_addr = remote.get_bank_base_address();
     uint32_t l1_read_addr = shard_dfb.get_read_ptr() + read_offset;
 #ifdef UNALIGNED
     constexpr uint32_t local_unit_size_padded = get_arg(args::local_unit_size_padded);
@@ -48,24 +45,24 @@ void kernel_main() {
     // needed here (unlike the reader): the local source is read directly with its L1 address.
     for (uint32_t i = 0; i < num_writes; ++i) {
         uint32_t bank_id = get_vararg(args_idx++);
-        uint32_t addr = dst_addr + get_vararg(args_idx++);
+        uint32_t offset = get_vararg(args_idx++);
         uint32_t units_to_transfer = get_vararg(args_idx++);
         for (uint32_t j = 0; j < units_to_transfer; ++j) {
             CoreLocalMem<uint32_t> src(l1_read_addr);
-            noc.async_write(src, bank, unit_size, {.offset_bytes = 0}, {.bank_id = bank_id, .addr = addr});
+            noc.async_write(src, bank, unit_size, {.offset_bytes = 0}, {.bank_id = bank_id, .offset_bytes = offset});
             l1_read_addr += local_unit_size_padded;
-            addr += remote_unit_size_padded;
+            offset += remote_unit_size_padded;
         }
     }
     noc.async_write_barrier();
 #else
     for (uint32_t i = 0; i < num_writes; ++i) {
         uint32_t bank_id = get_vararg(args_idx++);
-        uint32_t addr = dst_addr + get_vararg(args_idx++);
+        uint32_t offset = get_vararg(args_idx++);
         uint32_t units_to_transfer = get_vararg(args_idx++);
         uint32_t write_size = units_to_transfer * unit_size;
         CoreLocalMem<uint32_t> src(l1_read_addr);
-        noc.async_write(src, bank, write_size, {.offset_bytes = 0}, {.bank_id = bank_id, .addr = addr});
+        noc.async_write(src, bank, write_size, {.offset_bytes = 0}, {.bank_id = bank_id, .offset_bytes = offset});
         l1_read_addr += write_size;
     }
     noc.async_write_barrier();

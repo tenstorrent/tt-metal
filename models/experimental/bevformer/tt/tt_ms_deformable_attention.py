@@ -7,7 +7,7 @@ TTNN Multi-Scale Deformable Attention implementation for BEVFormer.
 The core attention is a single device op: ``ttnn.experimental.fused_msda_from_offsets``.
 It takes the reference points and the raw sampling offsets and does the whole of
 MSDA -- sampling-location generation, bilinear sampling, the attention multiply
-and the reduction over (levels, points) -- inside one kernel. No intermediate
+and the reduction over (levels, points) -- inside one device op. No intermediate
 grid or per-level sampled-value tensor is materialized.
 
 Key components:
@@ -15,22 +15,21 @@ Key components:
 - TTMSDeformableAttention: Main attention class with parameter management
 """
 
+from typing import Literal
+
 import ttnn
 
 import torch
-from ..config import DeformableAttentionConfig
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
+from ..model_config import DeformableAttentionConfig
+from .tt_common import signpost
 
 from loguru import logger
 
 # Enable/disable logging output
 ENABLE_LOGGING = False
+
+ValueMemory = Literal["auto", "l1", "dram"]
+_warned_dram_fallbacks = set()
 
 
 def _spatial_shapes_list(spatial_shapes):
@@ -43,7 +42,28 @@ def _spatial_shapes_list(spatial_shapes):
     return [(int(h), int(w)) for h, w in spatial_shapes.tolist()]
 
 
-def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets, attention_weights, spatial_shapes):
+def _warn_dram_fallback(value, attention_weights, spatial_shapes, reason):
+    warning_key = (tuple(value.shape), tuple(attention_weights.shape), tuple(spatial_shapes.flatten().tolist()))
+    if warning_key not in _warned_dram_fallbacks:
+        _warned_dram_fallbacks.add(warning_key)
+        logger.warning(f"fused_msda: {reason}; using interleaved DRAM for value shape {list(value.shape)}")
+
+
+def _is_allocation_oom(error):
+    """Keep the auto retry narrow: kernel and validation failures must remain visible."""
+    return "Out of Memory" in str(error)
+
+
+def multi_scale_deformable_attn_fused(
+    value,
+    reference_points,
+    sampling_offsets,
+    attention_weights,
+    spatial_shapes,
+    num_valid_queries=None,
+    *,
+    value_memory: ValueMemory = "auto",
+):
     """Core multi-scale deformable attention, as one device op.
 
     Computes, for each (b, q, h), with ``r(l, p) = p % R`` (BEVFormer's z-anchor
@@ -54,36 +74,95 @@ def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets,
                        reference_points[b, q, r(l, p)] + sampling_offsets[b, q, h, l, p] / [W_l, H_l])
 
     Args:
-        value: (bs, num_keys, num_heads, head_dim) or packed (bs, num_keys, num_heads*head_dim) ROW_MAJOR
+        value: (bs, num_keys, num_heads, head_dim) or packed (bs, num_keys, num_heads*head_dim)
         reference_points: (bs, num_queries, num_points_in_pillar, 2), normalized [0, 1]
         sampling_offsets: (bs, num_queries, num_heads, num_levels*num_points*2) ROW_MAJOR,
-            raw, in feature-map pixel units -- the reader applies the per-level
-            ``/ [W_l, H_l]`` normalization itself.
+            raw, in feature-map pixel units. The SFPU applies the per-level scale.
         attention_weights: (bs, num_queries, num_heads, num_levels*num_points) ROW_MAJOR
         spatial_shapes: torch (num_levels, 2) of (H, W)
+        num_valid_queries: optional per-batch count of rows to compute. Rows past it are left
+            unwritten and may hold NaN or Inf, so the caller must drop them with a select
+            (``ttnn.where``), not by multiplying with a mask.
+        value_memory: ``"auto"`` selects L1 only when value, output, and fused-op
+            circular buffers fit safely, retries in DRAM if an L1 allocation still
+            runs out of memory, and logs one warning per input shape when it falls
+            back; ``"dram"`` forces DRAM; ``"l1"`` requires L1 and raises
+            ``RuntimeError`` when it does not fit or cannot be allocated.
 
     Returns:
         (bs, num_queries, num_heads*head_dim) ROW_MAJOR -- the heads are already
-        concatenated by the op's writer, so no reshape/permute follows.
+        concatenated by the op's writer, so no reshape/permute follows. The output
+        lives in the memory ``value_memory`` selected (L1 or interleaved DRAM).
     """
-    if use_signpost:
-        signpost(header="fused_msda Start")
+    signpost(header="fused_msda Start")
 
-    value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT)
+    if value_memory not in {"auto", "l1", "dram"}:
+        raise ValueError(f'value_memory must be "auto", "l1", or "dram", got {value_memory!r}')
+
     attention_weights = ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT)
     reference_points = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
 
-    output = ttnn.experimental.fused_msda_from_offsets(
-        value,
-        reference_points,
-        sampling_offsets,
-        attention_weights,
-        _spatial_shapes_list(spatial_shapes),
-        reference_mode="pillar",
-    )
+    if value_memory == "dram":
+        target_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        # TODO: Expose placement on the module config and use explicit L1/DRAM for fixed
+        # deployments. This would improve host-side performance by removing the per-call
+        # capacity query, while keeping auto placement available for dynamic environments.
+        l1_is_safe = ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
+            value,
+            reference_points,
+            sampling_offsets,
+            attention_weights,
+            _spatial_shapes_list(spatial_shapes),
+            reference_mode="pillar",
+        )
+        if value_memory == "l1" and not l1_is_safe:
+            raise RuntimeError("fused_msda value_memory='l1' is unsafe under the current L1 allocation")
+        target_memory_config = ttnn.L1_MEMORY_CONFIG if l1_is_safe else ttnn.DRAM_MEMORY_CONFIG
+        if value_memory == "auto" and not l1_is_safe:
+            _warn_dram_fallback(value, attention_weights, spatial_shapes, "value and output do not safely fit L1")
 
-    if use_signpost:
-        signpost(header="fused_msda End")
+    valid_queries = list(num_valid_queries) if num_valid_queries else None
+
+    def run_with_memory_config(memory_config):
+        staged_value = value
+        owns_staged_value = False
+        try:
+            if value.layout != ttnn.ROW_MAJOR_LAYOUT:
+                staged_value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+                owns_staged_value = True
+            elif value.memory_config() != memory_config:
+                staged_value = ttnn.to_memory_config(value, memory_config)
+                owns_staged_value = True
+
+            return ttnn.experimental.fused_msda_from_offsets(
+                staged_value,
+                reference_points,
+                sampling_offsets,
+                attention_weights,
+                _spatial_shapes_list(spatial_shapes),
+                reference_mode="pillar",
+                memory_config=memory_config,
+                num_valid_queries=valid_queries,
+            )
+        finally:
+            if owns_staged_value:
+                ttnn.deallocate(staged_value)
+
+    try:
+        output = run_with_memory_config(target_memory_config)
+    except RuntimeError as error:
+        if value_memory != "auto" or target_memory_config != ttnn.L1_MEMORY_CONFIG or not _is_allocation_oom(error):
+            raise
+        _warn_dram_fallback(
+            value,
+            attention_weights,
+            spatial_shapes,
+            "L1 allocation failed after the capacity check",
+        )
+        output = run_with_memory_config(ttnn.DRAM_MEMORY_CONFIG)
+
+    signpost(header="fused_msda End")
     return output
 
 
@@ -93,7 +172,7 @@ class TTMSDeformableAttention:
     Based on the MMCV/BEVFormer approach.
     """
 
-    def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes):
+    def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes, residual=True):
         """
         Initialize TTNN Multi-Scale Deformable Attention module.
 
@@ -111,6 +190,8 @@ class TTMSDeformableAttention:
                 module: forward takes no shapes of its own, and they are handed to the
                 fused op as a static attribute. Features at a different resolution
                 require a new instance.
+            residual: Add the identity to the output. BEVFormer's MSDeformableAttention3D, inside
+                the spatial cross-attention, has no shortcut.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
@@ -146,6 +227,7 @@ class TTMSDeformableAttention:
         self.total_keys = int(self.spatial_shapes.prod(dim=1).sum().item())
 
         self.head_dim = self.embed_dims // self.num_heads
+        self.residual = residual
 
     def forward(
         self,
@@ -156,6 +238,7 @@ class TTMSDeformableAttention:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
+        num_valid_queries=None,
         **kwargs,
     ):
         """
@@ -168,6 +251,8 @@ class TTMSDeformableAttention:
             query_pos: [bs, num_queries, embed_dims] Query positional encoding
             key_padding_mask: [bs, num_keys] Padding mask for keys
             reference_points: [bs, num_queries, num_points_in_pillar, 2] Reference points
+            num_valid_queries: Optional per-batch count of rows to compute. Rows past it are left
+                unwritten and may hold NaN or Inf; drop them with ``ttnn.where``.
 
         Returns:
             output: [bs, num_queries, embed_dims]
@@ -183,8 +268,8 @@ class TTMSDeformableAttention:
         if query_pos is not None:
             query = ttnn.add(query, query_pos)
 
-        if use_signpost:
-            signpost(header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {self.total_keys}")
+        deformable_attn_region = f"TT MS Deformable Attn Module {query.shape[1]} - {self.total_keys}"
+        signpost(header=f"{deformable_attn_region} Start")
 
         # Handle batch_first format
         if not self.batch_first:
@@ -234,6 +319,9 @@ class TTMSDeformableAttention:
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_queries, self.num_heads, self.num_levels * self.num_points)
         )
+        # TODO(#62506): drop once softmax zeroes tile padding itself. The reshape leaves stale L1 in the
+        # padding, and softmax's additive -inf pad mask turns NaN or +inf there into NaN rows.
+        attention_weights = ttnn.fill_implicit_tile_padding(attention_weights, 0.0)
         attention_weights = ttnn.softmax(attention_weights, dim=-1)
 
         if ENABLE_LOGGING:
@@ -256,6 +344,7 @@ class TTMSDeformableAttention:
             sampling_offsets=sampling_offsets,
             attention_weights=attention_weights,
             spatial_shapes=self.spatial_shapes,
+            num_valid_queries=num_valid_queries,
         )
 
         if ENABLE_LOGGING:
@@ -270,14 +359,17 @@ class TTMSDeformableAttention:
             logger.info("MSDA Adding Residual")
 
         # Add residual connection
-        output = ttnn.add(output, identity)
+        if self.residual:
+            output = ttnn.add(output, identity)
+        else:
+            # The fused op's output is ROW_MAJOR; without output_proj or the residual nothing tiles it.
+            output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
 
         # Handle batch_first format for output
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 
-        if use_signpost:
-            signpost(header="TT MS Deformable Attn Module End")
+        signpost(header=f"{deformable_attn_region} End")
 
         return output
 

@@ -8,8 +8,9 @@
 // default) or Y = H_128 * x (normalize=false) using the FPU/MM path.
 // See llk_math_hadamard.h for the algorithmic derivation.
 //
-// All operands are 1-face [16, 16] tiles; the inputs are bfloat16 and
-// the result is packed out as bfp8 (bfloat8_b). The math is a custom
+// h16 and out are 1-face [16, 16] tiles, the input is 128 contiguous
+// datums (see in_cb below); the inputs are bfloat16 and the result is
+// packed out as bfp8 (bfloat8_b). The math is a custom
 // narrow MOP: one (LoFi) or two (high-fidelity) MVMULs per matmul pass
 // with a MOVD2B bridge, then an SFPU element-wise scale when normalize
 // is true. H_16 is streamed into srcA bank 1 by the unpack thread
@@ -21,11 +22,20 @@
 //   h16_cb : single [16, 16] bfloat16 tile. H_16 fills the entire face.
 //            Routed to srcB face (0, 0).
 //
-//   in_cb  : single [16, 16] bfloat16 tile. The 128 real input values
-//            live in rows [0..8), cols [0..16). The unpack path zeroes
-//            rows [8..16) itself (ZEROSRC over the full srcA span, see
-//            llk_unpack_hadamard.h), so callers need not pad them.
-//            Routed to srcA face (0, 0).
+//   in_cb  : bfloat16. The input is the first 128 datums at the tile
+//            address, in L1 order, read as rows [0..8) of srcA face (0, 0).
+//            The tile shape is not checked: e.g. face 0 rows [0..8) of a
+//            [16, 16] or [32, 32] tile, or 4x[1, 32] pages (row-major).
+//            Note that for faces of 2..4 rows (e.g. [4, 32]) the 128 datums
+//            are face-major, not the tile's logical row-major order.
+//            The unpack path zeroes rows [8..16) itself (ZEROSRC over the
+//            full srcA span, see llk_unpack_hadamard.h), so callers need
+//            not pad them.
+//            Each hadamard_h128_tile call reads 256 B from in_tile_index,
+//            which may span several pages (4 for bf16 [1, 32] pages). The
+//            caller must wait on and pop 256 B / page_size pages per call,
+//            step in_tile_index by the same count, and keep the window
+//            from wrapping past the CB end.
 //
 //   out_cb : single [16, 16] bfp8 (bfloat8_b) tile. The 1x128 result
 //            lives in face 0 rows [0..8), cols [0..16). The caller
@@ -68,7 +78,7 @@ namespace ckernel {
  *
  * | Argument         | Description                                                            | Type     | Valid Range            | Required              |
  * |------------------|------------------------------------------------------------------------|----------|------------------------|-----------------------|
- * | in_cb_id         | The 1x128 input vector tile ([16, 16]; padding auto-zeroed on unpack)  | uint32_t | 0 to 31                | True                  |
+ * | in_cb_id         | The 1x128 input vector (128 contiguous bf16; see in_cb above)          | uint32_t | 0 to 31                | True                  |
  * | h16_cb_id        | The H_16 weight tile ([16, 16], H_16 fills the single face)            | uint32_t | 0 to 31                | True                  |
  * | out_cb_id        | The 1x128 output vector tile ([16, 16], result in rows 0..7)           | uint32_t | 0 to 31                | True                  |
  * | fp32_dest_acc_en | Whether to enable fp32 accumulation in dest                            | bool     | true/false             | False (default off)   |
@@ -82,7 +92,7 @@ ALWI void hadamard_h128_init(const uint32_t in_cb_id, const uint32_t h16_cb_id, 
     // unpacker config is INDEPENDENT of the input CB's tile shape: srcA reads
     // the input data with h16's [16,16] config (a 4x[1,32] feed is read as 8
     // rows of 16), srcB reads h16. Both operands are bf16. in_cb_id is passed
-    // to the init only for its single-face assertion.
+    // to the init only to check that its format matches h16's.
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en>(h16_cb_id, h16_cb_id)));
     UNPACK((llk_unpack_hadamard_h128_init(h16_cb_id, in_cb_id, /*h16_tile_index=*/0)));
 
@@ -114,9 +124,9 @@ ALWI void hadamard_h128_init_short(const uint32_t in_cb_id, const uint32_t h16_c
  *
  * | Argument         | Description                                                  | Type     | Valid Range                                    | Required              |
  * |------------------|--------------------------------------------------------------|----------|------------------------------------------------|-----------------------|
- * | in_cb_id         | CB holding the 1x128 input tile (padding auto-zeroed)        | uint32_t | 0 to 31                                        | True                  |
+ * | in_cb_id         | CB holding the 1x128 input (128 contiguous bf16)             | uint32_t | 0 to 31                                        | True                  |
  * | h16_cb_id        | CB holding the H_16 weight tile (H_16 fills the face)        | uint32_t | 0 to 31                                        | True                  |
- * | in_tile_index    | Index of the input tile within in_cb_id                      | uint32_t | < CB size                                      | True                  |
+ * | in_tile_index    | Page index where the 256 B input starts (see in_cb above)    | uint32_t | < CB size                                      | True                  |
  * | h16_tile_index   | Index of the H_16 tile within h16_cb_id                      | uint32_t | < CB size                                      | True                  |
  * | dst_index        | DST register index that will receive the result Y            | uint32_t | < acquired DST size                            | True                  |
  */
