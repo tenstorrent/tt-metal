@@ -523,8 +523,8 @@ void py_module(nb::module_& mod) {
             compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
         )doc")
         .def_rw("stream_in1", &MatmulMultiCoreReuseMultiCast1DProgramConfig::stream_in1, R"doc(
-            Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB or with
-            PrefetcherPipes. The weight MUST be queued with the ``(weight, block_count, rotation)``
+            Select ring-rotated FIFO delivery for gather_in0 over PrefetcherPipes. The weight MUST
+            be queued with the ``(weight, block_count, rotation)``
             request form. Without it, gather_in0 over PrefetcherPipes takes its K-blocks in K order,
             into a pipe ring that holds the whole layer.
             mcast_in0 consumes natural FIFO order and requires this flag to remain false. Defaults
@@ -559,7 +559,7 @@ void py_module(nb::module_& mod) {
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
             mod, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig", R"doc(
-        This program config is a specialized config for very narrow tensors stored in DRAM.
+        This program config multiplies width-sharded L1 activations by width-sharded DRAM weights.
     )doc");
 
     matmul_multi_core_reuse_multicast_dram_sharded_program_config
@@ -583,9 +583,10 @@ void py_module(nb::module_& mod) {
         .def_rw("per_core_M", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_M, R"doc(
             Number of output tiles each core processes along the M dimension.
 
-            Determines how the M dimension is distributed across cores in DRAM-sharded
-            scenarios. This must align with the DRAM sharding pattern to ensure optimal
-            performance and avoid memory access conflicts.
+            Must equal the padded activation height, including fused batch dimensions, divided by
+            its tile height. The weight must contain one shared matrix. Every activation
+            shard contains all M rows. Both pipelines support multiple tile rows, subject to L1
+            capacity for the input/output shards and the program's working buffers.
         )doc")
         .def_rw("per_core_N", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_N, R"doc(
             Number of output tiles each core processes along the N dimension.
@@ -627,8 +628,13 @@ void py_module(nb::module_& mod) {
             extra cores split K and reduce their partial sums), every core reads its activation rows
             straight from the L1 shards, and in0_block_w is the number of K tiles per streamed
             weight block (any value). Accumulation follows compute_kernel_config: fp32_dest_acc_en
-            keeps each core's whole K in fp32 Dest, otherwise 16-bit Dest with packer L1
-            accumulation in Float16_b. A call that does not qualify runs as if the flag were False.
+            uses fp32 Dest and Float32 partials, otherwise 16-bit Dest and Float16_b partials.
+            For one tile row the fp32 path keeps each column pass's whole K in Dest. For multiple
+            tile rows, each weight block is reused across M before it is released, with bounded
+            activation buffering and packer L1 accumulation between K blocks.
+            Wormhole may partition tall M across two worker groups when narrow column slices
+            would otherwise duplicate activation traffic; each group then reads the weights.
+            A call that does not qualify runs as if the flag were False.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             // Include fused_activation in the repr for full visibility during tracing/debugging.
@@ -783,7 +789,7 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
-            global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
+            global_cb (ttnn.GlobalCircularBuffer, optional): GlobalCircularBuffer the worker-core prefetcher (``ttnn.dram_prefetcher``) streams in1 K-blocks through. Defaults to `None`.
             prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True`` or ``gather_in0=True``. For ``gather_in0`` the producer delivers each worker its K-blocks one in0 shard deep, in ring order starting with the K-block of its own in0 shard when ``stream_in1=True``, in K order otherwise, into a pipe ring that holds them all. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
 
         Returns:
@@ -913,7 +919,7 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
-            global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
+            global_cb (ttnn.GlobalCircularBuffer, optional): GlobalCircularBuffer the worker-core prefetcher (``ttnn.dram_prefetcher``) streams in1 K-blocks through. Defaults to `None`.
             prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True`` or ``gather_in0=True``. For ``gather_in0`` the producer delivers each worker its K-blocks one in0 shard deep, in ring order starting with the K-block of its own in0 shard when ``stream_in1=True``, in K order otherwise, into a pipe ring that holds them all. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
             in0_column_offset (int, optional): read input_tensor_a's K columns starting at this tile-aligned column of a wider interleaved input_tensor_a, whose width only needs to hold ``in0_column_offset + K`` columns, instead of all of its columns. Requires a ``MatmulMultiCoreReuseMultiCastProgramConfig``, an interleaved (DRAM or L1) input_tensor_a and no ``transpose_a``. Defaults to `None`.
 

@@ -27,8 +27,10 @@ void async_read_row_face0(
     noc.async_read(accessor, CoreLocalMem<uint32_t>(l1_dst_addr), row_bytes, {.page_id = page_id}, {});
 }
 
+namespace {
+
 // L1->L1-copy the row's second half into face 1. Only legal after the face-0 read barrier.
-static void copy_row_half_to_face1(const Noc& noc, uint32_t l1_dst_addr, uint32_t element_bytes) {
+void copy_row_half_to_face1(const Noc& noc, uint32_t l1_dst_addr, uint32_t element_bytes) {
     const uint32_t face_bytes = tt::constants::FACE_HW * element_bytes;
     const uint32_t half_row_bytes = tt::constants::FACE_WIDTH * element_bytes;
     const UnicastEndpoint self;
@@ -39,6 +41,8 @@ static void copy_row_half_to_face1(const Noc& noc, uint32_t l1_dst_addr, uint32_
         {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_dst_addr + half_row_bytes},
         {});
 }
+
+}  // namespace
 
 void kernel_main() {
     constexpr bool is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender") == 1;
@@ -198,7 +202,7 @@ void kernel_main() {
                     tt::tt_metal::groupnorm::BF16_ONE,
                     tt::tt_metal::groupnorm::BF16_ZERO);
                 tt::tt_metal::groupnorm::synthesize_group_mask_tiles_full_bf16(
-                    l1_write_addr_input_mask + block_w * input_mask_single_tile_size_bytes,
+                    l1_write_addr_input_mask + (block_w * input_mask_single_tile_size_bytes),
                     mask_row_offset,
                     num_channels_per_group,
                     block_w,

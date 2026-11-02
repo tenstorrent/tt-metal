@@ -42,28 +42,14 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
-    DestSync,
     FastMode,
     MathOperation,
     format_dict,
 )
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block
-from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    CLAMP_NEGATIVE,
-    FAST_MODE,
-    MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
-    TILE_COUNT,
-    generate_input_dim,
-)
 from helpers.utils import classify_special
+from test_eltwise_unary_sfpu import eltwise_unary_sfpu
 
 # key -> (fp32 bits, bfloat16 bits)
 SPECIALS = {
@@ -124,39 +110,22 @@ def _run(in_fmt, out_fmt, dest_acc, approx):
         patterns = torch.from_numpy(patterns.view(np.int16))
     bits[is_special] = patterns[lane[is_special]]
 
-    nb, ntb = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        dims,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-    cfg = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(dims, dims),
-            APPROX_MODE(approx),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(False),
-            MATH_OP(mathop=MathOperation.GeluDerivative),
-        ],
-        runtimes=[TILE_COUNT(tc_A), NUM_BLOCKS(nb), NUM_TILES_IN_BLOCK(ntb)],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tc_A,
-            tile_count_B=tc_B,
-            tile_count_res=tc_A,
-        ),
+    res = eltwise_unary_sfpu(
+        formats=formats,
         dest_acc=dest_acc,
+        approx_mode=approx,
+        mathop=MathOperation.GeluDerivative,
+        fast_mode=FastMode.No,
+        input_dimensions=dims,
+        src_A=src_A,
+        src_B=src_B,
+        tile_cnt_A=tc_A,
+        tile_cnt_B=tc_B,
         unpack_to_dest=unpacks_to_dest(in_fmt, dest_acc),
+        clamp_negative=False,
+        check_golden=False,
     )
-    hw = torch.tensor(cfg.run().result, dtype=format_dict[formats.output_format])
+    hw = torch.tensor(res, dtype=format_dict[formats.output_format])
     return (
         flat.to(torch.float32).numpy(),
         hw.to(torch.float32).numpy(),
