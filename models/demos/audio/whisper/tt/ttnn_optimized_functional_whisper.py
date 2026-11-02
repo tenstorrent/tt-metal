@@ -382,21 +382,30 @@ def get_decoder_prefill_sdpa_configs(device):
     return program_config, compute_kernel_config
 
 
-def _write_decoder_kv_prefill_to_cache(key_states, value_states, k_cache, v_cache):
-    """Bulk-write prefilled K/V [B, H, L, d] into self-attention KV cache (matches init_kv_cache layout)."""
+def _write_decoder_kv_prefill_to_cache(key_states, value_states, k_cache, v_cache, in_place=False):
+    """Bulk-write prefilled K/V [B, H, L, d] into self-attention KV cache (matches init_kv_cache layout).
+
+    ``slice_write`` moves the cache to a new buffer, which strands a decode trace captured against the old one;
+    ``in_place`` writes through ``fill_cache`` so the cache keeps its address.
+    """
     bsz, nh, seq_len, head_dim = (
         int(key_states.shape[0]),
         int(key_states.shape[1]),
         int(key_states.shape[2]),
         int(key_states.shape[3]),
     )
-    begins = [0, 0, 0, 0]
-    ends = [bsz, nh, seq_len, head_dim]
-    strides = [1, 1, 1, 1]
     k_bf8 = ttnn.typecast(key_states, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     v_bf8 = ttnn.typecast(value_states, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.experimental.slice_write(k_bf8, k_cache, begins, ends, strides)
-    ttnn.experimental.slice_write(v_bf8, v_cache, begins, ends, strides)
+    if in_place:
+        for b in range(bsz):
+            ttnn.fill_cache(k_cache, k_bf8[b : b + 1] if bsz > 1 else k_bf8, b)
+            ttnn.fill_cache(v_cache, v_bf8[b : b + 1] if bsz > 1 else v_bf8, b)
+    else:
+        begins = [0, 0, 0, 0]
+        ends = [bsz, nh, seq_len, head_dim]
+        strides = [1, 1, 1, 1]
+        ttnn.experimental.slice_write(k_bf8, k_cache, begins, ends, strides)
+        ttnn.experimental.slice_write(v_bf8, v_cache, begins, ends, strides)
     ttnn.deallocate(k_bf8)
     ttnn.deallocate(v_bf8)
 
@@ -635,7 +644,15 @@ def whisper_attention(
                 compute_kernel_config=sdpa_prefill_compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            _write_decoder_kv_prefill_to_cache(key_states, value_states, k_cache, v_cache)
+            # The p150 decode path keeps its decode trace across requests (see WhisperGenerator), so the cache
+            # must not move.
+            _write_decoder_kv_prefill_to_cache(
+                key_states,
+                value_states,
+                k_cache,
+                v_cache,
+                in_place=parameters.query_key_value.get("dram_sharded") is not None,
+            )
             ttnn.deallocate(query_states)
             ttnn.deallocate(key_states)
             ttnn.deallocate(value_states)

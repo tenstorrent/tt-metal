@@ -360,10 +360,14 @@ class WhisperGenerator:
         self.weights_mesh_mapper = weights_mesh_mapper
         # large-v2 / large-v3-turbo on p150: DRAM-sharded decoder matmuls and a full-grid LM head in decode.
         self._lm_head_core_grid = None
+        # Keep the decode trace across generate() calls: re-capturing it per request costs more than the
+        # optimized decode saves on short transcriptions. Every buffer the trace reads is allocated in __init__.
+        self._keep_decode_trace = False
         if ttnn_optimized_functional_whisper.use_p150_decode_optimizations(config, mesh_device):
             ttnn_optimized_functional_whisper.attach_decode_dram_sharded_weights(self.parameters.decoder)
             grid = mesh_device.compute_with_storage_grid_size()
             self._lm_head_core_grid = ttnn.CoreGrid(x=grid.x, y=grid.y)
+            self._keep_decode_trace = True
             logger.info("Whisper p150 decode optimizations enabled")
         self.kv_cache_per_batch_size = kv_cache_per_batch_size
         self.cross_attn_cache_per_batch_size = cross_attn_cache_per_batch_size
@@ -851,7 +855,8 @@ class WhisperGenerator:
 
         # Previous generate() may have left a decode trace installed; release before
         # encoder path allocates new buffers for this batch.
-        self._release_captured_traces_before_new_generation()
+        if not self._keep_decode_trace:
+            self._release_captured_traces_before_new_generation()
 
         # Process input features
         all_input_features = []
