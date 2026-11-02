@@ -1304,3 +1304,20 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   Slab / AnonPages / PageTables. This node runs tenstorrent.ko 2.11.0 (dkms, released 2026-08-14), whose sg_helpers.c
   still reads table->nents; the device's IOMMU group is DMA-FQ (translated, despite iommu=pt). No release has the fix
   yet (ttkmd-2.11.0 is behind it). Fix: a driver built from tt-kmd main, installed by infra (root).
+
+## 2026-11-02 16:51 INFRA: node power-cycled by an admin (BMC, ~14:56 UTC) to clear the tt-kmd #301 host leak
+- Up since 14:58:35; every tmux session / process from before is gone. The login-node guard reserved the node and ran
+  autoresume.sh 16:51: orchestrator NOT started (build_ok 4053399bb57 != HEAD 31f2f4004c3), overseer started.
+- Before the reboot: orchestrator stopped cleanly at --until FIX.21 (gate PASS 4118b90b442, 1 problem for review);
+  P.27 EXPERTS_BFP8 queued, not started (owner's word pending). run_ds41_8x4.sh says --until P.27.
+- Leak baseline after boot (16:52): MemTotal 566.1 GiB, MemFree 509.9, MemAvailable 516.6, AnonPages 4.1, Slab 4.2,
+  Cached 4.3, Buffers 5.0, PageTables 0.04 (unaccounted ~38 GiB = total - free - cached - buffers - anon - slab:
+  firmware / kernel reservations at boot; the leak is the growth from here). Driver still tenstorrent.ko 2.11.0
+  (the leak returns with device use until infra installs a tt-kmd main build).
+- 16:55 incremental rebuild started (rebuild.sh, tmux rebuild; HEAD has 52 commits since build_ok incl. C++).
+- 16:53 rebuild done (70 targets, ttnn import ok); 16:56 box test PASS (test_box.py, 17 s, no recovery needed; nobody
+  else on the box: no UMD locks, no other users' device jobs, ps -u dlukic empty). build_ok = HEAD 31f2f4004c3.
+- Overseer set up: watch (orchestrator not running, exit 3 = expected, idle by owner's order), heartbeat cron 7,37,
+  Stop hook present, overseer guard set by autoresume. Free RAM 507 GiB / available 516 GiB after build + box test.
+- Waiting for the owner's next order (P.27 EXPERTS_BFP8 queued, TODO; run_ds41_8x4.sh --until P.27). Note: build_ok
+  now matches HEAD, so a reservation loss + autoresume would start the orchestrator, i.e. P.27.
