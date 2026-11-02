@@ -61,9 +61,11 @@ CircularBufferImpl::CircularBufferImpl(
     this->set_global_circular_buffer(global_circular_buffer);
 }
 
+// Merges the descriptor's core ranges as ProgramImpl::add_circular_buffer does, so a program built from a
+// ProgramDescriptor initializes its CBs with the same multicasts as one built with CreateCircularBuffer.
 CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
     id_(reinterpret_cast<uintptr_t>(this)),
-    core_ranges_(descriptor.core_ranges),
+    core_ranges_(descriptor.core_ranges.merge_ranges()),
     config_(descriptor),
     locally_allocated_address_(std::nullopt) {
     this->validate_set_config_attributes();
