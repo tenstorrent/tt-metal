@@ -161,10 +161,11 @@ def test_a_cancelled_call_stops_the_whole_sweep(tmp_path):
     sweep = ["sh", "-c", f"sleep 30 & echo $! > {pidfile}; wait"]
 
     async def cancel():
-        with pytest.raises(
-            asyncio.TimeoutError
-        ):  # allow-pytest.raises: no expect_error in LLK suite
+        try:
             await asyncio.wait_for(llk_tools.run(sweep), 1)
+        except asyncio.TimeoutError:
+            return
+        pytest.fail("the sweep ended before the cancel")
 
     asyncio.run(cancel())
     pid = int(pidfile.read_text())
