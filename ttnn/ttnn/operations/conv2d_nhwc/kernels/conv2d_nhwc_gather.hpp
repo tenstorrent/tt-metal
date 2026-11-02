@@ -32,6 +32,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
@@ -149,7 +150,9 @@ FORCE_INLINE int32_t clamp_i(int32_t v, int32_t lo, int32_t hi) { return v < lo 
 // (perf_experiments/gather_fast): ~13% less gather work than one buffer. Raw NoC cmd-buf API on
 // purpose — no helper issues a strided run of fixed-length local reads on two cmd buffers.
 // The BRISC split-gather instance (R3) keeps one buffer: its cmd buffers serve the writer's writes.
-#if defined(COMPILE_FOR_NCRISC)
+// Carve-out: with the weight ring on the reader (WR_WEIGHTS) the gather waits on a transaction-id
+// barrier, which does not cover reads issued from the second cmd buffer (measured: hang) — one buffer.
+#if defined(COMPILE_FOR_NCRISC) && !defined(WR_WEIGHTS)
 constexpr bool dual_cmd_buf = true;
 #else
 constexpr bool dual_cmd_buf = false;
@@ -666,7 +669,26 @@ FORCE_INLINE void gather_tile_row_taps(
 
 // gather_m_blocks: this instance's m-blocks (role, role + num_gather_roles, ...) — window / halo fetch
 // then the im2col gather of every K-block into cb_act_rm. RT args start at rt_base (reader layout).
-FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
+// Weights on the reader (WR_WEIGHTS): an optional Poll functor (the reader's non-blocking weight
+// ring step; returns true if it touched the NoC) runs while cb_act_rm is full and once per tile-row.
+// The gather then tags its reads with GATHER_TRID (one cmd buffer) and waits only on that id,
+// so in-flight weight DRAM reads never stall a tile-row.
+struct NoPoll {
+    bool operator()() const { return false; }
+};
+constexpr uint32_t GATHER_TRID = 15;
+template <typename Poll = NoPoll>
+FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role, Poll poll = Poll{}) {
+    constexpr bool polled = !std::is_same_v<Poll, NoPoll>;
+    auto set_gather_trid = [&](uint32_t trid) { noc_async_read_set_trid(trid); };
+    auto run_poll = [&]() {
+        if constexpr (polled) {
+            if (poll()) {
+                set_local_read_state();
+                set_gather_trid(GATHER_TRID);
+            }
+        }
+    };
     [[maybe_unused]] const uint32_t input_addr = get_arg_val<uint32_t>(rt_base + 0);
     const uint32_t m_tile_start = get_arg_val<uint32_t>(rt_base + 1);
     const uint32_t m_tiles_this_core = get_arg_val<uint32_t>(rt_base + 2);
@@ -910,6 +932,9 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
             noc_async_read_barrier();
         }
         set_local_read_state();
+        if constexpr (polled) {
+            set_gather_trid(GATHER_TRID);
+        }
 
         // ---- gather_im2col_kblock, per n-block (activation is reused across n) ----
         for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
@@ -930,6 +955,11 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
                     const uint32_t tile = t0 + t;
                     {
                         MaybeDeviceZoneScope("reader_rm_reserve");
+                        if constexpr (polled) {
+                            while (!cb_pages_reservable_at_back(cb_act_rm, block_k_tiles)) {
+                                run_poll();
+                            }
+                        }
                         cb_reserve_back(cb_act_rm, block_k_tiles);
                     }
                     const uint32_t dst_base = get_write_ptr(cb_act_rm);
@@ -967,8 +997,13 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
                             wo_int_lo,
                             wo_int_hi);
                     }
-                    noc_async_read_barrier();
+                    if constexpr (polled) {
+                        noc_async_read_barrier_with_trid(GATHER_TRID);
+                    } else {
+                        noc_async_read_barrier();
+                    }
                     cb_push_back(cb_act_rm, block_k_tiles);
+                    run_poll();
                 }
             }
         }
@@ -978,6 +1013,9 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role) {
     }
     if constexpr (tile_in && k_exchange) {
         cb_pop_front(cb_act_window, tile_win_pages);
+    }
+    if constexpr (polled) {
+        set_gather_trid(0);  // kernel handoff expects cleared packet tags
     }
 }
 

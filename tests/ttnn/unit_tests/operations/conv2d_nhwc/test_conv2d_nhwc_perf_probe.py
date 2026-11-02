@@ -44,6 +44,24 @@ def test_perf_probe_block_sdxl_l1_bf16_bf8b(device):
     )
 
 
+def test_perf_probe_block_sdxl_l0_ds_bf16_bf8b(device):
+    """SDXL level-0 downsample perf case: (1,128,128,320) s2, BLOCK 10x10 shard (1664, 32), bf16 x bf8b."""
+    run_sharded(
+        device,
+        (1, 128, 128, 320),
+        320,
+        3,
+        1,
+        2,
+        ML.BLOCK_SHARDED,
+        True,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        shard_shape=(1664, 32),
+        core_grid=(10, 10),
+    )
+
+
 def test_l1_peak_block_sdxl_l1_bf16_bf8b(device):
     """Per-core L1 peak (graph capture, as the eval harness's device_l1_peak_bytes) of the
     perf-1 contract config; the target is production's 618,992 B."""

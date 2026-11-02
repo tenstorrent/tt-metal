@@ -381,7 +381,12 @@ void kernel_main() {
             // reader multicasts block k + 2 after it, so a payload's transit and the DRAM latency both
             // overlap act rounds and no core waits on a weight block in lockstep with its sender.
             // Resident weights: nothing to stream (w_push starts past the last K-block).
+#if defined(WR_WEIGHTS)
+            // Weights on the reader: the reader (NCRISC) streams the weight ring; nothing here.
+            uint32_t w_push = num_k_blocks;
+#else
             uint32_t w_push = weights_resident ? num_k_blocks : 0;  // blocks landed (pushed)
+#endif
             uint32_t w_read = w_push;                               // reader: blocks with reads issued
             uint32_t w_ack = w_push;                                // receiver: blocks acked
             auto slot_of = [&](uint32_t w) {

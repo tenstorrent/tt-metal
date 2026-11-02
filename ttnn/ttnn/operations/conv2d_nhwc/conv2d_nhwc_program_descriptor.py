@@ -32,6 +32,9 @@ from ttnn.operations._op_contract import UnsupportedAxisValue
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
+# Perf 1: the streamed K-exchange weight ring runs on the reader RISC (see wr_on in create_program_descriptor).
+WEIGHTS_ON_READER = True
+
 TILE = 32
 L1_NOC_ALIGN = 16
 
@@ -1168,6 +1171,11 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         if kx
         else False
     )
+    # The streamed weight ring runs on the reader (NCRISC, NOC_0) wherever a K-exchange core set streams
+    # multicast weights: the writer's loop then runs only the act rounds (Perf 1: SDXL L1 BLOCK -6%,
+    # ResNet layer4 -14%). Carve-out: HEIGHT's streamed fallback has receive-only sink cores, which
+    # carry no reader kernel to host the ring.
+    wr_on = WEIGHTS_ON_READER and kx and weight_mcast and not is_height and not p.get("weights_resident", False)
     if is_height and not weight_mcast:  # no multicast: every compute core reads its own weights
         sink_cores, mcast_cores = [], cores
     if act_mcast:
@@ -1425,7 +1433,8 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         tile_win = list(p["tile_windows"][mi]) if (tile_in and kx) else [0, 0, 0, 0]
         if tile_in and kx:
             reader_args += tile_win  # first tile-row, halo-before / own / halo-after tile-row counts
-        reader_rt[xy.x][xy.y] = reader_args
+        w_phase = mi if weight_rotating else (1 if mi == 0 else 0)
+        reader_rt[xy.x][xy.y] = ([w_addr, n_tile_start, w_phase, num_m_blocks] if wr_on else []) + reader_args
         writer_rt[xy.x][xy.y] = [
             w_addr,
             b_addr,
@@ -1445,10 +1454,35 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         # Receive-only: every round of every m-block (WIDTH: one m range for the whole group).
         writer_rt[xy.x][xy.y] = [0, 0, 0, 0, p["M_t"], _div_up(p["M_t"], bm), 0, 0, 1, 0]
 
+    wr_named = []
+    if wr_on:
+        reader_ct.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
+        wr_named = [
+            ("wr_cb_w", CB_WEIGHT_TILES),
+            ("wr_nkb", p["num_k_blocks"]),
+            ("wr_nnb", p["num_n_blocks"]),
+            ("wr_bk", bk),
+            ("wr_bn", bn),
+            ("wr_nt", p["N_t"]),
+            ("wr_kps", p.get("kblocks_per_slice", 1)),
+            ("wr_mcast", 1),
+            ("wr_depth", p["weight_depth"]),
+            ("wr_krows", p["weight_k_rows"]),
+            ("wr_senders", p["g_m"] if weight_rotating else 0),
+            (
+                "wr_slice_tiles",
+                weight_slice_tiles(input_tensor.memory_config(), p["C_in"], p["C_out"], p.get("groups", 1)),
+            ),
+            ("wr_ack_count", weight_group.num_cores() - 1 if weight_group is not cores else p["g_m"] - 1),
+            ("wr_act_mcast", 1 if act_mcast else 0),
+        ]
+    wr_defines = [("WR_WEIGHTS", "1")] if wr_on else []
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "conv2d_nhwc_reader.cpp"),
         core_ranges=cores,
         compile_time_args=reader_ct,
+        named_compile_time_args=wr_named,
+        defines=wr_defines,
         runtime_args=reader_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -1456,6 +1490,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         kernel_source=str(KERNEL_DIR / "conv2d_nhwc_writer.cpp"),
         core_ranges=mcast_cores,
         compile_time_args=writer_ct,
+        defines=wr_defines,
         runtime_args=writer_rt,
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -1503,7 +1538,7 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         # fixed sender = the group's first core (writer RT `mi == 0`).
         w_mcast = ttnn.Mcast(
             device,
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_0 if wr_on else ttnn.NOC.NOC_1, handshake=True),
             weight_group,
             weight_group.num_cores() if weight_group is not cores else p["g_m"],
             ttnn.McastRotatingSenderConfig()
@@ -1511,7 +1546,11 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
             else ttnn.McastFixedSenderConfig(sender_index=weight_sender),
             weight_order,
         )
-        w_mcast.attach(descriptor, "w_mcast", [writer], next_sem)
+        if wr_on:
+            w_mcast.attach(descriptor, "w_mcast", [reader], next_sem)
+            ttnn.attach_absent_mcast(writer, "w_mcast")
+        else:
+            w_mcast.attach(descriptor, "w_mcast", [writer], next_sem)
     else:
         ttnn.attach_absent_mcast(writer, "w_mcast")
     descriptor.kernels = [reader, writer, compute]
