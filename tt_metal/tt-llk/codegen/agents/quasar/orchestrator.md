@@ -63,7 +63,7 @@ analyzer  →  [ writer → tester → refiner ] × up to 3 cycles  →  optimiz
 - **refiner** (`llk-analysis-refiner.md`) — returns `REFINED` or `ESCALATE`.
 - **Loop cap: 3 writer-tester cycles**. Cycles 1 and 2 can hand off to the refiner; cycle 3 CANNOT (the refiner itself caps at v2 = 2 refinements = 3 total cycles). If cycle 3 still fails, the run is reported `failed`.
 - **optimizer**, **format** and the **pre-PR gates** (Step 7b) only run on success of tester. A run whose gates stay red is never `success`.
-- **perf comparison** (`PERF_ENABLED=true`, set by Step 2a) — the original is measured before the hide; the optimizer keeps only candidates that pass the functional test and are not slower; Step 6b records the verdict as a soft outcome that never changes `STATUS`.
+- **perf comparison** (`PERF_ENABLED=true`, set by Step 2a) — the original is measured before the hide; the optimizer keeps only candidates that pass the functional test and are not slower; Step 6b diagnoses the result from a wave capture, Step 6c lets the perf tuner make up to two diagnosis-guided changes when the stall headroom is at least 5%, and Step 6d records the verdict as a soft outcome that never changes `STATUS`.
 
 Agent playbooks live in `codegen/agents/quasar/`.
 
@@ -516,8 +516,8 @@ execute_step_perf_status
   execute_step_perf_measure entry full
   execute_step_perf_keep entry
   ```
-  Then go to Step 6b. If `PERF_ENABLED=false`, go straight to Step 7.
-- `KERNEL_TYPE` is `sfpu`: Step 6a, then Step 6b.
+  Then go to Step 6b (6c will skip: tuning is SFPU-only). If `PERF_ENABLED=false`, go straight to Step 7.
+- `KERNEL_TYPE` is `sfpu`: Step 6a, then Steps 6b–6d.
 
 ### Step 6a: Run the optimizer
 
@@ -560,9 +560,9 @@ source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_refresh_cost
 ```
 
-### Step 6b: Record the perf verdict
+### Step 6b: Diagnose the kernel in the tree
 
-First, a measure-only wave diagnosis of the kernel now in the tree. It captures waves of one variant on the emulator and records the floor, stall headroom and ranked causes (`codegen/skills/llk-perf-headroom`). It changes nothing in the tree. When perf is disabled, off the emulator, with `PERF_DIAG=false` or with little free disk, it prints `status=skipped`. EXECUTE (Bash tool, `timeout: 600000`, `dangerouslyDisableSandbox: true`, foreground):
+A wave diagnosis of the kernel the cheap stage left in the tree. It captures one variant on the emulator and records the floor, stall headroom and ranked causes (`codegen/skills/llk-perf-headroom`). It changes nothing in the tree. When perf is disabled, off the emulator, with `PERF_DIAG=false` or with little free disk, it prints `status=skipped`. EXECUTE (Bash tool, `timeout: 600000`, `dangerouslyDisableSandbox: true`, foreground):
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_perf_diagnose
@@ -572,13 +572,40 @@ While the printed line says `status=running`, EXECUTE the same way, as often as 
 source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_perf_diagnose_wait
 ```
-Then EXECUTE (a no-op that prints `not measured` when perf is disabled):
+
+### Step 6c: Diagnosis-guided tuning (only when the diagnosis shows headroom)
+
+EXECUTE:
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_perf_tune_gate
+```
+- `PERF_TUNE: skip …`: go to Step 6d. It skips for non-SFPU kernels, a diagnosis that is not `ok`, stall headroom below `PERF_TUNE_MIN_HEADROOM_PCT` (default 5%), or `PERF_TUNE=false`.
+- `PERF_TUNE: run …`: start the tuner, then go to Step 6d:
+```
+Agent tool:
+  subagent_type: "general-purpose"
+  description: "Tune kernel from diagnosis"
+  prompt: |
+    Read and follow codegen/agents/quasar/llk-perf-tuner.md to tune this run's kernel.
+
+    The kernel passes all tests and the cheap optimizer already ran. Make at most
+    PERF_TUNE_MAX_ATTEMPTS changes, one per attempt, each aimed at the top cause of
+    the latest wave diagnosis (PERF_DIAG_DIR). Keep a change only when
+    execute_step_perf_measure tune_N full says keep, re-diagnose each kept change,
+    and stop when execute_step_perf_tune_next prints next=done.
+```
+Wait for AGENTS completion, then EXECUTE `execute_step_refresh_cost` (same way as after Step 6a).
+
+### Step 6d: Record the perf verdict
+
+EXECUTE (a no-op that prints `not measured` when perf is disabled):
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
 execute_step_perf_finalize
 ```
 
-Quote the final `PERF_DIAG` line and the `PERF_FINAL:` line verbatim in your final report. Both are soft outcomes: never change `STATUS` or `FINAL_RESULT` because of them, and never act on the diagnosis in this run.
+Quote the last `PERF_DIAG` line, the `PERF_TUNE` gate line and the `PERF_FINAL:` line verbatim in your final report. All three are soft outcomes: never change `STATUS` or `FINAL_RESULT` because of them.
 
 ---
 
