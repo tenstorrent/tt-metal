@@ -45,6 +45,10 @@ Set ``DEEPSEEK_V4_MEMORY_REPORTS=1`` to write each program's L1 / DRAM block map
 step's logits, or with ``DEEPSEEK_V4_DEVICE_SAMPLING=1`` on the output stage, which then sends only the token
 (:class:`~models.experimental.deepseek_v41_flash.tt.lm_head.DeepSeekV41DeviceSampler`).
 ``DEEPSEEK_V4_SEED`` (default 1234) seeds either sampler.
+
+``DEEPSEEK_V4_BALANCE_DRAM_BANKS=1`` builds the routed experts with K-split gate_up shards spread over every DRAM
+bank (``layers.N.ffn.experts.E.gate_up_fused.tp4.k4``; ``tools/fill_expert_cache.py --balance-dram-banks`` writes
+them ahead of time).
 """
 
 from __future__ import annotations
@@ -107,6 +111,7 @@ _ENGRAM_RAM_MARGIN = 1.25
 _DEVICE_SAMPLING = os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "0") not in ("0", "", "false", "False")
 _TEMPERATURE = float(os.environ.get("DEEPSEEK_V4_TEMPERATURE", "0"))
 _SEED = int(os.environ.get("DEEPSEEK_V4_SEED", "1234"))
+_BALANCE_DRAM_BANKS = os.environ.get("DEEPSEEK_V4_BALANCE_DRAM_BANKS", "0") not in ("0", "", "false", "False")
 
 
 def _pad_to_tile(n: int) -> int:
@@ -204,6 +209,7 @@ def _construct_model(
         use_prefetcher=use_prefetcher,
         layer_submesh_ids=layer_submesh_ids,
         verify_rows=verify_rows,
+        balance_dram_banks=_BALANCE_DRAM_BANKS,
     )
     lm_head = DeepSeekV41LMHead(
         dequantized(loader, "lm_head.weight", translate=True),

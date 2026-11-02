@@ -35,7 +35,7 @@ Knobs (environment): those of ``test_full_model_prefill_demo.py`` (``DEEPSEEK_V4
 ``DEEPSEEK_V4_TRACE_REGION_SIZE``, ``DEEPSEEK_V4_PREFILL_HEARTBEAT``, ``DEEPSEEK_V4_PREFILL_STALL_SECS``,
 ``DEEPSEEK_V4_PREFILL_PROMPT``, ``DEEPSEEK_V4_CACHE_DIR``) except ``DEEPSEEK_V4_PREFILL_KV_ONLY`` (the head is always
 built), plus ``DEEPSEEK_V41_VISION_STAGE`` and ``DEEPSEEK_V4_PREFILL_IMAGE_SIZE`` (the images' side in pixels, default
-588: 42 x 42 patches, a span of 212 tokens). With fewer than all 40 layers the answer is not checked.
+588: 42 x 42 patches, a span of 212 tokens).
 """
 
 from __future__ import annotations
