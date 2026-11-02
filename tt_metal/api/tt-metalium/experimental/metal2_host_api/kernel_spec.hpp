@@ -86,6 +86,13 @@ namespace tt::tt_metal::experimental {
 //      args, dfb, pipe, sem, scratch, tensor, sem_internal, binding_details, experimental,
 //      internal, std, tensor_accessor.
 //    - Scopes belong to their KernelSpec: two KernelSpecs may use the same scope independently.
+//   Sharing a binding between scopes: a kernel binds a given resource once, under one name (see
+//   each binding kind's rules). To make it visible in another scope as well, alias it in kernel
+//   code, in a view of that scope:
+//     struct b_view : b { static constexpr const auto& in = a::out; };  // b's names, plus a::out as `in`
+//     op<b_view>();
+//   For a DFB, construct one DataflowBuffer and share it, not one per name (as for any alias of a
+//   DFB handle).
 //   Not yet supported: scoped arguments of a TT_KERNEL entry, and scoped names under emulation.
 //
 // ============================================================================

@@ -172,5 +172,42 @@ TT_KERNEL void entry(uint32_t num_tiles) { (void)num_tiles; }
             ::testing::HasSubstr("cannot take the scoped argument 'op.num_tiles'")));
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_ScopesShareABindingThroughAKernelSideAliasJITSmoke) {
+    // The documented way to share a binding between scopes (NAMES AND SCOPES in kernel_spec.hpp):
+    // bind it once, in one scope, and alias it in kernel code, in a view of the other scope.
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+template <typename Scope>
+uint64_t op() {
+    TensorAccessor accessor(Scope::input);
+    return accessor.get_noc_addr(get_arg(Scope::page));
+}
+
+// Scope b's names, plus a's tensor binding under b's own name.
+struct b_view : b {
+    static constexpr const auto& input = a::input;
+};
+static_assert(&b_view::input == &a::input);  // the same token, not a copy
+
+void kernel_main() {
+    volatile uint64_t sink = op<a>() + op<b_view>();
+    (void)sink;
+}
+)"};
+    dm_kernel.runtime_arg_schema.runtime_arg_names = {"a.page", "b.page"};
+
+    ProgramSpec spec;
+    spec.name = "scopes_share_a_binding";
+    spec.kernels = {dm_kernel};
+    spec.tensor_parameters = {MakeMinimalTensorParameter("t_0")};
+    BindTensorParameterToKernel(spec.kernels[0], "t_0", "a.input");
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental
