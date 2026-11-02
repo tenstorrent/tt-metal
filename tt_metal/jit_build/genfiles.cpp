@@ -889,15 +889,17 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
+    const tt::ARCH arch,
     uint32_t max_dfbs) {
-    vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
+    vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr, arch);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
         desc.buf_dataformat_arr,
         unpack_conditional_dst_format,
         fp32_dest_acc_en,
         std::move(unpack_to_dest_mode),
-        /*int_fpu_en=*/false);
+        /*int_fpu_en=*/false,
+        arch);
 
     TT_ASSERT(src_formats.size() == max_dfbs);
     TT_ASSERT(dst_formats.size() == max_dfbs);
@@ -927,7 +929,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
         desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
 
-    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(desc.buf_dataformat_arr);
+    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(desc.buf_dataformat_arr, arch);
 
     // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
     // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
@@ -1021,7 +1023,7 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_dfbs);
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, arch, max_dfbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
         desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_dfbs);
@@ -1142,13 +1144,16 @@ void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& o
         "#define DST_SYNC_MODE DstSync::Sync{}\n",
         options.fp32_dest_acc_en,
         options.dst_full_sync_en ? "Full" : "Half");
-    // (Quasar only) Kernel-wide unpack-to-dest sync selector. Derived from the per-DFB
-    // unpack_to_dest_mode vector: true iff any operand routes to Dest. Keeps unpack_modes the single source of truth.
+    // (Quasar only) Kernel-wide unpack-to-dest sync selector: true iff any operand routes to Dest, either by an
+    // explicit unpack_modes entry or because it is Int32/UInt32, which Quasar can only unpack to Dest. UNPACR_DEST
+    // writes 32-bit rows, so the route needs the 32-bit Dest; refuse the build instead of letting the kernel hang.
     if (arch == tt::ARCH::QUASAR) {
-        fmt::format_to(
-            std::ostreambuf_iterator<char>(out),
-            "constexpr bool UnpackToDestEn = {};\n",
-            tt::any_unpack_to_dest(options.unpack_to_dest_mode));
+        const bool unpack_to_dest_en =
+            tt::quasar_unpack_to_dest_en(options.hlk_desc.buf_dataformat_arr, options.unpack_to_dest_mode);
+        TT_FATAL(
+            !unpack_to_dest_en || options.fp32_dest_acc_en,
+            "Quasar unpack-to-dest requires fp32_dest_acc_en: operand(s) route to DEST but DEST is 16-bit");
+        fmt::format_to(std::ostreambuf_iterator<char>(out), "constexpr bool UnpackToDestEn = {};\n", unpack_to_dest_en);
     }
 }
 
