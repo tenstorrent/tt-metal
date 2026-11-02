@@ -203,16 +203,15 @@ struct dfb_hart_init_entry_t {
     //   TRISC harts: stride_size_precomp = (entry_size_raw >> cb_addr_shift) * stride_in_entries  (tile units)
     uint32_t stride_size_precomp;
     uint8_t stride_size_tiles;              // TRISC: stride in entries; DM: unused (see dm scalar pack below)
-    uint8_t num_txn_ids;                    // TRISC layout byte 13; DM pack uses byte 21 (see below)
-    uint8_t threshold;                      // TRISC layout; DM pack byte 18
-    uint8_t num_entries_per_txn_id;         // TRISC layout; DM pack byte 19
-    uint8_t num_entries_per_txn_id_per_tc;  // TRISC layout byte 16; DM pack byte 20
+    uint8_t num_txn_ids;                    // TRISC layout byte 13; DM pack uses byte 22 (see below)
+    uint8_t _reserved[3];                   // bytes 14-16. Compute TRISCs use no txn counts; a DM's, which are 16 bits,
+                                            // travel in the DM scalar pack below.
     uint8_t producer_signal_bit;            // TRISC layout byte 17; DM pack byte 13 (transport)
     uint8_t txn_ids[dfb::NUM_TXN_IDS];      // TRISC layout bytes 18-21; DM pack bytes 14-17
-    uint8_t remapper_pair_index;            // TRISC layout byte 22; DM pack remapper at byte 23
+    uint8_t remapper_pair_index;            // TRISC layout byte 22; DM pack remapper at byte 12
     uint8_t intra_shadow_tc_id;             // TRISC byte 23: intra-tensix ClientR shadow TC id, 0xFF if unused.
-                                            // Intra-tensix never targets a DM hart, so DM pack p[11]
-                                            // reclaims this byte for remapper_pair_index.
+                                            // Intra-tensix never targets a DM hart, so a DM entry
+                                            // does not use this byte.
     uint16_t num_entries;                   // bytes 24-25; ring entry count (main update_size path)
     uint16_t capacity;                      // bytes 26-27; producer: TC capacity; consumer: 0
     uint16_t block_size;                    // bytes 28-29; how many tiles exist in one block. 1 unless the ring is
@@ -224,38 +223,42 @@ static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must b
 static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
 static_assert(offsetof(dfb_hart_init_entry_t, num_entries) == 24, "num_entries must stay at bytes 24-25");
 
-// DM only: bytes [12,24) of the init entry header mirror LocalDFBInterface bytes [8,20)
-// (num_tcs_to_rr through _tc_align_pad). Host writes this 12B span in DTCM order; device
-// unpacks w3–w5 in dfb_unpack_entry_header_dm and stores via dfb_write_dm_iface_scalars_from_hdr.
-// Byte 13 carries producer_signal_bit for init decode (device sets tc_idx=0 after scalar write).
+// DM only: bytes [12,24) of the init entry header hold the txn-id scalars. The device unpacks w3-w5 in
+// dfb_unpack_entry_header_dm and stores them into LocalDFBInterface bytes [8,20)
+// (dfb_write_dm_iface_scalars_from_hdr). num_tcs is not in the pack: it travels in header byte 1.
+//   byte 12     remapper_pair_index
+//   byte 13     producer_signal_bit (device sets tc_idx=0 after the scalar write)
+//   bytes 14-17 txn_ids[4]
+//   bytes 18-19 num_entries_per_txn_id           (u16, little endian)
+//   bytes 20-21 num_entries_per_txn_id_per_tc    (u16, little endian)
+//   byte 22     num_txn_ids
+//   byte 23     broadcast_tc
 constexpr uint32_t DFB_INIT_ENTRY_DM_SCALAR_PACK_BYTE_OFF = 12u;
 constexpr uint32_t DFB_INIT_ENTRY_DM_SCALAR_PACK_BYTES = 12u;
 constexpr uint32_t DFB_INIT_ENTRY_DM_PRODUCER_SIGNAL_BYTE_OFF = 13u;
 
 inline void dfb_write_dm_scalar_pack_to_blob(
     uint8_t* entry_bytes,
-    uint8_t num_tcs,
+    uint8_t remapper_pair_index,
     uint8_t producer_signal_bit,
     const uint8_t txn_ids[dfb::NUM_TXN_IDS],
-    uint8_t threshold,
-    uint8_t num_entries_per_txn_id,
-    uint8_t num_entries_per_txn_id_per_tc,
+    uint16_t num_entries_per_txn_id,
+    uint16_t num_entries_per_txn_id_per_tc,
     uint8_t num_txn_ids,
-    uint8_t broadcast_tc,
-    uint8_t remapper_pair_index) {
+    uint8_t broadcast_tc) {
     uint8_t* const p = entry_bytes + DFB_INIT_ENTRY_DM_SCALAR_PACK_BYTE_OFF;
-    p[0] = num_tcs;
+    p[0] = remapper_pair_index;
     p[1] = producer_signal_bit;
     p[2] = txn_ids[0];
     p[3] = txn_ids[1];
     p[4] = txn_ids[2];
     p[5] = txn_ids[3];
-    p[6] = threshold;
-    p[7] = num_entries_per_txn_id;
-    p[8] = num_entries_per_txn_id_per_tc;
-    p[9] = num_txn_ids;
-    p[10] = broadcast_tc;
-    p[11] = remapper_pair_index;
+    p[6] = static_cast<uint8_t>(num_entries_per_txn_id);
+    p[7] = static_cast<uint8_t>(num_entries_per_txn_id >> 8);
+    p[8] = static_cast<uint8_t>(num_entries_per_txn_id_per_tc);
+    p[9] = static_cast<uint8_t>(num_entries_per_txn_id_per_tc >> 8);
+    p[10] = num_txn_ids;
+    p[11] = broadcast_tc;
 }
 
 inline uint8_t dfb_read_init_entry_producer_signal_bit(const uint8_t* entry_bytes, bool is_dm_hart) {
@@ -273,18 +276,19 @@ constexpr uint32_t dfb_hart_init_entry_byte_size(uint32_t num_tcs) {
     return static_cast<uint32_t>(sizeof(dfb_hart_init_entry_t)) + ((tc_bytes + 3u) & ~3u);
 }
 
+// The counts are 16 bits, like the tile counters and the hardware's tiles-to-process threshold registers.
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
-    uint8_t num_entries_to_process_threshold;  // entries each txn ID tracks before posting/acking
     uint8_t num_txn_ids;
-    uint8_t num_entries_per_txn_id;
-    uint8_t num_entries_per_txn_id_per_tc;
+    uint16_t num_entries_to_process_threshold;  // transactions each txn ID tracks before posting/acking
+    uint16_t num_entries_per_txn_id;
+    uint16_t num_entries_per_txn_id_per_tc;
 } __attribute__((packed));
 
 // Every field is naturally aligned at its current offset:
 // entry_size/stride_in_entries (u32) at 0/4, capacity/num_entries (u16) at 8/10,
-// risc_mask_bits (u16 bitfield) at 12, producer/consumer txn descriptors (packed, alignment 1) at 14/22,
-// trailing u8 fields at 30-33 (struct size 36 with tail padding).
+// risc_mask_bits (u16 bitfield) at 12, producer/consumer txn descriptors (packed, alignment 1) at 14/25,
+// trailing u8 fields at 36-39 (struct size 40).
 struct dfb_initializer_t {
     uint32_t entry_size;
     uint32_t stride_in_entries;
@@ -303,7 +307,7 @@ struct dfb_initializer_t {
     uint8_t num_producers;
     uint8_t _pad[3];  // reserved (was dm0_blob_size; DM0 blob is now a separate global region)
 };
-static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size changed — check field alignment");
+static_assert(sizeof(dfb_initializer_t) == 40, "dfb_initializer_t size changed — check field alignment");
 
 // Core-wide header for the DM1 remapper blob.
 // Followed by dfb_dm1_remapper_slot_t[num_slots] aggregated in ascending DFB id order.
@@ -322,8 +326,8 @@ struct dfb_dm0_isr_blob_core_header_t {
 // CMDBUF threshold for one txn id (role/path implied by producer/consumer masks in core_hdr).
 // 4B stride so the DM0 ISR blob + following hart blobs stay 4B-aligned.
 struct dfb_dm0_isr_txn_threshold_t {
-    uint8_t threshold;
-    uint8_t _pad[3];
+    uint16_t threshold;
+    uint8_t _pad[2];
 };
 
 // What DM0 needs to finish one implicit-sync DFB side at kernel exit (dfb_dm0_flush_side). Every txn id of
@@ -341,9 +345,9 @@ static_assert(sizeof(dfb_dm0_finish_info_t) == 3, "dfb_dm0_finish_info_t must be
 struct dfb_dm0_txn_descriptor_image_t {
     uint8_t num_counters;
     uint8_t tile_counters[18];
-    uint8_t tiles_to_post_or_ack;  // union post/ack share offset in TxnDFBDescriptor
+    uint16_t tiles_to_post_or_ack;  // union post/ack share offset in TxnDFBDescriptor; 2B-aligned at byte 20
     dfb_dm0_finish_info_t finish;
-    uint8_t _pad[9];
+    uint8_t _pad[7];
 };
 
 // One entry per producer RISC that uses the remapper.
@@ -407,7 +411,7 @@ inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t c
 
 static_assert(sizeof(dfb_global_header_t) == 96, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
-static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
+static_assert(sizeof(dfb_initializer_t) == 40, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
 
 namespace dfb {

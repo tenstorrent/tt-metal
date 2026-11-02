@@ -158,6 +158,7 @@ volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 thread_local DFBImplicitProgress g_dfb_progress[dfb::NUM_DFBS] __attribute__((used));
 uint32_t g_dfb_exit_record[dfb::NUM_KERNEL_DM_HARTS][NUM_DFB_POOL_TXN_IDS] __attribute__((used));
+uint8_t g_dfb_exit_share[dfb::NUM_KERNEL_DM_HARTS][NUM_DFB_POOL_TXN_IDS] __attribute__((used));
 
 void device_setup() {
     // instn_buf

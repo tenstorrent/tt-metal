@@ -539,6 +539,86 @@ TEST_F(UnitMeshFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     }
 }
 
+// Implicit-sync counts are 16 bits, so a ring can hold more than 255 entries. 593 is prime, so its ring gets one txn id
+// of 593 entries; 600 splits into two of 300. Checks the host writes the counts whole to the DM0 threshold pool, the DM0
+// txn descriptor image and the DM hart's txn-id scalars.
+TEST_F(UnitMeshFixture, DfbSerializeImplicitSyncRingOver255) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    for (const auto [num_entries, expected_txn_ids] : {std::pair<uint32_t, uint32_t>{593, 1}, {600, 2}}) {
+        SCOPED_TRACE("num_entries " + std::to_string(num_entries));
+        experimental::dfb::DataflowBufferConfig config{
+            .entry_size = 256,
+            .num_entries = num_entries,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x10,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::STRIDED,
+            .enable_producer_implicit_sync = true,
+            .enable_consumer_implicit_sync = true};
+
+        Program program = CreateProgram();
+        CoreCoord logical_core = CoreCoord(0, 0);
+        experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+        program.impl().finalize_dataflow_buffer_configs();
+        program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
+        program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
+
+        const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+        ASSERT_EQ(dfbs.size(), 1u);
+        const auto& prod = dfbs[0]->producer_txn_descriptor;
+        const auto& cons = dfbs[0]->consumer_txn_descriptor;
+        const uint32_t per_txn = num_entries / expected_txn_ids;
+        ASSERT_GT(per_txn, 255u);
+        for (const auto* desc : {&prod, &cons}) {
+            EXPECT_EQ(desc->num_txn_ids, expected_txn_ids);
+            EXPECT_EQ(desc->num_entries_to_process_threshold, per_txn);
+            EXPECT_EQ(desc->num_entries_per_txn_id, per_txn);
+            EXPECT_EQ(desc->num_entries_per_txn_id_per_tc, per_txn);
+        }
+
+        std::vector<uint8_t> buf(8192, 0);
+        const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf);
+        ASSERT_GT(nbytes, 0u);
+        const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+
+        // DM0 blob: threshold pool, then the txn descriptor image pool.
+        uint32_t prod_mask = 0;
+        uint32_t cons_mask = 0;
+        for (uint8_t i = 0; i < prod.num_txn_ids; ++i) {
+            prod_mask |= 1u << prod.txn_ids[i];
+        }
+        for (uint8_t i = 0; i < cons.num_txn_ids; ++i) {
+            cons_mask |= 1u << cons.txn_ids[i];
+        }
+        const uint32_t all_mask = prod_mask | cons_mask;
+        const uint32_t pool_off = ghdr->dm0_isr_blob_offset + sizeof(dfb_dm0_isr_blob_core_header_t);
+        const auto* thresholds = reinterpret_cast<const dfb_dm0_isr_txn_threshold_t*>(buf.data() + pool_off);
+        const uint32_t desc_off = pool_off + dm0_isr_txn_hw_pool_byte_size(prod_mask, cons_mask);
+        for (const uint32_t mask : {prod_mask, cons_mask}) {
+            for (uint32_t pending = mask; pending != 0; pending &= pending - 1u) {
+                const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
+                const uint32_t slot = dm0_isr_txn_slot_index(all_mask, txn_id);
+                EXPECT_EQ(thresholds[slot].threshold, per_txn);
+                dfb_dm0_txn_descriptor_image_t image;
+                std::memcpy(&image, buf.data() + desc_off + slot * sizeof(image), sizeof(image));
+                EXPECT_EQ(image.tiles_to_post_or_ack, per_txn);
+            }
+        }
+
+        // DM hart's txn-id scalars: per_txn and per_tc at bytes 18-19 and 20-21 of the init entry, little endian.
+        for (const uint8_t hart : {uint8_t{0}, uint8_t{4}}) {
+            const uint8_t* entry = buf.data() + ghdr->hart_blob_offset[hart];
+            EXPECT_EQ(entry[18] | (entry[19] << 8), per_txn) << "hart " << static_cast<int>(hart);
+            EXPECT_EQ(entry[20] | (entry[21] << 8), per_txn) << "hart " << static_cast<int>(hart);
+            EXPECT_EQ(entry[22], expected_txn_ids) << "hart " << static_cast<int>(hart);
+        }
+    }
+}
+
 TEST_F(UnitMeshFixture, DMTest1xDFB1Sx4SConfig) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
@@ -1307,7 +1387,7 @@ TEST_F(UnitMeshFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
     const uint8_t num_txn_ids_before = dfb->producer_txn_descriptor.num_txn_ids;
     const std::vector<uint8_t> txn_ids_before(
         dfb->producer_txn_descriptor.txn_ids, dfb->producer_txn_descriptor.txn_ids + num_txn_ids_before);
-    const uint8_t threshold_before = dfb->producer_txn_descriptor.num_entries_to_process_threshold;
+    const uint16_t threshold_before = dfb->producer_txn_descriptor.num_entries_to_process_threshold;
 
     // Override num_entries 2 -> 4 (still divisible by the preserved txn-id divisor).
     auto params = MakeMinimalRunArgs(node);
