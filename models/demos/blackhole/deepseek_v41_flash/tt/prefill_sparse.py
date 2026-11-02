@@ -182,6 +182,14 @@ def zeros_rm(md, shape):
     return _PERSIST[key]
 
 
+def _qpad_buf(md, C):
+    """DSV41_PF_QPAD=1 (default OFF): persistent row-major [1, 32, C, 512] bf16 buffer, zeros in heads 8..31, shared by every layer / user (the real heads are slice_written before each
+    sparse_sdpa call, in queue order); None when off."""
+    if os.environ.get("DSV41_PF_QPAD", "0") != "1":
+        return None
+    return zeros_rm(md, [1, PAD_HEADS, C, HEAD_DIM])
+
+
 PIDX_SHARD = os.environ.get(
     "DSV41_PIDX_SHARD", "auto"
 )  # column-sharded prefill indexer: "0" off, "1" on whenever possible, "auto" from PIDX_SHARD_MIN_L entries
@@ -1441,13 +1449,22 @@ class DSV41PrefillSparse:
                     ttnn.to_torch(ttnn.get_device_tensors(idx)[0]).to(torch.int64),
                     f"{os.environ['FA_DUMP_IDS']}/ids_{_DUMPN[0]:04d}_r{pa.ratio}.pt",
                 )
+            qpad = None
             if qbufs is not None:
                 qu = qbufs[u]
             else:
                 qu = ttnn.to_layout(
                     ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT
                 )
-                qu = ttnn.concat([qu, zero_heads], dim=1)
+                qpad = _qpad_buf(self.md, C)
+                if (
+                    qpad is not None
+                ):  # DSV41_PF_QPAD=1: write the 8 real heads into a persistent zero-padded [1,32,C,512] buffer instead of concatenating 24 zero heads
+                    ttnn.experimental.slice_write(qu, qpad, [0, 0, 0, 0], [1, LOCAL_HEADS, C, HEAD_DIM], [1, 1, 1, 1])
+                    ttnn.deallocate(qu)
+                    qu = qpad
+                else:
+                    qu = ttnn.concat([qu, zero_heads], dim=1)
             o = ttnn.transformer.sparse_sdpa(
                 qu,
                 ctx.pg.pool.pool if paged else kt,
@@ -1461,7 +1478,7 @@ class DSV41PrefillSparse:
                 **({} if paged else {"cache_batch_idx": u}),
             )
             FA.real_dump("o", o)
-            if qbufs is None:
+            if qbufs is None and qu is not qpad:
                 ttnn.deallocate(qu)
             if ids_pre is None:
                 ttnn.deallocate(idx)
