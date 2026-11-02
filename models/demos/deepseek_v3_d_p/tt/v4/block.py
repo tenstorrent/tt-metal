@@ -143,10 +143,10 @@ class TtV4Block(LightweightModule):
         )
 
         assert slot_num >= 1, f"slot_num must be positive, got {slot_num}"
-        self.is_csa = attn_kind == "compressed_sparse_attention"
+        is_csa = attn_kind == "compressed_sparse_attention"
         # The CSA indexer keeps per-slot overlap state and a user-major key cache, so it is told the
         # slot count; SWA and HCA state is one tensor set per slot, held below.
-        attn_kwargs = {"slot_num": slot_num} if self.is_csa else {}
+        attn_kwargs = {"slot_num": slot_num} if is_csa else {}
         # The full per-axis topology: the attention's SP-axis gather needs the SP element and its
         # other collectives the TP one. Its weights come off the torch module, not a state dict, so
         # there is nothing for a weight cache to hold for this half of the block.
@@ -159,7 +159,7 @@ class TtV4Block(LightweightModule):
         # offset back the way TtPrefillBlock takes actual_start: a caller-owned cache does not
         # advance itself, so the position has to come in with the chunk.
         self.attn.build_tables(max_seq_len or seq_len, chunk_tokens=seq_len)
-        self.attn_states = [self._new_state(slot) for slot in range(slot_num)]
+        self.attn_states = [self.attn.new_state(cache_user_id=slot) for slot in range(slot_num)]
 
         self.ffn = TtPrefillBlock._build_moe(
             mesh_device=mesh_device,
@@ -202,9 +202,6 @@ class TtV4Block(LightweightModule):
             mesh_device, mhc_cfg, *mhc_weights["ffn"], tp_axis=tp_axis, num_links=num_links, topology=tp_topology
         )
 
-    def _new_state(self, slot: int):
-        return self.attn.new_state(cache_user_id=slot) if self.is_csa else self.attn.new_state()
-
     def reset_state(self, slot: int) -> None:
         """Start a new request in user slot ``slot``: its attention state goes back to an empty cache at
         position 0. The tables, and every other slot's state, stay as they are.
@@ -215,7 +212,7 @@ class TtV4Block(LightweightModule):
         cleared: each chunk writes its rows before scoring and scores only up to its own position, so
         nothing reads what the slot's previous request left."""
         old = self.attn_states[slot]
-        self.attn_states[slot] = self._new_state(slot)
+        self.attn_states[slot] = self.attn.new_state(cache_user_id=slot)
         old.release()
 
     def forward(

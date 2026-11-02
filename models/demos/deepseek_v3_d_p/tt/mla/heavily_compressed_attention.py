@@ -109,8 +109,9 @@ class TtHCA(TtV4AttentionBase):
         self._slab_index = self.ops.rope_index_base(chunk // self.sp_factor)
         self._state_dims = (int(max_seq_len), capacity)
 
-    def new_state(self, batch: int = 1) -> TtHCAState:
-        """A fresh, zeroed state at position 0, over the tables ``build_tables`` made."""
+    def new_state(self, batch: int = 1, cache_user_id: int = 0) -> TtHCAState:
+        """A fresh, zeroed state at position 0, over the tables ``build_tables`` made. ``cache_user_id`` is
+        taken for parity with ``TtCSA.new_state``; nothing an HCA state reads is shared between slots."""
         assert self._state_dims is not None, "call build_tables before new_state"
         max_seq_len, capacity = self._state_dims
         return TtHCAState(

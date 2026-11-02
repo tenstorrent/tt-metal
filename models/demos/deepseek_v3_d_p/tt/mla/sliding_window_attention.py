@@ -180,8 +180,9 @@ class TtSWA(LightweightModule):
         self._slab_index = self.ops.rope_index_base(seq_local)
         self._max_seq_len = int(max_seq_len)
 
-    def new_state(self, batch: int = 1) -> TtSWAState:
-        """A fresh state at position 0, over the tables ``build_tables`` made."""
+    def new_state(self, batch: int = 1, cache_user_id: int = 0) -> TtSWAState:
+        """A fresh state at position 0, over the tables ``build_tables`` made. ``cache_user_id`` is taken
+        for parity with ``TtCSA.new_state``; nothing an SWA state reads is shared between slots."""
         assert batch == 1, f"a TtSWAState holds one user (batch 1); hold one state per user slot, got batch={batch}"
         assert self._max_seq_len is not None, "call build_tables before new_state"
         return TtSWAState(
