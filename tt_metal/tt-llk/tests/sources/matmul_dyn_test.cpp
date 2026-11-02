@@ -304,8 +304,13 @@ constexpr bool matmul_half_end_fold_k = false;
 #define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en
 #endif
 #ifdef ARCH_BLACKHOLE
+#ifdef MATMUL_PACK_KEYS
+#define MATMUL_INIT_KEYS MATMUL_PK_CT, MATMUL_PK_RT
+#else
+#define MATMUL_INIT_KEYS 0, 0
+#endif
 #define MATMUL_MATH_DEFAULT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
-#define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k
+#define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k, MATMUL_INIT_KEYS
 #else
 #define MATMUL_MATH_DEFAULT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
 #define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
@@ -313,7 +318,7 @@ constexpr bool matmul_half_end_fold_k = false;
 #line 176
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
 #define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
-#define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
+#define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true, false, 0, false, false, 0, false, MATMUL_INIT_KEYS
 #else
 #define MATMUL_MATH_TEMPLATE_ARGS MATMUL_MATH_DEFAULT_ARGS
 #define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_MATH_DEFAULT_INIT_ARGS
@@ -327,18 +332,22 @@ constexpr bool matmul_half_end_fold_k = false;
 #define DYN_MODE 0
 #endif
 volatile tt_l1_ptr std::uint32_t* dyn_tp = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(16);
-static std::uint32_t dyn_status = 0;
-static std::uint32_t dyn_calls  = 0;
+[[maybe_unused]] static std::uint32_t dyn_status = 0;
+[[maybe_unused]] static std::uint32_t dyn_calls  = 0;
 #define DYN_INIT_ARGS MATMUL_MATH_INIT_TEMPLATE_ARGS
 #define DYN_CALL_ARGS MATMUL_MATH_TEMPLATE_ARGS
 #define DYN_TINIT_ARGS MATMUL_FIDELITY, 5, false, true, 0, false, false, matmul_reuse_dir_k, false
 #define DYN_TCALL_ARGS MATMUL_FIDELITY, 5, false, true, matmul_reuse_dir_k
+#if DYN_MODE == 5
+#define DYN_MATMUL() _llk_math_matmul_init_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM)
+#else
 #define DYN_MATMUL()                                                                                               \
     do {                                                                                                           \
         std::uint32_t fw = *dyn_tp;                                                                                 \
         if (DYN_MODE == 1) fw |= 1;                                                                                 \
         if (DYN_MODE == 2) fw ^= (dyn_calls++ & 1);                                                                 \
         if (DYN_MODE == 3) fw &= ~1u;                                                                               \
+        if (DYN_MODE == 4) { fw &= ~1u; _llk_math_matmul_init_<DYN_INIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); } \
         if (fw % 2) {                                                                                              \
             if (dyn_status != 1) { _llk_math_matmul_init_switch_<DYN_TINIT_ARGS>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); dyn_status = 1; } \
             _llk_math_matmul_<DYN_TCALL_ARGS>(0, CT_DIM, RT_DIM);                                                   \
@@ -347,6 +356,7 @@ static std::uint32_t dyn_calls  = 0;
             _llk_math_matmul_<DYN_CALL_ARGS>(0, CT_DIM, RT_DIM);                                                    \
         }                                                                                                          \
     } while (0)
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -472,6 +482,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
+#include "matmul_pack_production.h"
 
 #ifndef MATMUL_PACK_FORM
 #define MATMUL_PACK_FORM 0
@@ -490,6 +501,11 @@ constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
 #else
 constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
 #endif
+#ifdef MATMUL_PACK_KEYS
+constexpr DataFormat matmul_pack_out_format = MATMUL_PK_OUT;
+#else
+constexpr DataFormat matmul_pack_out_format = DataFormat::Invalid;
+#endif
 #line 271
 
 #ifndef MATMUL_L1_ACC
@@ -497,36 +513,13 @@ constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
 #endif
 
 #if defined(ARCH_BLACKHOLE)
-// MATMUL_PACK_FORM 1 packs the block with one program run, 2 closes every tile (block-float outputs and small tiles).
 inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
 {
-#if defined(ARCH_BLACKHOLE)
-    // The fast forms need four faces of 16 rows. At half sync the pack hides behind math or unpack, where the denser DEST reads only add contention: the closed form stays off and the plain one needs 16-bit DEST.
-    constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
-    // the closed block pack at full sync issues its destination words before the math wait, as pack_block_prepare does in the ttnn kernels
-    constexpr bool fast_closed = false;
-    if (matmul_pack_form_v == 1 && fast_plain)
-    {
-        _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles);
-        return;
-    }
-    if (matmul_pack_form_v == 2 && fast_closed)
-    {
-        _llk_pack_block_closed_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride);
-        return;
-    }
-#endif
-    if constexpr (matmul_pack_form_v == 1)
-    {
-        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, address, num_tiles);
-    }
-    else
-    {
-        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride, num_faces);
-    }
+    matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format>(tile_index, address, num_tiles, tile_stride, num_faces);
 }
 #endif
 
+#line 307
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -546,9 +539,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#if defined(ARCH_BLACKHOLE)
-        if constexpr (matmul_pack_form_v != 0) { _llk_pack_block_fast_init_(); }
-#endif
+        // the W base of the block pack is programmed by its second call, as in llk_pack_block
+        //
+        //
         PROFILER_SYNC();
     }
     {

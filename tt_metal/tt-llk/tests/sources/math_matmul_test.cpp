@@ -392,6 +392,12 @@ constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
 #else
 constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
 #endif
+#include "matmul_pack_production.h"
+#ifdef MATMUL_PACK_KEYS
+constexpr DataFormat matmul_pack_out_format = MATMUL_PK_OUT;
+#else
+constexpr DataFormat matmul_pack_out_format = DataFormat::Invalid;
+#endif
 #line 279
 // The fast block packs need four faces of 16 rows.
 #if defined(ARCH_BLACKHOLE)
@@ -401,39 +407,21 @@ constexpr int matmul_pack_form_v = MATMUL_PACK_FORM;
 #endif
 
 #if defined(ARCH_BLACKHOLE)
-// MATMUL_PACK_FORM 1 packs the block with one program run, 2 closes every tile (block-float outputs and padded pages), 4 runs small tiles back to back with one close.
+// MATMUL_PACK_FORM 1 and 2: the block pack llk_pack_block runs (matmul_pack_production.h); 4 runs small tiles back to back with one close.
 inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces, [[maybe_unused]] std::uint32_t face_r_dim, [[maybe_unused]] bool fast = false)
 {
-#if defined(ARCH_BLACKHOLE)
-    // At half sync the pack hides behind math or unpack, where the denser DEST reads only add contention: the closed form stays off and the plain one needs 16-bit DEST.
-    constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
-    constexpr bool fast_closed = dest_sync == DstSync::SyncFull;
-    if (fast && matmul_pack_form_v == 1 && fast_plain)
-    {
-        _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles);
-        return;
-    }
-    if (fast && matmul_pack_form_v == 2 && fast_closed)
-    {
-        _llk_pack_block_closed_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride);
-        return;
-    }
-#endif
     if constexpr (matmul_pack_form_v == 4)
     {
         _llk_pack_block_dense_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, face_r_dim, num_faces);
     }
-    else if constexpr (matmul_pack_form_v == 1)
-    {
-        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, address, num_tiles);
-    }
     else
     {
-        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride, num_faces);
+        matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format>(tile_index, address, num_tiles, tile_stride, num_faces);
     }
 }
 #endif
 
+#line 320
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -470,12 +458,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(ARCH_BLACKHOLE)
         if constexpr (matmul_pack_form_v == 4) { _llk_pack_block_dense_init_(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces); }
 #endif
-#if defined(ARCH_BLACKHOLE)
-        if (matmul_pack_form_v != 0 && matmul_pack_form_v != 4 && num_faces == 4 && !PARTIAL_FACE_PACK)
-        {
-            _llk_pack_block_fast_init_();
-        }
-#endif
+        // the W base of the block pack is programmed by its second call, as in llk_pack_block
+        //
+        //
+        //
+        //
+        //
         PROFILER_SYNC();
     }
     {
