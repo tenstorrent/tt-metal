@@ -50,6 +50,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         "Input tensor shape does not meet the requirements set by this OP: input tensor shape must be (1,1,M,N) "
         "where "
         "M <= 32 and N is a multiple of 32");
+    TT_FATAL(a.logical_shape()[3] > 0, "Input width must be greater than 0.");
     TT_FATAL(
         (a.device()->arch() != tt::ARCH::BLACKHOLE) || (a.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
@@ -189,8 +190,8 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     // block
     const auto shard_spec = a.shard_spec().value();
     // check dims
-    // Cache hits also reach these checks only because this op has no validate_on_program_cache_hit; one added
-    // later must keep the two zero-divisor checks below.
+    // Cache hits also reach validation only because this op has no validate_on_program_cache_hit; one added later
+    // must keep the three zero-divisor checks: input width (with the shape checks above), subblock_w and num_links.
     TT_FATAL(args.subblock_wt > 0, "subblock_w must be greater than 0.");
     TT_FATAL(args.block_wt % args.subblock_wt == 0, "block_w must be divisible by subblock_w.");
     TT_FATAL(args.num_links > 0, "num_links must be greater than 0.");
