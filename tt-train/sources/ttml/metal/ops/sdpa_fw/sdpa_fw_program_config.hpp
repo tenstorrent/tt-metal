@@ -20,6 +20,12 @@ namespace ttml::metal {
  * max_pieces:     a causal work item heavier than its fair share of a core is cut into up to this many
  *                 pieces along its K/V steps, computed on different cores and merged (0 = 4, 1 = never
  *                 cut, at most 63). Above 1 the L1 check also reserves the partials' circular buffers.
+ *                 A program that cuts owns a DRAM scratch for the pieces' partials, allocated on the
+ *                 program-cache miss and held for the life of the cache entry, not of the call:
+ *                 slots * item rows * (d_v / 32 + 2) fp32 tiles, about 5 to 12 MiB at d = 128 with the
+ *                 default picks (at most one slot per core, scaling with the rows of an item). Every
+ *                 distinct shape that cuts holds its own, so a workload with many sequence lengths
+ *                 (padded rollouts, say) should set 1 unless the cut shapes are few.
  * num_cores:      cores to use (at most the compute grid).
  * causal_pairs:   place the causal work items as main did instead of longest first: query chunk i of a
  *                 stack with chunk (n - 1 - i), the pairs in contiguous blocks over the cores (when the
