@@ -829,6 +829,27 @@ def test_sdpa_noncausal_block_mask(device, s, nkv, bcast_heads, q_chunk_size, k_
     run_sdpa_block_mask(device, 1, 8, nkv, s, 128, q_chunk_size, k_chunk_size, p_masked, bcast_heads)
 
 
+@pytest.mark.parametrize("sq, sk, window", [(128, 64, 32), (256, 64, 64)])
+def test_sdpa_noncausal_sliding_window_rejects_rows_without_keys(device, expect_error, sq, sk, window):
+    # A centred window (window / 2 each side) leaves the last Q rows with no K row; the kernels would hang.
+    tt = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    q, k, v = tt(torch.randn(1, 1, sq, 64)), tt(torch.randn(1, 1, sk, 64)), tt(torch.randn(1, 1, sk, 64))
+    with expect_error(RuntimeError, "needs every Q row to reach a K row"):
+        ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, sliding_window_size=window)
+
+
+@pytest.mark.parametrize("sq, sk, window", [(96, 64, 64), (128, 64, 128), (64, 256, 64)])
+def test_sdpa_noncausal_sliding_window_unequal_lengths_run(device, sq, sk, window):
+    # Q and K lengths may differ as long as every Q row's window reaches a K row.
+    tt = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    q, k, v = tt(torch.randn(1, 1, sq, 64)), tt(torch.randn(1, 1, sk, 64)), tt(torch.randn(1, 1, sk, 64))
+    out = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, sliding_window_size=window)
+    )
+    assert tuple(out.shape) == (1, 1, sq, 64)
+    assert torch.isfinite(out.float()).all()
+
+
 def test_sdpa_block_mask_needs_matching_shape(device, expect_error):
     s, d = 1024, 128
     program_config = ttnn.SDPAProgramConfig(
