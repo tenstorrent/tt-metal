@@ -2648,9 +2648,12 @@ def test_where_nd_sharded_preallocated_output(device, nd_sharded_inputs):
 
 
 @pytest.mark.parametrize("op", ["lerp", "addcmul", "mac", "where"])
+@pytest.mark.parametrize("nd_operand", ["a", "b", "c"])
 @pytest.mark.parametrize("explicit_out", [False, True], ids=["inherited_out", "explicit_nd_out"])
-def test_ternary_nd_sharded_first_operand(device, op, explicit_out):
-    """An ND-sharded first operand whose sharding has no 2D equivalent has an empty shard_spec."""
+def test_ternary_nd_sharded_operand(device, op, nd_operand, explicit_out):
+    """An ND-sharded operand whose sharding has no 2D equivalent has an empty shard_spec."""
+    if op == "lerp" and nd_operand == "c":
+        pytest.skip("lerp takes a scalar weight here")
     torch.manual_seed(0)
     shape = (1, 1, 224, 224)
     nd_config = ttnn.MemoryConfig(
@@ -2669,9 +2672,10 @@ def test_ternary_nd_sharded_first_operand(device, op, explicit_out):
             t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
         )
 
-    tt_a = to_device(a, nd_config)
-    assert tt_a.memory_config().shard_spec is None
-    tt_b, tt_c = to_device(b), to_device(c)
+    tt_a, tt_b, tt_c = (
+        to_device(t, nd_config if name == nd_operand else ttnn.DRAM_MEMORY_CONFIG) for name, t in zip("abc", (a, b, c))
+    )
+    assert {"a": tt_a, "b": tt_b, "c": tt_c}[nd_operand].memory_config().shard_spec is None
     kwargs = {"memory_config": nd_config} if explicit_out else {}
     af, bf, cf = a.float(), b.float(), c.float()
     if op == "lerp":
@@ -2683,7 +2687,11 @@ def test_ternary_nd_sharded_first_operand(device, op, explicit_out):
     else:
         out, expected = ttnn.where(tt_a, tt_b, tt_c, **kwargs), torch.where(af != 0, bf, cf)
 
-    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
+    # lerp and mac default the output to the first operand's memory config.
+    if explicit_out or nd_operand == "a" or op in ("addcmul", "where"):
+        assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
+    else:
+        assert out.memory_config() == ttnn.DRAM_MEMORY_CONFIG
     torch.testing.assert_close(ttnn.to_torch(out).float(), expected, rtol=2e-2, atol=2e-2)
 
 
@@ -2722,3 +2730,44 @@ def test_where_nd_sharded_output_l1_interleaved_inputs(device, explicit_out):
         ttnn.where(*tt, output_tensor=out)
     assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
     assert torch.equal(ttnn.to_torch(out), torch.where(cond.bool(), t, f))
+
+
+@pytest.mark.parametrize(
+    "inputs_nd_sharded, explicit_out",
+    [(True, False), (True, True), (False, True)],
+    ids=["nd_inputs-inherited_out", "nd_inputs-explicit_nd_out", "interleaved_inputs-explicit_nd_out"],
+)
+def test_where_nd_sharded_on_second_sub_device(device, inputs_nd_sharded, explicit_out):
+    """An ND-sharded output on the second sub-device runs on that sub-device's workers."""
+    sub_device_0 = ttnn.SubDevice([ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 3))})])
+    sub_device_1 = ttnn.SubDevice([ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (5, 1))})])
+    manager = device.create_sub_device_manager([sub_device_0, sub_device_1], 3200)
+    device.load_sub_device_manager(manager)
+    try:
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (5, 1))})
+        nd_config = ttnn.MemoryConfig(
+            ttnn.BufferType.L1,
+            ttnn.NdShardSpec(
+                shard_shape=ttnn.Shape([1, 1, 64, 64]),
+                grid=grid,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+            ),
+        )
+        torch.manual_seed(0)
+        shape = (1, 1, 128, 192)
+        cond = torch.randint(0, 2, shape).bfloat16()
+        t, f = torch.randn(shape).bfloat16(), torch.randn(shape).bfloat16()
+        input_config = nd_config if inputs_nd_sharded else ttnn.L1_MEMORY_CONFIG
+        tt = [
+            ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_config)
+            for x in (cond, t, f)
+        ]
+        out = ttnn.where(*tt, memory_config=nd_config) if explicit_out else ttnn.where(*tt)
+        ttnn.synchronize_device(device, sub_device_ids=[ttnn.SubDeviceId(1)])
+        assert out.memory_config().shard_spec is None
+        assert out.memory_config().nd_shard_spec.grid == grid
+        assert torch.equal(ttnn.to_torch(out), torch.where(cond.bool(), t, f))
+    finally:
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
