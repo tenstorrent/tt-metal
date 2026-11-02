@@ -663,9 +663,9 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
 
 bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards. Its refusals by
-    // broadcast type are also preconditions of create_native_artifacts, which asserts them. The others keep the slice
-    // to what has been validated on Quasar.
+    // Narrower than matches_metal_v2_slice in op and dtype, but it also admits DRAM shards and a one-element fp32
+    // SCALAR, which that slice refuses. Its refusals by broadcast type are also preconditions of
+    // create_native_artifacts, which asserts them. The others keep the slice to what has been validated on Quasar.
     // Cheap checks first: this predicate runs on EVERY dispatch, cache hits included. The arch goes before
     // native_tuning(), so that off Quasar the knobs are never parsed and the settings line is never logged.
     const auto& a = tensor_args.input_tensor_a;

@@ -45,7 +45,7 @@
 //     shard; kernels_qsr/ does not read it.
 //
 // Not supported (rejected by matches_quasar_native_slice, which is narrower than matches_metal_v2_slice
-// in op, dtype and broadcast but also admits DRAM shards -- see below): row-major (non-tile)
+// in op and dtype but also admits a one-element fp32 SCALAR and DRAM shards): row-major (non-tile)
 // layout, where-op, quantization, and mixed lhs/rhs dtype. Every mix of
 // interleaved, L1-sharded and DRAM-sharded operands IS handled: each operand is borrowed where the anchor
 // holds it, and moves over the NoC through its sharding-aware TensorAccessor otherwise. A borrowed operand is

@@ -32,11 +32,15 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
 - **fp32 ROW, COL and mixed, and fp32 SCALAR above one element, do not run on Quasar yet.** The native gate refuses
   them. The Metal 2.0 gate admits subtile broadcast in bf16 only, so the op raises an error. The roadmap's milestone 3
   waits for them.
-- **The batch size changed for every placement.** The DM batch is the max batch size, in L1 and in DRAM. A dense
-  program compiles to the same instructions as it did right after that change (30 disassemblies).
-- **Verified** on craq-sim `b9d8e2f4`: the native module 193 passed, 1 skipped, 2 strict expected failures. Five of
-  the six other suite files pass. The activation-format file has the same 10 BFP8 and BFP4 failures as at the base.
-  Slide 3 gives each run, and slide 4 the planted defects.
+- **One batch rule on every placement.** The DM batch is the max batch size, in L1 and in DRAM. The compute batch is
+  the same wherever each Neo owns one tile counter of each ring. Since the rebase onto main, the FPU kernel batches
+  above ring stride 1 too, because #62954's `llk_unpack_AB` fix makes every batch exact. dchen kept this rule in place
+  of #62954's share rule beside DRAM. With the batches pinned to the same values, a dense program compiles to the
+  same instructions as on main (30 disassemblies).
+- **Verified** on craq-sim `67b8926b`, after the rebase onto main: the native module 202 passed, 1 skipped. Five of
+  the six other suite files pass, native on and off. The activation-format file has the same 10 BFP8 and BFP4 failures
+  as at the base. A craq-sim older than `b05091aa` now fails the FPU add and subtract cases, because the oracle keeps
+  only the two-rounding add. Slide 3 gives each run, and slide 4 the planted defects.
 
 ---
 
@@ -45,7 +49,10 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
 - **Batch size** (`resolve_native_config`; the commit "the batch size is the max batch size, beside every placement"):
   the DM batch was 8 in L1 and 1 beside a DRAM operand. It is now the tiles that one DST section holds, as the
   compute batch is: 8 on the FPU kernel, 4 on the SFPU kernel in a 16-bit DST, 2 in a 32-bit DST. Each ring holds two
-  batches per thread. The compute batches only where its batches come out right.
+  batches per thread. The compute batches wherever each Neo owns one tile counter of each ring; every batch is exact.
+  Main's #62954 made the batches follow each Neo's share beside DRAM, and dchen kept this one rule in its place.
+  `TTNN_QSR_DRAM_BATCH` is gone, and setting it now does nothing. `TTNN_QSR_DM_BATCH=1` with
+  `TTNN_QSR_TILES_PER_CYCLE=1` turns batching off.
 - **Walk header** (`kernels_qsr/common/operand_walk.hpp`; the commit "outer-dim broadcast runs native"): each operand
   has a mode (FULL, ROW, COL, SCALAR or VALUE) and a Map. A cursor per tile counter keeps the output position as
   mixed-radix digits, and each operand's page there. A step is adds and one compare per digit, so no kernel divides per
@@ -72,20 +79,81 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
   commit "binary_ng tests: check each broadcast case's borrowing; uneven shards and fast multiply beside ROW").
   Tensor-scalar has its own table, in bf16 and fp32, on both kernels and beside a borrowed a. The design doc and
   this page state each kind's support.
+- **After the rebase**: the oracle keeps only the two-rounding bf16 add (`_FPU_ADD_ROUNDINGS` holds `_fpu_add_bf16`),
+  and a failed add or subtract comparison says that a craq-sim older than `b05091aa` rounds once. The tail-ring tests
+  run the rule too, and the tests that read the device profiler pin batch 1; a profiling run asserts the pin, and a
+  no-device check keeps the 16 tiles per compute thread of `height_67`. The broadcast table test drops its
+  defect-model loop and takes the name `test_native_broadcast_tables_name_their_modes_and_walks`: the model predicts no
+  wrong tile, and the oracle tests catch any wrong tile. The design doc's lines about the removed descriptor factory,
+  and the comments on how the native gate compares with the Metal 2.0 gate, now match the code.
 
 ---
 
 ## 3. Verification
 
-The numbers below are lines of the untracked run log. Every run used craq-sim `b9d8e2f4`, except the runs on
-`67b8926b` that the first bullet names. `TTNN_QSR_NATIVE=0` runs the Metal 2.0 factory as the reference arm.
+The numbers below are lines of the untracked run log. `TTNN_QSR_NATIVE=0` runs the Metal 2.0 factory as the reference
+arm.
 
-- **The default craq-sim moved.** The new default `67b8926b` rounds a bf16 FPU add twice, as the hardware does. This
-  branch's oracle rounds once, so it needs main's two-rounding model, which a rebase brings. On `67b8926b`, two
-  mixed-broadcast cases differ by one ULP in the FPU add (`row_a_col_b_act` 2 of 60 tiles, `row_a_col_b_split` 3 of
-  480), and the four mixed configurations fail: 4 failed, 1 passed. The same command passes on `b9d8e2f4`: 5 passed. A
-  probe finds the device output equal to the two-rounding model at every element on `67b8926b`, in both factories, and
-  equal to this branch's oracle at every element on `b9d8e2f4`.
+**After the rebase onto main (`f5694bd1d22`).** Every run used craq-sim `67b8926b`, the default, unless a bullet names
+`b9d8e2f4`.
+
+- **The oracle keeps only the two-rounding add.** craq-sim rounds a bf16 FPU add twice from `b05091aa`, as the
+  hardware and ttsim do, so the default `67b8926b` does. `_FPU_ADD_ROUNDINGS` now holds only `_fpu_add_bf16`, and the
+  TODO of the week of 2026-10-19, part 3, is done. A craq-sim older than `b05091aa` rounds once. The FPU add and
+  subtract cases fail on it, with a message that says so (the control, below).
+- **The rebase.** Every commit built. Before the oracle changed, the whole native module passed on both builds:
+  `rb_module` on `67b8926b`, 197 passed, 1 skipped; `rb_module_b9` on `b9d8e2f4`, 197 passed, 1 skipped. The skip is
+  the native-off control. `rb_bcast`, the six broadcast oracle tests at `rule`, `rule-n1`, `R1C1W1` and `R1C4W1` and
+  the table test: 25 passed. These ran the FPU kernel at a compute batch of 8 above ring stride 1 beside ROW, COL,
+  SCALAR, VALUE, mixed and tensor-scalar operands for the first time.
+- **The compute batch, probed.** One FPU case of each of those kinds read `num_tiles_per_cycle` from its compute
+  kernel's generated arguments: 8 at `rule` beside every broadcast mode, and 1 at `rule-n1`. Both arms exited 0
+  (`probe_batch.log`).
+- **The tail rings at the rule.** The tail-ring tests now run `rule` too, so a borrowed shard runs full batches before
+  its tail block: 8 on the FPU kernel, 4 and 2 on the SFPU kernel. The tests that read the device profiler pin batch 1
+  in every role. `s2_tail_rule`: 6 passed. `s3_height67`: 13 passed (the other-op, fp32 and indivisible-shard tests,
+  every configuration). `s2_profiler`, the eight profiler tests: 77 passed, 126 deselected. dchen dropped #63305's
+  uneven-slice borrowing.
+- **The whole module**, native on (`fix1_module`): 202 passed, 1 skipped. That is `rb_module`'s 197 plus the five
+  `[rule]` ids that the borrowed configurations gained, with the same skip. The skip is the native-off control, which
+  `fix1_module_off` runs: 1 passed, 202 skipped.
+- **The six suite files**, one process each, native on (`t_<suite>`) and with `TTNN_QSR_NATIVE=0` (`t_<suite>_off`):
+  no_bcast 105 passed and 2 expected failures (the divide special values), resnet_add 10, descriptor_cache_hit 4, bcast
+  134, scalar 27, all the same on and off. The activation-format file: 112 passed and 10 failed on and off, the same 10
+  BFP8 and BFP4 cases as at the base, which the DFB validator refuses on Quasar. Each count equals the one that #62591
+  recorded for main on `b9d8e2f4`.
+- **The control: a craq-sim that rounds once.** Three FPU bf16 cases of the module fail on `b9d8e2f4`
+  (`t2_b9_control`: 3 failed in 33.02s) and pass on `67b8926b` (`t2_control_default`: 3 passed in 34.42s). They are
+  `test_native_output_matches_the_prediction` (an add: 15 of 1280 tiles differ),
+  `test_native_uneven_tile_counts_multithread[R1C1W1-batching=per-tile]` (an add arm: 1 to 27 tiles differ in 9 of its
+  11 shapes) and `test_native_other_ops_match_the_prediction[rule]` (8 subtract cases differ, and no multiply or
+  divide case). Each failure carries, once, the message that an older build rounds once and fails here.
+- **Dense programs against main.** With the batches pinned to the same values on both trees (DM batch 8, compute batch
+  2, ring depth 16), the 30 dense listings of main (`f5694bd1d22`) and of this branch's tip are identical
+  (`ab/main1031` against `ab/tip1031`): 5 programs (a DRAM add, an L1 multiply, a block-shard walk, a bank walk and an
+  fp32 L1 add) and 15 kernels, compared after the script masks objdump's trailing label notes and the `.LM` label
+  numbers. A second capture of the branch with every kernel recompiled (`ab/tip1031f`) is identical too. The
+  comparison failed on a planted change of a mnemonic, of an operand and of an encoding, and it passed on a change in
+  the masked notes alone. The pins exclude the batch rule itself, which differs from main on purpose. So this shows
+  that the rest of a dense program is main's.
+- **Not run**: any performance measurement (the native path is the best-performance option by rule, with no
+  measurement); a Wormhole or Blackhole device; tensor-scalar with an RHS or post activation, which neither the
+  module's table nor the scalar suite covers (both cover an activation on a only).
+- **A risk on ttsim, not run.** A batched sharded operand that moves over the NoC aborted on ttsim, so #62954 kept it at
+  batch 1 for H.I.I and W.I.I. These are the test module's names for a height- or width-sharded a in L1, beside a b and
+  an output that are interleaved in DRAM. ijankowskiTT reports in #63305 that the abort is the host profiler's marker
+  check, that only functional ttsim hits it (ttsim-perf and craq-sim profile these programs), and that the output is
+  exact. The rule now batches those programs by default, and this branch has not run them on ttsim. The tests that read the device profiler pin batch 1. A program off the profiler should not be
+  affected.
+
+**Before the rebase**, on craq-sim `b9d8e2f4` unless a bullet names `67b8926b`:
+
+- **The default craq-sim moved.** The new default `67b8926b` rounds a bf16 FPU add twice, as the hardware does. The
+  branch's oracle rounded once then; main's two-rounding model came with the rebase, and the oracle now keeps only it.
+  On `67b8926b`, two mixed-broadcast cases differed by one ULP in the FPU add (`row_a_col_b_act` 2 of 60 tiles,
+  `row_a_col_b_split` 3 of 480), and the four mixed configurations failed: 4 failed, 1 passed. The same command passed
+  on `b9d8e2f4`: 5 passed. A probe found the device output equal to the two-rounding model at every element on
+  `67b8926b`, in both factories, and equal to the branch's oracle at every element on `b9d8e2f4`.
 - **Tensor-scalar, red then green.** Before the code, the four configurations fail, because every op binds the Metal
   2.0 kernels: 4 failed, 1 passed. With the code, all pass: 5 passed. The cases include 0.1, which bf16 cannot hold:
   the golden takes the host's rounding to nearest even.
@@ -98,26 +166,24 @@ The numbers below are lines of the untracked run log. Every run used craq-sim `b
   only Metal 2.0 kernels. The program-cache test is one of the 27: the same scalar adds no cache entry, and a new
   scalar adds one.
 - **Module and suites**, native on, before the last edits to comments, docs, one gate check and one assert, and
-  before one new test case: the native module 193 passed, 1 skipped, 2 strict expected failures; no_bcast 104
-  passed, 2 expected failures; resnet_add 10; descriptor_cache_hit 4; bcast 134; scalar 27; activation formats 112
-  passed and 10 failed, the same 10 BFP8 and BFP4 cases as at the base. With `TTNN_QSR_NATIVE=0`: the module 1
-  passed, 195 skipped; no_bcast 104 passed, 2 expected failures; bcast 134; scalar 27.
+  before one new test case: the native module 193 passed, 1 skipped, 2 strict expected failures (both pass since
+  #62954); no_bcast 104 passed, 2 expected failures; resnet_add 10; descriptor_cache_hit 4; bcast 134; scalar 27;
+  activation formats 112 passed and 10 failed, the same 10 BFP8 and BFP4 cases as at the base. With
+  `TTNN_QSR_NATIVE=0`: the module 1 passed, 195 skipped; no_bcast 104 passed, 2 expected failures; bcast 134; scalar
+  27.
 - **After those edits**, the tensor-scalar tests pass again (5 passed, with the new case), and the scalar suite
   passes (27 passed).
 - **Dense programs**: the 30 disassemblies equal the baseline's, taken after the batch-size change, once the
   comparison script masks objdump's trailing label notes and the `.LM` label numbers: IDENTICAL.
 - **clang-tidy**: 0 findings in the factory and the gate, before and after those edits. On scratch copies with a
   planted `else` after an early return, it finds 2 and 3, so the instrument works.
-- **Not run**: any performance measurement (the native path is the best-performance option by rule, with no
-  measurement); a Wormhole or Blackhole device; tensor-scalar with an RHS or post activation, which neither the
-  module's table nor the scalar suite covers (both cover an activation on a only).
 
 ---
 
 ## 4. Planted defects in the earlier commits
 
 Each plant broke what the table names, and the named test caught it. Each revert built, and the test passed
-again.
+again. The plants ran before the rebase, on the commits that the table names.
 
 | Commit | Plant | What it broke | Caught by | Result |
 |---|---|---|---|---|

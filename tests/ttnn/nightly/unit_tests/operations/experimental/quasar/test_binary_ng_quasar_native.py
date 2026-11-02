@@ -40,6 +40,7 @@ import torch
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _ROUNDING_HINT,
     _add_goldens,
     _matches_none,
     _run,
@@ -149,6 +150,10 @@ def _threads(r, c, w):
 # Compute batching off. Every other knob keeps the rule's value.
 _COMPUTE_BATCH_1 = {"TTNN_QSR_TILES_PER_CYCLE": "1"}
 
+# Batch 1 in every role: on ttsim the host profiler aborts on some batched programs. A test that sets
+# TT_METAL_DEVICE_PROFILER takes these two knobs, not _COMPUTE_BATCH_1 alone, and _run_shard_arm asserts it.
+_PROFILED_BATCH_1 = {**_COMPUTE_BATCH_1, "TTNN_QSR_DM_BATCH": "1"}
+
 # One tile per DM transfer and per compute batch, in rings of two entries per thread, so that a thread's ring
 # wraps every two tiles.
 _PER_TILE = {"TTNN_QSR_DM_BATCH": "1", "TTNN_QSR_ENTRIES_PER_THREAD": "2", "TTNN_QSR_TILES_PER_CYCLE": "1"}
@@ -175,11 +180,14 @@ def _expectation_marks(expected_wrong):
 def _matches_prediction(got, goldens, expected_wrong, what):
     """Assert that exactly the predicted number of output tiles differ from the oracles; 0 means exact.
 
-    Returns True when the output is wrong as predicted.
+    Returns True when the output is wrong as predicted. Every caller compares an FPU add, so a failure ends with
+    _ROUNDING_HINT: a craq-sim older than b05091aa rounds the add once, and fails here.
     """
     wrong = _wrong_tiles(got, goldens)
     total = got.numel() // (32 * 32)
-    assert wrong == expected_wrong, f"{what}: {wrong} of {total} tiles differ, the prediction is {expected_wrong}"
+    assert (
+        wrong == expected_wrong
+    ), f"{what}: {wrong} of {total} tiles differ, the prediction is {expected_wrong}. {_ROUNDING_HINT}"
     return wrong > 0
 
 
@@ -231,8 +239,8 @@ _BENCHMARK_WRONG = _batched_wrong_tiles(_noc_split(32 * 40), _PARENT_KNOBS, _NOC
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.xfail(_BENCHMARK_WRONG > 0, raises=_WrongOutput, strict=True, reason=_BATCHED_REASON)
 def test_native_output_matches_the_prediction(device):
-    """bf16 add on this slice is exact: the output equals one of _FPU_ADD_ROUNDINGS bit for bit, except the
-    tiles that a set batch leaves wrong."""
+    """bf16 add on this slice is exact: the output equals the two-rounding model (_FPU_ADD_ROUNDINGS) bit for bit,
+    except the tiles that a set batch leaves wrong."""
     out, ta, tb = _add_returning_operands(device)
     if _matches_prediction(ttnn.to_torch(out), _add_goldens(ta, tb), _BENCHMARK_WRONG, "32x40 tiles"):
         raise _WrongOutput("32x40 tiles: wrong as predicted")
@@ -324,7 +332,7 @@ _ARM_SRC = """
 import hashlib, json, os, pathlib, sys
 import torch, ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _add_goldens, _matches_none)
+    _ROUNDING_HINT, _add_goldens, _matches_none)
 
 TILE_COUNTS = json.loads(os.environ["ARM_TILE_COUNTS"])
 
@@ -364,6 +372,9 @@ if failures or mismatches:
     print("FAIL")
     for f in failures + mismatches:
         print("  " + f)
+    if mismatches:
+        # Every case is a bf16 add.
+        print("  " + _ROUNDING_HINT)
     # 2 means only the output is wrong: every op ran and routed as expected.
     sys.exit(1 if failures else 2)
 print("OK over {} shapes".format(len(TILE_COUNTS)))
@@ -388,7 +399,9 @@ def _check_arm(p, what, expect_wrong=None):
     An expected-failure marker restricted to _WrongOutput therefore cannot hide a crash, a hang, a
     refusal or a fallback. expect_wrong maps the label of each shape the prediction gets wrong to the
     number of output tiles a modeled defect leaves wrong. Only exactly those counts raise
-    _WrongOutput, so a new defect, or a shape that is wrong where the prediction is 0, fails the test.
+    _WrongOutput, so a new defect, or a shape that is wrong where the prediction is 0, fails the test. The arm scripts
+    print _ROUNDING_HINT after their mismatch lines where an FPU add or subtract differs, and it reaches the message
+    through p.stdout.
     """
     expect_wrong = expect_wrong or {}
     if p.returncode == 2:
@@ -777,15 +790,14 @@ _MISMATCHED_SHARDS = [
     ),
 ]
 
-# The bit-exact configurations of the borrowed path. There the factory runs one reader and one writer
-# thread whatever is set, since they copy only the tail tiles. 1,1,1 keeps the rule's compute batch of 8
-# at ring stride 1. rule-n1 is the rule's 1,4,1, which puts the reader and the writer on four counters
-# each, with the compute batch at 1; 4,4,2-n1 checks that set reader and writer counts map to that same
-# program. So the DM side never outnumbers the Tensix side here, a case that some craq-sim builds corrupt.
+# The bit-exact configurations of the borrowed path. The rule runs 1,4,1, with a compute batch of 8 on the FPU kernel
+# and 4 on the SFPU kernel (2 in fp32); rule-n1 is the same program at batch 1. R and W stay at or below C, because some
+# craq-sim builds corrupt the output when the DM side outnumbers the Tensix side.
 _BORROWED_CONFIGS = {
     "R1C1W1": _threads(1, 1, 1),
     "rule-n1": _COMPUTE_BATCH_1,
     "R4C4W2-n1": {**_threads(4, 4, 2), **_COMPUTE_BATCH_1},
+    "rule": {},
 }
 # Two compute threads, on two-entry tail rings.
 _BORROWED_CONFIGS_C2 = {**_BORROWED_CONFIGS, "R1C2W1-n1": {**_threads(1, 2, 1), **_COMPUTE_BATCH_1}}
@@ -864,7 +876,7 @@ _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _FPU_ADD_ROUNDINGS, _ULP, _matches_none)
+    _FPU_ADD_ROUNDINGS, _ROUNDING_HINT, _ULP, _matches_none)
 
 SHARDS = json.loads(os.environ["ARM_SHARDS"])
 EXPECT = os.environ["ARM_EXPECT"]
@@ -892,9 +904,9 @@ def truncate_to_bf16(x):
     return (x.contiguous().view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
 
 
-# op -> (the op, its extra arguments, the kernel's bf16 results from the operands; an element is right when it
-# matches one). The FPU kernel adds and subtracts as _FPU_ADD_ROUNDINGS says, and multiplies with rounding to nearest
-# even. The SFPU kernel runs multiply out of fast mode, which truncates, and divide, which rounds to nearest even.
+# op -> (the op, its extra arguments, the kernel's bf16 results from the operands; an element is right when it matches
+# one). The FPU kernel adds and subtracts as _FPU_ADD_ROUNDINGS says, and multiplies with rounding to nearest even. The
+# SFPU kernel runs multiply out of fast mode, which truncates, and divide, which rounds to nearest even.
 OPS = {"add": (ttnn.experimental.quasar.add, {}, _FPU_ADD_ROUNDINGS),
        "subtract": (ttnn.experimental.quasar.subtract, {},
                     tuple(lambda a, b, rounding=rounding: rounding(a, -b) for rounding in _FPU_ADD_ROUNDINGS)),
@@ -909,7 +921,7 @@ def square(x):
     return truncate_to_bf16(x * x).float()
 
 
-# act ->(the op's activation arguments, the output from the operands and one of the op's roundings). SQUARE
+# act ->(the op's activation arguments, the output from the operands and one of the op's results). SQUARE
 # chains on a, on b, on both or on the result; a lone RELU on the result runs in the packer, on the rounded result.
 # RELU on a, and RELU on the result beside a chain, run on the SFPU.
 SQUARE, RELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE), ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
@@ -1012,6 +1024,7 @@ def memory_config(strategy, shard_shape, rng, orientation="row"):
 
 
 mismatches, failures = [], []
+add_wrong = False  # a bf16 add or subtract is among the mismatches
 keep, seen = [], set()
 specs = [json.dumps(entry[1:]) for entry in SHARDS]
 device = ttnn.open_device(device_id=0)
@@ -1083,7 +1096,7 @@ try:
             keep.extend([ta, tb, out])
         got = ttnn.to_torch(out)
         # Integer ULP distance per element, as production measures it: the sign of a zero does not count. A bf16
-        # golden is one of the kernel's exact roundings; fp32 allows the op's measured bound.
+        # golden is the kernel's exact rounding; fp32 allows the op's measured bound.
         bound = _ULP[ttnn.float32][opts.get("op", "add")] if fp32 else 0
         differ = _matches_none(got, goldens, bound)
         if differ.any():
@@ -1092,6 +1105,7 @@ try:
             h, w = differ.shape[-2:]
             wrong = int(differ.reshape(-1, h // 32, 32, w // 32, 32).any(dim=4).any(dim=2).sum())
             mismatches.append("{}: {} of {} tiles differ".format(name, wrong, differ.numel() // 1024))
+            add_wrong = add_wrong or (not fp32 and opts.get("op", "add") in ("add", "subtract"))
         # Free this entry's tensors before the next entry allocates its own; `keep` holds the ones a repeat needs.
         del ta, tb, out, op_kwargs
 finally:
@@ -1135,6 +1149,8 @@ if failures or mismatches:
     print("FAIL")
     for f in failures + mismatches:
         print("  " + f)
+    if add_wrong:
+        print("  " + _ROUNDING_HINT)
     # 2 means only the output is wrong: every op ran and routed as expected.
     sys.exit(1 if failures else 2)
 print("OK over {} shards".format(len(SHARDS)))
@@ -1147,9 +1163,12 @@ def _run_shard_arm(shards, expect, timeout, knobs=None):
     Inherited TTNN_QSR_* variables are stripped, as in _run_arm, so the arm runs exactly `knobs` and the
     rule's value of every knob that `knobs` leaves unset. With the device profiler on, inherited DPRINT and
     streaming-profiler variables are stripped too, because the runtime refuses to start with either of
-    them next to it. A build without Tracy skips the test.
+    them next to it. A profiling run must pin batch 1 in every role (_PROFILED_BATCH_1). A build without Tracy
+    skips the test.
     """
     profiling = (knobs or {}).get("TT_METAL_DEVICE_PROFILER") == "1"
+    if profiling:
+        assert _PROFILED_BATCH_1.items() <= knobs.items(), "a profiler run must pin batch 1 in every role"
     stripped = ("TTNN_QSR_", "TT_METAL_DPRINT_", "TT_METAL_STREAMING_PROFILER") if profiling else ("TTNN_QSR_",)
     env = {k: v for k, v in os.environ.items() if not k.startswith(stripped)}
     env.update(
@@ -1172,7 +1191,7 @@ _BORROWED_SHARD_CASES = [(entry, _BORROWED, [_shard_tiles(entry)] * _shard_cores
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-@pytest.mark.parametrize("name, knobs", _config_params({**_BORROWED_CONFIGS, "rule": {}}, _BORROWED_SHARD_CASES))
+@pytest.mark.parametrize("name, knobs", _config_params(_BORROWED_CONFIGS, _BORROWED_SHARD_CASES))
 def test_native_borrowed_shards_match_the_prediction(name, knobs):
     """Height, block and width shards must run native and give the predicted output in every configuration.
 
@@ -1202,7 +1221,8 @@ def test_native_borrowed_indivisible_shards_stay_native(name, knobs):
 
     A borrowed ring sized to the whole shard dies on the DFB host assertion, and a tail copied from the
     wrong address or packed into the wrong ring fails the bit comparison. R1C2W1-n1 runs two-entry tail
-    rings. At 1,1,1 every shard divides, and 9 and 10 tiles leave a remainder after one compute batch of 8.
+    rings. At 1,1,1 every shard divides, and 9 and 10 tiles leave a remainder after one compute batch of 8. At
+    the rule, height_67 runs two full batches of 8 in each compute thread before its tail block.
     """
     p = _run_shard_arm(_SMALL_SHARDS, expect="qsr", timeout=900, knobs=knobs)
     _check_arm(p, f"indivisible shards, {name}")
@@ -1222,7 +1242,7 @@ def test_native_borrowed_indivisible_shards_use_every_compute_thread(shard):
         [shard],
         expect="qsr",
         timeout=900,
-        knobs={**_COMPUTE_BATCH_1, "TT_METAL_DEVICE_PROFILER": "1", "ARM_EXPECT_NEOS": "4"},
+        knobs={**_PROFILED_BATCH_1, "TT_METAL_DEVICE_PROFILER": "1", "ARM_EXPECT_NEOS": "4"},
     )
     _check_arm(p, f"{shard[0]} on four Neos")
 
@@ -1241,7 +1261,7 @@ def test_native_borrowed_mismatched_output_borrows_only_the_inputs():
         expect="qsr",
         timeout=900,
         knobs={
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": "5",
             "ARM_EXPECT_NEOS": "4",
@@ -1376,7 +1396,7 @@ def test_native_l1_interleaved_borrows_in_place(case, cores, threads):
         timeout=900,
         knobs={
             **(_threads(4, 4, 2) if threads == "R4C4W2" else {}),
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": "2",
             "ARM_EXPECT_NEOS": "4",
@@ -1401,7 +1421,7 @@ def test_native_l1_interleaved_keeps_the_noc_path(case, cores):
         expect="qsr",
         timeout=900,
         knobs={
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": "6",
             "ARM_EXPECT_NEOS": "4",
@@ -1432,7 +1452,7 @@ def test_native_l1_interleaved_borrows_beside_dram(case, dms, cores):
         expect="qsr",
         timeout=900,
         knobs={
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": str(dms),
             "ARM_EXPECT_NEOS": "4",
@@ -1513,8 +1533,8 @@ def test_native_dram_sharded_matches_the_prediction(name, knobs):
     """DRAM-sharded operands must run native and give the predicted output, alone or beside interleaved
     operands.
 
-    Their fallback is the descriptor, which does not run on Quasar, so a refusing gate fails the test. A
-    page read from the wrong bank or offset fails the bit comparison, and a cached program that keeps the
+    The Metal 2.0 gate refuses a DRAM shard too, so a refusing native gate raises an error and fails the test.
+    A page read from the wrong bank or offset fails the bit comparison, and a cached program that keeps the
     first call's addresses fails the repeat.
     """
     p = _run_shard_arm(_DRAM_SHARDED, expect="qsr", timeout=900, knobs=knobs)
@@ -1542,7 +1562,7 @@ def test_native_dram_sharded_spreads_over_the_worker_grid(case):
         expect="qsr",
         timeout=900,
         knobs={
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": "6",
             "ARM_EXPECT_NEOS": "4",
@@ -1882,13 +1902,14 @@ def test_native_other_ops_match_the_prediction(name, knobs):
     _check_arm(p, f"subtract, multiply and divide, {name}", expect_wrong=_expect_wrong(_OP_CASES, knobs))
 
 
-# Borrowed shards that 4 does not divide, so that their last tiles go through the tail rings: block_6 has a
-# borrowed part and a tail, height1 only a tail. At 1,1,1 height_5 runs a full SFPU batch and a short one.
+# Borrowed shards that 4 does not divide, so that their last tiles go through the tail rings: block_6 has a borrowed
+# part and a tail, height1 only a tail. At 1,1,1 height_5 runs a full SFPU batch and a short one; at the rule height_67
+# runs full batches before its tail block (test_native_prediction_tables_cover_their_cases checks it).
 _OP_TAIL_SHARDS = [
     _with_op(entry, op)
     for op in _OTHER_OPS
     for entry in _SMALL_SHARDS
-    if entry[0] in ("block_6", "height1", "height_5")
+    if entry[0] in ("block_6", "height1", "height_5", "height_67")
 ]
 
 
@@ -1982,7 +2003,7 @@ _FP32_TAIL_SHARDS = [
     _with_fp32(_with_op(entry, op))
     for op in _FP32_OPS
     for entry in _SMALL_SHARDS
-    if entry[0] in ("block_6", "height1", "height_5")
+    if entry[0] in ("block_6", "height1", "height_5", "height_67")
 ]
 _FP32_ACT_CASES = [
     (_with_act(_with_fp32(_with_op(entry, op)), act), path, split)
@@ -1992,8 +2013,9 @@ _FP32_ACT_CASES = [
     if entry[0] in _ACT_MIXES
 ]
 _FP32_CONFIGS = {name: _MIXED_CONFIGS[name] for name in ("R1C1W1", "rule-n1", "rule")}
-# The configurations that have tail rings: at C = 1 every shard divides, and R4C4W2-n1 builds rule-n1's program.
-_FP32_TAIL_CONFIGS = {name: _BORROWED_CONFIGS_C2[name] for name in ("rule-n1", "R1C2W1-n1")}
+# The configurations that have tail rings: at C = 1 every shard divides, and R4C4W2-n1 builds rule-n1's program. At the
+# rule, height_67 runs eight full batches of 2 in each compute thread before its tail block.
+_FP32_TAIL_CONFIGS = {name: _BORROWED_CONFIGS_C2[name] for name in ("rule-n1", "R1C2W1-n1", "rule")}
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
@@ -2768,7 +2790,7 @@ def test_native_mixed_layouts_route_by_the_anchor(case, dms, cores):
         expect="qsr",
         timeout=900,
         knobs={
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": str(dms),
             "ARM_EXPECT_NEOS": "4",
@@ -2797,7 +2819,7 @@ def test_native_rule_follows_a_set_compute_count():
         timeout=900,
         knobs={
             "TTNN_QSR_COMPUTE_THREADS": "2",
-            **_COMPUTE_BATCH_1,
+            **_PROFILED_BATCH_1,
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": "4",
             "ARM_EXPECT_NEOS": "2",
@@ -2940,12 +2962,12 @@ _BCAST_TABLES = {
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-def test_native_broadcast_tables_predict_exact_output():
-    """No device. Each broadcast case must be exact in each broadcast configuration, and name its modes and its walk.
+def test_native_broadcast_tables_name_their_modes_and_walks():
+    """No device. Each broadcast case must name its modes and its walk, and no case name may repeat.
 
-    A broadcast operand is never borrowed, so an input always moves. The broadcast tables carry no strict
-    expected-failure marks, so the defect model must predict no wrong tile for a case in any configuration. A case
-    declares its walk or is named in _BCAST_WALK_BY_CONFIG, never both, and a walk has exactly the keys of _NOC_WALK.
+    The broadcast oracle tests pass no expectation, so they catch any wrong tile, and this test makes no prediction.
+    A case declares its walk or is named in _BCAST_WALK_BY_CONFIG, never both, and a walk has exactly the keys of
+    _NOC_WALK.
     """
     named = set()
     for table, entries in _BCAST_TABLES.items():
@@ -2964,11 +2986,6 @@ def test_native_broadcast_tables_predict_exact_output():
             assert (
                 walk.keys() == _NOC_WALK.keys()
             ), f"{table}/{entry[0]}: the walk has the keys {sorted(walk)}, a walk has exactly {sorted(_NOC_WALK)}"
-            split = _noc_split(_tensor_tiles(entry))
-            for config, knobs in _BCAST_CONFIGS.items():
-                for output_moves in (True, False):
-                    wrong = _batched_wrong_tiles(split, knobs, (True, output_moves), _runs_sfpu(entry))
-                    assert not wrong, f"{table}/{entry[0]} under {config}: the model predicts {wrong} wrong tiles"
     stale = _BCAST_WALK_BY_CONFIG - named
     assert not stale, f"these cases are named in _BCAST_WALK_BY_CONFIG but are in no broadcast table: {sorted(stale)}"
 
@@ -2979,7 +2996,8 @@ def test_native_prediction_tables_cover_their_cases():
 
     A split that misses tiles or counts a pad slot, a borrowed shard that 4 does not divide, or an
     L1-interleaved case that is neither in the rule table nor a pad case would make a prediction wrong, or
-    silently leave a case out of the rule column.
+    silently leave a case out of the rule column. At the rule, height_67 must give each compute thread whole batches
+    of 8 before its tail block, and it must sit in both tail tables.
     """
     cases = _BORROWED_SHARD_CASES + _BATCHED_BORROWED_CASES + _L1_INTERLEAVED_RULE_CASES + _DRAM_SHARDED_CASES
     # A pad slot takes a batch position but is not in the output, so a mixed case with pad slots must be exact in
@@ -3035,3 +3053,13 @@ def test_native_prediction_tables_cover_their_cases():
         _L1_INTERLEAVED_RULE_SPLITS
     )
     assert left_out == {"l1_100_pad", "l1_250_pad"}, f"L1-interleaved cases in no prediction table: {left_out}"
+    # At the rule, height_67 gives each compute thread whole FPU batches before its tail block, and it is in both tail
+    # tables.
+    height_67 = next(entry for entry in _SMALL_SHARDS if entry[0] == "height_67")
+    tiles = _shard_tiles(height_67)
+    per_thread = (tiles - tiles % _RULE_COMPUTE_THREADS) // _RULE_COMPUTE_THREADS
+    assert (
+        per_thread % _RULE_TILES_PER_CYCLE == 0 and per_thread >= 2 * _RULE_TILES_PER_CYCLE
+    ), f"height_67 gives each compute thread {per_thread} tiles, not 2 or more batches of {_RULE_TILES_PER_CYCLE}"
+    for table_name, table in (("_OP_TAIL_SHARDS", _OP_TAIL_SHARDS), ("_FP32_TAIL_SHARDS", _FP32_TAIL_SHARDS)):
+        assert any(entry[0].startswith("height_67/") for entry in table), f"height_67 is not in {table_name}"
