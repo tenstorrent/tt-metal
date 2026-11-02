@@ -140,7 +140,11 @@ class ChunkedRun:
 def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedRun:
     """Prefill `num_chunks` chunks of `chunk_len` tokens through `num_layers` layers, scoring every chunk against
     the golden trace as it goes."""
-    tp_shard_kv = True
+    # TP-deduped KV stripes each chip's chunk region over the TP ranks in whole tiles: 5120 / SP8 / TP4 = 160 rows
+    # each, but 2560 gives 80, which ring_mla's split-KV path cannot stripe. So 2560 keeps the TP-replicated KV
+    # (every TP rank holds the chip's whole 320-row region), 4x the KV bytes per chip.
+    rows, columns = tuple(mesh_device.shape)
+    tp_shard_kv = (chunk_len // (rows, columns)[SP_AXIS]) % ((rows, columns)[TP_AXIS] * ttnn.TILE_SIZE) == 0
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M if num_layers >= DEEP_TRACE_FROM else TRACE_100K)
     if checkpoint is None or trace is None:
