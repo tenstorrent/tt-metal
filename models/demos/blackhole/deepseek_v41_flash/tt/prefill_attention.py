@@ -448,6 +448,10 @@ class DSV41PrefillAttention:
         if not (dyn_sp and sp.indexer is not None):
             ttnn.deallocate(qr)
         qbufs = None
+        FA.real_dump("q", q)
+        FA.real_dump("kv", kvn)
+        FA.real_dump("tabc", tabs[0])
+        FA.real_dump("tabs", tabs[1])
         if FA.on("DSV41_FA_QPRE"):  # fused q heads + RoPE (+ the padded row-major sparse_sdpa input): tt/fuse_attn.py
             qh = FA.qprep(q, tabs, pf_tune.p64(self.md), U, C, LOCAL_HEADS, sparse=dyn_sp)
             if dyn_sp:

@@ -1455,6 +1455,7 @@ class DSV41PrefillSparse:
                 attention_sink=self.sink,
                 **({} if paged else {"cache_batch_idx": u}),
             )
+            FA.real_dump("o", o)
             if qbufs is None:
                 ttnn.deallocate(qu)
             if ids_pre is None:
@@ -1465,6 +1466,9 @@ class DSV41PrefillSparse:
             outs.append(ttnn.to_layout(ttnn.slice(o, [0, 0, 0, 0], [1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.TILE_LAYOUT))
             ttnn.deallocate(o)
         if raw:
+            _TD.put(
+                "sdpa", ids
+            )  # (keeps the numbering of the DSV41_PF_LAYER_DUMP buffers; the raw outputs are not a [U,8,C,512] tensor)
             return outs
         res = outs[0] if U == 1 else ttnn.concat(outs, dim=0)
         _TD.put("sdpa", res)

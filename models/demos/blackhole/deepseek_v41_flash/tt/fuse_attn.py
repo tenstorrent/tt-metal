@@ -62,12 +62,15 @@ def rope_blocks(
     max_cores=None,
     nt=16,
     mode=None,
+    fp32=None,
 ):
     """xs: tile tensor (in_rm False) or list of U row-major [1,32,C,512] tensors; outs: tile tensor (out_rm False) or list of U row-major tensors.
     in_str / out_str = (user stride, head stride, tile-row stride, first column tile) in tile pages. c, s: [Ut,1,C,512] bf16 TILE tables, P: [1,1,64,64] pair swap.
     """
     if mode is None:
         mode = int(os.environ.get("DSV41_FA_ROPE_MODE", "0"))
+    if fp32 is None:
+        fp32 = os.environ.get("DSV41_FA_FP32", "1") == "1"
     xs = list(xs) if in_rm else [xs]
     outs = list(outs) if out_rm else [outs]
     mesh = c.device()
@@ -126,7 +129,7 @@ def rope_blocks(
         core_set,
         ct_c,
         rt_c,
-        ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
+        ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=bool(fp32)),
         [],
     )
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
@@ -143,6 +146,7 @@ def rope_blocks(
         tuple(out_str),
         len(xs),
         mode,
+        bool(fp32),
         nt,
         ncores,
         tuple(_acc(xs[0])),
@@ -459,3 +463,21 @@ def idx_final(pos, cand, C):
     prog.custom_program_hash = _hash(0xFA4, ncand, C, ncores, tuple(_acc(pos)), tuple(_acc(cand)), tuple(_acc(out)))
     ttnn.generic_op([pos, cand, out], prog)
     return out
+
+
+_RD = [0]
+
+
+def real_dump(tag, t):
+    """diagnostics (FA_REAL_DUMP=<dir>): save device 0's copy of ``t`` as <dir>/<n>_<tag>.pt in eager passes only (real activations of the first window for the unit tests)."""
+    d = os.environ.get("FA_REAL_DUMP")
+    if not d:
+        return
+    from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as PS
+
+    if PS.CAPTURING[0]:
+        return
+    import torch
+
+    _RD[0] += 1
+    torch.save(ttnn.to_torch(ttnn.get_device_tensors(t)[0]), f"{d}/{_RD[0]:04d}_{tag}.pt")

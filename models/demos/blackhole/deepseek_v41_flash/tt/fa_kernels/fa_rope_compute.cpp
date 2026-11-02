@@ -36,6 +36,9 @@ void kernel_main() {
     constexpr uint32_t ROPE = get_compile_time_arg_val(12);  // 0: pass-through (layout conversion only)
     constexpr uint32_t NT = get_compile_time_arg_val(13);    // tiles per head block (16: 512 dims, 4: indexer 128 dims)
     constexpr uint32_t MODE = get_compile_time_arg_val(14);
+    // modes 0: FPU mul + FPU add, 1: SFPU + SFPU, 4: SFPU mul + FPU add, 5: FPU mul + SFPU add, 2: addcmul
+    constexpr bool MUL_FPU = (MODE == 0 || MODE == 5 || MODE == 6), MUL_SFPU = (MODE == 1 || MODE == 4),
+                   ADD_FPU = (MODE == 0 || MODE == 4 || MODE == 6);
     const uint32_t nb = get_arg_val<uint32_t>(0);
 
     compute_kernel_hw_startup(cb_x, cb_c, cb_y);
@@ -68,7 +71,7 @@ void kernel_main() {
         if constexpr (ROPE) {
             for (uint32_t j = 0; j < 2; ++j) {
                 const uint32_t xi = NT - 2 + j;
-                if constexpr (MODE == 0) {
+                if constexpr (MUL_FPU) {
                     // t1 = x * c
                     reconfig_data_format(cb_x, cb_c);
                     pack_reconfig_data_format(cb_t1);
@@ -85,7 +88,7 @@ void kernel_main() {
                     // t1 = x * c on the SFPU (MODE 1), or m = x * c kept in DEST for the addcmul (MODE 2)
                     reconfig_data_format(cb_x, cb_x);
                     pack_reconfig_data_format(cb_t1);
-                    if constexpr (MODE == 1) {
+                    if constexpr (MUL_SFPU) {
                         tile_regs_acquire();
                         copy_init(cb_x);
                         copy_tile(cb_x, xi, 0);
@@ -145,7 +148,7 @@ void kernel_main() {
                 } else {
                     // t3 = p * s
                     pack_reconfig_data_format(cb_t3);
-                    if constexpr (MODE == 0) {
+                    if constexpr (MUL_FPU) {
                         reconfig_data_format(cb_t2, cb_s);
                         mul_init(cb_t2, cb_s);
                         tile_regs_acquire();
@@ -172,11 +175,23 @@ void kernel_main() {
                     t1.wait_front(1);
                     t3.wait_front(1);
                     pack_reconfig_data_format(cb_y);
-                    if constexpr (MODE == 0) {
-                        reconfig_data_format(cb_t1, cb_t3);
-                        add_init(cb_t1, cb_t3);
+                    if constexpr (ADD_FPU) {
+                        if constexpr (MODE == 6) {
+                            reconfig_data_format(cb_t3, cb_t1);
+                        } else {
+                            reconfig_data_format(cb_t1, cb_t3);
+                        }
+                        if constexpr (MODE == 6) {
+                            add_init(cb_t3, cb_t1);
+                        } else {
+                            add_init(cb_t1, cb_t3);
+                        }
                         tile_regs_acquire();
-                        add_tiles(cb_t1, cb_t3, 0, 0, 0);
+                        if constexpr (MODE == 6) {
+                            add_tiles(cb_t3, cb_t1, 0, 0, 0);
+                        } else {
+                            add_tiles(cb_t1, cb_t3, 0, 0, 0);
+                        }
                     } else {
                         reconfig_data_format(cb_t1, cb_t1);
                         tile_regs_acquire();

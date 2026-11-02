@@ -88,6 +88,20 @@ def test_chunk_probe(mesh_device):
         ):  # device profiler: drain after every replayed window (trace ops are only logged when read per replay)
             ttnn.synchronize_device(md)
             ttnn.ReadDeviceProfiler(md)
+        if os.environ.get(
+            "PROBE_DUMPIDS"
+        ):  # selected row ids of every sparse layer of the replayed window (device 0, users 0..Up-1); needs DSV41_PF_LAYER_DUMP=1
+            from models.demos.blackhole.deepseek_v41_flash.tt import trace_dump as _TDD
+
+            s0k = s0[0] if isinstance(s0, (list, tuple)) else s0
+            if s0k in [int(x) for x in os.environ.get("PROBE_DUMPIDS_AT", "2048,4096,7680").split(",")]:
+                ttnn.synchronize_device(md)
+                for name_, t_ in _TDD.D.items():
+                    if name_.endswith(".ids"):
+                        torch.save(
+                            ttnn.to_torch(ttnn.get_device_tensors(t_)[0]).to(torch.int64),
+                            f"{os.environ['PROBE_DUMPIDS']}/w{s0k}_{name_}.pt",
+                        )
         rec.append((s0, th, td))
         return th, td
 
@@ -492,6 +506,18 @@ def test_chunk_probe(mesh_device):
             ttnn.execute_trace(md, pm.dyn_trace, cq_id=0, blocking=False)
         ttnn.synchronize_device(md)
         log(f"PROBE RAW {n_raw} back-to-back replays: {(time.perf_counter() - t_) / n_raw * 1e3:.1f} ms each")
+        if (
+            getattr(pm, "dyn_trace_b", None) is not None
+        ):  # both traces of a window (A then B), as replay_window enqueues them
+            ttnn.synchronize_device(md)
+            t_ = time.perf_counter()
+            for _ in range(n_raw):
+                ttnn.execute_trace(md, pm.dyn_trace, cq_id=0, blocking=False)
+                ttnn.execute_trace(md, pm.dyn_trace_b, cq_id=0, blocking=False)
+            ttnn.synchronize_device(md)
+            log(
+                f"PROBE RAW AB {n_raw} back-to-back windows (trace A + trace B): {(time.perf_counter() - t_) / n_raw * 1e3:.1f} ms each"
+            )
     if pm.__dict__.get("build_prof") is not None:
         import io
         import pstats
