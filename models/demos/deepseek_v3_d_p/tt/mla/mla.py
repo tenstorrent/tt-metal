@@ -52,6 +52,14 @@ class ttMLA:
         return ttMLA.MLA_WEIGHT_NAMES + (["g_proj"] if has_output_gate else [])
 
     @staticmethod
+    def replicates_wkv_b1(config, tp_factor: int, has_indexer: bool) -> bool:
+        """True for the layers that take _early_q_reshard: they run wkv_b1 over every head after the all-to-all
+        to sequence sharding, so they load all heads' wkv_b1 on every chip instead of the TP shard."""
+        heads_local = config.num_attention_heads // tp_factor
+        thin_head_shard = tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
+        return has_indexer and not getattr(config, "mla_use_nope", False) and thin_head_shard
+
+    @staticmethod
     def check_cache_complete(
         cache_path: Path, cache_name_prefix: str, has_indexer: bool = False, has_output_gate: bool = False
     ) -> bool:
@@ -83,6 +91,7 @@ class ttMLA:
         cache_path: Path | None = None,
         device: ttnn.MeshDevice | None = None,
         kv_only: bool = False,
+        replicate_wkv_b1: bool = False,
     ) -> dict | None:
         """
         Shared logic for converting MLA weights to ttnn with caching.
@@ -96,6 +105,8 @@ class ttMLA:
             tp_axis: Tensor parallel axis
             cache_path: Cache directory path
             device: None for cache-only (build cache), mesh_device for load to device
+            replicate_wkv_b1: every head's wkv_b1 on every chip (see replicates_wkv_b1), cached as
+                ``layer_{i}.mla_repl.wkv_b1``. A cache build writes it beside the TP-sharded file.
 
         Returns:
             Dict of ttnn.Tensor if device is not None, else None
@@ -110,8 +121,8 @@ class ttMLA:
         qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
         use_gate = bool(getattr(config, "mla_use_output_gate", False))
 
-        def _cache_name(name):
-            return str(cache_path / f"layer_{layer_idx}.mla.{name}") if cache_path else None
+        def _cache_name(name, prefix="mla"):
+            return str(cache_path / f"layer_{layer_idx}.{prefix}.{name}") if cache_path else None
 
         # Prepare tensors — real weights or placeholders
         if state_dict and "q_a_layernorm.weight" in state_dict:
@@ -147,6 +158,37 @@ class ttMLA:
         mapper_tp1 = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims_tp1)
 
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
+
+        def _wkv_b1_as(mapper, name):
+            return ttnn.as_tensor(
+                wkv_b1,
+                device=device,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem,
+                mesh_mapper=mapper,
+                cache_file_name=name,
+            )
+
+        def _wkv_b1():
+            if not replicate_wkv_b1:
+                return _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
+            repl_name = _cache_name("wkv_b1", "mla_repl")
+            repl_file = repl_name and Path(
+                f"{repl_name}_dtype_{ttnn.bfloat8_b.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
+            )
+            has_host_weights = bool(state_dict) and "q_a_layernorm.weight" in state_dict
+            if device is None or has_host_weights or (repl_file and repl_file.exists()):
+                if device is None:
+                    # A cache build keeps the TP-sharded file too: check_cache_complete looks for it.
+                    _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
+                return _wkv_b1_as(ttnn.ReplicateTensorToMesh(mesh_device), repl_name)
+            # A cache built before the replicated file existed: gather the TP shards once, at load. Loading
+            # the placeholder through as_tensor would write it to the cache as the weights.
+            shard = _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
+            full = ttnn.all_gather(shard, dim=1, cluster_axis=tp_axis, memory_config=mem)
+            ttnn.deallocate(shard)
+            return full
 
         # KV-branch weights (always loaded). The kv-only forward path only
         # needs these; the rest are gated below on `kv_only`.
@@ -200,15 +242,7 @@ class ttMLA:
                         mesh_mapper=mapper_tp1,
                         cache_file_name=_cache_name("q_b_proj"),
                     ),
-                    "wkv_b1": ttnn.as_tensor(
-                        wkv_b1,
-                        device=device,
-                        dtype=ttnn.bfloat8_b,
-                        layout=ttnn.TILE_LAYOUT,
-                        memory_config=mem,
-                        mesh_mapper=mapper_tp1,
-                        cache_file_name=_cache_name("wkv_b1"),
-                    ),
+                    "wkv_b1": _wkv_b1(),
                     "wkv_b2": ttnn.as_tensor(
                         wkv_b2,
                         device=device,
@@ -264,12 +298,21 @@ class ttMLA:
         """Build TTNN cache for MLA weights using device=None (no device copy). For DSA-sparse
         variants also writes the indexer tensorbins. Fails fast if sparse mode is resolved but the
         host indexer weights are missing — never silently builds a dense-only cache for a sparse layer."""
+        resolved_has_indexer = resolve_has_indexer(config, state_dict=state_dict, explicit=has_indexer)
         ttMLA._convert_and_cache_weights(
-            state_dict, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path, device=None, kv_only=kv_only
+            state_dict,
+            mesh_device,
+            config,
+            layer_idx,
+            sp_axis,
+            tp_axis,
+            cache_path,
+            device=None,
+            kv_only=kv_only,
+            replicate_wkv_b1=ttMLA.replicates_wkv_b1(config, mesh_device.shape[tp_axis], resolved_has_indexer),
         )
         # GLM-5.3 shared layers are sparse but own no indexer weights (they reuse a prior full layer's
         # top-k) -> build the MLA cache only, skip the indexer tensorbins.
-        resolved_has_indexer = resolve_has_indexer(config, state_dict=state_dict, explicit=has_indexer)
         if resolved_has_indexer and not indexer_layer_is_reused(config, layer_idx):
             if not TtIndexer.has_host_weights(state_dict):
                 raise ValueError(
@@ -580,6 +623,7 @@ class ttMLA:
             self.weight_cache_path,
             device=mesh_device,
             kv_only=kv_only,
+            replicate_wkv_b1=ttMLA.replicates_wkv_b1(config, self.tp_factor, self._has_indexer),
         )
         self.kv_a_layernorm_weight = weights["kv_a_layernorm"]
         self.kv_a_proj_with_mqa_weight = weights["kv_a_proj_with_mqa"]
@@ -1308,8 +1352,8 @@ class ttMLA:
         """Sparse layers whose head shard is too thin for sparse_sdpa move q to sequence sharding before the wkv_b1
         absorption, where it is 256 channels wide instead of 576, and RoPE writes it row-major for sparse_sdpa, so
         no untilize follows; sparse_sdpa's row-major output then goes to the all-to-all back to heads, which tilizes
-        it on the way. Costs all heads' wkv_b1 on every chip."""
-        return self._has_indexer and self._use_indexed_rope and self._needs_head_to_seq_reshard
+        it on the way. Costs all heads' wkv_b1 on every chip, which __init__ loads replicated for these layers."""
+        return ttMLA.replicates_wkv_b1(self.config, self.tp_factor, self._has_indexer)
 
     def _q_stem_seq_sharded(self, tt_q_nope, tt_q_rope, rope_tensors, kv_actual_isl, seq_len_local, metadata):
         """_q_stem after the head split, for _early_q_reshard: all-to-all heads -> sequence, wkv_b1 over all heads on
@@ -1325,13 +1369,9 @@ class ttMLA:
         nope_seq, rope_seq = a2a(tt_q_nope), a2a(tt_q_rope)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
-        if getattr(self, "_wkv_b1_all_heads", None) is None:
-            # Every head's wkv_b1, gathered once from the TP shards (the warm pass runs this before any capture).
-            self._wkv_b1_all_heads = ttnn.all_gather(
-                self.wkv_b1_weight, dim=1, cluster_axis=self.tp_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-        # The tuned config's blocks are one head x 5 row tiles x the full width: the same blocks at either shape.
-        prefix = ttnn.linear(nope_seq, self._wkv_b1_all_heads, **self._get_mm_kwargs("wkv_b1", seq_len_local))
+        # wkv_b1 holds every head here (replicate_wkv_b1). The tuned config's blocks are one head x 5 row tiles x
+        # the full width: the same blocks at either shape.
+        prefix = ttnn.linear(nope_seq, self.wkv_b1_weight, **self._get_mm_kwargs("wkv_b1", seq_len_local))
         ttnn.deallocate(nope_seq)
         tt_q = self._apply_rope_padded(
             rope_seq,
