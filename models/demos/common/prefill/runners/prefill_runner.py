@@ -124,6 +124,11 @@ INDEX_MAPPER_CONFIG = axis_mapper_config(ttnn.PlacementShard(2), ttnn.PlacementS
 
 
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
+# Capacity probes: shift every rank's layers by this many, so a 2-rank run on one Galaxy stands in for two
+# later pipeline stages (SC4 4x4 stages 6 and 7: PREFILL_PP_LAYER_OFFSET=72 PREFILL_NUM_LAYERS=21
+# PREFILL_PP_LAYER_COUNTS=12,9). Rank 0 still takes the H2D input, so it also holds the embedding. When set,
+# only the model's real last layer is built KV-only, not the last layer of the run.
+PP_LAYER_OFFSET = os.environ.get("PREFILL_PP_LAYER_OFFSET")
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 # Tokens per forward, a multiple of the chunk size: FORWARD_CHUNKS chunks per forward, metadata in prefill_chunk.
 FORWARD_TOKENS_BUDGET = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
@@ -1064,6 +1069,7 @@ def _print_config() -> None:
         ("PREFILL_SP_AXIS", f"{SP_AXIS} (mesh shape {GLOBAL_MESH_SHAPE})"),
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
+        ("PREFILL_PP_LAYER_OFFSET", os.environ.get("PREFILL_PP_LAYER_OFFSET", "<unset>")),
         (
             "DFLASH_ENABLED",
             f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
@@ -1172,6 +1178,13 @@ def main() -> None:
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1
+    kv_only_last_layer = is_last_rank and not MTP_LEVELS
+    if PP_LAYER_OFFSET is not None:
+        first_layer_idx += int(PP_LAYER_OFFSET)
+        assert (
+            first_layer_idx + num_my_layers <= MODEL_CFG.NUM_LAYERS
+        ), f"PREFILL_PP_LAYER_OFFSET={PP_LAYER_OFFSET} puts rank {rank} past layer {MODEL_CFG.NUM_LAYERS}"
+        kv_only_last_layer = kv_only_last_layer and first_layer_idx + num_my_layers == MODEL_CFG.NUM_LAYERS
     logger.info(
         f"[pp rank {rank}/{num_ranks}] mesh={GLOBAL_MESH_SHAPE} layers=[{first_layer_idx}, "
         f"{first_layer_idx + num_my_layers}) is_first={is_first_rank} is_last={is_last_rank} "
@@ -1205,7 +1218,7 @@ def main() -> None:
         num_links=2 if is_blackhole() else 1,
         gate_mode_name=_gate_mode_name,
         # is_last_rank, not True: TtPrefillTransformer asserts kv_only_last_layer -> is_last_rank, since a
-        kv_only_last_layer=is_last_rank and not MTP_LEVELS,
+        kv_only_last_layer=kv_only_last_layer,
         dflash_enabled=DFLASH_ENABLED,
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,
