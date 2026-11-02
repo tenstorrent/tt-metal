@@ -241,7 +241,7 @@ struct M2SingleDFBParams {
     // DM STRIDED implicit sync only: spread each DM kernel's transfers over a temporary, a copy passed to
     // a helper and the main object, so the kernel-exit finish must see one shared count per DFB.
     bool use_temporaries = false;
-    // Quasar: put the Tensix endpoint on trisc3 (credits only; trisc3 has no LLK pack/unpack path yet).
+    // Quasar only: run the Tensix producer / consumer side on trisc3 instead of trisc2 / trisc0.
     bool producer_on_trisc3 = false;
     bool consumer_on_trisc3 = false;
 };
@@ -258,7 +258,7 @@ inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
 constexpr uint32_t k_dfb_digest_sentinel = 0xDEADBEEFu;
 
 // A Tensix producer stamps word 0 of every entry it pushes with this base plus its thread id, so
-// the output shows which thread pushed each entry (dfb_t6_producer_2_0.cpp, dfb_t6_blocked_producer.cpp).
+// the output shows which thread pushed each entry.
 constexpr uint32_t k_dfb_producer_stamp_base = 0x7D000000u;
 
 inline uint32_t fnv1a_page_digest(const std::vector<uint32_t>& words, uint32_t page_id, uint32_t words_per_entry) {
@@ -477,8 +477,8 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             CONSUMER,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer_2_0.cpp",
             static_cast<uint8_t>(p.num_consumers));
-        // The Tensix consumer needs no block_size arg; the kernel reads it from the ring. It does need to
-        // know which TRISC the host made the consumer, so the right thread takes the digests.
+        // The Tensix consumer needs no block_size arg; the kernel reads it from the ring. It does need
+        // consumer_on_trisc3: the kernel runs on every TRISC, and only the consuming one hashes the entries.
         consumer.compile_time_args = {
             {"num_entries_per_consumer", num_entries_per_consumer},
             {"consumer_on_trisc3", p.consumer_on_trisc3 ? 1u : 0u}};

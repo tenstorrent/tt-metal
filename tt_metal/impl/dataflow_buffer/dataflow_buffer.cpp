@@ -2327,7 +2327,7 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
             }
             TT_FATAL(
                 !dfb->config.unpack_on_trisc3 && !dfb->config.pack_on_trisc3,
-                "DFB {}: unpack_on_trisc3 / pack_on_trisc3 need a Quasar device",
+                "DFB {}: unpack_on_trisc3 / pack_on_trisc3 needs a Quasar device",
                 dfb->id);
             dfb->risc_mask = dfb->config.producer_risc_mask | dfb->config.consumer_risc_mask;
 

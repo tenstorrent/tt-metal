@@ -17,8 +17,7 @@
 #endif
 
 // PrefetcherPipe-relay checkpoint align, called from the RelayDFBBindingToken constructor on
-// TRISC (unpack/pack; trisc3 is left out because the host never puts a relay DFB on it). DM aligns in
-// PrefetcherPipe::bind_relay().
+// TRISC (unpack/pack). DM aligns in PrefetcherPipe::bind_relay().
 #if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
 #include "internal/prefetcher_pipe_init.h"
 #endif

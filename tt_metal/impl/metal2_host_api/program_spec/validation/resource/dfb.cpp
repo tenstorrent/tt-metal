@@ -445,8 +445,6 @@ void ValidateDFBBlockedBindings(const DataflowBufferSpec& dfb, const CollectedSp
     }
 }
 
-// trisc3 as a DFB endpoint (DFBBinding::use_trisc3): only a compute kernel on a Quasar device can ask
-// for it, and not on a relay DFB.
 void ValidateDFBTrisc3Bindings(
     const DataflowBufferSpec& dfb, const CollectedSpecData::DFBEndpointInfo& endpoints, tt::ARCH arch) {
     auto check_bindings = [&](const auto& records, std::string_view role) {

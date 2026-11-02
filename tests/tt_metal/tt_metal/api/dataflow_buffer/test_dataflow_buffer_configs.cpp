@@ -1259,9 +1259,8 @@ TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1SConfig) {
     validate_intra_tensix_dfb(program, logical_core, config);
 }
 
-// trisc3 as the unpacker, the packer or both of a DFB: the role bits the host derives into
-// tensix_trisc_mask and serializes into bits 3:0 of every hart's init entry flags, and the cases it
-// rejects.
+// trisc3 as the unpacker, the packer or both of a DFB: the tensix_trisc_mask the host derives and
+// writes into every participating hart's init entry flags, and the cases it rejects.
 TEST_F(UnitMeshFixture, DfbTrisc3RoleMask) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "trisc3 DFB endpoints require Quasar";
@@ -1273,7 +1272,7 @@ TEST_F(UnitMeshFixture, DfbTrisc3RoleMask) {
         bool pack_on_trisc3 = false;
         bool unpack_on_trisc3 = false;
         bool intra = false;
-        bool rejected = false;  // a trisc3 side that has no compute endpoint
+        bool rejected = false;  // the trisc3 side is a DM endpoint, so finalize throws
         uint8_t expected_mask = 0;
     };
     // bit 2 = DM2, bit 8 = Neo0.
@@ -1360,7 +1359,7 @@ TEST_F(UnitMeshFixture, DfbTrisc3RoleMask) {
         ASSERT_EQ(dfbs.size(), 1u);
         EXPECT_EQ(dfbs[0]->tensix_trisc_mask, c.expected_mask);
 
-        // Every participating hart's entry carries the same nibble; check the Neo0 hart (hartid 8).
+        // Every participating hart's entry carries the same tensix_trisc_mask; check the Neo0 hart.
         std::vector<uint8_t> buf(8192, 0);
         const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf);
         ASSERT_GT(nbytes, 0u);
@@ -2260,7 +2259,7 @@ TEST_F(UnitMeshFixture, Trisc3OnDMBinding_Rejected_2_0) {
         .consumer_type = M2PorCType::TENSIX,
         .num_producers = 1,
         .num_consumers = 1,
-        .producer_on_trisc3 = true,  // <-- the offense (only a compute kernel can run on trisc3)
+        .producer_on_trisc3 = true,  // only a compute kernel can run on trisc3
     };
     EXPECT_THROW(
         {

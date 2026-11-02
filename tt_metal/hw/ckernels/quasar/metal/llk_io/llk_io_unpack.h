@@ -12,20 +12,17 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #include "llk_io.h"
 
-// Which unpackers POP_TILES waits on before it releases the credit: unpackers 0 and 1 on the unpack
-// thread. trisc3 has no unpacker op in its DFB path yet, so it waits for none; switch it to unpacker 2
-// (0x4) once it unpacks through UNP_S.
+// Unpackers that must finish before POP_TILES releases the credit; a thread that drives no unpacker waits for none.
 #if defined(UCK_CHLKC_ISOLATE_SFPU)
 constexpr std::uint8_t DFB_UNPACK_DONE_WAIT_MASK = 0x0;
 #else
 constexpr std::uint8_t DFB_UNPACK_DONE_WAIT_MASK = 0x3;
 #endif
 
-// Block until counter tc_id holds num_tiles. The unpack thread stalls its Tensix stream (WAIT_TILES);
-// trisc3 has no unpack op in its DFB path yet, so it polls the counter from the RISC instead.
+// Wait for num_tiles on counter tc_id: WAIT_TILES when an unpacker follows, a RISC poll when none does.
 inline void dfb_trisc_wait_tiles(const std::uint32_t num_tiles, const std::uint32_t tc_id) {
 #if defined(UCK_CHLKC_ISOLATE_SFPU)
-    ckernel::tensix_sync();  // retire this thread's earlier POP_TILES so the poll does not count entries they released
+    ckernel::tensix_sync();  // let this thread's earlier POP_TILES finish before reading the counter
     while ((ckernel::trisc::tile_counters[tc_id].f.posted & 0xFFFFu) < num_tiles) {
     }
 #else
@@ -55,7 +52,7 @@ inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_ti
             dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
         dfb_trisc_wait_tiles(num_tiles, tc_id);
     }
-    // trisc3 issues no WAIT_TILES or UNPACR for the guard, and its RISC poll above already blocks the RISC.
+    // The RISC poll issues no WAIT_TILES, so there is no guard to arm, and it already blocks the RISC.
 #if !defined(UCK_CHLKC_ISOLATE_SFPU)
     // TEN-4746: arm this dfb; a real unpack (UNPACR) on it must clear this before the matching pop.
     LLK_TDMA_GUARD_NOTE_WAIT(dfb_id);
