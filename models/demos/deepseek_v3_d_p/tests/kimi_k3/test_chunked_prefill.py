@@ -69,8 +69,18 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gathe
 # 56320 tokens — the "55k" leg: 11 chunks of 5120 or 22 of 2560, both past the 10-chunk mark the memory
 # gate wants. A 2560-token chunk is 320 rows per chip on SP=8: whole tiles for MLA, MoE and AttnRes, and the
 # KDA recurrence's tuned group of 10 (kimi_k3_program_config).
-CHUNK_SIZES = [5120, 2560]
+#
+# 2048 is the TP-dedup-compatible small chunk: 2560 / SP8 / TP4 is 80 rows per TP rank, which the deduped KV
+# cannot stripe (see _prefill_chunked), while 2048 gives 64. It covers 27 chunks (55296 tokens), and its
+# boundaries meet the golden's 640-token carry snapshots only every fifth chunk.
+CHUNK_SIZES = [5120, 2560, 2048]
 TOTAL_LEN = 56320
+
+
+def _num_chunks(chunk_len: int) -> int:
+    return TOTAL_LEN // chunk_len
+
+
 # Two depths, because the two traces cover different halves and neither covers both.
 #
 #   5  on the 100k trace: it snapshots the KDA recurrent state every 640 tokens, so the carry can be
@@ -145,6 +155,8 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
     # (every TP rank holds the chip's whole 320-row region), 4x the KV bytes per chip.
     rows, columns = tuple(mesh_device.shape)
     tp_shard_kv = (chunk_len // (rows, columns)[SP_AXIS]) % ((rows, columns)[TP_AXIS] * ttnn.TILE_SIZE) == 0
+    # A whole number of chunks: the deduped KV cache asserts it, and 56320 is not a multiple of 2048.
+    cache_len = _num_chunks(chunk_len) * chunk_len
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M if num_layers >= DEEP_TRACE_FROM else TRACE_100K)
     if checkpoint is None or trace is None:
@@ -152,7 +164,7 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
 
     checkpoint = Path(checkpoint)
     root = resolve_model_root(checkpoint)
-    config = kimi_k3_hf_config(max_seq=TOTAL_LEN)
+    config = kimi_k3_hf_config(max_seq=cache_len)
     cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS)
 
     attn_res = TtAttnRes(
@@ -195,7 +207,7 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
         residual_factory=residual_factory,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
-        max_seq_len=TOTAL_LEN,
+        max_seq_len=cache_len,
         is_chunked=True,
         weight_cache_path=cache,
         tp_shard_kv=tp_shard_kv,
@@ -208,7 +220,7 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
         kvpe = allocate_mla_kvpe_cache(
             mesh_device=mesh_device,
             hf_config=config,
-            max_seq_len=TOTAL_LEN,
+            max_seq_len=cache_len,
             mesh_shape=tuple(mesh_device.shape),
             sp_axis=SP_AXIS,
             num_layers=model.schedule.num_mla_layers,
@@ -279,7 +291,8 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
         # Snapshots land every 640 tokens, so the boundary after chunk k is row 8(k+1) - 1. The
         # golden's [heads, v_dim, k_dim] needs transposing into the layer's [heads, k_dim, v_dim].
         conv_pcc = float("nan")
-        if golden_conv is not None:
+        on_snapshot = (start + chunk_len) % SNAPSHOT_STRIDE == 0
+        if golden_conv is not None and on_snapshot:
             # The conv carry is TP-sharded and SP-replicated like the recurrent half, but its
             # channel axis is GROUPED, not contiguous: `group_output_shards` fuses the q, k and v
             # taps so each chip holds [q_slice | k_slice | v_slice] of width 3 * (q_dim / tp). The
@@ -309,7 +322,7 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
             conv_pcc = float(str(comp_pcc(want_conv, got_conv, CARRY_PCC)[1]).split()[-1])
 
         carry_pcc = float("nan")
-        if golden_carry is not None:
+        if golden_carry is not None and on_snapshot:
             row = (start + chunk_len) // SNAPSHOT_STRIDE - 1
             want_carry = golden_carry[row].transpose(-1, -2)
             carry = read_slab_layer(mesh_device, slabs, 0, 0)
@@ -337,9 +350,9 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
         )
         if output_pcc < output_pcc_bar:
             failures.append(f"chunk {chunk} worst layer {min(layer_pccs, key=layer_pccs.get)} {output_pcc}")
-        if golden_carry is not None and carry_pcc < CARRY_PCC:
+        if golden_carry is not None and on_snapshot and carry_pcc < CARRY_PCC:
             failures.append(f"chunk {chunk} carry {carry_pcc}")
-        if golden_conv is not None and conv_pcc < CARRY_PCC:
+        if golden_conv is not None and on_snapshot and conv_pcc < CARRY_PCC:
             failures.append(f"chunk {chunk} conv carry {conv_pcc}")
 
     # The per-layer curve at the first, middle and last chunk. A worst-layer summary hides where the
@@ -364,9 +377,9 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
     filled = num_chunks * chunk_len
     if kvpe is not None:
         cache, stripes = gather_cache_natural(kvpe.storage, mesh_device, tp_shard_kv)
-        positions = blockcyclic_positions(stripes, chunk_len, TOTAL_LEN)
+        positions = blockcyclic_positions(stripes, chunk_len, cache_len)
         for slot, model_layer in enumerate(model.schedule.mla_layer_ids[: model.schedule.num_mla_layers]):
-            device_rows = unrotate_cache_layer(cache[slot], positions, TOTAL_LEN)[:filled]
+            device_rows = unrotate_cache_layer(cache[slot], positions, cache_len)[:filled]
             kv_rows[model_layer] = device_rows.float()
             if not trace.has_kv_cache(model_layer):
                 continue
@@ -406,7 +419,7 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
 @pytest.mark.parametrize("chunk_len", CHUNK_SIZES, ids=[f"c{n}" for n in CHUNK_SIZES])
 def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers, chunk_len):
-    num_chunks = TOTAL_LEN // chunk_len
+    num_chunks = _num_chunks(chunk_len)
     run = _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks)
     footprints, failures = run.footprints, run.failures
 
@@ -427,6 +440,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
 # so their KV and KDA carries should agree to rounding: MLA attends over the same prefix either way, but the
 # MoE sees different tokens per call and KDA's grouped scan sums 10-chunk instead of 20-chunk groups, so the
 # floating-point order differs. Bit-exact equality is logged, not required.
+AGREE_SIZES = (5120, 2560)
 AGREE_TOKENS = 10240
 AGREE_NUM_LAYERS = 5
 AGREE_KV_PCC = 0.999
@@ -437,17 +451,17 @@ AGREE_CARRY_PCC = 0.999
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 def test_chunk_sizes_agree(mesh_device, device_params):
     runs = {}
-    for chunk_len in CHUNK_SIZES:
+    for chunk_len in AGREE_SIZES:
         runs[chunk_len] = _prefill_chunked(mesh_device, AGREE_NUM_LAYERS, chunk_len, AGREE_TOKENS // chunk_len)
         gc.collect()
-    reference, other = (runs[size] for size in CHUNK_SIZES)
+    reference, other = (runs[size] for size in AGREE_SIZES)
     failures = [f"c{size}: {f}" for size, run in runs.items() for f in run.failures]
 
     def score(label, want, got, bar):
         exact = torch.equal(want, got)
         pcc = 1.0 if exact else float(str(comp_pcc(want, got, bar)[1]).split()[-1])
         logger.info(
-            f"  {label}: c{CHUNK_SIZES[0]} vs c{CHUNK_SIZES[1]} pcc={pcc:.6f} "
+            f"  {label}: c{AGREE_SIZES[0]} vs c{AGREE_SIZES[1]} pcc={pcc:.6f} "
             f"max|diff|={(want - got).abs().max().item():.4g} exact={exact}"
         )
         if pcc < bar:
