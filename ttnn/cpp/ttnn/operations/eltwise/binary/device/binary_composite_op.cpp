@@ -150,9 +150,9 @@ Tensor minimum(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/) {
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
     // binary_ng has no tensor-scalar MINIMUM kernel, so this stays on the unary path, which packs
     // its result in the input dtype. A requested output dtype is applied after the compare.
     TT_FATAL(
@@ -160,14 +160,16 @@ Tensor minimum(
             *output_dtype == optional_output_tensor->dtype(),
         "If both output dtype and output tensor are provided, their dtypes should match");
     const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
+    TT_FATAL(
+        rhs_activations.empty(), "input_tensor_b_activations are not supported when the second operand is a scalar");
     const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
     Tensor result = std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary::detail::unary_impl(
-                input_a,
-                {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MINIMUM, (input_b)}},
-                memory_config,
-                compare_output);
+            // lhs activations run before the compare and post activations after it, as in the tensor-tensor overload.
+            std::vector<unary::EltwiseUnaryWithParam> op_chain(lhs_activations.begin(), lhs_activations.end());
+            op_chain.push_back(unary::EltwiseUnaryWithParam{unary::UnaryOpType::MINIMUM, (input_b)});
+            op_chain.insert(op_chain.end(), post_activations.begin(), post_activations.end());
+            return ttnn::operations::unary::detail::unary_impl(input_a, op_chain, memory_config, compare_output);
         },
         value);
     return retype ? ttnn::typecast(result, *output_dtype, memory_config, optional_output_tensor) : result;
@@ -200,9 +202,9 @@ Tensor maximum(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/) {
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
     // binary_ng has no tensor-scalar MAXIMUM kernel, so this stays on the unary path, which packs
     // its result in the input dtype. A requested output dtype is applied after the compare.
     TT_FATAL(
@@ -210,14 +212,16 @@ Tensor maximum(
             *output_dtype == optional_output_tensor->dtype(),
         "If both output dtype and output tensor are provided, their dtypes should match");
     const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
+    TT_FATAL(
+        rhs_activations.empty(), "input_tensor_b_activations are not supported when the second operand is a scalar");
     const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
     Tensor result = std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary::detail::unary_impl(
-                input_a,
-                {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MAXIMUM, (input_b)}},
-                memory_config,
-                compare_output);
+            // lhs activations run before the compare and post activations after it, as in the tensor-tensor overload.
+            std::vector<unary::EltwiseUnaryWithParam> op_chain(lhs_activations.begin(), lhs_activations.end());
+            op_chain.push_back(unary::EltwiseUnaryWithParam{unary::UnaryOpType::MAXIMUM, (input_b)});
+            op_chain.insert(op_chain.end(), post_activations.begin(), post_activations.end());
+            return ttnn::operations::unary::detail::unary_impl(input_a, op_chain, memory_config, compare_output);
         },
         value);
     return retype ? ttnn::typecast(result, *output_dtype, memory_config, optional_output_tensor) : result;
@@ -1231,9 +1235,9 @@ Tensor bias_gelu(
     const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<bool>& fast_and_approximate_mode) {
@@ -1255,7 +1259,10 @@ Tensor bias_gelu(
     const bool widen = dtype.has_value() && *dtype == DataType::FLOAT32 && input_tensor_a.dtype() != DataType::FLOAT32;
     const Tensor operand = widen ? ttnn::typecast(input_tensor_a, DataType::FLOAT32, memory_config) : input_tensor_a;
     const bool narrow = dtype.has_value() && *dtype != operand.dtype();
-    const std::optional<Tensor> gelu_output = narrow ? std::optional<Tensor>{} : optional_output_tensor;
+    TT_FATAL(rhs_activations.empty(), "input_tensor_b_activations are not supported when the bias is a scalar");
+    const std::optional<Tensor> final_output = narrow ? std::optional<Tensor>{} : optional_output_tensor;
+    // Post activations run after the gelu, so the gelu only writes the caller's output when there are none.
+    const std::optional<Tensor> gelu_output = post_activations.empty() ? final_output : std::optional<Tensor>{};
     Tensor result = ttnn::gelu(
         ttnn::add(
             operand,
@@ -1264,7 +1271,7 @@ Tensor bias_gelu(
             memory_config,
             gelu_output,
             {},
-            {},
+            lhs_activations,
             {},
             /*fast_and_approximate_mode*/ std::nullopt,
             resolved_sub_core_grids),
@@ -1272,6 +1279,14 @@ Tensor bias_gelu(
         memory_config,
         gelu_output,
         resolved_sub_core_grids);
+    if (!post_activations.empty()) {
+        result = ttnn::operations::unary::detail::unary_impl(
+            result,
+            std::vector<unary::EltwiseUnaryWithParam>(post_activations.begin(), post_activations.end()),
+            memory_config,
+            final_output,
+            resolved_sub_core_grids);
+    }
     return narrow ? ttnn::typecast(result, *dtype, memory_config, optional_output_tensor, resolved_sub_core_grids)
                   : result;
 }
