@@ -744,6 +744,9 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     if (ref_fp32) {
         reader_desc.defines.emplace_back("REF_FP32", "1");
     }
+    if (s.locations_heads_packed) {
+        reader_desc.defines.emplace_back("LOC_HEADS_PACKED", "1");
+    }
     reader_desc.config = ReaderConfigDescriptor{};
 
     // ---- compute (shared by V1 and V2) ----
