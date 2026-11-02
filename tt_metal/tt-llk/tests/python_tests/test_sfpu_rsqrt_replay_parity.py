@@ -85,7 +85,7 @@ def _fp32_sweep():
     return bits.view(torch.float32)
 
 
-def _run(fmt, dest_acc, approx, fast, iterations, src_A, sfpi_loop):
+def _config(fmt, dest_acc, approx, fast, iterations, src_A, sfpi_loop):
     tile_cnt_A, tile_cnt_B, faces = calculate_tile_and_face_counts(
         DIMS, DIMS, face_r_dim=MAX_FACE_R_DIM, num_faces=MAX_NUM_FACES
     )
@@ -125,7 +125,7 @@ def _run(fmt, dest_acc, approx, fast, iterations, src_A, sfpi_loop):
         dest_acc=dest_acc,
         unpack_to_dest=unpacks_to_dest(fmt, dest_acc),
     )
-    return torch.tensor(config.run().result, dtype=format_dict[fmt])
+    return config
 
 
 @pytest.mark.parametrize("iterations", [8, 32], ids=lambda n: f"iter_{n}")
@@ -148,8 +148,15 @@ def _run(fmt, dest_acc, approx, fast, iterations, src_A, sfpi_loop):
 )
 def test_rsqrt_matches_sfpi_loop(fmt, dest_acc, approx, fast, iterations):
     src_A = _all_bf16() if fmt == DataFormat.Float16_b else _fp32_sweep()
-    ours = _run(fmt, dest_acc, approx, fast, iterations, src_A, sfpi_loop=False)
-    ref = _run(fmt, dest_acc, approx, fast, iterations, src_A, sfpi_loop=True)
+    configs = [
+        _config(fmt, dest_acc, approx, fast, iterations, src_A, sfpi_loop=False),
+        _config(fmt, dest_acc, approx, fast, iterations, src_A, sfpi_loop=True),
+    ]
+    for config in configs:
+        config.prepare()
+    ours, ref = (
+        torch.tensor(config.run().result, dtype=format_dict[fmt]) for config in configs
+    )
     assert ours.numel() == ref.numel() == src_A.numel()
     itype = torch.int16 if fmt == DataFormat.Float16_b else torch.int32
     diff = (ours.view(itype) != ref.view(itype)) & ~(ours.isnan() & ref.isnan())
