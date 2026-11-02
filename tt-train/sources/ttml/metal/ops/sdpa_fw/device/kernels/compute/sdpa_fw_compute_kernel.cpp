@@ -184,7 +184,7 @@ FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t c
 FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
     cb_wait_front(cb_query, q_tiles);
 
-    const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
+    const uint32_t first_row_tile = sdpa_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
 #ifdef CAUSAL_MASK
     // Steps before first_masked_step lie entirely left of the diagonal and need no masking.
     const uint32_t first_masked_step = first_row_tile / Sk_chunk_t;
@@ -423,7 +423,7 @@ void kernel_main() {
 #endif
 
     for_each_work_item(/* arg_idx */ 0, [](uint32_t item) {
-        const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
+        const uint32_t first_row_tile = sdpa_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
         process_q_chunk(item, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
     });
 
