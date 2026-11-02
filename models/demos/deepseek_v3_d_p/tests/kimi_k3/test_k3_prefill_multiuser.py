@@ -246,8 +246,12 @@ def _kda_slot(mesh_device, slabs, slot, layer_idx):
         deallocate_state(state)
 
 
-def _kv_slots(kvpe, mesh_device, num_mla_layers, num_slots):
+def _kv_slots(kvpe, mesh_device, num_mla_layers, num_slots=None):
+    """Per-slot KV rows. ``num_slots`` defaults to what the cache holds: a traced packed runtime's cache has one more
+    slot than the KDA slabs, the scratch slot an empty chunk position writes."""
     rows, _ = gather_cache_natural(kvpe.storage, mesh_device, tp_shard_kv=True)
+    if num_slots is None:
+        num_slots = rows.shape[0] // num_mla_layers
     assert rows.shape[0] == num_slots * num_mla_layers, (rows.shape, num_slots, num_mla_layers)
     return [rows[s * num_mla_layers : (s + 1) * num_mla_layers] for s in range(num_slots)]
 
@@ -262,8 +266,7 @@ def _compare_state(label, mesh_device, model, kvpe, pairs, *, exact_layers, thre
     ``exact_layers`` must be bit-exact, the rest at least ``threshold`` PCC. Returns the failures."""
     failures = []
     slabs = model.kda_states
-    num_slots = slabs.num_slots
-    kv = _kv_slots(kvpe, mesh_device, model.schedule.num_mla_layers, num_slots)
+    kv = _kv_slots(kvpe, mesh_device, model.schedule.num_mla_layers)
 
     def check(name, layer, ref, got, ref_slot, got_slot):
         if layer in exact_layers:
