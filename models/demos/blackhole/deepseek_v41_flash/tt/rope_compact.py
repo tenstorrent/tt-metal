@@ -156,6 +156,14 @@ class CompactRope:
             and row64.layout == ttnn.ROW_MAJOR_LAYOUT
             and T <= 32
             and int(row64.shape[-1]) == ROPE_DIM
+            and width == HEAD_DIM
+            and T > 1
+            and [int(s) for s in shape][:3]
+            == [
+                1,
+                1,
+                T,
+            ]  # rows layout only: the per-user layouts are slower (rope2 / rope3 traced: 15-44 us vs 22-25 us)
         ):  # one program (tt/cmp_fuse.py::rope_full) instead of concat + reshape + to_layout
             from models.demos.blackhole.deepseek_v41_flash.tt import cmp_fuse
 

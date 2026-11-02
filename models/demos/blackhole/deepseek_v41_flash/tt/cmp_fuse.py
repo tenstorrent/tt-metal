@@ -79,7 +79,7 @@ def rope_full_enabled():
     return os.environ.get("DSV41_ROPE_FULL_FUSE", "0") == "1"
 
 
-def rope_full(row64, shape, width, cos, nc=100):
+def rope_full(row64, shape, width, cos, nc=32):
     """CompactRope.full as one program (tt/attn_kernels/rope_full.cpp): row64 [T,1,64] bf16 row-major -> bf16 TILE tensor ``shape`` ([A,T,1,W] / [T,1,1,W]: one tile per user and column tile;
     [1,1,T,W]: one tile row of T rows), columns 0..W-65 = 1.0 (cos) / 0.0 (sin), the last 64 = the row. Bit-identical to concat + reshape + to_layout(TILE).
     """
