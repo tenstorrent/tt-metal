@@ -2234,12 +2234,13 @@ _H2_14 = ("height", [16 * 32, 14 * 32], (0, 0, 1, 0))  # on [1, 1, 1024, 448]: 2
 
 # ROW: a or b of one logical row. Its Map has no tile-row stride, so every tile of a column reads the same page, and
 # each kernel expands it: the FPU kernel into a staging ring per compute batch, the SFPU kernel straight into the
-# operand's DST slot. bf16 only. Add and subtract run the FPU kernel, multiply and divide the SFPU kernel. In L1 the
-# bank walk gives a cluster at most 2 tiles of _OUTER_SHAPE. Production borrows no shard beside a ROW operand, so
-# row_b_full_batches runs on 32 clusters, 14 tiles each: FPU add batches 8 at R1C1W1, and the SFPU kernel 4. SQUARE
-# runs on the row tiles before the broadcast; a lone RELU on the result runs in the SFPU post chain, as the factory
-# keeps PACK_RELU off beside a broadcast. row_b_uneven_shard has the pad rows and columns of 14 x 30 tiles in 4 x 4
-# shards. Multiply in fast mode runs ELWMUL, the one FPU op with several fidelity phases, beside a ROW operand and, in
+# operand's DST slot. These cases run in bf16; the fp32 twins are in _FILLED. Add and subtract run the FPU kernel,
+# multiply and divide the SFPU kernel. In L1 the bank walk gives a cluster at most 2 tiles of _OUTER_SHAPE.
+# Production borrows no shard beside a ROW operand, so row_b_full_batches runs on 32 clusters, 14 tiles each: FPU
+# add batches 8 at R1C1W1, and the SFPU kernel 4. SQUARE runs on the row tiles before the broadcast; a lone RELU
+# on the result runs in the SFPU post chain, as the factory keeps PACK_RELU off beside a broadcast.
+# row_b_uneven_shard has the pad rows and columns of 14 x 30 tiles in 4 x 4 shards. Multiply in fast mode runs
+# ELWMUL, the one FPU op with several fidelity phases, beside a ROW operand and, in
 # row_b_full_batches/multiply_fast, in batches of 8 at R1C1W1 through the staging ring.
 _ROW = [
     _bcast("row_b", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), walk=_NOC_WALK),
@@ -2381,7 +2382,7 @@ def test_native_row_broadcast_matches_the_oracle(name, knobs):
 # a, whose post ring holds one batch per Neo. SQUARE on the held operand runs once per change, in the expansion. Beside
 # a height-sharded a and output, production borrows a and the output, and so does the native anchor. An uneven shard
 # beside a held operand takes no anchor: everything moves over the NoC. With one output tile per cluster, three Neos
-# per cluster hold nothing. bf16 only.
+# per cluster hold nothing. These cases run in bf16; the fp32 twins are in _FILLED.
 _H8 = ("height", [4 * 32, 4 * 32], (0, 0, 7, 0))  # on [2, 1, 512, 128]: 8 shards of 4x4 tiles, Wt = 4
 _HELD = [
     _bcast("col_b", _OUTER_SHAPE, [1, 3, 64, 1], _modes(b="COL", b_outer=True), walk=_NOC_WALK),
@@ -2600,14 +2601,15 @@ def test_native_value_broadcast_matches_the_oracle(name, knobs):
 # Mixed broadcast: one operand has one row and the other has one column. In ROW_A_COL_B the last two dims are [1, W] on
 # a and [H, 1] on b; ROW_B_COL_A swaps them. The op combines each row value with each column value, which is an outer
 # sum only for add. The ROW operand runs as ROW does and the COL operand is held, so a mix needs no code of its own.
-# bf16 only. Add, subtract and fast multiply run the FPU kernel, and multiply and divide run the SFPU kernel. Only
-# ROW_A_COL_B runs in L1 and beside a sharded output; ROW_B_COL_A runs in DRAM only. Two DRAM cases, row_a_col_b and
-# row_b_col_a/subtract, broadcast outer dims on both sides, and the others do not. In row_a_col_b_split the output is
-# sharded on 2 clusters. Production does not borrow it beside a ROW operand, so the native path takes no anchor and
-# walks 15 tiles per cluster, 2.5 rows, over 32 clusters. The case has two twins: row_a_col_b_split/multiply_fast runs
-# ELWMUL, the one FPU op with several fidelity phases, and row_a_col_b_split/multiply runs the SFPU kernel. Across the
-# three cases, the FPU kernel's batches of 8 at R1C1W1 and the SFPU kernel's batches of 4 end early at COL changes. On
-# the FPU kernel, a batch that crossed a multiple of 8 would cross the end of the staging ring.
+# These cases run in bf16; the fp32 twins are in _FILLED. Add, subtract and fast multiply run the FPU kernel, and
+# multiply and divide run the SFPU kernel. Only ROW_A_COL_B runs in L1 and beside a sharded output; ROW_B_COL_A runs in
+# DRAM only. Two DRAM cases, row_a_col_b and row_b_col_a/subtract, broadcast outer dims on both sides, and the others do
+# not. In row_a_col_b_split the output is sharded on 2 clusters. Production does not borrow it beside a ROW operand, so
+# the native path takes no anchor and walks 15 tiles per cluster, 2.5 rows, over 32 clusters. The case has two twins:
+# row_a_col_b_split/multiply_fast runs ELWMUL, the one FPU op with several fidelity phases, and
+# row_a_col_b_split/multiply runs the SFPU kernel. Across the three cases, the FPU kernel's batches of 8 at R1C1W1 and
+# the SFPU kernel's batches of 4 end early at COL changes. On the FPU kernel, a batch that crossed a multiple of 8 would
+# cross the end of the staging ring.
 _H2_6 = ("height", [40 * 32, 6 * 32], (0, 0, 1, 0))  # on [1, 1, 2560, 192]: 2 shards of 40 x 6 tiles
 _MIXED_BCAST = [
     _bcast(
@@ -2715,6 +2717,132 @@ def test_native_tensor_scalar_matches_the_oracle(name, knobs):
     """Tensor-scalar must run native, in bf16 and fp32, with the reader's fill, and give the oracle's bits."""
     p = _run_shard_arm(_SCALAR_OP, expect="qsr", timeout=1800, knobs=knobs)
     _check_arm(p, f"tensor-scalar, {name}")
+
+
+# fp32 ROW, COL, SCALAR and mixed: unary_bcast takes no 32-bit operand on Quasar, so the reader expands the tile in
+# software and the SFPU kernel, at a batch of 2, copies it. col_b_split and the _full_batches and _slabs cases have a
+# fill at entry 1 of a batch, so a fill must step one ring stride per entry: more than one entry where C >= 2.
+_FILLED = [
+    _bcast(
+        f"row_b/fp32/{op}",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        op=op,
+        dtype="float32",
+        walk=_NOC_WALK,
+    )
+    for op in _FP32_OPS
+] + [
+    _bcast("row_a/fp32", [2, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW"), op="subtract", dtype="float32", walk=_NOC_WALK),
+    _bcast("col_b/fp32", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), op="multiply", dtype="float32", walk=_NOC_WALK),
+    _bcast(
+        "col_a_L1/fp32",
+        [2, 3, 64, 1],
+        _OUTER_SHAPE,
+        _modes(a="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="divide",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast("scalar_b/fp32", _OUTER_SHAPE, [2, 3, 1, 1], _modes(b="SCALAR"), dtype="float32", walk=_NOC_WALK),
+    _bcast(
+        "col_b_act/fp32",
+        _OUTER_SHAPE,
+        [1, 3, 64, 1],
+        _modes(b="COL", b_outer=True),
+        act="rhs",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # Its batches end early at row changes.
+    _bcast(
+        "col_b_split/fp32",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        dtype="float32",
+        walk=_ANCHORED_WALK,
+    ),
+    # Both operands are filled: a ROW a on every tile and a COL b once per row, so a batch can take two locks.
+    _bcast(
+        "row_a_col_b/fp32",
+        [2, 1, 1, 160],
+        [1, 3, 64, 1],
+        _modes(a="ROW", b="COL", a_outer=True, b_outer=True),
+        op="multiply",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # Both operands are filled: a COL a once per row and a ROW b on every tile, so a batch can take two locks.
+    _bcast(
+        "row_b_col_a/fp32",
+        [2, 3, 64, 1],
+        [2, 3, 1, 160],
+        _modes(a="COL", b="ROW"),
+        op="divide",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_full_batches/fp32",
+        [1, 1, 1024, 448],
+        [1, 1, 1, 448],
+        _modes(b="ROW"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # The a side of row_b_full_batches, with every operand in DRAM.
+    _bcast(
+        "row_a_full_batches/fp32",
+        [1, 1, 1, 448],
+        [1, 1, 1024, 448],
+        _modes(a="ROW"),
+        op="subtract",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "scalar_b_slabs/fp32",
+        [1, 64, 64, 64],
+        [1, 64, 1, 1],
+        _modes(b="SCALAR"),
+        op="multiply",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+    # The a side of scalar_b_slabs.
+    _bcast(
+        "scalar_a_slabs/fp32",
+        [1, 64, 1, 1],
+        [1, 64, 64, 64],
+        _modes(a="SCALAR"),
+        op="subtract",
+        dtype="float32",
+        walk=_NOC_WALK,
+    ),
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_filled_broadcast_matches_the_oracle(name, knobs):
+    """An fp32 ROW, COL or SCALAR operand must run native, expanded by the reader, and give the oracle's bits.
+
+    A missed fill leaves one row, column or element of the tile, and a fill that the compute cannot see leaves the
+    bytes that the NoC wrote: either fails the exact comparison.
+    """
+    p = _run_shard_arm(_FILLED, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"filled broadcast, {name}")
 
 
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
@@ -2958,6 +3086,7 @@ _BCAST_TABLES = {
     "value": _VALUE + _VALUE_FP32,
     "mixed": _MIXED_BCAST,
     "scalar": _SCALAR_OP,
+    "filled": _FILLED,
 }
 
 

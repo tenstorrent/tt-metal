@@ -149,8 +149,8 @@ struct BinaryNgDeviceOperation {
     // select_program_factory.
     static bool matches_metal_v2_slice(const operation_attributes_t&, const tensor_args_t&);
 
-    // Narrower than matches_metal_v2_slice in op and dtype, but it also admits DRAM shards and a one-element fp32
-    // SCALAR, which that slice does not. Off when TTNN_QSR_NATIVE=0. Checked first; its leading tests are the
+    // Narrower than matches_metal_v2_slice in op and dtype, but it also admits DRAM shards and a subtile broadcast in
+    // fp32, which that slice does not. Off when TTNN_QSR_NATIVE=0. Checked first; its leading tests are the
     // arch and the cached env bool, so off Quasar it costs one arch read and a branch.
     static bool matches_quasar_native_slice(const operation_attributes_t&, const tensor_args_t&);
 

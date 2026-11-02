@@ -45,6 +45,12 @@
 #define B_HELD (B_MODE == QSR_MODE_COL || B_MODE == QSR_MODE_SCALAR)
 #define A_VALUE (A_MODE == QSR_MODE_VALUE)
 #define B_VALUE (B_MODE == QSR_MODE_VALUE)
+// A filled operand (ROW, COL or SCALAR in fp32) is expanded by the reader in software, because unary_bcast takes no
+// 32-bit operand on Quasar. The compute copies it where it would expand it.
+#ifndef A_FILLED
+#define A_FILLED 0
+#define B_FILLED 0
+#endif
 #endif
 
 namespace binary_ng_qsr {

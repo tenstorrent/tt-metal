@@ -11,8 +11,9 @@
 // assignment. Each tile takes two DST slots, the operands' copies, so a batch holds at most 4 tiles in a 16-bit DST
 // and 2 in a 32-bit DST. A ROW operand goes from its row tile straight into its DST slot with unary_bcast<ROW>, in
 // place of the copy. A held operand (COL, SCALAR) is expanded once per page change into its held ring, and a VALUE
-// operand is one ring entry; each is copied from entry 0 for every tile. The native gate runs bf16 multiply and divide
-// on it, and fp32 add, subtract, multiply and divide.
+// operand is one ring entry; each is copied from entry 0 for every tile. In fp32 the reader expands a ROW, COL or
+// SCALAR operand in software (A_FILLED, B_FILLED), and this kernel copies it where it would expand it. The native gate
+// runs bf16 multiply and divide on it, and fp32 add, subtract, multiply and divide.
 
 #include <cstdint>
 
@@ -70,8 +71,9 @@ FORCE_INLINE void process_sfpu_tiles(
 
     tile_regs_acquire();
     // Startup and preprocessing preserve the physical-LHS SrcA format. An activation chain on a ROW operand ran on its
-    // row tiles, and the broadcast copies their row 0, so the bits are those of the activation after the broadcast.
-#if A_ROW
+    // row tiles, and the broadcast copies their row 0, so the bits are those of the activation after the broadcast. A
+    // filled ROW operand is a whole tile already, and is copied.
+#if A_ROW && !A_FILLED
     unary_bcast_init<BroadcastType::ROW>(dfb_post_lhs_id);
     for (uint32_t i = 0; i < n; ++i) {
         unary_bcast<BroadcastType::ROW>(dfb_post_lhs_id, i, i * 2);
@@ -83,13 +85,13 @@ FORCE_INLINE void process_sfpu_tiles(
     }
 #endif
     reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
-#if B_ROW
+#if B_ROW && !B_FILLED
     unary_bcast_init<BroadcastType::ROW>(dfb_post_rhs_id);
 #else
     copy_init(dfb_post_rhs_id);
 #endif
     for (uint32_t i = 0; i < n; ++i) {
-#if B_ROW
+#if B_ROW && !B_FILLED
         unary_bcast<BroadcastType::ROW>(dfb_post_rhs_id, i, i * 2 + 1);
 #else
         copy_tile(dfb_post_rhs_id, b_one_entry ? 0u : i, i * 2 + 1);
@@ -220,7 +222,11 @@ void kernel_main() {
     binary_ng_qsr::for_each_batch(
         walk.cursor, walk.step, my_tiles, num_tiles_per_cycle, held_mask, [&](uint32_t n, uint32_t batch_changed) {
 #if A_HELD
-            hold_dfb<A_MODE == QSR_MODE_COL ? BroadcastType::COL : BroadcastType::SCALAR, (HAS_ACTIVATIONS(LHS) != 0)>(
+            hold_dfb<
+                A_FILLED                 ? BroadcastType::NONE
+                : A_MODE == QSR_MODE_COL ? BroadcastType::COL
+                                         : BroadcastType::SCALAR,
+                (HAS_ACTIVATIONS(LHS) != 0)>(
                 dfb_post_lhs,
                 dfb_held_lhs,
                 dfb_out_id,
@@ -230,7 +236,11 @@ void kernel_main() {
                 [&]([[maybe_unused]] uint32_t i) { PROCESS_ACTIVATIONS(LHS, i); });
 #endif
 #if B_HELD
-            hold_dfb<B_MODE == QSR_MODE_COL ? BroadcastType::COL : BroadcastType::SCALAR, (HAS_ACTIVATIONS(RHS) != 0)>(
+            hold_dfb<
+                B_FILLED                 ? BroadcastType::NONE
+                : B_MODE == QSR_MODE_COL ? BroadcastType::COL
+                                         : BroadcastType::SCALAR,
+                (HAS_ACTIVATIONS(RHS) != 0)>(
                 dfb_post_rhs,
                 dfb_held_rhs,
                 dfb_out_id,

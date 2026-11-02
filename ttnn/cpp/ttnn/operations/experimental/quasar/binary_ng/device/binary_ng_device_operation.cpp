@@ -663,8 +663,8 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
 
 bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // Narrower than matches_metal_v2_slice in op and dtype, but it also admits DRAM shards and a one-element fp32
-    // SCALAR, which that slice refuses. Its refusals by broadcast type are also preconditions of
+    // Narrower than matches_metal_v2_slice in op and dtype, but it also admits DRAM shards and a subtile broadcast in
+    // fp32, which that slice refuses. Its refusals by broadcast type are also preconditions of
     // create_native_artifacts, which asserts them. The others keep the slice to what has been validated on Quasar.
     // Cheap checks first: this predicate runs on EVERY dispatch, cache hits included. The arch goes before
     // native_tuning(), so that off Quasar the knobs are never parsed and the settings line is never logged.
@@ -677,8 +677,8 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (!tuning.enabled) {
         return false;
     }
-    // A missing b is tensor-scalar: b is the scalar argument, one value for the whole op (VALUE). A scalar has
-    // subtile broadcast type NONE, so the switch below reads no b for it; every other use of b checks is_scalar.
+    // A missing b is tensor-scalar: b is the scalar argument, one value for the whole op (VALUE). Its subtile broadcast
+    // type is NONE, and every use of b checks is_scalar.
     const bool is_scalar = !tensor_args.input_tensor_b.has_value();
     if (is_scalar &&
         (!attributes.scalar.has_value() || attributes.subtile_broadcast_type != SubtileBroadcastType::NONE)) {
@@ -690,32 +690,9 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (attributes.is_where_op || attributes.is_quant_op) {
         return false;
     }
-    // Subtile broadcast. ROW, COL and SCALAR expand with unary_bcast, which takes no 32-bit operand on Quasar, so they
-    // run in bf16 only. A SCALAR operand whose every dim is 1 is one value (VALUE), read and filled with no
-    // unary_bcast, so it runs in bf16 and fp32.
-    switch (attributes.subtile_broadcast_type) {
-        case SubtileBroadcastType::NONE: break;
-        case SubtileBroadcastType::ROW_A:
-        case SubtileBroadcastType::ROW_B:
-        case SubtileBroadcastType::COL_A:
-        case SubtileBroadcastType::COL_B:
-        case SubtileBroadcastType::ROW_A_COL_B:
-        case SubtileBroadcastType::ROW_B_COL_A:
-            if (a.dtype() != DataType::BFLOAT16) {
-                return false;
-            }
-            break;
-        case SubtileBroadcastType::SCALAR_A:
-            if (a.dtype() != DataType::BFLOAT16 && a.logical_shape().volume() != 1) {
-                return false;
-            }
-            break;
-        case SubtileBroadcastType::SCALAR_B:
-            if (a.dtype() != DataType::BFLOAT16 && b->logical_shape().volume() != 1) {
-                return false;
-            }
-            break;
-    }
+    // Subtile broadcast runs in bf16 and fp32. In bf16 the compute expands ROW, COL and SCALAR with unary_bcast. That
+    // takes no 32-bit operand on Quasar, so in fp32 the reader expands them in software and the compute copies them.
+
     // In bf16, add and subtract run the FPU kernel, multiply and divide run the SFPU kernel, and multiply runs the FPU
     // kernel in fast and approximate mode. In fp32 all four run the SFPU kernel. The SFPU kernel runs no other op here:
     // each needs its own validation on Quasar.
@@ -825,8 +802,9 @@ BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_progr
     const auto& b = tensor_args.input_tensor_b;
     TT_THROW(
         "ttnn.experimental.quasar binary op {} is not supported for a {} {}, b {}, broadcast {}. Unsupported cases "
-        "include mixed a and b dtypes, int32, row-major layout, where, quantization, zero volume, and a broadcast in "
-        "a dtype other than bfloat16. On Wormhole or Blackhole, use the production ttnn op.",
+        "include mixed a and b dtypes, int32, row-major layout, where, quantization, zero volume, a subtile broadcast "
+        "in a dtype other than bfloat16 or float32, and a float32 subtile broadcast with TTNN_QSR_NATIVE=0. On "
+        "Wormhole or Blackhole, use the production ttnn op.",
         enchantum::to_string(attributes.binary_op_type),
         a.dtype(),
         attributes.input_layout_a,

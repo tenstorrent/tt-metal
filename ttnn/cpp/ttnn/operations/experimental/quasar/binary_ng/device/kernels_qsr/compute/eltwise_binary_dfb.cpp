@@ -34,6 +34,9 @@
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/common/operand_walk.hpp"
+#if A_FILLED || B_FILLED
+#error "a filled operand runs on the SFPU kernel: fp32 runs nothing on the FPU kernel"
+#endif
 #if HAS_MAIN_RING
 // Its format reference names dfb::pre_lhs, which a program with no borrowed ring does not have.
 #include "eltwise_utils_dfb.hpp"

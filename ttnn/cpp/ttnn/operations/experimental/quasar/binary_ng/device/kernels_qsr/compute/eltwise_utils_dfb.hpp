@@ -85,10 +85,21 @@ ALWI void preprocess_impl_dfb(
 }
 
 #if A_ROW || B_ROW || A_HELD || B_HELD
+// The init of one expansion step. unary_bcast takes no 32-bit operand on Quasar, so a filled operand (bt NONE) copies,
+// and no program instantiates unary_bcast for it.
+template <BroadcastType bt>
+ALWI void expand_dfb_init(uint32_t dfb_src_id) {
+    if constexpr (bt == BroadcastType::NONE) {
+        copy_init(dfb_src_id);
+    } else {
+        unary_bcast_init<bt>(dfb_src_id);
+    }
+}
+
 // Expands tiles 0 to n - 1 of dfb_src, which the caller has waited for, into n entries of dfb_dst with unary_bcast<bt>,
-// through DST, and runs process_activations on each expanded tile there. dfb_dst is a self-loop ring of this thread,
-// and both are the kernel's own objects. The packer is retargeted to dfb_dst and back to dfb_out_id, as
-// preprocess_impl_dfb does. The caller pops dfb_src.
+// through DST, and runs process_activations on each expanded tile there. With bt NONE it copies them: the reader
+// expanded a filled operand already. dfb_dst is a self-loop ring of this thread, and both are the kernel's own objects.
+// The packer is retargeted to dfb_dst and back to dfb_out_id, as preprocess_impl_dfb does. The caller pops dfb_src.
 template <BroadcastType bt, bool kActivations, typename DFBSrc, typename DFBDst, typename ActivationFn>
 ALWI void expand_dfb(
     DFBSrc& dfb_src, DFBDst& dfb_dst, uint32_t dfb_out_id, uint32_t n, ActivationFn&& process_activations) {
@@ -101,16 +112,20 @@ ALWI void expand_dfb(
     pack_init(dfb_dst_id);
 #endif
     reconfig_data_format(dfb_src_id, dfb_src_id);
-    unary_bcast_init<bt>(dfb_src_id);
+    expand_dfb_init<bt>(dfb_src_id);
 
     tile_regs_acquire();
     for (uint32_t i = 0; i < n; ++i) {
         if constexpr (kActivations) {
             // An activation's init can change the unpack and math setup, so the broadcast's init runs again, as
             // preprocess_impl_dfb runs copy_init before each tile.
-            unary_bcast_init<bt>(dfb_src_id);
+            expand_dfb_init<bt>(dfb_src_id);
         }
-        unary_bcast<bt>(dfb_src_id, i, i);
+        if constexpr (bt == BroadcastType::NONE) {
+            copy_tile(dfb_src_id, i, i);
+        } else {
+            unary_bcast<bt>(dfb_src_id, i, i);
+        }
         process_activations(i);
     }
     tile_regs_commit();

@@ -45,7 +45,7 @@
 //     shard; kernels_qsr/ does not read it.
 //
 // Not supported (rejected by matches_quasar_native_slice, which is narrower than matches_metal_v2_slice
-// in op and dtype but also admits a one-element fp32 SCALAR and DRAM shards): row-major (non-tile)
+// in op and dtype but also admits a subtile broadcast in fp32 and DRAM shards): row-major (non-tile)
 // layout, where-op, quantization, and mixed lhs/rhs dtype. Every mix of
 // interleaved, L1-sharded and DRAM-sharded operands IS handled: each operand is borrowed where the anchor
 // holds it, and moves over the NoC through its sharding-aware TensorAccessor otherwise. A borrowed operand is
@@ -1019,6 +1019,16 @@ ProgramArtifacts create_native_artifacts(
         (*defines)["HAS_MAIN_RING"] = has_main_ring ? "1" : "0";
     }
 
+    // A ROW, COL or SCALAR operand in fp32 is filled: unary_bcast takes no 32-bit operand on Quasar, so the reader
+    // expands it in software and the compute copies it, as production fills where its LLK lacks a format.
+    const auto filled = [](OperandMode mode, tt::DataFormat df) {
+        return mode != OperandMode::FULL && mode != OperandMode::VALUE && df == tt::DataFormat::Float32;
+    };
+    const bool filled_a = filled(modes[0], a_df);
+    const bool filled_b = filled(modes[1], b_df);
+    // fp32 runs only the SFPU kernel, which has the copy; the FPU kernel has none.
+    TT_FATAL(!(filled_a || filled_b) || is_sfpu, "binary_ng Quasar-native: a filled operand on the FPU kernel");
+
     // A mapped program names each operand's mode and outer broadcast, for the reader and the compute. A dense program
     // defines none of them, and its kernels compile to their dense form.
     if (mapped) {
@@ -1027,6 +1037,8 @@ ProgramArtifacts create_native_artifacts(
             (*defines)["B_MODE"] = std::to_string(static_cast<uint32_t>(modes[1]));
             (*defines)["A_OUTER_BCAST"] = a_outer_bcast ? "1" : "0";
             (*defines)["B_OUTER_BCAST"] = b_outer_bcast ? "1" : "0";
+            (*defines)["A_FILLED"] = filled_a ? "1" : "0";
+            (*defines)["B_FILLED"] = filled_b ? "1" : "0";
         }
     }
 
@@ -1056,6 +1068,13 @@ ProgramArtifacts create_native_artifacts(
     }
     if (post_b) {
         set_unpack_mode(POST_RHS, b_inter_df);
+    }
+    // The SFPU kernel copies a held operand from its held ring, which in fp32 needs the same mode.
+    if (held_a) {
+        set_unpack_mode(HELD_LHS, a_df);
+    }
+    if (held_b) {
+        set_unpack_mode(HELD_RHS, b_df);
     }
 
     // --- Kernels. ---

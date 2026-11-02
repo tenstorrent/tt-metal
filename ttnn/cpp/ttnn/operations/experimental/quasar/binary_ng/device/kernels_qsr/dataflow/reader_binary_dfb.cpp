@@ -30,8 +30,23 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/common/operand_walk.hpp"
-#if A_VALUE || B_VALUE
+#if A_VALUE || B_VALUE || A_FILLED || B_FILLED
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
+#endif
+// The software expansion of a filled operand: its tile row, column or element across the whole tile.
+#if A_FILLED && A_ROW
+#define FILL_A FILL_TILE_WITH_FIRST_ROW
+#elif A_FILLED && A_MODE == QSR_MODE_COL
+#define FILL_A FILL_TILE_WITH_FIRST_COLUMN
+#elif A_FILLED
+#define FILL_A FILL_TILE_WITH_FIRST_ELEMENT
+#endif
+#if B_FILLED && B_ROW
+#define FILL_B FILL_TILE_WITH_FIRST_ROW_B
+#elif B_FILLED && B_MODE == QSR_MODE_COL
+#define FILL_B FILL_TILE_WITH_FIRST_COLUMN_B
+#elif B_FILLED
+#define FILL_B FILL_TILE_WITH_FIRST_ELEMENT_B
 #endif
 
 // The inputs that this reader reads per tile: not borrowed, and not one value for the whole op.
@@ -261,8 +276,8 @@ void kernel_main() {
 #endif
 
     // n tiles of one counter from its cursor, the first at core-local tile k: a read per operand that moves, then one
-    // barrier and one push_back per ring. A held operand (COL, SCALAR) moves only where its page changed; every other
-    // entry of its ring is a credit only, and keeps stale bytes, which the compute never unpacks.
+    // barrier, the fill of each filled entry that was read, and one push_back per ring. A held operand (COL, SCALAR)
+    // moves only where its page changed; its other entries are credits only, and the compute never unpacks their bytes.
     auto read_mapped = [&](binary_ng_qsr::Cursor& cursor, uint32_t k, uint32_t n) {
 #if A_PER_TILE
         {
@@ -278,17 +293,33 @@ void kernel_main() {
         }
         uint32_t offset_b = 0;
 #endif
+#if A_FILLED || B_FILLED
+        static_assert(dm_batch <= 32, "the 32-bit masks read_a and read_b hold one bit per entry of a batch");
+#endif
+#if A_FILLED
+        // Bit i: entry i of the batch holds a filled operand's tile, read over the NoC.
+        uint32_t read_a = 0;
+#endif
+#if B_FILLED
+        uint32_t read_b = 0;
+#endif
         for (uint32_t i = 0; i < n; ++i) {
             if (in_tensor(k)) {
 #if A_PER_TILE
                 if (!A_HELD || (cursor.changed & 1u) != 0) {
                     noc.async_read(src, dfb_in0, src_tile_bytes, {.page_id = cursor.page[0]}, {.offset_bytes = offset});
+#if A_FILLED
+                    read_a |= 1u << i;
+#endif
                 }
 #endif
 #if B_PER_TILE
                 if (!B_HELD || (cursor.changed & 2u) != 0) {
                     noc.async_read(
                         src_b, dfb_in1, src_tile_bytes_b, {.page_id = cursor.page[1]}, {.offset_bytes = offset_b});
+#if B_FILLED
+                    read_b |= 1u << i;
+#endif
                 }
 #endif
             }
@@ -305,6 +336,30 @@ void kernel_main() {
             DeviceZoneScopedSumN2("RD_BAR");
             noc.async_read_barrier();
         }
+        // The fill is a CPU store to L1, so it runs inside scoped_write_lock, whose release fences and flushes the
+        // stores before push_back credits the entries. Entry i of the batch sits i strides on.
+#if A_FILLED
+        if (read_a != 0) {
+            const auto lock = dfb_in0.scoped_write_lock(n);
+            const auto entries = lock.get_ptr<uint8_t>();
+            for (uint32_t i = 0; i < n; ++i) {
+                if ((read_a >> i) & 1u) {
+                    FILL_A(entries + i * in0_stride);
+                }
+            }
+        }
+#endif
+#if B_FILLED
+        if (read_b != 0) {
+            const auto lock = dfb_in1.scoped_write_lock(n);
+            const auto entries = lock.get_ptr<uint8_t>();
+            for (uint32_t i = 0; i < n; ++i) {
+                if ((read_b >> i) & 1u) {
+                    FILL_B(entries + i * in1_stride);
+                }
+            }
+        }
+#endif
 #if A_PER_TILE
         dfb_in0.push_back(n);
 #endif
