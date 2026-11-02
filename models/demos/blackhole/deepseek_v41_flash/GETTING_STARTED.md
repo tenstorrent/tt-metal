@@ -12,7 +12,7 @@ dsv41-flash-local:rc4c-785f0df9b28-2406dcb1-a83b4c6      # same content as the g
 ```
 
 - 21.7 GB on disk. No weights or caches inside.
-- No tar has been written yet for the a83b4c6 image (`docker save` it before distributing); the earlier tar `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_rc4c_785f0df9b28.tar` is the image without the tool-calling fix.
+- No tar exists for this image; the local tags are on host .34, `docker save` is needed to move it to other hosts.
 - The image contains the model catalog (`/home/container_app_user/model_specs/model_spec.json`, baked at build time). **No runtime spec file is needed**: the server picks the catalog entry from `--model`, `--tt-device` and `--impl`. (The `assets/runtime_spec_*.json` files are not used by rc4c.)
 
 ## Configurations
