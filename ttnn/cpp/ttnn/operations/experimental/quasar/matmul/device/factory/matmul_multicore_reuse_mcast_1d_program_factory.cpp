@@ -49,6 +49,12 @@ namespace ttnn::prim::qsr {
 
 namespace reuse_mcast_1d_optimized_helpers {
 
+// fp32 partials accumulate in L1 (packer) and stay on the src path: a to-dest reload inside the matmul
+// section deadlocks on Quasar (#62102) and the validator wants an explicit mode for Float32 (#61018).
+inline bool quasar_fp32_partials_l1_acc(bool packer_l1_acc, bool fp32_dest_acc_en, uint32_t num_blocks) {
+    return (packer_l1_acc || fp32_dest_acc_en) && num_blocks > 1;
+}
+
 uint32_t get_preferred_noc(
     const ttnn::CoreCoord src,
     const ttnn::CoreCoord dst,
@@ -140,7 +146,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -1168,7 +1174,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t num_blocks = K / in0_block_w;
     // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -2068,7 +2074,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     uint32_t num_blocks = Kt_pad / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     bool use_global_cb = global_cb.has_value();
 
@@ -2429,14 +2435,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                 {"cb_sync2", sync_cb2_index},
                 {"cb_remote", remote_cb_index}}});
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
-        for (const auto interm_cb_index : interm_cb_indices) {
-            unpack_to_dest_mode[interm_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        }
-    }
-
     auto mm_kernel = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/compute/"
@@ -2446,7 +2444,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -2998,7 +2995,7 @@ void override_program_parameters(
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -4031,7 +4028,7 @@ void override_program_parameters(
     uint32_t num_blocks = K / in0_block_w;
     // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -5201,6 +5198,24 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 namespace m2 = tt::tt_metal::experimental;
 
+using reuse_mcast_1d_optimized_helpers::quasar_fp32_partials_l1_acc;
+
+// Every consumed Float32 DFB gets an explicit UnpackToSrc entry: nothing routes to DEST (see
+// quasar_fp32_partials_l1_acc).
+void quasar_fp32_dfbs_unpack_to_src(
+    m2::ComputeHardwareConfig& compute_hw_config,
+    bool fp32_dest_acc_en,
+    const std::vector<std::pair<m2::DFBSpecName, tt::DataFormat>>& consumed_dfbs) {
+    if (!fp32_dest_acc_en) {
+        return;
+    }
+    for (const auto& [dfb, data_format] : consumed_dfbs) {
+        if (data_format == tt::DataFormat::Float32) {
+            compute_hw_config.unpack_modes.emplace(dfb, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+    }
+}
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
 // processor & NOC; Gen2 (Quasar) uses the default config, optionally opting the kernel's DFBs
@@ -5444,7 +5459,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     const bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -5833,6 +5848,15 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    std::vector<std::pair<m2::DFBSpecName, tt::DataFormat>> consumed_dfbs = {
+        {RO_IN0_DFB, in0_data_format}, {RO_IN1_DFB, in1_data_format}, {RO_INTERM0_DFB, interm0_data_format}};
+    if (bias_tensor.has_value()) {
+        consumed_dfbs.emplace_back(RO_BIAS_DFB, bias_data_format);
+    }
+    if (in0_transpose_tile) {
+        consumed_dfbs.emplace_back(RO_IN0_TRANSPOSE_DFB, in0_data_format);
+    }
+    quasar_fp32_dfbs_unpack_to_src(compute_hw_config, fp32_dest_acc_en, consumed_dfbs);
 
     // ---- in0 sender kernel CTAs (named) ----
     auto make_in0_sender_cta = [&](uint32_t core_has_output_block_work,
@@ -6526,7 +6550,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     uint32_t num_blocks = K / in0_block_w;
     // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -6861,6 +6885,15 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    std::vector<std::pair<m2::DFBSpecName, tt::DataFormat>> consumed_dfbs = {
+        {RO_IN0_DFB, in0_data_format}, {RO_IN1_DFB, in1_data_format}, {RO_INTERM0_DFB, interm0_data_format}};
+    if (bias_tensor.has_value()) {
+        consumed_dfbs.emplace_back(RO_BIAS_DFB, bias_data_format);
+    }
+    if (in0_transpose_tile) {
+        consumed_dfbs.emplace_back(RO_IN0_TRANSPOSE_DFB, in0_data_format);
+    }
+    quasar_fp32_dfbs_unpack_to_src(compute_hw_config, fp32_dest_acc_en, consumed_dfbs);
 
     // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
     // on in1_noc (below). The in1 sender/receiver writer kernels MUST issue NoC ops on that same NOC,

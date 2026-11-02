@@ -58,6 +58,12 @@ namespace ttnn::prim::qsr {
 
 namespace reuse_mcast_optimized_helpers {
 
+// fp32 partials accumulate in L1 (packer) and stay on the src path: a to-dest reload inside the matmul
+// section deadlocks on Quasar (#62102) and the validator wants an explicit mode for Float32 (#61018).
+inline bool quasar_fp32_partials_l1_acc(bool packer_l1_acc, bool fp32_dest_acc_en, uint32_t num_blocks) {
+    return (packer_l1_acc || fp32_dest_acc_en) && num_blocks > 1;
+}
+
 // Legacy ProgramDescriptor builder for the active create_descriptor path. No longer called after the
 // create_program_artifacts port (the Metal 2.0 builder in the anonymous namespace below replaces it).
 // [[maybe_unused]] suppresses -Wunused-function pending removal in a follow-up.
@@ -124,7 +130,7 @@ namespace reuse_mcast_optimized_helpers {
 
     // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -1629,7 +1635,7 @@ create_program_mcast_in0_in1(
 
     // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -3130,6 +3136,24 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 namespace m2 = tt::tt_metal::experimental;
 
+using reuse_mcast_optimized_helpers::quasar_fp32_partials_l1_acc;
+
+// Every consumed Float32 DFB gets an explicit UnpackToSrc entry: nothing routes to DEST (see
+// quasar_fp32_partials_l1_acc).
+void quasar_fp32_dfbs_unpack_to_src(
+    m2::ComputeHardwareConfig& compute_hw_config,
+    bool fp32_dest_acc_en,
+    const std::vector<std::pair<m2::DFBSpecName, tt::DataFormat>>& consumed_dfbs) {
+    if (!fp32_dest_acc_en) {
+        return;
+    }
+    for (const auto& [dfb, data_format] : consumed_dfbs) {
+        if (data_format == tt::DataFormat::Float32) {
+            compute_hw_config.unpack_modes.emplace(dfb, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+    }
+}
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
 // processor & NOC; Gen2 (Quasar) uses the default config, optionally opting the kernel's DFBs
@@ -3364,7 +3388,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
     // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -3831,6 +3855,15 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    std::vector<std::pair<m2::DFBSpecName, tt::DataFormat>> consumed_dfbs = {
+        {RO_IN0_DFB, in0_data_format}, {RO_IN1_DFB, in1_data_format}, {RO_INTERM0_DFB, interm0_data_format}};
+    if (bias_tensor.has_value()) {
+        consumed_dfbs.emplace_back(RO_BIAS_DFB, bias_data_format);
+    }
+    if (in0_transpose_tile) {
+        consumed_dfbs.emplace_back(RO_IN0_TRANSPOSE_DFB, in0_data_format);
+    }
+    quasar_fp32_dfbs_unpack_to_src(compute_hw_config, fp32_dest_acc_en, consumed_dfbs);
 
     // in1 reader uses the optimized reader noc; in0 the dram-write noc. (The legacy split-half
     // _other receivers ran on the opposite NOC for perf; the Metal 2.0 host API selects the NOC via

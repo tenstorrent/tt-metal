@@ -38,6 +38,12 @@ using tt::tt_metal::ProgramDescriptor;
 namespace ttnn::prim::qsr {
 namespace reuse_batched_hs_dram_sharded_optimized_helpers {
 
+// fp32 partials accumulate in L1 (packer) and stay on the src path: a to-dest reload inside the matmul
+// section deadlocks on Quasar (#62102) and the validator wants an explicit mode for Float32 (#61018).
+inline bool quasar_fp32_partials_l1_acc(bool packer_l1_acc, bool fp32_dest_acc_en, uint32_t num_blocks) {
+    return (packer_l1_acc || fp32_dest_acc_en) && num_blocks > 1;
+}
+
 using dram_sharded_helpers::get_max_page_size_and_num_pages;
 using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 
@@ -159,7 +165,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     auto out_subblock_w = std::get<1>(subblock_hw);
 
     uint32_t num_blocks = K / in0_block_w;
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)

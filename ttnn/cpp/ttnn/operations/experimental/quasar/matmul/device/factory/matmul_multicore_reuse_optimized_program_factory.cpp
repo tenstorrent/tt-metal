@@ -48,6 +48,28 @@ const KernelSpecName RO_READER_WRITER_KERNEL{"reader_writer"};
 const KernelSpecName RO_COMPUTE_KERNEL_G1{"compute_g1"};
 const KernelSpecName RO_COMPUTE_KERNEL_G2{"compute_g2"};
 
+// fp32 partials accumulate in L1 (packer) and stay on the src path: a to-dest reload inside the matmul
+// section deadlocks on Quasar (#62102) and the validator wants an explicit mode for Float32 (#61018).
+inline bool quasar_fp32_partials_l1_acc(bool packer_l1_acc, bool fp32_dest_acc_en, uint32_t num_blocks) {
+    return (packer_l1_acc || fp32_dest_acc_en) && num_blocks > 1;
+}
+
+// Every consumed Float32 DFB gets an explicit UnpackToSrc entry: nothing routes to DEST (see
+// quasar_fp32_partials_l1_acc).
+void quasar_fp32_dfbs_unpack_to_src(
+    ComputeHardwareConfig& compute_hw_config,
+    bool fp32_dest_acc_en,
+    const std::vector<std::pair<DFBSpecName, tt::DataFormat>>& consumed_dfbs) {
+    if (!fp32_dest_acc_en) {
+        return;
+    }
+    for (const auto& [dfb, data_format] : consumed_dfbs) {
+        if (data_format == tt::DataFormat::Float32) {
+            compute_hw_config.unpack_modes.emplace(dfb, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+    }
+}
+
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFactory::create_program_artifacts(
@@ -132,7 +154,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     uint32_t num_blocks = (K / in0_block_w);
     // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = quasar_fp32_partials_l1_acc(packer_l1_acc, fp32_dest_acc_en, num_blocks);
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -475,6 +497,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
 
     ComputeHardwareConfig compute_hw_config =
         ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
+    std::vector<std::pair<DFBSpecName, tt::DataFormat>> consumed_dfbs = {
+        {RO_IN0_DFB, in0_data_format}, {RO_IN1_DFB, in1_data_format}, {RO_INTERM0_DFB, interm0_data_format}};
+    if (in0_transpose_tile) {
+        consumed_dfbs.emplace_back(RO_IN0_TRANSPOSE_DFB, in0_data_format);
+    }
+    quasar_fp32_dfbs_unpack_to_src(compute_hw_config, fp32_dest_acc_en, consumed_dfbs);
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group block-count CTA ----
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_blocks_per_core_group) {
