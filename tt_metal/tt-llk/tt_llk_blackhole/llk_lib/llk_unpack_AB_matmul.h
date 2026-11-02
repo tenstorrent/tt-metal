@@ -351,8 +351,8 @@ inline void _llk_unpack_AB_matmul_(
     const bool reuse_a                               = ct_dim >= rt_dim;
     const std::uint32_t t_dim                        = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t mop_count                    = reuse_a ? ct_dim : rt_dim;
-    constexpr std::uint32_t MAX_MOP_ZMASK_ITERATIONS = 16; // zmask is 16 bits; dest caps ct_dim and rt_dim at 16
-    LLK_ASSERT(mop_count <= MAX_MOP_ZMASK_ITERATIONS, "max(ct_dim, rt_dim) exceeds MAX_MOP_ZMASK_ITERATIONS, the matmul MOP zmask width");
+    constexpr std::uint32_t MAX_MOP_ZMASK_ITERATIONS = 16; // TT_MOP carries only zmask[15:0]; MOP_CFG hi16 is not programmed here
+    LLK_ASSERT(mop_count <= MAX_MOP_ZMASK_ITERATIONS, "max(ct_dim, rt_dim) exceeds 16: TT_MOP carries only zmask[15:0] and MOP_CFG hi16 is not programmed");
     // zmask bit i set -> iteration i runs skipA (context-1 replay).
     constexpr std::uint32_t ALL_ITERATIONS_CONTEXT1_ZMASK = (1u << MAX_MOP_ZMASK_ITERATIONS) - 1;
 

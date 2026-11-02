@@ -127,6 +127,9 @@ ODD_REUSE_FIDELITY_THROTTLE = (
     (MathFidelity.HiFi4, TINY_TILE_HIGH_THROTTLE),
 )
 
+# The unpack MOP zmask does not depend on fidelity or throttle, so one unthrottled LoFi run covers it.
+MOP_ZMASK_FIDELITY_THROTTLE = ((MathFidelity.LoFi, 0),)
+
 
 def full_dest_matmul_params(label, rt_ct_dims, kt_dims, fidelity_throttle):
     fmt = next(
@@ -211,7 +214,7 @@ ALL_TEST_PARAMS = list(
             "mop_zmask",
             MOP_ZMASK_RT_CT,
             MOP_ZMASK_KT_DIMS,
-            ((MathFidelity.LoFi, 0),),
+            MOP_ZMASK_FIDELITY_THROTTLE,
         ),
     )
 )
