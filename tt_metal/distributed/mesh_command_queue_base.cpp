@@ -432,9 +432,11 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
                 num_txns_per_device);
         }
     }
-    this->submit_memcpy_request(num_txns_per_device, /*blocking=*/false, std::move(memory_pins));
+    // With stats on, the end event has to be issued before the wait.
+    const bool wait_after_stats = blocking && host_transfer_stats_->enabled();
+    this->submit_memcpy_request(num_txns_per_device, blocking && !wait_after_stats, std::move(memory_pins));
     transfer_stats.close();
-    if (blocking) {
+    if (wait_after_stats) {
         this->finish_nolock();
     }
 

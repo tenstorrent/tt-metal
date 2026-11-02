@@ -349,8 +349,10 @@ void MetalContext::teardown() {
         data_collector_->DumpData();
         data_collector_.reset();
     }
-    host_transfer_stats_->log_summary();
-    host_transfer_stats_->reset();
+    if (host_transfer_stats_->enabled()) {
+        host_transfer_stats_->log_summary();
+        host_transfer_stats_->reset();
+    }
 
     if (dprint_server_) {
         if (!get_cluster().is_mock_or_emulated()) {

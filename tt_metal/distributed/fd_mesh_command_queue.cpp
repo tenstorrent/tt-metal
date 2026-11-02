@@ -730,10 +730,12 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         device_dispatch::issue_core_read_command_sequence(dispatch_params);
     }
 
+    // With stats on, the end event has to be issued before the wait.
+    const bool wait_after_stats = blocking && host_transfer_stats_->enabled();
     this->submit_core_data_memcpy_request(
-        ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, /*blocking=*/false, sub_device_ids);
+        ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking && !wait_after_stats, sub_device_ids);
     transfer_stats.close();
-    if (blocking) {
+    if (wait_after_stats) {
         this->finish_nolock(sub_device_ids);
     }
 }
