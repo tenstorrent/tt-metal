@@ -3,11 +3,11 @@
 
 // qkv_proj_heads_rope compute: per block, seed the Float32 partials with the row-broadcast bias, project_block
 // (K-blocks 0..n-2 of K' = hidden, L1-accumulating onto the seed from K-block 0), then the
-// last K-block one row at a time, each row's
-// epilogue following it: rotate_block on q/k cores (two DEST-accumulated FPU muls per output tile, raw
-// whole-tile phase-major ELWMUL from tile_src_mul.hpp, each partial tile unpacked once for two products),
-// convert_block (copy + pack to bf16) on v cores. Output rows alternate between cb_out_tiles (writer, NoC1)
-// and cb_out_tiles_noc0 (reader, NoC0) when out_write_nocs == 2.
+// last K-block one output unit at a time (tail_units.hpp: a row, the block's last row as two head-aligned
+// units), each unit's epilogue following it: rotate_block on q/k cores (two DEST-accumulated FPU muls per
+// output tile, raw whole-tile phase-major ELWMUL from tile_src_mul.hpp, each partial tile unpacked once for
+// two products), convert_block (copy + pack to bf16) on v cores. With out_write_nocs == 2 each unit is
+// split across cb_out_tiles (writer, NoC1) and cb_out_tiles_noc0 (reader, NoC0).
 //
 // Perf 1 (measured, 8x512: 106.3 -> 100.5 us): running the last K-block per row lets each row's epilogue and
 // store overlap the rest of the K-loop instead of bursting after it. The last K-block is raw LLK because
@@ -45,6 +45,7 @@
 #include "vendor/kernel_lib/perf_instrumentation.hpp"
 #include "tile_src_mul.hpp"
 #include "mm_fused_mop.hpp"
+#include "tail_units.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_activation_block = get_compile_time_arg_val(0);
@@ -65,6 +66,8 @@ void kernel_main() {
     // DEST tiles per acquire (fp32 / sync mode), as the host sized the matmul subblock.
     constexpr uint32_t dest_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t cb_bias = get_compile_time_arg_val(16);
+    // tail_units.hpp: split output units across both NoCs (off with outputs in DRAM).
+    constexpr bool split_units = get_compile_time_arg_val(17) != 0;
 
     const uint32_t core_rows = get_arg_val<uint32_t>(0);
     const bool is_rotary = get_arg_val<uint32_t>(1) != 0;
@@ -95,6 +98,15 @@ void kernel_main() {
         }
         return w;
     }();
+    // Split last row: widest width <= row_sb_w dividing both of its units.
+    constexpr uint32_t part0_tiles = qkv_store::part0_tiles<tiles_per_head, n_tiles>();
+    constexpr uint32_t split_w = [] {
+        uint32_t w = row_sb_w;
+        while (part0_tiles % w || (n_tiles - part0_tiles) % w) {
+            --w;
+        }
+        return w;
+    }();
     // Bias seed: widest divisor of n_tiles that fits one DEST acquire.
     constexpr uint32_t seed_w = [] {
         uint32_t w = dest_tiles < n_tiles ? dest_tiles : n_tiles;
@@ -120,18 +132,19 @@ void kernel_main() {
     using ConvertPackNoc0 =
         PackTile<output(cb_out_tiles_noc0, ReservePolicy::Upfront, PushPolicy::AtEnd, DataFormatReconfig::Disabled)>;
 
-    // Epilogue of one valid row into cb_out (convert_pack is bound to the same CB).
+    // Epilogue of tiles [t0, t1) of one valid row into cb_out (convert_pack is bound to the same CB).
     // rotate_block: out_lo = P0 * cos_lo + P1 * (-sin_lo), out_hi = P0 * sin_hi + P1 * cos_hi against the row's
     // table slot [cos_lo, -sin_lo, sin_hi, cos_hi], window_heads heads per DEST window accumulated in place.
-    auto epilogue_row = [&](uint32_t row, uint32_t cb_out, auto convert_pack) {
+    auto epilogue_tiles = [&](uint32_t row, uint32_t t0, uint32_t t1, uint32_t cb_out, auto convert_pack) {
         const uint32_t row_base = row * n_tiles;
         if (is_rotary) {
             constexpr uint32_t window_heads = dest_tiles / tiles_per_head;
             static_assert(window_heads >= 1);
             const uint32_t table_base = (row % seq_tiles) * table_tiles_per_row;
-            cb_reserve_back(cb_out, n_tiles);
-            for (uint32_t head0 = 0; head0 < heads_per_core; head0 += window_heads) {
-                const uint32_t heads = heads_per_core - head0 < window_heads ? heads_per_core - head0 : window_heads;
+            const uint32_t head_end = t1 / tiles_per_head;
+            cb_reserve_back(cb_out, t1 - t0);
+            for (uint32_t head0 = t0 / tiles_per_head; head0 < head_end; head0 += window_heads) {
+                const uint32_t heads = head_end - head0 < window_heads ? head_end - head0 : window_heads;
                 tile_regs_acquire();
                 for (uint32_t head = 0; head < heads; ++head) {
                     const uint32_t p0 = row_base + (head0 + head) * tiles_per_head;
@@ -149,12 +162,12 @@ void kernel_main() {
                 }
                 tile_regs_release();
             }
-            cb_push_back(cb_out, n_tiles);
+            cb_push_back(cb_out, t1 - t0);
         } else {
             // One DEST window per dest_tiles tiles (Perf 2: per-tile windows cost 8 handshakes per row).
             eltwise_chain<InitReconfigOwner::Caller>(
-                IterationShape::tiles(n_tiles).block_size(dest_tiles),
-                ConvertCopy{partials_dfb, row_base},
+                IterationShape::tiles(t1 - t0).block_size(dest_tiles),
+                ConvertCopy{partials_dfb, row_base + t0},
                 convert_pack);
         }
     };
@@ -181,15 +194,16 @@ void kernel_main() {
         }
     };
 
-    // Last K-block of one row: accumulate onto the partials K-blocks 0..n-2 left in L1 (the row's partials
-    // sit at the CB write pointer, which advances one row per push).
-    auto last_k_row = [&](uint32_t row) {
+    // Last K-block of tiles [t0, t1) of one row, W wide per DEST acquire: accumulate onto the partials
+    // K-blocks 0..n-2 left in L1 (the unit's partials sit at the CB write pointer, which advances one unit
+    // per push).
+    auto last_k_tiles = [&]<uint32_t W>(uint32_t row, uint32_t t0, uint32_t t1) {
         reconfig_data_format(cb_weight_block, cb_activation_block);
-        ckernel::matmul_block_init(cb_activation_block, cb_weight_block, false, row_sb_w, 1, k_block);
-        mmk::fused_init(row_sb_w, 1);
+        ckernel::matmul_block_init(cb_activation_block, cb_weight_block, false, W, 1, k_block);
+        mmk::fused_init(W, 1);
         pack_reconfig_data_format(cb_matmul_partials);
         pack_reconfig_l1_acc(1);
-        for (uint32_t col = 0; col < n_tiles; col += row_sb_w) {
+        for (uint32_t col = t0; col < t1; col += W) {
             tile_regs_acquire();
             for (uint32_t inner = 0; inner < k_block; ++inner) {
                 mmk::fused_matmul_block(
@@ -198,19 +212,26 @@ void kernel_main() {
                     row * k_block + inner,
                     inner * n_tiles + col,
                     0,
-                    row_sb_w,
+                    W,
                     1,
                     k_block);
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t c = 0; c < row_sb_w; ++c) {
-                pack_tile<true>(c, cb_matmul_partials, col + c);
+            for (uint32_t c = 0; c < W; ++c) {
+                pack_tile<true>(c, cb_matmul_partials, col - t0 + c);
             }
             tile_regs_release();
         }
-        partials.push_back(n_tiles);
+        partials.push_back(t1 - t0);
         pack_reconfig_l1_acc(0);
+    };
+    auto last_k_unit = [&](const qkv_store::Unit& unit) {
+        if (unit.t1 - unit.t0 == n_tiles) {
+            last_k_tiles.template operator()<row_sb_w>(unit.row, 0, n_tiles);
+        } else {
+            last_k_tiles.template operator()<split_w>(unit.row, unit.t0, unit.t1);
+        }
     };
 
     // K-blocks 0..n-2 of the block, accumulating onto the seed in L1 (init once per block, not per subblock).
@@ -265,19 +286,27 @@ void kernel_main() {
         pack_reconfig_data_format(cb_out_tiles);
     };
 
-    auto epilogue_row_routed = [&](uint32_t row) {
+    // Unit u: with two output NoCs, a unit of >= 2 heads is split [t0, mid) to cb_out_tiles (writer) and
+    // [mid, t1) to cb_out_tiles_noc0 (reader); a one-head unit goes whole to the writer when u is even.
+    auto epilogue_unit_routed = [&](uint32_t u, const qkv_store::Unit& unit) {
         if (is_rotary) {
-            cb_wait_front(cb_rotary_table, (row + 1 < seq_tiles ? row + 1 : seq_tiles) * table_tiles_per_row);
+            cb_wait_front(cb_rotary_table, (unit.row + 1 < seq_tiles ? unit.row + 1 : seq_tiles) * table_tiles_per_row);
         }
-        partials.wait_front((row + 1) * n_tiles);
+        partials.wait_front(unit.row * n_tiles + unit.t1);
         if constexpr (out_write_nocs == 2) {
-            if (row & 1) {
-                DataflowBuffer out_noc0_dfb(cb_out_tiles_noc0);
-                epilogue_row(row, cb_out_tiles_noc0, ConvertPackNoc0{out_noc0_dfb});
+            DataflowBuffer out_noc0_dfb(cb_out_tiles_noc0);
+            const uint32_t mid = qkv_store::half_mid<tiles_per_head, split_units>(unit);
+            if (mid < unit.t1) {
+                epilogue_tiles(unit.row, unit.t0, mid, cb_out_tiles, ConvertPack{out_dfb});
+                epilogue_tiles(unit.row, mid, unit.t1, cb_out_tiles_noc0, ConvertPackNoc0{out_noc0_dfb});
+                return;
+            }
+            if (u & 1) {
+                epilogue_tiles(unit.row, unit.t0, unit.t1, cb_out_tiles_noc0, ConvertPackNoc0{out_noc0_dfb});
                 return;
             }
         }
-        epilogue_row(row, cb_out_tiles, ConvertPack{out_dfb});
+        epilogue_tiles(unit.row, unit.t0, unit.t1, cb_out_tiles, ConvertPack{out_dfb});
     };
 
     {
@@ -301,7 +330,7 @@ void kernel_main() {
             block_k_loop();
         }
 
-        // Last K-block interleaved with the epilogue: matmul row r + LAST_K_LEAD, then the epilogue of row r.
+        // Last K-block interleaved with the epilogue: matmul unit u + LAST_K_LEAD, then the epilogue of unit u.
         {
             MaybeDeviceZoneScope("compute_last_k_wait");
             activation.wait_front(act_block_tiles);
@@ -309,16 +338,18 @@ void kernel_main() {
         }
         // Occupancy: per-row table / partials waits and the output-CB reserves sit inside.
         MaybeDeviceZoneScope("compute_last_k_epilogue");
-        const uint32_t lead = rows < LAST_K_LEAD ? rows : LAST_K_LEAD;
-        for (uint32_t row = 0; row < lead; ++row) {
-            last_k_row(row);
+        const uint32_t first_split = qkv_store::first_split_row<tiles_per_head, n_tiles, split_units>(rows);
+        const uint32_t units = qkv_store::num_units(rows, first_split);
+        const uint32_t lead = units < LAST_K_LEAD ? units : LAST_K_LEAD;
+        for (uint32_t u = 0; u < lead; ++u) {
+            last_k_unit(qkv_store::unit_of<tiles_per_head, n_tiles>(u, first_split));
         }
-        for (uint32_t row = 0; row < rows; ++row) {
-            if (row + lead < rows) {
-                last_k_row(row + lead);
+        for (uint32_t u = 0; u < units; ++u) {
+            if (u + lead < units) {
+                last_k_unit(qkv_store::unit_of<tiles_per_head, n_tiles>(u + lead, first_split));
             }
             epilogue_setup();
-            epilogue_row_routed(row);
+            epilogue_unit_routed(u, qkv_store::unit_of<tiles_per_head, n_tiles>(u, first_split));
         }
         // Nominal rows past `rows` are never consumed; push them so the block's pop balances.
         if (rows < block_m) {

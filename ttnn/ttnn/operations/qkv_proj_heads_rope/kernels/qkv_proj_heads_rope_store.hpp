@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// store_row: one output token row (n_tiles bf16 tiles at the front of cb_out) -> q|k|v head layout.
-// Shared by the writer (NoC1) and the reader (NoC0): output rows alternate between the two kernels'
-// output CBs so the store tail uses both NoCs.
+// store_tiles: tiles [t0, t0 + count) of one output token row (at the front of cb_out) -> q|k|v head layout.
+// Shared by the writer (NoC1) and the reader (NoC0), which split every output unit (tail_units.hpp).
 
 #pragma once
 
@@ -12,6 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "tail_units.hpp"
 
 namespace qkv_store {
 
@@ -26,19 +26,21 @@ template <
     typename QAccessor,
     typename KAccessor,
     typename VAccessor>
-FORCE_INLINE void store_row(
+FORCE_INLINE void store_tiles(
     Noc& noc,
     uint32_t r,  // global tile-row index (b * seq_tiles + st)
     uint32_t third,
     uint32_t first_head,
     const QAccessor& q_accessor,
     const KAccessor& k_accessor,
-    const VAccessor& v_accessor) {
+    const VAccessor& v_accessor,
+    uint32_t t0,
+    uint32_t count) {
     constexpr uint32_t face_row_bytes = 16 * 2;
     constexpr uint32_t face_bytes = 16 * face_row_bytes;
     const uint32_t batch = r / seq_tiles;
     const uint32_t st = r % seq_tiles;
-    cb_wait_front(cb_out, n_tiles);
+    cb_wait_front(cb_out, count);
     uint32_t l1_addr = get_read_ptr(cb_out);
     if constexpr (last_valid_rows != 0) {
         // Output pad rows must be exactly 0 whatever x / table padding held.
@@ -51,7 +53,7 @@ FORCE_INLINE void store_row(
             // async_write_zeros addresses a CB from its write pointer; the tiles sit at the read
             // pointer (unsigned wrap keeps the delta exact).
             const uint32_t read_off = l1_addr - out_tiles.get_write_ptr();
-            for (uint32_t n = 0; n < n_tiles; ++n) {
+            for (uint32_t n = 0; n < count; ++n) {
                 const uint32_t tile_off = read_off + n * tile_bytes;
                 const uint32_t face_off = tile_off + top_face * 2 * face_bytes + first_row * face_row_bytes;
                 noc.async_write_zeros(out_tiles, partial_bytes, {.offset_bytes = face_off});
@@ -63,7 +65,7 @@ FORCE_INLINE void store_row(
             noc.write_zeros_l1_barrier();
         }
     }
-    for (uint32_t n = 0; n < n_tiles; ++n) {
+    for (uint32_t n = t0; n < t0 + count; ++n) {
         const uint32_t head = first_head + n / tiles_per_head;
         const uint32_t page = ((batch * num_heads + head) * seq_tiles + st) * tiles_per_head + n % tiles_per_head;
         if (third == 0) {
@@ -76,7 +78,7 @@ FORCE_INLINE void store_row(
         l1_addr += tile_bytes;
     }
     noc_async_writes_flushed();
-    cb_pop_front(cb_out, n_tiles);
+    cb_pop_front(cb_out, count);
 }
 
 }  // namespace qkv_store

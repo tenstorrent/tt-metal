@@ -8,7 +8,7 @@
 // weight_depth > 2 (R2 only): the sender of round k+1 issues its reads into the next slot before round k's
 // transfer, so its DRAM reads overlap round k's multicast. With two channels ("wmc1" present) the senders
 // alternate rounds, so one reads while the other multicasts.
-// Output rows: every out_write_nocs-th row from cb_out_tiles (the reader stores the others on NoC0).
+// Output units (tail_units.hpp): the first half of each from cb_out_tiles (the reader stores the rest on NoC0).
 
 #include <cstdint>
 #include <type_traits>
@@ -37,7 +37,8 @@ void kernel_main() {
     constexpr uint32_t last_valid_rows = get_compile_time_arg_val(12);
     constexpr uint32_t out_write_nocs = get_compile_time_arg_val(13);
     constexpr uint32_t weight_depth = get_compile_time_arg_val(14);
-    constexpr auto weight_args = TensorAccessorArgs<15>();
+    constexpr bool split_units = get_compile_time_arg_val(15) != 0;
+    constexpr auto weight_args = TensorAccessorArgs<16>();
     constexpr auto q_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
@@ -172,17 +173,40 @@ void kernel_main() {
             cb_push_back(cb_weight_block, weight_block_tiles);
         }
 
+        // Units of >= 2 heads: the writer stores the first half; one-head units: every other one
+        // (all of them when out_write_nocs == 1).
+        const uint32_t first_split = qkv_store::first_split_row<tiles_per_head, n_tiles, split_units>(rows);
+        const uint32_t units = qkv_store::num_units(rows, first_split);
         {
-            // Waiting for the block's first row = waiting for the K-loop + the first epilogue row.
+            // Waiting for the block's first unit = waiting for the K-loop + the first epilogue.
             MaybeDeviceZoneScope("writer_store_wait_first");
-            cb_wait_front(cb_out_tiles, n_tiles);
+            const auto first = qkv_store::unit_of<tiles_per_head, n_tiles>(0, first_split);
+            const uint32_t end =
+                out_write_nocs == 2 ? qkv_store::half_mid<tiles_per_head, split_units>(first) : first.t1;
+            cb_wait_front(cb_out_tiles, end - first.t0);
         }
-        // Rows alternate between this kernel's output CB and the reader's (out_write_nocs == 2).
         MaybeDeviceZoneScope("writer_store");
-        for (uint32_t row = 0; row < rows; row += out_write_nocs) {
+        for (uint32_t u = 0; u < units; ++u) {
+            auto unit = qkv_store::unit_of<tiles_per_head, n_tiles>(u, first_split);
+            if constexpr (out_write_nocs == 2) {
+                const uint32_t mid = qkv_store::half_mid<tiles_per_head, split_units>(unit);
+                if (mid < unit.t1) {
+                    unit.t1 = mid;
+                } else if (u & 1) {
+                    continue;
+                }
+            }
             qkv_store::
-                store_row<cb_out_tiles, n_tiles, tiles_per_head, num_heads, seq_tiles, tile_bytes, last_valid_rows>(
-                    noc, row_start + block_row + row, third, first_head, q_accessor, k_accessor, v_accessor);
+                store_tiles<cb_out_tiles, n_tiles, tiles_per_head, num_heads, seq_tiles, tile_bytes, last_valid_rows>(
+                    noc,
+                    row_start + block_row + unit.row,
+                    third,
+                    first_head,
+                    q_accessor,
+                    k_accessor,
+                    v_accessor,
+                    unit.t0,
+                    unit.t1 - unit.t0);
         }
     }
     MaybeDeviceZoneScope("writer_write_barrier");

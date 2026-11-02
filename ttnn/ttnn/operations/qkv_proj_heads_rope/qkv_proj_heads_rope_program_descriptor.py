@@ -294,6 +294,16 @@ def _rectangles(cells):
     return [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, y0, x1, y1 in rects]
 
 
+def _lowered_rectangles(cells):
+    """Rectangles a multicast group lowers to. Mcast normalizes its receiver set (CoreRangeSet merge: row runs
+    merged down identical x-extents), which can split a smaller _rectangles cover: a column plus a row run
+    touching it becomes three."""
+    rects = _rectangles(cells)
+    if len(rects) == 1:
+        return 1
+    return len(ttnn.CoreRangeSet(rects[:1]).merge(ttnn.CoreRangeSet(rects[1:])).ranges())
+
+
 def _row_major_layout(grid_x, grid_y, grid_n, grid_m):
     """Logical l = m*grid_n + n row-major: each M-group is a consecutive run (<= 3 rectangles)."""
     return {(m, n): divmod(m * grid_n + n, grid_x)[::-1] for m in range(grid_m) for n in range(grid_n)}
@@ -323,21 +333,30 @@ def _folded_layout(grid_x, grid_y, grid_n, grid_m, transpose):
 def _choose_layout(grid_x, grid_y, grid_n, grid_m):
     """Physical placement of the grid_m x grid_n logical grid, and whether W is multicast (R2).
 
-    Each multicast group must lower to <= MAX_MCAST_RECTANGLES rectangles. Prefer the row-major layout
-    (the R3 placement) when its N-groups already qualify; otherwise fold the logical grid so both channels
-    are lines. No qualifying layout, or N-groups below W_MCAST_MIN_GROUP: row-major with W unicast (R1).
+    Each multicast group must lower to <= MAX_MCAST_RECTANGLES rectangles (as Mcast lowers it). Every W round
+    is one multicast per N-group rectangle, so among the qualifying layouts (row-major, i.e. the R3 placement,
+    then the fold, then its transpose) take the one whose largest N-group lowers to the fewest rectangles,
+    the earlier on ties. 12x9 on the 11x10 p100a grid: the fold's N-group 8 (column x=8 next to the fold
+    columns) lowers to 3, every N-group of the transpose to 2 (2x512 36.7 -> 34.1 us). No qualifying layout,
+    or N-groups below W_MCAST_MIN_GROUP: row-major with W unicast (R1).
     """
     row_major = _row_major_layout(grid_x, grid_y, grid_n, grid_m)
     if grid_m < W_MCAST_MIN_GROUP:
         return row_major, False
-    for layout in (row_major, *(_folded_layout(grid_x, grid_y, grid_n, grid_m, t) for t in (False, True))):
+    best = None
+    candidates = (row_major, *(_folded_layout(grid_x, grid_y, grid_n, grid_m, t) for t in (False, True)))
+    for index, layout in enumerate(candidates):
         if layout is None:
             continue
         n_groups = [[layout[(m, n)] for m in range(grid_m)] for n in range(grid_n)]
         m_groups = [[layout[(m, n)] for n in range(grid_n)] for m in range(grid_m)]
-        if all(len(_rectangles(g)) <= MAX_MCAST_RECTANGLES for g in n_groups + m_groups):
-            return layout, True
-    return row_major, False
+        n_rects = [_lowered_rectangles(g) for g in n_groups]
+        if max(n_rects + [_lowered_rectangles(g) for g in m_groups]) > MAX_MCAST_RECTANGLES:
+            continue
+        key = (max(n_rects), index)
+        if best is None or key < best[0]:
+            best = (key, layout)
+    return (best[1], True) if best else (row_major, False)
 
 
 def _row_ranges(mt, grid_m):
@@ -421,6 +440,9 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
     ]
 
     last_valid_rows = input_tensor.shape[-2] % TILE
+    # kernels/tail_units.hpp: each output unit split across both NoCs, except with outputs in DRAM (measured
+    # slower there: 8x512 / 4x512 / 2x512 +2.5 / +3.5 / +5.4%).
+    split_units = int(outputs[0].memory_config().buffer_type != ttnn.BufferType.DRAM)
     reader_ct_args = [
         CB_ACTIVATION_BLOCK,
         CB_ROTARY_TABLE,
@@ -437,6 +459,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         NUM_HEADS,
         last_valid_rows,
         CB_BIAS,
+        split_units,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(cos).get_compile_time_args())
@@ -461,6 +484,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         last_valid_rows,
         OUT_WRITE_NOCS,
         blocking.weight_depth,
+        split_units,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
     for output in outputs:
@@ -484,6 +508,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         blocking.seq_tiles,
         _dest_tiles(compute_kernel_config),
         CB_BIAS,
+        split_units,
     ]
 
     reader_rt = {}
