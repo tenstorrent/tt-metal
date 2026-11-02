@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-#include "impl/streaming_profiler/service.hpp"
+#include "impl/streaming_profiler/receiver.hpp"
 
 using namespace tt::tt_metal::streaming_profiler;
 namespace kp = kernel_profiler;
@@ -35,7 +35,8 @@ struct Ring {
     std::vector<std::byte> mem;
     std::vector<std::atomic<uint64_t>> marks;
     uint64_t mark_block = UINT64_MAX;
-    Ring(uint64_t pages, uint64_t frame_pages) : fp(frame_pages), mem(pages * kPage), marks(pages * kPage / kMarkBytes) {
+    Ring(uint64_t pages, uint64_t frame_pages) :
+        fp(frame_pages), mem(pages * kPage), marks(pages * kPage / kMarkBytes) {
         for (auto& m : marks) {
             m.store(UINT64_MAX);
         }
@@ -51,7 +52,8 @@ struct Ring {
         }
         const uint64_t at = abs % mem.size();
         const uint32_t v = static_cast<uint32_t>(k);
-        const uint32_t hdr[2] = {kp::spsc_span_w0(), static_cast<uint32_t>(fp * kp::SPSC_SPAN_PAGE_WORDS - kp::SPSC_SPAN_PREFIX_WORDS)};
+        const uint32_t hdr[2] = {
+            kp::spsc_span_w0(), static_cast<uint32_t>(fp * kp::SPSC_SPAN_PAGE_WORDS - kp::SPSC_SPAN_PREFIX_WORDS)};
         for (uint64_t i = 0; i < bytes(); i += 4) {
             const uint32_t w = i < 8 ? hdr[i / 4] : v;
             std::memcpy(mem.data() + (at + i) % mem.size(), &w, 4);
@@ -96,7 +98,8 @@ int main() {
             r.write(i);
         }
         const uint64_t head = (k + 2) * r.bytes();
-        const Walked w = walk_frames(r.mem, (k - 2) * r.bytes(), (k + 2) * r.bytes(), r.mark_span(), out, fw, [&] { return head; });
+        const Walked w =
+            walk_frames(r.mem, (k - 2) * r.bytes(), (k + 2) * r.bytes(), r.mark_span(), out, fw, [&] { return head; });
         check(w.frames == 4 && w.dropped == 0 && w.cursor == (k + 2) * r.bytes(), "wrap: four frames, none dropped");
         for (uint64_t i = 0; i < 4; i++) {
             check(holds(out.data() + i * r.bytes(), fw[i], r, k - 2 + i), "wrap: contiguous copy");
@@ -111,20 +114,23 @@ int main() {
         const uint64_t head = kFifo - kW + 3 * r.bytes();
         const Walked w = walk_frames(r.mem, 0, 8 * r.bytes(), r.mark_span(), out, fw, [&] { return head; });
         check(w.frames == 0 && w.dropped == 8 * r.bytes() && w.cursor == 8 * r.bytes(), "lapped: jump to the boundary");
-        const Walked w2 = walk_frames(r.mem, 3 * r.bytes(), 8 * r.bytes(), r.mark_span(), out, fw, [&] { return head; });
+        const Walked w2 =
+            walk_frames(r.mem, 3 * r.bytes(), 8 * r.bytes(), r.mark_span(), out, fw, [&] { return head; });
         check(w2.frames == 5 && w2.dropped == 0, "lapped: the first intact frame walks");
     }
     {
         // With boundaries recorded, a lapped cursor resumes at the first boundary an eighth of the ring past the
-        // horizon (frames 0-2 overwritten -> horizon 768 B; + 128 KB -> block 2 starts below that, block 3's boundary is
-        // frame 768) and drops only up to there.
+        // horizon (frames 0-2 overwritten -> horizon 768 B; + 128 KB -> block 2 starts below that, block 3's boundary
+        // is frame 768) and drops only up to there.
         Ring r(kFifo / kPage, 4);
         for (uint64_t k = 0; k < 1024; k++) {
             r.write(k);
         }
         const uint64_t head = kFifo - kW + 3 * r.bytes();
         const Walked w = walk_frames(r.mem, 0, 1024 * r.bytes(), r.mark_span(), out, fw, [&] { return head; });
-        check(w.dropped == 768 * r.bytes() && w.frames == 64 && w.cursor == 832 * r.bytes(), "resume: at the boundary past the horizon");
+        check(
+            w.dropped == 768 * r.bytes() && w.frames == 64 && w.cursor == 832 * r.bytes(),
+            "resume: at the boundary past the horizon");
         for (uint64_t i = 0; i < 64; i++) {
             check(holds(out.data() + i * r.bytes(), fw[i], r, 768 + i), "resume: the frames after it are whole");
         }
@@ -133,7 +139,8 @@ int main() {
     }
     {
         // A device overwriting the ring forever, announcing each frame after its bytes land, and a consumer walking
-        // from just behind the lap point: no frame it is handed may be torn, and a lost position only moves forward. `observed` lags like the ingest thread's arrival count does.
+        // from just behind the lap point: no frame it is handed may be torn, and a lost position only moves forward.
+        // `observed` lags like the ingest thread's arrival count does.
         Ring r(kFifo / kPage, 4);
         std::atomic<uint32_t> word{0};
         std::atomic<uint64_t> observed{0};
@@ -149,7 +156,9 @@ int main() {
                 }
             }
         });
-        const auto live_head = [&] { return widen_head(observed.load(std::memory_order_acquire), word.load(std::memory_order_acquire)); };
+        const auto live_head = [&] {
+            return widen_head(observed.load(std::memory_order_acquire), word.load(std::memory_order_acquire));
+        };
         while (walked.load(std::memory_order_acquire) < r.mem.size()) {
         }
         uint64_t cursor = 0, walks = 0, dropped_passes = 0, frames = 0;
@@ -165,7 +174,9 @@ int main() {
             const Walked w = walk_frames(r.mem, cursor, end, r.mark_span(), out, fw, live_head);
             walks++;
             if (w.dropped != 0) {
-                check(w.cursor > cursor && w.cursor <= end, "concurrent: a lost position moves forward, never past the boundary");
+                check(
+                    w.cursor > cursor && w.cursor <= end,
+                    "concurrent: a lost position moves forward, never past the boundary");
                 dropped_passes++;
             }
             const uint64_t first = (w.cursor - w.bytes) / r.bytes();
@@ -178,8 +189,11 @@ int main() {
         stop.store(true);
         device.join();
         check(frames > 1000, "concurrent: the walk made progress");
-        std::printf("concurrent: %llu walks, %llu frames, %llu passes lost their position\n",
-                    static_cast<unsigned long long>(walks), static_cast<unsigned long long>(frames), static_cast<unsigned long long>(dropped_passes));
+        std::printf(
+            "concurrent: %llu walks, %llu frames, %llu passes lost their position\n",
+            static_cast<unsigned long long>(walks),
+            static_cast<unsigned long long>(frames),
+            static_cast<unsigned long long>(dropped_passes));
     }
     std::puts("PASS");
     return 0;

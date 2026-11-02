@@ -4,14 +4,23 @@
 //
 // Metadata types and values shared by the kernel observability_event_meta_silicon.cpp and its host test,
 // tests/tt_metal/tt_metal/debug_tools/observability_event/test_observability_event_meta_silicon.cpp. The kernel's
-// events carry exactly these values, so the host compares what it decoded against the same constants.
+// records carry exactly these values, so the host compares what it decoded against the same constants.
 #pragma once
 
 #include <stdint.h>
 
-#include "hostdev/observability_event_meta.h"
+#include <hostdevcommon/streaming_profiler_types.hpp>
+
+// A String constant: "..."_s on the device, the text itself on the host.
+#ifdef TT_DEVICE_COMPILE
+#define META_SILICON_STRING(text) text##_s
+#else
+#define META_SILICON_STRING(text) ::tt::tt_metal::experimental::streaming_profiler::String(text)
+#endif
 
 namespace observability_event_meta_silicon {
+
+using tt::tt_metal::experimental::streaming_profiler::String;
 
 enum class Level : int8_t { Low = -3, High = 9 };
 enum Wide : uint64_t { kWideMax = 0xFFFFFFFFFFFFFFFFull };
@@ -21,7 +30,7 @@ struct Style {
     uint8_t verbosity;
 };
 struct NestedMeta {
-    const char* name;
+    String name;
     Style style;
     uint16_t flags;
 };
@@ -35,13 +44,13 @@ struct Mid {
     uint32_t c;
 };
 struct DeepMeta {
-    const char* name;
+    String name;
     Mid mid;
     uint64_t tail;
 };
 
 struct AllWidthsMeta {
-    const char* name;
+    String name;
     bool on;
     int8_t i8;
     uint16_t u16;
@@ -52,33 +61,43 @@ struct AllWidthsMeta {
 };
 
 struct DefaultedMeta {
-    const char* name;
+    String name;
     uint32_t color = 0x123456;
     uint8_t verbosity = 4;
 };
 
 struct TwoStringsMeta {
-    const char* name;
-    const char* detail;
+    String name;
+    String detail;
 };
 
 struct TemplatedMeta {
-    const char* name;
+    String name;
     uint32_t value;
 };
 
-inline constexpr NestedMeta kNested{"meta_nested", {0xA9A9A9, 2}, 0xBEEF};
-inline constexpr DeepMeta kDeep{"meta_deep", {{0x7F, 0x1234}, 0xDEADBEEF}, 0x0123456789ABCDEFull};
+inline constexpr NestedMeta kNested{META_SILICON_STRING("meta_nested"), {0xA9A9A9, 2}, 0xBEEF};
+inline constexpr DeepMeta kDeep{META_SILICON_STRING("meta_deep"), {{0x7F, 0x1234}, 0xDEADBEEF}, 0x0123456789ABCDEFull};
 inline constexpr AllWidthsMeta kAllWidths{
-    "meta_all_widths", true, -128, 0xFFFF, -123456, -0x7FFFFFFFFFFFFFFFll - 1, kWideMax, Level::Low};
-inline constexpr DefaultedMeta kDefaulted{"meta_defaulted"};
-// Every byte the assembler text has to escape: quotes, a backslash, a newline, a tab, UTF-8 and DEL.
-inline constexpr TwoStringsMeta kTwoStrings{"meta_two_strings", "line one\nline two\t\"quotes\" \\ \xC3\xA9 \x7F end"};
+    META_SILICON_STRING("meta_all_widths"),
+    true,
+    -128,
+    0xFFFF,
+    -123456,
+    -0x7FFFFFFFFFFFFFFFll - 1,
+    kWideMax,
+    Level::Low};
+inline constexpr DefaultedMeta kDefaulted{META_SILICON_STRING("meta_defaulted")};
+// Quotes, a backslash, a newline, a tab, UTF-8 and DEL.
+inline constexpr TwoStringsMeta kTwoStrings{
+    META_SILICON_STRING("meta_two_strings"),
+    META_SILICON_STRING("line one\nline two\t\"quotes\" \\ \xC3\xA9 \x7F end")};
 inline constexpr uint32_t kColor = 0x42D4F4;
-inline constexpr tt::observability_event::TimeUnit kUnit = tt::observability_event::TimeUnit::Milliseconds;
+inline constexpr tt::tt_metal::experimental::streaming_profiler::TimeUnit kUnit =
+    tt::tt_metal::experimental::streaming_profiler::TimeUnit::Milliseconds;
 
-// The template event is instantiated with these values: equal values share one event, so two distinct events.
-inline constexpr const char* kTemplatedName = "meta_templated";
+// The templated call site is instantiated with these values: equal values share one call site, so two call sites.
+inline constexpr String kTemplatedName = META_SILICON_STRING("meta_templated");
 inline constexpr uint32_t kTemplatedA = 11;
 inline constexpr uint32_t kTemplatedB = 22;
 
