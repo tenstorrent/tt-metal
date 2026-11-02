@@ -676,10 +676,12 @@ def norm_gamma(device, w):
                            memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
+def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None, add=None, h_out=None):
     """x: residual [.., 32, K] bf16 32x32 tiles (row 0 live), L1 or DRAM; g: norm_gamma; m: hadamard_tensor(K).
     Writes x8 = mask(H(D (rmsnorm(x) * g))) on every A3 worker, like rmsnorm -> prep.
-    y_out: optional L1-interleaved [.., 32, K] bf16 tensor that also gets rmsnorm(x) * g (row 0, rest zero)."""
+    y_out: optional L1-interleaved [.., 32, K] bf16 tensor that also gets rmsnorm(x) * g (row 0, rest zero).
+    add: the residual add fused in front: h = x + add (bf16, like ttnn.add) is normed instead of x and
+    written to h_out (L1-interleaved [.., 32, K] bf16, row 0, rest zero)."""
     import struct
 
     device = x.device()
@@ -708,7 +710,12 @@ def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
     cbs = [cb(0, ttnn.bfloat16, t32, 1), cb(1, m.dtype, t32, 64), cb(2, ttnn.bfloat16, t1, 4),
            cb(3, ttnn.bfloat16, ttnn.Tile([8, 32]), 1), cb(7, ttnn.float32, t32, 1), cb(8, ttnn.float32, t1, 1),
            cb(9, ttnn.float32, t1, 1), cb(10, ttnn.bfloat16, t1, 32), cb(11, ttnn.float32, t32, 1),
-           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1), cb(14, ttnn.bfloat16, t32, 1)]
+           cb(12, ttnn.float32, t32, 1), cb(13, ttnn.bfloat16, t32, 1), cb(14, ttnn.bfloat16, t32, 1),
+           cb(15, ttnn.bfloat16, t32, 1), cb(16, ttnn.bfloat16, t32, 1)]
+    assert (add is None) == (h_out is None)
+    if add is not None:
+        assert h_out.memory_config().buffer_type == ttnn.BufferType.L1 and not h_out.is_sharded()
+        assert add.dtype == ttnn.bfloat16 and not add.is_sharded() and add.shape[-1] == k
     emit = y_out is not None
     if emit:
         assert y_out.memory_config().buffer_type == ttnn.BufferType.L1 and not y_out.is_sharded()
@@ -732,20 +739,23 @@ def rmsprep(x, g, m, x8, workers, eps, debug=0, tdebug=0, y_out=None):
         kernel_source=KERNEL_RMSPREP,
         core_ranges=grid,
         ncrisc_named_compile_time_args=[("rp_x_is_dram", int(x_is_dram)), ("rp_m_page", m_page),
-                                        ("rp_units_per_bank", upb), ("rp_emit", int(emit))],
-        brisc_named_compile_time_args=[("rp_debug", debug), ("rp_emit", int(emit))],
-        trisc_named_compile_time_args=[("rp_tdebug", tdebug), ("rp_emit", int(emit))],
+                                        ("rp_units_per_bank", upb), ("rp_emit", int(emit)),
+                                        ("rp_add", int(add is not None)),
+                                        ("rp_d_is_dram", int(add is not None and add.memory_config().buffer_type == ttnn.BufferType.DRAM))],
+        brisc_named_compile_time_args=[("rp_debug", debug), ("rp_emit", int(emit)), ("rp_add", int(add is not None))],
+        trisc_named_compile_time_args=[("rp_tdebug", tdebug), ("rp_emit", int(emit)), ("rp_add", int(add is not None))],
         # full-sync DST: the SFPU steps address DST slots absolutely (half-sync alternates halves per acquire)
         trisc_compute_config=cfg,
         per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
             ncrisc_args=[(c, [x.buffer_address(), m.buffer_address(), g.buffer_address(), b, r]
-                          + ([y_out.buffer_address()] if emit else []))
+                          + ([y_out.buffer_address()] if emit else [])
+                          + ([add.buffer_address(), h_out.buffer_address()] if add is not None else []))
                          for c, (b, r) in zip(cores, units)],
             brisc_args=brisc,
             trisc_args=[(c, [rb.buffer_address()]) for c in cores],
         ),
     )
     prog = ttnn.ProgramDescriptor(kernels=uk.get_kernel_descriptors().kernels, semaphores=sems, cbs=cbs)
-    ttnn.generic_op([x, g, m, rb] + ([y_out] if emit else []) + [x8], prog)
+    ttnn.generic_op([x, g, m, rb] + ([y_out] if emit else []) + ([add, h_out] if add is not None else []) + [x8], prog)
     ttnn.deallocate(rb)
     return x8

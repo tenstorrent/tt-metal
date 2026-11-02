@@ -94,6 +94,30 @@ def main():
                 print(f"emit: {np.median(all_kernel_us(ttnn, device)):6.1f} us  x8 unchanged {bool((got8 == got).all())}  "
                       f"y rel max err {yerr:.2e}  rows 1-31 zero {bool((yt[1:] == 0).all())}", flush=True)
                 ttnn.deallocate(yo)
+                # add mode: h = bf16(x + d) normed instead of x, and written out
+                d = torch.from_numpy(rng.standard_normal((1, 1, 32, k)).astype(np.float32)).bfloat16().float()
+                hw = (x + d).bfloat16().float()
+                h0 = hw[0, 0, 0].double().numpy()
+                yh = h0 / np.sqrt((h0 ** 2).mean() + eps) * (1.0 + w.double().numpy())
+                want_h = a3.mask_x(torch.from_numpy(had.rotate(yh[None]).astype(np.float32)).flatten()).numpy()
+                for dmem in (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG):
+                    dt = ttnn.from_torch(d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dmem)
+                    ho = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 32, k]), ttnn.bfloat16, ttnn.TILE_LAYOUT,
+                                                        device, ttnn.L1_MEMORY_CONFIG)
+                    a3.rmsprep(xt, g, m, x8, workers, eps, add=dt, h_out=ho)
+                    g8 = ttnn.to_torch(x8).float().numpy().reshape(len(workers), 8, k)
+                    ht = ttnn.to_torch(ho).float().numpy()[0, 0]
+                    herr = float(np.abs(g8 - want_h[None]).max()) / 2.0 ** (np.floor(np.log2(np.abs(want_h).max())) - 7)
+                    device_kernel_us(ttnn, device)
+                    for _ in range(9):
+                        a3.rmsprep(xt, g, m, x8, workers, eps, add=dt, h_out=ho)
+                    ttnn.synchronize_device(device)
+                    print(f"add (d in {'DRAM' if dmem == ttnn.DRAM_MEMORY_CONFIG else 'L1'}): "
+                          f"{np.median(all_kernel_us(ttnn, device)):6.1f} us  h exact {bool((ht[0] == hw[0, 0, 0].numpy()).all())}  "
+                          f"rows 1-31 zero {bool((ht[1:] == 0).all())}  x8 max err {herr:.1f} bf16 ulp  "
+                          f"pcc {float(np.corrcoef(g8[0].sum(0), want_h.sum(0))[0, 1]):.7f}", flush=True)
+                    ttnn.deallocate(ho)
+                    ttnn.deallocate(dt)
             ttnn.deallocate(x8)
             ttnn.deallocate(xt)
     finally:

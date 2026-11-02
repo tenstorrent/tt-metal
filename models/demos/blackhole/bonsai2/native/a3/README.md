@@ -34,13 +34,26 @@ once, never rewritten), `linear.TernaryLinear` (one projection), `mlp.TernaryMLP
 | + GDN in/out (vs MLP-only 58.24, same session) | 49.43 | 95.70 / 100.00 |
 | all sites (counted, vs control 79.09) | 44.25 | 95.51 / 100.00 |
 | + A2b 256 B code tiles + rectangular workers (vs 44.25 same session) | 39.40 | 95.51 / 100.00 |
+| + shared scale tails + B's GDN RECT/HMI (counted 18:33) | 38.23 | 95.51 / 100.00 |
+| + B's GDN CONV_HM/TRIM/HMO (3-arm count 19:13, vs 38.32 same session) | 35.85 | 96.09 / 100.00 |
+| + norm sites ffnorm, attnnorm, lmnorm (rmsprep; same count) | 34.97 | 96.09 / 100.00 |
+| + glue ops removed at the GDN/attention sites (count 20:17, vs 34.76 same session) -- current default | 33.92 | 96.09 / 100.00 |
 
-Against the six-flag control: 2.01x (12.6 -> 25.4 tok/s). Q2_0 runs number for number as PQ2_0
+Against the six-flag control: 2.33x (12.6 -> 29.5 tok/s). Q2_0 runs number for number as PQ2_0
 (bit-identical codes, deduplicated scales; the cost of finer groups was not measured).
 
 Op level (device us, real weights, PCC >= 0.99999 vs float64 cpu_ref): MLP 240 per layer (dense
 ~575), GDN [qkv|z] 79 (dense 259), ssm_out / attn_output 38 (91 / 102), attn qkv 71 (215),
 LM head 1053 (3957). Engine at ~442 GB/s over all ternary bytes (86% of peak).
+
+## Fused RMSNorm (rmsprep)
+
+`kernels/rmsprep_kernel.cpp` does the decode RMSNorm, the Hadamard prep and the scatter to the A3
+workers in one op (sites ffnorm / attnnorm / lmnorm, `TernaryLinear.norm`, `TernaryMLP.forward_residual`):
+the cores exchange per-block partial sums of squares through a master core, and rstd is applied to the
+outputs (H(D(x g rstd)) = rstd H(D(x g))), so the exchange overlaps the matmul. Options: `y_out` also writes
+the normalized rows (the GDN a|b matmul reads them), `add`/`h_out` fuses the residual add in front.
+15.1 us at op level (x in L1) vs 9.7 for plain prep; it replaces 3-4 ops per site.
 
 ## Traps (details in agentA/tt4x_local/TRAPS.md)
 
@@ -52,3 +65,5 @@ LM head 1053 (3957). Engine at ~442 GB/s over all ternary bytes (86% of peak).
   after freeing a tensor its CBs were built on.
 - An sfpi DST unit is 4 rows of even or odd columns.
 - Stock ttnn ops reject 1x32 tiles; narrow-N stock matmuls on auto configs are ~9x slow.
+- The decode tails around the 6144-wide sites are dispatch-bound: removing one 2.4 us op (a typecast)
+  saved 0.5 ms/token. Count ops, not just kernel time.
