@@ -329,3 +329,21 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             self.model.reset_streams(slot_id)
             logger.debug(f"KDA carries reset for slot {slot_id} at request head")
         return super().prefill_chunk(*args, **kwargs)
+
+    def prefill_forward(self, input_tensor, kv_caches, chunks, *args, **kwargs):
+        """Reset the KDA carries of every chunk that starts a request, then run the shared packed forward.
+
+        The per-chunk counterpart of `prefill_chunk`'s reset: each non-empty chunk is validated against the KDA
+        bounds contract (32-aligned start, end past it), and a chunk at `actual_start == 0` zeroes its own slot's
+        carries, outside any capture, before the forward that continues them. Validation runs for every chunk
+        before any reset, so a bad chunk leaves every carry as it was.
+        """
+        live = [c for c in chunks if not c.is_empty]
+        for c in live:
+            validate_kda_bounds(c.actual_start, c.actual_end)
+        heads = sorted({c.slot_id for c in live if c.actual_start == 0})
+        for slot_id in heads:
+            self.model.reset_streams(slot_id)
+        if heads:
+            logger.debug(f"KDA carries reset for slots {heads} at request head")
+        return super().prefill_forward(input_tensor, kv_caches, chunks, *args, **kwargs)
