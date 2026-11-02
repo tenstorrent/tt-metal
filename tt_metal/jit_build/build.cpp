@@ -473,11 +473,8 @@ void JitBuildEnv::init(
     if (rtoptions.get_gathering_enabled()) {
         this->defines_ += "-DENABLE_GATHERING ";
         if (this->arch_ == tt::ARCH::BLACKHOLE) {
-            // Blackhole instruction gathering is incompatible with loading a replay buffer. The LLKs
-            // bracket their records with disable_gathering()/enable_gathering() (load_replay_buf);
-            // the compiler's own replay optimisation turns unrolled SFPU loops into records it never
-            // brackets, so it is off in a gathering build. A compiler flag, not a define: the defines
-            // are dropped once a kernel has been preprocessed (TT_METAL_JIT_PREPROCESS).
+            // Gathering is incompatible with loading a replay buffer: the LLKs bracket their own records, the
+            // compiler's replay optimisation does not. A flag, not a define: JIT preprocessing drops the defines.
             this->cflags_ += "-mno-tt-tensix-optimize-replay ";
         }
     }

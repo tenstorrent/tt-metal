@@ -196,19 +196,14 @@ def test_harness_gathering_sequence_matches_tt_metal():
 
 
 # Replay-record checks for ENABLE_GATHERING builds (tenstorrent/tt-llk#1701 item 9).
-#
-# RISC-V CSR instruction fields, for matching cfg0 (CSR 0x7c0) writes whatever register
-# the compiler picked for the bit mask: csr[31:20] rs1[19:15] funct3[14:12] rd[11:7] op[6:0].
+# RISC-V CSR fields: csr[31:20] rs1[19:15] funct3[14:12] rd[11:7] op[6:0]; rs1 is whatever
+# register the compiler picked for the bit mask.
 CFG0_CSR = 0x7C0
 FUNCT3_CSRRS, FUNCT3_CSRRC = 0b010, 0b011
-# disable_gathering() is csrrs, fence, csrrs, csrrc, fence, then three TTNOPs; allow
-# slack for scheduling.
+# disable_gathering() is csrrs, fence, csrrs, csrrc, fence, three TTNOPs, plus scheduling slack.
 DISABLE_WINDOW_WORDS = 16
-# enable_gathering() is a single csrrc right after the recorded body. The body is `len` Tensix
-# instructions, but the words between the record and that csrrc also hold the RISC-V code the
-# compiler schedules among them (MOP programming, loop control, the composition of runtime
-# operands), and GCC may cross-jump a body's common tail into shared code, so the walk to the
-# csrrc counts Tensix words and follows unconditional jumps, up to this many words.
+# Walk from a record to its enable_gathering() csrrc: counts Tensix words (RISC-V code is
+# scheduled among them) and follows unconditional jumps (GCC cross-jumps common body tails).
 BODY_WALK_LIMIT_WORDS = 512
 TT_OPCODE_REPLAY = 0x04
 # _calculate_where_'s plain-SFPLOAD path (DISABLE_SFPLOADMACRO) records 6 instructions: three
@@ -237,10 +232,8 @@ def _replay_records(words):
     return records
 
 
-# A record whose length is a runtime value (_llk_pack_block_contiguous_mop_config_) is not an
-# inline .ttinsn word: the compiler composes the REPLAY word from `lui rd, 0x4000` (the REPLAY
-# opcode in the top byte), `addi rd, rd, 1` (load_mode) and the length, and stores it to the
-# instruction buffer. Those are matched separately, with a wider window before them.
+# A runtime-length record (_llk_pack_block_contiguous_mop_config_) is not an inline .ttinsn word:
+# the compiler composes it as `lui rd, 0x4000` (REPLAY opcode), `addi rd, rd, 1` (load_mode), sw.
 RISCV_OPCODE_LUI = 0x37
 RISCV_OPCODE_OP_IMM = 0x13
 RISCV_OPCODE_STORE = 0x23
@@ -526,14 +519,8 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
     )
 
 
-# ---------------------------------------------------------------------------------------------
-# Every Blackhole kernel that records a replay buffer, built the way tt-metal builds kernels under
-# TT_METAL_ENABLE_GATHERING=1 (the harness honours the same variable: test_config.py adds
-# -DENABLE_GATHERING -mno-tt-tensix-optimize-replay). One existing test variant per kernel path
-# is built with --compile-producer in a private build directory and every record found in its
-# math and pack ELFs must be bracketed. Keep the node ids in sync with the tests' parametrisation:
-# a stale id fails with the "stale node id" message below.
-# (kernel, pytest node id relative to python_tests, ELF that must carry the record)
+# One test variant per recording kernel path, built under TT_METAL_ENABLE_GATHERING=1 with
+# --compile-producer; every record in its ELF must be bracketed. (kernel, node id, ELF)
 GATHERING_BUILD_VARIANTS = [
     (
         "transpose_dest 32-bit",

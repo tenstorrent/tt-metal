@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// mac_init with ENABLE_GATHERING defined for the whole translation unit, as tt-metal builds
-// kernels under TT_METAL_ENABLE_GATHERING=1. The harness has no mac test (ttnn drives the
-// kernel directly), so this driver only instantiates the init that records the replay
-// buffer. Build-only: test_gathering_config.py inspects the math ELF and never runs it.
+// Build-only driver: instantiates mac_init under ENABLE_GATHERING so test_gathering_config.py can
+// inspect its replay record in the math ELF (the harness has no mac test; ttnn drives the kernel).
 
 #ifndef ENABLE_GATHERING
 #define ENABLE_GATHERING

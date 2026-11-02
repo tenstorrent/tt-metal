@@ -407,12 +407,8 @@ class TestConfig:
 
     @staticmethod
     def gathering_build() -> bool:
-        """The same switch tt-metal's JIT build honours: the LLK tests must run in the gathering
-        configuration tt-metal ships. ENABLE_GATHERING leaves Blackhole instruction gathering on
-        at boot (boot.h) and brackets every replay-buffer record with disable/enable_gathering
-        (ckernel::load_replay_buf). Wormhole has no gathering; Quasar ignores the define.
-        "1" only, like TT_METAL_DISABLE_SFPLOADMACRO.
-        """
+        """tt-metal's JIT switch: the LLK tests build in the gathering configuration tt-metal
+        ships. "1" only, like TT_METAL_DISABLE_SFPLOADMACRO."""
         return os.environ.get("TT_METAL_ENABLE_GATHERING") == "1"
 
     @staticmethod
