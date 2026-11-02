@@ -60,7 +60,7 @@ on:
         default: ""
         type: string
       stage2-thresholds:
-        description: 'With stage2-baseline-ref: {"<arch>": {"threshold": ..., "module_thresholds": ...}}; only these arches run stage 2'
+        description: 'With stage2-baseline-ref: {"<arch>": {"threshold": ..., "min_cycles": ..., "module_thresholds": ...}}; only these arches run stage 2'
         required: false
         default: "{}"
         type: string
@@ -468,6 +468,7 @@ jobs:
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           THRESHOLD: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].threshold }}
           MODULE_THRESHOLDS: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].module_thresholds }}
+          MIN_CYCLES: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].min_cycles }}
         run: |
           # JOB_START_EPOCH is stamped after container init (up to ~3 min on a cold pull); 2 more stay for the uploads.
           export LLK_STAGE2_DEADLINE=$(( JOB_START_EPOCH + (TIMEOUT_MINUTES - 5) * 60 ))
