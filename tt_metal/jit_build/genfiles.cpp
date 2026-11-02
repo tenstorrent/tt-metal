@@ -380,9 +380,11 @@ constexpr string_view SCRATCHPAD_NULL_TOKEN = "::ScratchpadBindingToken";
 
 // Each emit_*_tokens function below emits the tokens of the bindings that land at `site`.
 //
-// A scope's struct mixes names of every kind, so a member may share a name with a namespace or type
-// that a later declaration refers to (an arg named `dfb`, say). So every declaration spells the
-// namespaces and types it refers to fully qualified: ::dfb::AccessPattern, ::std::make_tuple.
+// A scope's struct mixes names of every kind, so a member may share a name with a type that a later
+// declaration refers to, and hide it (an arg named `DFBBindingToken`, say). So every declaration
+// spells the types it refers to fully qualified: ::DFBBindingToken. (A namespace name can't be hidden
+// that way, since a name followed by :: is looked up only among namespaces and types. Namespaces are
+// qualified too, to keep the rule simple: qualify everything.)
 
 void emit_dfb_tokens(ostream& content, DeclSite site, const vector<DfbEntry>& entries) {
     for_each_at(site, entries, [&](const DfbEntry& entry, string_view name) {
