@@ -316,13 +316,48 @@ void kernel_main() {
             noc_read.async_read(counts_acc, CoreLocalMem<uint32_t>(counts_l1), counts_page_size, {.page_id = 0}, {});
             noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
             noc_read.async_read_barrier();
+#ifdef URE_FAR_EXT_OFF
+            // Where combine's walks open on each expert: the start of the run of the ring chip diametrically
+            // opposite (expert_offsets' row for it), as a tile-row relative to the expert's region. Built once here
+            // and multicast with the counts, so all three kernels start each expert's chunks alike.
+            {
+                const uint32_t off_page = get_arg_val<uint32_t>(URE_FAR_RT_BASE + 1);
+                const uint32_t dg_far = get_arg_val<uint32_t>(URE_FAR_RT_BASE + 2);
+                const auto off_acc = TensorAccessor(
+                    tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+                    get_arg_val<uint32_t>(URE_FAR_RT_BASE + 0),
+                    off_page);
+                const uint32_t far_l1 = counts_l1 + URE_FAR_EXT_OFF;
+                // The start scratch is not reserved yet; its page serves as the staging slot for the regions.
+                const uint32_t start_tmp = cb_start_scratch_obj.get_write_ptr();
+                noc_async_read(off_acc.get_noc_addr(dg_far), far_l1, off_page);
+                noc_read.async_read(
+                    start_acc,
+                    CoreLocalMem<uint32_t>(start_tmp),
+                    start_acc.get_aligned_page_size(),
+                    {.page_id = 0},
+                    {});
+                noc_async_read_barrier();
+                noc_read.async_read_barrier();
+                invalidate_l1_cache();
+                volatile tt_l1_ptr uint32_t* far = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(far_l1);
+                const volatile tt_l1_ptr uint32_t* region = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_tmp);
+                for (uint32_t e = 0; e < off_page / sizeof(uint32_t); e++) {
+                    far[e] = far[e] > region[e] ? (far[e] - region[e]) / TILE_HEIGHT : 0;
+                }
+            }
+#endif
             if (counts_num_receivers > 0) {
                 // linked=true so the valid-sem multicast is ordered behind both data
                 // multicasts on the same reserved path (as for the weight mcast).
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(counts_l1),
                     MulticastEndpoint{},
+#ifdef URE_FAR_EXT_OFF
+                    URE_FAR_EXT_OFF + get_arg_val<uint32_t>(URE_FAR_RT_BASE + 1),
+#else
                     counts_page_size,
+#endif
                     counts_num_receivers,
                     {.offset_bytes = 0},
                     {.noc_x_start = cb_nx_start,
@@ -610,7 +645,14 @@ void kernel_main() {
         // not the max-tokens-padded shape of the input. chunk_M_tiles / per_core_M
         // were picked from the count above; the row mapping is contiguous (core gy
         // owns rows [chunk*chunk_M + gy*per_core_M, + per_core_M)).
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+#ifdef URE_FAR_EXT_OFF
+        const uint32_t first_chunk =
+            adaptive_chunk::first_chunk(counts_ptr[URE_FAR_EXT_OFF / 4 + global_expert_id], grp_rows, grp_chunk_M);
+#else
+        constexpr uint32_t first_chunk = 0;
+#endif
+        for (uint32_t chunk_i = 0; chunk_i < effective_chunks; ++chunk_i) {
+            const uint32_t chunk = adaptive_chunk::chunk_at(chunk_i, effective_chunks, first_chunk);
             // Per-chunk per_core_M: per_core_M_max for full chunks, a smaller divisor
             // for the tail. Chunk starts are UNIFORM at chunk*chunk_M_max (full chunks
             // are max_chunk; the tail is last, so its start is num_full*max_chunk too).

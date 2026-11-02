@@ -1048,9 +1048,16 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_emb
     // host-side-validated MAX_GLOBAL_EXPERTS limit.
     const uint32_t counts_num_entries = static_cast<uint32_t>(t.counts.logical_shape()[-1]);
     const uint32_t idx_num_entries = static_cast<uint32_t>(t.global_expert_idx_table.logical_shape()[-1]);
-    const uint32_t counts_scratch_bytes = std::max<uint32_t>(
+    uint32_t counts_scratch_bytes = std::max<uint32_t>(
         static_cast<uint32_t>(counts_buffer->aligned_page_size()),
         counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
+    // The opening tile-row table lands past the counts, 64-byte aligned because it is read straight from DRAM.
+    // Within L1_SCRATCH_MARGIN, so the L1 plan does not change with it.
+    const uint32_t far_ext_off = (counts_scratch_bytes + 63u) & ~63u;
+    if (options.far_chunk_table) {
+        counts_scratch_bytes =
+            far_ext_off + ((counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)) + 63u) & ~63u);
+    }
     const uint32_t idx_scratch_bytes = std::max<uint32_t>(
         static_cast<uint32_t>(idx_buffer->aligned_page_size()),
         idx_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
@@ -1173,6 +1180,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_emb
     const bool partial_eighth = partial_eighth_fits(g);
     tt::tt_metal::KernelDescriptor::Defines reader_defines;
     reader_defines.emplace_back("CB_X_TILED", std::to_string(CB_X_TILED));
+    if (options.far_chunk_table) {
+        reader_defines.emplace_back("URE_FAR_EXT_OFF", std::to_string(far_ext_off));
+    }
     if (big_first_threshold > 0) {
         reader_defines.emplace_back("URE_BIG_FIRST_T", std::to_string(big_first_threshold));
     }
@@ -1275,6 +1285,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_emb
     if (partial_eighth) {
         writer_kernel_desc.defines.emplace_back("PARTIAL_EIGHTH", "1");
     }
+    if (options.far_chunk_table) {
+        writer_kernel_desc.defines.emplace_back("URE_FAR_EXT_OFF", std::to_string(far_ext_off));
+    }
     if (big_first_threshold > 0) {
         writer_kernel_desc.defines.emplace_back("URE_BIG_FIRST_T", std::to_string(big_first_threshold));
     }
@@ -1367,6 +1380,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_emb
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     tt::tt_metal::KernelDescriptor::Defines compute_defines;
     compute_defines.emplace_back("PACKER_L1_ACC", "1");
+    if (options.far_chunk_table) {
+        compute_defines.emplace_back("URE_FAR_EXT_OFF", std::to_string(far_ext_off));
+    }
     if (big_first_threshold > 0) {
         compute_defines.emplace_back("URE_BIG_FIRST_T", std::to_string(big_first_threshold));
     }

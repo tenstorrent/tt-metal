@@ -157,8 +157,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
                 .collector_noc_y = static_cast<uint32_t>(collector_noc.y),
                 .collector_counts_addr = collector.counts_addr,
                 .go_addr = go_addr});
-        // The wave-planned program does not reorder chunks by where combine's walks open.
-        if (!op.unified_waves) {
+        {
             namespace cf = ttnn::operations::experimental::deepseek_prefill::combine_fabric2d;
             const uint32_t extent = cf::ring_extent(combine_args);
             append_far_run(

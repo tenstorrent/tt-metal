@@ -383,8 +383,16 @@ void kernel_main() {
         // mismatch would emit this expert's rows at the wrong token offsets).
         const uint32_t effective_chunks = runs_here ? adaptive_chunk::num_chunks(count_tiles, grp_chunk_M) : 0;
         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
+        // Same start chunk as the reader and compute (adaptive_chunk::chunk_at).
+#ifdef URE_FAR_EXT_OFF
+        const uint32_t first_chunk =
+            adaptive_chunk::first_chunk(counts_ptr[URE_FAR_EXT_OFF / 4 + global_expert_id], grp_rows, grp_chunk_M);
+#else
+        constexpr uint32_t first_chunk = 0;
+#endif
 
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        for (uint32_t chunk_i = 0; chunk_i < effective_chunks; ++chunk_i) {
+            const uint32_t chunk = adaptive_chunk::chunk_at(chunk_i, effective_chunks, first_chunk);
             // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
             // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
             // Runs before the cb_out drain.

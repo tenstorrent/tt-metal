@@ -37,6 +37,10 @@ struct UnifiedRoutedExpertFfnProgramFactory {
         // The writers report each expert to combine's collector (HYB_EXPERT_DONE_RT_BASE) as soon as they are
         // done with it, at its place in adaptive_chunk::predicted_order.
         bool report_predicted_order = false;
+        // Each whole-grid expert's chunks run from the one holding the rows combine's walks open on (the ring chip
+        // diametrically opposite, URE_FAR_RT_BASE), fanning out from there (adaptive_chunk::chunk_at), so both
+        // ring directions get rows to send from the first chunk on. The table rides past the counts.
+        bool far_chunk_table = false;
     };
     static tt::tt_metal::ProgramDescriptor create_embedded_descriptor(
         const UnifiedRoutedExpertFfnParams& operation_attributes,

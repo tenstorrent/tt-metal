@@ -962,6 +962,8 @@ void kernel_main() {
         // count -> effective_chunks bounds this expert's chunk loop; count=0 => the
         // loop body is skipped entirely.
         uint32_t count_value = 0;
+        // The tile-row combine's walks open on in this expert's region (URE_FAR_EXT_OFF), sent after the count.
+        uint32_t open_row = 0;
         UNPACK(({
             const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
             const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
@@ -991,9 +993,18 @@ void kernel_main() {
             }
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
+#ifdef URE_FAR_EXT_OFF
+            open_row = counts_ptr[URE_FAR_EXT_OFF / 4 + global_expert_id];
+            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, open_row);
+            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, open_row);
+#endif
         }));
         MATH(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
         PACK(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+#ifdef URE_FAR_EXT_OFF
+        MATH(open_row = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        PACK(open_row = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+#endif
         // count is in TOKEN rows; convert to tile rows (ceil), then let the runtime
         // picker size THIS expert's chunks. The picker derives chunk_M_tiles (hence
         // per_core_M and the chunk count) from this expert's own count, so no
@@ -1021,7 +1032,10 @@ void kernel_main() {
         ASSERT(count_tiles == count_tiles_raw);
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, grp_chunk_M);
 
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        // Same start chunk as the reader and writer (adaptive_chunk::chunk_at).
+        const uint32_t first_chunk = adaptive_chunk::first_chunk(open_row, grp_rows, grp_chunk_M);
+        for (uint32_t chunk_i = 0; chunk_i < effective_chunks; ++chunk_i) {
+            const uint32_t chunk = adaptive_chunk::chunk_at(chunk_i, effective_chunks, first_chunk);
             // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller divisor
             // for the tail). The gate/up + multiply phases do per_core_M rows of real
             // work; the down matmul keeps its full compile-time ring and MAC-skips

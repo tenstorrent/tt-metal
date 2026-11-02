@@ -3153,6 +3153,7 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
                 .origin_y = kOriginY,
                 .big_first_threshold = op.big_first_threshold,
                 .report_predicted_order = op.overlap_combine,
+                .far_chunk_table = op.overlap_combine,
             });
     }
 
