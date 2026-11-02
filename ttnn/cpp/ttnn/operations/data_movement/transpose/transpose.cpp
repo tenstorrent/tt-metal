@@ -298,7 +298,11 @@ ttnn::Tensor transpose_impl(
     const bool wh = 5 == (normalized_dim1 + normalized_dim2);  // 2+3=5
     const bool cn = 1 == (normalized_dim1 + normalized_dim2);  // 0+1
     const bool bfloat8_supported = wh || cn;
-    const bool typecast = input_unsqueezed.dtype() == DataType::BFLOAT8_B and !bfloat8_supported;
+    // Only the WH and CN kernels handle block-float tiles; the others move flat face lines, so bfloat8_b and
+    // bfloat4_b go through bfloat16 there.
+    const DataType input_dtype = input_unsqueezed.dtype();
+    const bool typecast =
+        (input_dtype == DataType::BFLOAT8_B || input_dtype == DataType::BFLOAT4_B) and !bfloat8_supported;
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
     Tensor output;
@@ -331,7 +335,7 @@ ttnn::Tensor transpose_impl(
             input_typecasted, transpose_dims[normalized_dim1][normalized_dim2], memory_config_arg, pad_value);
     }
     output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
-    return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
+    return typecast ? ttnn::typecast(output, input_dtype) : output;
 }
 
 }  // namespace ttnn::operations::data_movement::transpose
