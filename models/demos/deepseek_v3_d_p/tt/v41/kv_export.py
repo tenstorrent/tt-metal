@@ -40,6 +40,7 @@ tokens so far; chunk boundaries are multiples of 128 (the prefill's 64-per-chip 
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -312,6 +313,18 @@ def _export_entries(exp, attn, st, slot, L, start, end, *, ratio, ent, idx, chun
     ttnn.deallocate(keys)
     if not cp2_split():
         attn._write_rm(ent, rows, b, e0)
+        ttnn.kv_cache.fill_cache_for_user_(idx, k8, b, update_idx=e0)
+    elif os.environ.get("V41_EXPORT_CP2_IDX", "1") == "0":
+        # DS41F-0138 (2026-11-02): the ring's KV split with the index keys REPLICATED (DSV41_CSA_CP2_IDX=0 -- the index split is
+        # the open defect at 32k): entry rows chip-major as below, the index keys unsplit at their global rows
+        S2 = exp.max_seq_len // ratio // 2
+        assert e0 % 16 == 0 and n % 16 == 0, (e0, n)
+        ent_c = _chip_major(rows, 8)
+        for c in range(2):
+            er = ttnn.slice(ent_c, [c, 0, 0, 0], [c + 1, 1, n // 2, HEAD_DIM])
+            attn._write_rm(ent, er, b, c * S2 + e0 // 2)
+            ttnn.deallocate(er)
+        ttnn.deallocate(ent_c)
         ttnn.kv_cache.fill_cache_for_user_(idx, k8, b, update_idx=e0)
     else:
         # DS41F-0138: chip-major export -- entry rows [e0, e0 + n) are 8-row-interleaved over the chips, the index keys in
