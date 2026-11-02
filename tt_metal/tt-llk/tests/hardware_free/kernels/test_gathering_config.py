@@ -392,6 +392,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
         UNPACK_TRANS_FACES,
         UNPACK_TRANS_WITHIN_FACE,
     )
+    from helpers.tile_constants import MAX_NUM_FACES
 
     # bf16 is the LO16 where path; the record is the same for every supported format.
     formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
@@ -413,7 +414,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
             DEST_SYNC(),
             TILE_COUNT(tile_cnt_A),
             LOOP_FACTOR(1),
-            NUM_FACES(num_faces=4),
+            NUM_FACES(num_faces=MAX_NUM_FACES),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),

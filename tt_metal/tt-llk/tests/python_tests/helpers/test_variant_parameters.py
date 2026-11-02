@@ -979,6 +979,14 @@ class DEST_SYNC(TemplateParameter):
 
 
 @dataclass
+class DEFAULT_DEST_SYNC(TemplateParameter):
+    """Emit the default Dest sync without adding a fixed field to a perf schema."""
+
+    def convert_to_cpp(self) -> str:
+        return "constexpr auto dest_sync = ckernel::DstSync::SyncHalf;"
+
+
+@dataclass
 class TILIZE(TemplateParameter):
     tilize: Tilize = Tilize.No
 

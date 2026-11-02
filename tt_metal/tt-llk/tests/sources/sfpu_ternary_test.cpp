@@ -22,101 +22,10 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr std::uint32_t MAX_TILES_DEST          = is_fp32_dest_acc_en ? 4 : 8;
-static constexpr ckernel::DstSync DST_SYNC_MODE        = ckernel::DstSync::SyncHalf;
+static constexpr ckernel::DstSync DST_SYNC_MODE        = dest_sync;
 static constexpr ckernel::BroadcastType BROADCAST_TYPE = ckernel::BroadcastType::NONE;
 
-template <typename T, typename = void>
-struct has_buffer_a : std::false_type
-{
-};
-
-template <typename T>
-struct has_buffer_a<T, std::void_t<decltype(std::declval<T>().buffer_A)>> : std::true_type
-{
-};
-
-template <typename T, typename = void>
-struct has_buffer_b : std::false_type
-{
-};
-
-template <typename T>
-struct has_buffer_b<T, std::void_t<decltype(std::declval<T>().buffer_B)>> : std::true_type
-{
-};
-
-template <typename T, typename = void>
-struct has_buffer_c : std::false_type
-{
-};
-
-template <typename T>
-struct has_buffer_c<T, std::void_t<decltype(std::declval<T>().buffer_C)>> : std::true_type
-{
-};
-
-template <typename T>
-std::uint32_t ternary_input_a_address(const T& params, std::uint32_t tile)
-{
-    if constexpr (has_buffer_a<T>::value)
-    {
-        return L1_ADDRESS(params.buffer_A[tile]);
-    }
-    else
-    {
-        return PERF_ADDRESS(PERF_INPUT_A, tile);
-    }
-}
-
-template <typename T>
-std::uint32_t ternary_input_b_address(const T& params, std::uint32_t tile)
-{
-    if constexpr (has_buffer_b<T>::value)
-    {
-        return L1_ADDRESS(params.buffer_B[tile]);
-    }
-    else
-    {
-        return PERF_ADDRESS(PERF_INPUT_B, tile);
-    }
-}
-
-template <typename T>
-std::uint32_t ternary_input_c_address(const T& params, std::uint32_t tile)
-{
-    if constexpr (has_buffer_c<T>::value)
-    {
-        return L1_ADDRESS(params.buffer_C[tile]);
-    }
-    else
-    {
-        return PERF_ADDRESS(PERF_INPUT_C, tile);
-    }
-}
-
-template <typename T, typename = void>
-struct has_buffer_res : std::false_type
-{
-};
-
-template <typename T>
-struct has_buffer_res<T, std::void_t<decltype(std::declval<T>().buffer_Res)>> : std::true_type
-{
-};
-
-template <typename T>
-std::uint32_t ternary_output_address(const T& params, std::uint32_t tile)
-{
-    if constexpr (has_buffer_res<T>::value)
-    {
-        return L1_ADDRESS(params.buffer_Res[tile]);
-    }
-    else
-    {
-        return PERF_ADDRESS(PERF_OUTPUT, tile);
-    }
-}
-
+// Perf schema v3 omits block runtimes and derives one full-tensor block from TILE_CNT.
 template <typename T, typename = void>
 struct has_num_blocks : std::false_type
 {
@@ -163,14 +72,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_BLOCKS                   = ternary_num_blocks(params);
     const std::uint32_t NUM_TILES_IN_BLOCK           = ternary_num_tiles_in_block(params);
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
+#ifndef SPEED_OF_LIGHT
+    const Operand& buffer_A = params.buffer_A;
+    const Operand& buffer_B = params.buffer_B;
+    const Operand& buffer_C = params.buffer_C;
+#endif
 
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
-        _llk_unpack_A_init_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
-            UNPACK_TRANSPOSE_FACES,
-            UNPACK_TRANSPOSE_WITHIN_FACE,
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            num_faces /* num_faces_A */,
+            num_faces /* num_faces_B */);
+        _llk_unpack_A_init_<BROADCAST_TYPE, false /* acc_to_dest */, reuse_dest_type, unpack_to_dest>(
+            UNPACK_TRANSPOSE_FACES /* transpose_of_faces */,
+            UNPACK_TRANSPOSE_WITHIN_FACE /* within_face_16x16_transpose */,
             ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
             formats.unpack_A_src,
             formats.unpack_A_dst);
@@ -185,11 +106,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid<true, is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR);
+                _perf_unpack_loop_set_valid<true /* set_a */, is_fp32_dest_acc_en /* set_b */>(num_faces * TILE_CNT * LOOP_FACTOR /* iterations */);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
+            // Unlike the single-stream isolation modes, L1_TO_L1 measures all three operand streams.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
@@ -197,12 +119,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
                         const std::uint32_t input_tile = block * NUM_TILES_IN_BLOCK + tile;
-                        _llk_unpack_A_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
-                            ternary_input_a_address(params, input_tile), formats.unpack_A_src, formats.unpack_A_dst);
-                        _llk_unpack_A_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
-                            ternary_input_b_address(params, input_tile), formats.unpack_A_src, formats.unpack_A_dst);
-                        _llk_unpack_A_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
-                            ternary_input_c_address(params, input_tile), formats.unpack_A_src, formats.unpack_A_dst);
+                        _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest */, reuse_dest_type, unpack_to_dest>(
+                            L1_ADDRESS(buffer_A[input_tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                        _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest */, reuse_dest_type, unpack_to_dest>(
+                            L1_ADDRESS(buffer_B[input_tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                        _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest */, reuse_dest_type, unpack_to_dest>(
+                            L1_ADDRESS(buffer_C[input_tile]), formats.unpack_A_src, formats.unpack_A_dst);
                     }
                 }
             }
@@ -213,7 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    _llk_unpack_A_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
+                    _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest */, reuse_dest_type, unpack_to_dest>(
                         PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
@@ -237,6 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = ternary_num_tiles_in_block(params);
     constexpr DataCopyType data_copy_type  = DataCopyType::A2D;
     constexpr DataFormat MATH_FORMAT_RAW   = static_cast<DataFormat>(formats.math);
+    // Math represents Float32 as Tf32, while the SFPU dispatch asserts the logical format.
     constexpr DataFormat MATH_FORMAT_ENUM  = (MATH_FORMAT_RAW == DataFormat::Tf32) ? DataFormat::Float32 : MATH_FORMAT_RAW;
 
     {
@@ -266,7 +189,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else
                     {
-                        _perf_math_loop_clear_valid<true, true>(num_faces);
+                        _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(num_faces /* iterations */);
                     }
                 }
             }
@@ -287,7 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
                         else
                         {
-                            _perf_math_loop_clear_valid<true, true>(num_faces);
+                            _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(num_faces /* iterations */);
                         }
                     }
                 }
@@ -307,15 +230,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                                 block_tile, formats.math, formats.math);
                         }
+                        // SFPU cost is data-independent, so MATH_ISOLATE aliases operands to adjacent Dest slots.
                         test_utils::call_ternary_sfpu_operation<
                             DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
+                            is_fp32_dest_acc_en /* DST_ACCUM_MODE */,
                             SFPU_TERNARY_OPERATION,
                             APPROX_MODE,
                             is_fp32_dest_acc_en,
                             MATH_FORMAT_ENUM,
-                            8>(
-                            block_tile, (block_tile + 1) % MAX_TILES_DEST, (block_tile + 2) % MAX_TILES_DEST, block_tile, SFPU_TERNARY_SCALAR, VectorMode::RC);
+                            8 /* ITERATIONS */>(
+                            block_tile /* dst_index_in0 */,
+                            (block_tile + 1) % MAX_TILES_DEST /* dst_index_in1 */,
+                            (block_tile + 2) % MAX_TILES_DEST /* dst_index_in2 */,
+                            block_tile /* dst_index_out */,
+                            SFPU_TERNARY_SCALAR /* value */,
+                            VectorMode::RC /* vector_mode */);
                     }
                 }
             }
@@ -332,11 +261,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_math_eltwise_unary_datacopy_init_<data_copy_type, is_fp32_dest_acc_en>(
                             ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                            0, formats.math, formats.math);
+                            0 /* dst_index_in0 */, formats.math, formats.math);
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                            1, formats.math, formats.math);
+                            1 /* dst_index_in1 */, formats.math, formats.math);
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                            2, formats.math, formats.math);
+                            2 /* dst_index_in2 */, formats.math, formats.math);
+                        // sfpi dst_reg[] expects Dest RWC reset to the tile-0 base after the A2D copies.
                         _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
 #ifdef SFPU_CLOBBER_LREGS
                         ckernel::sfpu::clobber_sfpu_lregs();
@@ -344,12 +274,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         test_utils::call_ternary_sfpu_operation_init<SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en>();
                         test_utils::call_ternary_sfpu_operation<
                             DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
+                            is_fp32_dest_acc_en /* DST_ACCUM_MODE */,
                             SFPU_TERNARY_OPERATION,
                             APPROX_MODE,
                             is_fp32_dest_acc_en,
                             MATH_FORMAT_ENUM,
-                            8>(0, 1, 2, 0, SFPU_TERNARY_SCALAR, VectorMode::RC);
+                            8 /* ITERATIONS */>(
+                            0 /* dst_index_in0 */,
+                            1 /* dst_index_in1 */,
+                            2 /* dst_index_in2 */,
+                            0 /* dst_index_out */,
+                            SFPU_TERNARY_SCALAR /* value */,
+                            VectorMode::RC /* vector_mode */);
                         _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                     }
                 }
@@ -370,10 +306,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     const std::uint32_t NUM_BLOCKS         = ternary_num_blocks(params);
     const std::uint32_t NUM_TILES_IN_BLOCK = ternary_num_tiles_in_block(params);
+#ifndef SPEED_OF_LIGHT
+    const Operand& buffer_Res = params.buffer_Res;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
-        _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
@@ -403,7 +342,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         const std::uint32_t result_tile = block * NUM_TILES_IN_BLOCK + tile;
                         _llk_packer_wait_for_math_done_();
-                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(0, ternary_output_address(params, result_tile));
+                        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(0 /* dst_index */, L1_ADDRESS(buffer_Res[result_tile]));
                         _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                     }
                 }

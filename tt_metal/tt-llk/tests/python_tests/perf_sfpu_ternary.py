@@ -13,10 +13,11 @@ with no perf test of their own:
   snake_beta -> metal llk_sfpu/ckernel_sfpu_snake_beta.h  (out = x + sin(alpha*x)^2/beta)
   where      -> metal llk_sfpu/ckernel_sfpu_where.h         (out = a != 0 ? b : c)
 
-These are ternary (3 Dest tiles, plus a scalar for the addc kernels) and do not
-fit the unary/binary harnesses, so they run through a dedicated ternary source.
-The cycles/tile number lands in the TILE_LOOP row of the .post.csv as
-mean(MATH_ISOLATE), and the math ELF size is TEXT_SIZE(MATH_ISOLATE).
+These are ternary (3 Dest tiles, plus a scalar for the addc kernels) and share
+the functional ``sources/sfpu_ternary_test.cpp`` kernel. L1_TO_L1 unpacks all
+three A/B/C operands; the isolation modes retain their targeted microbenchmarks.
+The cycles/tile number lands in the TILE_LOOP row of the .post.csv, and each
+thread's ELF size is reported for its run type.
 """
 
 import pytest
@@ -62,7 +63,7 @@ def test_perf_sfpu_ternary(
     iterations,
     input_dimensions,
 ):
-    _func._run_sfpu_ternary(
+    configuration = _func._build_sfpu_ternary_perf_config(
         formats,
         dest_acc,
         mathop,
@@ -70,7 +71,6 @@ def test_perf_sfpu_ternary(
         loop_factor=loop_factor,
         iterations=iterations,
         approx_mode=ApproximationMode.No,
-        is_perf=True,
-        perf_report=perf_report,
         run_types=ALL_PERF_RUN_TYPES,
     )
+    configuration.run(perf_report)

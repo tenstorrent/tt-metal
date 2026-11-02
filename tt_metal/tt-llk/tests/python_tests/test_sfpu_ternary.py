@@ -43,6 +43,7 @@ from helpers.stimuli_generator import (
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    DEFAULT_DEST_SYNC,
     DEST_SYNC,
     DISABLE_SRC_ZERO_FLAG,
     ITERATIONS,
@@ -58,6 +59,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 
 _SCALAR_VALUE = 2.0
 
@@ -93,6 +95,86 @@ def _ternary_default_specs(mathop, input_format):
     return spec_ab, spec_ab, spec_c
 
 
+def _sfpu_ternary_compile_params(
+    mathop, approx_mode, tile_count, loop_factor, faces_to_generate
+):
+    return [
+        SFPU_TERNARY_OP(mathop),
+        SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+        APPROX_MODE(approx_mode),
+        TILE_COUNT(tile_count),
+        LOOP_FACTOR(loop_factor),
+        NUM_FACES(num_faces=faces_to_generate),
+        UNPACK_TRANS_FACES(Transpose.No),
+        UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+    ]
+
+
+def _build_sfpu_ternary_perf_config(
+    formats,
+    dest_acc,
+    mathop,
+    input_dimensions,
+    *,
+    approx_mode=_APPROX_MODE,
+    loop_factor=1,
+    iterations=32,
+    run_types=ALL_PERF_RUN_TYPES,
+):
+    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
+    )
+
+    # Keep this literal list visible so schema v3 can derive the perf columns.
+    templates = [
+        SFPU_TERNARY_OP(mathop),
+        SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+        APPROX_MODE(approx_mode),
+        ITERATIONS(iterations),
+        TILE_COUNT(tile_count),
+        LOOP_FACTOR(loop_factor),
+        NUM_FACES(num_faces=faces_to_generate),
+        UNPACK_TRANS_FACES(Transpose.No),
+        UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        DEFAULT_DEST_SYNC(),
+    ]
+
+    # Ternary SFPU timing is data-independent. Provision C so runtime and SOL
+    # L1_TO_L1 builds use the same generated Operand path for all three inputs.
+    perf_c = torch.zeros(input_dimensions)
+    return create_test_or_perf_config(
+        is_perf=True,
+        run_types=run_types,
+        test_config_kwargs={
+            "test_name": "sources/sfpu_ternary_test.cpp",
+            "formats": formats,
+            "templates": templates,
+            "runtimes": [],
+            "variant_stimuli": StimuliConfig(
+                None,
+                formats.input_format,
+                None,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_count,
+                tile_count_B=tile_count,
+                tile_count_res=tile_count,
+                buffer_C=perf_c.flatten(),
+                stimuli_C_format=formats.input_format,
+                tile_count_C=tile_count,
+            ),
+            "unpack_to_dest": (
+                formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+            ),
+            "dest_acc": dest_acc,
+            "compile_time_formats": True,
+        },
+    )
+
+
 def _run_sfpu_ternary(
     formats,
     dest_acc,
@@ -104,60 +186,13 @@ def _run_sfpu_ternary(
     approx_mode=_APPROX_MODE,
     clobber_lregs=False,
     loop_factor=1,
-    iterations=32,
-    is_perf=False,
-    perf_report=None,
-    run_types=None,
 ):
-    if run_types is None:
-        run_types = ALL_PERF_RUN_TYPES if is_perf else []
-
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+        input_dimensions,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
     )
-
-    if is_perf:
-        templates = [
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ]
-        configuration = create_test_or_perf_config(
-            is_perf=True,
-            run_types=run_types,
-            test_config_kwargs={
-                "test_name": "sources/sfpu_ternary_test.cpp",
-                "formats": formats,
-                "templates": templates,
-                "runtimes": [],
-                "variant_stimuli": StimuliConfig(
-                    None,
-                    formats.input_format,
-                    None,
-                    formats.input_format,
-                    formats.output_format,
-                    tile_count_A=tile_count,
-                    tile_count_B=tile_count,
-                    tile_count_res=tile_count,
-                    buffer_C=None,
-                    stimuli_C_format=formats.input_format,
-                    tile_count_C=tile_count,
-                ),
-                "unpack_to_dest": (
-                    formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-                ),
-                "dest_acc": dest_acc,
-                "compile_time_formats": True,
-            },
-        )
-        configuration.run(perf_report)
-        return
 
     # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
     torch.manual_seed(0)
@@ -197,17 +232,11 @@ def _run_sfpu_ternary(
         formats.output_format,
     )
 
-    functional_compile_params = [
-        SFPU_TERNARY_OP(mathop),
-        SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-        APPROX_MODE(approx_mode),
+    functional_compile_params = _sfpu_ternary_compile_params(
+        mathop, approx_mode, tile_count, loop_factor, faces_to_generate
+    ) + [
         DISABLE_SRC_ZERO_FLAG(True),
         DEST_SYNC(),
-        TILE_COUNT(tile_count),
-        LOOP_FACTOR(loop_factor),
-        NUM_FACES(num_faces=faces_to_generate),
-        UNPACK_TRANS_FACES(Transpose.No),
-        UNPACK_TRANS_WITHIN_FACE(Transpose.No),
     ]
     if clobber_lregs:
         functional_compile_params.append(SFPU_CLOBBER_LREGS())
@@ -218,7 +247,7 @@ def _run_sfpu_ternary(
 
     configuration = create_test_or_perf_config(
         is_perf=False,
-        run_types=run_types,
+        run_types=[],
         test_config_kwargs={
             "test_name": "sources/sfpu_ternary_test.cpp",
             "formats": formats,
@@ -453,17 +482,12 @@ def test_ttnn_where(
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
         formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(_APPROX_MODE),
+        templates=_sfpu_ternary_compile_params(
+            mathop, _APPROX_MODE, tile_cnt_A, 1, MAX_NUM_FACES
+        )
+        + [
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
-            TILE_COUNT(tile_cnt_A),
-            LOOP_FACTOR(1),
-            NUM_FACES(num_faces=4),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
         ],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
@@ -559,17 +583,12 @@ def test_ttnn_where_mcw(
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
         formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(_APPROX_MODE),
+        templates=_sfpu_ternary_compile_params(
+            mathop, _APPROX_MODE, tile_count, 1, MAX_NUM_FACES
+        )
+        + [
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(1),
-            NUM_FACES(num_faces=4),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
         ],
         runtimes=[NUM_BLOCKS(tile_count), NUM_TILES_IN_BLOCK(1)],
