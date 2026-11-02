@@ -71,7 +71,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
-from helpers.tilize_untilize import tilize, untilize
+from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import passed_test
 
@@ -184,12 +184,13 @@ def _build_custom_mm(
             blk = torch_b[rows, cols]
             # Face-major (tilized) layout inside each [32,tile_c] tile. Tilize in the input
             # format so the returned dtype matches the packer (pack_fp32 rejects a
-            # bfloat16 tensor, which is tilize's default Float16_b dtype).
-            tiled_blk = tilize(
-                blk.reshape(-1),
+            # bfloat16 tensor, which is tilize_block's default Float16_b dtype).
+            tiled_blk = tilize_block(
+                blk,
+                dimensions=[DEFAULT_TILE_R_DIM, tile_c],
                 stimuli_format=in1_format,
                 tile_dimensions=[DEFAULT_TILE_R_DIM, tile_c],
-            )
+            ).flatten()
             # BFP packers need the face count; the others pack the whole tensor.
             packed_tile = (
                 in1_packer(tiled_blk, num_faces=in1_num_faces)
@@ -198,10 +199,11 @@ def _build_custom_mm(
             )
             packed_b += packed_tile
             if in1_format in _BFP_UNPACKERS:
-                golden_b[rows, cols] = untilize(
+                golden_b[rows, cols] = untilize_block(
                     _BFP_UNPACKERS[in1_format](packed_tile, num_faces=in1_num_faces),
+                    dimensions=[DEFAULT_TILE_R_DIM, tile_c],
                     tile_dimensions=[DEFAULT_TILE_R_DIM, tile_c],
-                ).reshape(DEFAULT_TILE_R_DIM, tile_c)
+                )
 
     # Golden: plain A @ B (LoFi), row-major, NOT tilized -- the device-side layout is
     # undone in _device_rows. Instantiate MatmulGolden directly (not via

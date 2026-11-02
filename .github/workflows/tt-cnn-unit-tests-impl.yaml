@@ -43,7 +43,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/tt_cnn_unit_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -111,7 +111,7 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive

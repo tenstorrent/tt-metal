@@ -116,6 +116,8 @@ thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
 // do_thread_crt1 clears this per-thread state before first use; bfd_alloc then sets next to the
 // partition base and current[] to BFD_ID_INVALID on the first allocation.
 thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
+// Scaler DFB of an in-flight 2x column reduce, as operand id + 1 (0 = none); see llk_unpack_common_api.h.
+thread_local std::uint32_t reduce_2x_scaler_operand_plus_one __attribute__((used)) = 0;
 }  // namespace trisc
 namespace pack {
 // Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
