@@ -25,12 +25,8 @@ inline void _sub_int_(
         is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
 
     if constexpr (SIGN_MAGNITUDE_FORMAT) {
-        // Sign-magnitude operands must be converted to 2's complement in-LREG before/after the
-        // integer add, because on Blackhole the INT32_2S_COMP load/store mode has no effect. sfpi
-        // can express this via DataLayout::SM32 (which emits smag_to_int/int_to_smag in software),
-        // but that generic conversion measures ~35% slower on Blackhole than this raw hand-scheduled
-        // path (~498 vs ~368 cyc/tile at MATH_ISOLATE, and #pragma GCC unroll 0 does not help), so
-        // the sign-magnitude path stays raw. The 2's-complement branch below is sfpi.
+        // Blackhole's INT32_2S_COMP load/store mode has no effect, so sign-magnitude operands are
+        // converted in LREGs here; this raw path is faster than sfpi's DataLayout::SM32 conversion.
         constexpr auto INSTR_MOD_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
 
         // size of each tile in Dest is 64 rows
@@ -56,11 +52,7 @@ inline void _sub_int_(
             sfpi::dst_reg++;
         }
     } else {
-        // 2's-complement integer subtract expressed in sfpi. `a - b` lowers to the same single
-        // SFPIADD (2's-complement of B) the raw path used, but the loads/store and the dst walk are
-        // left to the compiler, dropping the per-iteration bookkeeping. Pick the DataLayout whose
-        // load/store format byte matches the original InstrModLoadStore (LO16->U16, INT32/2S_COMP->I32;
-        // on Blackhole INT32_2S_COMP loads the same raw bits as INT32).
+        // LO16 loads as U16; INT32 and INT32_2S_COMP (no-op on Blackhole) load as I32.
         constexpr sfpi::DataLayout layout =
             (INSTRUCTION_MODE == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
         using vType = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
