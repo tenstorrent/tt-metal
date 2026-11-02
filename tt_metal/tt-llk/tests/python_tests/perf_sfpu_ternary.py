@@ -11,7 +11,7 @@ with no perf test of their own:
   addcdiv    -> metal llk_sfpu/ckernel_sfpu_addcdiv.h     (out = a + value*b/c)
   lerp       -> metal llk_sfpu/ckernel_sfpu_lerp.h        (out = a + c*(b - a))
   snake_beta -> metal llk_sfpu/ckernel_sfpu_snake_beta.h  (out = x + sin(alpha*x)^2/beta)
-  where      -> llk sfpu/ckernel_sfpu_where.h               (out = a != 0 ? b : c)
+  where      -> metal llk_sfpu/ckernel_sfpu_where.h         (out = a != 0 ? b : c)
 
 These are ternary (3 Dest tiles, plus a scalar for the addc kernels) and do not
 fit the unary/binary harnesses, so they run through a dedicated ternary source.

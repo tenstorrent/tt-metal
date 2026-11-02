@@ -25,11 +25,11 @@ namespace {
 void validate_tensors(const PadCodegenParams& operation_attributes, const PadCodegenInputs& tensor_args) {
     const Tensor& input = tensor_args.input;
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to pad need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands need to be allocated in buffers on device!");
     const auto& optional_output = tensor_args.optional_output_tensor;
     if (optional_output.has_value()) {
         TT_FATAL(optional_output->storage_type() == ttnn::StorageType::DEVICE, "Output of pad needs to be on device!");
-        TT_FATAL(optional_output->buffer() != nullptr, "Output of pad needs to be allocated in a buffer on device!");
+        TT_FATAL(optional_output->is_allocated(), "Output of pad needs to be allocated in a buffer on device!");
         TT_FATAL(optional_output->device() == input.device(), "Input and output of pad must be on the same device");
         TT_FATAL(
             optional_output->tensor_spec() ==

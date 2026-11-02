@@ -475,9 +475,9 @@ void append_reduce_scatter_common_args(
     const Tensor& intermediate,
     const Tensor& output,
     const std::optional<Tensor>& penult) {
-    TT_FATAL(input.buffer() != nullptr, "reduce_scatter input buffer is null");
-    TT_FATAL(intermediate.buffer() != nullptr, "reduce_scatter intermediate buffer is null");
-    TT_FATAL(output.buffer() != nullptr, "reduce_scatter output buffer is null");
+    TT_FATAL(input.is_allocated(), "reduce_scatter input buffer is null");
+    TT_FATAL(intermediate.is_allocated(), "reduce_scatter intermediate buffer is null");
+    TT_FATAL(output.is_allocated(), "reduce_scatter output buffer is null");
     common_args.push_back(input.buffer());
     common_args.push_back(intermediate.buffer());
     common_args.push_back(output.buffer());
@@ -788,9 +788,6 @@ auto build_ring_reduce_scatter_program_impl(
     }
 
     // Kernel Runtime Args
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
     const auto buffer_size_bytes_full_size_channel =
         tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     // Transient Fabric Mux V2: one mux core per (link, direction), serving num_workers_per_direction
@@ -798,15 +795,17 @@ auto build_ring_reduce_scatter_program_impl(
     // clients close their connections, so no explicit termination signalling is required. The mux
     // kernels themselves are created per-core in the loop below via add_fabric_mux_v2_to_program (each
     // needs the src/dst fabric node ids + link for the direction it forwards to).
-    // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
-    const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*mesh_device);
+    // The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear of persistent
+    // L1 there, and the program's L1 validation keeps it below L1 buffers such as carried semaphores (#56769).
     tt::tt_fabric::FabricMuxV2Config mux_config(
         *mesh_device,
         static_cast<uint8_t>(num_workers_per_direction),
         static_cast<uint8_t>(num_buffers_full_size_channels),
         buffer_size_bytes_full_size_channel,
-        mux_base_l1_address,
-        mux_l1_small_floor_address);
+        /*base_l1_address=*/0);
+    if (!mux_core_range_set.empty()) {
+        mux_config.place_in_program_local_l1(program, mux_core_range_set);
+    }
 
     auto reader_named_compile_args = operations::experimental::ccl::detail::get_ring_reader_named_compile_args(
         ring_index,
@@ -1466,9 +1465,6 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
     }
 
     // Kernel Runtime Args
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
     const auto buffer_size_bytes_full_size_channel =
         tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     // Transient Fabric Mux V2: one mux core per (link, direction), serving num_workers_per_direction
@@ -1476,15 +1472,17 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
     // clients close their connections, so no explicit termination signalling is required. The mux
     // kernels themselves are created per-core in the loop below via add_fabric_mux_v2_to_program (each
     // needs the src/dst fabric node ids + link for the direction it forwards to).
-    // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
-    const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*mesh_device);
+    // The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear of persistent
+    // L1 there, and the program's L1 validation keeps it below L1 buffers such as carried semaphores (#56769).
     tt::tt_fabric::FabricMuxV2Config mux_config(
         *mesh_device,
         static_cast<uint8_t>(num_workers_per_direction),
         static_cast<uint8_t>(num_buffers_full_size_channels),
         buffer_size_bytes_full_size_channel,
-        mux_base_l1_address,
-        mux_l1_small_floor_address);
+        /*base_l1_address=*/0);
+    if (!mux_core_range_set.empty()) {
+        mux_config.place_in_program_local_l1(desc, mux_core_range_set);
+    }
 
     auto reader_named_compile_args = operations::experimental::ccl::detail::get_ring_reader_named_compile_args(
         ring_index,
@@ -2251,23 +2249,24 @@ auto build_line_reduce_scatter_program_impl(
     // Common Kernel Runtime Args
     const bool sync_with_other_direction = !(is_first_chip || is_last_chip);
     uint32_t fwd_bwd_semaphore_address = add_semaphore(program, sender_worker_core_range_set, 0);
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
 
     const auto num_full_size_channels = num_workers_per_direction;
     const auto num_header_only_channels = 0;
     const auto buffer_size_bytes_full_size_channel =
         tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
 
-    // Fabric mux kernel
+    // Fabric mux kernel. The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays
+    // clear of persistent L1 there; its addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
         0,
         buffer_size_bytes_full_size_channel,
-        mux_base_l1_address);
+        /*base_l1_address=*/0);
+    if (!mux_core_range_set.empty()) {
+        mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set);
+    }
 
     // mux kernel
     auto mux_kernel_id = add_kernel(

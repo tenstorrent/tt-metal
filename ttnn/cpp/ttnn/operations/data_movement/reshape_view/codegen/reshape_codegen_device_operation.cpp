@@ -19,7 +19,7 @@ namespace {
 // The prim body and a cache hit reach the device before any other check.
 void require_device_input(const Tensor& input) {
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to reshape need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands need to be allocated in buffers on device!");
 }
 
 }  // namespace

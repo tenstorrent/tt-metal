@@ -34,7 +34,7 @@ is also covered by ``test_rmsnorm_clear_product_tile.py``.
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import MathFidelity, format_dict
@@ -76,6 +76,8 @@ def _num_tiles_for_format(formats):
     return [4, 5, 8]
 
 
+# mul_reduce_scalar is a Blackhole-only experimental LLK
+@blackhole_only
 @pytest.mark.xfail(
     reason=(
         "Legacy standalone chunk loop does not use the corrected compute-API "
@@ -93,9 +95,6 @@ def _num_tiles_for_format(formats):
     tile_dimensions=TILE_DIMENSIONS,
 )
 def test_mul_reduce_scalar_chunked(formats, math_fidelity, num_tiles, tile_dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("mul_reduce_scalar is a Blackhole-only experimental LLK")
-
     tile_shape = construct_tile_shape(tile_dimensions)
     elements_per_tile = tile_shape.total_tile_size()
     dest_acc = dest_acc_for(formats.output_format)

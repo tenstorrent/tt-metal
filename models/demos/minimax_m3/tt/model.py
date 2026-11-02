@@ -9,6 +9,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
+from models.demos.minimax_m3.utils.checkpoint import check_supported_config
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
 from models.tt_transformers.tt.common import rope_scaling_model_factory
@@ -59,7 +60,7 @@ def create_rope_setup(
     Returns:
         RotarySetup: Configured rotary setup instance with cos/sin matrices
     """
-    max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
+    max_seq_len = hf_config.max_position_embeddings
     # MiniMax-M3 has no rope_scaling; rope_scaling_model_factory requires a dict,
     # so only build it when params are present, else pass None (plain RoPE).
     rope_scaling_params = getattr(hf_config, "rope_scaling", None)
@@ -70,14 +71,12 @@ def create_rope_setup(
     # 128-wide head is rotated. Build the cos/sin matrices at rotary_dim width;
     # the attention layer rotates [..., :rotary_dim] and passes [..., rotary_dim:]
     # through unchanged (see attention/operations.py:apply_rope).
-    rotary_dim = getattr(hf_config, "rotary_dim", hf_config.head_dim)
-
     rope_setup = RotarySetup(
         device=mesh_device,
         batch_size=batch_size,
-        head_dim=rotary_dim,
+        head_dim=hf_config.rotary_dim,
         max_seq_len=max_seq_len,
-        rope_theta=getattr(hf_config, "rope_theta", 150000.0),
+        rope_theta=hf_config.rope_theta,
         rope_scaling=rope_scaling,
         datatype=datatype,
         shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
@@ -94,9 +93,11 @@ class Model:
     It supports both prefill and decode modes.
 
     Key Features:
-    - MoE (Mixture of Experts): sigmoid+bias router (top-8), SiLU-SwiGLU experts
-    - Full causal GQA attention (no sliding window, no sinks) with partial RoPE + QK-norm
+    - MoE (Mixture of Experts): sigmoid(+bias) router (top-k), clamped-swigluoai experts + shared expert
+    - GQA attention, dense or MSA block-sparse per layer (sparse_attention_freq), partial RoPE + QK-norm
     - Compatible with tt_transformers generator interface
+
+    Every dimension, the layer pattern and RoPE come from ``hf_config`` (checked by check_supported_config).
     """
 
     def __init__(
@@ -143,6 +144,7 @@ class Model:
                 only its layer slice and forwards the hidden state. Both True (default) => a single-rank
                 instance builds the whole model unchanged.
         """
+        check_supported_config(hf_config)
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config

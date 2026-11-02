@@ -60,5 +60,5 @@ outputs:
     description: 'Absolute path to JSON mapping of workflow_name -> last success timestamp info'
 
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'fetch-workflow-data.js'
