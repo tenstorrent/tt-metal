@@ -27,34 +27,13 @@ import numpy as np
 import ttnn
 import ttml
 
-from ttml.common.utils import resolve_padded_load_shape
+from ttml.common.utils import resolve_padded_load_shape, unpermute_proj_rows
 
 from .. import WeightTyingType
 
 # ---------------------------------------------------------------------------
 # Weight-permutation helpers (module-private)
 # ---------------------------------------------------------------------------
-
-
-def _unpermute_proj_rows(w: np.ndarray, n_heads: int) -> np.ndarray:
-    """HF ``[first_half, second_half]`` → ttml interleaved ``[r0, i0, r1, i1, ...]``."""
-    if w.ndim == 1:
-        total = w.shape[0]
-        D = total // n_heads
-        half = D // 2
-        wv = w.reshape(n_heads, D)
-        first_half = wv[:, :half]
-        second_half = wv[:, half:]
-        return np.stack([first_half, second_half], axis=2).reshape(total)
-    if w.ndim == 2:
-        rows, cols = w.shape
-        D = rows // n_heads
-        half = D // 2
-        wv = w.reshape(n_heads, D, cols)
-        first_half = wv[:, :half, :]
-        second_half = wv[:, half:, :]
-        return np.stack([first_half, second_half], axis=2).reshape(rows, cols)
-    raise ValueError(f"Expected 1D or 2D tensor, got {w.ndim}D")
 
 
 def _unpermute_norm_weights(w: np.ndarray) -> np.ndarray:
@@ -147,7 +126,7 @@ def _fuse_kv(k: np.ndarray, v: np.ndarray, num_kv_heads: int) -> np.ndarray:
     q_proj), so it is un-permuted here; V is left as-is. Weights are 2-D
     ``[kv_out, hidden]`` and biases are 1-D ``[kv_out]``.
     """
-    k = _unpermute_proj_rows(k, num_kv_heads)
+    k = unpermute_proj_rows(k, num_kv_heads)
     return np.concatenate([k, v], axis=0)
 
 
@@ -380,7 +359,7 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
 
         heads = _proj_transform_heads(hf_name, config.num_attention_heads, config.num_key_value_heads)
         if heads is not None:
-            arr = _unpermute_proj_rows(arr, heads)
+            arr = unpermute_proj_rows(arr, heads)
         elif _is_norm_proj(hf_name):
             arr = _unpermute_norm_weights(arr)
 

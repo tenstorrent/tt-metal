@@ -33,10 +33,11 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
             tt::tt_metal::split_work_to_cores(
                 device_compute_with_storage_grid_size, num_output_blocks_total, row_major);
 
-    TT_ASSERT(tensor_args.input.dtype() == output.dtype(), "Input and output tensors must be of same type");
-
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input.dtype());
     const uint32_t input_tile_size = tt::tile_size(input_format);
+
+    const tt::DataFormat output_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const uint32_t output_tile_size = tt::tile_size(output_format);
 
     const tt::DataFormat intermediary_format =
         (input_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -124,12 +125,12 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
 
     // Compute transposes and writes back to writer
     desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_size * input_tile_size,
+        .total_size = cb_size * output_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_id),
-            .data_format = input_format,
-            .page_size = input_tile_size}}}});
+            .data_format = output_format,
+            .page_size = output_tile_size}}}});
 
     // Reuse the reader from reduce since we want the same behavior
     KernelDescriptor reader_kernel_desc;

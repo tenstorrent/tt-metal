@@ -113,6 +113,7 @@ class SyncEvent:
     duration_cycles: int
     payload: Optional[int] = None
     timestamp: int = 0  # For ordering events
+    program: int = 0  # runtime id of the program that emitted it: the harness case id + 1
 
 
 def parse_zone_csv(csv_path: Path) -> list[SyncEvent]:
@@ -153,6 +154,8 @@ def parse_zone_csv(csv_path: Path) -> list[SyncEvent]:
             # default for zone rows and prints it unconditionally, so a "0" in a zone row
             # means "no payload" -- while in a TS_DATA row 0 is a real value (CB id 0 is the
             # CB these kernels use). Reading the column for both would collapse the two.
+            # The program's runtime id: it is how one capture holding every case splits per case.
+            program = int(get_col("run host ID") or 0)
             data_str = get_col("data")
             payload = None
             if data_str and row_type == "TS_DATA":
@@ -178,6 +181,7 @@ def parse_zone_csv(csv_path: Path) -> list[SyncEvent]:
                                 duration_cycles=timestamp - start_ts,
                                 payload=None,
                                 timestamp=start_ts,
+                                program=program,
                             )
                         )
 
@@ -192,6 +196,7 @@ def parse_zone_csv(csv_path: Path) -> list[SyncEvent]:
                             duration_cycles=0,  # Signals are instantaneous
                             payload=payload,
                             timestamp=timestamp,
+                            program=program,
                         )
                     )
 
@@ -207,8 +212,9 @@ def parse_zone_csv(csv_path: Path) -> list[SyncEvent]:
 class ApiTest:
     """One row of the C++ test table in tests/tt_metal/tools/profiler/test_sync_events.cpp.
 
-    `test_id` is the index into that table and is passed to the binary as argv[1], so the two
-    tables must stay in the same order. Append new cases at the end of both.
+    `test_id` is the index into that table -- it is what the binary takes on its command line and
+    what tags the case's events (runtime id test_id + 1) -- so the two tables must stay in the same
+    order. Append new cases at the end of both.
     """
 
     test_id: int
@@ -449,27 +455,31 @@ def get_test_binary() -> Path:
     return TT_METAL_HOME / "build/test/tt_metal/tools/profiler/test_sync_events"
 
 
-def run_test(test_id: int, csv_path: Path) -> tuple[bool, str, bool]:
-    """Run C++ test for a specific API.
+@dataclass
+class Capture:
+    """One run of the C++ harness: a set of cases on a single device open."""
 
-    Returns: (success, log, streaming_profiler_active)
-    """
-    test_binary = get_test_binary()
-    if not test_binary.exists():
-        return False, f"Binary not found: {test_binary}", False
+    success: bool
+    log: str
+    streaming_active: bool
+    csv_path: Path
+    events: list[SyncEvent]
 
+
+def run_cases(test_ids: list[int], csv_path: Path, sync_events: bool = True) -> Capture:
+    """Run the given harness cases back to back in one process; an empty list runs them all."""
     env = os.environ.copy()
     env.update(
         {
             "TT_METAL_HOME": str(TT_METAL_HOME),
             "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_STREAMING_PROFILER_SYNC_EVENTS": "1",
+            "TT_METAL_STREAMING_PROFILER_SYNC_EVENTS": "1" if sync_events else "0",
             "TT_METAL_STREAMING_PROFILER_ZONE_CSV": str(csv_path),
         }
     )
 
     proc = subprocess.run(
-        [str(test_binary), str(test_id)],
+        [str(get_test_binary()), *map(str, test_ids)],
         capture_output=True,
         text=True,
         timeout=300,
@@ -477,8 +487,13 @@ def run_test(test_id: int, csv_path: Path) -> tuple[bool, str, bool]:
         cwd=str(TT_METAL_HOME),
     )
     log = proc.stdout + proc.stderr
-    streaming_active = "[streaming profiler] active" in log
-    return proc.returncode == 0, log, streaming_active
+    return Capture(
+        success=proc.returncode == 0,
+        log=log,
+        streaming_active="[streaming profiler] active" in log,
+        csv_path=csv_path,
+        events=parse_zone_csv(csv_path) if csv_path.exists() else [],
+    )
 
 
 def check_remote_payload(event: SyncEvent, spec: ApiTest) -> list[str]:
@@ -512,31 +527,40 @@ def check_remote_payload(event: SyncEvent, spec: ApiTest) -> list[str]:
     return errors
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def setup():
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     if not get_test_binary().exists():
         pytest.skip("Build test first: cmake --build build --target profiler_test_sync_events")
 
 
+@pytest.fixture(scope="module")
+def capture(setup) -> Capture:
+    """Every case in API_TESTS, captured once.
+
+    A device open is most of what a case costs, and a process per case paid for 25 of them -- on
+    the CI viommu runners that alone outgrew the step budget. Each case is its own program tagged
+    with runtime id test_id + 1, so the shared capture splits back per case.
+    """
+    csv_path = ARTIFACTS / "all_cases.csv"
+    csv_path.unlink(missing_ok=True)
+    return run_cases([spec.test_id for spec in API_TESTS], csv_path)
+
+
 @pytest.mark.parametrize("spec", API_TESTS, ids=lambda s: s.name)
-def test_sync_api(spec: ApiTest):
+def test_sync_api(spec: ApiTest, capture: Capture):
     """Unified test for each sync API. Verifies:
     1. Every expected event is present, on the expected RISC.
     2. Payloads are valid -- CB ids match the CB the kernel used, local semaphore keys are L1
        addresses, and remote payloads decode as tagged NoC addresses on the expected NoC.
     3. The blocking wait blocked for at least the producer's delay.
     """
-    csv_path = ARTIFACTS / f"{spec.name}.csv"
-    csv_path.unlink(missing_ok=True)
-
-    success, log, streaming_active = run_test(spec.test_id, csv_path)
-    assert success, f"Test failed:\n{log[-2000:]}"
-    if not streaming_active:
+    assert capture.success, f"Test failed:\n{capture.log[-2000:]}"
+    if not capture.streaming_active:
         pytest.skip("Streaming profiler did not activate (requires Blackhole with ENABLE_TRACY build)")
-    assert csv_path.exists(), f"Zone CSV not written. Log:\n{log[-1000:]}"
+    assert capture.csv_path.exists(), f"Zone CSV not written. Log:\n{capture.log[-1000:]}"
 
-    events = parse_zone_csv(csv_path)
+    events = [e for e in capture.events if e.program == spec.test_id + 1]
     # Zones carry timing; the matching -KEY signals carry the payload.
     sync_events = [e for e in events if not e.zone_name.endswith("-KEY")]
     key_events = [e for e in events if e.zone_name.endswith("-KEY")]
@@ -637,71 +661,27 @@ def test_no_events_when_disabled():
     csv_path = ARTIFACTS / "disabled.csv"
     csv_path.unlink(missing_ok=True)
 
-    test_binary = get_test_binary()
-    env = os.environ.copy()
-    env.update(
-        {
-            "TT_METAL_HOME": str(TT_METAL_HOME),
-            "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_STREAMING_PROFILER_SYNC_EVENTS": "0",  # Disabled
-            "TT_METAL_STREAMING_PROFILER_ZONE_CSV": str(csv_path),
-        }
-    )
-
-    proc = subprocess.run(
-        [str(test_binary), "0"],
-        capture_output=True,
-        text=True,
-        timeout=300,
-        env=env,
-        cwd=str(TT_METAL_HOME),
-    )
-    log = proc.stdout + proc.stderr
-
-    if proc.returncode != 0:
-        pytest.skip(f"Test binary failed: {log[-500:]}")
-    if "[streaming profiler] active" not in log:
+    run = run_cases([0], csv_path, sync_events=False)
+    if not run.success:
+        pytest.skip(f"Test binary failed: {run.log[-500:]}")
+    if not run.streaming_active:
         pytest.skip("Streaming profiler did not activate")
     if not csv_path.exists():
         pytest.skip("Zone CSV not written (streaming profiler may have no zones)")
 
-    events = parse_zone_csv(csv_path)
+    events = run.events
     assert len(events) == 0, f"Found {len(events)} SYNC-* events when disabled"
     print("\n✓ No SYNC-* events when disabled")
 
 
-def test_full_coverage_summary():
-    """Run every API test in one capture and assert all event types are exercised."""
-    csv_path = ARTIFACTS / "full.csv"
-    csv_path.unlink(missing_ok=True)
-
-    test_binary = get_test_binary()
-    env = os.environ.copy()
-    env.update(
-        {
-            "TT_METAL_HOME": str(TT_METAL_HOME),
-            "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_STREAMING_PROFILER_SYNC_EVENTS": "1",
-            "TT_METAL_STREAMING_PROFILER_ZONE_CSV": str(csv_path),
-        }
-    )
-
-    proc = subprocess.run(
-        [str(test_binary)],  # No arg = all tests
-        capture_output=True,
-        text=True,
-        timeout=300,
-        env=env,
-        cwd=str(TT_METAL_HOME),
-    )
-    log = proc.stdout + proc.stderr
-
-    assert proc.returncode == 0, f"Test failed:\n{log[-1000:]}"
-    if "[streaming profiler] active" not in log:
+def test_full_coverage_summary(capture: Capture):
+    """Over the capture of every API test, assert all event types are exercised."""
+    assert capture.success, f"Test failed:\n{capture.log[-1000:]}"
+    if not capture.streaming_active:
         pytest.skip("Streaming profiler did not activate (requires Blackhole with ENABLE_TRACY build)")
-    assert csv_path.exists(), f"Zone CSV not written. Log:\n{log[-1000:]}"
+    assert capture.csv_path.exists(), f"Zone CSV not written. Log:\n{capture.log[-1000:]}"
 
-    events = parse_zone_csv(csv_path)
+    events = capture.events
 
     print("\n" + "=" * 50)
     print("FULL API COVERAGE SUMMARY")

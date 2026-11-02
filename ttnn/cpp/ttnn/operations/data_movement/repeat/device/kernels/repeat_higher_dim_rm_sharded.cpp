@@ -36,7 +36,7 @@ void kernel_main() {
     const auto d = TensorAccessor(tensor::dst);
 
     Scratchpad<uint8_t> dfb(scratch::in0);
-    const uint32_t cb_slot = dfb.get_base_address();
+    const auto cb_slot = dfb.local_mem();
 
     Noc noc;
 

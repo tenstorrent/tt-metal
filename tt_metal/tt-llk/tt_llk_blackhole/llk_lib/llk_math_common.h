@@ -39,6 +39,7 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
 
     // Establish the no-override baseline for the SrcA/SrcB ALU format-select fields (ADDR32=0),
     // consumed by the FPU (SrcA) and SFPU (SrcB) on this thread: clear SrcA_val/override and

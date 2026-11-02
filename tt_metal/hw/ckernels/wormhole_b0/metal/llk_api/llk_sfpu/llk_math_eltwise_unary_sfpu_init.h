@@ -114,8 +114,8 @@ inline void unused_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 }  // namespace sfpu
 
 // Bare init entry point: delegates per SFPU op to its self-contained sfpu::<op>_init().
-// is_fp32_dest_acc_en is threaded to the (few) ops whose init depends on the dest-acc mode
-// (asin/acos prime the endpoint-sqrt constants only in fp32 dest); it is ignored by the rest.
+// is_fp32_dest_acc_en is threaded to asin/acos, whose inits keep it in their signature; no WH init
+// currently depends on the dest-acc mode (asin/acos prime the endpoint-sqrt constants in both modes).
 template <SfpuType sfpu_op, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_init() {
     SAN_HOOK(unsupported());
