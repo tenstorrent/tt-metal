@@ -1357,3 +1357,32 @@ def test_tilize_float_to_int32_saturates(device, in_dtype):
     tt_input = ttnn.from_torch(torch_input, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     tt_output = ttnn.tilize(tt_input, dtype=ttnn.int32)
     assert torch.equal(ttnn.to_torch(tt_output), torch.tensor([expected_row * 4] * 32, dtype=torch.int32))
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (1, 32)], ids=["16x32", "1x32"])
+def test_tilize_int_float_conversion_rejects_tiny_tile(device, tile_shape, expect_error):
+    torch_input = torch.zeros((1, 1, 32, 32), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "only 32x32 tiles"):
+        ttnn.tilize(tt_input, dtype=ttnn.int32, tile=ttnn.Tile(list(tile_shape)))
+
+
+def test_tilize_int_float_conversion_rejects_sharded_sub_core_grids(device, expect_error):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+    shard_spec = ttnn.ShardSpec(grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    torch_input = torch.zeros((1, 1, 128, 64), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    with expect_error(RuntimeError, "does not honor sub_core_grids"):
+        ttnn.tilize(tt_input, memory_config=mem_cfg, dtype=ttnn.int32, sub_core_grids=grid)
+
+
+def test_tilize_int_float_conversion_interleaved_sub_core_grids(device):
+    torch.manual_seed(0)
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    torch_input = torch.empty((1, 1, 128, 64), dtype=torch.float32).uniform_(-1000.0, 1000.0).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize(tt_input, dtype=ttnn.int32, sub_core_grids=sub_core_grids)
+    assert torch.equal(ttnn.to_torch(tt_output), torch_input.to(torch.int32))

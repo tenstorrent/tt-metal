@@ -67,6 +67,22 @@ ttnn::Tensor tilize(
     // fp8 has no TILE form to stage through; the device op rejects fp8 -> integer itself.
     if (output_dtype.has_value() && input_tensor.dtype() != DataType::FP8_E4M3 &&
         ttnn::prim::tilize_needs_typecast(input_tensor.dtype(), output_dtype.value())) {
+        // typecast always produces 32x32 tiles and sizes its transfers by them.
+        TT_FATAL(
+            tile == tt::tt_metal::Tile(),
+            "tilize from {} to {} goes through ttnn::typecast, which supports only 32x32 tiles; got a {}x{} tile",
+            input_tensor.dtype(),
+            output_dtype.value(),
+            tile.get_height(),
+            tile.get_width());
+        // Sharded typecast ignores sub_core_grids and spreads over the full compute grid.
+        TT_FATAL(
+            !(sub_core_grids.has_value() &&
+              (input_tensor.is_sharded() || memory_config.value_or(input_tensor.memory_config()).is_sharded())),
+            "tilize from {} to {} goes through ttnn::typecast, which does not honor sub_core_grids for sharded "
+            "tensors; use interleaved memory configs or drop sub_core_grids",
+            input_tensor.dtype(),
+            output_dtype.value());
         const ttnn::Tensor tiled =
             ttnn::tilize(input_tensor, memory_config, std::nullopt, use_multicore, use_low_perf, tile, sub_core_grids);
         // The intermediate's memory config, not the requested one: the legacy sharded factories
