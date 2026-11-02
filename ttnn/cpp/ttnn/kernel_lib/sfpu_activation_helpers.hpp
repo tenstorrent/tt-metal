@@ -48,6 +48,10 @@ template <uint32_t Fast = 0>
 using TanhActivation = ActivationOp<KernelActivation::TANH, Fast>;
 template <uint32_t Fast = 0>
 using GeluActivation = ActivationOp<KernelActivation::GELU, Fast>;
+// GeluTanhActivation: tanh-approximation GELU (F.gelu(approximate="tanh")), not the erf GELU above.
+// Fast=0 selects the accurate FP32 tanh form; non-zero selects x / (1 + exp(-2u)).
+template <uint32_t Fast = 0>
+using GeluTanhActivation = ActivationOp<KernelActivation::GELU_TANH, Fast>;
 // Relu6Activation: MaxBits is the max value as a uint32_t bit pattern of the float;
 // 0 selects the default 6.0f.
 template <uint32_t MaxBits = 0>
@@ -76,9 +80,9 @@ template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0>
 struct ActivationInitHelper {
     static_assert(
         ACT == KernelActivation::NONE || ACT == KernelActivation::SILU || ACT == KernelActivation::TANH ||
-            ACT == KernelActivation::GELU || ACT == KernelActivation::RELU6 || ACT == KernelActivation::SIGMOID ||
-            ACT == KernelActivation::HARDSIGMOID || ACT == KernelActivation::HARDTANH ||
-            ACT == KernelActivation::SELU || ACT == KernelActivation::SOFTPLUS,
+            ACT == KernelActivation::GELU || ACT == KernelActivation::GELU_TANH || ACT == KernelActivation::RELU6 ||
+            ACT == KernelActivation::SIGMOID || ACT == KernelActivation::HARDSIGMOID ||
+            ACT == KernelActivation::HARDTANH || ACT == KernelActivation::SELU || ACT == KernelActivation::SOFTPLUS,
         "Unsupported KernelActivation type for fused activation init");
 
     FORCE_INLINE static void init() {
@@ -90,6 +94,9 @@ struct ActivationInitHelper {
         } else if constexpr (ACT == KernelActivation::GELU) {
             // PARAM0: 0 = accurate, non-zero = fast
             gelu_tile_init_pack<PARAM0 != 0>();
+        } else if constexpr (ACT == KernelActivation::GELU_TANH) {
+            // PARAM0: 0 = accurate, non-zero = fast
+            gelu_tanh_tile_init_pack<PARAM0 != 0>();
         } else if constexpr (ACT == KernelActivation::RELU6) {
             relu_max_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
@@ -111,9 +118,9 @@ template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0, uint32
 struct ActivationApplyHelper {
     static_assert(
         ACT == KernelActivation::NONE || ACT == KernelActivation::SILU || ACT == KernelActivation::TANH ||
-            ACT == KernelActivation::GELU || ACT == KernelActivation::RELU6 || ACT == KernelActivation::SIGMOID ||
-            ACT == KernelActivation::HARDSIGMOID || ACT == KernelActivation::HARDTANH ||
-            ACT == KernelActivation::SELU || ACT == KernelActivation::SOFTPLUS,
+            ACT == KernelActivation::GELU || ACT == KernelActivation::GELU_TANH || ACT == KernelActivation::RELU6 ||
+            ACT == KernelActivation::SIGMOID || ACT == KernelActivation::HARDSIGMOID ||
+            ACT == KernelActivation::HARDTANH || ACT == KernelActivation::SELU || ACT == KernelActivation::SOFTPLUS,
         "Unsupported KernelActivation type for fused activation apply");
 
     static_assert(
@@ -129,6 +136,9 @@ struct ActivationApplyHelper {
         } else if constexpr (ACT == KernelActivation::GELU) {
             // PARAM0: 0 = accurate, non-zero = fast
             gelu_tile_pack<PARAM0 != 0>(tile_index);
+        } else if constexpr (ACT == KernelActivation::GELU_TANH) {
+            // PARAM0: 0 = accurate, non-zero = fast
+            gelu_tanh_tile_pack<DST_ACCUM_MODE, PARAM0 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::RELU6) {
             // PARAM0 is the max value (as uint32_t bit pattern)
             // Default to 6.0 if PARAM0 is 0
