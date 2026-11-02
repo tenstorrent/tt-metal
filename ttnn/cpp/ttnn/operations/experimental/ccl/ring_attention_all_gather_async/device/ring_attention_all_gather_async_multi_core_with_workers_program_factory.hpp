@@ -130,12 +130,14 @@ struct RingAttentionRankMapping {
     bool column_major_ranks = false;
 };
 
-// The kernels' full-mesh rank-mapping compile-time arg (ring_attention_rank_mapping.hpp).
+// The kernels' full-mesh rank-mapping compile-time arg, in the kernels' own encoding
+// (ring_attention_rank_mapping.hpp).
 inline uint32_t rank_mapping_compile_time_arg(const RingAttentionRankMapping& mapping) {
     if (!mapping.full_mesh) {
-        return 0u;
+        return ring_attention_all_gather::kAxisRankMapping;
     }
-    return mapping.column_major_ranks ? 2u : 1u;
+    return mapping.column_major_ranks ? ring_attention_all_gather::kColumnMajorRankMapping
+                                      : ring_attention_all_gather::kRowMajorRankMapping;
 }
 
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
