@@ -21,6 +21,7 @@
 
 #include "fused_msda_device_operation.hpp"
 #include "ttnn/operations/experimental/fused_msda/device/kernels/msda_tiled_geometry.hpp"
+#include "ttnn/operations/experimental/fused_msda/device/kernels/msda_work_list.hpp"
 
 namespace ttnn::operations::experimental::fused_msda {
 
@@ -39,12 +40,7 @@ uint32_t aligned_page_size(uint32_t raw_bytes, BufferType buffer_type) {
 // One unit of work: up to 32 consecutive queries of a single (batch, head).
 // Queries and heads are independent and the whole 4 * L * P reduction for a
 // unit stays on the core that owns it, so there is no cross-core reduction.
-struct TileAssignment {
-    uint32_t batch;
-    uint32_t head;
-    uint32_t q_start;
-    uint32_t v_rows;
-};
+using TileAssignment = fused_msda_work::Unit;
 
 // The normalized -> pixel mapping for one axis of one level, folded into the
 // three constants the SFPU geometry applies:
@@ -164,6 +160,7 @@ constexpr uint32_t kInputCbGroups = 8;  // ditto, in corner groups of n_d_tiles
 bool bf16_exact(uint32_t fp32_bits) { return (fp32_bits & 0xFFFFu) == 0; }
 
 constexpr uint32_t kTileMaxRows = 32;
+static_assert(kTileMaxRows == fused_msda_work::TILE_ROWS);
 constexpr uint32_t kTileWidth = 32;
 
 constexpr uint8_t value_scratch_cb = tt::CBIndex::c_0;
@@ -191,6 +188,11 @@ constexpr uint8_t const_cb = tt::CBIndex::c_15;
 constexpr uint8_t weight_cb = tt::CBIndex::c_19;
 // float32 reference points only: the reference tile split into bf16 parts.
 constexpr uint8_t ref_parts_cb = tt::CBIndex::c_13;
+// Device valid query counts only: the reader's and the writer's copies of the
+// counts, and the reader's tile count handed to compute.
+constexpr uint8_t reader_counts_cb = tt::CBIndex::c_20;
+constexpr uint8_t writer_counts_cb = tt::CBIndex::c_21;
+constexpr uint8_t tile_count_cb = tt::CBIndex::c_22;
 
 // Row-major staging: when D is a whole number of tile widths, the reader
 // lands the four corners of a point side by side as a row-major block and
@@ -267,6 +269,10 @@ uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {
 // do not depend on num_valid_queries, which is excluded from the program hash. Only
 // which tiles fill the slots, and how many, changes between calls.
 //
+// The tile order and the per-core runs are kernels/msda_work_list.hpp's. With
+// device_valid_counts the tile list is left empty: the kernels derive their
+// runs from the counts tensor with the same header.
+//
 // Every core gets the same number of slots: a cached program reports each core's
 // runtime-arg count as the kernel's longest, so per-core lengths could not be
 // matched on a hit.
@@ -295,31 +301,31 @@ MSDAWorkSplit msda_work_split(
     // themselves are not used, since every core gets that many slots.
     split.slots = slots_group_1;
 
-    // Heads innermost: each core takes a contiguous run of tiles, so most of
-    // its consecutive tiles share (b, q_start), and the V2 reader stages the
-    // head-invariant reference points once per query block in its run rather
-    // than once per tile.
-    for (uint32_t b = 0; b < s.batch; ++b) {
-        const uint32_t q_end = attrs.num_valid_queries.empty() ? s.num_queries : attrs.num_valid_queries[b];
-        for (uint32_t q_start = 0; q_start < q_end; q_start += kTileMaxRows) {
-            for (uint32_t h = 0; h < s.num_heads; ++h) {
-                split.tiles.push_back({b, h, q_start, std::min(kTileMaxRows, q_end - q_start)});
-            }
-        }
-    }
-
-    // ceil(active / n) never exceeds the slots: slots are ceil(total / n) and active <= total.
     const auto n = static_cast<uint32_t>(split.cores.size());
-    const auto active = static_cast<uint32_t>(split.tiles.size());
-    split.counts.resize(n);
+    split.counts.assign(n, 0u);
+    if (attrs.device_valid_counts) {
+        return split;
+    }
+    const auto valid = [&](uint32_t b) {
+        return attrs.num_valid_queries.empty() ? s.num_queries : attrs.num_valid_queries[b];
+    };
+    const uint32_t active = fused_msda_work::active_tiles(valid, s.batch, s.num_heads);
+    split.tiles.reserve(active);
+    for (uint32_t g = 0; g < active; ++g) {
+        split.tiles.push_back(fused_msda_work::unit(valid, s.batch, s.num_heads, g));
+    }
+    // A run never exceeds the slots: slots are ceil(total / n) and active <= total.
     for (uint32_t i = 0; i < n; ++i) {
-        split.counts[i] = active / n + (i < active % n ? 1u : 0u);
+        split.counts[i] = fused_msda_work::core_run(active, i, n).count;
     }
     return split;
 }
 
 // Per-core runtime args of the three kernels. Slots past a core's count are
 // zero-filled so the arg count, and with it the cached program, stays fixed.
+// With device_valid_counts there are no slots: the reader's count arg and the
+// writer's carry the counts tensor's address, and each core gets its index and
+// the core count in place of the tile list.
 struct MSDARuntimeArgs {
     std::vector<std::vector<uint32_t>> reader;
     std::vector<std::vector<uint32_t>> compute;
@@ -338,6 +344,9 @@ MSDARuntimeArgs msda_runtime_args(
     // matrices, so it gets them too, after the level table.
     const uint32_t reader_fixed = 5 + 3 * s.num_levels + (tiled_geometry ? kAxisConstantsPerLevel * s.num_levels : 0);
     const uint32_t ref_addr = attrs.from_offsets ? tensor_args.reference_points->buffer()->address() : 0u;
+    const bool device_counts = attrs.device_valid_counts;
+    const uint32_t counts_addr = device_counts ? tensor_args.num_valid_queries_tensor->buffer()->address() : 0u;
+    const auto num_cores = static_cast<uint32_t>(split.cores.size());
 
     // Same constants on every core.
     std::vector<uint32_t> compute_template;
@@ -358,7 +367,7 @@ MSDARuntimeArgs msda_runtime_args(
         reader.push_back(tensor_args.attention_weights.buffer()->address());
         reader.push_back(loc.buffer()->address());
         reader.push_back(ref_addr);
-        reader.push_back(count);
+        reader.push_back(device_counts ? counts_addr : count);
         uint32_t level_start = 0;
         for (uint32_t l = 0; l < s.num_levels; ++l) {
             const uint32_t h = attrs.spatial_shapes_hw[2 * l];
@@ -375,14 +384,21 @@ MSDARuntimeArgs msda_runtime_args(
         auto& writer = args.writer.emplace_back();
         writer.reserve(3 + slots * 3);
         writer.push_back(output.buffer()->address());
-        writer.push_back(count);
+        writer.push_back(device_counts ? counts_addr : count);
         writer.push_back(tensor_args.value.buffer()->address());
+
+        if (device_counts) {
+            reader.insert(reader.end(), {static_cast<uint32_t>(i), num_cores});
+            writer.insert(writer.end(), {static_cast<uint32_t>(i), num_cores});
+            args.compute.push_back(compute_template);
+            continue;
+        }
 
         for (uint32_t t = 0; t < count; ++t) {
             const auto& asn = split.tiles[tile_cursor + t];
-            reader.insert(reader.end(), {asn.batch, asn.head, asn.q_start, asn.v_rows});
+            reader.insert(reader.end(), {asn.b, asn.head, asn.q_start, asn.v_rows});
             // Output is (B, Q, H*D): one page per (b, q), head placed by offset.
-            writer.insert(writer.end(), {asn.batch * s.num_queries + asn.q_start, asn.head, asn.v_rows});
+            writer.insert(writer.end(), {asn.b * s.num_queries + asn.q_start, asn.head, asn.v_rows});
         }
         reader.resize(reader_fixed + slots * 4, 0u);
         writer.resize(3 + slots * 3, 0u);
@@ -536,6 +552,15 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
         // Reader -> writer, one point's gather arguments at a time. Raw uint32
         // words; the format only satisfies the CB config.
         push(gather_mailbox_cb, 1, kGatherMailboxNbytes, tt::DataFormat::UInt32);
+    }
+    if (attrs.device_valid_counts) {
+        const uint32_t counts_page =
+            tt::round_up(s.batch * static_cast<uint32_t>(sizeof(uint32_t)), tt::tt_metal::hal::get_l1_alignment());
+        push(reader_counts_cb, 1, counts_page, tt::DataFormat::UInt32);
+        push(writer_counts_cb, 1, counts_page, tt::DataFormat::UInt32);
+        // UInt32: compute reads the count with read_tile_value, whose indexing
+        // follows the CB format; a float format would misread the raw word.
+        push(tile_count_cb, 1, tt::tt_metal::hal::get_l1_alignment(), tt::DataFormat::UInt32);
     }
     return plan;
 }
@@ -694,6 +719,17 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     if (attrs.from_offsets) {
         TensorAccessorArgs(*tensor_args.reference_points->buffer()).append_to(reader_ct);
     }
+    // The kernels read every count with one B * 4-byte read of page 0, the
+    // single page validation guarantees.
+    KernelDescriptor::Defines counts_defines;
+    if (attrs.device_valid_counts) {
+        TensorAccessorArgs(*tensor_args.num_valid_queries_tensor->buffer()).append_to(reader_ct);
+        counts_defines = {
+            {"MSDA_DEVICE_COUNTS", "1"},
+            {"MSDA_BATCH", std::to_string(s.batch)},
+            {"MSDA_TILE_COUNT_CB", std::to_string(tile_count_cb)},
+        };
+    }
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -701,8 +737,12 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_ct);
+    reader_desc.defines = counts_defines;
+    if (attrs.device_valid_counts) {
+        reader_desc.defines.emplace_back("MSDA_READER_COUNTS_CB", std::to_string(reader_counts_cb));
+    }
     if (ref_fp32) {
-        reader_desc.defines = {{"REF_FP32", "1"}};
+        reader_desc.defines.emplace_back("REF_FP32", "1");
     }
     reader_desc.config = ReaderConfigDescriptor{};
 
@@ -711,6 +751,9 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     compute_desc.kernel_source = std::string(kKernelDir) + "compute/compute_msda.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
+    if (attrs.device_valid_counts) {
+        compute_desc.defines = counts_defines;
+    }
     compute_desc.compile_time_args = {
         input_tile_cb,
         scalar_tile_cb,
@@ -785,6 +828,9 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     };
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*value.buffer()).append_to(writer_ct);
+    if (attrs.device_valid_counts) {
+        TensorAccessorArgs(*tensor_args.num_valid_queries_tensor->buffer()).append_to(writer_ct);
+    }
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kKernelDir) + "dataflow/writer_msda.cpp";
@@ -792,6 +838,11 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_ct);
     writer_desc.config = WriterConfigDescriptor{};
+    if (attrs.device_valid_counts) {
+        writer_desc.defines = counts_defines;
+        writer_desc.defines.emplace_back("MSDA_WRITER_COUNTS_CB", std::to_string(writer_counts_cb));
+        writer_desc.defines.emplace_back("MSDA_NUM_QUERIES", std::to_string(s.num_queries));
+    }
 
     // ---- per-core runtime args ----
     // Plain addresses, not Buffer* bindings: override_runtime_arguments rewrites
