@@ -27,7 +27,7 @@ struct GenericProgramSpecDeviceOperation {
     struct operation_attributes_t {
         // A program and its run args. They point into the caller's objects, which outlive the call.
         struct Program {
-            // Unset for the ProgramSpec form: the program runs on every device that holds the tensors.
+            // Unset for the ProgramSpec form: the program runs on the devices of the tensor on the fewest devices.
             std::optional<ttnn::MeshCoordinateRange> range;
             const tt::tt_metal::experimental::ProgramSpec* spec = nullptr;
             const tt::tt_metal::experimental::ProgramRunArgs* run_args = nullptr;

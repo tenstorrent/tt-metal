@@ -52,7 +52,7 @@ namespace {
 
 using ProgramSpecAttributes = ttnn::operations::generic::GenericProgramSpecDeviceOperation::operation_attributes_t;
 
-// No range: the program runs on every device that holds the tensors.
+// No range: the program runs on the devices of the tensor that is on the fewest devices.
 ProgramSpecAttributes make_program_spec_attributes(
     const ProgramSpec& spec, const ProgramRunArgs& run_args, std::optional<uint64_t> custom_program_hash) {
     return {.programs = {{.spec = &spec, .run_args = &run_args}}, .custom_program_hash = custom_program_hash};

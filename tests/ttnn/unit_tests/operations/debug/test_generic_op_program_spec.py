@@ -297,13 +297,24 @@ def test_sharded_typecast_on_borrowed_buffers(device):
     memory_config = ttnn.create_sharded_memory_config(
         shape, core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.HEIGHT
     )
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(
-        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
-    )
-    output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(shape), ttnn.float32, ttnn.TILE_LAYOUT, device, memory_config
-    )
+
+    def sharded_tensors(seed):
+        torch.manual_seed(seed)
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+        # The output starts as a known value, so a program that wrote to another tensor's shard would leave it.
+        output_tensor = ttnn.from_torch(
+            torch.full(shape, 7.0),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=memory_config,
+        )
+        return torch_input, input_tensor, output_tensor
+
+    torch_input, input_tensor, output_tensor = sharded_tensors(seed=0)
     cores = memory_config.shard_spec.grid
     tiles_per_core = 2
     # tt::DataFormat values of bfloat16 and float32; the kernel takes them as compile-time arguments.
@@ -370,17 +381,38 @@ def test_sharded_typecast_on_borrowed_buffers(device):
         ],
         tensor_args={"input": input_tensor, "output": output_tensor},
     )
-    for _ in range(2):
-        result = ttnn.to_torch(E.generic_op([input_tensor, output_tensor], spec, run_args))
-        assert result.dtype == torch.float32
-        assert torch.equal(result, torch_input.float())
+    result = ttnn.to_torch(E.generic_op([input_tensor, output_tensor], spec, run_args))
+    assert result.dtype == torch.float32
+    assert torch.equal(result, torch_input.float())
+
+    # A cache hit with new tensors, made while the first ones still exist so that their shards are elsewhere: the
+    # buffers move to the new tensors' shards.
+    torch_input2, input_tensor2, output_tensor2 = sharded_tensors(seed=1)
+    run_args.tensor_args = {"input": input_tensor2, "output": output_tensor2}
+    entries = device.num_program_cache_entries()
+    result = ttnn.to_torch(E.generic_op([input_tensor2, output_tensor2], spec, run_args))
+    assert device.num_program_cache_entries() == entries
+    assert torch.equal(result, torch_input2.float())
 
 
 def test_varargs_and_aliased_buffers(device):
-    expected, a, b, out = inputs(device, (1, 1, 96, 64))
+    shape = (1, 1, 96, 64)
+    expected, a, b, out = inputs(device, shape)
     spec, run_args = mul_program(a, b, out, varargs=True, aliased_buffer=True)
-    for _ in range(2):
-        assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+
+    # A cache hit with new tensors and one tile fewer for the same cores, as in
+    # test_later_calls_reuse_the_program_with_new_tensors_and_values: the last tile keeps the output's starting value
+    # only if the new vararg values reached the device.
+    expected, a2, b2, _ = inputs(device, shape, seed=1)
+    initial = torch.full(shape, 7.0, dtype=torch.bfloat16)
+    out2 = ttnn.from_torch(initial, layout=ttnn.TILE_LAYOUT, device=device)
+    _, run_args2 = mul_program(a2, b2, out2, varargs=True, aliased_buffer=True, tile_limit=5)
+    entries = device.num_program_cache_entries()
+    result = tile_order(ttnn.to_torch(E.generic_op([a2, b2, out2], spec, run_args2)))
+    assert device.num_program_cache_entries() == entries
+    assert_with_pcc(tile_order(expected)[: 5 * 1024], result[: 5 * 1024], 0.9999)
+    assert torch.equal(result[5 * 1024 :], tile_order(initial)[5 * 1024 :])
 
 
 def test_semaphores_start_at_zero_on_every_call(device):
@@ -405,10 +437,13 @@ def test_semaphores_start_at_zero_on_every_call(device):
         semaphores=[E.SemaphoreSpec(unique_id="sem", target_nodes=node)],
         work_units=[E.WorkUnitSpec(kernels=["producer", "consumer"], target_nodes=node)],
     )
-    # The consumer waits for the producer's signal; a program that runs at all on the second call reused the cache.
+    # The producer raises the semaphore by 1 and the consumer waits until it equals 1. If a call started from the value
+    # the previous one left, the third call would start at 2 and never finish.
     entries = device.num_program_cache_entries()
-    for _ in range(2):
+    for _ in range(3):
         E.generic_op([out], spec, E.ProgramRunArgs())
+    # The calls only enqueue the program: wait for them, so that one that never finishes fails this test.
+    ttnn.synchronize_device(device)
     assert device.num_program_cache_entries() == entries + 1
 
 
@@ -436,8 +471,9 @@ def test_later_calls_reuse_the_program_with_new_tensors_and_values(device):
 
 
 def tile_order(tensor):
-    """The elements of a (1, 1, 64, 64) tensor in tile order, so that the first n tiles are its first n * 1024."""
-    return tensor.reshape(2, 32, 2, 32).permute(0, 2, 1, 3).flatten()
+    """The elements of a (1, 1, h, w) tensor in tile order, so that the first n tiles are its first n * 1024."""
+    height, width = tensor.shape[-2:]
+    return tensor.reshape(height // 32, 32, width // 32, 32).permute(0, 2, 1, 3).flatten()
 
 
 def test_custom_program_hash_replaces_the_spec_hash(device):
@@ -505,13 +541,22 @@ def test_a_precomputed_spec_hash_gives_the_default_cache_entry(device):
     assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
 
 
-def test_dfb_run_overrides(device):
+def test_dfb_run_overrides_stay_in_effect_on_later_calls(device, expect_error):
     expected, a, b, out = inputs(device, seed=10)
-    spec, run_args = mul_program(a, b, out)
-    run_args.dfb_run_overrides = [E.DFBRunOverrides(dfb="in_a", num_entries=4)]
+    spec, run_args = mul_program(a, b, out, aliased_buffer=True)
+    # Buffers that share memory keep one total size, so Metal rejects a call that resizes only one of them.
+    run_args.dfb_run_overrides = [E.DFBRunOverrides(dfb=name, num_entries=4) for name in ("in_a", "in_a_view")]
     assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
     run_args.dfb_run_overrides = []
     assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+
+    # The sizes stayed: in_a alone can take the size it already has, but not its original size, which in_a_view no
+    # longer has.
+    run_args.dfb_run_overrides = [E.DFBRunOverrides(dfb="in_a", num_entries=4)]
+    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
+    run_args.dfb_run_overrides = [E.DFBRunOverrides(dfb="in_a", num_entries=2)]
+    with expect_error(RuntimeError, "was not overridden in alias group"):
+        E.generic_op([a, b, out], spec, run_args)
 
 
 @pytest.mark.parametrize(
@@ -596,10 +641,12 @@ def test_tensor_args_must_match_the_parameters(device, expect_error):
     _, a, b, out = inputs(device)
     spec, run_args = mul_program(a, b, out)
     run_args.tensor_args = {"a": a, "b": b}
-    with expect_error(RuntimeError, "declares 3 tensor parameters, but run_args.tensor_args gives 2"):
-        E.generic_op([a, b, out], spec, run_args)
-    run_args.tensor_args = {"a": a, "b": b, "c": out}
     with expect_error(RuntimeError, "tensor parameter 'out' has no tensor"):
+        E.generic_op([a, b, out], spec, run_args)
+    run_args.tensor_args = {"a": a, "b": b, "out": out, "c": out}
+    with expect_error(
+        RuntimeError, "run_args.tensor_args has a tensor for 'c', which the ProgramSpec does not declare"
+    ):
         E.generic_op([a, b, out], spec, run_args)
     run_args.tensor_args = {"a": a, "b": b, "out": out}
     with expect_error(RuntimeError, "tensor of tensor parameter 'b' is not in io_tensors"):
@@ -630,6 +677,8 @@ def test_run_args_must_match_the_kernels(device, cache_hit, expect_error):
     spec, good_run_args = mul_program(a, b, out)
     if cache_hit:
         E.generic_op([a, b, out], spec, good_run_args)
+        # These checks run on every call, so the later calls run without validate_program_args.
+        ttnn.CONFIG.validate_program_args = False
 
     def run_with(update):
         _, run_args = mul_program(a, b, out)
@@ -679,6 +728,8 @@ def test_vararg_counts_are_checked_on_every_call(device, cache_hit, expect_error
     spec, run_args = mul_program(a, b, out, varargs=True)
     if cache_hit:
         E.generic_op([a, b, out], spec, run_args)
+        # Metal writes later calls' varargs unchecked, so this check matters most without validate_program_args.
+        ttnn.CONFIG.validate_program_args = False
 
     reader = kernel_run_args(run_args, "reader")
     varargs = reader.advanced_options.runtime_varargs
@@ -694,24 +745,64 @@ def test_vararg_counts_are_checked_on_every_call(device, cache_hit, expect_error
     with expect_error(RuntimeError, "declares 0 common runtime varargs, but its run args give 1"):
         E.generic_op([a, b, out], spec, run_args)
 
+    if not cache_hit:
+        # A first call checks the cores too, so varargs for a core the kernel does not run on are reported as that,
+        # even with a count the kernel does not declare.
+        varargs[core] = varargs[core][:2]
+        varargs[ttnn.CoreCoord(0, 5)] = [0]
+        reader.advanced_options = E.AdvancedKernelRunArgs(runtime_varargs=varargs)
+        replace_kernel_run_args(run_args, "reader", reader)
+        with expect_error(RuntimeError, "does not run on node .*, but its run args give runtime varargs for it"):
+            E.generic_op([a, b, out], spec, run_args)
 
+
+LEFT_OUT_CORE_ERRORS = {
+    False: "runtime argument 'num_tiles' does not have exactly one value",
+    True: "declares runtime varargs, but its run args give none for node",
+}
+
+
+def leave_out_a_core(run_args, varargs):
+    """Drops one core from the compute kernel's num_tiles, or with varargs, from the reader's varargs."""
+    if varargs:
+        reader = kernel_run_args(run_args, "reader")
+        values = reader.advanced_options.runtime_varargs
+        values.pop(next(iter(values)))
+        reader.advanced_options = E.AdvancedKernelRunArgs(runtime_varargs=values)
+        replace_kernel_run_args(run_args, "reader", reader)
+    else:
+        compute = kernel_run_args(run_args, "compute")
+        num_tiles = compute.runtime_arg_values["num_tiles"]
+        num_tiles.pop(next(iter(num_tiles)))
+        compute.runtime_arg_values = {"num_tiles": num_tiles}
+        replace_kernel_run_args(run_args, "compute", compute)
+
+
+@pytest.mark.parametrize("varargs", [False, True], ids=["named_args", "varargs"])
+def test_a_core_left_out_of_the_first_call(device, varargs, expect_error):
+    # Checked before the kernels compile, with validate_program_args off too.
+    ttnn.CONFIG.validate_program_args = False
+    _, a, b, out = inputs(device)
+    spec, run_args = mul_program(a, b, out, varargs=varargs)
+    leave_out_a_core(run_args, varargs)
+    with expect_error(RuntimeError, LEFT_OUT_CORE_ERRORS[varargs]):
+        E.generic_op([a, b, out], spec, run_args)
+
+
+@pytest.mark.parametrize("varargs", [False, True], ids=["named_args", "varargs"])
 @pytest.mark.parametrize("validate", [True, False], ids=["validate_on", "validate_off"])
-def test_a_core_left_out_of_a_later_call(device, validate, expect_error):
+def test_a_core_left_out_of_a_later_call(device, validate, varargs, expect_error):
     expected, a, b, out = inputs(device)
-    spec, run_args = mul_program(a, b, out)
+    spec, run_args = mul_program(a, b, out, varargs=varargs)
     E.generic_op([a, b, out], spec, run_args)
 
     ttnn.CONFIG.validate_program_args = validate
-    compute = kernel_run_args(run_args, "compute")
-    num_tiles = compute.runtime_arg_values["num_tiles"]
-    num_tiles.pop(next(iter(num_tiles)))
-    compute.runtime_arg_values = {"num_tiles": num_tiles}
-    replace_kernel_run_args(run_args, "compute", compute)
+    leave_out_a_core(run_args, varargs)
     if validate:
-        with expect_error(RuntimeError, "runtime argument 'num_tiles' does not have exactly one value"):
+        with expect_error(RuntimeError, LEFT_OUT_CORE_ERRORS[varargs]):
             E.generic_op([a, b, out], spec, run_args)
     else:
-        # The left-out core keeps the value from the first call.
+        # The left-out core keeps the values from the first call.
         assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
 
 
@@ -728,12 +819,22 @@ def test_mesh_form(device):
     mesh_spec = E.MeshProgramSpec(programs=[(mesh_range(device), spec)])
     mesh_run_args = E.MeshProgramRunArgs(programs=[(mesh_range(device), run_args)])
     assert mesh_run_args.programs[0][1].tensor_args["a"] is a
-    for _ in range(2):
-        result = E.generic_op([a, b, out], mesh_spec, mesh_run_args)
-        assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
+    assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], mesh_spec, mesh_run_args)), 0.9999)
 
+    # A cache hit with new tensors and one tile fewer, as in
+    # test_later_calls_reuse_the_program_with_new_tensors_and_values.
+    expected, a2, b2, _ = inputs(device, seed=15)
+    initial = torch.full((1, 1, 64, 64), 7.0, dtype=torch.bfloat16)
+    out2 = ttnn.from_torch(initial, layout=ttnn.TILE_LAYOUT, device=device)
+    _, run_args2 = mul_program(a2, b2, out2, tile_limit=3)
+    mesh_run_args.programs = [(mesh_range(device), run_args2)]
     entries = device.num_program_cache_entries()
-    E.prepare_generic_op([a, b, out], mesh_spec, mesh_run_args)
+    result = tile_order(ttnn.to_torch(E.generic_op([a2, b2, out2], mesh_spec, mesh_run_args)))
+    assert device.num_program_cache_entries() == entries
+    assert_with_pcc(tile_order(expected)[: 3 * 1024], result[: 3 * 1024], 0.9999)
+    assert torch.equal(result[3 * 1024 :], tile_order(initial)[3 * 1024 :])
+
+    E.prepare_generic_op([a2, b2, out2], mesh_spec, mesh_run_args)
     assert device.num_program_cache_entries() == entries
 
 
@@ -742,9 +843,19 @@ def test_a_mesh_run_args_subclass_setattr_cannot_drop_the_tensors(device):
         def __setattr__(self, name, value):
             pass
 
+    class MeshRunArgsIgnoringPrivateWrites(E.MeshProgramRunArgs):
+        def __setattr__(self, name, value):
+            if not name.startswith("_"):
+                super().__setattr__(name, value)
+
     _, a, b, out = inputs(device)
     _, run_args = mul_program(a, b, out)
     mesh_run_args = MeshRunArgsIgnoringWrites(programs=[(mesh_range(device), run_args)])
+    assert mesh_run_args.programs[0][1].tensor_args["a"] is a
+
+    # An assignment to programs reaches the setter, which stores the tensors' owners itself.
+    mesh_run_args = MeshRunArgsIgnoringPrivateWrites()
+    mesh_run_args.programs = [(mesh_range(device), run_args)]
     assert mesh_run_args.programs[0][1].tensor_args["a"] is a
 
 
