@@ -343,12 +343,26 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
+      # The gate refuses to compare when a leg did not complete, so one reset
+      # connection on FinalizeArtifact costs the whole architecture a verdict.
+      # The bytes are already in blob storage by then; only the last call fails.
+      # Try once more before giving the leg up.
       - name: Upload performance data
+        id: upload-perf-data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always() && hashFiles('tt_metal/tt-llk/perf_data/runs/**') != ''
+        continue-on-error: true
         with:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
           path: ${{ env.LLK_PATH }}/perf_data/runs/
+
+      - name: Upload performance data, second attempt
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always() && steps.upload-perf-data.outcome == 'failure'
+        with:
+          name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
+          path: ${{ env.LLK_PATH }}/perf_data/runs/
+          overwrite: true
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -543,11 +557,12 @@ jobs:
 
   upload-perf-data:
     name: "Upload perf data to the warehouse"
-    needs: [build-images, llk-perf-exec]
+    needs: [build-images, llk-perf-exec, load-test-matrix]
     # always(): a night that lost shards still produced the ones that finished,
     # and partial coverage is real data. Publishing it is safe because the
     # merged run_id carries no attempt, so re-running the failed shards and
     # re-uploading replays over the partial night instead of adding a second.
+    # A baseline pipeline is the exception; baseline_completeness.py below says why.
     if: ${{ always() && inputs.upload-to-warehouse }}
     runs-on: ubuntu-latest
     # The merge lives in helpers.perf.core, whose imports reach the device
@@ -583,11 +598,35 @@ jobs:
             --in-dir "$GITHUB_WORKSPACE/perf-data" \
             --out-dir "$GITHUB_WORKSPACE/generated/llk_perf"
           ls -l "$GITHUB_WORKSPACE/generated/llk_perf"
+
+      - name: Keep a partial run out of the baseline
+        id: baseline-guard
+        env:
+          EXPECTED_MATRIX: ${{ needs.load-test-matrix.outputs.matrix }}
+          PIPELINE: ${{ inputs.pipeline }}
+        run: |
+          python3 "${LLK_PATH}/perf/baseline_completeness.py" \
+            --matrix "$EXPECTED_MATRIX" \
+            --in-dir "$GITHUB_WORKSPACE/perf-data" \
+            --out-dir "$GITHUB_WORKSPACE/generated/llk_perf" \
+            --pipeline "$PIPELINE"
+          ls -l "$GITHUB_WORKSPACE/generated/llk_perf"
+          # The batchfile globs *.parquet, and sftp fails on a glob that matches
+          # nothing. Every architecture being short is rare but not impossible.
+          if ls "$GITHUB_WORKSPACE"/generated/llk_perf/*.parquet >/dev/null 2>&1; then
+            echo "have-files=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Nothing is complete enough to publish."
+            echo "have-files=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # The LLK test image has the python env but no ssh client, and the
       # upload action shells out to sftp.
       - name: Install the SFTP client
+        if: steps.baseline-guard.outputs.have-files == 'true'
         run: apt-get update -qq && apt-get install -y -qq openssh-client
       - name: Upload perf data
+        if: steps.baseline-guard.outputs.have-files == 'true'
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_LLK_PERF_WRITER_KEY }}
