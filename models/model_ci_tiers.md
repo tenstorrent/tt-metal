@@ -241,7 +241,6 @@ Models covered (system · classification tier):
 | Qwen2.5-VL-7B | WH LLMBox | 3 |
 | Qwen3-VL-32B | WH LLMBox | 2 |
 | GPT-OSS 120B | WH Galaxy | 1 |
-| MiMo-V2.6-Flash | BH Galaxy | 3 |
 | Gemma-3-27B | WH LLMBox, WH Galaxy | 2 |
 | Gemma-4-12B | BH QuietBox 2 | 1 |
 | Gemma-4-26B-A4B | BH QuietBox 2 | 1 |
