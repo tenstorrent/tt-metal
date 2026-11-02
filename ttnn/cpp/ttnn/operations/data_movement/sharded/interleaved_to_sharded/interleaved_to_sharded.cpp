@@ -7,6 +7,7 @@
 #include "interleaved_to_sharded.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 using namespace tt::tt_metal;
 
@@ -31,6 +32,15 @@ ttnn::Tensor interleaved_to_sharded(
     if (sharded_memory_config.shard_spec().has_value()) {
         validate_shard_shape(sharded_memory_config.shard_spec()->shape);
     }
+    if (data_type_arg.has_value() && is_int_float_conversion(input_tensor.dtype(), data_type_arg.value())) {
+        // Integer <-> float is a value conversion, not a CB format change: typecast first, then shard.
+        return interleaved_to_sharded(
+            ttnn::typecast(input_tensor, data_type_arg.value()),
+            sharded_memory_config,
+            std::nullopt,
+            keep_l1_aligned,
+            preallocated_output);
+    }
     return ttnn::prim::interleaved_to_sharded(
         input_tensor,
         sharded_memory_config,
@@ -48,6 +58,16 @@ ttnn::Tensor interleaved_to_sharded(
     const std::optional<DataType>& data_type_arg,
     const std::optional<bool>& keep_l1_aligned) {
     validate_shard_shape(shard_shape);
+    if (data_type_arg.has_value() && is_int_float_conversion(input_tensor.dtype(), data_type_arg.value())) {
+        return interleaved_to_sharded(
+            ttnn::typecast(input_tensor, data_type_arg.value()),
+            grid,
+            shard_shape,
+            shard_scheme,
+            shard_orientation,
+            std::nullopt,
+            keep_l1_aligned);
+    }
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;

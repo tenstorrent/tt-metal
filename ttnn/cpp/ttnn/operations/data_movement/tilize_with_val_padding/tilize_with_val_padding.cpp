@@ -6,6 +6,7 @@
 
 #include "device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -82,6 +83,13 @@ ttnn::Tensor tilize_with_val_padding(
 
     if (input_tensor.layout() == Layout::TILE) {
         return input_tensor;
+    }
+
+    // Integer <-> float is a value conversion, not a CB format change: tilize in the input dtype, then typecast.
+    if (output_dtype.has_value() && is_int_float_conversion(input_tensor.dtype(), output_dtype.value())) {
+        auto tiled = tilize_with_val_padding(
+            input_tensor, output_padded_shape, pad_value, memory_config, std::nullopt, use_multicore, sub_core_grids);
+        return ttnn::typecast(tiled, output_dtype.value());
     }
 
     // Handle empty tensors - no tiling needed for tensors with no data
