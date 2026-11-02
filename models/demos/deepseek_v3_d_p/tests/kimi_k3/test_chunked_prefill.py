@@ -106,6 +106,12 @@ SNAPSHOT_STRIDE = 640
 # and the same value as the corresponding one-shot rung — chunking itself costs nothing.
 SHALLOW_OUTPUT_PCC = 0.99
 DEEP_OUTPUT_PCC = 0.98
+# The bars are scored per chunk, and the score falls with context depth, so a smaller chunk's last window holds only
+# the deepest tokens of the same 55k. Measured at depth 24 (layer 19, the worst at every size; jobs 168797/168917):
+# 5120's last chunk [51200, 56320) scores 0.9809, while 2560 splits the same tokens into 0.9811 and 0.9791 and
+# 2048's last chunk [53248, 55296) scores 0.9784. 2048 keeps the TP-deduped KV and drops the same as 2560, so this
+# is the window, not the KV layout. Chunk 0 is 0.985-0.986 at all three sizes.
+SMALL_CHUNK_DEEP_OUTPUT_PCC = 0.975
 # The carry is a chunk-long bf16 recurrence per chunk compounded across chunks, and it is compared
 # against a snapshot the model wrote in fp32; the ladder's own KDA output sits at 0.9999.
 CARRY_PCC = 0.99
@@ -244,7 +250,8 @@ def _prefill_chunked(mesh_device, num_layers, chunk_len, num_chunks) -> ChunkedR
     # instead of the tail of the previous chunk. That is a small, localized error that per-chunk PCC
     # over 5120 tokens would comfortably hide, which is exactly why it needs its own oracle.
     golden_conv = trace.rows("kda", "kda_conv_state_layer_0") if trace.has("kda", "kda_conv_state_layer_0") else None
-    output_pcc_bar = DEEP_OUTPUT_PCC if num_layers > KimiK3Config.ATTN_RES_BLOCK_SIZE else SHALLOW_OUTPUT_PCC
+    deep_bar = DEEP_OUTPUT_PCC if chunk_len >= 5120 else SMALL_CHUNK_DEEP_OUTPUT_PCC
+    output_pcc_bar = deep_bar if num_layers > KimiK3Config.ATTN_RES_BLOCK_SIZE else SHALLOW_OUTPUT_PCC
     footprints = []
     failures = []
     per_chunk_layer_pccs = {}
