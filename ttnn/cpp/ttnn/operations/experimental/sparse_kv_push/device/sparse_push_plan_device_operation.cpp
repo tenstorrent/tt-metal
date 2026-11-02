@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "sparse_kv_push_common.hpp"
@@ -19,8 +20,6 @@ namespace {
 constexpr uint32_t kIdxAlign = 16;      // indices per core are a multiple of this, so each slice starts 64 B aligned
 constexpr uint32_t kCbAlignBytes = 64;  // CB sizes are rounded up to whole 64 B
 using ::sparse_push_plan::kChunkRows;
-
-uint32_t round_up(uint32_t x, uint32_t m) { return (x + m - 1) / m * m; }
 
 tt::tt_metal::KernelDescriptor plan_kernel(
     const char* source,
@@ -70,7 +69,7 @@ void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
         kChunkRows);
     const uint32_t chunks = attrs.max_rows / kChunkRows, cores = plan_cores(idx.device());
     TT_FATAL(
-        (chunks + cores - 1) / cores <= ::sparse_push_plan::kMaxChunksPerCore,
+        tt::div_up(chunks, cores) <= ::sparse_push_plan::kMaxChunksPerCore,
         "sparse push plan: {} chunks over {} cores exceed {} reduce chunks per core",
         chunks,
         cores,
@@ -140,12 +139,12 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
     const uint32_t cores = core_list.size();
     const CoreRangeSet all_cores(CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1)));
     const uint32_t total_idx = rows * topk;
-    const uint32_t per_core = round_up((total_idx + cores - 1) / cores, kIdxAlign);
+    const uint32_t per_core = tt::round_up(tt::div_up(total_idx, cores), kIdxAlign);
     const uint32_t chunks = layout.bitmap_words / kChunkWords;
-    const uint32_t max_chunks = (chunks + cores - 1) / cores;  // reduce chunks per core
+    const uint32_t max_chunks = tt::div_up(chunks, cores);  // reduce chunks per core
     const uint32_t array_words = dirty_array_words(cores);
     // A bucket holds one worker's share of a core's indices (+1 for rounding), padded to whole 64 B.
-    const uint32_t bucket_cap = pad_words((per_core + kWorkers - 1) / kWorkers + 1);
+    const uint32_t bucket_cap = pad_words(tt::div_up(per_core, kWorkers) + 1);
     // Rank ranges: a whole number of owner rounds (block b belongs to b % num_devices), so each range holds the same
     // number of blocks of every owner; at least 4 rounds, and a multiple of 16 blocks so every range's word ranks and
     // bitmap words are whole 16 B L1 transfers.
@@ -154,7 +153,7 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
     while (range_blocks % kRangeBlockAlign != 0) {
         range_blocks += attrs.num_devices;
     }
-    const uint32_t max_ranges = (layout.num_blocks + range_blocks - 1) / range_blocks;
+    const uint32_t max_ranges = tt::div_up(layout.num_blocks, range_blocks);
 
     tt::tt_metal::ProgramDescriptor desc;
     auto add_cb = [&](uint32_t id, uint32_t bytes) {
@@ -167,20 +166,20 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
                 .page_size = bytes}}},
         });
     };
-    add_cb(kTableImage, round_up(layout.image_words * sizeof(uint32_t), kCbAlignBytes));
+    add_cb(kTableImage, tt::round_up(layout.image_words * sizeof(uint32_t), kCbAlignBytes));
     add_cb(kIdx, per_core * sizeof(uint32_t));
-    add_cb(kDirtyChunks, round_up(chunks, kCbAlignBytes));  // one byte per chunk
+    add_cb(kDirtyChunks, tt::round_up(chunks, kCbAlignBytes));  // one byte per chunk
     add_cb(kDirtyMaps, kNumDirtyMaps * array_words * sizeof(uint32_t));
     // Every core's copy of every reduce chunk this core owns, worst case.
     add_cb(kScratch, max_chunks * cores * kChunkWords * sizeof(uint32_t));
-    add_cb(kPartials, round_up(max_ranges * owner_stride(attrs.num_devices) * sizeof(uint32_t), kCbAlignBytes));
+    add_cb(kPartials, tt::round_up(max_ranges * owner_stride(attrs.num_devices) * sizeof(uint32_t), kCbAlignBytes));
     add_cb(kMisc, misc_words(max_chunks) * sizeof(uint32_t));
     // Step 1's buckets (kWorkers x kWorkers of bucket_cap words), then step 2's copy lists: uint16 core ids, one list
     // of `cores` per reduce chunk.
     const uint32_t bucket_words = kWorkers * kWorkers * bucket_cap;
-    const uint32_t list_words = round_up(max_chunks * cores * sizeof(uint16_t), sizeof(uint32_t)) / sizeof(uint32_t);
+    const uint32_t list_words = tt::div_up(max_chunks * cores * sizeof(uint16_t), sizeof(uint32_t));
     add_cb(kBuckets, std::max(bucket_words, list_words) * sizeof(uint32_t));
-    add_cb(kWordRanks, round_up(layout.bitmap_words * sizeof(uint16_t), kCbAlignBytes));
+    add_cb(kWordRanks, tt::round_up(layout.bitmap_words * sizeof(uint16_t), kCbAlignBytes));
     for (uint32_t i = 0; i < kNumSems; ++i) {
         desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = i, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
