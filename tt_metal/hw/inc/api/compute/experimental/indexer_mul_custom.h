@@ -23,13 +23,13 @@ namespace ckernel {
 // Blocked bcast-col MUL with dest-MAC head reduction (indexer_score gate-mul). Mechanism documented
 // canonically in _llk_math_bcast_cols_reuse_custom_ (llk_math_eltwise_binary_custom.h). Here: one
 // unpack context loads ONE SrcB (gate w[h]) + ct_dim SrcA tiles (qk for ct_dim consecutive cols of
-// head h, so cb_qk must be head-major). Reuses the SDPA blocked-sub unpack (op-agnostic). Pair with
-// mul_bcast_cols_init_short_custom.
+// head h, so cb_qk must be head-major). Reuses the SDPA blocked-sub unpack (op-agnostic). Honours
+// MATH_FIDELITY like mul_bcast_cols_init. Pair with mul_bcast_cols_init_short_custom.
 
 ALWI void mul_bcast_cols_init_short_custom(
     std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_mul_bcast_cols_init_custom(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_mul_bcast_cols_init_custom<MATH_FIDELITY>(icb0, icb1)));
     UNPACK((llk_unpack_AB_sub_bcast_col_init_custom(icb0, icb1)));
 }
 
@@ -41,7 +41,7 @@ ALWI void mul_tiles_bcast_cols_custom(
     std::uint32_t itile1,
     std::uint32_t idst,
     std::uint32_t ct_dim) {
-    MATH((llk_math_eltwise_binary_mul_bcast_cols_custom(idst, ct_dim)));
+    MATH((llk_math_eltwise_binary_mul_bcast_cols_custom<MATH_FIDELITY>(idst, ct_dim)));
     UNPACK((llk_unpack_AB_sub_bcast_col_custom(icb0, icb1, itile0, itile1, ct_dim)));
 }
 

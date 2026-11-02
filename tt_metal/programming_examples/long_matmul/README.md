@@ -56,7 +56,9 @@ The program runs the workload once per core grid, pausing 5 s between grids so t
 can be measured in between. The grid list is generated from the device's compute grid: for each
 width `x` from 3 up to the device maximum, the heights `x-1`, `x` and `x+1` are tried and clipped
 to the device. On a Wormhole n300 (8x7) that is 15 grids from 3x2 to 8x7; on a Wormhole n150
-(8x8) 17 grids ending at 8x8; on a Blackhole p100a (11x10) 24 grids ending at 11x10. Pairs of
+(8x8) 17 grids ending at 8x8; on a Blackhole p100a (11x10) 24 grids ending at 11x10. Widths
+past that band, where even `x-1` is taller than the device, run at the full height, so a 13x10
+grid gets 26 grids ending 11x10, 12x10, 13x10. Pairs of
 equal core count but different shape (3x4 vs 4x3, 6x7 vs 7x6) are included on purpose, to
 separate a core-count effect from a NoC-shape one.
 

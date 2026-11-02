@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     kimi_k3_program_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state, device_scalar
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -332,9 +333,14 @@ def make_kimi_k3_test_case(checkpoint_dir: Path, *, sequence: int) -> KimiK3Test
     )
 
 
-def make_synthetic_kimi_k3_test_case(*, sequence: int) -> KimiK3TestCase:
-    """Build deterministic production-dimension Kimi-K3 inputs without a checkpoint."""
+def make_synthetic_kimi_k3_test_case(*, sequence: int, num_heads: int | None = None) -> KimiK3TestCase:
+    """Build deterministic production-dimension Kimi-K3 inputs without a checkpoint.
+
+    ``num_heads`` overrides the global KDA head count, so a smaller TP keeps Galaxy's heads per chip.
+    """
     config = _kda_config_from_kimi_k3_constants()
+    if num_heads is not None:
+        config = replace(config, num_heads=num_heads)
     state_dict = random_weights(config)
     hidden = torch.randn(
         1,
@@ -596,3 +602,13 @@ def assert_matches_reference(
             nrmse_threshold=nrmse.convolution,
             linf_threshold=0.1,
         )
+
+
+def read_slab_layer(mesh_device, slabs: KdaStates, slot: int, layer_idx: int) -> KdaState:
+    """A copy of layer ``layer_idx``'s carry at host ``slot``, read through the device-slot import the
+    K3 layers use. OWNED: free it with ``deallocate_state``."""
+    state = allocate_native_state(mesh_device, slabs.geometry)
+    index = device_scalar(mesh_device, slot)
+    slabs.import_layer(state, index, layer_idx)
+    ttnn.deallocate(index)
+    return state

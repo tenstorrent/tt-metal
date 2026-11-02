@@ -176,8 +176,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensors_args.input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(
-        tensors_args.input_tensor.buffer() != nullptr,
-        "Operands to softmax need to be allocated in buffers on device!");
+        tensors_args.input_tensor.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((tensors_args.input_tensor.layout() == Layout::TILE), "Inputs to softmax must be tilized");
     TT_FATAL(
         tensors_args.input_tensor.dtype() == DataType::FLOAT32 ||
@@ -185,6 +184,18 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
             tensors_args.input_tensor.dtype() == DataType::BFLOAT8_B,
         "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
         tensors_args.input_tensor.dtype());
+
+    // subblock_w == 0 reaches `block_w % subblock_w` in the mask branch below, a modulo by zero on
+    // the host that kills the process with SIGFPE, so the zero check runs here, ahead of both branches.
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
+                TT_FATAL(program_config.subblock_w > 0, "subblock_w must be greater than 0.");
+            }
+        },
+        attributes.program_config);
+
     if (tensors_args.mask.has_value()) {
         const auto& mask = tensors_args.mask.value();
         TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
@@ -205,6 +216,15 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                      tensors_args.input_tensor.padded_shape()[-1] / tile_width,
                      tile_height});
                 TT_FATAL(mask.padded_shape() == expected_shape, "Non-sharded mask shape must match expected shape");
+            } else {
+                const auto& input_tile = tensors_args.input_tensor.tensor_spec().tile();
+                TT_FATAL(
+                    mask.padded_shape()[-2] >= input_tile.get_height() &&
+                        mask.padded_shape()[-1] >= input_tile.get_width(),
+                    "Non-sharded TILE mask must span at least one {}x{} input tile, got padded shape {}",
+                    input_tile.get_height(),
+                    input_tile.get_width(),
+                    mask.padded_shape());
             }
             for (uint32_t i = 1; i < tensors_args.input_tensor.padded_shape().rank() - 2; i++) {
                 TT_FATAL(
@@ -439,15 +459,19 @@ static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
         /*default_l1_acc=*/false);
 }
 
+static void check_input_on_device(const Tensor& input_tensor) {
+    TT_FATAL(
+        input_tensor.device() != nullptr,
+        "input_tensor.device() == nullptr, No device found, move input_tensor to device");
+}
+
 Tensor softmax(
     const Tensor& input_tensor,
     int8_t dim,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
-    TT_FATAL(
-        input_tensor.device() != nullptr,
-        "input_tensor.device() == nullptr, No device found, move input_tensor to device");
+    check_input_on_device(input_tensor);
 
     const auto compute_kernel_config_val = softmax_init_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -531,6 +555,8 @@ Tensor scale_mask_softmax(
     bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
+    check_input_on_device(input_tensor);
+
     const auto compute_kernel_config_val = softmax_init_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
@@ -621,6 +647,8 @@ Tensor softmax_in_place(
     SoftmaxProgramConfig program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
+    check_input_on_device(input_tensor);
+
     const auto compute_kernel_config_val = softmax_init_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
@@ -662,6 +690,8 @@ Tensor scale_mask_softmax_in_place(
     bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
+    check_input_on_device(input_tensor);
+
     const auto compute_kernel_config_val = softmax_init_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
@@ -723,6 +753,8 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     SoftmaxProgramConfig program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
+    check_input_on_device(input_tensor);
+
     const auto compute_kernel_config_val = softmax_init_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,

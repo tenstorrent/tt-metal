@@ -9,7 +9,7 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>

@@ -207,7 +207,7 @@ def global_ring_prefill_attention(
             tt_q.shape[-2],
             sliding=False,
             num_heads=tt_q.shape[1],
-            num_cores=(sdpa_grid.x - 1) * sdpa_grid.y,
+            grid=(sdpa_grid.x - 1, sdpa_grid.y),
             use_tuned_configs=use_tuned_configs,
         )
 
@@ -217,7 +217,7 @@ def global_ring_prefill_attention(
             GLOBAL_HEAD_DIM,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            max_k_splits=k_splits,
+            k_splits=k_splits,
             # Global attention only: sliding attention gains nothing from LoFi, so it keeps HiFi2.
             matmul_math_fidelity=ttnn.MathFidelity.LoFi,
             segmented_accumulation=segmented,
@@ -277,28 +277,34 @@ def _load_global_ring_sdpa_configs():
     return {int(chunk): tuple(config) for chunk, config in data["configs"].items()}
 
 
-def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110, *, use_tuned_configs=False):
-    """(q_chunk_size, k_chunk_size, max_k_splits, segmented_accumulation) for the ring SDPA, from the per-rank Q slab
-    (chunk / CP), the local heads and the SDPA cores.
+def _k_splits(units, grid):
+    """3 if three bands of whole rows of the (head, Q chunk) units fit grid (cols, rows), else 1, as the op counts
+    them. The op also caps sliding layers by their window; Gemma4's 1024 allows 4."""
+    return 3 if 3 * -(-units // grid[0]) <= grid[1] else 1
+
+
+def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, grid=(11, 10), *, use_tuned_configs=False):
+    """(q_chunk_size, k_chunk_size, k_splits, segmented_accumulation) for the ring SDPA, from the per-rank Q slab
+    (chunk / CP), the local heads and the SDPA grid (columns, rows).
     """
-
+    num_cores = grid[0] * grid[1]
     if sliding:
-        # Split K three ways when the cores hold three bands of every (head, Q chunk) unit.
         q_chunk = 128
-        k_splits = 3 if num_heads * -(-q_slab_tokens // q_chunk) * 3 <= num_cores else 1
-        return q_chunk, 128, k_splits, False
+        return q_chunk, 128, _k_splits(num_heads * -(-q_slab_tokens // q_chunk), grid), False
 
-    if use_tuned_configs and num_heads == 8 and num_cores == 110:
+    if use_tuned_configs and num_heads == 8 and tuple(grid) == (11, 10):
         tuned = _load_global_ring_sdpa_configs().get(q_slab_tokens * 8)
         if tuned is not None:
             return tuned
 
-    # Short slabs: 4 Q chunks per head are too few to fill the grid, so K is split over 3 bands.
+    # Short slabs: 4 Q chunks per head are too few to fill the grid, so K is split over 3 bands. The op refuses
+    # segmented accumulation with a K split, so it is on only where the split does not fit.
     if q_slab_tokens <= 512:
         q_chunk = q_slab_tokens // 4
         q_chunk = q_chunk if q_chunk > 0 and q_chunk % TILE_HEIGHT == 0 else TILE_HEIGHT
-        segmented = -(-q_slab_tokens // q_chunk) * num_heads <= num_cores
-        return q_chunk, 256, 3, segmented
+        units = num_heads * -(-q_slab_tokens // q_chunk)
+        k_splits = _k_splits(units, grid)
+        return q_chunk, 256, k_splits, k_splits == 1 and units <= num_cores
 
     # Segmented accumulation needs one Q chunk per core.
     for q_chunk in _GLOBAL_Q_CHUNKS:
@@ -314,7 +320,7 @@ def ring_prefill_program_config(
     head_dim,
     q_chunk_size,
     k_chunk_size,
-    max_k_splits=1,
+    k_splits=1,
     matmul_math_fidelity=None,
     segmented_accumulation=False,
 ):
@@ -333,7 +339,7 @@ def ring_prefill_program_config(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
-        max_k_splits=max_k_splits,
+        k_splits=k_splits,
         matmul_math_fidelity=matmul_math_fidelity,
         segmented_accumulation=segmented_accumulation,
     )
@@ -421,10 +427,10 @@ def sliding_ring_prefill_attention(
     if program_config is None:
         sdpa_grid = ccl_manager.compute_grid_size
         q_chunk, k_chunk, k_splits, _ = ring_sdpa_chunk_sizes(
-            tt_q.shape[-2], sliding=True, num_heads=tt_q.shape[1], num_cores=(sdpa_grid.x - 1) * sdpa_grid.y
+            tt_q.shape[-2], sliding=True, num_heads=tt_q.shape[1], grid=(sdpa_grid.x - 1, sdpa_grid.y)
         )
         program_config = ring_prefill_program_config(
-            mesh_device, ccl_manager, head_dim, q_chunk_size=q_chunk, k_chunk_size=k_chunk, max_k_splits=k_splits
+            mesh_device, ccl_manager, head_dim, q_chunk_size=q_chunk, k_chunk_size=k_chunk, k_splits=k_splits
         )
     # Only the predecessor halo is exchanged, and the op requires a compact buffer (gathered rows < cache_seq *
     # ring): a full-capacity one fails "requires a compact halo buffer". The halo is the window rounded up to whole

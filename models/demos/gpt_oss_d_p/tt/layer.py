@@ -14,6 +14,7 @@ import os
 
 import ttnn
 from models.demos.gpt_oss_d_p.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss_d_p.utils.profiler_utils import COARSE, FINE, zone
 from models.demos.gpt_oss_d_p.utils.substate import substate
 
 _DELTA_PROBE = os.environ.get("GPT_OSS_DELTA_PROBE", "") != ""
@@ -123,6 +124,13 @@ class DecoderLayer:
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
 
+        # Profiling zone name for this layer. GPT-OSS alternates sliding-window and full-causal
+        # attention per layer (hf_config.layer_types; even=sliding), while the MLP is MoE on every
+        # layer — so the attention class is the only thing distinguishing layers, and the parser
+        # aggregates all layers of a class into one row. Inner zone names are relative; the parser
+        # composes the full path from the nesting (see utils/profiler_utils.py).
+        self.zone_name = f"layer{layer_idx:02d}_{'sliding' if self.self_attn.is_sliding else 'full'}"
+
     def __call__(
         self,
         hidden_states,
@@ -135,41 +143,49 @@ class DecoderLayer:
         indexed_rope=False,
     ):
         seqlen = hidden_states.shape[-2]
-        if seqlen > 32 * 1024:
-            # Reallocate hidden states to prevent memory fragmentation.
-            hidden_states = ttnn.move(hidden_states)
+        with zone(self.zone_name, COARSE):
+            if seqlen > 32 * 1024:
+                # Reallocate hidden states to prevent memory fragmentation.
+                with zone("defrag_move", FINE):
+                    hidden_states = ttnn.move(hidden_states)
 
-        # hidden_states / residual: [1, 1, tokens/num_rows, hidden_size]
-        residual = hidden_states
-        hidden_states_post_norm = self.input_layernorm(hidden_states)
+            # hidden_states / residual: [1, 1, tokens/num_rows, hidden_size]
+            residual = hidden_states
+            with zone("input_norm", FINE):
+                hidden_states_post_norm = self.input_layernorm(hidden_states)
 
-        hidden_states = self.self_attn(
-            hidden_states_post_norm,
-            rope_mats=position_embeddings,
-            position_idx=position_idx,
-            kv_cache=kv_cache,
-            user_id=user_id,
-            batch_size=batch_size,
-            cached_len=cached_len,
-            indexed_rope=indexed_rope,
-        )
-        hidden_states_post_norm.deallocate(True)
+            with zone("attn", COARSE):
+                hidden_states = self.self_attn(
+                    hidden_states_post_norm,
+                    rope_mats=position_embeddings,
+                    position_idx=position_idx,
+                    kv_cache=kv_cache,
+                    user_id=user_id,
+                    batch_size=batch_size,
+                    cached_len=cached_len,
+                    indexed_rope=indexed_rope,
+                )
+            hidden_states_post_norm.deallocate(True)
 
-        if _DELTA_PROBE:
-            _delta_stats("attn_out", self.layer_idx, hidden_states)
+            if _DELTA_PROBE:
+                _delta_stats("attn_out", self.layer_idx, hidden_states)
 
-        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
-        residual.deallocate(True)
-        residual = hidden_states
-        hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
+            with zone("residual_attn", FINE):
+                hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+            residual.deallocate(True)
+            residual = hidden_states
+            with zone("post_attn_norm", FINE):
+                hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
 
-        hidden_states = self.mlp(hidden_states_post_norm)
-        hidden_states_post_norm.deallocate(True)
+            with zone("mlp", COARSE):
+                hidden_states = self.mlp(hidden_states_post_norm)
+            hidden_states_post_norm.deallocate(True)
 
-        if _DELTA_PROBE:
-            _delta_stats("moe_out ", self.layer_idx, hidden_states)
+            if _DELTA_PROBE:
+                _delta_stats("moe_out ", self.layer_idx, hidden_states)
 
-        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
-        residual.deallocate(True)
+            with zone("residual_mlp", FINE):
+                hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+            residual.deallocate(True)
 
         return hidden_states
