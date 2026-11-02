@@ -454,11 +454,12 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
 // FPU (19-bit inputs, once per partial); the merger's own fp32 output accumulator is scaled in DST so it is
 // never truncated.
 // A piece whose first step lies past a row's diagonal (Sq_chunk_t > 2 * Sk_chunk_t, or a piece of the
-// first chunks) sees only masked scores on that row: its running max is the mask value itself, so the row's
-// P is exp(0) = 1 everywhere and its partial is finite garbage, which the fold removes exactly (alpha =
-// exp(scale * (mask - real max)) underflows to 0). The whole path never does this, since every row has K
-// tile 0 unmasked at step 0. It holds while |score| stays far below the mask's fp32 spacing (measured
-// finite on Blackhole with raw scores past 32).
+// first chunks) sees only masked scores on that row. The stamp adds the bf16 mask value (-998244352) in
+// fp32, where a score of a few hundred survives as the low bits; the row max then rounds to the mask value
+// in the bf16 max CB, so the row's P is exp(scale * score), not exp(0): finite garbage of up to exp(scale *
+// |score|) per element. The fold removes it exactly, since alpha = exp(scale * (mask - real max))
+// underflows to 0. The whole path never does this, since every row has K tile 0 unmasked at step 0.
+// Measured finite on Blackhole with raw scores in the thousands (SplitEdge_LargeScoresStayFinite).
 // ttnn has this fold twice: ring_joint's K split (merge_into_prev in ring_joint_sdpa.cpp) and flash decode's
 // correction_block (compute_common.hpp). Neither fits here. ring_joint's runs on its bf16 streaming path
 // only (it rejects fp32_dest_acc_en, and this kernel keeps the fp32 accumulator in DST), its senders hold
