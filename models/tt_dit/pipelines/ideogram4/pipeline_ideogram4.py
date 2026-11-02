@@ -146,6 +146,13 @@ from ..pipeline_api import PipelineAPIMixin
 # the dequant. Set IDEOGRAM4_DEQUANT_CACHE=0 to force a fresh dequant.
 _DEQUANT_CACHE = os.environ.get("IDEOGRAM4_DEQUANT_CACHE", "1") != "0"
 
+# Pass ring-SDPA ``logical_n`` (the real image+text length) as a 1-element uint32 device
+# tensor instead of a Python int (default on). As an int it is a compile-time kernel arg, so
+# every distinct prompt length compiles new SDPA kernels; as a tensor the kernels compile once
+# per resolution (worst-case placeholder) and read the live length on device each dispatch.
+# Set IDEOGRAM4_LOGICAL_N_TENSOR=0 to restore the int path (A/B comparison).
+_LOGICAL_N_TENSOR = os.environ.get("IDEOGRAM4_LOGICAL_N_TENSOR", "1") != "0"
+
 
 def _dq(path):
     """Load + dequantize an fp8 checkpoint to bf16, caching the bf16 result on disk.
@@ -530,6 +537,21 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             return tensor.from_torch(t, device=self.mesh_device, dtype=ttnn.uint32, mesh_axes=mesh_axes)
         return tensor.from_torch(t, device=self.mesh_device, dtype=ttnn.uint32)
 
+    def _logical_n_arg(self, seq: int) -> int | ttnn.Tensor:
+        """Ring-SDPA ``logical_n`` for a branch: a [1,1,1,1] uint32 ROW_MAJOR replicated device
+        tensor (read on device each dispatch -> one SDPA compile per resolution, any prompt
+        length), or the plain int when IDEOGRAM4_LOGICAL_N_TENSOR=0. Only the ring path (SP>1)
+        consumes it; without SP the transformer uses plain SDPA and ignores the value."""
+        if not _LOGICAL_N_TENSOR or self.sp_factor == 1:
+            return seq
+        return tensor.from_torch(
+            torch.tensor([seq], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_axes=[None, None, None, None],
+        )
+
     def _branch(self, n_pre, num_img, grid_h, grid_w, llm_real):
         """Build the per-branch device tensors with a CONSTANT [image | text | pad] layout.
 
@@ -595,6 +617,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             img_mask=self._seq_dev(img_mask, 1),
             idx=self._idx_dev(idx, 1),
             seq=seq,
+            seq_arg=self._logical_n_arg(seq),
             padded_len=L,
             n_pre=n_pre,
         )
@@ -682,7 +705,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
                 image_indicator_index=br["idx"],
                 llm_token_mask=br["llm_mask"],
                 output_image_mask=br["img_mask"],
-                spatial_sequence_length=br["seq"],
+                spatial_sequence_length=br["seq_arg"],
             )  # [1, padded_len/sp, in_ch] sequence-sharded
             if self.sp_factor > 1:
                 out = self.ccl.all_gather_persistent_buffer(out, dim=1, mesh_axis=self.sp_axis)
@@ -851,6 +874,8 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         for br in (cond_b, uncond_b):
             for key in ("llm", "cos", "sin", "llm_mask", "img_mask", "idx"):
                 ttnn.deallocate(br[key])
+            if isinstance(br["seq_arg"], ttnn.Tensor):
+                ttnn.deallocate(br["seq_arg"])
         ttnn.deallocate(z_out)
 
         on_event(SectionStart("vae"))
