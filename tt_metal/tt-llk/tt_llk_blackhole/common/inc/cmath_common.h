@@ -110,15 +110,30 @@ inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_()
 // mode for them (DEST_32B_LOW must match Fp32_enabled || INT8_math_enabled; MOVA2D.md, MOVB2D.md), but on Blackhole
 // Fp32_enabled also makes these moves treat SrcA as Tf32, and Tf32 with DEST_32B_LOW corrupts the write (HW erratum
 // TEN-4245). INT8_math_enabled selects the same 32-bit mode without that, so the low-half moves run with it in place
-// of Fp32_enabled. Returns the ALU_ACC_CTRL word for _dest_32b_lo_moves_end_ to restore both bits from. Out of line, as
-// the sync dwarfs a call and some kernels are tight on code space.
-inline __attribute__((noinline)) std::uint32_t _dest_32b_lo_moves_begin_()
+// of Fp32_enabled.
+//
+// _dest_32b_lo_moves_save_ reads the ALU_ACC_CTRL word for _dest_32b_lo_moves_end_ to restore both bits from;
+// _dest_32b_lo_moves_enter_ switches to INT8_math_enabled; _dest_32b_lo_moves_begin_ does both. enter and end are
+// two RMWCIBs each and nothing else, so a replay recording can hold them (end with the word saved before recording);
+// save cannot go in one. save and begin are out of line, as the sync dwarfs a call and some kernels are tight on
+// code space.
+inline __attribute__((noinline)) std::uint32_t _dest_32b_lo_moves_save_()
 {
     static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_ACC_CTRL_INT8_math_enabled_ADDR32);
     tensix_sync(); // the read below must see every earlier config write
-    const std::uint32_t alu_acc_ctrl = load_blocking(&get_cfg_pointer()[ALU_ACC_CTRL_Fp32_enabled_ADDR32]);
+    return load_blocking(&get_cfg_pointer()[ALU_ACC_CTRL_Fp32_enabled_ADDR32]);
+}
+
+inline void _dest_32b_lo_moves_enter_()
+{
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(1);
+}
+
+inline __attribute__((noinline)) std::uint32_t _dest_32b_lo_moves_begin_()
+{
+    const std::uint32_t alu_acc_ctrl = _dest_32b_lo_moves_save_();
+    _dest_32b_lo_moves_enter_();
     return alu_acc_ctrl;
 }
 

@@ -1829,7 +1829,8 @@ inline void fused_step_group(const bool ascending)
 // Exactly transpose_face_body_len Tensix instructions. Nothing checks this: the count below is hand
 // maintained against this body, and if the two ever disagree the recording captures the wrong number
 // of instructions and every replayed face is wrong. Re-count when editing this function.
-inline void transpose_dest_face_32b_body()
+// alu_acc_ctrl is _dest_32b_lo_moves_save_'s word, read before recording: the restore is recorded with it.
+inline void transpose_dest_face_32b_body(const std::uint32_t alu_acc_ctrl)
 {
     // Transpose low 16 bits and backup it in SrcA
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float16_b));
@@ -1860,26 +1861,27 @@ inline void transpose_dest_face_32b_body()
     TTI_MOVB2D(0, 24, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, 8);
     TTI_MOVB2D(0, 28, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, 12);
 
-    // lo16 writeback: Fp32_enabled=0 + SrcA=Float32 -> writes lo16, preserves hi16
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+    // lo16 writeback: INT8_math_enabled in place of Fp32_enabled + SrcA=Float32 -> writes lo16, preserves hi16
+    math::_dest_32b_lo_moves_enter_();
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
     TTI_MOVA2D(1, 0, ADDR_MOD_7, p_mova2d::MOV_8_ROWS, 0);
     TTI_MOVA2D(1, 8, ADDR_MOD_5, p_mova2d::MOV_8_ROWS, 8); // ADDR_MOD_5 = dest +16: step to the next face
 
-    // Restore Fp32_enabled=1 for subsequent 32-bit Dst access
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+    // Restore Fp32_enabled and INT8_math_enabled for subsequent 32-bit Dst access
+    math::_dest_32b_lo_moves_end_(alu_acc_ctrl);
 }
 
-// 5 x RMWCIB (both CFG fields are single-byte masks, so one instruction each) + 8 x MOVD2B + 2 x TRNSPSRCB
+// 7 x RMWCIB (every CFG field here is a single-byte mask, so one instruction each: 3 SrcA formats, plus
+// Fp32_enabled and INT8_math_enabled in _dest_32b_lo_moves_enter_ and _end_) + 8 x MOVD2B + 2 x TRNSPSRCB
 // + 4 x MOVB2A + 4 x MOVB2D + 2 x MOVA2D.
-constexpr std::uint32_t transpose_face_body_len = 25;
+constexpr std::uint32_t transpose_face_body_len = 27;
 
 // The absolute-offset form, for the unfused index faces and transpose_N_faces, where the face count
 // varies and a recording cannot be replayed across it.
-// Transpose one 16x16 face of 32-bit Dst data at `dst_offset`.
+// Transpose one 16x16 face of 32-bit Dst data at `dst_offset`. alu_acc_ctrl is _dest_32b_lo_moves_save_'s word.
 template <int dst_offset>
-inline void transpose_dest_face_32b()
+inline void transpose_dest_face_32b(const std::uint32_t alu_acc_ctrl)
 {
     // Transpose low 16 bits and backup it in SrcA
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float16_b));
@@ -1911,7 +1913,7 @@ inline void transpose_dest_face_32b()
     TTI_MOVB2D(0, 28, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, dst_offset + 12);
 
     // lo16 writeback: INT8_math_enabled in place of Fp32_enabled + SrcA=Float32 -> writes lo16, preserves hi16
-    const std::uint32_t alu_acc_ctrl = math::_dest_32b_lo_moves_begin_();
+    math::_dest_32b_lo_moves_enter_();
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
 
     TTI_MOVA2D(1, 0, ADDR_MOD_7, p_mova2d::MOV_8_ROWS, dst_offset + 0);
@@ -1923,10 +1925,10 @@ inline void transpose_dest_face_32b()
 
 // Transpose `N` consecutive faces starting at the current RWC.Dst, recording the body once and replaying it.
 template <std::uint32_t N>
-inline void transpose_faces_from_dst()
+inline void transpose_faces_from_dst(const std::uint32_t alu_acc_ctrl)
 {
     lltt::record<lltt::Exec>(0, transpose_face_body_len);
-    transpose_dest_face_32b_body();
+    transpose_dest_face_32b_body(alu_acc_ctrl);
     for (std::uint32_t face = 1; face < N; face++)
     {
         lltt::replay(0, transpose_face_body_len);
@@ -1972,6 +1974,8 @@ inline void transpose_8_faces()
     {
         enter_transpose_cfg_block();
     }
+    // One read of ALU_ACC_CTRL serves every face's low-half writeback (see transpose_dest_face_32b_body).
+    const std::uint32_t alu_acc_ctrl = math::_dest_32b_lo_moves_save_();
 
     // 8 value faces at +0, +16, ..., +112, walked through RWC.Dst from one recording. The callers reach here
     // with RWC.Dst == 0; make that explicit rather than implicit, since a stale Dst corrupts silently.
@@ -1980,25 +1984,25 @@ inline void transpose_8_faces()
     {
         // Unfused mode keeps the indices in a parallel DST region that begins exactly where the eight value
         // faces end, so the sixteen faces are contiguous and one walk covers both.
-        transpose_faces_from_dst<16>();
+        transpose_faces_from_dst<16>(alu_acc_ctrl);
     }
     else if constexpr (!fused)
     {
-        transpose_faces_from_dst<8>();
+        transpose_faces_from_dst<8>(alu_acc_ctrl);
         // The index region does not abut the value faces here, so these keep the absolute-offset form.
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        transpose_dest_face_32b<indices_offset + 0>();
-        transpose_dest_face_32b<indices_offset + 16>();
-        transpose_dest_face_32b<indices_offset + 32>();
-        transpose_dest_face_32b<indices_offset + 48>();
-        transpose_dest_face_32b<indices_offset + 64>();
-        transpose_dest_face_32b<indices_offset + 80>();
-        transpose_dest_face_32b<indices_offset + 96>();
-        transpose_dest_face_32b<indices_offset + 112>();
+        transpose_dest_face_32b<indices_offset + 0>(alu_acc_ctrl);
+        transpose_dest_face_32b<indices_offset + 16>(alu_acc_ctrl);
+        transpose_dest_face_32b<indices_offset + 32>(alu_acc_ctrl);
+        transpose_dest_face_32b<indices_offset + 48>(alu_acc_ctrl);
+        transpose_dest_face_32b<indices_offset + 64>(alu_acc_ctrl);
+        transpose_dest_face_32b<indices_offset + 80>(alu_acc_ctrl);
+        transpose_dest_face_32b<indices_offset + 96>(alu_acc_ctrl);
+        transpose_dest_face_32b<indices_offset + 112>(alu_acc_ctrl);
     }
     else
     {
-        transpose_faces_from_dst<8>();
+        transpose_faces_from_dst<8>(alu_acc_ctrl);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
@@ -2026,36 +2030,38 @@ inline void transpose_N_faces()
     {
         enter_transpose_cfg_block();
     }
+    // One read of ALU_ACC_CTRL serves every face's low-half writeback (see transpose_dest_face_32b_body).
+    const std::uint32_t alu_acc_ctrl = math::_dest_32b_lo_moves_save_();
 
-    transpose_dest_face_32b<0>();
-    transpose_dest_face_32b<16>();
+    transpose_dest_face_32b<0>(alu_acc_ctrl);
+    transpose_dest_face_32b<16>(alu_acc_ctrl);
     if constexpr (N > 2)
     {
-        transpose_dest_face_32b<32>();
-        transpose_dest_face_32b<48>();
+        transpose_dest_face_32b<32>(alu_acc_ctrl);
+        transpose_dest_face_32b<48>(alu_acc_ctrl);
     }
     if constexpr (N > 4)
     {
-        transpose_dest_face_32b<64>();
-        transpose_dest_face_32b<80>();
-        transpose_dest_face_32b<96>();
-        transpose_dest_face_32b<112>();
+        transpose_dest_face_32b<64>(alu_acc_ctrl);
+        transpose_dest_face_32b<80>(alu_acc_ctrl);
+        transpose_dest_face_32b<96>(alu_acc_ctrl);
+        transpose_dest_face_32b<112>(alu_acc_ctrl);
     }
     if constexpr (!fused)
     {
-        transpose_dest_face_32b<indices_offset + 0>();
-        transpose_dest_face_32b<indices_offset + 16>();
+        transpose_dest_face_32b<indices_offset + 0>(alu_acc_ctrl);
+        transpose_dest_face_32b<indices_offset + 16>(alu_acc_ctrl);
         if constexpr (N > 2)
         {
-            transpose_dest_face_32b<indices_offset + 32>();
-            transpose_dest_face_32b<indices_offset + 48>();
+            transpose_dest_face_32b<indices_offset + 32>(alu_acc_ctrl);
+            transpose_dest_face_32b<indices_offset + 48>(alu_acc_ctrl);
         }
         if constexpr (N > 4)
         {
-            transpose_dest_face_32b<indices_offset + 64>();
-            transpose_dest_face_32b<indices_offset + 80>();
-            transpose_dest_face_32b<indices_offset + 96>();
-            transpose_dest_face_32b<indices_offset + 112>();
+            transpose_dest_face_32b<indices_offset + 64>(alu_acc_ctrl);
+            transpose_dest_face_32b<indices_offset + 80>(alu_acc_ctrl);
+            transpose_dest_face_32b<indices_offset + 96>(alu_acc_ctrl);
+            transpose_dest_face_32b<indices_offset + 112>(alu_acc_ctrl);
         }
     }
 
