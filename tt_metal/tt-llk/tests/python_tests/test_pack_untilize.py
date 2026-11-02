@@ -15,19 +15,23 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
+    PackUntilizeBenchmark,
+    PerfRunType,
 )
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
+    LOOP_FACTOR,
     NUM_FACES,
-    TILE_COUNT,
+    PACK_UNTILIZE_BENCHMARK,
     TILE_DST_CT_OFFSET,
     generate_input_dim,
 )
@@ -57,17 +61,38 @@ def test_pack_untilize(
     input_dimensions,
     dest_sync,
     tile_dst_ct_offset,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    block_ct_dim=None,
+    compile_time_formats=False,
+    benchmark=PackUntilizeBenchmark.Functional,
 ):
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
+    benchmark_is_perf = benchmark != PackUntilizeBenchmark.Functional
+    if is_perf != benchmark_is_perf:
+        raise ValueError(f"is_perf={is_perf} does not match benchmark={benchmark!r}")
+    if not is_perf and loop_factor != 1:
+        raise ValueError("Functional pack-untilize runs require loop_factor=1")
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
     if TestConfig.WITH_COVERAGE and input_dimensions == [64, 512]:
         pytest.skip(
             "Skipping large dimension test in coverage mode, check issue: #1063 on TT-LLK repo"
         )
 
-    if get_chip_architecture() == ChipArchitecture.WORMHOLE and (
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE and (
         formats.input_format == DataFormat.Fp8_e4m3
         or formats.output_format == DataFormat.Fp8_e4m3
     ):
-        pytest.skip("Fp8_e4m3 not supported on wormhole")
+        pytest.skip(
+            "Pack Untilize does not support Fp8_e4m3 on non-Blackhole architectures"
+        )
 
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b format")
@@ -121,23 +146,24 @@ def test_pack_untilize(
 
     golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
 
-    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
+    functional_unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     # _llk_pack_untilize_init_ has a static_assert that checks if block_ct_dim is less or equal to 8.
     # TODO: Update this logic to accept more than 8 tiles per block if the static_assert changes in the future.
-    _, block_ct_dim = get_num_blocks_and_num_tiles_in_block(
-        dest_sync,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Untilize,
-    )
+    if block_ct_dim is None:
+        _, block_ct_dim = get_num_blocks_and_num_tiles_in_block(
+            dest_sync,
+            dest_acc,
+            formats,
+            input_dimensions,
+            TILE_DIMENSIONS,
+            BlocksCalculationAlgorithm.Untilize,
+        )
 
-    configuration = TestConfig(
-        "sources/pack_untilize_test.cpp",
-        formats,
-        templates=[
+    test_config_kwargs = {
+        "test_name": "sources/pack_untilize_test.cpp",
+        "formats": formats,
+        "templates": [
             generate_input_dim(
                 input_dimensions,
                 input_dimensions,
@@ -145,12 +171,15 @@ def test_pack_untilize(
             ),
             DEST_SYNC(dest_sync),
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
+            PACK_UNTILIZE_BENCHMARK(benchmark),
+            NUM_FACES(4),
+            LOOP_FACTOR(loop_factor),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
-        variant_stimuli=StimuliConfig(
-            src_A,
+        "runtimes": [],
+        "variant_stimuli": StimuliConfig(
+            None if is_perf else src_A,
             formats.input_format,
-            src_B,
+            None if is_perf else src_B,
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
@@ -158,9 +187,25 @@ def test_pack_untilize(
             tile_count_res=tile_cnt_A,
             sfpu=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": (
+            # Match perf_fast_untilize: its Float32 baseline unpacks through
+            # SrcA and performs A2D datacopy instead of unpacking to Dest.
+            False
+            if benchmark == PackUntilizeBenchmark.FastUntilizeBaseline
+            else functional_unpack_to_dest
+        ),
+        "compile_time_formats": compile_time_formats,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 
