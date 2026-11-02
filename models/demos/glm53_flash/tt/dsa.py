@@ -79,7 +79,10 @@ DSA_FOLD_MODES = ("both", "q", "o", "none")
 # GLM53_DSA_DECODE_STATE: the traced multi-user sparse decode (``_decode_unified``, the mesh default) with the fused
 # ``dsa_decode_state`` program for the state side (q_a norm, latent append, index ring + pool maintenance: 29 ops ->
 # 1), the GLM53_DSA_FOLD absorb folds (w_qb1 / w_o2: 4 + 4 ops -> 1 + 1) and the free head-major query views:
-#   "0" (default) = today's composite ops; "1" = the fused state block (``_decode_state_unified``);
+#   "0" (default) = the composite ops; "1" = the fused state block (``_decode_state_unified``): 47.62 vs 48.35 ms per
+#   traced step at 32 users on the 8x4 (2026-11-03), NOT the default because the decode chain changes (per-user chain
+#   pcc after layer 44 at S=16 0.846854 vs the composite's 0.859975, the last position's greedy id != the host argmax
+#   for every user); the 45-layer logits gate is prefill-only and does not exercise it, so a decode-mode gate decides;
 #   "latent" = the fallback that keeps the index maintenance on today's ops: the program still norms q_a and appends
 #   the latent, its ring / pool writes are then overwritten by the composite ``maintain_decode`` (bit-identical
 #   index state by construction, 19 ops back). Read at construction (``decode_state_default``), so two layers of one
@@ -184,7 +187,7 @@ def sparse_block_plan(r0: int, r1: int, qblock: int, ablock: int) -> list[tuple[
 
 
 def decode_state_default() -> str:
-    """The ``GLM53_DSA_DECODE_STATE`` knob (``DSA_DECODE_STATE_MODES``; default "0" = the composite path)."""
+    """The ``GLM53_DSA_DECODE_STATE`` knob (``DSA_DECODE_STATE_MODES``; default "0" = the composite ops)."""
     mode = os.environ.get("GLM53_DSA_DECODE_STATE", "0")
     if mode not in DSA_DECODE_STATE_MODES:
         raise ValueError(f"GLM53_DSA_DECODE_STATE={mode!r}: expected one of {DSA_DECODE_STATE_MODES}")
