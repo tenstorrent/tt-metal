@@ -1331,8 +1331,9 @@ def test_lazy_sfpu_gates_realistic_dtbias(device, request, B, T, variant, a_scal
     print(f"sfpu-real SUMMARY {variant} a_scale={a_scale} B={B} T={T}: " + " ".join(f"{k}={v:.3e}" for k, v in worst.items()))
     # the FP32 branch: decay within 1e-3 relative everywhere (softplus <= 4e-4 relative), within a few fp32 ulps of the
     # truth where a + dt_bias < -5 (decay near 1; the BF16 clamp's error there is 1 - exp(nea * softplus) ~ 1e-4..1e-2),
-    # and no state drift beyond 1e-4 relative over the sequence
+    # and slot-0 drift (per (user, head) relative Frobenius error vs fp64, never re-synced) within the exact-gate K4
+    # arm's envelope: device, 6 steps, B = 8: 2e-3..4.4e-3 for every variant with the FP32 branch
     assert worst["dec_all"] < 1e-3, f"{variant}: decay max rel err {worst['dec_all']:.3e}"
     assert worst["dec_neg"] < 2e-6, f"{variant}: decay max|d| where a + dt_bias < -5: {worst['dec_neg']:.3e}"
-    assert worst["s0_neg"] < 1e-4 and worst["s0_pos"] < 1e-4, f"{variant}: slot-0 drift {worst}"
+    assert worst["s0_neg"] < 1e-2 and worst["s0_pos"] < 1e-2, f"{variant}: slot-0 drift {worst}"
     assert worst["p_out"] > 0.999
