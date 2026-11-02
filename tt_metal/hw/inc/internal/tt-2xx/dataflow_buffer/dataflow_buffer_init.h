@@ -730,22 +730,23 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
                 "num_tcs_to_rr must match DFB_DM_IFACE_NUM_TCS_BYTE_OFF");
 
             // 64-bit copy: both sides 8B-aligned (every entry is a multiple of 8; iface alignas(64)).
-            const uint64_t* src64 = static_cast<const uint64_t*>(
+            const uint8_t* src = static_cast<const uint8_t*>(
                 __builtin_assume_aligned(reinterpret_cast<const void*>(e_addr + DFB_IFACE_IMAGE_CTRL_BYTES), 8));
-            uint64_t* dst64 = static_cast<uint64_t*>(__builtin_assume_aligned(&iface, 8));
+            uint8_t* dst = static_cast<uint8_t*>(__builtin_assume_aligned(&iface, 8));
             const uint32_t t_slots_start = rdcycle();
 
             // Fixed-size 32B scalar head: straight-line, no trip count, no branch.
-            dst64[0] = src64[0];
-            dst64[1] = src64[1];
-            dst64[2] = src64[2];
-            dst64[3] = src64[3];
+            __builtin_memcpy(dst, src, 8);
+            __builtin_memcpy(dst + 8, src + 8, 8);
+            __builtin_memcpy(dst + 16, src + 16, 8);
+            __builtin_memcpy(dst + 24, src + 24, 8);
 
             // One trip per TC slot with the slot unrolled inside, not one trip per word: num_tcs is
             // a runtime value, and a word-at-a-time loop pays increment/compare/branch per word.
             for (uint32_t t = 0; t < num_tcs; t++) {
-                dst64[4 + 2 * t] = src64[4 + 2 * t];  // ptr, base_addr
-                dst64[5 + 2 * t] = src64[5 + 2 * t];  // limit, packed_tile_counter
+                const uint32_t off = 32u + 16u * t;
+                __builtin_memcpy(dst + off, src + off, 8);          // ptr, base_addr
+                __builtin_memcpy(dst + off + 8, src + off + 8, 8);  // limit, packed_tile_counter
             }
             total_tc_slots += rdcycle() - t_slots_start;
         }
