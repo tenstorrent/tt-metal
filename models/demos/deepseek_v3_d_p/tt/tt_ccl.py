@@ -605,6 +605,47 @@ class TT_CCL:
             self.mla_chunked_kv_buffers[key] = buffer
         return self.mla_chunked_kv_buffers[key]
 
+    def get_mla_kv_window_buffers(
+        self, *, local_rows, kvpe_dim, num_heads, v_head_dim, k_chunk_size, window_parts, tp_axis
+    ):
+        """The rotating KV window's gathered K and V for ring_joint_scaled_dot_product_attention(kv_window_parts=...):
+        slot rings of a few readiness parts per ring direction instead of the whole gathered sequence. K (the latent) is
+        replicated, V TP-sharded on heads. Scratch shared by every layer; zero-filled so rows past a part are finite."""
+        import torch
+
+        tp = self.mesh_device.shape[tp_axis]
+        assert num_heads % tp == 0, f"num_heads={num_heads} not divisible by tp={tp}"
+        key = ("kv_window", local_rows, kvpe_dim, num_heads, v_head_dim, k_chunk_size, window_parts, tp_axis)
+        if key not in self.mla_chunked_kv_buffers:
+            k_shape = ttnn.transformer.ring_joint_kv_window_shape(
+                [1, 1, local_rows, kvpe_dim], k_chunk_size, window_parts
+            )
+            v_shape = ttnn.transformer.ring_joint_kv_window_shape(
+                [1, num_heads // tp, local_rows, v_head_dim], k_chunk_size, window_parts
+            )
+            buffers = []
+            for shape in (k_shape, v_shape):
+                buffer = ttnn.empty(
+                    shape,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.zeros_like(buffer, optional_tensor=buffer)
+                buffers.append(buffer)
+            shard_dims = [None, None]
+            shard_dims[tp_axis] = 1
+            topology = ttnn.from_torch(
+                torch.zeros(1, tp, 32, 32),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
+                ),
+            ).tensor_topology()
+            buffers[1].update_tensor_topology(topology)
+            self.mla_chunked_kv_buffers[key] = tuple(buffers)
+        return self.mla_chunked_kv_buffers[key]
+
     def get_mla_chunked_kv_buffer(self, *, cache_batch, seq_len, kvpe_dim, dtype=ttnn.bfloat8_b):
         """Lazily allocate (once per mesh) and return the combined gathered-KV scratch buffer used by
         the chunked-prefill ring_mla op (persistent_output_buffer_kv). It's scratch -- each layer's

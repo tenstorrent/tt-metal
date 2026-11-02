@@ -547,6 +547,18 @@ class ttMLA:
         # SDPA waits forever on a missing wrap link. See tt_ccl.resolve_per_axis_topology, which the V4
         # attention blocks and compressors share with this.
         self.sp_ccl_topology, self.tp_ccl_topology = resolve_per_axis_topology(topology, self.sp_axis, self.tp_axis)
+        # Rotating KV window parts per ring direction for expanded K (0 = whole-sequence gathered buffers). The op takes
+        # it on an even SP ring of 4 or more, in chunked prefill (a cache longer than the chunk).
+        self._kv_window_parts = (
+            self._KV_WINDOW_PARTS
+            if self.unrolled_v
+            and self._expanded_k
+            and self.sp_ccl_topology == ttnn.Topology.Ring
+            and self.sp_factor > 2
+            and self.sp_factor % 2 == 0
+            and seq_len > self.active_seq_len
+            else 0
+        )
 
         # Ring-attention persistent buffers. Chunked prefill and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
@@ -559,6 +571,20 @@ class ttMLA:
         # the ring-joint-SDPA buffers — so it allocates none of these regardless of is_chunked.
         if kv_only or self._has_indexer:
             pass
+        elif self.is_chunked and self._kv_window_parts:
+            # Expanded K on a ring lands the gathered latent K and per-head V in rotating windows (_KV_WINDOW_PARTS parts of the
+            # largest slice per ring direction) instead of buffers that hold the whole gathered sequence.
+            heads_local = self.num_heads // self.tp_factor
+            _, k_chunk, _ = self._unrolled_v_sdpa_chunks(self.active_seq_len // self.sp_factor, heads_local)
+            self._chunked_kv_buf, self._chunked_v_buf = self.tt_ccl.get_mla_kv_window_buffers(
+                local_rows=seq_len // self.sp_factor,
+                kvpe_dim=self.kv_lora_rank + self.qk_rope_head_dim,
+                num_heads=self.num_heads,
+                v_head_dim=self.v_head_dim,
+                k_chunk_size=k_chunk,
+                window_parts=self._kv_window_parts,
+                tp_axis=self.tp_axis,
+            )
         elif self.is_chunked:
             # Chunked prefill gathers the latent kvpe cache: ring_mla reads K and V from it, unrolled-V reads K from it
             # and also gathers the per-head V that _expand_v unrolls from it. The single-slot gather
@@ -1445,6 +1471,11 @@ class ttMLA:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+    # Rotating KV window size per ring direction for expanded K, in parts of the largest slice
+    # (ring_joint_scaled_dot_product_attention kv_window_parts): more than the parts per slice (8), else the ring
+    # deadlocks.
+    _KV_WINDOW_PARTS = 12
+
     # Measured (Q chunk, K chunk, K splits) for expanded K, which runs on head pairs only: each head gets 2 Q chunks,
     # one per core of the pair. k512 does not fit L1 beside the expanded K^T CB.
     # Keyed (kvpe width, Q / expanded-K head width, local heads, local rows): a schedule fits L1 only for the expansion
@@ -1641,6 +1672,7 @@ class ttMLA:
                 is_balanced=self.is_balanced,
                 **meta_slot_kwargs,
                 **({"k_expand_weight": self.wkv_b1_weight} if self._expanded_k else {}),
+                **({"kv_window_parts": self._kv_window_parts} if self._kv_window_parts else {}),
                 **kw,
             )
 
