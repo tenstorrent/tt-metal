@@ -352,15 +352,30 @@ class DSV41DeviceEngram:
             return ttnn.addcmul(x, gate, value)
         return ttnn.add(x, ttnn.multiply(gate, value))
 
+    def _kv_mm(self, rows):
+        """kv projection of the own-chunk Engram. DSV41_PF_ENGRAM_MM=1 (default OFF): minimal_matmul on the 12x10 grid, blocks (2,16,4) subblock (1,4) (single chip M=256 K=6144 N=3200:
+        181 us with the 8x8 matmul grid -> 137 us)."""
+        if os.environ.get("DSV41_PF_ENGRAM_MM", "0") == "1" and int(rows.shape[-2]) == 256:
+            cfg = ttnn.MinimalMatmulConfig(
+                M_block_size=2,
+                K_block_size=16,
+                N_block_size=4,
+                subblock_h=1,
+                subblock_w=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(12, 10),
+            )
+            return ttnn.experimental.minimal_matmul(rows, self.wkv_T, compute_kernel_config=self.ckc, config=cfg)
+        return ttnn.matmul(
+            rows, self.wkv_T, compute_kernel_config=self.ckc, dtype=ttnn.bfloat16, core_grid=ttnn.CoreGrid(y=8, x=8)
+        )
+
     def forward_v2_own(self, x, rows):
         """Column-split Engram: ``x`` [T,1,hc,D] is THIS column's own chunk, ``rows`` [1,1,n*T,Kin] the rows of the n = #columns chunks of the group
         (chunk j of the group belongs to column j; replicated on every device). The kv projection is sharded over the columns, so ONE matmul over all
         n*T tokens gives each column its 1/n slice of every chunk's kv; an all_to_all (hidden shards -> own tokens) hands every column the FULL kv of
         its own chunk, and the gating runs on the own T tokens only. Same maths as ``forward_v2`` on the gathered chunks (bit-identical), without the
         all_gather of x, the n separate calls and the reduce_scatter of the n identical copies."""
-        kv = ttnn.matmul(
-            rows, self.wkv_T, compute_kernel_config=self.ckc, dtype=ttnn.bfloat16, core_grid=ttnn.CoreGrid(y=8, x=8)
-        )  # [1,1,n*T,(hc+1)D/n]
+        kv = self._kv_mm(rows)  # [1,1,n*T,(hc+1)D/n]
         kv = ttnn.experimental.all_to_all_async_generic(
             kv, in_dim=3, out_dim=2, num_links=self.ccl.num_links, topology=ttnn.Topology.Ring, cluster_axis=1
         )  # [1,1,T,(hc+1)D]
@@ -428,9 +443,7 @@ class DSV41DeviceEngram:
         tt/mhc_packed.py) -> the same layout. The 4 streams are split / joined by TILE-ALIGNED column slices (no row-major round trip, no 4-rows-in-a-32-row-tile padding): the gate runs on
         the rows in stream-major order [1,1,hc*T,D], every reduction is still over one row's D elements, so the values are those of ``forward_v2_own``.
         """
-        kv = ttnn.matmul(
-            rows, self.wkv_T, compute_kernel_config=self.ckc, dtype=ttnn.bfloat16, core_grid=ttnn.CoreGrid(y=8, x=8)
-        )  # [1,1,n*T,(hc+1)D/n]
+        kv = self._kv_mm(rows)  # [1,1,n*T,(hc+1)D/n]
         kv = ttnn.experimental.all_to_all_async_generic(
             kv, in_dim=3, out_dim=2, num_links=self.ccl.num_links, topology=ttnn.Topology.Ring, cluster_axis=1
         )  # [1,1,T,(hc+1)D]
