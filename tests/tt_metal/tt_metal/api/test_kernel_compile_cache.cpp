@@ -38,7 +38,7 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         DataMovementConfig config_riscv_0 = {.processor = DataMovementProcessor::RISCV_0};
         DataMovementConfig config_riscv_1 = {.processor = DataMovementProcessor::RISCV_1};
 
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         KernelHandle kernel_handle_riscv_0 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_0);
         KernelHandle kernel_handle_riscv_1 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_1);
         program.impl().compile(mesh_device.get());
