@@ -459,6 +459,15 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
 // exp(scale * (mask - real max)) underflows to 0). The whole path never does this, since every row has K
 // tile 0 unmasked at step 0. It holds while |score| stays far below the mask's fp32 spacing (measured
 // finite on Blackhole with raw scores past 32).
+// ttnn has this fold twice: ring_joint's K split (merge_into_prev in ring_joint_sdpa.cpp) and flash decode's
+// correction_block (compute_common.hpp). Neither fits here. ring_joint's runs on its bf16 streaming path
+// only (it rejects fp32_dest_acc_en, and this kernel keeps the fp32 accumulator in DST), its senders hold
+// one unit and keep their state in L1 for the reducer to pull after a signal, as three whole-item blocks
+// (sum, max, out CBs); here a sender's core goes on to whole items and mergers, so the state leaves L1 for
+// DRAM scratch, and the merger streams it back a row at a time, [max, sum, O] in one CB, because a whole
+// item's fp32 partial does not fit the L1 the pick leaves. correction_block folds max and sum only, from
+// four CBs indexed alike per row; the partial's tiles sit at fixed slots of one row. The fold below is built
+// from the K/V loop's own helpers instead, so a later shared helper has one local copy to replace.
 #ifdef SPLIT_UNITS
 // dst_tiles: output tiles per DST pass when copying the output tiles through.
 template <uint32_t rows, uint32_t dst_tiles>
