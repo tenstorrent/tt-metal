@@ -89,8 +89,9 @@ inline std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
 /**
  * The labels an operation without its own compute_output_topologies gets. An output that shares its device buffer
  * with a tensor in tensor_args is the caller's tensor (in place or preallocated) and keeps that tensor's label while
- * caller_owned_output_topology accepts it against the other tensors; every other output, and a caller's tensor the
- * rule rejects, takes the union of all of them (compute_output_placements_and_shape) on its own mesh coordinates.
+ * the rule of caller_owned_output_topology accepts it against the other tensors; every other output, and a caller's
+ * tensor the rule rejects, takes the union of all of them (compute_output_placements_and_shape) on its own mesh
+ * coordinates.
  */
 void apply_default_output_topologies(
     const std::vector<std::reference_wrapper<ttnn::Tensor>>& outputs,

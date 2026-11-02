@@ -265,67 +265,52 @@ std::optional<ttsl::SmallVector<bool>> sharded_per_mesh_axis(
     return std::nullopt;
 }
 
-std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
-    const ttnn::Tensor& caller_tensor, std::span<const ttnn::Tensor* const> operands, std::string_view op_name) {
-    const auto& caller_topology = caller_tensor.tensor_topology();
-    if (caller_tensor.device() == nullptr) {
-        return caller_topology;  // not a mesh tensor: nothing to compare against
-    }
-    const auto& mesh_shape = caller_tensor.device()->shape();
-    const auto caller_sharded = sharded_per_mesh_axis(caller_topology, mesh_shape);
+namespace {
 
-    std::string reason;
-    for (const ttnn::Tensor* operand : operands) {
-        if (operand == nullptr || operand == &caller_tensor) {
-            continue;
+// A tensor as the caller-owned rule reads it: its label, and that label per mesh axis (sharded_per_mesh_axis).
+struct RuleOperand {
+    const tt::tt_metal::TensorTopology* topology = nullptr;
+    std::optional<ttsl::SmallVector<bool>> sharded;
+};
+
+// Why the caller's label stops describing the data next to the operands', or an empty string while it still does.
+// With `same_mesh_coords` every label is already known to span the same mesh coordinates.
+std::string rejection_reason(
+    const RuleOperand& caller, std::span<const RuleOperand* const> operands, size_t mesh_dims, bool same_mesh_coords) {
+    for (const RuleOperand* operand : operands) {
+        if (!same_mesh_coords && operand->topology->mesh_coords() != caller.topology->mesh_coords()) {
+            return "an operand is distributed over a different set of mesh coordinates";
         }
-        const auto& operand_topology = operand->tensor_topology();
-        if (operand_topology.mesh_coords() != caller_topology.mesh_coords()) {
-            reason = "an operand is distributed over a different set of mesh coordinates";
-            break;
+        if (!caller.sharded.has_value() || !operand->sharded.has_value()) {
+            return "a label does not have one placement per mesh axis and is not a collapsed whole-mesh label";
         }
-        const auto operand_sharded = sharded_per_mesh_axis(operand_topology, mesh_shape);
-        if (!caller_sharded.has_value() || !operand_sharded.has_value()) {
-            reason = "a label does not have one placement per mesh axis and is not a collapsed whole-mesh label";
-            break;
-        }
-        for (size_t axis = 0; axis < mesh_shape.dims(); ++axis) {
-            if ((*operand_sharded)[axis] && !(*caller_sharded)[axis]) {
-                reason = fmt::format(
+        for (size_t axis = 0; axis < mesh_dims; ++axis) {
+            if ((*operand->sharded)[axis] && !(*caller.sharded)[axis]) {
+                return fmt::format(
                     "an operand is sharded along mesh axis {}, on which the caller's tensor is replicated", axis);
-                break;
             }
         }
-        if (!reason.empty()) {
-            break;
-        }
     }
-    if (reason.empty()) {
-        return caller_topology;
-    }
-
-    static std::mutex warned_mutex;
-    static std::set<std::string, std::less<>> warned;
-    bool first_time = false;
-    {
-        std::lock_guard<std::mutex> guard(warned_mutex);
-        if (!warned.contains(op_name)) {
-            warned.emplace(op_name);
-            first_time = true;
-        }
-    }
-    if (first_time) {
-        log_warning(
-            tt::LogOp,
-            "{}: the caller's tensor takes the union of the operand labels instead of its own: {} (logged once per "
-            "process for this op)",
-            op_name,
-            reason);
-    }
-    return std::nullopt;
+    return {};
 }
 
-namespace {
+void warn_once(std::string_view op_name, std::string_view reason) {
+    static std::mutex warned_mutex;
+    static std::set<std::string, std::less<>> warned;
+    {
+        std::lock_guard<std::mutex> guard(warned_mutex);
+        if (warned.contains(op_name)) {
+            return;
+        }
+        warned.emplace(op_name);
+    }
+    log_warning(
+        tt::LogOp,
+        "{}: the caller's tensor takes the union of the operand labels instead of its own: {} (logged once per "
+        "process for this op)",
+        op_name,
+        reason);
+}
 
 // The device buffer `tensor` lives in, or nullptr for a host or deallocated tensor.
 const void* device_buffer(const ttnn::Tensor& tensor) {
@@ -337,32 +322,80 @@ const void* device_buffer(const ttnn::Tensor& tensor) {
 
 }  // namespace
 
+std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
+    const ttnn::Tensor& caller_tensor, std::span<const ttnn::Tensor* const> operands, std::string_view op_name) {
+    const auto& caller_topology = caller_tensor.tensor_topology();
+    if (caller_tensor.device() == nullptr) {
+        return caller_topology;  // not a mesh tensor: nothing to compare against
+    }
+    const auto& mesh_shape = caller_tensor.device()->shape();
+    ttsl::SmallVector<RuleOperand> read;
+    for (const ttnn::Tensor* operand : operands) {
+        if (operand != nullptr && operand != &caller_tensor) {
+            const auto& topology = operand->tensor_topology();
+            read.push_back({&topology, sharded_per_mesh_axis(topology, mesh_shape)});
+        }
+    }
+    ttsl::SmallVector<const RuleOperand*> read_operands;
+    for (const auto& operand : read) {
+        read_operands.push_back(&operand);
+    }
+    const RuleOperand caller{&caller_topology, sharded_per_mesh_axis(caller_topology, mesh_shape)};
+    const std::string reason = rejection_reason(caller, read_operands, mesh_shape.dims(), /*same_mesh_coords=*/false);
+    if (reason.empty()) {
+        return caller_topology;
+    }
+    warn_once(op_name, reason);
+    return std::nullopt;
+}
+
 void apply_default_output_topologies(
     const std::vector<std::reference_wrapper<ttnn::Tensor>>& outputs,
     const std::vector<std::reference_wrapper<const ttnn::Tensor>>& inputs,
     std::string_view op_name) {
-    // Every label is decided before any is applied: an in-place output is also an input the other outputs are checked
-    // against, and the checks must read the labels the tensors were launched with.
-    ttsl::SmallVector<std::optional<tt::tt_metal::TensorTopology>> kept(outputs.size());
-    ttsl::SmallVector<const ttnn::Tensor*> operands;
-    for (size_t i = 0; i < outputs.size(); ++i) {
-        const void* buffer = device_buffer(outputs[i].get());
-        if (buffer == nullptr) {
+    // Each input is read once, and every label is decided from the labels the tensors were launched with before any
+    // is applied: an in-place output is also an input the other outputs are checked against.
+    ttsl::SmallVector<const void*> buffers;
+    for (const auto& input : inputs) {
+        buffers.push_back(device_buffer(input.get()));
+    }
+    ttsl::SmallVector<RuleOperand> read;  // the inputs as the rule reads them, filled at the first caller-owned output
+    ttsl::SmallVector<const RuleOperand*> operands;
+    size_t mesh_dims = 0;
+    bool same_mesh_coords = true;
+    ttsl::SmallVector<const ttnn::Tensor*> kept(outputs.size(), nullptr);  // the input whose label an output keeps
+    bool needs_union = false;
+    for (size_t o = 0; o < outputs.size(); ++o) {
+        const void* buffer = device_buffer(outputs[o].get());
+        const auto caller = buffer == nullptr ? buffers.end() : std::find(buffers.begin(), buffers.end(), buffer);
+        if (caller == buffers.end()) {
+            needs_union = true;
             continue;
         }
-        const ttnn::Tensor* caller = nullptr;
-        operands.clear();
-        for (const auto& input_ref : inputs) {
-            const ttnn::Tensor& input = input_ref.get();
-            if (device_buffer(input) != buffer) {
-                operands.push_back(&input);
-            } else if (caller == nullptr) {
-                caller = &input;
+        const auto caller_index = static_cast<size_t>(caller - buffers.begin());
+        if (read.empty()) {
+            const auto& mesh_shape = inputs[caller_index].get().device()->shape();
+            mesh_dims = mesh_shape.dims();
+            for (const auto& input : inputs) {
+                const auto& topology = input.get().tensor_topology();
+                read.push_back({&topology, sharded_per_mesh_axis(topology, mesh_shape)});
+            }
+            for (size_t i = 1; i < read.size() && same_mesh_coords; ++i) {
+                same_mesh_coords = read[i].topology->mesh_coords() == read[0].topology->mesh_coords();
             }
         }
-        if (caller != nullptr) {
-            kept[i] = caller_owned_output_topology(
-                *caller, std::span<const ttnn::Tensor* const>(operands.data(), operands.size()), op_name);
+        operands.clear();
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            if (buffers[i] != buffer) {
+                operands.push_back(&read[i]);
+            }
+        }
+        const std::string reason = rejection_reason(read[caller_index], operands, mesh_dims, same_mesh_coords);
+        if (reason.empty()) {
+            kept[o] = &inputs[caller_index].get();
+        } else {
+            warn_once(op_name, reason);
+            needs_union = true;
         }
     }
 
@@ -370,17 +403,17 @@ void apply_default_output_topologies(
         ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
         tt::tt_metal::distributed::MeshShape>>
         union_label;
-    for (size_t i = 0; i < outputs.size(); ++i) {
-        ttnn::Tensor& output = outputs[i].get();
-        if (kept[i].has_value()) {
-            output.update_tensor_topology(*kept[i]);
-            continue;
+    if (needs_union) {
+        union_label = compute_output_placements_and_shape(inputs);
+    }
+    for (size_t o = 0; o < outputs.size(); ++o) {
+        ttnn::Tensor& output = outputs[o].get();
+        if (kept[o] == nullptr) {
+            output.update_tensor_topology(tt::tt_metal::TensorTopology(
+                union_label->second, union_label->first, output.tensor_topology().mesh_coords()));
+        } else if (&output.tensor_topology() != &kept[o]->tensor_topology()) {  // a handle that shares no label with it
+            output.update_tensor_topology(kept[o]->tensor_topology());
         }
-        if (!union_label.has_value()) {
-            union_label = compute_output_placements_and_shape(inputs);
-        }
-        output.update_tensor_topology(tt::tt_metal::TensorTopology(
-            union_label->second, union_label->first, output.tensor_topology().mesh_coords()));
     }
 }
 
