@@ -796,13 +796,22 @@ jobs:
         env:
           TTNN_MASTER_JSON_PATH: ${{ env.REPORT_JSON }}
         run: |
-          python3 tests/sweep_framework/sweeps_runner.py \
-            --suite-name model_traced \
-            --vector-source vectors_export \
-            --result-dest results_export \
-            --tag "$VECTOR_TAG" \
-            --device-perf \
-            --main-proc-verbose
+          # The runner turns the device profiler off when MESH_DEVICE_SHAPE is unset and the
+          # fabric is on, so run once per traced mesh with the shape pinned.
+          meshes=$(ls tests/sweep_framework/vectors_export/*.json | grep -oE 'mesh_[0-9]+x[0-9]+' | sed 's/^mesh_//' | sort -u)
+          rc=0
+          for mesh in $meshes; do
+            echo "::group::Replay mesh $mesh"
+            MESH_DEVICE_SHAPE="$mesh" python3 tests/sweep_framework/sweeps_runner.py \
+              --suite-name model_traced \
+              --vector-source vectors_export \
+              --result-dest results_export \
+              --tag "$VECTOR_TAG" \
+              --device-perf \
+              --main-proc-verbose || rc=1
+            echo "::endgroup::"
+          done
+          exit $rc
 
       - name: Summarize replay results
         if: always() && steps.vectors.outcome == 'success'
