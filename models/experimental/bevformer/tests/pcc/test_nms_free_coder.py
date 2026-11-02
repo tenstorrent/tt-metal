@@ -7,7 +7,9 @@ import torch
 
 import ttnn
 from models.experimental.bevformer.model_config import (
+    BOX_CENTER,
     BOX_DTYPE,
+    BOX_VELOCITY,
     CENTERS_FIRST,
     CODE_SIZE,
     CODE_XY,
@@ -114,6 +116,10 @@ def test_nms_free_coder(device, reset_seeds, logits, batch_size, score_threshold
         assert_pcc(scores, tt_scores[i].float(), 0.99)
         torch.testing.assert_close(tt_scores[i].float(), scores, rtol=SCORE_RTOL, atol=0)
         assert_boxes_close(boxes, tt_boxes[i].float())
+        # The centers and velocities are gathered, not computed, so a lost bfloat16 part of the
+        # gather shows here while the PCC above still passes.
+        for channels in (BOX_CENTER, BOX_VELOCITY):
+            torch.testing.assert_close(tt_boxes[i][..., channels].float(), boxes[..., channels], rtol=0, atol=0)
 
     expected = reference.decode(cls_scores, bbox_preds)
     # The first decode compiles the range test; a second one must only hit the program cache.
