@@ -2,7 +2,8 @@
 
 `BONSAI_NATIVE=pq2_0` runs every ternary projection of Ternary Bonsai 2 27B at decode straight from
 the PQ2_0 GGUF: 2-bit codes as `BFLOAT2_B` tiles plus the fp16 per-128-group scales (held as fp32),
-applied inside the matmul. Nothing is requantized. `BONSAI_NATIVE_SITES` picks sites (default: all
+applied inside the matmul. Nothing is requantized. With BONSAI_SCALE16 (the pq2_0 default) the
+scale tiles are fp16 (the GGUF's own type; a bf16-declared CB carries them and TRISC unpacks them as Float16). `BONSAI_NATIVE_SITES` picks sites (default: all
 of `mlp, gdn_in, gdn_out, attn_qkv, attn_o, lm_head`); decode only (M = 1). Defaults: 256 B code
 tiles with a forced exponent (`BONSAI_A2B=0` for 320 B Bfp2_b) and the 32 A3 workers as two
 rectangles (`BONSAI_A3_RECT=0` for the scattered set).
@@ -37,9 +38,11 @@ once, never rewritten), `linear.TernaryLinear` (one projection), `mlp.TernaryMLP
 | + shared scale tails + B's GDN RECT/HMI (counted 18:33) | 38.23 | 95.51 / 100.00 |
 | + B's GDN CONV_HM/TRIM/HMO (3-arm count 19:13, vs 38.32 same session) | 35.85 | 96.09 / 100.00 |
 | + norm sites ffnorm, attnnorm, lmnorm (rmsprep; same count) | 34.97 | 96.09 / 100.00 |
-| + glue ops removed at the GDN/attention sites (count 20:17, vs 34.76 same session) -- current default | 33.92 | 96.09 / 100.00 |
+| + glue ops removed at the GDN/attention sites (count 20:17, vs 34.76 same session) | 33.92 | 96.09 / 100.00 |
+| + B's attention flags ATTN_LEAN/QGVIEW/TAIL (count 22:04, vs 33.92 same session) | 32.74 | 96.09 / 100.00 |
+| + fp16 scale tiles, BONSAI_SCALE16 (count 22:26, vs 32.75 same session) -- current default | 31.94 | 96.09 / 100.00 |
 
-Against the six-flag control: 2.33x (12.6 -> 29.5 tok/s). Q2_0 runs number for number as PQ2_0
+Against the six-flag control: 2.48x (12.6 -> 31.3 tok/s). Q2_0 runs number for number as PQ2_0
 (bit-identical codes, deduplicated scales; the cost of finer groups was not measured).
 
 Op level (device us, real weights, PCC >= 0.99999 vs float64 cpu_ref): MLP 240 per layer (dense
