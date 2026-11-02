@@ -2,6 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Tile-level helpers shared by the gdn_decode_step compute kernels (plain and fused-conv variants).
 #pragma once
+// softplus_tile (api/compute/eltwise_unary/softplus.h -> ckernel_sfpu_softplus.h) selects its algorithm on INP_FLOAT32,
+// which only the eltwise-unary program factory defines. Without it every GDN kernel got the BF16 branch: a degree-6
+// polynomial with the residual clamped to 0 for |a + dt_bias| > 5, i.e. softplus = 0 and decay = exp(0) = 1 (the head
+// never forgets) wherever a + dt_bias < -5 -- 24% of the Qwen3.8 GDN heads have dt_bias < -5. All GDN gate inputs are
+// fp32 scalar tiles, so the FP32 branch (degree-8 polynomial on [0, 5] + Cody-Waite exp tail) is the right one for
+// every includer: gdn_spec_step's SFPU gates (kernel_opts bit 9 / 11) and plain mode, gdn_decode_step_conv's
+// gate_decay (fast_mode = false). The fast_mode programs compute the gates in software fp32 on a data-movement core
+// and never call softplus_tile, so they are unchanged. Defined before any compute API header is included; besides
+// softplus only erf / i1 / digamma / elu / selu / celu read INP_FLOAT32, and no GDN kernel uses them.
+#ifndef INP_FLOAT32
+#define INP_FLOAT32 1
+#endif
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
