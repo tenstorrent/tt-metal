@@ -101,6 +101,9 @@ std::uint32_t _start() {
     // text, so every thread of a kernel derives the same slot and two co-resident kernels derive
     // different ones, keeping their sync_threads() rendezvous separate.
     my_barrier_id = thread_0_hartid;
+#if defined(NOC_API_V1)
+    noc_cmd_buf_trids_reset();
+#endif
 
     // Paint stack after all thread_local writes and CRT init are done.
     mark_stack_usage();

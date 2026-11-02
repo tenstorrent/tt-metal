@@ -215,6 +215,13 @@ inline __attribute__((always_inline)) void noc_cmd_buf_write_trid(uint32_t noc, 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_HI, NOC_CMD_PKT_TAG_ID(noc_cmd_buf_trid[cmd_buf]));
 }
 
+// Firmware thread_locals survive from one kernel to the next, so each DM kernel starts by clearing its ids.
+inline __attribute__((always_inline)) void noc_cmd_buf_trids_reset() {
+    for (uint32_t cmd_buf = 0; cmd_buf < NOC_NUM_CMD_BUFS; cmd_buf++) {
+        noc_cmd_buf_trid[cmd_buf] = 0;
+    }
+}
+
 inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_t noc, uint32_t id_mask) {
     uintptr_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CLEAR_OUTSTANDING_REQ_CNT;
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
