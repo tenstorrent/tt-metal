@@ -14,7 +14,7 @@ void ValidateNodeCapacity(const ValidationContext& ctx, tt::ARCH arch, uint32_t 
     // Checked over every node at once rather than per WorkUnitSpec: WorkUnitSpecs with the same name
     // are exempt from the overlap check, so a node's kernels can come from more than one WorkUnitSpec.
     ValidateGen1DMPlacement(ctx, arch);
-    ValidateScratchpadBindersPerNode(ctx);
+    ValidateScratchpadBindersPerNode(ctx, arch);
 }
 
 }  // namespace tt::tt_metal::experimental

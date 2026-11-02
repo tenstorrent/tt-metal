@@ -4,11 +4,17 @@
 
 #pragma once
 
+#include <string>
+#include <vector>
+
+#include "optimizers/adamw_utils.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
 
+// Defaults for every param group. Groups can override lr, beta1, beta2, epsilon and weight_decay;
+// amsgrad and stochastic_rounding apply to the whole optimizer.
 struct AdamWConfig {
     float lr{1e-3F};
     float beta1{0.9F};
@@ -18,15 +24,16 @@ struct AdamWConfig {
     bool amsgrad{false};
     // Applies to bf16 parameters only: an fp32 parameter keeps the low bits that rounding would lose.
     bool stochastic_rounding{false};
-    // Skip weight decay on 1-D params (RMSNorm gains, biases); standard decoupled-AdamW behavior.
-    bool weight_decay_skip_1d{false};
 };
 
 class AdamW : public OptimizerBase {
 public:
     [[nodiscard]] std::string get_name() const override;
 
-    explicit AdamW(ttml::serialization::NamedParameters parameters, const AdamWConfig& config);
+    explicit AdamW(
+        ttml::serialization::NamedParameters parameters,
+        const AdamWConfig& config,
+        std::vector<ParamGroup> param_groups = {});
 
     void zero_grad() override;
 
@@ -38,20 +45,7 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
-    [[nodiscard]] float get_lr() const override;
-    void set_lr(float lr) override;
-
-    [[nodiscard]] float get_beta1() const;
-    void set_beta1(float beta1);
-
-    [[nodiscard]] float get_beta2() const;
-    void set_beta2(float beta2);
-
-    [[nodiscard]] float get_epsilon() const;
-    void set_epsilon(float epsilon);
-
-    [[nodiscard]] float get_weight_decay() const;
-    void set_weight_decay(float weight_decay);
+    void set_param_group_option(size_t group_idx, const std::string& key, float value) override;
 
     [[nodiscard]] bool get_amsgrad() const;
     void set_amsgrad(bool amsgrad);
@@ -63,9 +57,9 @@ private:
     void init_max_exp_avg_sq();
 
     size_t m_steps{0};
-    float m_beta1_pow{1.0F};
-    float m_beta2_pow{1.0F};
-    AdamWConfig m_config;
+    BetaPowers m_beta_pows;
+    bool m_amsgrad{false};
+    bool m_stochastic_rounding{false};
     ttml::serialization::NamedParameters m_exp_avg;
     ttml::serialization::NamedParameters m_exp_avg_sq;
     ttml::serialization::NamedParameters m_max_exp_avg_sq;

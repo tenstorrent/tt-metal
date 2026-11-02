@@ -103,7 +103,7 @@ struct KernelSpec {
     // - accessor_name must be unique across all tensor_bindings.
     Group<TensorBinding> tensor_bindings;
 
-    using CompileTimeArgs = Table<std::string, uint32_t>;
+    using CompileTimeArgs = Table<std::string, ArgValue>;
     // Table key represents the accessor name of the CTA.
     // Invariant:
     // - The key must be a valid C++ identifier.
