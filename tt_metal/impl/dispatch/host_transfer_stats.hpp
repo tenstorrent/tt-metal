@@ -38,8 +38,8 @@ inline constexpr size_t kNumHostTransferCategories = static_cast<size_t>(HostTra
 
 // Bytes and busy time of host <-> device transfers, logged when the MetalContext tears down if
 // TT_METAL_HOST_TRANSFER_STATS is set. Each transfer is an interval opened with begin() and closed with end(). Busy
-// time is the wall time with at least one transfer of a category open, so transfers that overlap across threads,
-// devices or command queues count once, and the rate is a total across all of them.
+// time is the wall time covered by the transfers of a category that moved bytes, so transfers that overlap across
+// threads, devices or command queues count once, and the rate is a total across all of them.
 class HostTransferStats {
 public:
     using Clock = std::chrono::steady_clock;
@@ -74,8 +74,9 @@ private:
         uint64_t transfers = 0;
         Clock::duration busy{};
         uint32_t in_flight = 0;
-        Clock::time_point stretch_start = Clock::time_point::max();
-        Clock::time_point stretch_end = Clock::time_point::min();
+        // Sorted, disjoint intervals of the transfers that moved bytes since in_flight was last zero. An empty
+        // transfer can stay open across a gap between them, so they are merged rather than spanned.
+        std::vector<std::pair<Clock::time_point, Clock::time_point>> stretch;
     };
 
     std::atomic<bool> enabled_;

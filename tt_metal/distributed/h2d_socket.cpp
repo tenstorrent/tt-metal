@@ -994,6 +994,10 @@ uint32_t H2DSocketImpl::try_stage(const uint8_t* const* pages, uint32_t num_page
             gather(stage_buffer_.data());
             ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
             pcie_writer(stage_buffer_.data(), num_bytes, aligned_data_buf_start_ + write_ptr_);
+            // publish_staged() fences the pages later. With stats on, fence here so the timed push includes it.
+            if (transfer_stats_ != nullptr && transfer_stats_->enabled()) {
+                tt_driver_atomics::sfence();
+            }
         } else {
             gather(reinterpret_cast<uint8_t*>(host_buffer_.get()) + write_ptr_);
             this->count_staged_bytes(num_bytes);

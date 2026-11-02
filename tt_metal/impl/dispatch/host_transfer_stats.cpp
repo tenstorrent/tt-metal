@@ -62,6 +62,30 @@ std::string format_duration(HostTransferStats::Clock::duration d) {
     return fmt::format("{:.3f} us", std::chrono::duration<double, std::micro>(d).count());
 }
 
+using Interval = std::pair<HostTransferStats::Clock::time_point, HostTransferStats::Clock::time_point>;
+
+// Adds `interval` to sorted, disjoint `intervals`, merging the ones it overlaps.
+void merge_interval(std::vector<Interval>& intervals, Interval interval) {
+    auto first =
+        std::lower_bound(intervals.begin(), intervals.end(), interval.first, [](const Interval& existing, auto start) {
+            return existing.second < start;
+        });
+    auto last = first;
+    for (; last != intervals.end() && last->first <= interval.second; ++last) {
+        interval.first = std::min(interval.first, last->first);
+        interval.second = std::max(interval.second, last->second);
+    }
+    intervals.insert(intervals.erase(first, last), interval);
+}
+
+HostTransferStats::Clock::duration covered(const std::vector<Interval>& intervals) {
+    HostTransferStats::Clock::duration total{};
+    for (const auto& [start, end] : intervals) {
+        total += end - start;
+    }
+    return total;
+}
+
 }  // namespace
 
 void HostTransferStats::begin(HostTransferCategory category) {
@@ -80,15 +104,11 @@ void HostTransferStats::end(
     if (bytes > 0) {
         s.bytes += bytes;
         ++s.transfers;
-        s.stretch_start = std::min(s.stretch_start, start);
-        s.stretch_end = std::max(s.stretch_end, end);
+        merge_interval(s.stretch, {start, end});
     }
     if (--s.in_flight == 0) {
-        if (s.stretch_start <= s.stretch_end) {
-            s.busy += s.stretch_end - s.stretch_start;
-        }
-        s.stretch_start = Clock::time_point::max();
-        s.stretch_end = Clock::time_point::min();
+        s.busy += covered(s.stretch);
+        s.stretch.clear();
     }
 }
 
@@ -102,11 +122,7 @@ void HostTransferStats::add_bytes(HostTransferCategory category, uint64_t bytes)
 HostTransferStats::Totals HostTransferStats::totals(HostTransferCategory category) const {
     const auto& s = streams_[static_cast<size_t>(category)];
     std::lock_guard lk(s.mutex);
-    Totals totals{.bytes = s.bytes, .transfers = s.transfers, .busy = s.busy};
-    if (s.stretch_start <= s.stretch_end) {
-        totals.busy += s.stretch_end - s.stretch_start;
-    }
-    return totals;
+    return Totals{.bytes = s.bytes, .transfers = s.transfers, .busy = s.busy + covered(s.stretch)};
 }
 
 std::vector<std::pair<std::string, std::string>> HostTransferStats::summary_rows() const {
@@ -157,8 +173,8 @@ void HostTransferStats::reset() {
         s.bytes = 0;
         s.transfers = 0;
         s.busy = {};
-        s.stretch_start = Clock::time_point::max();
-        s.stretch_end = Clock::time_point::min();
+        s.in_flight = 0;
+        s.stretch.clear();
     }
 }
 

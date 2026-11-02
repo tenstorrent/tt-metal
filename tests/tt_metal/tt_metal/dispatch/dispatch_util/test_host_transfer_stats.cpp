@@ -56,6 +56,20 @@ TEST(HostTransferStatsTest, CPU_TransferWithoutBytesAddsNoTime) {
     EXPECT_TRUE(stats.summary_rows().empty());
 }
 
+TEST(HostTransferStatsTest, CPU_EmptyTransferOpenAcrossAGapDoesNotBridgeIt) {
+    HostTransferStats stats(true);
+    const auto t0 = Clock::now();
+    stats.begin(HostTransferCategory::BufferWriteFastDispatch);
+    stats.begin(HostTransferCategory::BufferWriteFastDispatch);
+    stats.end(HostTransferCategory::BufferWriteFastDispatch, t0, t0 + 10ms, 1);
+    stats.begin(HostTransferCategory::BufferWriteFastDispatch);
+    stats.end(HostTransferCategory::BufferWriteFastDispatch, t0 + 20ms, t0 + 30ms, 1);
+    stats.end(HostTransferCategory::BufferWriteFastDispatch, t0, t0 + 40ms, 0);
+
+    EXPECT_EQ(stats.totals(HostTransferCategory::BufferWriteFastDispatch).busy, 20ms)
+        << "the gap between the two transfers is not busy time";
+}
+
 TEST(HostTransferStatsTest, CPU_ScopedHostTransferRecordsOnlyWhileEnabled) {
     HostTransferStats stats(false);
     {
@@ -106,6 +120,18 @@ TEST(HostTransferStatsTest, CPU_ResetClearsTotals) {
 
     const auto totals = stats.totals(HostTransferCategory::CoreWriteFastDispatch);
     EXPECT_EQ(totals.bytes, 0u);
+    EXPECT_EQ(totals.transfers, 0u);
+    EXPECT_EQ(totals.busy, Clock::duration::zero());
+}
+
+TEST(HostTransferStatsTest, CPU_ResetDropsTransfersStillOpen) {
+    HostTransferStats stats(true);
+    const auto t0 = Clock::now();
+    stats.begin(HostTransferCategory::CoreReadFastDispatch);
+    stats.reset();
+    stats.end(HostTransferCategory::CoreReadFastDispatch, t0, t0 + 1ms, 4);
+
+    const auto totals = stats.totals(HostTransferCategory::CoreReadFastDispatch);
     EXPECT_EQ(totals.transfers, 0u);
     EXPECT_EQ(totals.busy, Clock::duration::zero());
 }

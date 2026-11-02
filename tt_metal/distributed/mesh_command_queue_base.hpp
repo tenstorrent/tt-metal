@@ -69,9 +69,18 @@ protected:
     // Open and close the transfer of one API call while stats are on, for queues whose transfers finish after the
     // call returns. Only the fast dispatch queue overrides them, so callers pass fast dispatch categories. Called with
     // lock_api_function_() held, so the transfers of one queue never overlap. end_transfer_stats is called after the
-    // transfer's commands are issued and before a blocking call waits for them.
-    virtual void begin_transfer_stats(HostTransferCategory /*category*/) {}
-    virtual void end_transfer_stats(HostTransferCategory /*category*/, uint64_t /*bytes*/) {}
+    // transfer's commands are issued and before a blocking call waits for them. Both get the devices (the whole mesh
+    // when `device_range` is empty) and sub-devices the transfer uses: waiting on others could wait on work that is
+    // itself waiting on the transfer.
+    virtual void begin_transfer_stats(
+        HostTransferCategory /*category*/,
+        const std::optional<MeshCoordinateRange>& /*device_range*/,
+        ttsl::Span<const SubDeviceId> /*sub_device_ids*/) {}
+    virtual void end_transfer_stats(
+        HostTransferCategory /*category*/,
+        uint64_t /*bytes*/,
+        const std::optional<MeshCoordinateRange>& /*device_range*/,
+        ttsl::Span<const SubDeviceId> /*sub_device_ids*/) {}
     // Adds one shard's bytes to the transfer open on this queue. Shard writes and reads call it once they are past
     // the checks that skip the transfer.
     void count_transfer_bytes(uint64_t bytes) {
@@ -87,7 +96,12 @@ protected:
     // end_transfer_stats with the counted bytes, plus `bytes`, on close() or destruction.
     class ScopedTransferStats {
     public:
-        ScopedTransferStats(MeshCommandQueueBase& cq, HostTransferCategory category, uint64_t bytes = 0);
+        ScopedTransferStats(
+            MeshCommandQueueBase& cq,
+            HostTransferCategory category,
+            std::optional<MeshCoordinateRange> device_range,
+            ttsl::Span<const SubDeviceId> sub_device_ids = {},
+            uint64_t bytes = 0);
         ~ScopedTransferStats();
         void close();
 
@@ -99,6 +113,8 @@ protected:
     private:
         MeshCommandQueueBase* cq_ = nullptr;
         HostTransferCategory category_;
+        std::optional<MeshCoordinateRange> device_range_;
+        ttsl::Span<const SubDeviceId> sub_device_ids_;
         uint64_t bytes_;
     };
 
