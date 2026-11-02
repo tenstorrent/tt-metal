@@ -142,6 +142,15 @@ def lanes_enabled(environ=os.environ) -> bool:
     return environ.get(LANES_ENV, "1") != "0"
 
 
+PAR_ENV = "QWEN38_TOPK_PAR"  # 1: the lane form's sort is the 1-row form's fold / merge comparator tree (default 1; 0 turns it off)
+PAR_FOLDS = 4
+PAR_CBS = (("cb_mk", 18, ttnn.float32), ("cb_mi", 19, ttnn.uint32))  # scratch pages of the fold results
+
+
+def par_enabled(environ=os.environ) -> bool:
+    return environ.get(PAR_ENV, "1") == "1"
+
+
 def lanes_plan(rows: int, pass_tokens=None) -> list[tuple[int, int]]:
     """``(pass_mask, token_mask)`` per core of the lane form for ``rows`` live tokens: one core per sort pass that holds
     a live token, in pass order.  ``pass_tokens`` defaults to the pinned ``PASS_TOKENS``."""
@@ -184,7 +193,7 @@ def program_parts(
     standalone program is ``fp.program_descriptor(*program_parts(...))``.  ``sem_base`` offsets the program-local
     semaphore ids this form declares (none today; the multi-core form reserves five)."""
 
-    plan, _lanes = _core_plan(rows)
+    plan, lanes = _core_plan(rows)
     if rectangle is None:
         rectangle = placement.free_rectangle(logits.device(), *RECTANGLE)
     cores = lane_cores(rectangle, len(plan))
@@ -204,6 +213,10 @@ def program_parts(
         )
         for name, index, dtype, pages in CBS
     ]
+    par = par_enabled() and lanes
+    if par:  # the fold results' scratch pages, one per fold (keys fp32, indices uint32 like cb_index)
+        cbs += [fp.cb_descriptor(index, dtype, fp.TILE_BYTES[dtype], PAR_FOLDS, grid) for _n, index, dtype in PAR_CBS]
+        named += [(name, index) for name, index, _dtype in PAR_CBS]
 
     def per_core(args_of):
         return [
@@ -217,6 +230,8 @@ def program_parts(
     modes = [ttnn.UnpackToDestMode.Default] * 64  # one per circular buffer of the runtime (64)
     for name in UNPACK_TO_DEST_FP32:
         modes[CB_INDEX[name]] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    if par:
+        modes[PAR_CBS[0][1]] = ttnn.UnpackToDestMode.UnpackToDestFp32  # the keys' reload copy is exact fp32
     compute_config.unpack_to_dest_mode = modes
 
     def kernel(source, compile_time_args, runtime_args, config):
@@ -245,6 +260,8 @@ def program_parts(
     )
     compute = kernel(KERNELS["compute"], [], per_core(lambda _t, _r, p, m: [p, m]), compute_config)
     compute.defines = _compute_defines() + fp.zone_defines()
+    if par:
+        compute.defines = compute.defines + [("FRT_PAR", "1")]
     del sem_base  # no program-local semaphores in this form
     return [reader, writer, compute], cbs, []
 

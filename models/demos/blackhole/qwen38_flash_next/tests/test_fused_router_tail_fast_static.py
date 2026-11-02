@@ -53,6 +53,7 @@ def stubs(monkeypatch):
 
 def test_fast_program_has_the_split_index_kernel_and_defines(monkeypatch, stubs):
     monkeypatch.setenv(sc.FAST_ENV, "1")
+    monkeypatch.setenv(sc.PAR_ENV, "0")  # the old program: exactly these six kernels
     kernels, cbs, semaphores = sc.two_core_parts(
         _Logits(), _Logits(), _Logits(), _Logits(), rows=1, top_k=10, rectangle=stubs
     )
@@ -119,3 +120,23 @@ def test_fp32_index_decode_matches_python():
         assert (0 if bits == 0 else (((bits & 0x7FFFFF) | 0x800000) >> (150 - (bits >> 23)))) == e
     for name in ("reader_main", "writer"):
         assert "(((bits & 0x7FFFFFu) | 0x800000u) >> (150u - (bits >> 23)))" in K(name)
+
+
+def test_par_program_swaps_the_sort_kernels_for_the_fold_and_merge_kernels(monkeypatch, stubs):
+    monkeypatch.setenv(sc.FAST_ENV, "1")
+    kernels, _cbs, _sems = sc.two_core_parts(
+        _Logits(), _Logits(), _Logits(), _Logits(), rows=1, top_k=10, rectangle=stubs
+    )
+    names = sorted(k.kernel_source.rsplit("/", 1)[-1] for k in kernels)
+    assert sc.par_enabled() and names == sorted(
+        [
+            "reader_rtf_main.cpp",
+            "writer_rtf.cpp",
+            "compute_rtf_main.cpp",
+            "reader_rtf_fold.cpp",
+            "writer_rtf_fold.cpp",
+            "compute_rtf_fold.cpp",
+            "reader_rtf_merge.cpp",
+            "compute_rtf_merge.cpp",
+        ]
+    )

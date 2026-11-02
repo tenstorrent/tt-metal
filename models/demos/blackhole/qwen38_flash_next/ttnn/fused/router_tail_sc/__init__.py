@@ -49,6 +49,17 @@ FAST_KERNELS = {
     "writer": fp.kernel_source(NAME, "writer_rtf.cpp"),
     "index": fp.kernel_source(NAME, "writer_rtf_index.cpp"),
 }
+PAR_ENV = "QWEN38_TOPK_PAR"  # 1: the sort as 4 fold cores + the merge on core B (default 1; 0 turns it off)
+PAR_KERNELS = {
+    "reader_fold": fp.kernel_source(NAME, "reader_rtf_fold.cpp"),
+    "writer_fold": fp.kernel_source(NAME, "writer_rtf_fold.cpp"),
+    "compute_fold": fp.kernel_source(NAME, "compute_rtf_fold.cpp"),
+    "reader_merge": fp.kernel_source(NAME, "reader_rtf_merge.cpp"),
+    "compute_merge": fp.kernel_source(NAME, "compute_rtf_merge.cpp"),
+}
+PAR_FOLDS = 4  # fold cores: row 1 of the top-k rectangle, each folds Wt / PAR_FOLDS tiles
+PAR_CBS = (("cb_mk", 18), ("cb_mi", 19))  # core B's receive pages, one per fold core, fp32 tiles
+PAR_FOLD_SEM = 1  # sem_base + 1: fold cores -> core B "partial top-32 arrived" (moe_dense reserves 5 ids for G1)
 SORT_PASS_MASK = 1  # the sort pass that holds token 0 (rt.PASS_TOKENS[0])
 SORT_CORES = 2
 ROWTRIM_ENV = (
@@ -64,6 +75,10 @@ def enabled(rows: int, environ=os.environ) -> bool:
     return (
         environ.get(SORTCORE_ENV, "1") == "1" and rows == 1 and rt.lanes_enabled(environ)
     )  # default on (x36 A/B -0.65 ms)
+
+
+def par_enabled(environ=os.environ) -> bool:
+    return environ.get(PAR_ENV, "1") == "1"
 
 
 def rowtrim_defines(environ=os.environ) -> list[tuple[str, str]]:
@@ -185,10 +200,21 @@ def two_core_parts(
         kernels_of = {**FAST_KERNELS, "writer": KERNELS["writer"]}
     if "idxf" in opts:
         index_template = float_index_template(logits.device())
+    par = (
+        par_enabled()
+        and {"direct", "inline", "idxf"} <= set(opts)
+        and logits.dtype == ttnn.float32
+        and rectangle.end.x - rectangle.start.x + 1 >= PAR_FOLDS
+        and rectangle.end.y > rectangle.start.y
+    )
     core_a, core_b = rt.lane_cores(rectangle, SORT_CORES)
     noc = gr_read.noc_map(logits.device())
     a_x, a_y = noc[(core_a.x, core_a.y)]
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(core_a, core_b)])
+    if par:  # one CB table on A, B and the fold cores: the same L1 address everywhere (the NoC sends rely on it)
+        fold_cores = [ttnn.CoreCoord(rectangle.start.x + j, rectangle.start.y + 1) for j in range(PAR_FOLDS)]
+        fold_set = ttnn.CoreRangeSet([ttnn.CoreRange(fold_cores[0], fold_cores[-1])])
+        grid = ttnn.CoreRangeSet([ttnn.CoreRange(core_a, core_b), ttnn.CoreRange(fold_cores[0], fold_cores[-1])])
     set_a = ttnn.CoreRangeSet([ttnn.CoreRange(core_a, core_a)])
     set_b = ttnn.CoreRangeSet([ttnn.CoreRange(core_b, core_b)])
     named = [(name, index) for name, index, _dtype, _pages in rt.CBS] + [
@@ -197,6 +223,13 @@ def two_core_parts(
         ("stage_pages", rt.STAGE_PAGES),
         ("sem_id", sem_base),
     ]
+    if par:
+        named += [
+            *PAR_CBS,
+            ("NT", rt.WIDTH_TILES // PAR_FOLDS),
+            ("NL", PAR_FOLDS),
+            ("fold_sem_id", sem_base + PAR_FOLD_SEM),
+        ]
     cbs = [
         fp.cb_descriptor(
             index,
@@ -211,6 +244,10 @@ def two_core_parts(
         )
         for name, index, dtype, pages in rt.CBS
     ]
+    if par:
+        cbs += [
+            fp.cb_descriptor(index, ttnn.float32, fp.TILE_BYTES[ttnn.float32], PAR_FOLDS, grid) for _n, index in PAR_CBS
+        ]
     compute_config = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, dst_full_sync_en=False
     )
@@ -230,6 +267,9 @@ def two_core_parts(
         sort_modes[
             rt.CB_INDEX["cb_in0"]
         ] = ttnn.UnpackToDestMode.UnpackToDestFp32  # (a bf16 CB keeps the srcA transpose)
+    if par:
+        for _n, index in PAR_CBS:
+            sort_modes[index] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_sort_config.unpack_to_dest_mode = sort_modes
     define = lambda *names: [(f"RTF_{n.upper()}", "1") for n in names if n in opts]  # noqa: E731
 
@@ -297,6 +337,44 @@ def two_core_parts(
     )
     semaphores = [fp.semaphore_descriptor(sem_base, set_a)]
     kernels = [reader_main, writer, compute_main, reader_sort, compute_sort]
+    if par:  # core B merges the fold cores' partial top-32 lists instead of folding the 16 tiles
+        b_x, b_y = noc[(core_b.x, core_b.y)]
+        wt_each = rt.WIDTH_TILES // PAR_FOLDS
+        kernels = [
+            reader_main,
+            writer,
+            compute_main,
+            kernel(PAR_KERNELS["reader_merge"], set_b, [], [(core_b, [a_x, a_y])], ttnn.ReaderConfigDescriptor()),
+            kernel(PAR_KERNELS["compute_merge"], set_b, [], [(core_b, [SORT_PASS_MASK])], compute_sort_config),
+            kernel(
+                PAR_KERNELS["reader_fold"],
+                fold_set,
+                fp.accessor_args(logits),
+                [(c, [logits_addr, j * wt_each]) for j, c in enumerate(fold_cores)],
+                ttnn.ReaderConfigDescriptor(),
+            ),
+            kernel(
+                PAR_KERNELS["writer_fold"],
+                fold_set,
+                fp.accessor_args(index_template),
+                [(c, [index_addr, j * wt_each, b_x, b_y, j]) for j, c in enumerate(fold_cores)],
+                ttnn.WriterConfigDescriptor(),
+            ),
+            kernel(
+                PAR_KERNELS["compute_fold"],
+                fold_set,
+                [],
+                [(c, [SORT_PASS_MASK]) for c in fold_cores],
+                compute_sort_config,
+            ),
+        ]
+        semaphores.append(
+            fp.semaphore_descriptor(
+                sem_base + PAR_FOLD_SEM,
+                ttnn.CoreRangeSet([ttnn.CoreRange(core_b, core_b), ttnn.CoreRange(fold_cores[0], fold_cores[-1])]),
+            )
+        )
+        return kernels, cbs, semaphores
     if "split" in opts:  # core B's second data-movement RISC reads the index tiles while the reader reads the logits
         kernels.append(
             kernel(

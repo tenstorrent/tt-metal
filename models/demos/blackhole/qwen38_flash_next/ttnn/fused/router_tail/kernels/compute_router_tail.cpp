@@ -56,6 +56,9 @@ FORCE_INLINE void frt_load_tile(uint32_t cb_probs, uint32_t cb_index, uint32_t w
 #define FRT_EXP_LIVE 1
 #endif
 // 1: sort the raw logits and take the softmax over the selected top_k columns (QWEN38_ROUTER_RAWSORT); 0: the chain
+#ifndef FRT_PAR
+#define FRT_PAR 0  // QWEN38_TOPK_PAR: the 1-row form's fold / merge comparator tree (lane form only)
+#endif
 #ifndef FRT_RAWSORT
 #define FRT_RAWSORT 0
 #endif
@@ -236,6 +239,63 @@ void kernel_main() {
     ckernel::topk_tile_init();
     probs.wait_front(Wt);
     index.wait_front(Wt);
+#if FRT_PAR
+    // QWEN38_TOPK_PAR: the comparator tree of the 1-row form (router_tail_sc compute_rtf_fold.cpp /
+    // compute_rtf_merge.cpp) on this core's token columns: four folds of Wt / 4 tiles each (tile 4j into DST 0 / 2, the
+    // next three into DST 1 / 3 with a sort64 after each), every fold's DST 0 / 2 packed to page j of cb_mk / cb_mi,
+    // then the merge
+    // ((F0 + F1) + F2) + F3: list 0 into DST 0 / 2, lists 1..3 into DST 1 / 3 with a sort64 after each.
+    {
+        FUSED_ZONE("fz_rt_c_topk_sort");
+        constexpr uint32_t cb_mk = get_named_compile_time_arg_val("cb_mk");
+        constexpr uint32_t cb_mi = get_named_compile_time_arg_val("cb_mi");
+        constexpr uint32_t nfold = 4;
+        static_assert(Wt % nfold == 0, "the folds must tile the row");
+        constexpr uint32_t nt = Wt / nfold;
+        DataflowBuffer mk(cb_mk);
+        DataflowBuffer mi(cb_mi);
+        for (uint32_t f = 0; f < nfold; ++f) {
+            ckernel::topk_tile_init();
+            tile_regs_acquire();
+            for (uint32_t w = 0; w < nt; ++w) {
+                frt_load_tile(cb_probs, cb_index, f * nt + w, (w == 0) ? 0 : 1);
+                if (w != 0) {
+                    frt_sort64(pass_mask);
+                }
+            }
+            tile_regs_commit();
+            mk.reserve_back(1);
+            mi.reserve_back(1);
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_mk);
+            pack_tile(0, cb_mk);
+            pack_reconfig_data_format(cb_mi);
+            pack_tile(2, cb_mi);
+            tile_regs_release();
+            mk.push_back(1);
+            mi.push_back(1);
+        }
+        mk.wait_front(nfold);
+        mi.wait_front(nfold);
+        ckernel::topk_tile_init();
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < nfold; ++j) {
+            const uint32_t slot = (j == 0) ? 0 : 1;
+            reconfig_data_format_srca(cb_mk);
+            copy_init(cb_mk);
+            copy_tile(cb_mk, j, slot);
+            reconfig_data_format_srca(cb_mi);
+            copy_init(cb_mi);
+            copy_tile(cb_mi, j, slot + 2);
+            if (j != 0) {
+                frt_sort64(pass_mask);
+            }
+        }
+        tile_regs_commit();
+        mk.pop_front(nfold);
+        mi.pop_front(nfold);
+    }
+#else
     {
         FUSED_ZONE("fz_rt_c_topk_sort");
         tile_regs_acquire();
@@ -247,6 +307,7 @@ void kernel_main() {
         }
         tile_regs_commit();
     }
+#endif
     probs.pop_front(Wt);
     index.pop_front(Wt);
     vals_t.reserve_back(1);

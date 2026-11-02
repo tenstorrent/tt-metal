@@ -48,7 +48,9 @@ def test_cb_table_is_consistent():
 def test_named_compile_time_args_exist_on_the_python_side(kernel):
     names = set(re.findall(r'get_named_compile_time_arg_val\("([a-z_0-9]+)"\)', SOURCES[kernel]))
     assert names, kernel
-    assert names <= set(rt.CB_INDEX) | {"Wt", "top_k", "stage_pages"}, names - set(rt.CB_INDEX)
+    assert names <= set(rt.CB_INDEX) | {"Wt", "top_k", "stage_pages"} | {n for n, _i, _d in rt.PAR_CBS}, names - set(
+        rt.CB_INDEX
+    )
 
 
 def test_runtime_arg_layout_matches_the_python_side():
