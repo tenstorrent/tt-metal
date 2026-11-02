@@ -23,6 +23,8 @@ from gate_slack_notify import (
     _pct,
     _subject,
     regression_body,
+    threshold_for,
+    threshold_line,
 )
 
 # A regression first, then a skip, then a pass: the post leads with what needs action.
@@ -52,21 +54,6 @@ def find_points(path, rows):
     return found
 
 
-def threshold_for(ctx, module):
-    """The relative threshold the arch's gate applied to ``module``, or None."""
-    for pair in (ctx.get("module_thresholds") or "").split(","):
-        name, _, value = pair.partition("=")
-        if name.strip() and name.strip() == module.split("+")[0]:
-            try:
-                return float(value)
-            except ValueError:
-                break
-    try:
-        return float(ctx.get("threshold") or "")
-    except ValueError:
-        return None
-
-
 def _elsewhere(row, others):
     """How the same point moved on the other arches, as one line."""
     bits = []
@@ -91,14 +78,18 @@ def _section(part, others):
     arch = (ctx.get("arch") or "?").capitalize()
     head = f"*{_escape(arch)}* · {_escape(ctx.get('run_types') or '?')}"
     note = [f":hourglass: {_escape(ctx['note'])}"] if ctx.get("note") else []
+    # Each architecture carries its own thresholds, and they differ, so the rule
+    # belongs to the section and not to the post.
+    rule = [x for x in (threshold_line(ctx),) if x]
     status = part["status"]
     if status == "clean":
-        return [f"{head}: :white_check_mark: no point regressed.", *note]
+        return [f"{head}: :white_check_mark: no point regressed.", *rule, *note]
     if status == "skipped":
         reason = _escape(ctx.get("reason") or "The gate compared nothing.")
         return [f"{head}: :warning: *SKIPPED.* {reason}", *note]
     return [
         f"{head}: :rotating_light: regression",
+        *rule,
         *note,
         *regression_body(part["rows"], ctx, lambda row: _elsewhere(row, others)),
     ]

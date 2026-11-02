@@ -126,3 +126,26 @@ def test_no_part_at_all_still_posts_a_skip(tmp_path, monkeypatch):
     main(["--expect", "blackhole", "--channel", "C", "--out", str(out)])
     assert "should_post=true" in output.read_text()
     assert "*Blackhole*" in json.loads(out.read_text())["text"]
+
+
+def test_each_arch_shows_its_own_threshold():
+    parts = [
+        {"status": "clean", "rows": [], "ctx": _ctx("blackhole", min_cycles="30")},
+        {"status": "clean", "rows": [], "ctx": _ctx("wormhole", min_cycles="30")},
+    ]
+    text = build_text(parts, {})
+    assert "more than 2% and by more than 30 cycles" in text
+    assert "more than 13% and by more than 30 cycles, except perf_matmul 25%" in text
+
+
+def test_a_skipped_arch_claims_no_threshold():
+    parts = [
+        {
+            "status": "skipped",
+            "rows": [],
+            "ctx": _ctx("blackhole", min_cycles="30", reason="A leg failed."),
+        },
+        {"status": "clean", "rows": [], "ctx": _ctx("wormhole", min_cycles="30")},
+    ]
+    text = build_text(parts, {})
+    assert text.count("Threshold:") == 1
