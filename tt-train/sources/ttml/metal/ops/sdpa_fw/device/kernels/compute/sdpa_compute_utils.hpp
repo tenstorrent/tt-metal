@@ -46,6 +46,19 @@ void sdpa_fw_recip_tile_first_column(uint32_t idst) {
 // Softmax helpers. Score CB is row-major (row r, K tile n at r * Sk_chunk_t + n); each stat CB is
 // rows deep with row r in slot r. The row-range helpers (row0, n) leave the CB waits/reserves/pushes to
 // the caller; the block-level ones (apply_exp_inplace_and_find_exp_sum, matmul_qk_by_v) do their own.
+//
+// TODO: these re-implement ttnn's SDPA helpers in
+// ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp:
+//   update_row_max_values              -> reduce_c
+//   apply_exp_inplace_and_find_exp_sum -> sub_exp_block_bcast_cols_inplace (incl. the L1-acc row sum)
+//   update_exp_max_diffs               -> sub_exp_block
+//   row_reduce_tiles_inplace           -> matmul_reduce
+//   recip_tiles_inplace                -> recip_block_inplace
+//   matmul_qk_by_v, the QK^T loop      -> matmul_blocks
+// The causal mask stamp already comes from there (sdpa_mask_lightweight.hpp). Including the rest needs
+// template flags for the training-only differences (accurate exp, fp32 stats, out-of-order packing for
+// stacked heads, the sdpa_fw first-column reciprocal) and that header's REDUCE_OP / EXP_APPROX_MODE
+// defines; tracked as a follow-up.
 
 // TODO: replace FPU reduce_tile(MAX) + sub_tiles_bcast_cols with SFPU equivalents once LLK
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
