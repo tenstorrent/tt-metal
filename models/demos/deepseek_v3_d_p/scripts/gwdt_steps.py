@@ -698,14 +698,12 @@ def build_steps(models: list[str]) -> list[Step]:
 
 
 def path_needs(group: str, model: str) -> list[str]:
-    hf, ttnn_cache, trace = MODEL_PATH_VARS[model]
+    hf, ttnn_cache, _trace = MODEL_PATH_VARS[model]
     if group == "block-random":
-        # Random weights and input: only config.json from the HF model dir.
-        return [hf]
-    if group == "block":
-        # Without a golden trace the block runs random input and checks determinism only.
-        return [hf, ttnn_cache]
-    return [hf, ttnn_cache, trace]
+        # Random weights; the K2.7 config ships in the repo and GLM5.3 builds its own.
+        return []
+    # Without a golden trace, block runs random input and smoke/soak run synthetic tokens.
+    return [hf, ttnn_cache]
 
 
 def missing_needs(step: Step, ctx: Ctx) -> list[str]:

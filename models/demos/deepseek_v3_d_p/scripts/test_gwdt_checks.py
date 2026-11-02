@@ -579,14 +579,15 @@ def test_run_all_missing_path_blocks_only_steps_that_need_it():
     assert steps[1].state.result == Result(Status.PENDING, "not run: TRACE missing")
 
 
-def test_path_needs_block_random_only_needs_hf_config():
+def test_path_needs_no_golden_trace():
     from gwdt_steps import path_needs
 
-    assert path_needs("block-random", "kimi_k2_7") == ["KIMI_K2_7_HF_MODEL"]
-    assert path_needs("block-random", "glm53") == ["GLM53_HF_MODEL"]
+    assert path_needs("block-random", "kimi_k2_7") == []
+    assert path_needs("block-random", "glm53") == []
     assert path_needs("block", "glm53") == ["GLM53_HF_MODEL", "TT_GLM53_PREFILL_TTNN_CACHE"]
     assert path_needs("block", "kimi_k2_7") == ["KIMI_K2_7_HF_MODEL", "TT_KIMI_PREFILL_TTNN_CACHE"]
-    assert "PREFILL_TRACE_DIR" in path_needs("smoke", "glm53")
+    assert path_needs("smoke", "glm53") == ["GLM53_HF_MODEL", "TT_GLM53_PREFILL_TTNN_CACHE"]
+    assert path_needs("soak", "kimi_k2_7") == ["KIMI_K2_7_HF_MODEL", "TT_KIMI_PREFILL_TTNN_CACHE"]
 
 
 def test_run_all_skip_by_user():
