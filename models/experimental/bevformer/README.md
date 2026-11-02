@@ -64,14 +64,6 @@ tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[trace]"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop --tracing-mode
 ```
-- `tests/perf/test_bevformer_trace.py` checks the demo's pipelined path, two command queues with
-  host inputs prepared ahead, against the same detector run live, frame by frame: replays at
-  changing counts, a frame no camera sees, and the plan grown both within a frame and between
-  frames, each followed by a recapture. It runs the selected variant:
-
-```sh
-pytest models/experimental/bevformer/tests/perf/test_bevformer_trace.py
-```
 - See the demo's [recorded smoke results](demo/README.md#recorded-smoke-results) for ten-frame
   end-to-end measurements of the bundled tiny, small and base configs. These wall-clock results
   are separate from the Tracy harness above.
@@ -113,6 +105,15 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 ```sh
 pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer.py
 ```
+- `tests/e2e/test_bevformer_trace.py`: the demo's pipelined path, two command queues with host
+  inputs prepared ahead, against the same detector run live, frame by frame: replays at changing
+  counts, a frame no camera sees, and the plan grown both within a frame and between frames, each
+  followed by a recapture. It runs the selected variant and is not part of `tests/pcc/`, as its
+  cold run compiles every kernel again for the two-queue grid:
+
+```sh
+pytest models/experimental/bevformer/tests/e2e/test_bevformer_trace.py
+```
 
 ## Project Structure
 
@@ -124,6 +125,7 @@ models/experimental/bevformer/
 ├── reference/          # PyTorch reference implementation
 ├── tests/
 │   ├── common.py       # Test helpers: dataset presets, dummy weights and random inputs
+│   ├── e2e/            # The detector replayed from traces against the live detector
 │   ├── fixtures/       # Deterministic synthetic camera geometry used only by tests
 │   ├── pcc/            # Unit tests for individual components
 │   └── perf/           # Device-perf harnesses, one per stage and one for the detector
