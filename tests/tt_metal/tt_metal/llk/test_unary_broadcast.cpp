@@ -74,6 +74,8 @@ struct UnaryBroadcastConfig {
     tt::DataFormat in_t;
     tt::DataFormat out_t;
     bool fp32_dest_acc_en = false;
+    // Quasar: mark the input DFB UnpackToDest, so the broadcast runs from DEST (32-bit formats only).
+    bool unpack_to_dest = false;
 };
 
 // Assume 1Xn tiles.
@@ -198,6 +200,30 @@ bool check_is_close(
     std::vector<std::uint32_t>& device_res,
     tt::DataFormat T_out,
     std::string_view result_label) {
+    if (T_out == tt::DataFormat::Float32 || T_out == tt::DataFormat::Int32) {
+        // 32-bit formats: the broadcast is a datum copy, so the packed words must match bit-exactly.
+        if (packed_golden.size() != device_res.size()) {
+            TT_THROW("{} mismatch: size golden={} device={}", result_label, packed_golden.size(), device_res.size());
+        }
+        const auto it = std::mismatch(packed_golden.begin(), packed_golden.end(), device_res.begin());
+        if (it.first != packed_golden.end()) {
+            const size_t i = static_cast<size_t>(it.first - packed_golden.begin());
+            size_t num_mismatches = 0;
+            for (size_t k = i; k < packed_golden.size(); ++k) {
+                num_mismatches += (packed_golden[k] != device_res[k]) ? 1 : 0;
+            }
+            TT_THROW(
+                "{} mismatch: first at index {} (tile {}, datum {}) golden=0x{:08x} device=0x{:08x}, {} words differ",
+                result_label,
+                i,
+                i / 1024,
+                i % 1024,
+                *it.first,
+                *it.second,
+                num_mismatches);
+        }
+        return true;
+    }
     if (T_out == tt::DataFormat::Float16_b) {
         if (packed_golden.size() != device_res.size()) {
             TT_THROW("{} mismatch: size golden={} device={}", result_label, packed_golden.size(), device_res.size());
@@ -378,6 +404,11 @@ void run_single_core_unary_broadcast_quasar(
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     compute_defines.emplace("BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim));
 
+    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
+    if (test_config.unpack_to_dest) {
+        unpack_modes = {{SRC_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
+    }
+
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
@@ -400,6 +431,7 @@ void run_single_core_unary_broadcast_quasar(
         .hw_config =
             experimental::ComputeHardwareConfig{
                 .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+                .unpack_modes = unpack_modes,
             },
     };
 
@@ -475,6 +507,24 @@ void get_packed_tilized_input_output_pair(
         std::vector<float> input = unpack_bfp8_tiles_into_float_vec(packed_tilized_input, true, false);
         packed_tilized_output =
             get_tilized_packed_golden_broadcast(input, {num_tiles, tile_width, tile_height}, bcast_dim, out_t);
+    } else if (in_t == tt::DataFormat::Float32 || in_t == tt::DataFormat::Int32) {
+        // 32-bit formats: the broadcast is a datum copy, so the golden is built on the raw 32-bit words (bit-exact).
+        TT_FATAL(out_t == in_t, "32-bit unary broadcast expects in_t == out_t, got {} -> {}", in_t, out_t);
+        constexpr std::uint32_t seed = 42;
+        const std::size_t numel = num_tiles * num_single_tile_elem;
+        std::vector<std::uint32_t> input;
+        if (in_t == tt::DataFormat::Float32) {
+            input = pack_vector<std::uint32_t, float>(generate_uniform_random_vector<float>(-2.0f, 2.0f, numel, seed));
+        } else {
+            // Two's-complement Int32 incl. negatives, the tt-llk test's 0.9 * INT32_MAX range.
+            input = pack_vector<std::uint32_t, int32_t>(
+                generate_uniform_random_vector<int32_t>(-1932735283, 1932735283, numel, seed));
+        }
+        ::unit_tests::compute::GoldenConfig config = {
+            .num_tiles_r_dim = static_cast<int>(num_tiles), .num_tiles_c_dim = 1, .datum_bytes = 4};
+        packed_tilized_input = ::unit_tests::compute::gold_standard_tilize(input, config);
+        std::vector<std::uint32_t> bcast = get_broadcasted_vec(input, {num_tiles, tile_width, tile_height}, bcast_dim);
+        packed_tilized_output = ::unit_tests::compute::gold_standard_tilize(bcast, config);
     }
 }
 
@@ -632,6 +682,31 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDf
                     test_config.fp32_dest_acc_en);
                 run_single_core_unary_broadcast(this->device(), test_config);
             }
+        }
+    }
+}
+
+// 32-bit broadcast from DEST (UnpackToDestEn): the unpacker places the source rows at the dst index and math
+// broadcasts them in place. 32 tiles in 8 blocks of 4, one tile per section at dst index 0..3, so the SyncHalf
+// bank-1 sections meet dst 1 and dst 3 (= capacity - 1 for a 32-bit DEST). Bit-exact for Float32 and Int32.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfbToDest) {
+    constexpr BroadcastDim k_quasar_dims[] = {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR};
+    for (BroadcastDim bcast_dim : k_quasar_dims) {
+        for (tt::DataFormat fmt : {tt::DataFormat::Float32, tt::DataFormat::Int32}) {
+            UnaryBroadcastConfig test_config = {
+                .broadcast_dim = bcast_dim,
+                .in_t = fmt,
+                .out_t = fmt,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest = true,
+            };
+            log_info(
+                tt::LogTest,
+                "Testing UNARY BROADCAST from DEST bcast={} in_t={} out_t={}",
+                broadcast_dim_to_type.at(test_config.broadcast_dim),
+                test_config.in_t,
+                test_config.out_t);
+            run_single_core_unary_broadcast(this->device(), test_config);
         }
     }
 }

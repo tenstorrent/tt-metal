@@ -9,7 +9,12 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
+#ifdef ARCH_QUASAR
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#else
 #include "api/dataflow/circular_buffer.h"
+#endif
 
 // Minimal reproducer for the stale-dest-offset bug in the 32-bit unpack-to-dest datacopy branch
 // (_llk_math_eltwise_unary_datacopy_, unpack_to_dest && is_32bit_input).
@@ -52,6 +57,16 @@ constexpr BroadcastType kBcastDim = (BCAST_DIM_VAL == 0)   ? BroadcastType::ROW
 }  // namespace
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    // Quasar twin: the same three operands as Metal 2.0 DFBs. The kernel-wide UnpackToDestEn (raised by the
+    // Float32 bcast_in DFB) routes both unpacks through UNP_DEST; the broadcast is placed at its own DEST index.
+    DataflowBuffer copy_cb(dfb::copy_in);
+    DataflowBuffer bcast_cb(dfb::bcast_in);
+    DataflowBuffer out_cb(dfb::out);
+    const uint32_t cb_copy = copy_cb.get_id();    // Float16_b data tile, copied to DST slot 1
+    const uint32_t cb_bcast = bcast_cb.get_id();  // Float32 tile (UnpackToDest), lands in DST slot 0
+    const uint32_t cb_out = out_cb.get_id();      // Float32, two tiles per iteration: DST[0] then DST[1]
+#else
     constexpr auto cb_copy = tt::CBIndex::c_0;   // Float16_b data tile, copied to DST slot 1
     constexpr auto cb_bcast = tt::CBIndex::c_1;  // Float32 tile (UnpackToDestFp32), lands in DST slot 0
     constexpr auto cb_out = tt::CBIndex::c_16;   // Float32, two tiles per iteration: DST[0] then DST[1]
@@ -59,6 +74,7 @@ void kernel_main() {
     CircularBuffer copy_cb(cb_copy);
     CircularBuffer bcast_cb(cb_bcast);
     CircularBuffer out_cb(cb_out);
+#endif
 
     compute_kernel_hw_startup(cb_copy, cb_out);
 
