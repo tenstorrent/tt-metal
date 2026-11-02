@@ -97,6 +97,12 @@ def _tap_forward(runtime, mesh_device, sink):
     runtime.model.forward = tapped
 
 
+def _dram_allocated(mesh_device):
+    """DRAM bytes allocated per chip."""
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    return view.total_bytes_allocated_per_bank * view.num_banks
+
+
 def run_runtime_two_users(mesh_device, num_links, adapter_name, num_layers):
     adapter = get_adapter(adapter_name)
     runtime, kv_caches = _build(mesh_device, adapter, num_layers, num_links)
@@ -150,6 +156,9 @@ def run_runtime_two_users(mesh_device, num_links, adapter_name, num_layers):
         for req, chunk in _SCHEDULE:
             prefill(req, chunk, per_layer[req], outs[req])
 
+        # Every slot's state is resident from here on, so another round of resets and chunks must free
+        # exactly what it allocates.
+        dram = _dram_allocated(mesh_device)
         isolated = {}
         for req, rerun_slot in _ISOLATED:
             # The runtime resets the rerun's slot at its head; the others are emptied here.
@@ -159,6 +168,8 @@ def run_runtime_two_users(mesh_device, num_links, adapter_name, num_layers):
             isolated[req] = ([[] for _ in range(num_layers)], [])
             for chunk in range(_REQUESTS[req][1]):
                 prefill(req, chunk, *isolated[req], slot=rerun_slot)
+        grown = _dram_allocated(mesh_device) - dram
+        assert grown == 0, f"resets and reruns left {grown / 2**20:+.2f} MiB of DRAM allocated per chip"
 
         assert acks.records == [a for chunk_acks in expected_acks for a in chunk_acks], "layer acks out of contract"
 
