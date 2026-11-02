@@ -60,6 +60,7 @@ uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 #if defined(NOC_API_V1)
 uint32_t noc_cmd_buf_lock[NOC_NUM_CMD_BUFS] __attribute__((used));
+thread_local uint32_t noc_cmd_buf_trid[NOC_NUM_CMD_BUFS] __attribute__((used));
 #endif
 
 // temporary for things to build

@@ -80,6 +80,9 @@ inline __attribute__((always_inline)) void noc_io_fence() { asm volatile("fence 
 // Every DM core shares the NIU command buffers, so the issue functions below program and issue a command under
 // its buffer's lock. The *_set_state / *_with_state paths do not take it and are not safe across DM cores.
 extern uint32_t noc_cmd_buf_lock[NOC_NUM_CMD_BUFS];
+// This DM core's transaction id per buffer, recorded by ncrisc_noc_set_transaction_id. NOC_CTRL_HI is shared, so
+// ncrisc_noc_fast_read writes this core's id there in the same lock hold as its issue.
+extern thread_local uint32_t noc_cmd_buf_trid[NOC_NUM_CMD_BUFS];
 
 struct NocCmdBufLock {
     uint32_t* const word;
@@ -365,6 +368,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
 
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_HI, NOC_CMD_PKT_TAG_ID(noc_cmd_buf_trid[cmd_buf]));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
@@ -1021,6 +1025,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
 // clang-format on
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
+    NocCmdBufLock lock(cmd_buf);
+    noc_cmd_buf_trid[cmd_buf] = trid;
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_HI, NOC_CMD_PKT_TAG_ID(trid));
 }
