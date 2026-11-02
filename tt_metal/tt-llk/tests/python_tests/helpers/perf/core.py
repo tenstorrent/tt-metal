@@ -1019,11 +1019,17 @@ class PerfConfig(TestConfig):
 
         # RC experiment (warmup-agent): LLK_WARMUP=1 brings back a40b624e1a9 (one unrecorded pass over the run types
         # of the test before the measured pass), without changing any ELF.
-        if (
-            os.environ.get("LLK_WARMUP", "0") == "1"
-            and not TestConfig.TEST_TARGET.run_simulator
-        ):
-            for templates, runtimes, run_type in self.run_configs:
+        # LLK_RC_PRE: comma list of this test's run types run unrecorded after the warm-up (if any);
+        # LLK_RC_HOOK: python file with hook(location), called right before the measured pass.
+        pre_names = [
+            n.strip() for n in os.environ.get("LLK_RC_PRE", "").split(",") if n.strip()
+        ]
+        by_name = {rt.name: (t, r, rt) for t, r, rt in self.run_configs}
+        warm = (
+            list(self.run_configs) if os.environ.get("LLK_WARMUP", "0") == "1" else []
+        )
+        if not TestConfig.TEST_TARGET.run_simulator:
+            for templates, runtimes, run_type in warm + [by_name[n] for n in pre_names]:
                 self.current_run_type = run_type
                 if TestConfig.SPEED_OF_LIGHT:
                     self.templates = templates + runtimes
@@ -1036,6 +1042,11 @@ class PerfConfig(TestConfig):
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
+            hook = os.environ.get("LLK_RC_HOOK")
+            if hook:
+                ns = {}
+                exec(compile(open(hook).read(), hook, "exec"), ns)
+                ns["hook"](TestConfig.TENSIX_LOCATION)
 
         for templates, runtimes, run_type in self.run_configs:
             self.current_run_type = run_type
