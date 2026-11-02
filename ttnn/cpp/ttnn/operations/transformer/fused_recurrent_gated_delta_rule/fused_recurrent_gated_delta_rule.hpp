@@ -51,6 +51,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     bool head_major_output = false,
     bool head_major_input = false,
-    bool fused_gating = false);
+    bool fused_gating = false,
+    bool fused_l2norm = false);
 
 }  // namespace ttnn::transformer

@@ -62,6 +62,10 @@ def fused_recurrent_trim(q, k, v, beta, g, scale, **op_kwargs):
     def as_f32(x):  # QWEN36_1C_GDN_HMI hands q/k/v over in fp32 already
         return x if x.dtype == f32 else ttnn.typecast(x, f32)
 
+    if op_kwargs.get("fused_l2norm"):  # QWEN36_1C_GDN_L2: the op normalizes q/k and applies the scale itself
+        return ttnn.transformer.fused_recurrent_gated_delta_rule(
+            as_f32(q), as_f32(k), as_f32(v), g, as_f32(beta), scale=scale, output_final_state=True, **op_kwargs
+        )
     ckc = _gdn_norm_ckc()
     qn = ttnn.rms_norm(as_f32(q), epsilon=1e-6 / K, compute_kernel_config=ckc)
     if ckc is None:
@@ -73,7 +77,7 @@ def fused_recurrent_trim(q, k, v, beta, g, scale, **op_kwargs):
         kn,
         as_f32(v),
         g,
-        ttnn.typecast(beta, f32),
+        as_f32(beta),  # GB's constants row is fp32 already
         scale=scale * K**-0.5,
         output_final_state=True,
         **op_kwargs,
@@ -474,6 +478,8 @@ class TPGatedDeltaNet:
             from models.demos.blackhole.bonsai2.tp1.ops.conv_hm.op import alloc_outputs
 
             self._fconv_out = alloc_outputs(self.mesh, self.Nk, self.Nv)  # persistent, zeroed once
+        # QWEN36_1C_GDN_L2 (with TRIM, one user): the recurrence op l2-normalizes q/k and applies the query scale itself.
+        self._gdn_l2 = self._gdn_trim and self.B == 1 and os.environ.get("QWEN36_1C_GDN_L2") == "1"
         self._gdn_gb = self._gdn_trim and self.B == 1 and os.environ.get("QWEN36_1C_GDN_GB") == "1"
         self._gb_consts = (
             ttnn.typecast(ttnn.concat([self.tw["neg_exp_A"], self.tw["dt_bias"]], dim=-1), ttnn.float32)
@@ -1765,6 +1771,7 @@ class TPGatedDeltaNet:
                     **({"head_major_output": True} if self._gdn_hmo else {}),
                     **({"head_major_input": True} if self._gdn_hmi else {}),
                     **({"fused_gating": True} if b is None else {}),
+                    **({"fused_l2norm": True} if self._gdn_l2 else {}),
                 )
             elif rec_in_place:
                 o, new_rec = fused_recurrent_gated_delta_rule_ttnn(

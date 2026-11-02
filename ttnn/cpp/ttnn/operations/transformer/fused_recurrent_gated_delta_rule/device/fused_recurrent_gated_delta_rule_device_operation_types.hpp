@@ -37,6 +37,10 @@ struct FusedRecurrentGatedDeltaRuleParams {
     // `beta` the per-head constants [1,1,2*BH] (-exp(A_log) | dt_bias), all fp32. The kernel computes
     // decay = exp(-exp(A_log) * softplus(a + dt_bias)) and beta = sigmoid(b) itself (QWEN36_1C_GDN_GB).
     bool gb_fused = false;
+    // fused_l2norm (decode, T == 1): q and k arrive un-normalized; the kernel computes q*l2_scale/||q|| and k/||k||
+    // (eps 1e-6 under the square root, as rms_norm(x, 1e-6/K) * K^-0.5 does) before the recurrence (QWEN36_1C_GDN_L2).
+    bool fused_l2norm = false;
+    float l2_scale = 1.0f;
 };
 
 // All device-op input tensors are fp32, TILE layout, interleaved (DRAM or L1).

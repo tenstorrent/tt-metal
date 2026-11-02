@@ -9,6 +9,7 @@
 #include "fused_recurrent_gated_delta_rule_program_factory.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <set>
 #include <vector>
@@ -46,6 +47,10 @@ constexpr uint32_t gdec = tt::CBIndex::c_14;      // [1,1]  gb_fused: decay comp
 constexpr uint32_t gbeta = tt::CBIndex::c_15;     // [1,1]  gb_fused: beta computed in-kernel
 constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring mode only
 constexpr uint32_t gbscr = tt::CBIndex::c_17;     // 1 tile gb_fused reader scratch (a|b / constants tile)
+constexpr uint32_t l2ss = tt::CBIndex::c_18;      // [1,1]  fused_l2norm: sum of squares
+constexpr uint32_t l2s = tt::CBIndex::c_19;       // [1,1]  fused_l2norm: rsqrt(ss + eps) * multiplier
+constexpr uint32_t qn = tt::CBIndex::c_21;        // [1,K]  fused_l2norm: normalized, scaled q
+constexpr uint32_t kn = tt::CBIndex::c_22;        // [1,K]  fused_l2norm: normalized k
 }  // namespace cb
 
 tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::create_descriptor(
@@ -119,6 +124,13 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
         add_cb(cb::decay, 1, T > 1 ? 2 : 1);
         add_cb(cb::beta, 1, T > 1 ? 2 : 1);
     }
+    const uint32_t l2 = attrs.fused_l2norm ? 1u : 0u;
+    if (l2) {
+        add_cb(cb::l2ss, 1);
+        add_cb(cb::l2s, 1);
+        add_cb(cb::qn, Kt);
+        add_cb(cb::kn, Kt);
+    }
     add_cb(cb::S, kv);
     add_cb(cb::out, Vt, 2);
     add_cb(cb::state_out, kv, 2);
@@ -140,7 +152,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/";
-    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token, gb};
+    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token, gb, l2};
 
     std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx, gb};
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
@@ -202,7 +214,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
             {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH, attrs.gqa});
         // BH is needed by the writer to place per-token state token-major (page t*BH + h).
         writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
-        compute.emplace_runtime_args(core, {T});
+        compute.emplace_runtime_args(core, {T, std::bit_cast<uint32_t>(attrs.l2_scale)});
     }
 
     desc.kernels.push_back(std::move(reader));
