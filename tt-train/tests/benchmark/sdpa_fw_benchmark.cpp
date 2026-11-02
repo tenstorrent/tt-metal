@@ -5,7 +5,18 @@
 // SDPA forward on the consumer shapes: the program factory's default chunking against this same kernel
 // pinned to the chunking main used (one query tile-row, four K/V tiles per step), plus any config given
 // on the command line. Prints host microseconds per launch (the timed loop sits between two device
-// syncs) and the speedup. main's own kernel is not timed here: build the merge-base to compare.
+// syncs) and the speedup. main's own kernel is not timed here: build this file on the merge-base with
+// run() calling sdpa_fw(query, key, value, sc.mask_type, mask, 0.0F, true, gate) to compare. Measured
+// that way on Blackhole p150b (merge-base 0fff850f3c6 vs this branch, us per launch), this kernel at
+// main's chunking matches main's kernel, so the speedups below are the chunking, not a kernel change:
+//
+//   scenario                    main's kernel   this kernel, main's chunking   default pick
+//   tinyllama_s2048_causal             1656.4                         1656.6          882.7
+//   tinyllama_s4096_causal             6263.0                         6209.3         2571.4
+//   llama8b_s2048_causal               3149.2                         3163.8         1321.9
+//   tinyllama_s2048_nomask             3038.2                         3031.3         1244.7
+//   tinyllama_s2048_arbitrary          4103.9                         3839.1         1861.0
+//   tinyllama_s2048_causal_gate        1704.1                         1718.1          950.1
 //
 // Usage: sdpa_fw_benchmark [scenario-name-substring] [q_chunk_size,k_chunk_size,heads_per_item ...]
 // Env:   TTML_SDPA_BENCH_WARMUP (default 2), TTML_SDPA_BENCH_MEASURE (default 10)
