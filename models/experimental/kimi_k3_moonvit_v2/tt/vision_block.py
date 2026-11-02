@@ -41,4 +41,18 @@ class TT_Vision_Block(Module):
         rename_substate(state, "wo", "attention.wo")
 
     def forward(self, x: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor) -> ttnn.Tensor:
-        raise NotImplementedError("TT_Vision_Block.forward")
+        """[1, 1, rows, hidden_size] -> the same shape; rows are this device's shard of the padded,
+        window-ordered sequence. `x` is left allocated: the caller owns it."""
+        normed = self.norm0(x)
+        attn = self.attention(normed, rope, logical_n)
+        ttnn.deallocate(normed)
+        h = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn)
+
+        normed = self.norm1(h)
+        mlp = self.mlp(normed)
+        ttnn.deallocate(normed)
+        out = ttnn.add(h, mlp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(h)
+        ttnn.deallocate(mlp)
+        return out
