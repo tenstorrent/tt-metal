@@ -478,7 +478,9 @@ def test_interleaved_to_sharded_partial_program_cache_reuse(device, H, num_cores
 # different logical shape and Alignment must build two programs. Metal 2.0 compares every tensor's layout exactly on
 # a cache hit, so a key that let them share one would throw once the op is ported (#59915).
 def test_interleaved_to_sharded_partial_same_padded_shape_different_alignment(device, function_level_defaults):
-    grid_size = (8, 8)
+    # Each slice is a single shard, so any grid works; take the device's so smaller grids run too.
+    compute_grid = device.compute_with_storage_grid_size()
+    grid_size = (compute_grid.x, compute_grid.y)
     num_slices = 2
     interleaved_mem_config = ttnn.MemoryConfig(
         memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
