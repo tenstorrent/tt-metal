@@ -18,7 +18,7 @@
 //
 // Runtime args, per core:
 //   TRISC:  rb_addr
-//   NCRISC: x_addr, m_addr, g_addr, b, r
+//   NCRISC: x_addr, m_addr, g_addr, b, r, [emit] y_out_addr
 //   BRISC:  x8_addr, b, r, rb_addr, master_xy, is_master, num_cores, num_blocks, inv_k (fp32 bits),
 //           eps (fp32 bits), num_workers, worker xy..., [master only] core xy... for the rstd broadcast
 // Compile time: x_is_dram, m_page, units_per_bank.
@@ -46,7 +46,6 @@
 constexpr uint32_t cb_x = 0, cb_m = 1, cb_o = 2, cb_stage = 3, cb_g = 7, cb_p = 8, cb_r = 9, cb_y = 10, cb_scr = 11;
 constexpr uint32_t cb_y32 = 13;  // y as one bf16 32x32 tile (cb_x holds x the same way, cb_g holds g)
 constexpr uint32_t cb_yo = 14;   // emit: the normalized y = y' * rstd as one bf16 32x32 tile
-constexpr uint32_t cb_ystage = 15;  // emit: a zeroed 2 KB tile staging one row-0 output page
 // rp_emit: also write the normalized row (for consumers that need it besides the ternary site, e.g. the
 // GDN a|b matmul) into y_out [.., 32, K] 32x32 tiles, row 0 live, zeros elsewhere; unit r writes the
 // block's K-tiles 4r..4r+3.
@@ -174,6 +173,26 @@ void kernel_main() {
         src += KT * m_page;
         cb_push_back(cb_m, KT);
     }
+    if constexpr (emit) {
+        // y rows of this unit's K-tiles -> y_out pages as full 32x32 tiles, row 0 = y, zeros elsewhere.
+        // On NCRISC (idle by now), so it overlaps BRISC's scatter.
+        const InterleavedAddrGen<false> yg{.bank_base_address = get_arg_val<uint32_t>(5), .page_size = 2048};
+        for (uint32_t t = 4 * r; t < 4 * r + 4; ++t) {
+            for (uint32_t c = 0; c < 4; ++c) {
+                noc_async_write(MEM_ZEROS_BASE, get_noc_addr(b * KT + t, yg, c * 512), 512);
+            }
+        }
+        noc_async_write_barrier();  // zeros land before the rows
+        cb_wait_front(cb_yo, 1);
+        const uint32_t yt = get_read_ptr(cb_yo);
+        for (uint32_t t = 4 * r; t < 4 * r + 4; ++t) {
+            const uint32_t f0 = yt + (t / 16) * 1024 + (t % 16) * 32;  // row t of the 32x32 y tile
+            noc_async_write(f0, get_noc_addr(b * KT + t, yg, 0), 32);
+            noc_async_write(f0 + 512, get_noc_addr(b * KT + t, yg, 512), 32);
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_yo, 1);
+    }
 #elif defined(COMPILE_FOR_BRISC)
     const uint32_t x8_addr = get_arg_val<uint32_t>(0);
     const uint32_t b = get_arg_val<uint32_t>(1), r = get_arg_val<uint32_t>(2);
@@ -193,9 +212,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slots);
     sl[2048 / 4] = as_u(part);  // staging word for the NoC write
     // y (one 32x32 bf16 tile) -> 32 1x32 tiles for custom_mm: tile t = [row t cols 0-15][row t cols 16-31]
+    constexpr uint32_t dbg = get_named_compile_time_arg_val("rp_debug");  // 1: no rstd exchange (rstd = 1/sqrt(partial*nb/K)), 2: no re-layout (timing only)
     cb_wait_front(cb_y32, 1);
     cb_reserve_back(cb_y, KT);
-    {
+    if constexpr (!(dbg & 2)) {
         const uint32_t ys = get_read_ptr(cb_y32), yd = get_write_ptr(cb_y);
         for (uint32_t t = 0; t < KT; ++t) {
             const uint32_t f0 = ys + (t / 16) * 1024 + (t % 16) * 32;
@@ -208,7 +228,6 @@ void kernel_main() {
     if constexpr (!emit) {
         cb_pop_front(cb_y32, 1);  // when emitting, TRISC copies it again and pops it
     }
-    constexpr uint32_t dbg = get_named_compile_time_arg_val("rp_debug");  // 1: no rstd exchange (rstd = 1/sqrt(partial*nb/K))
     if constexpr (dbg & 1) {
         sl[1024 / 4] = as_u(rsqrt_newton(part * inv_k * nblocks + eps));
     } else {
@@ -271,28 +290,6 @@ void kernel_main() {
             st[r * 8 + i] = 0;
             st[64 + r * 8 + i] = 0;
         }
-    }
-    if constexpr (emit) {
-        // y rows of this unit's K-tiles -> y_out pages as full 32x32 tiles: row 0 = y, zeros elsewhere
-        const InterleavedAddrGen<false> yg{.bank_base_address = get_arg_val<uint32_t>(11 + nw + (is_master ? ncores : 0)),
-                                           .page_size = 2048};
-        cb_reserve_back(cb_ystage, 1);
-        const uint32_t ys = get_write_ptr(cb_ystage);
-        volatile tt_l1_ptr uint32_t* yz = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ys);
-        for (uint32_t i = 0; i < 512; ++i) {
-            yz[i] = 0;
-        }
-        cb_wait_front(cb_yo, 1);
-        const uint32_t yt = get_read_ptr(cb_yo);
-        for (uint32_t t = 4 * r; t < 4 * r + 4; ++t) {
-            const uint32_t f0 = yt + (t / 16) * 1024 + (t % 16) * 32;  // row t of the 32x32 y tile
-            noc_async_read(get_noc_addr(f0), ys, 32);
-            noc_async_read(get_noc_addr(f0 + 512), ys + 512, 32);
-            noc_async_read_barrier();
-            noc_async_write(ys, get_noc_addr(b * KT + t, yg), 2048);
-            noc_async_write_barrier();
-        }
-        cb_pop_front(cb_yo, 1);
     }
 #elif defined(COMPILE_FOR_TRISC)
     deepseek_compute_kernel_init();
