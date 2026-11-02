@@ -239,12 +239,12 @@ void kernel_main() {
     slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, kReportWords * sizeof(uint32_t), reported);
     const std::vector<uint32_t> expected = {
         0x00000001u,  // args::id
-        0xA0000001u,
-        0xA0000002u,
-        0xA0000003u,  // a::id, a::batch, a::Ht
-        0xB0000001u,
-        0xB0000002u,
-        0xB0000003u,  // b::id, b::batch, b::Ht
+        0xA0000001u,  // a::id
+        0xA0000002u,  // a::batch
+        0xA0000003u,  // a::Ht
+        0xB0000001u,  // b::id
+        0xB0000002u,  // b::batch
+        0xB0000003u,  // b::Ht
     };
     EXPECT_EQ(reported, expected);
 }
