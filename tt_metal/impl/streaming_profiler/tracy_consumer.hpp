@@ -24,6 +24,7 @@ class TracyConsumer {
 public:
     using Batch = experimental::streaming_profiler::Batch<
         experimental::streaming_profiler::Zone,
+        experimental::streaming_profiler::Stall,
         experimental::streaming_profiler::TimestampedData,
         experimental::streaming_profiler::Event>;
 
