@@ -112,6 +112,7 @@ device used (p0). Every busy lane then runs verify, accept, chained draft, the r
 host one step behind, reading one page per step.
 """
 
+import json
 import math
 import os
 import threading
@@ -126,8 +127,9 @@ import ttnn
 from ..reference import kv_pair_split
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
-from ..reference.sample_verify import commit_pass, pass_inputs
+from ..reference.sample_verify import commit_pass, pass_inputs, pass_rows
 from ..reference.spec_chain import chain_row, chained_draft
+from ..reference.spec_inputs import VERIFY_ROWS
 from ..reference.spec_decode import (
     DRAFT_GROUPS,
     GROUP_SLOTS,
@@ -214,6 +216,28 @@ ASYNC_SPEC = os.environ.get("MIMO_ASYNC_SPEC", "1") == "1"
 # chains onto it; by default it returns a handle and is read a step later (VerifyHandle), and the plugin may chain the
 # next verify onto it.
 SPEC_DEFER = os.environ.get("MIMO_SPEC_DEFER", "1") == "1"
+# MIMO_VERIFY_AUDIT=<dir> (debug): one JSONL file per engine process in <dir> (``_audit``). Per verify pass: the tokens
+# and positions it ran (``verify_packed`` after the relay, copied to the host right behind its result page without
+# blocking), its accept page, and which TP chips' copies of either differ from chip 0's; per prefill its rows, per
+# plain decode its positions, and per propose the plugin's commits. Records carry ``seq``, the host's enqueue order.
+AUDIT_DIR = os.environ.get("MIMO_VERIFY_AUDIT", "")
+_audit_lock = threading.Lock()
+_audit_file = None
+
+
+def _audit(kind, **record):
+    """Appends one MIMO_VERIFY_AUDIT record (any thread)."""
+    global _audit_file
+    with _audit_lock:
+        if _audit_file is None:
+            os.makedirs(AUDIT_DIR, exist_ok=True)
+            _audit_file = open(os.path.join(AUDIT_DIR, f"audit_{os.getpid()}.jsonl"), "a", buffering=1)
+        _audit_file.write(json.dumps({"t": round(time.time(), 4), "kind": kind, **record}) + "\n")
+
+
+def _chip_words(host):
+    """Each chip's words of a replicated host copy, as Python ints (int32 values keep their sign)."""
+    return [ttnn.to_torch(t).reshape(-1).to(torch.int64).tolist() for t in ttnn.get_device_tensors(host)]
 
 
 def _untraced_decode(vllm_config):
@@ -305,6 +329,8 @@ class VerifyHandle:
         self.prev = None  # a chained verify's: the deferred verify it chained onto, until this one is read
         self.proposed = False
         self.waited = self.draft_wait = 0.0
+        self.seq = None  # MIMO_VERIFY_AUDIT: the host's enqueue order
+        self.audit = []  # MIMO_VERIFY_AUDIT: per page, (pass index, the host copy of verify_packed behind it)
         self._lock = threading.Lock()
         self._results = self._readout = None
 
@@ -325,7 +351,34 @@ class VerifyHandle:
                     else:
                         self.waited += time.perf_counter() - t
                 self._results = [(lane, vp, chain.unpack(host)) for lane, vp, chain, host in self.pages]
+                if AUDIT_DIR:
+                    self._audit_pages()
             return self._results
+
+    def _audit_pages(self):
+        """MIMO_VERIFY_AUDIT: one record per pass (under the lock, once the pages are on the host)."""
+        for (lane, vp, _, host), (_, _, result), (k, packed) in zip(self.pages, self._results, self.audit):
+            chips, page_chips = _chip_words(packed), _chip_words(host)
+            b = len(chips[0]) // VERIFY_ROWS
+            _audit(
+                "pass",
+                seq=self.seq,
+                k=k,
+                tip=self.tip_id,
+                lane=lane,
+                relayed=sorted(int(r) for r in self.relayed),
+                answers=[[int(s), int(r), int(c)] for s, r, c in vp.answers],
+                table_rows=[None if r is None else int(r) for r in vp.table_rows],
+                host_tokens=[int(x) for x in vp.tokens],
+                host_positions=[int(x) for x in vp.positions],
+                run_tokens=chips[0][:SPEC_SLOTS],
+                run_positions=chips[0][b : b + SPEC_SLOTS],
+                verify_chips_differ=[c for c in range(1, len(chips)) if chips[c] != chips[0]],
+                page_chips_differ=[c for c in range(1, len(page_chips)) if page_chips[c] != page_chips[0]],
+                groups=[[int(g), int(r)] for g, r in pass_rows(vp)],
+                accept=[[int(c), [int(t) for t in toks], bool(tr)] for c, toks, tr in result.accept],
+                page_positions=[int(x) for x in result.positions],
+            )
 
     def p0_range(self, row):
         """(lowest, highest) real column-0 position of ``row``: exact for a row the host built or once this step is
@@ -430,6 +483,7 @@ class MiMoV2ForCausalLM:
     def __init__(self, generator, max_seq_len):
         self.gen = generator
         self.models = generator.models
+        self._audit_seq = 0  # MIMO_VERIFY_AUDIT: the host's enqueue order of verifies, prefills and plain decodes
         self.dp = generator.dp
         self.per_lane = generator.users_per_replica
         self.max_seq_len = max_seq_len
@@ -763,6 +817,10 @@ class MiMoV2ForCausalLM:
                 out[g] = torch.as_tensor(tables[i][row])
         return out
 
+    def _next_audit_seq(self):
+        self._audit_seq += 1
+        return self._audit_seq
+
     def _layer_tables(self, page_table, page_tables_per_layer):
         """One block table per layer. The plugin sends ``page_tables_per_layer`` when vLLM made several KV cache
         groups; with one group, ``page_table`` serves every layer."""
@@ -803,6 +861,12 @@ class MiMoV2ForCausalLM:
         starts = np.asarray(start_pos).reshape(-1).astype(np.int64)
         ends = np.asarray(prompt_lens).reshape(-1).astype(np.int64)
         slots = list(range(rows)) if empty_slots is None else [int(s) for s in empty_slots]
+        if AUDIT_DIR:
+            _audit(
+                "prefill",
+                seq=self._next_audit_seq(),
+                rows=[[slots[i], int(starts[i]), int(ends[i])] for i in range(rows)],
+            )
         placed = []
         table_rows = [{} for _ in range(self.dp)]
         continues = {}
@@ -1057,6 +1121,15 @@ class MiMoV2ForCausalLM:
                 if pos is None:
                     raise RuntimeError(f"lane {lane}: a steady decode before any reloading decode")
             active = pos >= 0
+            if AUDIT_DIR:
+                live = [s for s in range(model.max_batch) if int(pos[s]) >= 0]
+                _audit(
+                    "decode",
+                    seq=self._next_audit_seq(),
+                    lane=lane,
+                    reload=bool(reload_inputs),
+                    rows=[[first + s, int(pos[s]), int(tok[s]) if reload_inputs else None] for s in live],
+                )
             if on_device and (reload_inputs or reload_sampling_params):
                 self._set_sampling(lane, model, sampling_params, first, last, pos)
             sample = on_device and self.lane_sampled[lane]
@@ -1231,6 +1304,8 @@ class MiMoV2ForCausalLM:
         if not accept:
             return self._verify_unchained(spec_mode, lanes, tables, tokens.shape, t0)
         handle = VerifyHandle(rows, tokens.shape[1], positions[:, 0], fused)
+        if AUDIT_DIR:
+            handle.seq = self._next_audit_seq()
         handle.relayed = set(relayed)
         handle.hints = counts.to(torch.int64).clone()
         handle.prev = pending if relayed else None
@@ -1263,6 +1338,8 @@ class MiMoV2ForCausalLM:
                     self._drafter(lane).enqueue_chained()
                     handle.sources[lane] = sources[lane]
                 handle.pages.append((lane, p[k], model.spec_chain, model.spec_chain.read_async()))
+                if AUDIT_DIR:
+                    handle.audit.append((k, model.spec_inputs.verify_packed.cpu(blocking=False)))
         for lane, p in enumerate(lanes):
             if p:
                 handle.events[lane] = ttnn.record_event(self.models[lane].mesh_device, 0)
@@ -1518,6 +1595,19 @@ class MiMoV2ForCausalLM:
         whose propose returns the drafts its pages carry (``_propose_deferred``)."""
         from vllm_tt_plugin.spec_decode import DraftOutput
 
+        if AUDIT_DIR:
+            ct, cp = torch.as_tensor(committed_tokens), torch.as_tensor(committed_positions)
+            cn = torch.as_tensor(accepted_counts).reshape(-1)
+            _audit(
+                "commit",
+                tip=getattr(hidden, "tip_id", None),
+                seq=getattr(hidden, "seq", None),
+                rows=[
+                    [r, cp[r, : int(cn[r])].tolist(), ct[r, : int(cn[r])].tolist()]
+                    for r in range(ct.shape[0])
+                    if int(cn[r]) > 0 and int(cp[r, 0]) >= 0
+                ],
+            )
         if isinstance(hidden, VerifyHandle):
             return self._propose_deferred(hidden, num_drafts, committed_tokens, committed_positions, accepted_counts)
         t0 = time.perf_counter()
