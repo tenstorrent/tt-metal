@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
@@ -272,7 +273,7 @@ std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
     const auto& mesh_shape = caller_tensor.device()->shape();
     const auto caller_sharded = sharded_per_mesh_axis(caller_topology, mesh_shape);
 
-    std::string_view reason;
+    std::string reason;
     for (const ttnn::Tensor* operand : operands) {
         if (operand == nullptr || operand == &caller_tensor) {
             continue;
@@ -289,7 +290,8 @@ std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
         }
         for (size_t axis = 0; axis < mesh_shape.dims(); ++axis) {
             if ((*operand_sharded)[axis] && !(*caller_sharded)[axis]) {
-                reason = "an operand is sharded along a mesh axis on which the caller's tensor is replicated";
+                reason = fmt::format(
+                    "an operand is sharded along mesh axis {}, on which the caller's tensor is replicated", axis);
                 break;
             }
         }
