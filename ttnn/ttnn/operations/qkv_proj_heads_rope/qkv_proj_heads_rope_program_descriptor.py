@@ -35,7 +35,6 @@ OUT_DEPTH = 2
 # store tail is NoC1-bandwidth bound once all 108 cores finish the K-loop together.
 OUT_WRITE_NOCS = 2
 CB_BUDGET_BYTES = 900 * 1024
-OCCUPANCY_SLACK = 0.05
 HEADS_PER_CORE_CANDIDATES = tuple(h for h in range(1, NUM_HEADS + 1) if NUM_HEADS % h == 0)
 
 BF16_TILE_BYTES = ttnn.tile_size(ttnn.bfloat16)
@@ -53,6 +52,20 @@ MAX_MCAST_RECTANGLES = 3
 # Smallest N-group (= W DRAM crossings under R1) for which W is multicast (R2). Measured on p100a: at
 # grid_m = 3 (3x36 grid) the per-round handshake over 3 one-core rectangles costs more than 3 W reads.
 W_MCAST_MIN_GROUP = 4
+
+# Selection cost model (device ns per stream; the slowest overlapped stream binds). Fitted on p100a against
+# forced head-group runs of 12 (B, S) shapes x 5-6 candidates; it ranks the measured best first on all of them.
+NS_PER_TILE_PRODUCT_PHASE = 13  # matmul, per tile-product per fidelity phase (HiFi3: 39 ns)
+NS_PER_CORE_W_TILE = 110  # one core's W stream (its own unicast reads, or the R2 sender's)
+NS_PER_DRAM_W_TILE = 10.8  # W tiles crossing DRAM across the whole grid (R1: grid_m times per block)
+NS_PER_X_TILE_RECEIVER = 7.1  # R3 x multicast, per tile per receiver: large M-groups serialize
+FIDELITY_PHASES = {
+    ttnn.MathFidelity.LoFi: 1,
+    ttnn.MathFidelity.HiFi2: 2,
+    ttnn.MathFidelity.HiFi3: 3,
+    ttnn.MathFidelity.HiFi4: 4,
+}
+W_TILES = K_TILES * TILES_PER_HEAD * TOTAL_HEADS
 
 assert K_TILES % K_BLOCK == 0, "k_block must divide K' (ragged last K-block not built)"
 assert OUT_WRITE_NOCS in (1, 2)
@@ -156,8 +169,21 @@ def _block_m(rows_max, rows_min, cap):
     return min(range(1, min(rows_max, cap) + 1), key=lambda b: (cost(b), -b))
 
 
+def _modelled_ns(compute_kernel_config, grid_m, grid_n, n_tiles, rows_max, num_blocks, w_multicast):
+    """Device-time estimate of one core assignment: the slowest of the matmul, the per-core W stream, the
+    grid-wide W DRAM traffic and the x multicast. Under R1 every M-group re-reads W, so a candidate that
+    loses R2 pays grid_m crossings; a large M-group pays for every x receiver."""
+    phases = FIDELITY_PHASES[compute_kernel_config.math_fidelity]
+    matmul = rows_max * n_tiles * K_TILES * phases * NS_PER_TILE_PRODUCT_PHASE
+    w_core = num_blocks * n_tiles * K_TILES * NS_PER_CORE_W_TILE
+    w_dram = W_TILES * (1 if w_multicast else grid_m * num_blocks) * NS_PER_DRAM_W_TILE
+    x_mcast = rows_max * K_TILES * (grid_n - 1) * NS_PER_X_TILE_RECEIVER
+    return max(matmul, w_core, w_dram, x_mcast)
+
+
 def select_blocking(device, batch, seq, compute_kernel_config):
-    """Selection function (op_design.md, Core assignment): occupancy first (5% slack), then min ingress."""
+    """Selection function (op_design.md, Core assignment): least modelled device time (_modelled_ns, which
+    sees whether the layout realizes R2), then fewest output tiles per core, then least per-core ingress."""
     grid = device.compute_with_storage_grid_size()
     num_cores = grid.x * grid.y
     seq_tiles = _div_up(seq, TILE)
@@ -176,15 +202,15 @@ def select_blocking(device, batch, seq, compute_kernel_config):
         rows_max = _div_up(mt, grid_m)
         block_m = _block_m(rows_max, mt // grid_m, cap)
         num_blocks = _div_up(rows_max, block_m)
+        w_multicast = _w_multicast(grid, grid_m, grid_n, mt, block_m)
+        cost = _modelled_ns(compute_kernel_config, grid_m, grid_n, n_tiles, rows_max, num_blocks, w_multicast)
         tiles_max = rows_max * n_tiles
         ingress = K_TILES * (rows_max + num_blocks * n_tiles)
-        candidates.append((tiles_max, ingress, heads_per_core, grid_m, grid_n, block_m))
+        candidates.append(((cost, tiles_max, ingress, -heads_per_core), heads_per_core, grid_m, grid_n, block_m))
     if not candidates:
         raise RuntimeError("qkv_proj_heads_rope: no core assignment fits the compute grid")
 
-    min_tiles = min(c[0] for c in candidates)
-    kept = [c for c in candidates if c[0] <= (1 + OCCUPANCY_SLACK) * min_tiles]
-    _, _, heads_per_core, grid_m, grid_n, block_m = min(kept, key=lambda c: (c[1], -c[2]))
+    _, heads_per_core, grid_m, grid_n, block_m = min(candidates, key=lambda c: c[0])
     sb_h, sb_w = _subblock(block_m, TILES_PER_HEAD * heads_per_core, _dest_tiles(compute_kernel_config))
     return Blocking(
         heads_per_core=heads_per_core,
@@ -283,21 +309,32 @@ def _choose_layout(grid_x, grid_y, grid_n, grid_m):
     return row_major, False
 
 
+def _row_ranges(mt, grid_m):
+    """(row_start, rows) per M-group: Mt tile-rows split as evenly as possible."""
+    base, extra = divmod(mt, grid_m)
+    ranges = []
+    start = 0
+    for m_group in range(grid_m):
+        rows = base + (1 if m_group < extra else 0)
+        ranges.append((start, rows))
+        start += rows
+    return ranges
+
+
+def _w_multicast(grid, grid_m, grid_n, mt, block_m):
+    """R2 is on when the layout qualifies and every M-group walks the same block count (W rounds only line
+    up across an N-group then)."""
+    block_counts = {_div_up(rows, block_m) for _, rows in _row_ranges(mt, grid_m)}
+    return len(block_counts) == 1 and _choose_layout(grid.x, grid.y, grid_n, grid_m)[1]
+
+
 def _core_assignment(device, blocking):
     """(core, n_group, m_group, row_start, rows) per core, and whether W is multicast (R2)."""
     grid = device.compute_with_storage_grid_size()
     mt, grid_m, grid_n = blocking.tensor_row_tiles, blocking.grid_m, blocking.grid_n
-    layout, w_multicast = _choose_layout(grid.x, grid.y, grid_n, grid_m)
-    base, extra = divmod(mt, grid_m)
-    row_ranges = []
-    start = 0
-    for m_group in range(grid_m):
-        rows = base + (1 if m_group < extra else 0)
-        row_ranges.append((start, rows))
-        start += rows
-    # W rounds line up across an N-group only if its M-groups walk the same number of blocks.
-    block_counts = {_div_up(rows, blocking.block_m) for _, rows in row_ranges}
-    w_multicast = w_multicast and len(block_counts) == 1
+    layout, _ = _choose_layout(grid.x, grid.y, grid_n, grid_m)
+    w_multicast = _w_multicast(grid, grid_m, grid_n, mt, blocking.block_m)
+    row_ranges = _row_ranges(mt, grid_m)
     assignment = []
     for m_group in range(grid_m):
         for n_group in range(grid_n):
