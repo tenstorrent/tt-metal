@@ -29,7 +29,7 @@
 #include "llrt.hpp"
 #include "binary_metadata.hpp"
 #include "tt_elffile.hpp"
-#include "observability_event_meta.hpp"
+#include "call_sites.hpp"
 #include <tt-umd/driver_atomics.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -81,13 +81,9 @@ const CachedBinary& get_cached_binary(
             ll_api::ElfFile elf;
             elf.ReadImage(path);
             ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
-            // Streaming profiler: give this image its block of descriptor ids, rebase the ELF there and register the
-            // names. Every device-executed image, kernel or firmware, passes through here before it can run, so a
-            // zone's name is registered strictly before it can reach the host. Not gated on the streaming profiler:
-            // only ELFs built with PROFILE_STREAMING (part of the JIT build key) carry zone sections, and ingest_elf
-            // returns at once for the rest. Must run before from_elf: the ids are immediates in the text it packs, and
-            // XIP rewrites the other relocations in place.
-            ObservabilityEventMetaRegistry::instance().ingest_elf(path, elf);
+            // Must run before from_elf, which packs the text the DevicePublish descriptor ids are immediates in and may
+            // XIP-transform the ELF.
+            load_call_sites(path, elf);
             ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
             if (update_callback) {
                 update_callback(image);

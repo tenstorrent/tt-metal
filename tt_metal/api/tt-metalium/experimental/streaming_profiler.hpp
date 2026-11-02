@@ -79,7 +79,16 @@ class Callback;
 
 // Implementation detail.
 namespace detail {
-// Descriptor ids are 16-bit and assigned per process: each device image gets the next block as it loads
+// A call site's metadata, which its call sites own. Every record of a call site has the same metadata type.
+struct CallSiteMetadataBase {
+    virtual ~CallSiteMetadataBase() = default;
+};
+template <typename M>
+struct CallSiteMetadata final : CallSiteMetadataBase {
+    explicit CallSiteMetadata(M value) : value(std::move(value)) {}
+    M value;
+};
+// Event ids are 16-bit and assigned per process: each device image gets the next block as it loads
 // (hostdev/observability_event_descriptor.h), so the table is flat and a lookup is one load.
 inline constexpr uint32_t EVENT_DESCRIPTOR_ID_BITS = 16;
 inline constexpr uint32_t EVENT_DESCRIPTOR_ID_COUNT = 1u << EVENT_DESCRIPTOR_ID_BITS;

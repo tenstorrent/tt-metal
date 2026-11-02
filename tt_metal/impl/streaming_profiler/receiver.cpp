@@ -32,8 +32,8 @@
 
 #include "context/metal_context.hpp"
 #include "hostdev/observability_event_descriptor.h"
+#include "llrt/call_sites.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "llrt/observability_event_meta.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -217,21 +217,11 @@ Receiver::~Receiver() {
         programs_->verify_completeness(d);
     }
     log_report();
-    const uint64_t foreign = llrt::ObservabilityEventMetaRegistry::instance().foreign_sections();
-    const uint64_t malformed = llrt::ObservabilityEventMetaRegistry::instance().malformed_records();
     log_info(
         tt::LogMetal,
-        "[streaming profiler] descriptor ids: {} of {} assigned to the images this process loaded",
-        llrt::ObservabilityEventMetaRegistry::instance().ids_assigned(),
+        "[streaming profiler] DevicePublish descriptor ids: {} of {} assigned to the images this process loaded",
+        llrt::device_publish_descriptor_ids_assigned(),
         TT_ZONE_STALL_ID);
-    if (malformed != 0 || foreign != 0) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] zone names: {} malformed records, {} foreign metadata sections ignored (the JIT "
-            "cache holds ELFs from a different .tt_observability_event_meta layout)",
-            malformed,
-            foreign);
-    }
 }
 
 bool Receiver::poll(Stream& s) {
