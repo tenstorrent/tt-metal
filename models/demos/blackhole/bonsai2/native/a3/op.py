@@ -629,6 +629,8 @@ def weights_for_device(device, codes_kn, scales_gn=None, cache=None, shared_exp=
 
     num_g = k // 32 // 32
     tail_t = tail_group(num_g, n // 32 // banks // workers_per_bank)
+    if os.environ.get("BONSAI_SCALE_TAILS", "1") == "0":  # one tail tile per column (the pre-tail byte count)
+        tail_t = 1
     s2 = host(f"s2t{tail_t}", lambda: torch.from_numpy(
         pack_scales(np.asarray(get()[1], dtype=np.float32), banks, tail_t).view(np.int32)), ttnn.int32,
         ttnn.ROW_MAJOR_LAYOUT)
