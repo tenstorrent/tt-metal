@@ -22,10 +22,12 @@ SparseKvPushPart = ttnn.experimental.SparseKvPushPart
 # ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/device/sparse_kv_push_common.hpp.
 PUSH_CORES_PER_LINK = 4 * 3
 
-# Must match kMaxStripeChunk and sparse_push_plan::kChunkRows in
+# Must match plan_table::kMaxDevices, kMaxStripeChunk, sparse_push_plan::kChunkRows and kMaxChunksPerCore in
 # ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/device/kernels/sparse_push_constants.hpp.
+MAX_DEVICES = 32
 MAX_STRIPE_CHUNK = 512
 PLAN_CHUNK_ROWS = 512
+PLAN_MAX_CHUNKS_PER_CORE = 32
 
 
 @dataclass
@@ -37,19 +39,26 @@ class SparseKvPushPlan:
 
 
 def sparse_kv_push_supported(mesh_device) -> bool:
-    """The push sends over all four torus links of every chip."""
+    """The push sends over all four torus links of every chip, and a plan table holds at most MAX_DEVICES owners."""
     rows, cols = tuple(mesh_device.shape)
-    return ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY and min(rows, cols) >= 3
+    return (
+        ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+        and min(rows, cols) >= 3
+        and rows * cols <= MAX_DEVICES
+    )
 
 
-def sparse_kv_push_fits(stripe_chunk: int, max_rows: int) -> bool:
+def sparse_kv_push_fits(mesh_device, stripe_chunk: int, max_rows: int) -> bool:
     """Whether the push can serve a cache of `max_rows` rows in blocks of `stripe_chunk` rows: a block's bitmap is
-    read as at most 64 B (512 rows, in whole 32-row words), and the plan reduces the bitmap in 512-row chunks."""
+    read as at most 64 B (512 rows, in whole 32-row words), and the plan reduces the bitmap in 512-row chunks, at most
+    PLAN_MAX_CHUNKS_PER_CORE of them on each of the chip's cores."""
+    grid = mesh_device.compute_with_storage_grid_size()
     return (
         0 < stripe_chunk <= MAX_STRIPE_CHUNK
         and stripe_chunk % 32 == 0
         and max_rows % stripe_chunk == 0
         and max_rows % PLAN_CHUNK_ROWS == 0
+        and divup(max_rows // PLAN_CHUNK_ROWS, grid.x * grid.y) <= PLAN_MAX_CHUNKS_PER_CORE
     )
 
 
@@ -112,13 +121,13 @@ class SparseKvPushPlanner:
         push_cores = self.links * PUSH_CORES_PER_LINK
         # Attention's busiest core if it took every core the push leaves free...
         tokens_per_core = divup(query_rows, grid.x * grid.y - push_cores)
-        # ...and the fewest whole columns that keep that load (GLM: 160 rows, 2 per core, 80 cores = 8 columns).
-        attention_cols = divup(divup(query_rows, tokens_per_core), grid.y)
+        # ...and the fewest whole columns that keep that load (GLM: 160 rows, 2 per core, 80 cores = 8 columns), but no
+        # more than leave the push its cores (e.g. 96 rows would take 10 columns, the push needs 3 of 12).
+        push_cols_needed = divup(push_cores, grid.y)
+        attention_cols = min(divup(divup(query_rows, tokens_per_core), grid.y), grid.x - push_cols_needed)
+        assert attention_cols > 0, f"no room for {push_cores} push cores beside attention on a {grid.x}x{grid.y} grid"
         # The push takes the bottom rows of the remaining columns.
         push_cols = grid.x - attention_cols
-        assert (
-            push_cols > 0 and divup(push_cores, push_cols) <= grid.y
-        ), f"no room for {push_cores} push cores beside attention on a {grid.x}x{grid.y} grid"
         push_rows = divup(push_cores, push_cols)
         attention = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(attention_cols - 1, grid.y - 1))]

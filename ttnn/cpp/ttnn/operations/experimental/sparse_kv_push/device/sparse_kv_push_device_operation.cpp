@@ -116,6 +116,14 @@ void validate_runtime(const SparseKvPushParams& params, const SparseKvPushInputs
     TT_FATAL(
         !tensor_args.batch_index_tensor.has_value() || tensor_args.batch_index_tensor->buffer() != nullptr,
         "sparse KV push batch_index_tensor must be allocated on device");
+    // Senders read the cache while writers fill the output, so the two must not share pages. Both are interleaved over
+    // the DRAM banks: they overlap exactly when their per-bank address ranges do.
+    const auto* cache_buf = input.buffer();
+    const auto* output_buf = tensor_args.output_tensor.buffer();
+    TT_FATAL(
+        cache_buf->address() + cache_buf->aligned_size_per_bank() <= output_buf->address() ||
+            output_buf->address() + output_buf->aligned_size_per_bank() <= cache_buf->address(),
+        "sparse KV push output must not overlap the cache it reads");
     auto* mesh_device = input.device();
     TT_FATAL(
         tensor_args.output_tensor.device() == mesh_device && tensor_args.table.device() == mesh_device &&

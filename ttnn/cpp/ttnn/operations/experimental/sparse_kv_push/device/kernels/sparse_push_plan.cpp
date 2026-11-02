@@ -274,9 +274,13 @@ void kernel_main() {
         if (core_idx == 0) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrive_sem), cores * round);
             if constexpr (cores > 1) {
-                // Linked: the go value lands after the spans on every core, with no ack round trip between.
+                // Linked: the go value lands after the spans on every core, with no ack round trip between. A span is
+                // empty when no index on this chip is set (every row masked); the go value still goes out.
                 spans([&](uint32_t l1, uint32_t bytes) {
-                    noc_async_write_multicast(l1, all_cores_mcast_addr(l1), l1_transfer_bytes(bytes), cores - 1, true);
+                    if (bytes != 0) {
+                        noc_async_write_multicast(
+                            l1, all_cores_mcast_addr(l1), l1_transfer_bytes(bytes), cores - 1, true);
+                    }
                 });
                 noc_async_writes_flushed();  // the previous go value has left misc
                 misc[kMiscGo] = round;
