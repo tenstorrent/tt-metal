@@ -402,6 +402,8 @@ models:
     bh_sc1: 370
     bh_sc4: 50
   unit_tier2:
+    bh_galaxy: 10  # AGMM program-cache identity regression (#56035)
+    bh_loudbox: 10  # AGMM program-cache identity regression (#56035)
     wh_llmbox: 114
     wh_llmbox_perf: 206
     wh_n150: 122
