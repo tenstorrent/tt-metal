@@ -28,6 +28,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import parametrize
 from helpers.stimuli_generator import calculate_tile_and_face_counts
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from test_eltwise_unary_typecast import _build_typecast_config
 
 # The (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path,
@@ -92,7 +93,10 @@ def test_perf_eltwise_unary_typecast(
 
     # Calculate tile count from input dimensions
     tile_count_A, tile_count_B, _ = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+        input_dimensions,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
     )
 
     configuration = _build_typecast_config(
@@ -100,9 +104,7 @@ def test_perf_eltwise_unary_typecast(
         dest_acc,
         approx_mode,
         input_dimensions,
-        None,
         tile_count_A,
-        None,
         tile_count_B,
         is_perf=True,
         run_types=[

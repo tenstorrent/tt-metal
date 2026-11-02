@@ -22,14 +22,9 @@ from helpers.format_config import (
     DataFormat,
     InputOutputFormat,
 )
-from helpers.golden_generators import (
-    TILE_DIMENSIONS,
-    TypecastGolden,
-    get_golden_generator,
-)
+from helpers.golden_generators import TypecastGolden, get_golden_generator
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
     FastMode,
     MathOperation,
@@ -37,31 +32,28 @@ from helpers.llk_params import (
     StableSort,
     Transpose,
 )
-from helpers.param_config import (
-    get_num_blocks_and_num_tiles_in_block,
-    parametrize,
-)
+from helpers.param_config import parametrize
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    calculate_tile_and_face_counts,
+    generate_stimuli,
+)
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     FAST_MODE,
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
-    NUM_BLOCKS,
     NUM_FACES,
-    NUM_TILES_IN_BLOCK,
     STABLE_SORT,
     TILE_COUNT,
     TYPECAST_FORMATS,
-    TYPECAST_PERF_MODE,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
-    DestSync,
-    generate_input_dim,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from helpers.utils import passed_test, result_tensor
 
 # The full ttnn typecast dtype set (analysis doc section 5).
@@ -198,7 +190,8 @@ def test_eltwise_unary_typecast(
     ],
     dest_acc=_production_dest_acc,
     approx_mode=[ApproximationMode.No],
-    input_dimensions=[[32, 32], [32, 256]],
+    # Six tiles exercises the final partial Dest block when fp32 Dest holds four.
+    input_dimensions=[[32, 32], [32, 192], [32, 256]],
 )
 def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
     formats: InputOutputFormat,
@@ -313,10 +306,10 @@ def test_eltwise_unary_typecast_uint_to_uint16_saturation(
         dest_acc,
         ApproximationMode.No,
         input_dimensions,
-        src_A,
         tile_cnt_A,
-        src_B,
         tile_cnt_B,
+        src_A=src_A,
+        src_B=src_B,
     )
     result = [int(v) & _UINT16_MAX for v in configuration.run().result]
     assert len(result) == len(
@@ -478,10 +471,10 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
         dest_acc,
         ApproximationMode.No,
         input_dimensions,
-        src_A,
         tile_cnt_A,
-        src_B,
         tile_cnt_B,
+        src_A=src_A,
+        src_B=src_B,
     )
     result = [int(v) & 0xFF for v in configuration.run().result]
     assert len(result) == len(
@@ -561,10 +554,10 @@ def test_eltwise_unary_typecast_uint_to_uint8_wide_range(
         dest_acc,
         ApproximationMode.No,
         input_dimensions,
-        src_A,
         tile_cnt_A,
-        src_B,
         tile_cnt_B,
+        src_A=src_A,
+        src_B=src_B,
     )
     result = [int(v) & 0xFF for v in configuration.run().result]
     assert len(result) == len(
@@ -583,12 +576,12 @@ def _build_typecast_config(
     dest_acc: DestAccumulation,
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
-    src_A: torch.Tensor | None,
     tile_cnt_A: int,
-    src_B: torch.Tensor | None,
     tile_cnt_B: int,
-    twos_complement: bool = False,
     *,
+    src_A: torch.Tensor | None = None,
+    src_B: torch.Tensor | None = None,
+    twos_complement: bool = False,
     is_perf: bool = False,
     run_types: list[PerfRunType] | None = None,
     loop_factor: int = 1,
@@ -609,13 +602,11 @@ def _build_typecast_config(
         formats
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
+    _, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
     )
 
     templates = [
@@ -625,7 +616,6 @@ def _build_typecast_config(
         # (input, output) pair that selects the concrete typecast kernel.
         MATH_OP(mathop=MathOperation.Typecast),
         TYPECAST_FORMATS(formats.input_format, formats.output_format),
-        TYPECAST_PERF_MODE(is_perf),
         ITERATIONS(iterations),
         FAST_MODE(FastMode.No),
         STABLE_SORT(StableSort.No),
@@ -633,18 +623,10 @@ def _build_typecast_config(
     runtimes = [
         TILE_COUNT(tile_cnt_A),
         LOOP_FACTOR(loop_factor),
-        NUM_FACES(num_faces=4),
+        NUM_FACES(num_faces=faces_to_generate),
         UNPACK_TRANS_FACES(Transpose.No),
         UNPACK_TRANS_WITHIN_FACE(Transpose.No),
     ]
-    if not is_perf:
-        templates.insert(0, generate_input_dim(input_dimensions, input_dimensions))
-        runtimes.extend(
-            [
-                NUM_BLOCKS(num_blocks),
-                NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            ]
-        )
 
     test_config_kwargs = {
         "test_name": "sources/eltwise_unary_typecast_test.cpp",
@@ -729,11 +711,11 @@ def _run_typecast(
         dest_acc,
         approx_mode,
         input_dimensions,
-        src_A,
         tile_cnt_A,
-        src_B,
         tile_cnt_B,
-        twos_complement,
+        src_A=src_A,
+        src_B=src_B,
+        twos_complement=twos_complement,
     )
 
     res_from_L1 = configuration.run().result

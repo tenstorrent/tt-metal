@@ -263,7 +263,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_unary_typecast": {
-        "version": 5,
+        "version": 4,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -286,7 +286,6 @@ PERF_TEST_SCHEMAS = {
             "output_format",
             "stable_sort",
             "tile_cnt",
-            "typecast_is_perf",
             "unpack_to_dest",
             "unpack_transpose_faces",
             "unpack_transpose_within_face",
