@@ -1426,7 +1426,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         GLOBAL_MESH_SHAPE,
         rank=rank,
         num_ranks=num_ranks,
-        first_layer_idx=first_layer_idx,
+        # The model's layer index, as the caches were built: under PREFILL_PP_LAYER_OFFSET the layer split's
+        # first_layer_idx is the un-offset one.
+        first_layer_idx=runtime.config.first_layer_idx,
         num_my_layers=num_my_layers,
     )
 
