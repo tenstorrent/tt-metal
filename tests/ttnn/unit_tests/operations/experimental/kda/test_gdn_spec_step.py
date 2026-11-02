@@ -1241,3 +1241,98 @@ def test_lazy_rejects(device, expect_error):
             memory_config=ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16, fast_mode=True, fp32_state=False,
             kernel_opts=LAZY_BIT,
         )  # fmt: skip
+
+
+# --------------------------------------------------------------------------- #
+# K4 SFPU gates (kernel_opts bit 9, + bit 11 face) with REALISTIC dt_bias. softplus_tile selects its algorithm on
+# INP_FLOAT32; before gdn_step_helpers.hpp defined it, the GDN compute kernels got the BF16 branch, which clamps the
+# residual to 0 for |a + dt_bias| > 5: softplus = 0 and decay = 1 (no forgetting) wherever a + dt_bias < -5. The other
+# tests draw dt_bias = 0.1 randn and never reach that region. Qwen3.8: 24% of the 2304 GDN heads have dt_bias < -5,
+# min about -9. Truth: the fp64 serial recurrence; the K4 program with the writer's exact software gates (no bit 9) is
+# the reference arm.
+# --------------------------------------------------------------------------- #
+SFPU_GATE_BIT = 512
+NARROW_GR_BIT = 1024
+SFPU_FACE_BIT = 2048
+# one TP = 8 slice (Nv = 6) spanning the checkpoint's range (Qwen3.8, 2304 heads: dt_bias min -8.94, 10% -5.93,
+# median -3.23, 24.2% < -5; exp(A_log) on the dt_bias < -5 heads: median 0.37, 90% 4.9, max 23.5)
+DTB_REALISTIC = [-9.0, -7.5, -6.0, -5.0, -3.0, 0.5]
+NEA_REALISTIC = [-23.5, -4.9, -0.37, -0.125, -1.0, -0.33]
+SFPU_VARIANTS = {
+    "k4": LAZY_OPTS | NARROW_GR_BIT,
+    "sfpu": LAZY_OPTS | NARROW_GR_BIT | SFPU_GATE_BIT,
+    "sfpu_face": LAZY_OPTS | NARROW_GR_BIT | SFPU_GATE_BIT | SFPU_FACE_BIT,
+}
+
+
+@pytest.mark.parametrize("a_scale", [0.3, 2.0])
+@pytest.mark.parametrize("variant", list(SFPU_VARIANTS))
+@pytest.mark.parametrize("B,T", [(8, 4), (1, 4)])
+def test_lazy_sfpu_gates_realistic_dtbias(device, request, B, T, variant, a_scale):
+    """K4 verify sequence (GDN_SFPU_SEQ_STEPS steps, default 6) with dt_bias down to -9 and `a` at a_scale * randn:
+    per step the decay the kernel stashed (exp(g_t), fp32) vs fp64 -- max |d dec| over every (user, head, token) and
+    over the a + dt_bias < -5 ones separately, the share of those whose decay came out exactly 1.0 (the BF16 clamp
+    signature) -- outputs (PCC) and the replayed state in ring slot 0 (max relative error per head class). The state
+    is never re-synced to the truth, so slot 0 carries the accumulated drift. Asserts the FP32-branch accuracy."""
+    g = GEOS[0]
+    assert g.Nv == len(DTB_REALISTIC)
+    c = LazyCase(device, g, B, T, seed=1701 + 10 * B + T)
+    c.dtb = torch.tensor(DTB_REALISTIC).bfloat16().float()
+    c.nea = torch.tensor(NEA_REALISTIC).bfloat16().float()
+    dev = lambda t, dt, lay=ttnn.TILE_LAYOUT: ttnn.from_torch(t, dtype=dt, layout=lay, device=device)
+    c.dtb_d = dev(c.dtb.reshape(1, 1, g.Nv), ttnn.float32)
+    c.nea_d = dev(c.nea.reshape(1, 1, g.Nv), ttnn.float32)
+    opts = SFPU_VARIANTS[variant]
+    S_true = c.S0.double()
+    E_prev = c.E_prev
+    mi_ctrl = [T] * B
+    gen = torch.Generator().manual_seed(4049 + B + T)
+    Nv, QKVZ = g.Nv, g.QKVZ
+    neg_heads = c.dtb < -5
+    worst = dict(dec_all=0.0, dec_neg=0.0, ones_neg=0.0, s0_neg=0.0, s0_pos=0.0, p_out=1.0)
+    for step in range(int(os.environ.get("GDN_SFPU_SEQ_STEPS", "6"))):
+        rows = make_rows(g, round_up32(B * T) if B * T % 32 else B * T)
+        rows[:, QKVZ : QKVZ + Nv] = (a_scale * torch.randn(rows.shape[0], Nv)).bfloat16().float()
+        mi_win = [0 if m >= T else m for m in mi_ctrl]
+        out_ref, states, deltas, kns, decs, Wn_ref = reference_lazy(
+            g, rows, E_prev, mi_win, S_true, c.taps, c.dtb, c.nea, c.w, B, T
+        )
+        o = c.run(rows, mi_ctrl, kernel_opts=opts)
+        out = ttnn.to_torch(o).reshape(-1, g.VD).float()[: B * T]
+        ttnn.deallocate(o)
+        ring = c.ring_host()
+        _, _, dec_d = _stash_host(ring[1 + (1 - c.par)], B, Nv, T)
+        # a + dt_bias per (user, head, token)
+        tt_ = torch.stack(
+            [rows[u * T : (u + 1) * T, QKVZ : QKVZ + Nv].T + c.dtb[:, None] for u in range(B)]
+        )  # [B, Nv, T]
+        neg = tt_ < -5
+        d_dec = (dec_d.double() - decs).abs()
+        dec_all = (d_dec / decs.clamp_min(1e-30)).max().item()  # relative: decays span 1e-3 .. 1
+        dec_neg = d_dec[neg].max().item() if neg.any() else 0.0
+        ones_neg = (dec_d[neg] == 1.0).float().mean().item() if neg.any() else 0.0
+        rel = (ring[0].double() - S_true).flatten(2).norm(dim=-1) / S_true.flatten(2).norm(dim=-1).clamp_min(1e-30)
+        s0_neg = rel[:, neg_heads].max().item()
+        s0_pos = rel[:, ~neg_heads].max().item()
+        p_out = pcc(out, out_ref)
+        print(
+            f"sfpu-real {variant} a_scale={a_scale} step {step} (B={B},T={T}): a+dtb<-5 share={neg.float().mean():.3f} "
+            f"| dec max rel err all={dec_all:.3e}, max|d| a+dtb<-5={dec_neg:.3e} dec==1 share there={ones_neg:.3f} "
+            f"| slot0 rel err dtb<-5 heads={s0_neg:.3e} others={s0_pos:.3e} | out pcc={p_out:.7f}"
+        )
+        for k, v in (("dec_all", dec_all), ("dec_neg", dec_neg), ("ones_neg", ones_neg), ("s0_neg", s0_neg), ("s0_pos", s0_pos)):
+            worst[k] = max(worst[k], v)
+        worst["p_out"] = min(worst["p_out"], p_out)
+        mi_next = [int(x) for x in torch.randint(0, T, (B,), generator=gen)]
+        S_true = torch.stack([states[mi_next[u], u] for u in range(B)])
+        E_prev = c.win_host(1 - c.par)
+        mi_ctrl = mi_next
+        c.par = 1 - c.par
+    print(f"sfpu-real SUMMARY {variant} a_scale={a_scale} B={B} T={T}: " + " ".join(f"{k}={v:.3e}" for k, v in worst.items()))
+    # the FP32 branch: decay within 1e-3 relative everywhere (softplus <= 4e-4 relative), within a few fp32 ulps of the
+    # truth where a + dt_bias < -5 (decay near 1; the BF16 clamp's error there is 1 - exp(nea * softplus) ~ 1e-4..1e-2),
+    # and no state drift beyond 1e-4 relative over the sequence
+    assert worst["dec_all"] < 1e-3, f"{variant}: decay max rel err {worst['dec_all']:.3e}"
+    assert worst["dec_neg"] < 2e-6, f"{variant}: decay max|d| where a + dt_bias < -5: {worst['dec_neg']:.3e}"
+    assert worst["s0_neg"] < 1e-4 and worst["s0_pos"] < 1e-4, f"{variant}: slot-0 drift {worst}"
+    assert worst["p_out"] > 0.999
