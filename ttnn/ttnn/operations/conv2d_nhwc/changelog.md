@@ -350,3 +350,109 @@
   - Passing absolute rounds to the act receiver hung WIDTH with receive-only sinks: the rotation length is the group size, not the slice count. Fixed by passing the owner phase.
   - The Counter data-ready signal cannot carry out-of-order deliveries, and its sender barriers made it slower (113k).
 - Tests added: `test_conv2d_nhwc_perf_probe.py::test_perf_probe_resnet_block` (three cases; `R9_CASE` env filter) and `test_l1_peak_resnet_block`.
+
+## Perf 1 — tournament round 1 (BLOCK act exchange / gather / weight stream)
+- Date: 2026-11-02. No SUPPORTED change. BH p150b, AICLK 1350 MHz. Numbers are per-core max TRISC_1 KERNEL cycles from `profile_log_device.csv`; the ops-CSV durations are broken by cross-core clock skew on this box. ns = cycles / 1.35.
+- Focus case: the first `attention: PERF FOCUS` loose case, SDXL level-1 3×3. Input (1,64,64,640), C_out 640, BLOCK 10×10, shard (410,64), bf16 × bf8b, bias. Achievable 149,049 ns (201.2k cycles). Precision contract unchanged: LoFi, fp32 DEST.
+- Plan: S = 10 slices; per core bm 13, bn 2, bk 3. That gives 60 act rounds of 80 KB along each grid row, and a rotating weight sender down each column.
+
+### Instrumentation (permanent)
+- Added `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp`. `MaybeDeviceZoneScope` is an alias of `DeviceZoneScopedN` and costs nothing with the profiler off. The header named in the brief did not exist in this tree.
+- Zones:
+  - reader: `reader_window_barrier`, `reader_gather_kblock`, `reader_rm_reserve` (wait split from work), `reader_wt_drain`
+  - compute: `compute_matmul`, `compute_tilize_own` / `compute_tilize`, `compute_bias_untilize`
+  - writer: `writer_act_reserve`, `writer_act_send`, `writer_act_wait`
+- The focus case uses 244 of the 250 markers per RISC.
+- Summary tool: `perf_experiments/tools/zones.py`. One-run wrapper: `prof.sh`.
+
+### Measured breakdown (focus, round start: 237.9k cycles ≈ 176.2 µs)
+Zones (mean per core):
+| zone | cycles |
+|---|---|
+| compute_matmul (whole helper call) | 232k |
+| writer_act_wait (54 rounds) | 137.6k |
+| reader_gather_kblock | 187k, of which reader_rm_reserve 90k |
+| compute_tilize_own (6 calls) | 27k |
+| bias + untilize | 5k |
+
+Cumulative payload ablation (sync kept):
+| step | cycles |
+|---|---|
+| full | 237.3k |
+| − act payload | 196.5k |
+| − weights | 197.1k |
+| − gather | 179.6k |
+| − tilize | 167.3k |
+| − matmul (everything stubbed) | 84.8k |
+
+Solo ablations: − matmul 224.4k; − weights 224.0k; − gather 217.2k.
+
+Reading:
+- The matmul payload is about 82k cycles (≈ 17.6 cycles per tile, about 90% of LoFi peak). The whole-op compute floor at full utilisation is 73.7k.
+- With every payload stubbed, an 85k handshake floor remains. It runs serially with the matmul instead of hiding it.
+- Ranked headroom: the act exchange (payload plus serialised row multicasts), then the weight stream sharing the writer's loop and NOC_1, the gather startup bubble, and tilize.
+- The matmul is roofline-gated and got no ideas.
+
+### Portfolio and verdicts (artifacts in `perf_experiments/<slug>/`, brief in `perf_experiments/BRIEF.md`)
+| idea | verdict | focus (cycles) | domain / notes |
+|---|---|---|---|
+| `gather_fast`: padding kernel rows stay on the fast run path (zero runs); interior runs alternate two NoC cmd buffers | **WIN** | 240k → 229.3k | Applies everywhere. ResNet layer3 ds 87.7k → 80.1k; layer4 84.0k → 81.2k; HEIGHT layer2 ds 41.3k → 35.4k; rest flat. Exceptions: none. |
+| `weights_on_reader_risc`: the streamed weight ring (DRAM reads, column multicast / receive) runs on NCRISC (NOC_0) as a non-blocking step polled by the gather | **WIN** | 239–241k → 225.5k (alone) | layer4 −14%, BLOCK 28×28×256 fp32 −36%, layer3 3×3 −6%, no-bias −9%. Measured regression on layer3 ds (+4.5%). |
+| `dual_noc_act_mcast`: split each act round across NOC_1 (writer) and NOC_0 (reader), two flags | WIN, marginal | 238.7k → 229.8k (−3.7%, inside the ±4% noise) | layer3 ds +18%. Raw multicast. Conflicts with `weights_on_reader_risc` (both load the reader and NOC_0). **Not graduated.** |
+| `fewer_rounds_bigger_kblock`: bk 3 → 6/9/18 | **BLOCKED** (L1) | bk 6 tap-major 195.8k (−20%) | Costs about +330 KB per core (922,880 B peak vs the 618,992 B target). The only variant that fits (send buffer aliased into the landing ring) runs 252.9k, no win. bk 18 runs out of L1. layer3 3×3 bk 9 regresses +6.7%; layer4 bk 18 −17%; 28×28×256 −16%. |
+| `act_pipeline_depth`: ack ahead / deeper landing ring | NULL | ring depth 3: 237.0k; 2 channels: 360–415k | A Flag channel can carry only one outstanding round. Two concurrent row multicasts regress heavily. |
+| `handshake_floor`: cheaper act round protocol | NULL | best full-case variant 238.1k | Diagnosis: the ack round trip is not on the critical path. The floor is the next sender's loop work (the weight landing at about 600 per round) plus about 350 cycles of flag latency. Any overlap of a weight or second row multicast with the act multicast on NOC_1 costs +30–130%. Batching the weights 3 per handshake gives floor −17% but full case +7.6%. |
+| `tilize_own_fast`: cheaper own-block tilize | NULL | ±0.3% | The 27k zone is mostly a 17k wait for the first gather. The real tilize is about 11k, and a free tilize would save only 5.7k. The BH fast-tilize path is already in use. Split pieces: +3.4%. |
+
+### What graduated
+- **`gather_fast`** (commit 18de8479fa3, `kernels/conv2d_nhwc_gather.hpp`)
+  - One unqualified path. The interior/padding fast-path condition and the per-read loop it replaced are deleted.
+  - Carve-outs:
+    - The BRISC split-gather instance keeps one cmd buffer (its buffers serve the writer's writes; structural).
+    - Under `WR_WEIGHTS` the gather uses one cmd buffer. Its transaction-id barrier does not cover reads issued from the second buffer: measured hang, readers stuck in `noc_async_read_barrier_with_trid`.
+  - On the focus case only the padding part of this change remains active.
+- **`weights_on_reader_risc`** (commit 624cc0c529c; descriptor `wr_on`, `kernels/conv2d_nhwc_reader.cpp`, gather `Poll` hook, writer `WR_WEIGHTS`)
+  - Domain: every K-exchange core set with streamed multicast weights (BLOCK; any S, including one slice). Written as carve-outs, not an allow-list.
+  - The writer-side ring stays as the path for R0 interleaved, WIDTH (no weight multicast) and HEIGHT resident weights.
+  - Carve-outs:
+    - HEIGHT streamed fallback: its receive-only sink cores carry no reader kernel to host the ring (cannot).
+    - Measured regression kept on the unified path: ResNet layer3 ds 79.8k → 84.1k (+5.4%, 2 vs 3 tight runs). The other strided BLOCK perf case (SDXL level-0 ds) is flat at 106.4k → 106.7k, so stride is not the predicate. No principled host-side test for "reader-bound gather" was found, so no shape fence was added. Net for layer3 ds over the round: 87.2k → 84.1k.
+  - Integration fix beyond the subagent's variant: the weight step now reports any NoC activity (send / land / ack), not only reads, so the gather always re-arms its read state.
+  - `WEIGHTS_ON_READER` is an A/B module constant, default True.
+
+### Whole-op before → after (cycles; one run each unless noted)
+| case | round start | after Perf 1 | achievable |
+|---|---|---|---|
+| **SDXL L1 BLOCK (focus)** | 237.9k (176.2 µs) | **215.1k (159.3 µs), −9.6%** | 201.2k (149.0 µs) |
+| ResNet layer3 ds BLOCK | 87.2k | 84.1k (3 runs) | 66.5k |
+| ResNet layer3 3×3 BLOCK | 78.7k | 74.3k | 64.6k |
+| ResNet layer4 3×3 BLOCK | 84.0k | 66.0k | 48.2k |
+| SDXL L0 ds BLOCK | — | 106.7k (new probe `test_perf_probe_block_sdxl_l0_ds_bf16_bf8b`) | 94.2k |
+| guard BLOCK bf16 no-bias | 30.8k | 27.9k | — |
+| BLOCK 28×28×256 fp32 | 77.7k | 48.9k | — |
+| guard WIDTH strided | 94.6k | 94.6k | — |
+| guard interleaved bf16 relu | 100.0k | 99.3k | — |
+| ResNet layer2 ds HEIGHT | 41.3k | 35.6k | 41.0k |
+| ResNet layer1 3×3 HEIGHT | 38.8k | 38.5k | 38.0k |
+
+- Precision is identical before and after on every case (focus PCC 0.999776, rel-RMS 0.02017).
+- Focus L1 peak: 590,336 B (target 618,992 B), unchanged.
+
+### No-regression / correctness
+- Guard set (one per kernel path × layout × placement): no regression beyond noise except the recorded layer3 ds.
+- `--dev` (watcher + asserts): 12/12 BLOCK perf probes pass.
+- Unit directory: 197 passed.
+- Golden `eval/golden_tests/conv2d_nhwc/`, full: 4,578 passed, 0 failed (rest skipped / xfailed). Interleaved 3,671 in 12 pytest-split groups, BLOCK 298, WIDTH / HEIGHT / loose 609.
+
+### Bottleneck now (round 2)
+- On the focus case the writer spends 169k of 207k waiting on act rounds. Matmul is 82k, and the gather has slack (rm reserve 61k).
+- The act exchange is the bound: 60 serialized 80 KB row multicasts.
+- Remaining levers:
+  - Fewer rounds: bk 6 was −20%, but blocked at +330 KB L1. A row-chunked send that overlaps the owner's tilize with the transfer could make the aliased-send variant fit.
+  - Act payload bandwidth: the dual-NoC split, re-measured now that the weights are on NOC_0.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `noc_async_read_with_state` (dataflow_api stateful read; no kernel_lib helper covers it) | capability | No API issues a run of fixed-length local reads over two cmd buffers. The stateful read is tied to `read_cmd_buf` and rewrites the length register on every read, so each issue is a poll plus 4 writes on one buffer, with no overlap of one buffer's poll with the other's request. Also, a second-buffer read is not counted by `noc_async_read_barrier_with_trid` even when tagged, and the trid API (`noc_async_read_set_trid`) only tags `read_cmd_buf`. | 171.2k (231.1k cyc, padding fix only, one buffer) | 169.9k (229.3k cyc) | `kernels/conv2d_nhwc_gather.hpp:181` (`run_issue` / `local_read_run`) |
+| `dataflow_kernel_lib` Mcast pipes (`SenderPipe::send` / `ReceiverPipe::wait_delivery` / `acknowledge`) | capability | No non-blocking readiness query: no `acks_ready()` / `poll_delivery()` / `try_send()`. A weight ring polled from inside another stage's loop has to peek the channel's DATA_READY / CONSUMER_READY semaphores through `detail::make_mcast_semaphore` and the positional bindings, then call the blocking pipe with its condition already met. | 170.1k (229.7k cyc, ring on the writer with blocking pipes) | 159.5k (215.3k cyc) | `kernels/conv2d_nhwc_reader.cpp:90` (peeks at :137 / :176) |
