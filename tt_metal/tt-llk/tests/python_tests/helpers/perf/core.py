@@ -1039,7 +1039,7 @@ class PerfConfig(TestConfig):
 
         # A kernel inherits state from the kernel before it: run each kernel once
         # unrecorded, so no measured kernel follows a kernel of another test.
-        if not TestConfig.TEST_TARGET.run_simulator:
+        if not TestConfig.TEST_TARGET.run_simulator and not os.environ.get("LLK_PERF_NO_WARMUP"):
             for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
                 self.write_runtimes_to_L1()
