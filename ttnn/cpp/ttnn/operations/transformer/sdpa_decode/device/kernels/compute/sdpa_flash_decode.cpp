@@ -429,6 +429,15 @@ void kernel_main() {
                     mask_cb_to_use,
                     cb_zero_in);
 
+#ifdef DYNAMIC_CHUNK_SIZE
+                // The fusion above adds one mask. When the causal and the sliding-window fusion fire on the
+                // same chunk that is the sliding-window mask, so the causal mask is added here.
+                if (add_causal_mask_fusion && add_sliding_window_mask_fusion) {
+                    reconfig_data_format(cb_qk_im, cb_mask_in);
+                    add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                }
+#endif
+
                 /* QK += MASK */
                 // Apply block padding mask for every chunk when block_size < TILE_HEIGHT.
                 // Uses <false> to NOT pop the mask CB so it can be reused for subsequent chunks.
