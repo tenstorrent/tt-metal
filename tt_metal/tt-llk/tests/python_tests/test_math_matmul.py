@@ -13,6 +13,8 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
     DestAccumulation,
     DestSync,
     MathFidelity,
@@ -22,7 +24,15 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.logger import logger
-from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
+from helpers.matmul_sweep import (
+    ODD_REUSE_KT_DIMS,
+    ODD_REUSE_RT_CT,
+    MatmulConfig,
+    generate_face_layout_config_sweep,
+    generate_tile_dims,
+    sweep_matmul,
+    sweep_tiny_tiles_matmul,
+)
 from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
@@ -54,15 +64,8 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
-MATH_FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 MATMUL_COMBINATIONS = sweep_matmul(
     MATMUL_FORMATS,
     DEST_ACC_MODES,
@@ -116,6 +119,50 @@ TINY_TILE_LOW_THROTTLE = 1
 # in tt_metal/hw/inc/api/compute/matmul.h is 5, so cover 5 rather than 4.
 TINY_TILE_HIGH_THROTTLE = 5
 
+# One run per tile (LoFi and HiFi4 at throttle 0) and one run per fidelity phase (HiFi4 at 5).
+ODD_REUSE_FIDELITY_THROTTLE = (
+    (MathFidelity.LoFi, 0),
+    (MathFidelity.HiFi4, 0),
+    (MathFidelity.HiFi4, TINY_TILE_HIGH_THROTTLE),
+)
+
+
+def odd_reuse_matmul_params():
+    fmt = next(
+        f
+        for f in MATMUL_FORMATS
+        if f.input_format == DataFormat.Float16_b
+        and f.output_format == DataFormat.Float16_b
+    )
+    face_layout = generate_face_layout_config_sweep(math_matmul=True)[0]
+    params = []
+    for rt_dim, ct_dim in ODD_REUSE_RT_CT:
+        for kt_dim in ODD_REUSE_KT_DIMS:
+            config = MatmulConfig(
+                tile_dimensions=generate_tile_dims(
+                    (
+                        [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
+                        [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+                    )
+                ),
+                face_layout_config=face_layout,
+                formats=fmt,
+                stochastic_rnd=StochasticRounding.No,
+                dst_index=0,
+                dest_sync=DestSync.Full,
+                dest_acc=DestAccumulation.No,
+            )
+            for fidelity, throttle in ODD_REUSE_FIDELITY_THROTTLE:
+                params.append(
+                    pytest.param(
+                        fidelity,
+                        config,
+                        throttle,
+                        id=f"odd_reuse-rt{rt_dim}-ct{ct_dim}-kt{kt_dim}-{fidelity.name}-throttle{throttle}",
+                    )
+                )
+    return params
+
 
 ALL_TEST_PARAMS = list(
     chain(
@@ -123,14 +170,14 @@ ALL_TEST_PARAMS = list(
         (
             (fidelity, combinations, throttle)
             for fidelity, combinations, throttle in product(
-                MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
+                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
             )
         ),
         # Tiny tiles at throttle 0: the full sweep, unchanged.
         (
             (fidelity, combinations, 0)
             for fidelity, combinations in product(
-                MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
+                ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
         ),
         # Tiny tiles at a throttled level <= 3: the fallback to the unthrottled MOP is taken
@@ -138,7 +185,7 @@ ALL_TEST_PARAMS = list(
         (
             (fidelity, combinations, TINY_TILE_LOW_THROTTLE)
             for fidelity, combinations in product(
-                MATH_FIDELITIES, TINY_TILES_THROTTLE_COMBINATIONS
+                ALL_MATH_FIDELITIES, TINY_TILES_THROTTLE_COMBINATIONS
             )
         ),
         # Tiny tiles above level 3, LoFi only: the one case where the fallback depends on
@@ -151,6 +198,8 @@ ALL_TEST_PARAMS = list(
             (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE)
             for combinations in TINY_TILES_THROTTLE_COMBINATIONS
         ),
+        # Odd t_dim on the full-dest blocks the sweep cannot reach.
+        odd_reuse_matmul_params(),
     )
 )
 
