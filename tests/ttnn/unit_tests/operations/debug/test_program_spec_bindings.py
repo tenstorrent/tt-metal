@@ -444,3 +444,36 @@ def test_tensor_args_hold_the_tensors(device):
 
     run_args.tensor_args = {"output": tensor}
     assert list(run_args.tensor_args) == ["output"]
+
+
+class DictWithFailingCopy(dict):
+    def copy(self):
+        raise RuntimeError("copy() was called")
+
+
+class DictCopyingNothing(dict):
+    def copy(self):
+        return {}
+
+
+@pytest.mark.parametrize("dict_type", [DictWithFailingCopy, DictCopyingNothing], ids=lambda cls: cls.__name__)
+def test_tensor_args_from_a_dict_subclass_hold_the_tensors(device, dict_type):
+    # The run args copy the entries themselves, so a dict subclass's copy() cannot leave the C++ object referring to
+    # tensors that nothing keeps alive.
+    tensor = ttnn.from_torch(torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    run_args = E.ProgramRunArgs(tensor_args=dict_type(input=tensor))
+    assert run_args.tensor_args["input"] is tensor
+
+    run_args.tensor_args = dict_type(output=tensor)
+    assert list(run_args.tensor_args) == ["output"]
+    assert run_args.tensor_args["output"] is tensor
+
+
+def test_a_subclass_setattr_cannot_drop_the_tensors(device):
+    class RunArgsIgnoringWrites(E.ProgramRunArgs):
+        def __setattr__(self, name, value):
+            pass
+
+    tensor = ttnn.from_torch(torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    run_args = RunArgsIgnoringWrites(tensor_args={"input": tensor})
+    assert run_args.tensor_args["input"] is tensor

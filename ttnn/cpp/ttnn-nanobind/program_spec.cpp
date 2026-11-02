@@ -194,6 +194,17 @@ m2::Table<m2::TensorParamName, m2::TensorArgument> make_tensor_args(const nb::di
     return tensor_args;
 }
 
+// A plain dict with the entries of tensor_args, read with PyDict_Next as make_tensor_args reads them, so a dict
+// subclass's copy() or __iter__ cannot change them. ProgramRunArgs builds its C++ table from this copy and keeps the
+// copy as the owner of the tensors, so the two always name the same tensors.
+nb::dict copy_tensor_args(const nb::dict& tensor_args) {
+    nb::dict copy;
+    for (const auto& [name, tensor] : tensor_args) {
+        copy[name] = tensor;
+    }
+    return copy;
+}
+
 void bind_enums(nb::module_& mod) {
     export_enum<tt::tt_metal::Precision>(mod, "Precision");
     export_enum<tt::tt_metal::UnpackMode>(mod, "UnpackMode");
@@ -293,7 +304,7 @@ void bind_resources(nb::module_& mod) {
                     .entry_size = entry_size,
                     .num_entries = num_entries,
                     .data_format_metadata = to_data_format(data_format_metadata),
-                    .tile_format_metadata = std::move(tile_format_metadata),
+                    .tile_format_metadata = tile_format_metadata,
                     .borrowed_from = std::move(borrowed_from),
                     .advanced_options = std::move(advanced_options)};
             },
@@ -351,7 +362,7 @@ void bind_resources(nb::module_& mod) {
                     .unique_id = std::move(unique_id),
                     .size_per_node = size_per_node,
                     .data_format_metadata = to_data_format(data_format_metadata),
-                    .tile_format_metadata = std::move(tile_format_metadata)};
+                    .tile_format_metadata = tile_format_metadata};
             },
             nb::kw_only(),
             nb::arg("unique_id"),
@@ -428,7 +439,7 @@ void bind_hardware_configs(nb::module_& mod) {
             [](DMConfig* self,
                std::optional<DMConfig::DataMovement1XXConfig> config_1xx,
                std::optional<DMConfig::DataMovement2XXConfig> config_2xx) {
-                new (self) DMConfig{.config_1xx = std::move(config_1xx), .config_2xx = std::move(config_2xx)};
+                new (self) DMConfig{.config_1xx = config_1xx, .config_2xx = std::move(config_2xx)};
             },
             nb::kw_only(),
             nb::arg("config_1xx") = dm_defaults.config_1xx,
@@ -953,12 +964,13 @@ void bind_program_run_args(nb::module_& mod) {
                std::vector<m2::KernelRunArgs> kernel_run_args,
                const nb::dict& tensor_args,
                std::vector<m2::DFBRunOverrides> dfb_run_overrides) {
-                auto tensor_arg_table = make_tensor_args(tensor_args);
+                nb::dict owners = copy_tensor_args(tensor_args);
+                auto tensor_arg_table = make_tensor_args(owners);
+                set_tensor_owners(self.h, owners);
                 new (self.p) m2::ProgramRunArgs{
                     .kernel_run_args = std::move(kernel_run_args),
                     .tensor_args = std::move(tensor_arg_table),
                     .dfb_run_overrides = std::move(dfb_run_overrides)};
-                nb::setattr(self.h, TENSOR_ARGS_ATTRIBUTE, tensor_args.attr("copy")());
             },
             nb::kw_only(),
             nb::arg("kernel_run_args") = run_args_defaults.kernel_run_args,
@@ -978,8 +990,10 @@ void bind_program_run_args(nb::module_& mod) {
                 return nb::getattr(self.h, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")();
             },
             [](nb::pointer_and_handle<m2::ProgramRunArgs> self, const nb::dict& tensor_args) {
-                self.p->tensor_args = make_tensor_args(tensor_args);
-                nb::setattr(self.h, TENSOR_ARGS_ATTRIBUTE, tensor_args.attr("copy")());
+                nb::dict owners = copy_tensor_args(tensor_args);
+                auto tensor_arg_table = make_tensor_args(owners);
+                set_tensor_owners(self.h, owners);
+                self.p->tensor_args = std::move(tensor_arg_table);
             })
         .def_rw("dfb_run_overrides", &m2::ProgramRunArgs::dfb_run_overrides, COPY);
 }
@@ -995,6 +1009,12 @@ void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value,
                                       .c_str());
     }
     if (PyObject_GenericSetAttr(self.ptr(), name.ptr(), value.ptr()) != 0) {
+        throw nb::python_error();
+    }
+}
+
+void set_tensor_owners(nb::handle self, nb::handle owners) {
+    if (PyObject_GenericSetAttr(self.ptr(), nb::str(TENSOR_ARGS_ATTRIBUTE).ptr(), owners.ptr()) != 0) {
         throw nb::python_error();
     }
 }

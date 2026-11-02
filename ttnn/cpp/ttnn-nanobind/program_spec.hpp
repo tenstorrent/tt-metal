@@ -23,4 +23,9 @@ void py_module_types(nb::module_& mod);
 // AttributeError, as the classes without dynamic_attr do; a Python subclass may set any attribute.
 void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type);
 
+// Stores owners, the Python objects that keep the tensors of a run args object alive, in its _tensor_args attribute.
+// PyObject_GenericSetAttr skips type(self).__setattr__, so a Python subclass's __setattr__ cannot drop them. Call it
+// before the C++ object refers to the new tensors: if it fails, the object is unchanged.
+void set_tensor_owners(nb::handle self, nb::handle owners);
+
 }  // namespace ttnn::program_spec
