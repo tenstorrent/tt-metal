@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/packed_summary.hpp"
 
 #include <cstdint>
 
@@ -28,30 +29,6 @@ FORCE_INLINE void issue_tensor_block_read(
             buffer.get_entry_size(),
             {.page_id = page + tile},
             {.offset_bytes = tile * buffer.get_entry_size()});
-    }
-}
-
-template <uint32_t Kt, uint32_t Vt, typename AAccessor, typename BAccessor, typename DFB>
-FORCE_INLINE void issue_packed_affine_read(
-    Noc& noc, const AAccessor& a_accessor, const BAccessor& b_accessor, DFB& buffer, uint32_t worker_index) {
-    const uint32_t tile_bytes = buffer.get_entry_size();
-    for (uint32_t row = 0; row < Kt; ++row) {
-        for (uint32_t column = 0; column < Kt; ++column) {
-            noc.async_read(
-                a_accessor,
-                buffer,
-                tile_bytes,
-                {.page_id = worker_index * Kt * Kt + row * Kt + column},
-                {.offset_bytes = (row * (Kt + Vt) + column) * tile_bytes});
-        }
-        for (uint32_t column = 0; column < Vt; ++column) {
-            noc.async_read(
-                b_accessor,
-                buffer,
-                tile_bytes,
-                {.page_id = worker_index * Kt * Vt + row * Vt + column},
-                {.offset_bytes = (row * (Kt + Vt) + Kt + column) * tile_bytes});
-        }
     }
 }
 
@@ -141,6 +118,7 @@ template <
     uint32_t Vt,
     uint32_t BH,
     uint32_t G,
+    uint32_t has_tail,
     uint32_t has_actual_end,
     uint32_t sp_rank,
     uint32_t sp_size,
@@ -151,13 +129,10 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t worker_count = BH * G;
     static_assert(worker_count <= 128, "affine prefix coordinate table exceeds runtime-arg budget");
 
-    const auto a_accessor = TensorAccessor(tensor::a);
-    const auto b_accessor = TensorAccessor(tensor::b);
+    constexpr uint32_t affine_tiles = affine_a_tiles + affine_b_tiles;
+    const auto summaries_accessor = TensorAccessor(tensor::summaries);
     const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
     const auto output_accessor = TensorAccessor(tensor::output);
-    const auto tail_a_accessor = TensorAccessor(tensor::tail_a);
-    const auto tail_b_accessor = TensorAccessor(tensor::tail_b);
-    const auto tail_entry_states_accessor = TensorAccessor(tensor::tail_entry_states);
     DataflowBuffer initial_a(dfb::initial_a);
     DataflowBuffer initial_b(dfb::initial_b);
     DataflowBuffer local_a(dfb::local_a);
@@ -211,21 +186,37 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     initial_state.reserve_back(affine_b_tiles);
     if (reset_worker) {
         noc.async_write_zeros(initial_a, affine_a_tiles * initial_a.get_entry_size());
-    } else if (group > reset_group) {
-        issue_tensor_block_read(noc, tail_a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
-        issue_tensor_block_read(noc, tail_b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
+    } else if (has_tail && group > reset_group) {
+        // Slot 1 exists only with tail transforms; an S = 1 kernel never addresses it.
+        kda::read_summary_transform<Kt, Vt>(noc, summaries_accessor, initial_a, initial_b, worker_count + worker_index);
     } else {
-        issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
-        issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
+        kda::read_summary_transform<Kt, Vt>(noc, summaries_accessor, initial_a, initial_b, worker_index);
+    }
+    // Only a rank holding a valid tail has a reset worker, and its summaries then carry the tail slot.
+    if constexpr (has_tail) {
+        if (reset_worker) {
+            if (!aligned_reset) {
+                // The tail transform's packed [A | B] rows are contiguous pages of slot 1.
+                tail_affine.reserve_back(affine_tiles);
+                issue_tensor_block_read(
+                    noc,
+                    summaries_accessor,
+                    tail_affine,
+                    kda::summary_row_page<Kt, Vt>(worker_count + worker_index, 0),
+                    affine_tiles);
+            }
+            const auto tail_entry_states_accessor =
+                TensorAccessor(*tensor::get_token_if_present<"tail_entry_states">());
+            tail_entry_states.reserve_back(affine_b_tiles);
+            issue_tensor_block_read(
+                noc,
+                tail_entry_states_accessor,
+                tail_entry_states,
+                (worker_index / G) * affine_b_tiles,
+                affine_b_tiles);
+        }
     }
     if (reset_worker) {
-        if (!aligned_reset) {
-            tail_affine.reserve_back(affine_a_tiles + affine_b_tiles);
-            issue_packed_affine_read<Kt, Vt>(noc, tail_a_accessor, tail_b_accessor, tail_affine, worker_index);
-        }
-        tail_entry_states.reserve_back(affine_b_tiles);
-        issue_tensor_block_read(
-            noc, tail_entry_states_accessor, tail_entry_states, (worker_index / G) * affine_b_tiles, affine_b_tiles);
         noc.write_zeros_l1_barrier();
     }
     issue_tensor_block_read(
@@ -236,11 +227,13 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         initial_b.push_back(affine_b_tiles);
     }
     initial_state.push_back(affine_b_tiles);
-    if (reset_worker) {
-        if (!aligned_reset) {
-            tail_affine.push_back(affine_a_tiles + affine_b_tiles);
+    if constexpr (has_tail) {
+        if (reset_worker) {
+            if (!aligned_reset) {
+                tail_affine.push_back(affine_tiles);
+            }
+            tail_entry_states.push_back(affine_b_tiles);
         }
-        tail_entry_states.push_back(affine_b_tiles);
     }
 
     uint32_t completed_stages = 0;

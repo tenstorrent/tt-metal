@@ -192,6 +192,7 @@ class TtKimiK3Block(LightweightModule):
         actual_end: Optional[int] = None,
         actual_isl: Optional[int] = None,
         padding_side: str = "right",
+        attn_input_tap=None,
     ) -> None:
         """One layer, folded into `residual`. Returns nothing — the stream holds the state.
 
@@ -200,6 +201,8 @@ class TtKimiK3Block(LightweightModule):
         is done as early as it was before.
         """
         hidden = residual.open(self.local_idx)
+        if attn_input_tap is not None:
+            attn_input_tap(self.local_idx, hidden)
         normed = self.attn_norm(hidden)
         seq_len_local = normed.shape[2]
 
