@@ -424,7 +424,12 @@ if [ "${PP_RANKS}" -eq 0 ]; then
 fi
 
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
-if [ "${DFLASH}" = 1 ]; then
+# Producer rank r must share a host with runner rank r: it reads that rank's H2D descriptor from the
+# host's /dev/shm. --map-by slot puts rank 0 on the launching host whenever it is in the host list
+# (any run launched from a galaxy, not the chipless CI controller), while discovery may have put runner
+# rank 0 on another host, and rank 0's producer then times out waiting for the descriptor. Map by
+# tt-run's own rankfile instead. prte rejects an absolute rankfile path, hence the copy under the tree.
+if [ "${DFLASH}" = 1 ] || [ "${PP_RANKS}" -eq 0 ]; then
   mkdir -p "${TT_METAL_HOME}/generated/ttrun"
   cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"
   PRODUCER_PLACEMENT=(--map-by rankfile:file=generated/ttrun/producer_rankfile --wdir "${TT_METAL_HOME}")
