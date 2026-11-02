@@ -59,6 +59,11 @@ on:
         required: false
         default: ""
         type: string
+      trial-baseline-run:
+        description: "Trial only: build the stage 2 baseline from this run's perf-data artifacts, not the warehouse"
+        required: false
+        default: ""
+        type: string
       stage2-thresholds:
         description: 'With stage2-baseline-ref: {"<arch>": {"threshold": ..., "module_thresholds": ...}}; only these arches run stage 2'
         required: false
@@ -271,7 +276,47 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install pandas snowflake-connector-python cryptography
+      - name: "Trial: download the baseline run's perf data"
+        if: inputs.trial-baseline-run != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-*
+          path: trial-raw
+          run-id: ${{ inputs.trial-baseline-run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: "Trial: build the baseline from that run"
+        if: inputs.trial-baseline-run != ''
+        env:
+          STAGE2_THRESHOLDS: ${{ inputs.stage2-thresholds }}
+          RUN: ${{ inputs.trial-baseline-run }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN}" --jq .head_sha)
+          for ARCH in $(python3 -c 'import json, os; print(*json.loads(os.environ["STAGE2_THRESHOLDS"]))'); do
+            mkdir -p "stage2-baseline/${ARCH}"
+            python3 - "$ARCH" "$SHA" "$RUN" <<'PYTHON'
+          import glob, json, sys
+          from pathlib import Path
+          import pandas as pd
+          sys.path.insert(0, "tt_metal/tt-llk/perf")
+          from regression_compare import MODULE_COL, _module_of
+          arch, sha, run = sys.argv[1:]
+          frames = []
+          for path in glob.glob(f"trial-raw/perf-data-{arch}-*/**/*.csv", recursive=True):
+              if path.endswith((".post.csv", ".counters.csv")):
+                  continue
+              f = pd.read_csv(path)
+              if MODULE_COL not in f.columns:
+                  f[MODULE_COL] = _module_of(path)
+              frames.append(f)
+          out = Path(f"stage2-baseline/{arch}")
+          pd.concat(frames, ignore_index=True).to_csv(out / "baseline.csv", index=False)
+          (out / "baseline_metadata.json").write_text(json.dumps({"commit_sha": sha, "run_id": run}))
+          print(arch, len(frames), "CSVs from run", run, "at", sha)
+          PYTHON
+          done
       - name: Read the baseline from the warehouse
+        if: inputs.trial-baseline-run == ''
         env:
           SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
           SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
