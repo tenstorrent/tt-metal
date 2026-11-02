@@ -91,8 +91,9 @@ namespace tt::tt_metal::experimental {
 //   code, in a view of that scope:
 //     struct b_view : b { static constexpr const auto& in = a::out; };  // b's names, plus a::out as `in`
 //     op<b_view>();
-//   For a DFB, construct one DataflowBuffer and share it, not one per name (as for any alias of a
-//   DFB handle).
+//   Each scope's code then constructs its own device objects from its own names, as a kernel
+//   would: for a shared DFB, that's one DataflowBuffer per scope. (Two DataflowBuffer objects
+//   for one DFB endpoint work correctly, but can confuse device-side debug tooling's bookkeeping.)
 //   Not yet supported: scoped arguments of a TT_KERNEL entry, and scoped names under emulation.
 //
 // ============================================================================
