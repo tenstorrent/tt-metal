@@ -9540,6 +9540,10 @@ def test_ring_joint_attention_dynamic_local_n_rejects_unsupported_features(expec
             with expect_error(RuntimeError, "dynamic_local_n"):
                 call(**overrides)
         assert mesh.num_program_cache_entries() == entries
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
 @pytest.mark.parametrize("sliding", [False, True], ids=["nonslide", "slide"])
 def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(sliding):
     """A program-cache hit must use the all-gather semaphores passed to that call (#62923).
