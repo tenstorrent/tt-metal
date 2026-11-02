@@ -4,11 +4,13 @@
 """
 TTNN Multi-Scale Deformable Attention implementation for BEVFormer.
 
-The core attention is a single device op: ``ttnn.experimental.fused_msda_from_offsets``.
-It takes the reference points and the raw sampling offsets and does the whole of
-MSDA -- sampling-location generation, bilinear sampling, the attention multiply
-and the reduction over (levels, points) -- inside one device op. No intermediate
-grid or per-level sampled-value tensor is materialized.
+The core attention is ``ttnn.experimental.fused_msda_from_offsets``: it takes the
+reference points and the raw sampling offsets and does the whole of MSDA --
+sampling-location generation, bilinear sampling, the attention multiply and the
+reduction over (levels, points) -- inside one kernel. When head_dim is a multiple
+of 32, ``ttnn.experimental.fused_msda_head_major_value`` first lays value_proj's
+output out head-major (in L1 when it fits), so the op reads both corners of a
+horizontal bilinear pair in one read.
 
 Key components:
 - multi_scale_deformable_attn_fused: Core attention computation function
@@ -29,7 +31,14 @@ from loguru import logger
 ENABLE_LOGGING = False
 
 ValueMemory = Literal["auto", "l1", "dram"]
+ValueLayout = Literal["auto", "head_major"]
 _warned_dram_fallbacks = set()
+
+
+def msda_value_layout(head_dim):
+    """The value layout BEVFormer's fused MSDA reads: head-major whenever
+    ``fused_msda_head_major_value`` can build it, i.e. each head owns whole 32-wide tiles."""
+    return "head_major" if head_dim % 32 == 0 else "auto"
 
 
 def _spatial_shapes_list(spatial_shapes):
@@ -53,9 +62,13 @@ def _warn_dram_fallback(value, attention_weights, spatial_shapes, reason):
         logger.warning(f"{DRAM_FALLBACK_PREFIX}{reason}; using interleaved DRAM for value shape {list(value.shape)}")
 
 
-def _is_allocation_oom(error):
-    """Keep the auto retry narrow: kernel and validation failures must remain visible."""
-    return "Out of Memory" in str(error)
+def _is_l1_exhausted(error):
+    """Keep the auto retry narrow: kernel and validation failures must remain visible.
+
+    An L1 tensor that leaves too little room for the program's circular buffers fails at
+    program creation with a clash, not an allocator Out of Memory; both mean L1 was too full."""
+    message = str(error)
+    return "Out of Memory" in message or "clash with L1 buffers" in message
 
 
 def grouped_softmax(logits, group_size):
@@ -94,10 +107,11 @@ def multi_scale_deformable_attn_fused(
     num_valid_queries=None,
     *,
     num_valid_queries_tensor=None,
+    value_layout: ValueLayout = "auto",
     value_memory: ValueMemory = "auto",
     reference_mode="pillar",
 ):
-    """Core multi-scale deformable attention, as one device op.
+    """Core multi-scale deformable attention: stage value, then run the fused op.
 
     Computes, for each (b, q, h), with ``r(l, p) = p % R`` (BEVFormer's z-anchor
     grouping, ``reference_mode="pillar"``), or ``r(l, p) = l`` (``reference_mode="level"``)::
@@ -107,7 +121,9 @@ def multi_scale_deformable_attn_fused(
                        reference_points[b, q, r(l, p)] + sampling_offsets[b, q, h, l, p] / [W_l, H_l])
 
     Args:
-        value: (bs, num_keys, num_heads, head_dim) or packed (bs, num_keys, num_heads*head_dim)
+        value: (bs, num_keys, num_heads, head_dim), packed (bs, num_keys, num_heads*head_dim),
+            or, with ``value_layout="head_major"``, head-major
+            (bs, num_heads, ceil(num_keys/32), 32*head_dim) ROW_MAJOR
         reference_points: (bs, num_queries, R, 2), normalized [0, 1]: R points in the pillar, or
             one per level with ``reference_mode="level"``
         sampling_offsets: (bs, num_queries, num_heads, num_levels*num_points*2) ROW_MAJOR,
@@ -122,11 +138,18 @@ def multi_scale_deformable_attn_fused(
         num_valid_queries_tensor: the same counts as a (bs,) uint32 ROW_MAJOR device tensor, read on
             device, so a captured trace follows its contents. Counts above num_queries are
             clamped. Pass at most one of the two.
-        value_memory: ``"auto"`` selects L1 only when value, output, and fused-op
-            circular buffers fit safely, retries in DRAM if an L1 allocation still
-            runs out of memory, and logs one warning per input shape when it falls
+        value_layout: the layout the op reads. ``"auto"`` stages value ROW_MAJOR in its own
+            shape. ``"head_major"`` takes value already head-major, or packed TILE
+            (bs, num_keys, num_heads*head_dim) as value_proj emits it, which
+            ``fused_msda_head_major_value`` converts, taking num_heads from
+            attention_weights; head_dim must be a multiple of 32 (see ``msda_value_layout``).
+        value_memory: where value and the output go. ``"auto"`` selects L1 only when
+            value, output, and fused-op circular buffers fit safely, retries in DRAM if an
+            L1 allocation still fails, and logs one warning per input shape when it falls
             back; ``"dram"`` forces DRAM; ``"l1"`` requires L1 and raises
-            ``RuntimeError`` when it does not fit or cannot be allocated.
+            ``RuntimeError`` when it does not fit or cannot be allocated. A ROW_MAJOR value
+            (canonical, packed or head-major) already in the selected memory is used in
+            place; any other value is laid out anew there.
 
     Returns:
         (bs, num_queries, num_heads*head_dim) ROW_MAJOR -- the heads are already
@@ -137,6 +160,12 @@ def multi_scale_deformable_attn_fused(
 
     if value_memory not in {"auto", "l1", "dram"}:
         raise ValueError(f'value_memory must be "auto", "l1", or "dram", got {value_memory!r}')
+    if value_layout not in {"auto", "head_major"}:
+        raise ValueError(f'value_layout must be "auto" or "head_major", got {value_layout!r}')
+    # A packed value is converted here; a rank-4 one is already head-major.
+    produce_head_major = value_layout == "head_major" and len(value.shape) == 3
+    if produce_head_major and value.layout != ttnn.TILE_LAYOUT:
+        raise ValueError('value_layout="head_major" converts a packed value only from TILE, as value_proj emits it')
 
     attention_weights = ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT)
     reference_points = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
@@ -155,6 +184,7 @@ def multi_scale_deformable_attn_fused(
             _spatial_shapes_list(spatial_shapes),
             reference_mode=reference_mode,
             device_valid_counts=num_valid_queries_tensor is not None,
+            value_layout=value_layout,
         )
         if value_memory == "l1" and not l1_is_safe:
             raise RuntimeError("fused_msda value_memory='l1' is unsafe under the current L1 allocation")
@@ -168,7 +198,14 @@ def multi_scale_deformable_attn_fused(
         staged_value = value
         owns_staged_value = False
         try:
-            if value.layout != ttnn.ROW_MAJOR_LAYOUT:
+            if produce_head_major:
+                # Head-major pages put both corners of a horizontal bilinear pair
+                # in one read; the producer untilizes straight into that layout.
+                staged_value = ttnn.experimental.fused_msda_head_major_value(
+                    value, attention_weights.shape[2], memory_config=memory_config
+                )
+                owns_staged_value = True
+            elif value.layout != ttnn.ROW_MAJOR_LAYOUT:
                 staged_value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
                 owns_staged_value = True
             elif value.memory_config() != memory_config:
@@ -185,6 +222,7 @@ def multi_scale_deformable_attn_fused(
                 memory_config=memory_config,
                 num_valid_queries=valid_queries,
                 num_valid_queries_tensor=num_valid_queries_tensor,
+                value_layout=value_layout,
             )
         finally:
             if owns_staged_value:
@@ -193,7 +231,7 @@ def multi_scale_deformable_attn_fused(
     try:
         output = run_with_memory_config(target_memory_config)
     except RuntimeError as error:
-        if value_memory != "auto" or target_memory_config != ttnn.L1_MEMORY_CONFIG or not _is_allocation_oom(error):
+        if value_memory != "auto" or target_memory_config != ttnn.L1_MEMORY_CONFIG or not _is_l1_exhausted(error):
             raise
         _warn_dram_fallback(
             value,
@@ -269,6 +307,7 @@ class TTMSDeformableAttention:
         self.total_keys = int(self.spatial_shapes.prod(dim=1).sum().item())
 
         self.head_dim = self.embed_dims // self.num_heads
+        self.value_layout = msda_value_layout(self.head_dim)
         self.residual = residual
         self.linear_kwargs = grid_linear_kwargs(device)
 
@@ -362,7 +401,8 @@ class TTMSDeformableAttention:
         if ENABLE_LOGGING:
             logger.info("MSDA Value Projection Start")
 
-        # The fused op takes packed (B, S, H*D), which is what this Linear emits.
+        # Project value. It stays tiled (B, S, H*D); with a head-major layout,
+        # fused_msda_head_major_value turns it into that layout in one pass.
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
         value = ttnn.linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
 
@@ -383,6 +423,7 @@ class TTMSDeformableAttention:
             spatial_shapes=self.spatial_shapes,
             num_valid_queries=num_valid_queries,
             num_valid_queries_tensor=num_valid_queries_tensor,
+            value_layout=self.value_layout,
         )
 
         if ENABLE_LOGGING:

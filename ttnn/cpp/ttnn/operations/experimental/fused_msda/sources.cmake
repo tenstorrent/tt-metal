@@ -6,6 +6,8 @@ set(TTNN_OP_EXPERIMENTAL_FUSED_MSDA_SRCS
     fused_msda.cpp
     device/fused_msda_device_operation.cpp
     device/fused_msda_program_factory.cpp
+    device/head_major_value_device_operation.cpp
+    device/head_major_value_program_factory.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from

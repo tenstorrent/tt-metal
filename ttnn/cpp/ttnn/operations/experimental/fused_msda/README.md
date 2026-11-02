@@ -7,8 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 
 Design note for the MSDA device op.
 
-Two entry points, one device operation, one compute kernel (which owns both the
-sampling geometry and the reduction), one writer kernel, two readers:
+Two entry points share one device operation, one compute kernel (which owns both
+the sampling geometry and the reduction), one writer kernel and two readers:
 
 | Entry point                            | Frontend                                             |
 | -------------------------------------- | ---------------------------------------------------- |
@@ -17,6 +17,10 @@ sampling geometry and the reduction), one writer kernel, two readers:
 
 A host-only query, `ttnn.experimental.can_use_fused_msda_from_offsets_l1_value`
 (§2.4), tells a caller whether V2's `value` can be staged in L1.
+
+A second, small device operation, `ttnn.experimental.fused_msda_head_major_value`
+(§2.5), lays a tiled packed `value` out head-major, the layout in which the op
+reads both corners of a horizontal bilinear pair in one NoC read (§8).
 
 ---
 
@@ -54,6 +58,7 @@ callable.
 out = ttnn.experimental.fused_msda(
     value,                      # (B, S, H, D)          ROW_MAJOR bf16   [canonical]
                                 #   or (B, S, H*D)      ROW_MAJOR bf16   [packed]
+                                #   or (B, H, ceil(S/32), 32*D)  ROW_MAJOR bf16  [head-major]
     sampling_locations,         # (B, Q, H, L, P, 2)    ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P*2) ROW_MAJOR bf16   [packed]
                                 #   or (B, Q, H*L*P*2)  ROW_MAJOR bf16   [heads-packed]
@@ -63,6 +68,7 @@ out = ttnn.experimental.fused_msda(
     *,
     align_corners=False,
     locations_in_grid_space=False,
+    value_layout="auto",        # "auto" | "head_major"
     memory_config=None,
 )
 # -> (B, Q, H*D) ROW_MAJOR bf16
@@ -80,12 +86,19 @@ reader, and reading it from device would force a host sync. `level_start_index`
 is derived from it on host (exclusive prefix sum of `H_l * W_l`) and shipped as
 runtime args — callers never pass it.
 
+`value_layout="auto"` tells canonical and packed `value` apart by rank.
+`value_layout="head_major"` declares the head-major layout: one page holds 32
+consecutive keys of one head, so keys `x` and `x + 1` of a head are adjacent.
+It is declared, never inferred, because `(B, H, ceil(S/32), 32*D)` can coincide
+with a canonical `(B, S, H, D)` shape. Its last page per head is padded and never
+read. Keys sit back to back, so `D * 2` must be a multiple of `value`'s buffer
+alignment at any `H` (§9).
+
 ### 2.2 V2 — `fused_msda_from_offsets`
 
 ```python
 out = ttnn.experimental.fused_msda_from_offsets(
-    value,                      # (B, S, H, D)          ROW_MAJOR bf16   [canonical]
-                                #   or (B, S, H*D)      ROW_MAJOR bf16   [packed]
+    value,                      # as V1
     reference_points,           # (B, Q, R, 2)          ROW_MAJOR bf16 or fp32
     sampling_offsets,           # (B, Q, H, L, P, 2)    ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P*2) ROW_MAJOR bf16   [packed]
@@ -95,6 +108,7 @@ out = ttnn.experimental.fused_msda_from_offsets(
     *,
     reference_mode="level",     # "level" | "pillar"
     align_corners=False,
+    value_layout="auto",        # as V1
     memory_config=None,
     num_valid_queries=None,     # optional per-batch row count, see below
     num_valid_queries_tensor=None,  # the same counts on device, see below
@@ -157,17 +171,52 @@ default and is one `ttnn.reshape` away for anyone who wants it.
 fits = ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
     value, reference_points, sampling_offsets, attention_weights, spatial_shapes,
     *, reference_mode="level", align_corners=False, device_valid_counts=False,
+    value_layout="auto",
 )
 # -> bool
 ```
 
-True when `value`, staged as ROW_MAJOR interleaved L1, and the bf16 output fit
-below the L1 frontier together with this op's circular buffers, under
-`usable_program_l1_capacity` (95%). Per-bank sizes are rounded up to the
-allocator's DRAM-alignment granule; a `value` already in ROW_MAJOR L1 is not
-counted again. Pass `device_valid_counts=True` when the op will get
-`num_valid_queries_tensor`, whose staging adds circular buffers (§6). `value` may still be TILE or in DRAM. The answer reflects the
-allocator's current state, so call it right before the op and do not cache it.
+True when `value`, staged in ROW_MAJOR interleaved L1 in the layout the op will
+read, and the bf16 output fit below the L1 frontier together with this op's
+circular buffers, under `usable_program_l1_capacity` (95%). Per-bank sizes are
+rounded up to the allocator's DRAM-alignment granule; a `value` already in
+ROW_MAJOR L1 is not counted again. `value` may still be TILE or in DRAM.
+
+- `device_valid_counts=True`: the op will get `num_valid_queries_tensor`, whose
+  staging adds circular buffers (§6).
+- `value_layout="head_major"`: `value` is either already head-major or the
+  packed `(B, S, H*D)` a caller will convert with
+  `fused_msda_head_major_value`. The check then charges the producer's output
+  (`head_major_value_spec`), which pads each head's keys to a multiple of 32 and
+  uses `32 * D * 2`-byte pages, not the packed value.
+
+The answer reflects the allocator's current state, so call it right before the
+op and do not cache it.
+
+### 2.5 Head-major producer — `fused_msda_head_major_value`
+
+```python
+hm = ttnn.experimental.fused_msda_head_major_value(
+    value,                      # (B, S, H*D) TILE bf16, INTERLEAVED, 32x32 tiles
+    num_heads,                  # H
+    *,
+    memory_config=None,         # None keeps value's
+)
+# -> (B, H, ceil(S/32), 32*D) ROW_MAJOR bf16
+```
+
+One output page is one `(b, h, 32-key block)`: the `D / 32` input tiles of that
+tile row and head, untilized. A reader fetches them, compute untilizes one page
+at a time, and a writer stores the 32 rows as one page; pages are split over all
+cores. Requirements: `D % 32 == 0` (a head owns whole tiles), and tile padding
+only up to a whole tile of `S`, as `ttnn.linear` and `ttnn.to_layout` produce,
+because tile ids come from the logical shape. Rows past `S` in a head's last page
+hold the input's tile padding; `fused_msda` never reads them. Pass the result
+with `value_layout="head_major"`.
+
+Building the same layout from existing ops (pad, reshape, permute, untilize,
+re-page) costs 12-16 ms for BEVFormer-base's spatial cross-attention value,
+against about 260 us for this op, so the layout only pays off with it.
 
 ---
 
@@ -515,11 +564,16 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (geometry, reduc
    (`r * 4*D*2 + c * D*2`), skip out-of-bounds corners and rows `>= v_rows`,
    barrier, and push once. The reader copies no value data; with the
    split gather it does this for rows `[0, SPLIT_ROW)` only and waits for the writer's
-   rows before the push. Other `D`:
+   rows before the push. With head-major `value`, a horizontal pair (NW+NE or
+   SW+SE) whose two corners are in bounds and in the same page is one `2*D*2`-byte
+   read into its two adjacent slots; a pair that straddles a page (`x0` is key 31
+   of its page) or has one corner out of bounds is read a corner at a time. Other `D`:
    for each corner, read the sticks into `value_scratch`, scatter them into
-   `n_d_tiles` tile rows, skip the rest, and push. The stick is at
-   page `(b*S + level_start[l] + cy*W_l + cx) * H + h` (canonical) or
-   `b*S + ...` at byte offset `h*D*2` (packed).
+   `n_d_tiles` tile rows, skip the rest, and push; this path reads head-major
+   `value` a corner at a time too. `fused_msda_gather::value_loc` gives each
+   key's page: with `s = level_start[l] + cy*W_l + cx`, page
+   `(b*S + s) * H + h` (canonical), `b*S + s` at byte offset `h*D*2` (packed), or
+   `(b*H + h) * ceil(S/32) + s/32` at byte offset `(s % 32)*D*2` (head-major).
 
 The two readers differ only in which staged pair step 2 ships as the primary
 and which as the secondary (column 16 of the geometry tiles on V2), and only V2
@@ -589,7 +643,7 @@ Wormhole keeps the reader-only gather; the split has not been measured there.
 | dtype | `bfloat16` (all tensors); `reference_points` may be `float32` | tile format of the FPU path; a float32 reference point keeps all 24 significant bits into `px` (whole into the SFPU per point, split exactly into three bf16 tiles for the FPU when tiled), where a bf16 point in [0, 1] would move in steps of up to 0.8 px at `W = 200` |
 | layout | `ROW_MAJOR` (all tensors) | reader/writer address by stick |
 | memory | `INTERLEAVED` only | `TensorAccessor` page indexing |
-| `D` | positive multiple of 16; with packed `value` and `H > 1`, `D*2` a multiple of `value`'s buffer alignment | a `D`-stick is scattered across `ceil(D/32)` tiles in 16-value face halves. The writer's per-head output offset `h*D*2` is a multiple of 32 B, which every architecture's NoC write alignment divides (static_asserted in the writer), so any `H` works for the output. Packed `value` reads each head at `h*D*2` within one page, which must be a legal NoC read address: on Blackhole, whose DRAM alignment is 64 B, every `D % 32 == 16` (16, 48, ...) is rejected in DRAM. Validated in the program factory, not assumed. |
+| `D` | positive multiple of 16; with packed `value` and `H > 1`, and with head-major `value` at any `H`, `D*2` a multiple of `value`'s buffer alignment; `D % 32 == 0` to build head-major `value` with `fused_msda_head_major_value` | a `D`-stick is scattered across `ceil(D/32)` tiles in 16-value face halves. The writer's per-head output offset `h*D*2` is a multiple of 32 B, which every architecture's NoC write alignment divides (static_asserted in the writer), so any `H` works for the output. Packed `value` reads each head at `h*D*2` within one page, and head-major `value` each key at `(s % 32)*D*2`, which must be a legal NoC read address: on Blackhole, whose DRAM alignment is 64 B, every `D % 32 == 16` (16, 48, ...) is rejected in DRAM. Validated in the program factory, not assumed. The producer needs a head to own whole tiles. |
 | `L` | `1 <= L <= 8` | per-level geometry is held in a fixed reader array |
 | `H_l`, `W_l` | `<= 256` | the largest extent the op is tested at. The corner word's index field holds extents up to 361, and the tiled geometry falls back to the per-point path for an extent that is not bf16-exact. Rejected in `derive_shapes`, pinned by `test_fused_msda_rejects_spatial_shape_beyond_extent_limit` |
 | `Q`, `P`, `H`, `B` | any positive value | `Q % 32 != 0` handled by `v_rows` |
@@ -632,7 +686,10 @@ ttnn/cpp/ttnn/operations/experimental/fused_msda/
 └── device/
     ├── fused_msda_device_operation.hpp / .cpp  attrs, validation, output spec
     ├── fused_msda_program_factory.cpp          CBs, kernels, work split, RT args (rebuilt on cache hits)
+    ├── head_major_value_device_operation.hpp / .cpp  producer: validation, output spec (head_major_value_spec)
+    ├── head_major_value_program_factory.cpp    producer: CBs, kernels, page split
     └── kernels/
+        ├── msda_value_layout.hpp               value layouts and head-major paging, shared with the host
         ├── msda_tile_layout.hpp                tile face-row byte offsets
         ├── msda_corner_word.hpp                the corner word compute hands the gathers
         ├── msda_tiled_geometry.hpp             tiled geometry layout, shared with the factory
@@ -644,7 +701,8 @@ ttnn/cpp/ttnn/operations/experimental/fused_msda/
         ├── dataflow/writer_msda.cpp
         ├── dataflow/msda_gather_rows.hpp       row-range corner gather, shared by reader and writer
         ├── compute/msda_geometry.hpp           sampling geometry (SFPU; FPU matmuls when tiled)
-        └── compute/compute_msda.cpp
+        ├── compute/compute_msda.cpp
+        └── head_major/{reader,compute,writer}_head_major_value.cpp   the producer's kernels
 
 tests/ttnn/unit_tests/operations/experimental/test_fused_msda.py
 models/experimental/bevformer/tests/pcc/test_fused_msda.py
@@ -680,10 +738,22 @@ packed rank-4, `(bs, Q, heads, levels*points)`.
 The module passes raw pixel offsets; the op's per-level constants account for
 `scale_l`.
 
+Every BEVFormer configuration has `D = 32`, so all three callers read `value`
+head-major (`msda_value_layout` in the module picks it whenever `D % 32 == 0`,
+and row-major staging otherwise). In spatial cross-attention and the decoder,
+`TTMSDeformableAttention` hands value_proj's tiled packed output to
+`multi_scale_deformable_attn_fused`, which converts it with
+`fused_msda_head_major_value`.
+Temporal self-attention runs the producer itself, first, so its value takes the
+top of L1, and passes the result with `value_layout="head_major"`. Head-major
+halves the gather's reads for horizontal corner pairs: on BEVFormer-base,
+Blackhole P100, the temporal and spatial fused calls drop by about 30%.
+
 Before each call the module asks `can_use_fused_msda_from_offsets_l1_value`
-(§2.4), with `device_valid_counts` when it passes the counts tensor, and stages
-`value`, and the op's output with it, in L1 when they fit,
-interleaved DRAM otherwise. The gather is bound by the DRAM endpoints' request
+(§2.4), with `device_valid_counts` when it passes the counts tensor and the
+`value_layout` it will use, and stages `value`, and the op's output with it, in
+L1 when they fit, interleaved DRAM otherwise. A value that is already head-major
+is moved like any other. The gather is bound by the DRAM endpoints' request
 rate, so L1 is the fast path.
 
 Numerics are pinned by

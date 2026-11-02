@@ -195,10 +195,14 @@ def test_msda_auto_keeps_value_in_l1_on_large_blackhole(device, monkeypatch, bat
     assert placements == [ttnn.BufferType.L1]
 
 
-def test_msda_auto_falls_back_to_dram(device, monkeypatch, expect_error):
-    """Cover both a conservative capacity fallback and a post-check L1 OOM."""
+# SCA-shaped fallback case: six cameras folded into the batch, value_proj's tiled packed value.
+FALLBACK_NUM_HEADS = 8
+
+
+def _fallback_case(device):
+    """(value, reference_points, sampling_offsets, attention_weights, spatial_shapes) on device."""
     spatial_shapes = torch.tensor([(29, 50), (15, 25), (8, 13), (4, 7)], dtype=torch.long)
-    batch_size, num_queries, num_heads, num_points, embed_dims = 6, 128, 8, 4, 256
+    batch_size, num_queries, num_heads, num_points, embed_dims = 6, 128, FALLBACK_NUM_HEADS, 4, 256
     num_keys = int(spatial_shapes.prod(dim=1).sum().item())
 
     torch.manual_seed(0)
@@ -237,6 +241,27 @@ def test_msda_auto_falls_back_to_dram(device, monkeypatch, expect_error):
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+    return value, reference_points, sampling_offsets, attention_weights, spatial_shapes
+
+
+def _blocked_l1(device, free_per_bank):
+    """An L1 tensor that leaves about ``free_per_bank`` bytes of the largest free block per bank."""
+    l1_view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    tile_bytes = 2048
+    blocker_tiles_per_bank = (l1_view.largest_contiguous_bytes_free_per_bank - free_per_bank) // tile_bytes
+    assert blocker_tiles_per_bank > 0
+    return ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * blocker_tiles_per_bank, 32 * l1_view.num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+
+
+def test_msda_auto_falls_back_to_dram(device, monkeypatch, expect_error):
+    """Cover both a conservative capacity fallback and a post-check L1 OOM."""
+    value, reference_points, sampling_offsets, attention_weights, spatial_shapes = _fallback_case(device)
 
     expected = multi_scale_deformable_attn_fused(
         value,
@@ -333,22 +358,11 @@ def test_msda_auto_falls_back_to_dram(device, monkeypatch, expect_error):
         assert len(staged_values) == 1
         assert not staged_values[0][1].is_allocated()
 
-    l1_view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
-    tile_bytes = 2048
     # The fused program's CBs need ~121 KiB/core here. With 176 KiB free the 95%
     # program-L1 margin leaves ~167 KiB: enough for the CBs alone (value in DRAM),
     # not once the 6.4 MB of L1 value and output are spread over the banks
     # (~59 KiB/bank at 110 banks, more with fewer), so the check must say unsafe.
-    target_free_per_bank = 176 * 1024
-    blocker_tiles_per_bank = (l1_view.largest_contiguous_bytes_free_per_bank - target_free_per_bank) // tile_bytes
-    assert blocker_tiles_per_bank > 0
-    blocker = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, 32 * blocker_tiles_per_bank, 32 * l1_view.num_banks]),
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        device,
-        ttnn.L1_MEMORY_CONFIG,
-    )
+    blocker = _blocked_l1(device, 176 * 1024)
 
     def allocated_per_bank():
         return tuple(
@@ -391,3 +405,182 @@ def test_msda_auto_falls_back_to_dram(device, monkeypatch, expect_error):
         assert allocated_per_bank() == allocated_before_fallback
     finally:
         ttnn.deallocate(blocker)
+
+
+def _round_up(n, multiple):
+    return -(-n // multiple) * multiple
+
+
+def _l1_bytes_per_bank(device, num_pages, page_bytes):
+    """What the fit check charges a ROW_MAJOR interleaved L1 tensor per bank: whole pages per
+    bank at L1 alignment, rounded up to the allocator's DRAM-alignment granule."""
+    num_banks = ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks
+    granule = ttnn.get_dram_alignment()
+    per_bank = -(-num_pages // num_banks) * _round_up(page_bytes, ttnn.get_l1_alignment())
+    return _round_up(max(per_bank, granule), granule)
+
+
+def test_msda_l1_check_charges_head_major_staging(device):
+    """With value_layout="head_major" the fit check charges what the producer allocates.
+
+    The producer's output pads each head's keys to a multiple of 32 in 32*D*2-byte pages, so
+    per bank it differs from the packed (B, S, H*D) value the "auto" check charges. Free L1 is
+    set in 64-byte steps with a ROW_MAJOR blocker, and for each layout the smallest free size
+    the check admits is found by bisection. Both checks charge the same output and circular
+    buffers against 95% of the free span, so the two thresholds must differ by the value's
+    charge difference / 0.95. At the head-major threshold the real call must then run in L1.
+    """
+    value, reference_points, sampling_offsets, attention_weights, spatial_shapes = _fallback_case(device)
+    batch, num_keys, channels = value.shape
+    head_dim = channels // FALLBACK_NUM_HEADS
+    packed_bytes = _l1_bytes_per_bank(device, batch * num_keys, channels * 2)
+    head_major_bytes = _l1_bytes_per_bank(device, batch * FALLBACK_NUM_HEADS * -(-num_keys // 32), 32 * head_dim * 2)
+    charge_gap = head_major_bytes - packed_bytes
+    assert charge_gap > 0, (head_major_bytes, packed_bytes)
+
+    l1_view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    num_banks = l1_view.num_banks
+    unblocked_free = l1_view.largest_contiguous_bytes_free_per_bank
+    step = 64
+
+    def fits_with_free(free_per_bank, value_layout):
+        pages_per_bank = (unblocked_free - free_per_bank) // step
+        # One 64-byte page per row, pages_per_bank of them in every bank.
+        blocker = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([pages_per_bank * num_banks, step // 2]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            device,
+            ttnn.L1_MEMORY_CONFIG,
+        )
+        try:
+            return ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
+                value,
+                reference_points,
+                sampling_offsets,
+                attention_weights,
+                spatial_shapes.tolist(),
+                reference_mode="pillar",
+                value_layout=value_layout,
+            )
+        finally:
+            ttnn.deallocate(blocker)
+
+    def admitted_from(value_layout):
+        lo, hi = 64 * 1024 // step, 384 * 1024 // step
+        assert not fits_with_free(lo * step, value_layout) and fits_with_free(hi * step, value_layout)
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if fits_with_free(mid * step, value_layout):
+                hi = mid
+            else:
+                lo = mid
+        return hi * step
+
+    auto_threshold = admitted_from("auto")
+    head_major_threshold = admitted_from("head_major")
+    measured_gap = head_major_threshold - auto_threshold
+    expected_gap = charge_gap * 100 / 95
+    assert abs(measured_gap - expected_gap) <= 2 * step, (measured_gap, expected_gap, charge_gap)
+
+    pages_per_bank = (unblocked_free - head_major_threshold) // step
+    blocker = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([pages_per_bank * num_banks, step // 2]),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        output = multi_scale_deformable_attn_fused(
+            value,
+            reference_points,
+            sampling_offsets,
+            attention_weights,
+            spatial_shapes,
+            value_layout="head_major",
+            value_memory="l1",
+        )
+        assert output.memory_config() == ttnn.L1_MEMORY_CONFIG
+        ttnn.deallocate(output)
+    finally:
+        ttnn.deallocate(blocker)
+
+
+@pytest.mark.parametrize(
+    "l1_failure",
+    [
+        "Out of Memory: injected L1 output allocation failure",
+        "Statically allocated circular buffers in program 1 clash with L1 buffers on core range [injected]",
+    ],
+    ids=["oom", "cb_clash"],
+)
+def test_msda_auto_falls_back_to_dram_through_head_major_producer(device, monkeypatch, l1_failure):
+    """The head-major path retries in DRAM after an L1 failure, frees what it staged, and matches packed."""
+    value, reference_points, sampling_offsets, attention_weights, spatial_shapes = _fallback_case(device)
+    call = partial(
+        multi_scale_deformable_attn_fused, value, reference_points, sampling_offsets, attention_weights, spatial_shapes
+    )
+
+    expected = call(value_memory="dram")
+    expected_torch = ttnn.to_torch(expected)
+    ttnn.deallocate(expected)
+
+    fused_op = ttnn.experimental.fused_msda_from_offsets
+    producer = ttnn.experimental.fused_msda_head_major_value
+    attempted = []
+    staged_values = []
+
+    def record_producer(tensor, num_heads, **kwargs):
+        staged = producer(tensor, num_heads, **kwargs)
+        staged_values.append((kwargs["memory_config"], staged))
+        return staged
+
+    def fail_in_l1(staged, *args, **kwargs):
+        attempted.append((kwargs["memory_config"], kwargs["value_layout"]))
+        if kwargs["memory_config"] == ttnn.L1_MEMORY_CONFIG:
+            raise RuntimeError(l1_failure)
+        return fused_op(staged, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ttnn.experimental, "can_use_fused_msda_from_offsets_l1_value", lambda *args, **kwargs: True)
+        patch.setattr(ttnn.experimental, "fused_msda_head_major_value", record_producer)
+        patch.setattr(ttnn.experimental, "fused_msda_from_offsets", fail_in_l1)
+        actual = call(value_layout="head_major", value_memory="auto")
+
+    assert attempted == [(ttnn.L1_MEMORY_CONFIG, "head_major"), (ttnn.DRAM_MEMORY_CONFIG, "head_major")]
+    assert [memory_config for memory_config, _ in staged_values] == [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG]
+    assert all(not staged.is_allocated() for _, staged in staged_values)
+    assert actual.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    torch.testing.assert_close(ttnn.to_torch(actual), expected_torch, rtol=0, atol=0)
+    ttnn.deallocate(actual)
+
+
+def test_msda_head_major_value_follows_value_memory(device, monkeypatch):
+    """A value already head-major is moved to the memory value_memory selects, like any other value."""
+    value, reference_points, sampling_offsets, attention_weights, spatial_shapes = _fallback_case(device)
+    head_major = ttnn.experimental.fused_msda_head_major_value(
+        value, FALLBACK_NUM_HEADS, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    placements = []
+    fused_op = ttnn.experimental.fused_msda_from_offsets
+
+    def spy(staged, *args, **kwargs):
+        placements.append(staged.memory_config().buffer_type)
+        return fused_op(staged, *args, **kwargs)
+
+    monkeypatch.setattr(ttnn.experimental, "fused_msda_from_offsets", spy)
+    output = multi_scale_deformable_attn_fused(
+        head_major,
+        reference_points,
+        sampling_offsets,
+        attention_weights,
+        spatial_shapes,
+        value_layout="head_major",
+        value_memory="dram",
+    )
+    assert placements == [ttnn.BufferType.DRAM]
+    assert head_major.is_allocated() and head_major.memory_config() == ttnn.L1_MEMORY_CONFIG
+    assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    ttnn.deallocate(output)
+    ttnn.deallocate(head_major)

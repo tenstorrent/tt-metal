@@ -14,6 +14,8 @@
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/experimental/fused_msda/device/kernels/msda_value_layout.hpp"
+#include "ttnn/operations/experimental/fused_msda/device/head_major_value_device_operation.hpp"
 
 namespace ttnn::operations::experimental::fused_msda {
 
@@ -100,27 +102,51 @@ MSDAShapes derive_shapes(
         total_keys += h * w;
     }
 
-    // ---- value: (B, S, H, D) or packed (B, S, H*D) ----
+    // ---- value: (B, S, H, D), packed (B, S, H*D) or head-major (B, H, ceil(S/32), 32*D) ----
     // Packed is the layout a Linear over embed_dims emits; D is recovered from
-    // attention_weights' head dim after that tensor is parsed below.
+    // attention_weights' head dim after that tensor is parsed below. Head-major
+    // holds 32 consecutive keys of one head per page, so the row-major gather
+    // (D % 32 == 0) fetches a horizontal corner pair in one read; the last page
+    // of a head is padded. The caller declares head-major: its rank-4 shape can
+    // coincide with a canonical one, so it is never inferred.
+    using namespace fused_msda_value_layout;
     const auto& vs = value.logical_shape();
-    TT_FATAL(
-        vs.rank() == 4 || vs.rank() == 3,
-        "fused_msda: value rank must be 4 (B, S, H, D) or 3 (B, S, H*D), got shape {}",
-        vs);
     s.batch = vs[0];
-    s.num_keys = vs[1];
-    s.value_packed = vs.rank() == 3;
     TT_FATAL(s.batch > 0, "fused_msda: batch must be > 0");
-    TT_FATAL(
-        s.num_keys == total_keys,
-        "fused_msda: value's S dim ({}) must equal sum of H_l * W_l over spatial_shapes ({})",
-        s.num_keys,
-        total_keys);
-    if (!s.value_packed) {
-        s.num_heads = vs[2];
-        s.head_dim = vs[3];
+    if (attrs.value_layout == MSDAValueLayout::HeadMajor) {
+        s.value_layout = ValueLayout::HeadMajor;
+        TT_FATAL(
+            vs.rank() == 4 && static_cast<uint32_t>(vs[2]) == head_major_pages_per_head(total_keys) &&
+                vs[3] % HEAD_MAJOR_KEYS_PER_PAGE == 0,
+            "fused_msda: value_layout=\"head_major\" but value {} is not head-major (B, H, {}, {}*D) for "
+            "S = sum of H_l * W_l = {}",
+            vs,
+            head_major_pages_per_head(total_keys),
+            HEAD_MAJOR_KEYS_PER_PAGE,
+            total_keys);
+        s.num_keys = total_keys;
+        s.num_heads = vs[1];
+        s.head_dim = vs[3] / HEAD_MAJOR_KEYS_PER_PAGE;
         TT_FATAL(s.num_heads > 0, "fused_msda: num_heads must be > 0");
+    } else {
+        TT_FATAL(
+            vs.rank() == 4 || vs.rank() == 3,
+            "fused_msda: value rank must be 4 (B, S, H, D) or 3 (B, S, H*D), got shape {}; pass "
+            "value_layout=\"head_major\" for (B, H, ceil(S/32), 32*D)",
+            vs);
+        s.value_layout = vs.rank() == 3 ? ValueLayout::Packed : ValueLayout::Canonical;
+        s.num_keys = vs[1];
+        TT_FATAL(
+            s.num_keys == total_keys,
+            "fused_msda: value's S dim ({}) must equal sum of H_l * W_l over spatial_shapes ({}){}",
+            s.num_keys,
+            total_keys,
+            vs.rank() == 4 ? "; pass value_layout=\"head_major\" if value is head-major (B, H, ceil(S/32), 32*D)" : "");
+        if (s.value_layout == ValueLayout::Canonical) {
+            s.num_heads = vs[2];
+            s.head_dim = vs[3];
+            TT_FATAL(s.num_heads > 0, "fused_msda: num_heads must be > 0");
+        }
     }
 
     // ---- attention_weights: (B, Q, H, L, P) or (B, Q, H, L*P) ----
@@ -134,7 +160,7 @@ MSDAShapes derive_shapes(
         "fused_msda: attention_weights batch ({}) != value batch ({})",
         as[0],
         s.batch);
-    if (s.value_packed) {
+    if (s.value_layout == ValueLayout::Packed) {
         s.num_heads = as[2];
         TT_FATAL(s.num_heads > 0, "fused_msda: num_heads must be > 0");
         TT_FATAL(
@@ -430,6 +456,7 @@ ttnn::Tensor fused_msda(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     bool align_corners,
     bool locations_in_grid_space,
+    ttnn::experimental::MSDAValueLayout value_layout,
     const std::optional<MemoryConfig>& memory_config) {
     auto attrs = OperationType::operation_attributes_t{
         .output_memory_config = memory_config.value_or(value.memory_config()),
@@ -438,6 +465,7 @@ ttnn::Tensor fused_msda(
         .locations_in_grid_space = locations_in_grid_space,
         .from_offsets = false,
         .reference_mode = ttnn::experimental::MSDAReferenceMode::Level,
+        .value_layout = value_layout,
     };
     auto args = OperationType::tensor_args_t{
         .value = value,
@@ -457,6 +485,7 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
+    ttnn::experimental::MSDAValueLayout value_layout,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::vector<uint32_t>>& num_valid_queries,
     const std::optional<Tensor>& num_valid_queries_tensor) {
@@ -470,6 +499,7 @@ ttnn::Tensor fused_msda_from_offsets(
         .locations_in_grid_space = false,
         .from_offsets = true,
         .reference_mode = reference_mode,
+        .value_layout = value_layout,
         .device_valid_counts = num_valid_queries_tensor.has_value(),
     };
     if (num_valid_queries.has_value()) {
@@ -499,7 +529,8 @@ bool can_use_fused_msda_from_offsets_l1_value(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
-    bool device_valid_counts) {
+    bool device_valid_counts,
+    ttnn::experimental::MSDAValueLayout value_layout) {
     using tt::tt_metal::BufferType;
     using tt::tt_metal::Layout;
     using tt::tt_metal::PageConfig;
@@ -508,6 +539,11 @@ bool can_use_fused_msda_from_offsets_l1_value(
     using tt::tt_metal::TensorSpec;
 
     const MemoryConfig l1_memory_config{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
+    // A packed value the caller will turn head-major with
+    // fused_msda_head_major_value: shapes and circular buffers follow from the
+    // packed value, but what lands in L1 is the producer's output.
+    const bool produced_head_major =
+        value_layout == ttnn::experimental::MSDAValueLayout::HeadMajor && value.logical_shape().rank() == 3;
     auto attrs = OperationType::operation_attributes_t{
         .output_memory_config = l1_memory_config,
         .spatial_shapes_hw = flatten_spatial_shapes(spatial_shapes),
@@ -515,6 +551,7 @@ bool can_use_fused_msda_from_offsets_l1_value(
         .locations_in_grid_space = false,
         .from_offsets = true,
         .reference_mode = reference_mode,
+        .value_layout = produced_head_major ? ttnn::experimental::MSDAValueLayout::Auto : value_layout,
         .device_valid_counts = device_valid_counts,
     };
     auto args = OperationType::tensor_args_t{
@@ -524,7 +561,12 @@ bool can_use_fused_msda_from_offsets_l1_value(
         .reference_points = reference_points,
         .sampling_offsets = sampling_offsets,
     };
-    const auto shapes = derive_shapes(attrs, args, /*require_value_row_major=*/false);
+    auto shapes = derive_shapes(attrs, args, /*require_value_row_major=*/false);
+    if (produced_head_major) {
+        // The packed and head-major parses agree on every dimension; the circular
+        // buffers below are planned for the layout the op will actually read.
+        shapes.value_layout = ttnn::operations::experimental::fused_msda::ValueLayout::HeadMajor;
+    }
 
     if (hybrid_allocator_enabled()) {
         return false;
@@ -536,11 +578,16 @@ bool can_use_fused_msda_from_offsets_l1_value(
         return false;
     }
 
-    // A value already in ROW_MAJOR L1 is part of the allocator state below;
-    // counting it again would double-charge it.
+    // The producer's output is a new tensor, always charged. A value already in
+    // ROW_MAJOR L1 is part of the allocator state below; counting it again
+    // would double-charge it.
     uint64_t pending_tensor_bytes = 0;
-    const bool value_is_staged = value.layout() == Layout::ROW_MAJOR && value.memory_config() == l1_memory_config;
-    if (!value_is_staged) {
+    if (produced_head_major) {
+        pending_tensor_bytes += allocation_bytes_per_bank(
+            ttnn::operations::experimental::fused_msda::head_major_value_spec(
+                value.logical_shape(), shapes.num_heads, l1_memory_config),
+            allocator);
+    } else if (!(value.layout() == Layout::ROW_MAJOR && value.memory_config() == l1_memory_config)) {
         const TensorSpec value_spec(
             value.logical_shape(), TensorLayout(value.dtype(), PageConfig(Layout::ROW_MAJOR), l1_memory_config));
         pending_tensor_bytes += allocation_bytes_per_bank(value_spec, allocator);
