@@ -232,6 +232,15 @@ def grid_height_sharded(device, shard_tiles, channels):
     )
 
 
+def conv_output_size(height, width, kernel_size, stride, padding):
+    """The output height and width of a conv on a ``height x width`` input, at dilation (1, 1), the
+    only one TTConv2D and TTCameraBottleneck take."""
+    return tuple(
+        (size + 2 * pad - kernel) // step + 1
+        for size, kernel, step, pad in zip((height, width), kernel_size, stride, padding)
+    )
+
+
 def is_pointwise(conv):
     """Whether ``conv``, anything with a conv's geometry, is a 1x1 conv without padding or groups: a
     matmul over channels of its input, subsampled at its stride."""
@@ -341,8 +350,9 @@ class TTConv2D:
         self.input_height = conv.input_height
         self.input_width = conv.input_width
         self.batch_size = conv.batch_size
-        self.output_height = (self.input_height + 2 * self.padding[0] - self.kernel_size[0]) // self.stride[0] + 1
-        self.output_width = (self.input_width + 2 * self.padding[1] - self.kernel_size[1]) // self.stride[1] + 1
+        self.output_height, self.output_width = conv_output_size(
+            self.input_height, self.input_width, self.kernel_size, self.stride, self.padding
+        )
 
         assert not (
             dram_activation and self.is_pointwise and output_layout == ttnn.ROW_MAJOR_LAYOUT

@@ -30,9 +30,8 @@ from models.experimental.bevformer.model_config import (
     tt_fpn_kwargs,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tt.tt_common import is_pointwise
+from models.experimental.bevformer.tt.tt_common import conv_output_size, is_pointwise
 from models.experimental.bevformer.tt.tt_resnet import TTResNet
-
 
 # --- Shared helpers ---------------------------------------------------------------------------
 
@@ -315,8 +314,7 @@ def create_fpn_parameters(model, input_tensors, tt_kwargs=None):
     for fpn_conv in model.fpn_convs[len(level_shapes) :]:
         shapes.append((batch, height, width))
         conv = fpn_conv.conv
-        height = (height + 2 * conv.padding[0] - conv.kernel_size[0]) // conv.stride[0] + 1
-        width = (width + 2 * conv.padding[1] - conv.kernel_size[1]) // conv.stride[1] + 1
+        height, width = conv_output_size(height, width, conv.kernel_size, conv.stride, conv.padding)
 
     def conv_args(conv_module, shape):
         conv = conv_module.conv
