@@ -78,9 +78,22 @@ FORCE_INLINE void trid_ring_gather(
     uint32_t hi,
     uint32_t k_row_bytes,
     uint32_t page_offset) {
-    constexpr uint32_t D = RingDepth;
     const UnicastEndpoint local_l1;
     const uint32_t cnt = hi - lo;
+    if constexpr (RingDepth == 0) {
+        // plain issue loop + one barrier (no transaction ids): the least per-row software overhead
+        for (uint32_t i = 0; i < cnt; ++i) {
+            const uint32_t p = lo + i;
+            const uint32_t page =
+                tt::block_cyclic::logical_to_physical_page<BlockCyclic, ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(
+                    idx_ptr[base + p]);
+            noc.async_read(
+                kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * k_row_bytes});
+        }
+        noc.async_read_barrier();
+        return;
+    }
+    constexpr uint32_t D = RingDepth == 0 ? 1 : RingDepth;
     for (uint32_t i = 0; i < cnt; ++i) {
         const uint32_t p = lo + i;
         const uint32_t trid = (i % D) + 1;

@@ -185,7 +185,7 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     writer_ct += _acc(out) + _acc(kv) + _acc(sink) + _acc(q)
     fid = getattr(ckc, "math_fidelity", ttnn.MathFidelity.HiFi4)
     approx = bool(getattr(ckc, "math_approx_mode", False))
-    fp32 = bool(getattr(ckc, "fp32_dest_acc_en", True))
+    fp32 = bool(getattr(ckc, "fp32_dest_acc_en", True)) and os.environ.get("SS_FP32", "1") == "1"
     dst_size = 4 if fp32 else 8
     qsb = 1
     for d in range(min(Sqt, dst_size), 0, -1):
