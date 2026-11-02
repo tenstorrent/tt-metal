@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // qkv_proj_heads_rope compute: per block, seed the Float32 partials with the row-broadcast bias, project_block
-// (matmul_block over K-blocks 0..n-2 of K' = hidden, L1-accumulating onto the seed from K-block 0), then the
+// (K-blocks 0..n-2 of K' = hidden, L1-accumulating onto the seed from K-block 0), then the
 // last K-block one row at a time, each row's
 // epilogue following it: rotate_block on q/k cores (two DEST-accumulated FPU muls per output tile, raw
 // whole-tile phase-major ELWMUL from tile_src_mul.hpp: 1.95x over mul_tiles, bit-identical),
@@ -21,6 +21,12 @@
 // block_m packs; no eltwise_chain element packs one DEST tile to several CB tiles. It runs while math waits
 // for the first x / W K-block.
 //
+// Perf 2 (measured, 8x512: 94.9 -> 92.1 us, bit-identical): every matmul call goes through mm_fused_mop.hpp
+// (one math MOP per call instead of one per tile product, 52.4 -> 49.3 cycles per product at HiFi3), so
+// K-blocks 0..n-2 are a raw K-loop instead of compute_kernel_lib::matmul_block: the helper's math is
+// ckernel::matmul_block, which has no fused-MOP mode (a raw K-loop with the stock LLK measured flat vs the
+// helper: 95.3 vs 94.9 us).
+//
 // Raw calls: pack_reconfig_l1_acc(0/1) around the per-row last K-block - no helper exposes the L1-acc
 // toggle; the epilogue setup (reconfig + mul_init + tile_src_mul_init / copy_init) once per row (the last-K
 // matmul init between rows reprograms unpack and math), which the convert chain's InitReconfigOwner::Caller
@@ -35,10 +41,10 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "tile_src_mul.hpp"
+#include "mm_fused_mop.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_activation_block = get_compile_time_arg_val(0);
@@ -80,8 +86,7 @@ void kernel_main() {
     DataflowBuffer partials_dfb(cb_matmul_partials);
     DataflowBuffer out_dfb(cb_out_tiles);
 
-    static_assert(num_k_blocks >= 2, "the last K-block is split off the helper's K-loop");
-    constexpr auto shape = MatmulBlockShape::of(block_m / sb_h, n_tiles / sb_w, sb_h, sb_w, k_block, num_k_blocks - 1);
+    static_assert(num_k_blocks >= 2, "the last K-block is split off the block-wide K-loop");
     // Last K-block runs one row at a time: widest divisor of n_tiles that fits the host's DEST subblock.
     constexpr uint32_t row_sb_w = [] {
         uint32_t w = sb_h * sb_w < n_tiles ? sb_h * sb_w : n_tiles;
@@ -177,18 +182,18 @@ void kernel_main() {
     auto last_k_row = [&](uint32_t row) {
         reconfig_data_format(cb_weight_block, cb_activation_block);
         ckernel::matmul_block_init(cb_activation_block, cb_weight_block, false, row_sb_w, 1, k_block);
+        mmk::fused_init(row_sb_w, 1);
         pack_reconfig_data_format(cb_matmul_partials);
         pack_reconfig_l1_acc(1);
         for (uint32_t col = 0; col < n_tiles; col += row_sb_w) {
             tile_regs_acquire();
             for (uint32_t inner = 0; inner < k_block; ++inner) {
-                ckernel::matmul_block(
+                mmk::fused_matmul_block(
                     cb_activation_block,
                     cb_weight_block,
                     row * k_block + inner,
                     inner * n_tiles + col,
                     0,
-                    false,
                     row_sb_w,
                     1,
                     k_block);
@@ -201,6 +206,46 @@ void kernel_main() {
             tile_regs_release();
         }
         partials.push_back(n_tiles);
+        pack_reconfig_l1_acc(0);
+    };
+
+    // K-blocks 0..n-2 of the block, accumulating onto the seed in L1 (init once per block, not per subblock).
+    auto block_k_loop = [&]() {
+        reconfig_data_format(cb_weight_block, cb_activation_block);
+        pack_reconfig_data_format(cb_matmul_partials);
+        ckernel::matmul_block_init(cb_activation_block, cb_weight_block, false, sb_w, sb_h, k_block);
+        mmk::fused_init(sb_w, sb_h);
+        pack_reconfig_l1_acc(1);
+        for (uint32_t kb = 0; kb + 1 < num_k_blocks; ++kb) {
+            activation.wait_front(act_block_tiles);
+            weight.wait_front(weight_block_tiles);
+            for (uint32_t m = 0; m < block_m / sb_h; ++m) {
+                for (uint32_t n = 0; n < n_tiles / sb_w; ++n) {
+                    tile_regs_acquire();
+                    for (uint32_t inner = 0; inner < k_block; ++inner) {
+                        mmk::fused_matmul_block(
+                            cb_activation_block,
+                            cb_weight_block,
+                            m * sb_h * k_block + inner,
+                            inner * n_tiles + n * sb_w,
+                            0,
+                            sb_w,
+                            sb_h,
+                            k_block);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t r = 0; r < sb_h; ++r) {
+                        for (uint32_t c = 0; c < sb_w; ++c) {
+                            pack_tile<true>(r * sb_w + c, cb_matmul_partials, (m * sb_h + r) * n_tiles + n * sb_w + c);
+                        }
+                    }
+                    tile_regs_release();
+                }
+            }
+            activation.pop_front(act_block_tiles);
+            weight.pop_front(weight_block_tiles);
+        }
         pack_reconfig_l1_acc(0);
     };
 
@@ -247,25 +292,9 @@ void kernel_main() {
             seed_partials();
         }
         {
-            // Occupancy: matmul_block waits per K-block on x / W inside the helper.
+            // Occupancy: waits per K-block on x / W inside.
             MaybeDeviceZoneScope("compute_matmul");
-            matmul_block<
-                false,
-                true,
-                LastBlockTarget::Interm,
-                OutputCBLayout::TileRowMajor,
-                matmul_config::InitMode::Short,
-                InputPolicy::WaitAndPopPerKBlock,
-                InputPolicy::WaitAndPopPerKBlock,
-                NoPostCompute,
-                NoPreKBlock,
-                NoPostKBlock,
-                0,
-                NoKBlockInnerDimFn,
-                NoIn0Source,
-                NoIn1BaseOffset,
-                true,
-                true>(activation, weight, partials, partials, shape, {}, {}, n_tiles, n_tiles);
+            block_k_loop();
         }
 
         // Last K-block interleaved with the epilogue: matmul row r + LAST_K_LEAD, then the epilogue of row r.
