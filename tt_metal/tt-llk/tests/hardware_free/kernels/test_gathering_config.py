@@ -370,15 +370,27 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
     """With ENABLE_GATHERING and DISABLE_SFPLOADMACRO, _calculate_where_'s plain-SFPLOAD
     record must sit inside disable_gathering()/enable_gathering() like its two siblings.
     """
-    from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+    from helpers.llk_params import (
+        ApproximationMode,
+        DestAccumulation,
+        MathOperation,
+        PerfRunType,
+        Transpose,
+    )
     from helpers.test_variant_parameters import (
         APPROX_MODE,
         DEST_SYNC,
         DISABLE_SRC_ZERO_FLAG,
+        LOOP_FACTOR,
         NUM_BLOCKS,
+        NUM_FACES,
         NUM_TILES_IN_BLOCK,
+        PERF_RUN_TYPE,
         SFPU_TERNARY_OP,
         SFPU_TERNARY_SCALAR,
+        TILE_COUNT,
+        UNPACK_TRANS_FACES,
+        UNPACK_TRANS_WITHIN_FACE,
     )
 
     # bf16 is the LO16 where path; the record is the same for every supported format.
@@ -399,6 +411,12 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
             APPROX_MODE(ApproximationMode.No),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
+            TILE_COUNT(tile_cnt_A),
+            LOOP_FACTOR(1),
+            NUM_FACES(num_faces=4),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
         ],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
