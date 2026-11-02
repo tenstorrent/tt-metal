@@ -11,6 +11,7 @@
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -50,8 +51,14 @@ bool has_input_window(const UpdatePaddedKvCacheDeviceOperation::operation_attrib
     return args.input_row_offset != 0 || written_input_rows(args, input_seq) != input_seq;
 }
 
-std::optional<TensorSpec> optional_spec(const std::optional<Tensor>& tensor) {
-    return tensor.has_value() ? std::optional<TensorSpec>{tensor->tensor_spec()} : std::nullopt;
+// A tensor's key as Metal 2.0 matches it under match_padded_shape_only: its whole TensorLayout (Alignment
+// included) plus its padded shape. An absent tensor keys as nullopt, so presence is keyed too.
+std::optional<std::uint64_t> padded_key(const std::optional<Tensor>& tensor) {
+    if (!tensor.has_value()) {
+        return std::nullopt;
+    }
+    return tt::tt_metal::experimental::hash_tensorspec_with_relaxation(
+        tensor->tensor_spec(), {.match_padded_shape_only = true});
 }
 
 // Window offset in page-rows. A windowed call is a plain page copy (no rope / scales), so a page-row is one token
@@ -541,21 +548,25 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
     // slot_idx and kv_actual_global are NEVER hashed on either path (metadata: read on-device; scalar:
     // common runtime args patched on cache hits), so successive users/chunks reuse the cached program.
     // The metadata-vs-scalar choice DOES change the program (compile args, common args, which kernel
-    // path compiles); hashing each metadata tensor's optional TensorSpec keeps the two variants
+    // path compiles); keying each metadata tensor's presence keeps the two variants
     // distinct (the slot_idx and kv_actual_global tensors are always present together).
     // layer_idx IS hashed: it takes only num_layers distinct values, so one program per layer is reused
     // across users/chunks. num_layers, cluster_axis and tp_axis stay IN: all structural — they govern
     // the cache slot linearization and which mesh dims are sp/tp — not per-call data.
     const auto& cache = tensor_args.cache;
     const auto& input = tensor_args.input;
-    // Every tensor's whole TensorSpec is keyed. The full padded shapes, not just their volumes, matter:
+    // Every tensor is keyed as Metal 2.0 matches it under match_padded_shape_only: its whole TensorLayout
+    // plus its padded shape. The full padded shapes, not just their volumes, matter:
     // the descriptor derives Wt, input_Ht, cache_HtWt/CHtWt and the work split from specific
     // dimensions, so two differently-shaped tensors that happen to share a volume must NOT collide onto
     // the same cached program. Layout matters too (TILE vs ROW_MAJOR drives the page-unit math), and the
-    // rest of each spec (Alignment included) is keyed because Metal 2.0 requires an exact layout match on
-    // every cache hit (#59915). On the metadata path the writer bakes a TensorAccessorArgs built from
-    // slot_idx into its compile-time args, so the bank table it selects cannot be refreshed on a cache
-    // hit; only the metadata tensors' specs are keyed, never their values.
+    // rest of each layout (Alignment included) is keyed because Metal 2.0 requires it to match exactly on
+    // every cache hit (#59915). Logical shapes are left out: the descriptor works only from padded shapes,
+    // and the logical-shape checks run in validate_runtime_args, on hits too. So a caller whose true
+    // sequence length varies under a fixed padded size still reuses one program.
+    // On the metadata path the writer bakes a TensorAccessorArgs built from slot_idx into its
+    // compile-time args, so the bank table it selects cannot be refreshed on a cache hit; only the
+    // metadata tensors' layouts and shapes are keyed, never their values.
     // has_valid is a writer compile arg, so it is hashed; the VALUE stays out (patched runtime arg).
     return tt::tt_metal::operation::hash_operation<UpdatePaddedKvCacheDeviceOperation>(
         tensor_args.valid_global.has_value() || args.valid_global.has_value(),
@@ -564,13 +575,13 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         args.cluster_axis,
         args.tp_axis.has_value(),
         args.tp_axis.value_or(0),
-        cache.tensor_spec(),
-        input.tensor_spec(),
-        optional_spec(tensor_args.slot_idx),
-        optional_spec(tensor_args.kv_actual_global),
-        optional_spec(tensor_args.valid_global),
-        optional_spec(tensor_args.rope),
-        optional_spec(tensor_args.scales),
+        padded_key(cache),
+        padded_key(input),
+        padded_key(tensor_args.slot_idx),
+        padded_key(tensor_args.kv_actual_global),
+        padded_key(tensor_args.valid_global),
+        padded_key(tensor_args.rope),
+        padded_key(tensor_args.scales),
         // A window's row count shapes the work split; its offset is a runtime arg patched on cache hits.
         has_input_window(args, input.padded_shape()[-2]),
         written_input_rows(args, input.padded_shape()[-2]));

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -195,8 +196,14 @@ void validate_runtime_args(
     }
 }
 
-std::optional<TensorSpec> optional_spec(const std::optional<Tensor>& tensor) {
-    return tensor.has_value() ? std::optional<TensorSpec>{tensor->tensor_spec()} : std::nullopt;
+// A tensor's key as Metal 2.0 matches it under match_padded_shape_only: its whole TensorLayout (Alignment
+// included) plus its padded shape. An absent tensor keys as nullopt, so presence is keyed too.
+std::optional<std::uint64_t> padded_key(const std::optional<Tensor>& tensor) {
+    if (!tensor.has_value()) {
+        return std::nullopt;
+    }
+    return tt::tt_metal::experimental::hash_tensorspec_with_relaxation(
+        tensor->tensor_spec(), {.match_padded_shape_only = true});
 }
 
 }  // namespace
@@ -274,15 +281,16 @@ ZeroPaddedKvCacheDeviceOperation::tensor_return_value_t ZeroPaddedKvCacheDeviceO
 ttsl::hash::hash_t ZeroPaddedKvCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // slot_idx and valid_global are per-call scalars (patched, NOT hashed). layer_idx, num_layers,
-    // cluster_axis, chunk_size_global and pad_align are structural (hashed). Hash the cache's whole
-    // TensorSpec: the full shape drives the program, and the rest of the spec (Alignment included) is
-    // keyed because Metal 2.0 requires an exact layout match on every cache hit (#59915).
+    // cluster_axis, chunk_size_global and pad_align are structural (hashed). Each tensor is keyed as
+    // Metal 2.0 matches it under match_padded_shape_only: the full padded shape drives the program, and
+    // the whole TensorLayout (Alignment included) is keyed because Metal 2.0 requires it to match exactly
+    // on every cache hit (#59915). Logical shapes are left out: the program works only from padded shapes.
     const auto& cache = tensor_args.cache;
     // The tensor-vs-scalar choice changes the reader/writer programs (compile args + which kernel
-    // branch compiles); hashing each metadata tensor's optional TensorSpec keeps the two variants
+    // branch compiles); keying each metadata tensor's presence keeps the two variants
     // distinct. On the metadata path the reader and writer bake a TensorAccessorArgs built from slot_idx
     // into their compile-time args, so the bank table it selects cannot be refreshed on a cache hit.
-    // Only the metadata tensors' specs are keyed, never their values, on either path.
+    // Only the metadata tensors' layouts and shapes are keyed, never their values, on either path.
     return tt::tt_metal::operation::hash_operation<ZeroPaddedKvCacheDeviceOperation>(
         args.layer_idx,
         args.num_layers,
@@ -290,9 +298,9 @@ ttsl::hash::hash_t ZeroPaddedKvCacheDeviceOperation::compute_program_hash(
         args.tp_axis,
         args.chunk_size_global,
         args.pad_align,
-        cache.tensor_spec(),
-        optional_spec(tensor_args.slot_idx),
-        optional_spec(tensor_args.valid_global));
+        padded_key(cache),
+        padded_key(tensor_args.slot_idx),
+        padded_key(tensor_args.valid_global));
 }
 
 tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
