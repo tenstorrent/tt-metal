@@ -474,6 +474,9 @@ class TPGatedDeltaNet:
         # scalar reshapes go. The constants row is the same bf16 -exp(A_log) and dt_bias today's chain uses.
         # QWEN36_1C_GDN_FCONV (with HMI, so CONV_HM/TRIM/HMO too): the fused head-major conv op (ops/conv_hm).
         self._gdn_fconv = self._gdn_hmi and os.environ.get("QWEN36_1C_GDN_FCONV") == "1"
+        # QWEN36_1C_GDN_GATE (with HMO, one user): gated norm + silu(z) gate as one op (ops/gate_hm).
+        self._gdn_gate = self._gdn_hmo and os.environ.get("QWEN36_1C_GDN_GATE") == "1"
+        self._gate_out = None
         if self._gdn_fconv:
             from models.demos.blackhole.bonsai2.tp1.ops.conv_hm.op import alloc_outputs
 
@@ -1822,7 +1825,19 @@ class TPGatedDeltaNet:
         else:
             self._write_recurrent_state_prefix(new_rec, B)
 
-        if self._gdn_hmo:
+        _bf = (ttnn.bfloat16 if getattr(self, "_native_out", None) is not None and B <= tpc.TILE_SIZE
+               and os.environ.get("BONSAI_GDN_GATE_BF16", "1") == "1" else None)
+        if self._gdn_gate:
+            # QWEN36_1C_GDN_GATE: gated norm + silu(z) gate in one op (ops/gate_hm), into a persistent row buffer in
+            # the out-projection's input dtype (bf16 for the exact-ternary out-proj, fp32 otherwise). Allocated on the
+            # first (eager) call, before any trace capture.
+            from models.demos.blackhole.bonsai2.tp1.ops.gate_hm.op import alloc_output, gate_hm
+
+            if self._gate_out is None:
+                self._gate_out = alloc_output(self.mesh, self.value_dim_tp, dtype=_bf or ttnn.float32)
+            gated = gate_hm(o, z, tw["norm_w"], self._gate_out)
+            ttnn.deallocate(o)
+        elif self._gdn_hmo:
             out_n = ttnn.rms_norm(  # o: [Nv, 1, Dv]
                 o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1, compute_kernel_config=_gdn_norm_ckc()
             )
@@ -1835,14 +1850,14 @@ class TPGatedDeltaNet:
             out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
             ttnn.deallocate(out_n)
         # BONSAI_NATIVE: the exact-ternary out-proj reads bf16, so the gate emits it (no separate typecast op)
-        _bf = (ttnn.bfloat16 if getattr(self, "_native_out", None) is not None and B <= tpc.TILE_SIZE
-               and os.environ.get("BONSAI_GDN_GATE_BF16", "1") == "1" else None)
-        gated = _silu_mul(out_f, z, _L1, dtype=_bf)
-        ttnn.deallocate(out_f)
+        if not self._gdn_gate:
+            gated = _silu_mul(out_f, z, _L1, dtype=_bf)
+            ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 
         partial = self._row_proj(gated, tw["out"])
-        ttnn.deallocate(gated)
+        if not self._gdn_gate:  # the gate op's output is a persistent buffer
+            ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
         out = tt_all_reduce(
             partial,
