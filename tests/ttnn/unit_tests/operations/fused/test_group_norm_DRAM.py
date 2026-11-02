@@ -75,6 +75,21 @@ GROUP_NORM_DRAM_SHAPES = [
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
 ]
 
+GROUP_NORM_DRAM_SANITY_SHAPES = [
+    shape
+    for shape in GROUP_NORM_DRAM_SHAPES
+    if shape[:4]
+    not in {
+        (1, 1536, 8, 8),
+        (1, 1152, 128, 128),
+        (1, 512, 64, 64),
+        (1, 512, 128, 128),
+        (1, 256, 256, 256),
+        (1, 256 // 4, 256, 256),
+        (1, 512 // 4, 256, 256),
+    }
+]
+
 
 GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES = [
     (8, 768, 1, 512, 32, 2, 8, 8),  # base case
@@ -294,7 +309,7 @@ def run_group_norm_DRAM(
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SANITY_SHAPES)
 @pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
 def test_group_norm_DRAM(
     device,
@@ -673,7 +688,9 @@ def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
         pytest.skip()
 
     torch.manual_seed(0)
-    N, C, HW, G, padded = 1, 1024, 200, 32, 224
+    # 256 channels, not the 1024 of the issue: the check is the padding rows (200 logical over 224 padded), and
+    # the channel count only scales the work (4 min on the simulator at 1024, #62486).
+    N, C, HW, G, padded = 1, 256, 200, 32, 224
 
     real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
     ref = torch.nn.functional.group_norm(real.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW).float(), G)

@@ -169,6 +169,15 @@ _CONV_ON_DEVICE = {"stem": True, "conv1": True, "conv2": True, "conv3": True, "d
 _MAXPOOL_ON_DEVICE = True
 
 
+# Free each conv's prepared (device) weights/bias right after the conv. Opt-in for eager runs only: the model's bf16
+# conv weights total ~47 MB (+4 MB fc), which does not fit the emulator's single 43 MB DRAM bank, so keeping them all
+# resident OOMs partway through layer4 (layer4_module2.conv2's 4.5 MB weights). With it on, each conv uploads its
+# weights, runs, and frees them, at the cost of a weight re-prepare on every forward. Leave it off for traced runs:
+# trace capture cannot upload the host weights again. Read per call so a test can set it after import.
+def _free_device_conv_weights():
+    return os.environ.get("TT_METAL_QSR_RESNET_FREE_CONV_WEIGHTS", "0") == "1"
+
+
 def _host_conv2d(
     input_tensor,
     weight_tensor,
@@ -232,7 +241,7 @@ def _conv2d_or_host(
     is the per-conv conv_kwargs dict (in_channels/out_channels/batch_size/input_height/input_width/
     kernel_size/stride/padding/dilation/groups/device/conv_config)."""
     if on_device:
-        return ttnn.experimental.quasar.conv2d(
+        out, out_dims, [dev_weight, dev_bias] = ttnn.experimental.quasar.conv2d(
             input_tensor=input_tensor,
             weight_tensor=weight_tensor,
             bias_tensor=bias_tensor,
@@ -242,6 +251,13 @@ def _conv2d_or_host(
             return_weights_and_bias=True,
             **conv2d_kwargs,
         )
+        if not _free_device_conv_weights():
+            return out, out_dims, [dev_weight, dev_bias]
+        # Free the prepared device copies and hand back the caller's tensors, so the next forward prepares again.
+        for dev_t, orig_t in ((dev_weight, weight_tensor), (dev_bias, bias_tensor)):
+            if dev_t is not None and dev_t is not orig_t and ttnn.is_tensor_storage_on_device(dev_t):
+                ttnn.deallocate(dev_t)
+        return out, out_dims, [weight_tensor, bias_tensor]
     logger.warning(f"[QSR] conv '{name}' HOST bypass (on_device=False)")
     return _host_conv2d(
         input_tensor,

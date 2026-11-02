@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -20,7 +21,7 @@ import ttnn
 
 from ...models.vae.vae_wan2_1 import WanEncoder
 from ...utils import cache
-from ...utils.conv3d import aligned_channels, conv3d_blocking_hash, conv_pad_height, conv_pad_width
+from ...utils.conv3d import aligned_channels, conv3d_blocking_hash, conv3d_configs, conv_pad_height, conv_pad_width
 from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host, unflatten
 from .pipeline_wan import WanPipeline, WanPipelineConfig
 
@@ -35,6 +36,8 @@ _CHECKPOINT_DIR_ENV = "WAN22_I2V_CHECKPOINT_DIR"
 # the two are numerically identical and full-T is faster. A mesh absent here uses full-T
 # forward and the fallback conv3d blocking table.
 _ENCODER_T_CHUNK_BY_MESH = {
+    # Full-T runs out of DRAM.
+    (2, 2): 4,
     (4, 8): 16,
     (4, 32): 40,
 }
@@ -120,6 +123,14 @@ def _load_pil_image(src) -> Image.Image:
         raise ValueError(f"Failed to load image from {src!r}: {e}") from e
 
 
+def center_crop_to_aspect(image: Image.Image, width: int, height: int) -> Image.Image:
+    crop_width = min(image.width, round(image.height * width / height))
+    crop_height = min(image.height, round(image.width * height / width))
+    left = (image.width - crop_width) // 2
+    top = (image.height - crop_height) // 2
+    return image.crop((left, top, left + crop_width, top + crop_height))
+
+
 def _parse_image_prompts(image_prompt, num_frames: int) -> list[ImagePrompt]:
     """Resolve conditioning inputs to loaded RGB images at non-negative frame positions.
 
@@ -169,8 +180,22 @@ class WanPipelineI2V(WanPipeline):
         # initialize without warmup; we warm up below with a sample image_prompt.
         super().__init__(device=device, config=config, scheduler=scheduler, run_warmup=False, lora_enabled=lora_enabled)
 
-        enc_height, enc_width, enc_t_chunk = self._vae_encoder_build_dims()
-        self.tt_vae_encoder = WanEncoder(
+        # Like the decoder, one image encoder per size, shared by sizes with the same blockings.
+        self._vae_encoders: dict[tuple[int, int], WanEncoder] = {}
+        encoders_by_blockings: dict[tuple[str, ...], WanEncoder] = {}
+        for width, height in self._resolutions:
+            encoder = self._build_vae_encoder(width, height)
+            self._vae_encoders[width, height] = encoders_by_blockings.setdefault(conv3d_configs(encoder), encoder)
+        logger.info(f"{len(encoders_by_blockings)} image encoder(s) for {len(self._resolutions)} resolution(s)")
+        for encoder in encoders_by_blockings.values():
+            self._load_vae_encoder(encoder)
+
+        if run_warmup:
+            self._warmup()
+
+    def _build_vae_encoder(self, width: int, height: int) -> WanEncoder:
+        enc_height, enc_width, enc_t_chunk = self._vae_encoder_build_dims(width, height)
+        return WanEncoder(
             base_dim=self._vae.config.base_dim,
             in_channels=self._vae.config.in_channels,
             z_dim=self._vae.config.z_dim,
@@ -189,18 +214,20 @@ class WanPipelineI2V(WanPipeline):
             latents_std=self._vae.config.latents_std,
         )
 
+    def _load_vae_encoder(self, encoder: WanEncoder) -> None:
         # C_in_block decides how prepare_conv3d_weights reshapes the stored weights, so a
         # cache written for one blocking is unusable by another. The _lnorm suffix marks
         # weights with the latent normalization folded into quant_conv, which are likewise
-        # unusable by a build that normalizes on the host.
+        # unusable by a build that normalizes on the host. Meshes without an encoder chunk
+        # size use the fallback blockings, which keep the unsuffixed cache.
         subfolder = "vae_encoder_lnorm"
-        if enc_t_chunk is not None:
-            blocking_hash = conv3d_blocking_hash(self.tt_vae_encoder)
+        if tuple(self.mesh_device.shape) in _ENCODER_T_CHUNK_BY_MESH:
+            blocking_hash = conv3d_blocking_hash(encoder)
             if blocking_hash:
                 subfolder = f"vae_encoder_{blocking_hash}_lnorm"
 
         cache.load_model(
-            self.tt_vae_encoder,
+            encoder,
             model_name=os.path.basename(self.checkpoint_name),
             subfolder=subfolder,
             parallel_config=self.vae_parallel_config,
@@ -209,25 +236,33 @@ class WanPipelineI2V(WanPipeline):
             get_torch_state_dict=lambda: self._vae.torch_state_dict(),
         )
 
-        if run_warmup:
-            self._warmup()
+    def _warmup_kwargs(self, width: int, height: int) -> dict[str, object]:
+        """A sample image_prompt of the size.
 
-    def _warmup(self) -> None:
-        """Allocate buffers with a sample image_prompt sized to the target resolution.
-
-        Runs a real ``__call__``, so it reaches ``prepare_latents``. A subclass whose
+        The warmup runs a real ``__call__``, so it reaches ``prepare_latents``. A subclass whose
         ``prepare_latents`` needs state set in its own ``__init__`` must therefore pass
-        ``run_warmup=False`` and call this once that state exists.
+        ``run_warmup=False`` and call ``_warmup`` once that state exists.
         """
-        self(
-            prompts=["warmup"],
-            image_prompt=Image.new("RGB", (self._width, self._height)),
-            num_inference_steps=2,
-            guidance_scale=2 if self._cfg_enabled else 1,
-            guidance_scale_2=2 if self._cfg_enabled else 1,
-        )
+        return {"image_prompt": Image.new("RGB", (width, height))}
 
-    def _vae_encoder_build_dims(self) -> tuple[int, int, int | None]:
+    def _resolve_size(self, width: int | None, height: int | None, image_prompt: object) -> tuple[int, int]:
+        """The given size, or by default the configured one closest to the first conditioning
+        image in aspect ratio and, as a tie breaker, to the first size in area."""
+        if width is not None or height is not None or image_prompt is None:
+            return super()._resolve_size(width, height, image_prompt)
+
+        image = _parse_image_prompts(image_prompt, self._num_frames)[0].image
+        default_width, default_height = self._resolutions[0]
+
+        def distance(size: tuple[int, int]) -> float:
+            w, h = size
+            aspect = abs(math.log(w / h / (image.width / image.height)))
+            area = abs(math.log(w * h / (default_width * default_height)))
+            return aspect + area
+
+        return min(self._resolutions, key=distance)
+
+    def _vae_encoder_build_dims(self, width: int, height: int) -> tuple[int, int, int | None]:
         """Dims that select the image encoder's conv3d blockings, applied at construction.
 
         The chunk size here is the frame count each conv3d call will actually see, which is
@@ -244,8 +279,8 @@ class WanPipelineI2V(WanPipeline):
             logger.info(f"Image encoder: fallback conv3d blockings (no entry for mesh {mesh_shape})")
             return 0, 0, None
         chunk = min((_ENCODER_T_CHUNK_BY_MESH[mesh_shape] or _I2V_ENCODE_FRAMES), _I2V_ENCODE_FRAMES)
-        logger.info(f"Image encoder: conv3d blockings for {self._width}x{self._height} T={chunk}")
-        return self._height, self._width, chunk
+        logger.info(f"Image encoder: conv3d blockings for {width}x{height} T={chunk}")
+        return height, width, chunk
 
     def get_model_input(self, latents, cond_latents):
         """
@@ -261,8 +296,9 @@ class WanPipelineI2V(WanPipeline):
         return ttnn.reshape(model_input, (*tuple(latents.shape)[:-1], -1))
 
     def _preprocess_frame(self, image: Image.Image, height: int, width: int, device) -> torch.Tensor:
-        """Conditioning image to a (B,C,H,W) float32 tensor, nominally in [-1,1]."""
-        img = TF.to_tensor(image).sub_(0.5).div_(0.5)
+        """Conditioning image to a (B,C,H,W) float32 tensor, nominally in [-1,1]. An image of
+        another aspect ratio is center-cropped to the target's rather than stretched."""
+        img = TF.to_tensor(center_crop_to_aspect(image, width, height)).sub_(0.5).div_(0.5)
         img = torch.nn.functional.interpolate(img[None], size=(height, width), mode="bicubic", antialias=True)
         return img.to(device) if device is not None else img
 
@@ -367,28 +403,33 @@ class WanPipelineI2V(WanPipeline):
         # dimension reshapes to a view over the same buffer rather than a copy.
         tt_video_BTHWC = ttnn.unsqueeze(tt_video_THWC, 0)
 
-        pc_before = self.mesh_device.num_program_cache_entries()
-        encoded_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
-            tt_video_BTHWC, logical_h, logical_w=logical_w, encoder_t_chunk_size=chunk
-        )
-        pc_after = self.mesh_device.num_program_cache_entries()
-        if pc_after != pc_before:
-            # Steady state is zero: a non-zero delta after warmup means the encode shape
-            # changed (e.g. a late frame_pos moved encode_frames) and programs recompiled.
-            logger.info(
-                f"VAE encode compiled {pc_after - pc_before} new program(s) "
-                f"(encode_frames={encode_frames}, forward chunk={chunk})"
+        # The encoder's CCL buffers are cached by shape, so each size would keep its own; the
+        # untraced encode releases them once the latents are on the host.
+        with self.vae_ccl_manager.transient_ping_pong_buffers():
+            pc_before = self.mesh_device.num_program_cache_entries()
+            encoded_BCTHW, new_logical_h, new_logical_w = self._vae_encoders[width, height](
+                tt_video_BTHWC, logical_h, logical_w=logical_w, encoder_t_chunk_size=chunk
             )
+            pc_after = self.mesh_device.num_program_cache_entries()
+            if pc_after != pc_before:
+                # Steady state is zero: a non-zero delta after warmup means the encode shape
+                # changed (e.g. a late frame_pos moved encode_frames) and programs recompiled.
+                logger.info(
+                    f"VAE encode compiled {pc_after - pc_before} new program(s) "
+                    f"(encode_frames={encode_frames}, forward chunk={chunk})"
+                )
 
-        ttnn.deallocate(tt_video_BTHWC)
+            ttnn.deallocate(tt_video_BTHWC)
 
-        # ---- device -> host --------------------------------------------------
-        concat_dims = [None, None]
-        concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
-        concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-        encoded = fast_device_to_host(encoded_BCTHW, self.mesh_device, concat_dims, ccl_manager=self.vae_ccl_manager)
-        ttnn.deallocate(encoded_BCTHW)
-        ttnn.synchronize_device(self.mesh_device)
+            # ---- device -> host ----------------------------------------------
+            concat_dims = [None, None]
+            concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
+            concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+            encoded = fast_device_to_host(
+                encoded_BCTHW, self.mesh_device, concat_dims, ccl_manager=self.vae_ccl_manager
+            )
+            ttnn.deallocate(encoded_BCTHW)
+            ttnn.synchronize_device(self.mesh_device)
 
         # ---- host: replicate + mask ------------------------------------------
         # Same crop convention as prepare_latents; already normalized by latents_mean/std,

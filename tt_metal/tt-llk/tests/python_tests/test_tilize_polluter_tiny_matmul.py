@@ -26,15 +26,13 @@ Tensix. Keep them in the sweep.
 
 from dataclasses import dataclass
 
-import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
-    MathFidelity,
     StochasticRounding,
     Transpose,
-    format_dict,
 )
 from helpers.matmul_sweep import (
     FaceLayoutConfig,
@@ -60,7 +58,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
 )
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Tiny in0 (SrcB) is 2 horizontal faces; in1 (SrcA) is a regular 4-face 32x32 tile.
 TINY_NUM_FACES_IN0 = 2
@@ -112,12 +110,7 @@ def _tiny_matmul_layout(in0_tile_r_dim: int):
         same=False,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     in0_tile_r_dim=[8, 4, 2, 1],
     do_restore=[True, False],
 )
@@ -228,12 +221,7 @@ def test_tilize_polluter_tiny_matmul(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # num_faces < 4: compare only the active faces of each output tile.
     num_elements_per_tile = tile_dims.in0_tile_r_dim * tile_dims.in1_tile_c_dim

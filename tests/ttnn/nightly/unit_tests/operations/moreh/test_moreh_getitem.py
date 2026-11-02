@@ -298,7 +298,6 @@ def test_getitem_RAW_MAJOR_callback(shape_index_dim, dtype, index_size, device):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dim",
     [

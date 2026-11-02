@@ -13,17 +13,19 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& rms_tensor,
-    const ttnn::Tensor& dL_dout_tensor) {
+    const ttnn::Tensor& dL_dout_tensor,
+    bool compute_dgamma,
+    const std::optional<ttnn::Tensor>& gate_tensor) {
     auto result = ttnn::prim::ttml_rmsnorm_bw(
-        input_tensor,   // [B,1,S,C]
-        gamma_tensor,   // [1,1,1,C]
-        rms_tensor,     //[B,1,S,1]
-        dL_dout_tensor  //[B,1,S,C]
-    );
+        input_tensor, gamma_tensor, rms_tensor, dL_dout_tensor, gate_tensor, compute_dgamma);
 
     // dL_dgamma requires sum over batches so we cannot perform this sum in the kernel. Instead we return the
     // dL_dgamma_components and reduce it here.
-    return {result[0], ttnn_fixed::sum_over_leading_dims(result[1])};  // [B,1,S,C] -> [1,1,1,C]
+    std::optional<ttnn::Tensor> dL_dgamma;
+    if (result[1].has_value()) {
+        dL_dgamma = ttnn_fixed::sum_over_leading_dims(result[1].value());  // [B,1,S,C] -> [1,1,1,C]
+    }
+    return {result[0], dL_dgamma, result[2]};
 }
 
 }  // namespace ttml::metal

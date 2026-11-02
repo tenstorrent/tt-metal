@@ -176,9 +176,8 @@ def build_sweep_spec(
     otherwise the curve's tail is the approximation's known overshoot rather than a
     finding.
     """
-    spec = for_op(
-        op, in_fmt, distribution_a=distribution, approx_mode=approx_mode
-    ).spec_A
+    spec = for_op(op, in_fmt, approx_mode=approx_mode).spec_A
+    spec.distribution = distribution
     if seed is not None:
         spec.seed = seed
     return spec

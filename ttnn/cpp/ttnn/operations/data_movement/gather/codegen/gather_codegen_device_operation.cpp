@@ -139,7 +139,7 @@ void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
             tensor_args.input_index_tensor.logical_shape());
     }
     TT_FATAL(
-        (tensor_args.input_tensor.buffer() != nullptr) && (tensor_args.input_index_tensor.buffer() != nullptr),
+        (tensor_args.input_tensor.is_allocated()) && (tensor_args.input_index_tensor.is_allocated()),
         "gather_codegen: operands need to be allocated in buffers on the device. Buffer is null.");
     TT_FATAL(
         tensor_args.input_tensor.storage_type() == StorageType::DEVICE,
@@ -159,7 +159,7 @@ void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
             tensor_args.output_tensor.value().device() == tensor_args.input_tensor.device(),
             "gather_codegen: preallocated output tensor must be on the same device as the input.");
         TT_FATAL(
-            tensor_args.output_tensor.value().buffer() != nullptr,
+            tensor_args.output_tensor.value().is_allocated(),
             "gather_codegen: preallocated output tensor has no device buffer allocated.");
     }
     TT_FATAL(attributes.sparse_grad == false, "gather_codegen: sparse gradient is not supported.");

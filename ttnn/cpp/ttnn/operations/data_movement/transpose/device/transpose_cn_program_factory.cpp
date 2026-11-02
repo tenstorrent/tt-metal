@@ -36,7 +36,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     bool row_major = input_tensor.layout() == Layout::ROW_MAJOR;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_cn needs to be allocated in a buffer on device!");
 
     tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t page_shape[2] = {TILE_WIDTH, TILE_HEIGHT};
