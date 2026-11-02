@@ -124,7 +124,8 @@ void check_kernel_run_args(
         join_names(schema.common_runtime_arg_names),
         join_names(names_of(run_args.common_runtime_arg_values)));
 
-    // Metal writes varargs by position on a later call without checking their count, so every call checks it.
+    // Metal writes varargs by position on a later call without checking their count, so every call checks it. When the
+    // nodes are checked too, varargs for a node the kernel does not run on are reported as that, not as a wrong count.
     const auto& options = kernel.advanced_options;
     const auto& varargs = run_args.advanced_options;
     TT_FATAL(
@@ -133,7 +134,13 @@ void check_kernel_run_args(
         kernel.unique_id,
         options.num_common_runtime_varargs,
         varargs.common_runtime_varargs.size());
+    const auto nodes = check_nodes ? nodes_of_kernel(spec, kernel.unique_id) : std::unordered_set<m2::NodeCoord>{};
     for (const auto& [node, values] : varargs.runtime_varargs) {
+        TT_FATAL(
+            !check_nodes || nodes.contains(node),
+            "generic_op: kernel '{}' does not run on node {}, but its run args give runtime varargs for it",
+            kernel.unique_id,
+            node.str());
         const uint32_t count = runtime_vararg_count(options, node);
         TT_FATAL(
             values.size() == count,
@@ -148,7 +155,6 @@ void check_kernel_run_args(
         return;
     }
     // A later call keeps the previous value of a node it leaves out, and Metal does not report it.
-    const auto nodes = nodes_of_kernel(spec, kernel.unique_id);
     for (const auto& [name, values] : run_args.runtime_arg_values) {
         const bool covers_nodes =
             values.size() == nodes.size() &&
@@ -168,22 +174,10 @@ void check_kernel_run_args(
             kernel.unique_id,
             node.str());
     }
-    for (const auto& [node, values] : varargs.runtime_varargs) {
-        TT_FATAL(
-            nodes.contains(node),
-            "generic_op: kernel '{}' does not run on node {}, but its run args give runtime varargs for it",
-            kernel.unique_id,
-            node.str());
-    }
 }
 
 void check_tensor_args(
     const m2::ProgramSpec& spec, const m2::ProgramRunArgs& run_args, const std::vector<Tensor>& io_tensors) {
-    TT_FATAL(
-        run_args.tensor_args.size() == spec.tensor_parameters.size(),
-        "generic_op: the ProgramSpec declares {} tensor parameters, but run_args.tensor_args gives {} tensors",
-        spec.tensor_parameters.size(),
-        run_args.tensor_args.size());
     std::vector<bool> claimed(io_tensors.size(), false);
     for (const auto& parameter : spec.tensor_parameters) {
         const auto tensor_arg = run_args.tensor_args.get(parameter.unique_id);
@@ -212,6 +206,14 @@ void check_tensor_args(
             parameter.unique_id,
             tensor_spec,
             parameter.spec);
+    }
+    // Every tensor parameter has its tensor, so any other entry names one the spec does not declare.
+    for (const auto& [name, tensor_arg] : run_args.tensor_args) {
+        TT_FATAL(
+            std::ranges::find(spec.tensor_parameters, name, &m2::TensorParameter::unique_id) !=
+                spec.tensor_parameters.end(),
+            "generic_op: run_args.tensor_args has a tensor for '{}', which the ProgramSpec does not declare",
+            name);
     }
 }
 
@@ -478,8 +480,9 @@ void GenericProgramSpecDeviceOperation::validate_on_program_cache_hit(
 
 ttsl::hash::hash_t GenericProgramSpecDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    // The framework adds the op's type to the key. Both forms combine the spec hash, or the custom hash in its place,
-    // with the run-args schema, so passing compute_program_spec_hash(spec) as the custom hash gives the default key.
+    // The framework adds the op's type to the key. Each program's spec hash, or the custom hash in its place, is
+    // combined with its range and run-args schema. One custom hash stands in for the spec of every program, so passing
+    // compute_program_spec_hash(spec) as the custom hash gives the default key when every program runs that spec.
     ttsl::hash::hash_t hash = 0;
     for (const auto& program : operation_attributes.programs) {
         const auto& spec = *program.spec;

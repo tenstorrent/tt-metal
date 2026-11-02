@@ -90,7 +90,8 @@ void bind_generic_operation_preparation(nb::module_& mod) {
         Use it to find out whether a program compiles and fits the device's kernel-configuration buffer before
         committing resources to it. The prepared workload is inserted into the program cache, so the next
         generic_op call with the same tensors and program is a cache hit. A failed preparation leaves the program
-        cache unchanged.
+        cache unchanged, with one exception: when a ProgramSpec is already cached, its run args are applied to the
+        cached program first, so DFB size overrides stay in effect even if the preparation then fails.
 
         Args:
             io_tensors (List[ttnn.Tensor]): The tensors the generic_op call would receive.
@@ -164,8 +165,8 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         R"doc(
         Everything fixed about a mesh program: a ttnn.experimental.ProgramSpec for each mesh coordinate range, and
         an optional custom_program_hash that replaces the hash of the specs in the program cache key (which still
-        includes the names the run args refer to, each kernel's cores and its vararg counts). The ranges must not
-        overlap.
+        includes the names the run args refer to, each kernel's cores and its vararg counts). One value replaces the
+        hash of every range's spec, so it must stand for all of them. The ranges must not overlap.
         Lists are copied in and out.
         )doc")
         .def(
@@ -250,8 +251,9 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             io_tensors (List[ttnn.Tensor]): The tensors the program uses, with the preallocated output last. Each
                 tensor parameter binds its own entry, so a tensor bound to two parameters is listed twice. The list
                 may hold only the output.
-            spec (ttnn.experimental.ProgramSpec or ttnn.experimental.MeshProgramSpec): The program, run on every
-                device that holds the tensors, or a program for each mesh coordinate range.
+            spec (ttnn.experimental.ProgramSpec or ttnn.experimental.MeshProgramSpec): The program, run on the
+                devices of the tensor in io_tensors that is on the fewest devices (every other tensor must be on them
+                too), or a program for each mesh coordinate range.
             run_args (ttnn.experimental.ProgramRunArgs or ttnn.experimental.MeshProgramRunArgs): The values of this
                 call, or of each range's program.
             custom_program_hash (int, optional): With a ProgramSpec only (a MeshProgramSpec has its own field):
@@ -291,9 +293,9 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         nb::arg("spec"),
         R"doc(
         The hash of a ttnn.experimental.ProgramSpec that ttnn.experimental.generic_op keys its program cache on when
-        no custom_program_hash is given. Argument values, ProgramSpec.name and WorkUnitSpec.name are not part of it,
-        and tensor parameter specs are hashed under their relaxations. generic_op computes it on every call, so a
-        caller that runs one spec many times can compute it once and pass it as custom_program_hash.
+        no custom_program_hash is given. Runtime argument values, ProgramSpec.name and WorkUnitSpec.name are not part
+        of it, and tensor parameter specs are hashed under their relaxations. generic_op computes it on every call, so
+        a caller that runs one spec many times can compute it once and pass it as custom_program_hash.
         )doc");
 }
 
