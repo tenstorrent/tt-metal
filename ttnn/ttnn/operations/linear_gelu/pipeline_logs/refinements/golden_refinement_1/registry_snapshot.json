@@ -1,0 +1,35 @@
+{
+  "supported": {
+    "dtype": [
+      "BFLOAT16"
+    ],
+    "layout": [
+      "TILE"
+    ],
+    "alignment": [
+      "tile_aligned",
+      "h_non_aligned"
+    ],
+    "fp32_dest_acc_en": [
+      true
+    ],
+    "memory_layout": [
+      "INTERLEAVED"
+    ],
+    "buffer_type": [
+      "L1",
+      "DRAM"
+    ],
+    "out_buffer_type": [
+      "L1",
+      "DRAM"
+    ]
+  },
+  "exclusions": [],
+  "invalid": [
+    {
+      "dtype": "BFLOAT8_B",
+      "layout": "ROW_MAJOR"
+    }
+  ]
+}
