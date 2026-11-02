@@ -989,12 +989,13 @@ def test_fused_activation(device, name, op, torch_op, rtol, K_chunk_tiles, with_
 @pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["reload_every_K_chunk", "packer_l1_acc"])
 def test_fp32_dest_acc_activation_over_K_chunks(device, packer_l1_acc):
     """fp32 partials are unpacked straight to DST, ahead of a K chunk of SrcA / SrcB unpacks in the same DST section;
-    with packer_l1_acc only the last of the 3 K chunks reloads them. The activation runs on the reloaded sum."""
+    with packer_l1_acc only the last of the 3 K chunks reloads them. The activation runs on the reloaded sum. Two C
+    slices on one core: the second one's first K chunk must start from a zeroed DST, not the first one's sums."""
     M, K, N = 2 * TILE, 6 * TILE, 4 * TILE
     torch.manual_seed(15)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, 1, 0),
+        cores=_rect(0, 0, 0, 0),
         C_slice_M_tiles=2,
         C_slice_N_tiles=2,
         K_chunk_tiles=2,

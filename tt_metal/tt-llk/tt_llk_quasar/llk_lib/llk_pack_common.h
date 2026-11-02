@@ -283,16 +283,14 @@ inline void _llk_packer_set_math_semaphore_()
 }
 
 /**
- * @brief Finishes a dest section: waits for pack, clears the dest section, and signals math it is ready to reuse.
+ * @brief Waits for pack to finish and zeroes the dest section it just read, so the next section math accumulates in
+ * there starts from zero.
  *
- * Uses the semaphore math <-> pack synchronization scheme (the alternative to @ref _llk_pack_dest_dvalid_section_done_).
- *
- * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
  * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
  * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
  */
-template <std::uint32_t PACK_SEL, DstSync DST, bool EN_32BIT_DEST>
-inline void _llk_pack_dest_semaphore_section_done_()
+template <DstSync DST, bool EN_32BIT_DEST>
+inline void _llk_pack_dest_section_clear_()
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK); // wait for pack to finish
 
@@ -314,6 +312,21 @@ inline void _llk_pack_dest_semaphore_section_done_()
         static_assert(DST == DstSync::SyncHalf);
         TT_ZEROACC(p_zeroacc::CLR_HALF, EN_32BIT_DEST, 0, ADDR_MOD_7, dest_register_offset != 0);
     }
+}
+
+/**
+ * @brief Finishes a dest section: waits for pack, clears the dest section, and signals math it is ready to reuse.
+ *
+ * Uses the semaphore math <-> pack synchronization scheme (the alternative to @ref _llk_pack_dest_dvalid_section_done_).
+ *
+ * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
+ * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
+ * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
+ */
+template <std::uint32_t PACK_SEL, DstSync DST, bool EN_32BIT_DEST>
+inline void _llk_pack_dest_semaphore_section_done_()
+{
+    _llk_pack_dest_section_clear_<DST, EN_32BIT_DEST>();
 
     // Tell math that it can write again
     _llk_packer_set_math_semaphore_();
