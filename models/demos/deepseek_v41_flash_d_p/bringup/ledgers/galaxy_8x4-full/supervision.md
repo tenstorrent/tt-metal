@@ -1297,3 +1297,10 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   a chunk, per group), recorded not gated. Estimate before measuring: ~20-21 GiB a chip today, ~28-29 GiB with bfp8 (budget 27.2).
   KV per user at 1M (served caches, all bf16): window 40 GiB + compressed 2.5 + index keys 0.63 = 43.1 GiB, 1.41 GiB a chip on 8x4.
   Not started: host leak ~253 GiB, reboot first.
+- 2026-11-02: framework: a dirty Galaxy mesh is reset with recover-hosts, not tt-smi -r (8205174d58a; owner, Exabox guide).
+  Host leak cause found: tt-kmd PR #301 (merged 2026-10-15, bb67d172d7e, "Free the whole chained scatterlist"):
+  free_chained_sgt walks table->nents, which dma_map_sgtable overwrote; with an IOMMU the pinning merges into one
+  segment and the rest of the chain leaks on every unpin and at process exit (~11 MiB per 2 GiB pin), invisible in
+  Slab / AnonPages / PageTables. This node runs tenstorrent.ko 2.11.0 (dkms, released 2026-08-14), whose sg_helpers.c
+  still reads table->nents; the device's IOMMU group is DMA-FQ (translated, despite iommu=pt). No release has the fix
+  yet (ttkmd-2.11.0 is behind it). Fix: a driver built from tt-kmd main, installed by infra (root).
