@@ -806,6 +806,10 @@ void kernel_main() {
                             in0_mcast_nx_end,
                             in0_mcast_ny_end,
                             in0_num_receivers);
+                        // The multicast copies this core's own valid word, and ownership rotates: next K-block this
+                        // core is a receiver and clears that word first (step 1). Unflushed, the NoC can read it
+                        // after the clear and send the row a 0, which leaves every receiver waiting for good.
+                        noc.async_writes_flushed();
                         cb_x_tiled_obj.pop_front(g_in0_block_tiles_max);
                         x_stage_obj.push_back(g_in0_block_tiles_max);
                     }
