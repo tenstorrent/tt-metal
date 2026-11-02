@@ -178,6 +178,17 @@ def test_bfp2_device_typecast_integer(device, integer):
     assert torch.equal(ttnn.to_torch(ttnn.typecast(integer_tensor, ttnn.bfloat2_b)), x)
 
 
+@pytest.mark.parametrize("integer", [ttnn.int32, ttnn.int8])
+def test_bfp2_device_typecast_signed_integer(device, integer):
+    # -1 is exact in BFLOAT2_B, so signed casts are exact on {-1, 0, 1}.
+    x = _ternary((64, 64))
+    bfp2_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
+    integer_tensor = ttnn.from_torch(x.to(torch.int32), dtype=integer, layout=ttnn.TILE_LAYOUT, device=device)
+
+    assert torch.equal(ttnn.to_torch(ttnn.typecast(bfp2_tensor, integer)).float(), x)
+    assert torch.equal(ttnn.to_torch(ttnn.typecast(integer_tensor, ttnn.bfloat2_b)), x)
+
+
 def test_bfp2_device_typecast_sharded_same_dtype(device):
     # Only a BFLOAT2_B -> BFLOAT2_B cast reaches the sharded typecast factory: no other format has the 320-byte tile.
     x = _ternary((128, 128))
