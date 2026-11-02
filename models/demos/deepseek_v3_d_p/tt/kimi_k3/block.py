@@ -351,11 +351,12 @@ class TtKimiK3Block(LightweightModule):
             residual.release(hidden)
             return
 
+        # An empty chunk adds zeros: its rows pass through the residual unchanged. Shaped like a real chunk's
+        # output (same rows, dtype and layout, so the concat is uniform); validate_chunks guarantees one exists.
+        template = next(out for out in outs if out is not None)
         for k in range(n):
             if outs[k] is None:
-                hidden_k = ttnn.slice(hidden, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, hidden.shape[-1]))
-                outs[k] = ttnn.zeros_like(hidden_k)
-                ttnn.deallocate(hidden_k)
+                outs[k] = ttnn.zeros_like(template)
         attn_out = outs[0] if n == 1 else ttnn.concat(outs, dim=2)
         if n > 1:
             for out in outs:
