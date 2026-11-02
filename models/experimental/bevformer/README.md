@@ -58,9 +58,12 @@ scene selection, score filtering, and output format.
   run, and add `--tracing-mode` to `tt-perf-report` for `[trace]`:
 
 ```sh
+# Live: one measured frame, or two with BEVFORMER_PERF_FRAMES=2
 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[live]"
 BEVFORMER_PERF_FRAMES=2 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[live]"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
+
+# Replayed from traces
 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py::test_bevformer_perf[trace]"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop --tracing-mode
 ```
