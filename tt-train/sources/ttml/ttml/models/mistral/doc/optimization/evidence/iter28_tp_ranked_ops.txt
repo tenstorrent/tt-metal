@@ -1,0 +1,84 @@
+chip 0: 2 steps, 45.51 ms kernels per profiled step; classes: math 34.85, other 7.59, layout 1.98, glue 1.09
+   ms/step   ops  op | in0 | in1 | cores
+     6.148     4  Matmul | 1x1x1024x5184 | 1x1x5184x16384 | 110
+     5.517     4  Matmul | 1x1x5184x16384 | 1x1x1024x16384 | 110
+     3.844    17  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+     3.249     4  Matmul | 1x1x1024x8256 | 1x1x8256x5120 | 88
+     3.039     1  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+     2.803     4  Matmul | 1x1x8256x5120 | 1x1x1024x5120 | 110
+     2.756     1  Matmul | 1x1x5120x32768 | 1x1x1024x32768 | 110
+     2.087    17  AllGatherAsync | 1x1x1024x1280 |  | 20
+     1.321     8  RMSNormBackwardRows | 1x1x1024x5120 | 1x1x32[1]x5120 | 96
+     1.023     8  AddRMSNormForwardRows | 1x1x1024x5120 | 1x1x1024x5120 | 96
+     0.756     4  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+     0.736     4  SwigluPackedBw | 1x1x1024x16384 | 1x1x1024x8256 | 110
+     0.674     2  Reduce | 1x1x1024x32768 |  | 32
+     0.630     4  SDPABackwardKV | 1x8x1024x128 | 1x8x1024x128 | 110
+     0.628     1  BinaryNg | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     0.586     4  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+     0.584     3  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+     0.478     4  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88
+     0.467    16  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+     0.442     4  SwigluPackedFw | 1x1x1024x16384 |  | 110
+     0.434     4  SDPABackwardQ | 1x8x1024x128 | 1x8x1024x128 | 110
+     0.397     4  SDPAForward | 1x8x1024x128 | 1x2x1024x128 | 110
+     0.394     4  TransposeSplit | 1x1x8256x1024 | 1x1x32[16]x8192 | 110
+     0.368     4  Matmul | 1x1x1024x32[16] | 1x1x1024x16384 | 110
+     0.342     1  VpCrossEntropyBw | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     0.292     8  SkinnyMatmulPartial | 1x1x1024x5120 | 1x1x32[16]x5120 | 104
+     0.260     4  LowrankUpdate | 1x1x1024x5120 | 1x1x1024x32[16] | 110
+     0.244     4  TransposeSplit | 1x1x5184x1024 | 1x1x32[16]x5120 | 110
+     0.236     7  BinaryNg | 1x1x1024x1024 | 1x1x1024x1024 | 110
+     0.221     4  SkinnyMatmulPartial | 1x1x1024x8256 | 1x1x32[16]x8192 | 104
+     0.203     4  Concat | 1x1x1024x5120 | 1x1x1024x64 | 110
+     0.199     4  Matmul | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88
+     0.192     4  Matmul | 1x1x1024x32[16] | 1x1x1024x8256 | 88
+     0.174     4  Matmul | 1x1x1024x32[16] | 1x1x32[16]x1024 | 33
+     0.166     1  Embeddings | 1x1x1x1024 | 1x1x32768x5120 | 32
+     0.154     1  RMSNormForward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     0.145     4  SkinnyMatmulPartial | 1x1x1024x5120 | 1x1x5120x32[16] | 104
+     0.140     1  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+     0.134     8  RotaryEmbeddingLlama | 1x8x1024x128 | 1x1x1024x128 | 110
+     0.134     4  LowrankUpdate | 1x1x1024x1536 | 1x1x1024x32[16] | 110
+chip 2: 2 steps, 43.58 ms kernels per profiled step; classes: math 34.62, other 5.95, layout 1.93, glue 1.08
+   ms/step   ops  op | in0 | in1 | cores
+     6.148     4  Matmul | 1x1x1024x5184 | 1x1x5184x16384 | 110
+     5.517     4  Matmul | 1x1x5184x16384 | 1x1x1024x16384 | 110
+     3.247     4  Matmul | 1x1x1024x8256 | 1x1x8256x5120 | 88
+     3.041     1  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+     2.802     4  Matmul | 1x1x8256x5120 | 1x1x1024x5120 | 110
+     2.757     1  Matmul | 1x1x5120x32768 | 1x1x1024x32768 | 110
+     2.604    17  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+     1.946    17  AllGatherAsync | 1x1x1024x1280 |  | 20
+     1.274     8  RMSNormBackwardRows | 1x1x1024x5120 | 1x1x32[1]x5120 | 96
+     0.988     8  AddRMSNormForwardRows | 1x1x1024x5120 | 1x1x1024x5120 | 96
+     0.756     4  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+     0.722     4  SwigluPackedBw | 1x1x1024x16384 | 1x1x1024x8256 | 110
+     0.667     2  Reduce | 1x1x1024x32768 |  | 32
+     0.639     1  BinaryNg | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     0.629     4  SDPABackwardKV | 1x8x1024x128 | 1x8x1024x128 | 110
+     0.583     4  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+     0.583     3  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+     0.478     4  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88
+     0.444    16  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+     0.439     4  SwigluPackedFw | 1x1x1024x16384 |  | 110
+     0.429     4  SDPABackwardQ | 1x8x1024x128 | 1x8x1024x128 | 110
+     0.397     4  SDPAForward | 1x8x1024x128 | 1x2x1024x128 | 110
+     0.380     4  TransposeSplit | 1x1x8256x1024 | 1x1x32[16]x8192 | 110
+     0.353     4  Matmul | 1x1x1024x32[16] | 1x1x1024x16384 | 110
+     0.346     1  VpCrossEntropyBw | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     0.277     8  SkinnyMatmulPartial | 1x1x1024x5120 | 1x1x32[16]x5120 | 104
+     0.253     4  LowrankUpdate | 1x1x1024x5120 | 1x1x1024x32[16] | 110
+     0.235     4  TransposeSplit | 1x1x5184x1024 | 1x1x32[16]x5120 | 110
+     0.227     7  BinaryNg | 1x1x1024x1024 | 1x1x1024x1024 | 110
+     0.210     4  SkinnyMatmulPartial | 1x1x1024x8256 | 1x1x32[16]x8192 | 104
+     0.200     4  Matmul | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88
+     0.199     4  Concat | 1x1x1024x5120 | 1x1x1024x64 | 110
+     0.184     4  Matmul | 1x1x1024x32[16] | 1x1x1024x8256 | 88
+     0.172     4  Matmul | 1x1x1024x32[16] | 1x1x32[16]x1024 | 33
+     0.153     1  RMSNormForward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     0.141     1  Embeddings | 1x1x1x1024 | 1x1x32768x5120 | 32
+     0.138     4  SkinnyMatmulPartial | 1x1x1024x5120 | 1x1x5120x32[16] | 104
+     0.131     8  RotaryEmbeddingLlama | 1x8x1024x128 | 1x1x1024x128 | 110
+     0.129    28  BinaryNg | 1x1x32[16]x16384 |  | 110
+     0.124     4  LowrankUpdate | 1x1x1024x1536 | 1x1x1024x32[16] | 110

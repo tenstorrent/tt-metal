@@ -1,0 +1,23 @@
+chip | ops | kernels ms | matmul ms | collectives ms | span ms (cycles/1.35 GHz) | idle % | eff. clock GHz
+0    | 467 |       44.0 |      28.4 |            4.8 |     45.1 |    2.3 | 1.170
+1    | 467 |       44.6 |      28.4 |            5.4 |     45.7 |    2.3 | 1.184
+2    | 467 |       43.4 |      28.4 |            4.4 |     44.3 |    2.1 | 1.150
+3    | 467 |       45.7 |      28.5 |            6.3 |     46.7 |    2.2 | 1.211
+
+matmul time relative to chip 0, top shapes:
+     6.15 ms  chip0 x1.00  chip1 x1.00  chip2 x1.00  chip3 x1.00  ('1x1x1024x5184', '1x1x5184x16384')
+     5.52 ms  chip0 x1.00  chip1 x1.00  chip2 x1.00  chip3 x1.00  ('1x1x5184x16384', '1x1x1024x16384')
+     3.25 ms  chip0 x1.00  chip1 x1.00  chip2 x1.00  chip3 x1.00  ('1x1x1024x8256', '1x1x8256x5120')
+     3.04 ms  chip0 x1.00  chip1 x1.00  chip2 x1.00  chip3 x1.00  ('1x1x1024x5120', '1x1x5120x32768')
+     2.81 ms  chip0 x1.00  chip1 x1.00  chip2 x1.00  chip3 x1.00  ('1x1x8256x5120', '1x1x1024x5120')
+     2.76 ms  chip0 x1.00  chip1 x1.00  chip2 x1.00  chip3 x1.00  ('1x1x5120x32768', '1x1x1024x32768')
+
+collectives on chip 0:
+     2.51 ms   17 x     148 us  ('ReduceScatterMinimalAsync', '1x1x1024x5120')
+     1.99 ms   17 x     117 us  ('AllGatherAsync', '1x1x1024x1280')
+     0.12 ms    1 x     123 us  ('ReduceScatterMinimalAsync', '1x1x128x5120')
+     0.04 ms    1 x      42 us  ('ReduceScatterMinimalAsync', '1x1x5120x128')
+     0.03 ms    1 x      30 us  ('AllGatherAsync', '1x1x128x1280')
+     0.03 ms    1 x      29 us  ('AllGatherAsync', '1x1x5120x32')
+     0.03 ms    2 x      13 us  ('AllGatherAsync', '1x1x256x32[1]')
+     0.02 ms    2 x       9 us  ('ReduceScatterMinimalAsync', '1x1x1024x32[1]')
