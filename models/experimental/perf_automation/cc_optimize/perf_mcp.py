@@ -6681,9 +6681,17 @@ def record_kernel_attempt(
     # mirrors PERF_MCP_ALLOW_UNGATED_COMMIT for a resumed session whose verdict belongs to a previous
     # process. A refusal RETURNS -- it does not raise -- because this runs inside a live agent loop
     # and an exception would end the round instead of redirecting it.
+    # A structural-gate rung whose candidate crashed the model (not the device) has no measurement
+    # either, but refusing the row leaves the gate stuck: the cap never advances, the gate keeps
+    # re-firing with the highest combined gap, and every other target (including C++ kernels) is
+    # blocked behind it indefinitely.  Observed on glm_4_7_flash: 3 chain-fuse attempts all refused
+    # here, chain gate at 0/3 cap after ~500 total optimizer attempts.  The gate's own cap bounds
+    # how many unmeasured rows can accumulate, so the risk is the same as the wedged exemption.
+    _is_gate_rung = (kernel_kind or "").lower() in _GATE_KINDS
     if (
         not _fpv["own"]
         and "wedged" not in (note or "").lower()
+        and not _is_gate_rung
         and os.environ.get("PERF_MCP_ALLOW_UNMEASURED_ATTEMPT") != "1"
     ):
         # A DIVERGED READING STILL GETS A ROW, though never a verdict. own=False stays exactly as it
