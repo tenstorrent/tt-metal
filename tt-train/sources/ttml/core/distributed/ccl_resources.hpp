@@ -7,6 +7,11 @@
 
 namespace ttml::core::distributed {
 
+// Semaphores are handed out round-robin from small pools, so a collective reuses the semaphores of an
+// earlier one. That is only safe between collectives over the same device groups, so each instance must
+// serve a single cluster axis (see AutoContext::get_ccl_resources). Groups along different axes are not
+// kept in lockstep: a device that is ahead on one axis would signal a lagging peer on a semaphore that
+// the peer is still using for a collective on the other axis.
 class CCLResources {
 public:
     CCLResources();
