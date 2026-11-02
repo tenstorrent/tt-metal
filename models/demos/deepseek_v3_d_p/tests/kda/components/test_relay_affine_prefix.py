@@ -5,8 +5,8 @@ and last chronological ranks, call after call.
 
 Galaxy runs the relay on its SP8 torus axis, as Kimi-K3 does, and on an unwrapped Fabric2D, where the last rank's hand-off
 to the first crosses the SP line. LoudBox SP8xTP1 and QuietBox SP4xTP1 run it on a TorusY ring with Galaxy's per-chip
-workload, as their KDA layer gates do, and LoudBox's 4x2 and 2x4 on Fabric2D (SP4 and SP2 lines). Every rank holds 640
-rows of 24 heads, and every fabric carries K3's payload: one FP32 tile per packet.
+workload, as their KDA layer gates do, and on a 1D ring, LoudBox's 4x2 and 2x4 on Fabric2D (SP4 and SP2 lines). Every
+rank holds 640 rows of 24 heads, and every fabric carries K3's payload: one FP32 tile per packet.
 """
 
 import statistics
@@ -18,7 +18,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
     AffineTransform,
@@ -46,6 +46,13 @@ def _mesh_case(shape: tuple[int, int], topology: str, case_id: str, device_param
     )
 
 
+def _fabric_1d_ring_params() -> dict:
+    """FABRIC_1D_RING with K3's payload, as the LoudBox and QuietBox KDA layer perf gates open it."""
+    return fabric_1d_device_params(
+        fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE
+    )
+
+
 _MESH = pytest.mark.parametrize(
     "mesh_device,device_params",
     [
@@ -57,9 +64,11 @@ _MESH = pytest.mark.parametrize(
             fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
         ),
         _mesh_case((8, 1), "ring", "loudbox-SP8xTP1-ring"),
+        _mesh_case((8, 1), "ring", "loudbox-SP8xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
         _mesh_case((4, 2), "mesh-4x2", "loudbox-SP4xTP2-fabric-2d"),
         _mesh_case((2, 4), "mesh-2x4", "loudbox-SP2xTP4-fabric-2d"),
         _mesh_case((4, 1), "ring", "quietbox-SP4xTP1-ring"),
+        _mesh_case((4, 1), "ring", "quietbox-SP4xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
     ],
     indirect=True,
 )
