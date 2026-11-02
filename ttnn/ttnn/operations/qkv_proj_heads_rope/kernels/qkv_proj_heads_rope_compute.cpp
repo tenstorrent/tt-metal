@@ -7,13 +7,18 @@
 // Output rows alternate between cb_out_tiles (writer, NoC1) and cb_out_tiles_noc0 (reader, NoC0) when
 // out_write_nocs == 2.
 //
-// Raw call: pack_reconfig_l1_acc(0) after each block - no helper exposes the L1-acc disable
-// (matmul_block leaves it enabled after the last K-block).
+// Raw calls: pack_reconfig_l1_acc(0) after each block - no helper exposes the L1-acc disable
+// (matmul_block leaves it enabled after the last K-block); the epilogue chains' setup (reconfig +
+// mul_init / copy_init) once per block, which InitReconfigOwner::Caller hands to the caller so it is not
+// repeated per row x head.
 
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -66,23 +71,24 @@ void kernel_main() {
             WaitPolicy::None,
             PopPolicy::None,
             InputTileMapping::Row,
-            DataFormatReconfig::Enabled,
+            DataFormatReconfig::Disabled,
             TileAddressing::Offset),
-        input(cb_rotary_table, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
+        input(
+            cb_rotary_table, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block, DataFormatReconfig::Disabled),
         Dst::D0,
         DestAccumulation::PerRow>;
     using RotaryPack = PackTile<output(
         cb_out_tiles,
         ReservePolicy::PerOuter,
         PushPolicy::PerOuter,
-        DataFormatReconfig::Enabled,
+        DataFormatReconfig::Disabled,
         TileAddressing::Direct,
         DestAccumulation::PerRow)>;
     using RotaryPackNoc0 = PackTile<output(
         cb_out_tiles_noc0,
         ReservePolicy::PerOuter,
         PushPolicy::PerOuter,
-        DataFormatReconfig::Enabled,
+        DataFormatReconfig::Disabled,
         TileAddressing::Direct,
         DestAccumulation::PerRow)>;
     // convert_block: Float32 partials row -> bf16 output row.
@@ -91,10 +97,12 @@ void kernel_main() {
         WaitPolicy::None,
         PopPolicy::None,
         InputTileMapping::Block,
-        DataFormatReconfig::Enabled,
+        DataFormatReconfig::Disabled,
         TileAddressing::Offset)>;
-    using ConvertPack = PackTile<output(cb_out_tiles, ReservePolicy::Upfront, PushPolicy::AtEnd)>;
-    using ConvertPackNoc0 = PackTile<output(cb_out_tiles_noc0, ReservePolicy::Upfront, PushPolicy::AtEnd)>;
+    using ConvertPack =
+        PackTile<output(cb_out_tiles, ReservePolicy::Upfront, PushPolicy::AtEnd, DataFormatReconfig::Disabled)>;
+    using ConvertPackNoc0 =
+        PackTile<output(cb_out_tiles_noc0, ReservePolicy::Upfront, PushPolicy::AtEnd, DataFormatReconfig::Disabled)>;
 
     // Epilogue of one valid row; the pack elements are bound to that row's output CB.
     auto epilogue_row = [&](uint32_t row, auto rotary_pack, auto convert_pack) {
@@ -102,14 +110,15 @@ void kernel_main() {
         if (is_rotary) {
             cb_wait_front(cb_rotary_table, table_tiles_per_row);
             for (uint32_t head = 0; head < heads_per_core; ++head) {
-                eltwise_chain(
+                eltwise_chain<InitReconfigOwner::Caller>(
                     IterationShape::grid(tiles_per_head, 2),
                     RotaryMulAcc{partials_dfb, table_dfb, row_base + head * tiles_per_head},
                     rotary_pack);
             }
             cb_pop_front(cb_rotary_table, table_tiles_per_row);
         } else {
-            eltwise_chain(IterationShape::tiles(n_tiles), ConvertCopy{partials_dfb, row_base}, convert_pack);
+            eltwise_chain<InitReconfigOwner::Caller>(
+                IterationShape::tiles(n_tiles), ConvertCopy{partials_dfb, row_base}, convert_pack);
         }
     };
 
@@ -136,6 +145,17 @@ void kernel_main() {
             true>(activation, weight, partials, partials, shape, {}, {}, n_tiles, n_tiles);
         partials.push_back(partials_tiles);
         pack_reconfig_l1_acc(0);
+
+        // The epilogue chains' one-time setup, once per block (InitReconfigOwner::Caller): both output
+        // CBs are bf16, so one pack reconfig serves either.
+        if (is_rotary) {
+            reconfig_data_format(cb_matmul_partials, cb_rotary_table);
+            mul_init(cb_matmul_partials, cb_rotary_table, true);
+        } else {
+            reconfig_data_format_srca(cb_matmul_partials);
+            copy_init(cb_matmul_partials);
+        }
+        pack_reconfig_data_format(cb_out_tiles);
 
         partials.wait_front(partials_tiles);
         for (uint32_t row = 0; row < rows; ++row) {
