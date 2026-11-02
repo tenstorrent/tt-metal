@@ -35,6 +35,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     is_tp_deduped_kv_cache,
     populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
+    striped_cache_to_host,
 )
 from tests.ttnn.utils_for_testing import assert_equal
 
@@ -543,19 +544,7 @@ def _shard_major_host(tensor, mesh_device, dtype=torch.bfloat16, sp_axis=0):
     order the address table addresses. The singleton dim 1 is kept so callers keep their [:, :, a:b, :]
     slicing. Dense (TP-replicated) caches must NOT use this -- take tp column 0 instead.
     """
-    # ConcatMesh2dToTensor(dims=(2, 1)): mesh axis 0 concatenates on seq, mesh axis 1 on dim 1. Linear chip
-    # order is row-major on the mesh at sp_axis=0 and column-major at sp_axis=1.
-    n0, n1 = mesh_device.shape[0], mesh_device.shape[1]
-    composed = ttnn.to_torch(
-        tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-    ).to(dtype)
-    local = composed.shape[2] // n0  # per-chip rows = seq_len_cache / (sp*tp)
-    chips = (
-        [(a0, a1) for a0 in range(n0) for a1 in range(n1)]
-        if sp_axis == 0
-        else [(a0, a1) for a1 in range(n1) for a0 in range(n0)]
-    )
-    flat = torch.cat([composed[:, a1, a0 * local : (a0 + 1) * local] for a0, a1 in chips], dim=1)
+    flat = striped_cache_to_host(tensor, mesh_device, sp_axis).to(dtype)
     return flat.unsqueeze(1)
 
 
