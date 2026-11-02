@@ -32,7 +32,9 @@ def _require_codegen_arch(device):
 def _make_input(shape, dtype):
     if dtype in (ttnn.int32, ttnn.uint32):
         return torch.randint(0, 100, shape, dtype=torch.int32)
-    return torch.rand(shape, dtype=torch.bfloat16)
+    # Signed and wider than [0, 1): an integer-output golden of [0, 1) is all zeros, which a stale
+    # binding or an overwritten earlier output would still match.
+    return (torch.rand(shape, dtype=torch.bfloat16) - 0.5) * 200
 
 
 def _reference(host, **kwargs):
@@ -325,17 +327,24 @@ def _pin_l1_headroom(device, headroom_bytes):
     return resident, resident.buffer_address() - info.address_at_first_l1_cb_buffer
 
 
-def test_tilize_codegen_cb_plan_follows_live_l1(device):
+# The output stays in DRAM: an L1 output of this shape would not fit under the pin.
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"memory_config": ttnn.DRAM_MEMORY_CONFIG}, {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": ttnn.int32}],
+    ids=["bfloat16", "bfloat16_to_int32"],
+)
+def test_tilize_codegen_cb_plan_follows_live_l1(device, kwargs):
     grid = device.compute_with_storage_grid_size()
     assert _PLAN_SHAPE[-2] // 32 >= grid.x * grid.y, "the plan case must keep more tile rows than cores"
     torch.manual_seed(0)
-    host = torch.rand(_PLAN_SHAPE, dtype=torch.bfloat16)
+    host = _make_input(_PLAN_SHAPE, ttnn.bfloat16)
     xt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    reference = _reference(host, **kwargs)
+    expected = host if reference is None else reference
     device.clear_program_cache()
 
     out, added = _codegen_added(device, lambda: ttnn.tilize(xt, **kwargs))
-    assert_equal(host, ttnn.to_torch(out))
+    assert_equal(expected, ttnn.to_torch(out))
     assert added > 0, "auto served the unpressured call on native; expected codegen"
     entries_clear = device.num_program_cache_entries()
 
@@ -345,7 +354,7 @@ def test_tilize_codegen_cb_plan_follows_live_l1(device):
             8 * _BF16_TILE_BYTES <= headroom < _FULL_ROW_DOUBLE_BUFFERED
         ), f"pinned headroom {headroom} B does not force a smaller plan"
         out = ttnn.tilize(xt, **kwargs)
-        assert_equal(host, ttnn.to_torch(out))
+        assert_equal(expected, ttnn.to_torch(out))
         msg = "the pinned call replayed the program planned for clear L1"
         assert device.num_program_cache_entries() == entries_clear + 1, msg
     finally:
@@ -353,7 +362,7 @@ def test_tilize_codegen_cb_plan_follows_live_l1(device):
 
     # Releasing the pin restores the original plan, which is still cached.
     out = ttnn.tilize(xt, **kwargs)
-    assert_equal(host, ttnn.to_torch(out))
+    assert_equal(expected, ttnn.to_torch(out))
     assert (
         device.num_program_cache_entries() == entries_clear + 1
     ), "releasing the pin did not return to the cached plan"
