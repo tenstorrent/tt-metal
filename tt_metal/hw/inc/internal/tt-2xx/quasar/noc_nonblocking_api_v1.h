@@ -81,7 +81,7 @@ inline __attribute__((always_inline)) void noc_io_fence() { asm volatile("fence 
 // its buffer's lock. The *_set_state / *_with_state paths do not take it and are not safe across DM cores.
 extern uint32_t noc_cmd_buf_lock[NOC_NUM_CMD_BUFS];
 // This DM core's transaction id per buffer, recorded by ncrisc_noc_set_transaction_id. NOC_CTRL_HI is shared, so
-// ncrisc_noc_fast_read writes this core's id there in the same lock hold as its issue.
+// the issue functions below write this core's id there in the same lock hold as the issue.
 extern thread_local uint32_t noc_cmd_buf_trid[NOC_NUM_CMD_BUFS];
 
 struct NocCmdBufLock {
@@ -208,6 +208,11 @@ inline __attribute__((always_inline)) bool noc_status_reg_matches_counter(
 
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
+}
+
+// Call with cmd_buf's lock held, before the issue.
+inline __attribute__((always_inline)) void noc_cmd_buf_write_trid(uint32_t noc, uint32_t cmd_buf) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_HI, NOC_CMD_PKT_TAG_ID(noc_cmd_buf_trid[cmd_buf]));
 }
 
 inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_t noc, uint32_t id_mask) {
@@ -368,7 +373,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_HI, NOC_CMD_PKT_TAG_ID(noc_cmd_buf_trid[cmd_buf]));
+    noc_cmd_buf_write_trid(noc, cmd_buf);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
@@ -435,8 +440,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
 
     if constexpr (use_trid) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_HI, NOC_CMD_PKT_TAG_ID(trid));
+        noc_cmd_buf_trid[cmd_buf] = trid;
     }
+    noc_cmd_buf_write_trid(noc, cmd_buf);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
@@ -491,6 +497,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
         __atomic_fetch_add(&noc_nonposted_writes_num_issued[noc], 1, __ATOMIC_RELAXED);
         __atomic_fetch_add(&noc_nonposted_writes_acked[noc], num_dests, __ATOMIC_RELAXED);
     }
+    noc_cmd_buf_write_trid(noc, cmd_buf);
     noc_io_fence();
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
@@ -819,6 +826,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
             __atomic_fetch_add(&noc_nonposted_writes_acked[noc], 1, __ATOMIC_RELAXED);
         }
     }
+    noc_cmd_buf_write_trid(noc, cmd_buf);
     noc_io_fence();
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
@@ -871,6 +879,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
             __atomic_fetch_add(&noc_nonposted_writes_acked[noc], num_dests, __ATOMIC_RELAXED);
         }
     }
+    noc_cmd_buf_write_trid(noc, cmd_buf);
     noc_io_fence();
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
@@ -923,6 +932,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
             __atomic_fetch_add(&noc_nonposted_atomics_acked[noc], 1, __ATOMIC_RELAXED);
         }
     }
+    noc_cmd_buf_write_trid(noc, cmd_buf);
     noc_io_fence();
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
 }
@@ -978,6 +988,7 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
             __atomic_fetch_add(&noc_nonposted_atomics_acked[noc], num_dests, __ATOMIC_RELAXED);
         }
     }
+    noc_cmd_buf_write_trid(noc, cmd_buf);
     noc_io_fence();
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
 }
