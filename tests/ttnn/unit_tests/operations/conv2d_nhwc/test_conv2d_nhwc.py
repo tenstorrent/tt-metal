@@ -126,8 +126,9 @@ def test_conv2d_nhwc_flattened_input_spatial(device, input_shape, C_out, k, padd
     _run(device, input_shape, C_out, k, padding, with_bias=True, flattened=True)
 
 
-def test_conv2d_nhwc_rejects_unsupported_stride(device, expect_error):
-    """Outside Phase 0 SUPPORTED -> NotImplementedError naming the stride axis (validate() gate)."""
+def test_conv2d_nhwc_rejects_unsupported_dilation(device, expect_error):
+    """Outside SUPPORTED -> NotImplementedError naming the dilation axis (validate() gate).
+    (Was the stride axis; strided convs were added to SUPPORTED by the verifier.)"""
     torch.manual_seed(42)
     x = torch.randn(1, 8, 8, 32, dtype=torch.float32)
     tt_x = ttnn.from_torch(
@@ -138,17 +139,71 @@ def test_conv2d_nhwc_rejects_unsupported_stride(device, expect_error):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     w = torch.randn(32, 32, 3, 3, dtype=torch.float32)
-    with expect_error(NotImplementedError, "stride"):
+    with expect_error(NotImplementedError, "dilation"):
         tt_w = prepare_conv2d_weights(
             w,
             kernel_size=3,
-            stride=2,
-            padding=1,
+            stride=1,
+            padding=2,
             groups=1,
-            dilation=1,
+            dilation=2,
             input_dtype=ttnn.float32,
             weight_dtype=ttnn.float32,
             input_memory_config=tt_x.memory_config(),
             device=device,
         )
-        conv2d_nhwc(tt_x, tt_w, 3, padding=1, stride=2)
+        conv2d_nhwc(tt_x, tt_w, 3, padding=2, dilation=2)
+
+
+@pytest.mark.parametrize(
+    "input_shape, C_out, k, padding, stride",
+    [
+        pytest.param((1, 56, 56, 64), 128, 3, 1, 2, id="k3_s2_resnet_downsample"),
+        pytest.param((1, 17, 17, 32), 64, 3, 1, 2, id="k3_s2_odd_spatial"),
+        pytest.param((1, 56, 56, 256), 512, 1, 0, 2, id="k1_s2_shortcut"),
+        pytest.param((2, 28, 28, 64), 64, 3, 1, 3, id="k3_s3_batch2"),
+    ],
+)
+def test_conv2d_nhwc_strided(device, input_shape, C_out, k, padding, stride):
+    torch.manual_seed(42)
+    N, H, W, C_in = input_shape
+    x = torch.randn(N, H, W, C_in, dtype=torch.float32)
+    w = torch.randn(C_out, C_in, k, k, dtype=torch.float32)
+    b = torch.randn(C_out, dtype=torch.float32)
+    expected = torch_reference(x, w, b, padding=padding, stride=stride)
+    tt_x = ttnn.from_torch(
+        x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    common = dict(
+        kernel_size=k,
+        stride=stride,
+        padding=padding,
+        input_dtype=ttnn.float32,
+        weight_dtype=ttnn.float32,
+        input_memory_config=tt_x.memory_config(),
+        device=device,
+    )
+    tt_out = conv2d_nhwc(
+        tt_x,
+        prepare_conv2d_weights(w, **common),
+        k,
+        bias=prepare_conv2d_bias(b, **common),
+        padding=padding,
+        stride=stride,
+    )
+    out = ttnn.to_torch(tt_out).float()
+    assert list(out.shape) == list(expected.shape)
+    p = pcc(out, expected)
+    assert p >= PCC_BY_DTYPE[ttnn.float32], f"PCC {p:.6f}"
+
+
+@pytest.mark.parametrize(
+    "input_shape, C_out, k, padding",
+    [
+        pytest.param((1, 128, 128, 512), 128, 3, 1, id="wide_row_colclip_bm_lt_row"),
+        pytest.param((1, 64, 200, 256), 64, 3, 1, id="wide_row_W_out_not_tile_multiple"),
+    ],
+)
+def test_conv2d_nhwc_wide_rows_column_clip(device, input_shape, C_out, k, padding):
+    """Rows too wide for a full-row window in L1 (fp32): exercises the column-clipped window."""
+    _run(device, input_shape, C_out, k, padding, with_bias=True, flattened=False)

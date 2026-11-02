@@ -19,11 +19,25 @@ TILE = 32
 L1_NOC_ALIGN = 16
 
 # ---- Module knobs (single source of truth) ----
-CB_BUDGET_BYTES = 768 * 1024  # perf lamp L5
+CB_BUDGET_BYTES = 768 * 1024  # preferred per-core CB budget (perf lamp L5)
+L1_HEADROOM_BYTES = 128 * 1024  # kept free under the hard cap (L1_SMALL, allocator slack)
+
+
+def l1_cap_bytes():
+    """Hard per-core CB cap: worker L1 unreserved size minus headroom."""
+    return ttnn.get_max_worker_l1_unreserved_size() - L1_HEADROOM_BYTES
+
+
 ACT_RM_DEPTH = 2  # cb_act_rm depth, in (1 tile-row x bk) quanta
 WEIGHT_DEPTH = 2  # cb_weight_tiles depth, in (bk x bn) K-blocks
 OUT_RM_DEPTH = 2  # cb_out_rm depth, in (1 tile-row x bn) quanta
 BK_FLOOR = 4  # bk >= min(K_t, BK_FLOOR) on the first walk (perf lamp L7)
+# Compute config: one source for the descriptor, the DEST capacity used by the
+# subblock rule and the accumulator page format.
+MATH_FIDELITY = ttnn.MathFidelity.HiFi4
+FP32_DEST_ACC_EN = True
+DST_TILES = 4 if FP32_DEST_ACC_EN else 8  # half-sync DEST capacity in tiles
+ACC_DTYPE = ttnn.float32 if FP32_DEST_ACC_EN else ttnn.bfloat16
 
 # ---- CB indices (semantic names) ----
 CB_ACT_WINDOW = 0
@@ -40,6 +54,11 @@ def _div_up(a, b):
     return -(-a // b)
 
 
+def tile_bytes(dtype):
+    """Bytes of one 32x32 tile of `dtype` (bf8b: 64 B exponents + 1024 B mantissas)."""
+    return {ttnn.float32: 4096, ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088}[dtype]
+
+
 def _divisors(n):
     return [d for d in range(1, n + 1) if n % d == 0]
 
@@ -53,22 +72,58 @@ def conv_geometry(*, C_in, kH, kW, groups, elem_bytes):
     return {"tap_width": tap_width, "band_tiles": band_tiles, "K_t": kH * band_tiles}
 
 
-def _window_sticks(pix0, pix1, *, H, W, H_out, W_out, kH, padding, stride, dilation):
-    """Sticks in the flattened input range an m-block's pixels [pix0, pix1] read.
+def _window_bounds(pix0, pix1, *, H, W, H_out, W_out, kH, kW, padding, stride, dilation):
+    """Input window an m-block's pixels [pix0, pix1] read (regime R0 + R10 column clip).
+
+    Returns (row_lo, row_hi, col_lo, last_hi, win_w, mid_lo, mid_hi) over flattened input
+    rows (n*H + h). Window stick of input (row, col) = (row - row_lo) * win_w + (col - col_lo).
+      * one output row  -> 2-D clip: every row holds columns [col_lo, last_hi], win_w = width.
+      * several rows    -> contiguous flattened range, win_w = W: the first input row starts
+        at col_lo and the last ends at last_hi (each only when that row is not padding-clamped,
+        i.e. read by that one output row alone); middle rows are whole.
     Mirrors the reader kernel's window bound computation exactly."""
     hw_out = H_out * W_out
     n0, r0 = divmod(pix0, hw_out)
     n1, r1 = divmod(pix1, hw_out)
-    ho0, ho1 = r0 // W_out, r1 // W_out
-    lo_row = min(max(0, ho0 * stride - padding), H - 1)
-    hi_row = max(min(H - 1, ho1 * stride - padding + dilation * (kH - 1)), 0)
-    lo = (n0 * H + lo_row) * W
-    hi = (n1 * H + hi_row) * W + W - 1
-    return hi - lo + 1
+    ho0, wo0 = divmod(r0, W_out)
+    ho1, wo1 = divmod(r1, W_out)
+    raw_lo = ho0 * stride - padding
+    raw_hi = ho1 * stride - padding + dilation * (kH - 1)
+    row_lo = n0 * H + min(max(0, raw_lo), H - 1)
+    row_hi = max(n1 * H + max(min(H - 1, raw_hi), 0), row_lo)
+    c_first = min(max(0, wo0 * stride - padding), W - 1)
+    c_last = max(min(W - 1, wo1 * stride - padding + dilation * (kW - 1)), 0)
+    if n0 == n1 and ho0 == ho1:
+        col_lo, last_hi = c_first, max(c_last, c_first)
+        return row_lo, row_hi, col_lo, last_hi, last_hi - col_lo + 1, col_lo, last_hi
+    col_lo = c_first if raw_lo >= 0 else 0
+    last_hi = c_last if raw_hi <= H - 1 else W - 1
+    return row_lo, row_hi, col_lo, last_hi, W, 0, W - 1
+
+
+def _window_sticks(pix0, pix1, **kw):
+    row_lo, row_hi, col_lo, last_hi, win_w, _, _ = _window_bounds(pix0, pix1, **kw)
+    return (row_hi - row_lo) * win_w + (last_hi - col_lo) + 1
 
 
 def select_blocking(
-    *, N, H, W, C_in, C_out, kH, kW, padding, stride, dilation, groups, elem_bytes, num_cores, has_bias
+    *,
+    N,
+    H,
+    W,
+    C_in,
+    C_out,
+    kH,
+    kW,
+    padding,
+    stride,
+    dilation,
+    groups,
+    elem_bytes,
+    weight_tile_bytes,
+    num_cores,
+    has_bias,
+    l1_cap_bytes,
 ):
     geo = conv_geometry(C_in=C_in, kH=kH, kW=kW, groups=groups, elem_bytes=elem_bytes)
     tap_width, band_tiles, K_t = geo["tap_width"], geo["band_tiles"], geo["K_t"]
@@ -86,9 +141,9 @@ def select_blocking(
     g_n = N_t // core_n_tiles
 
     T = TILE * TILE * elem_bytes  # act / out tile bytes
-    T_w = TILE * TILE * elem_bytes  # weight tile bytes (weight_dtype == dtype in Phase 0)
-    T_acc = TILE * TILE * 4  # fp32 DEST accumulation
-    win_kw = dict(H=H, W=W, H_out=H_out, W_out=W_out, kH=kH, padding=padding, stride=stride, dilation=dilation)
+    T_w = weight_tile_bytes  # weight / bias tile bytes (weight_dtype)
+    T_acc = tile_bytes(ACC_DTYPE)  # accumulator page = DEST width
+    win_kw = dict(H=H, W=W, H_out=H_out, W_out=W_out, kH=kH, kW=kW, padding=padding, stride=stride, dilation=dilation)
 
     def window_max(bm):
         best = 1
@@ -113,33 +168,39 @@ def select_blocking(
         )
 
     k_divs_desc = sorted(_divisors(K_t), reverse=True)
-    choice = None
-    for bn in sorted(_divisors(core_n_tiles), reverse=True):
-        # Step 2 (bn = core_n_tiles only): bm = core_m_tiles with the bk floor.
-        if bn == core_n_tiles:
-            bm = core_m_tiles
-            win = window_max(bm)
-            for bk in k_divs_desc:
-                if bk >= min(K_t, BK_FLOOR) and footprint(bm, bk, bn, win) <= CB_BUDGET_BYTES:
-                    choice = (bm, bk, bn, win)
-                    break
-        # Step 3: walk bm down, bk over all divisors.
-        if choice is None:
+    win_cache = {}
+
+    def win_of(bm):
+        if bm not in win_cache:
+            win_cache[bm] = window_max(bm)
+        return win_cache[bm]
+
+    def walk(budget):
+        for bn in sorted(_divisors(core_n_tiles), reverse=True):
+            # Step 2 (bn = core_n_tiles only): bm = core_m_tiles with the bk floor.
+            if bn == core_n_tiles:
+                bm = core_m_tiles
+                win = win_of(bm)
+                for bk in k_divs_desc:
+                    if bk >= min(K_t, BK_FLOOR) and footprint(bm, bk, bn, win) <= budget:
+                        return bm, bk, bn, win
+            # Step 3: walk bm down, bk over all divisors.
             for bm in range(core_m_tiles, 0, -1):
-                win = window_max(bm)
-                bk = next((d for d in k_divs_desc if footprint(bm, d, bn, win) <= CB_BUDGET_BYTES), None)
+                win = win_of(bm)
+                bk = next((d for d in k_divs_desc if footprint(bm, d, bn, win) <= budget), None)
                 if bk is not None:
-                    choice = (bm, bk, bn, win)
-                    break
-        if choice is not None:
-            break
+                    return bm, bk, bn, win
+        return None
+
+    # The preferred budget first (perf lamp L5: footprint is a target); only a shape that
+    # cannot block under it falls back to the hard per-core L1 cap.
+    choice = walk(CB_BUDGET_BYTES) or walk(l1_cap_bytes)
     if choice is None:
         raise NotImplementedError("conv2d_nhwc: input window exceeds L1 — DRAM-slicing regime R10 not built")
     bm, bk, bn, window_sticks_max = choice
 
-    dst_tiles = 4  # fp32_dest_acc_en, half-sync DEST
-    sb_w = max(d for d in _divisors(bn) if d <= dst_tiles)
-    sb_h = max(d for d in _divisors(bm) if d * sb_w <= dst_tiles)
+    sb_w = max(d for d in _divisors(bn) if d <= DST_TILES)
+    sb_h = max(d for d in _divisors(bm) if d * sb_w <= DST_TILES)
 
     return {
         **geo,
@@ -215,14 +276,12 @@ def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_t
         _cb(CB_ACT_TILES, act_dtype, p["T"], bm * bk, cores),
         _cb(CB_OUT_RM, output_tensor.dtype, p["T"], OUT_RM_DEPTH * bn, cores),
     ]
-    partial_formats = [
-        ttnn.CBFormatDescriptor(buffer_index=CB_PARTIALS, data_format=ttnn.float32, page_size=p["T_acc"])
-    ]
+    partial_formats = [ttnn.CBFormatDescriptor(buffer_index=CB_PARTIALS, data_format=ACC_DTYPE, page_size=p["T_acc"])]
     if has_bias:
         cbs.append(_cb(CB_BIAS_TILES, bias_tensor.dtype, p["T_w"], p["core_n_tiles"], cores))
         # cb_biased aliases cb_partials: one allocation, two FIFOs (in-place bias add).
         partial_formats.append(
-            ttnn.CBFormatDescriptor(buffer_index=CB_BIASED, data_format=ttnn.float32, page_size=p["T_acc"])
+            ttnn.CBFormatDescriptor(buffer_index=CB_BIASED, data_format=ACC_DTYPE, page_size=p["T_acc"])
         )
     cbs.append(
         ttnn.CBDescriptor(total_size=bm * bn * p["T_acc"], core_ranges=cores, format_descriptors=partial_formats)
@@ -276,6 +335,13 @@ def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_t
 
     # ---- Compute ----
     compute_ct = [
+        CB_ACT_RM,
+        CB_WEIGHT_TILES,
+        CB_BIAS_TILES,
+        CB_ACT_TILES,
+        CB_PARTIALS,
+        CB_BIASED,
+        CB_OUT_RM,
         bm,
         bk,
         bn,
@@ -331,6 +397,6 @@ def create_program_descriptor(input_tensor, weight_tensor, bias_tensor, output_t
         core_ranges=cores,
         compile_time_args=compute_ct,
         runtime_args=compute_rt,
-        config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
+        config=ttnn.ComputeConfigDescriptor(math_fidelity=MATH_FIDELITY, fp32_dest_acc_en=FP32_DEST_ACC_EN),
     )
     return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)

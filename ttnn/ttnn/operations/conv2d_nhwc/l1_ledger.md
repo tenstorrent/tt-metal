@@ -19,14 +19,15 @@ Block axes (from `op_design.md` → Blocking Model): `m` (bm = `block_m_tiles`),
 
 | Symbol | Bound | Predicate establishing it |
 |---|---|---|
-| `window_sticks_max` | `≤ ((ceil(bm·32/W_out) + 1)·s + 2·d(k−1) + 1)·W` within one image crossing, and exactly the host-computed maximum over all blocks | the `select_blocking()` fit check, `footprint ≤ CB_BUDGET_BYTES` (Phase 0 max: 224 KiB) |
+| `window_sticks_max` | Block in one output row: `(d(kH−1)+1) · min(W, (bm·32−1)·s + d(kW−1) + 1)` (2-D column clip). Block over several rows: `≤ ((ceil(bm·32/W_out) + 1)·s + d(k−1) + 1)·W` within one image crossing, first/last row trimmed. Exactly the host-computed maximum over all blocks (`_window_bounds`, mirrored by the reader). | the `select_blocking()` fit check: `footprint ≤ CB_BUDGET_BYTES`, else `≤ l1_cap_bytes()` |
 | `tap_width` | `≤ C_in_g + l1_granule_elems − 1` | definition |
 | `bm` | `1 ≤ bm ≤ core_m_tiles = ceil(M_t / min(M_t, num_cores))` | selection rule steps 2–3 |
 | `bn` | divides `core_n_tiles`, which divides `N_t` | selection rule step 4 |
 | `bk` | divides `K_t = kH·band_tiles` | mechanism cap (uniform `in0_block_k`) |
 | `core_n_tiles` | `N_t / g_n` | Work Distribution |
 | `act_rm_depth`, `weight_depth`, `out_rm_depth` | 2, 2, 2 | host constants |
-| `CB_BUDGET_BYTES` | 768 KiB | module constant (perf lamp L5) |
+| `CB_BUDGET_BYTES` | 768 KiB, preferred | module constant (perf lamp L5) |
+| `l1_cap_bytes()` | `get_max_worker_l1_unreserved_size() − 128 KiB` (≈ 1.33 MiB on BH) | hard cap, used only when nothing blocks under `CB_BUDGET_BYTES` (verifier addition) |
 
 ## Total per-core footprint
 
@@ -41,6 +42,8 @@ F(bm, bk, bn) = window_sticks_max(bm) · tap_width · elem_bytes      # scales w
 ```
 
 Over the 62 Phase 0-eligible golden shapes (110 cores, fp32), F ranges from 162 to 676 KiB. Input and output tensors stay in DRAM (no L1 tensors), so the device peak equals F.
+
+Verifier re-measure (device `device_l1_peak_bytes`, golden run after the column clip and `strided` were added): 32 KiB – 1.27 MiB. The only shape above the 768 KiB preference is SDXL 32×32×1280→1280 s2 (fp32, 1.26 MiB: its one-tile-row window spans 5 input rows × 32 columns × 5 KiB sticks), which blocks only under the hard cap.
 
 ## Data-movement budget (chosen split R0)
 

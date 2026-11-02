@@ -4,9 +4,10 @@
 // conv2d_nhwc reader (NCRISC, NoC0) — regime R0.
 //
 // Block operations owned here:
-//   fetch_window_block   : the m-block's input footprint (a contiguous flattened stick range
-//                          [lo, hi]) from DRAM into cb_act_window (reader-private scratch),
-//                          one read barrier per m-block.
+//   fetch_window_block   : the m-block's input footprint from DRAM into cb_act_window
+//                          (reader-private scratch), one read barrier per m-block. Columns are
+//                          clipped to what the block reads (R10 column clip): a 2-D clip for a
+//                          block inside one output row, a trimmed contiguous range otherwise.
 //   gather_im2col_kblock : per K-block, per tile-row: 32 im2col rows x (bk*32) elements into
 //                          cb_act_rm (bk tile-sized pages of RM rows), as L1->L1 NoC copies of
 //                          each (pixel, kernel-row band) in-image run plus zero runs from
@@ -45,6 +46,8 @@ constexpr uint32_t band_elems = band_tiles * TILE_DIM;
 constexpr uint32_t kblock_elems = block_k_tiles * TILE_DIM;
 constexpr uint32_t im2col_row_bytes = kblock_elems * elem_bytes;
 
+FORCE_INLINE int32_t clamp_i(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
 FORCE_INLINE void zero_run(uint64_t zeros_noc, uint32_t dst, uint32_t bytes) {
     while (bytes > 0) {
         const uint32_t chunk = bytes < MEM_ZEROS_SIZE ? bytes : MEM_ZEROS_SIZE;
@@ -58,7 +61,9 @@ FORCE_INLINE void zero_run(uint64_t zeros_noc, uint32_t dst, uint32_t bytes) {
 FORCE_INLINE void gather_row(
     uint64_t zeros_noc,
     uint32_t window_base,
-    int32_t lo,
+    int32_t win_row0,
+    int32_t col_lo,
+    int32_t win_w,
     uint32_t n,
     int32_t h_base,
     int32_t w_base,
@@ -95,8 +100,8 @@ FORCE_INLINE void gather_row(
                 if (a > o) {
                     zero_run(zeros_noc, seg_dst, (a - o) * elem_bytes);
                 }
-                // Window element of band offset a: stick (n,h,w_base) relative to lo, plus a.
-                const int32_t stick = (static_cast<int32_t>(n * H) + h) * static_cast<int32_t>(W) + w_base - lo;
+                // Window element of band offset a: stick (n,h,w_base) of the clipped window, plus a.
+                const int32_t stick = (static_cast<int32_t>(n * H) + h - win_row0) * win_w + (w_base - col_lo);
                 const int32_t src_elem = stick * static_cast<int32_t>(tap_width) + static_cast<int32_t>(a);
                 noc_async_read(
                     get_noc_addr(window_base + static_cast<uint32_t>(src_elem) * elem_bytes),
@@ -130,27 +135,51 @@ void kernel_main() {
         const uint32_t t0 = m_tile_start + m_block * block_m_tiles;
         const uint32_t t1 = (t0 + block_m_tiles < m_tile_end) ? t0 + block_m_tiles : m_tile_end;
 
-        // ---- fetch_window_block: flattened stick range [lo, hi] (mirrors host _window_sticks) ----
+        // ---- fetch_window_block (mirrors host _window_bounds) ----
+        // Window stick of input (row, col) = (row - row_lo) * win_w + (col - col_lo).
+        //   one output row : 2-D clip, every row holds [col_lo, last_hi], win_w = its width.
+        //   several rows   : contiguous flattened range (win_w = W); the first / last input row
+        //                    is trimmed to [col_lo, ...] / [..., last_hi] unless padding-clamped.
         const uint32_t pix0 = t0 * TILE_DIM;
         const uint32_t pix1 = ((t1 * TILE_DIM < M) ? t1 * TILE_DIM : M) - 1;
-        const uint32_t n0 = pix0 / hw_out, ho0 = (pix0 - n0 * hw_out) / W_out;
-        const uint32_t n1 = pix1 / hw_out, ho1 = (pix1 - n1 * hw_out) / W_out;
-        int32_t lo_row = static_cast<int32_t>(ho0) * stride - padding;
-        lo_row = lo_row < 0 ? 0 : lo_row;
-        lo_row = lo_row > static_cast<int32_t>(H) - 1 ? static_cast<int32_t>(H) - 1 : lo_row;
-        int32_t hi_row = static_cast<int32_t>(ho1) * stride - padding + dilation * static_cast<int32_t>(kH - 1);
-        hi_row = hi_row > static_cast<int32_t>(H) - 1 ? static_cast<int32_t>(H) - 1 : hi_row;
-        hi_row = hi_row < 0 ? 0 : hi_row;
-        const uint32_t lo = (n0 * H + static_cast<uint32_t>(lo_row)) * W;
-        const uint32_t hi = (n1 * H + static_cast<uint32_t>(hi_row)) * W + W - 1;
-        {
-            uint32_t dst = window_base;
-            for (uint32_t s = lo; s <= hi; ++s) {
+        const uint32_t n0 = pix0 / hw_out, r0 = pix0 - n0 * hw_out, ho0 = r0 / W_out;
+        const uint32_t n1 = pix1 / hw_out, r1 = pix1 - n1 * hw_out, ho1 = r1 / W_out;
+        const int32_t wo0 = static_cast<int32_t>(r0 - ho0 * W_out);
+        const int32_t wo1 = static_cast<int32_t>(r1 - ho1 * W_out);
+        constexpr int32_t Hi = static_cast<int32_t>(H);
+        constexpr int32_t Wi = static_cast<int32_t>(W);
+        const int32_t raw_lo = static_cast<int32_t>(ho0) * stride - padding;
+        const int32_t raw_hi = static_cast<int32_t>(ho1) * stride - padding + dilation * static_cast<int32_t>(kH - 1);
+        const int32_t row_lo = static_cast<int32_t>(n0 * H) + clamp_i(raw_lo, 0, Hi - 1);
+        int32_t row_hi = static_cast<int32_t>(n1 * H) + clamp_i(raw_hi, 0, Hi - 1);
+        row_hi = row_hi < row_lo ? row_lo : row_hi;
+        const int32_t c_first = clamp_i(wo0 * stride - padding, 0, Wi - 1);
+        const int32_t c_last = clamp_i(wo1 * stride - padding + dilation * static_cast<int32_t>(kW - 1), 0, Wi - 1);
+        int32_t col_lo, last_hi, win_w, mid_lo, mid_hi;
+        if (n0 == n1 && ho0 == ho1) {
+            col_lo = c_first;
+            last_hi = c_last < c_first ? c_first : c_last;
+            win_w = last_hi - col_lo + 1;
+            mid_lo = col_lo;
+            mid_hi = last_hi;
+        } else {
+            col_lo = raw_lo >= 0 ? c_first : 0;
+            last_hi = raw_hi <= Hi - 1 ? c_last : Wi - 1;
+            win_w = Wi;
+            mid_lo = 0;
+            mid_hi = Wi - 1;
+        }
+        for (int32_t row = row_lo; row <= row_hi; ++row) {
+            const int32_t c0 = row == row_lo ? col_lo : mid_lo;
+            const int32_t c1 = row == row_hi ? last_hi : mid_hi;
+            uint32_t dst = window_base + static_cast<uint32_t>((row - row_lo) * win_w + (c0 - col_lo)) * tap_bytes;
+            uint32_t s = static_cast<uint32_t>(row) * W + static_cast<uint32_t>(c0);
+            for (int32_t c = c0; c <= c1; ++c, ++s) {
                 noc_async_read(input.get_noc_addr(s), dst, stick_bytes);
                 dst += tap_bytes;
             }
-            noc_async_read_barrier();
         }
+        noc_async_read_barrier();
 
         // ---- gather_im2col_kblock, per n-block (activation is reused across n) ----
         for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
@@ -178,7 +207,9 @@ void kernel_main() {
                             gather_row(
                                 zeros_noc,
                                 window_base,
-                                static_cast<int32_t>(lo),
+                                row_lo,
+                                col_lo,
+                                win_w,
                                 n,
                                 static_cast<int32_t>(ho) * stride - padding,
                                 static_cast<int32_t>(wo) * stride - padding,

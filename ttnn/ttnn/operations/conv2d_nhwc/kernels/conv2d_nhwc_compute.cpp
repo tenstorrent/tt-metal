@@ -20,23 +20,22 @@
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
 
-constexpr uint32_t block_m_tiles = get_compile_time_arg_val(0);
-constexpr uint32_t block_k_tiles = get_compile_time_arg_val(1);
-constexpr uint32_t block_n_tiles = get_compile_time_arg_val(2);
-constexpr uint32_t num_k_blocks = get_compile_time_arg_val(3);
-constexpr uint32_t num_n_blocks = get_compile_time_arg_val(4);
-constexpr uint32_t out_subblock_h = get_compile_time_arg_val(5);
-constexpr uint32_t out_subblock_w = get_compile_time_arg_val(6);
-constexpr bool has_bias = get_compile_time_arg_val(7) != 0;
-constexpr uint32_t core_n_tiles = get_compile_time_arg_val(8);
-
-constexpr uint32_t cb_act_rm = 1;
-constexpr uint32_t cb_weight_tiles = 2;
-constexpr uint32_t cb_bias_tiles = 3;
-constexpr uint32_t cb_act_tiles = 4;
-constexpr uint32_t cb_partials = 5;
-constexpr uint32_t cb_biased = 6;
-constexpr uint32_t cb_out_rm = 7;
+constexpr uint32_t cb_act_rm = get_compile_time_arg_val(0);
+constexpr uint32_t cb_weight_tiles = get_compile_time_arg_val(1);
+constexpr uint32_t cb_bias_tiles = get_compile_time_arg_val(2);
+constexpr uint32_t cb_act_tiles = get_compile_time_arg_val(3);
+constexpr uint32_t cb_partials = get_compile_time_arg_val(4);
+constexpr uint32_t cb_biased = get_compile_time_arg_val(5);
+constexpr uint32_t cb_out_rm = get_compile_time_arg_val(6);
+constexpr uint32_t block_m_tiles = get_compile_time_arg_val(7);
+constexpr uint32_t block_k_tiles = get_compile_time_arg_val(8);
+constexpr uint32_t block_n_tiles = get_compile_time_arg_val(9);
+constexpr uint32_t num_k_blocks = get_compile_time_arg_val(10);
+constexpr uint32_t num_n_blocks = get_compile_time_arg_val(11);
+constexpr uint32_t out_subblock_h = get_compile_time_arg_val(12);
+constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
+constexpr bool has_bias = get_compile_time_arg_val(14) != 0;
+constexpr uint32_t core_n_tiles = get_compile_time_arg_val(15);
 
 constexpr uint32_t in0_num_subblocks = block_m_tiles / out_subblock_h;
 constexpr uint32_t in1_num_subblocks = block_n_tiles / out_subblock_w;

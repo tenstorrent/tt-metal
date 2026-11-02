@@ -18,7 +18,9 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 from .conv2d_nhwc_program_descriptor import (
     conv_geometry,
     create_program_descriptor,
+    l1_cap_bytes,
     select_blocking,
+    tile_bytes,
 )
 
 # ---------------------------------------------------------------------------
@@ -83,7 +85,7 @@ INPUT_TAGGERS = {
 }
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0)
+# 2. SUPPORTED (Phase 0 + verifier: strided)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -93,7 +95,7 @@ SUPPORTED = {
     "bias_mode": ["with_bias", "no_bias"],
     "activation": ["none"],
     "channel_alignment": ["tile_aligned"],
-    "stride_mode": ["unit"],
+    "stride_mode": ["unit", "strided"],  # gather/window bounds are stride-parametric (verifier probe)
     "groups_mode": ["dense"],
     "dilation_mode": ["unit"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
@@ -186,6 +188,14 @@ def validate(
         raise ValueError("conv2d_nhwc: kernel larger than the padded input")
     if bias is not None and int(bias.shape[-1]) != C_out:
         raise ValueError("conv2d_nhwc: bias C_out does not match the weight")
+    geo = conv_geometry(
+        C_in=C_in, kH=kernel_size, kW=kernel_size, groups=groups, elem_bytes=_elem_bytes(input_tensor.dtype)
+    )
+    if int(weight_tensor.shape[-2]) != geo["K_t"] * 32:
+        raise ValueError(
+            f"conv2d_nhwc: prepared weight has {int(weight_tensor.shape[-2])} K rows, expected {geo['K_t'] * 32} "
+            "for this C_in / kernel_size / groups (was it built by prepare_conv2d_weights with the same arguments?)"
+        )
     return N, H, W, C_in, C_out
 
 
@@ -352,8 +362,10 @@ def conv2d_nhwc(
         dilation=dilation,
         groups=groups,
         elem_bytes=_elem_bytes(input_tensor.dtype),
+        weight_tile_bytes=tile_bytes(weight_tensor.dtype),
         num_cores=grid.x * grid.y,
         has_bias=bias is not None,
+        l1_cap_bytes=l1_cap_bytes(),
     )
     H_out, W_out = plan["H_out"], plan["W_out"]
     out_shape = [1, 1, N * H_out * W_out, C_out] if input_spatial is not None else [N, H_out, W_out, C_out]

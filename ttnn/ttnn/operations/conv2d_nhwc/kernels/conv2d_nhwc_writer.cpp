@@ -96,10 +96,13 @@ void kernel_main() {
                         noc_async_write(src, output.get_noc_addr(pix, col_offset_bytes), out_row_bytes);
                         src += out_row_bytes;
                     }
-                    noc_async_write_barrier();
+                    // Only the source slots must be drained before they are recycled; the
+                    // DRAM-side completion is awaited once at kernel end.
+                    noc_async_writes_flushed();
                 }
                 cb_pop_front(cb_out_rm, block_n_tiles);
             }
         }
     }
+    noc_async_write_barrier();
 }

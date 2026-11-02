@@ -1,0 +1,31 @@
+{
+ "results_dir": "/tmp/conv2d_nhwc_golden_r3",
+ "summary": {
+  "total": 5712,
+  "supported_pass": 172,
+  "supported_fail": 0,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 2262,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 0,
+  "invalid_skipped": 1104,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 0,
+  "no_axes_found": 2174
+ },
+ "category_counts": {
+  "xfail_expected": 2262,
+  "supported_pass": 172,
+  "invalid_skipped": 1104,
+  "no_axes_found": 2174
+ },
+ "loud": {
+  "supported_fail": [],
+  "xpass_drift": [],
+  "xfail_wrong_mode": [],
+  "supported_marked_xfail": []
+ }
+}
