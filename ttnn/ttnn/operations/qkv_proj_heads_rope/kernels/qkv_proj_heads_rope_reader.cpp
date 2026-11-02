@@ -57,7 +57,8 @@ void kernel_main() {
     constexpr uint32_t hidden_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t seq_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(7);
-    constexpr auto x_args = TensorAccessorArgs<8>();
+    constexpr uint32_t tiles_per_head = get_compile_time_arg_val(8);
+    constexpr auto x_args = TensorAccessorArgs<9>();
     constexpr auto cos_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
 
@@ -74,7 +75,9 @@ void kernel_main() {
     // K' = hidden tiles + the bias K tile.
     static_assert(num_k_blocks * k_block == hidden_tiles + 1);
     constexpr uint32_t act_block_tiles = block_m * k_block;
-    constexpr uint32_t table_tiles_per_row = 4;
+    // Table row = [cos_lo, -sin_lo, sin_hi, cos_hi]: the rotate_half tile swap needs D/2 == one tile.
+    static_assert(tiles_per_head == 2);
+    constexpr uint32_t table_tiles_per_row = 2 * tiles_per_head;
 
     const auto x_accessor = TensorAccessor(x_args, x_addr, tile_bytes);
     const auto cos_accessor = TensorAccessor(cos_args, cos_addr, tile_bytes);
@@ -133,10 +136,11 @@ void kernel_main() {
                 const uint32_t st = (first_row + row) % seq_tiles;
                 cb_reserve_back(cb_rotary_table, table_tiles_per_row);
                 const uint32_t table_addr = get_write_ptr(cb_rotary_table);
-                noc_async_read_page(st * 2, cos_accessor, table_addr);
-                noc_async_read_page(st * 2, sin_accessor, table_addr + tile_bytes);
-                noc_async_read_page(st * 2 + 1, sin_accessor, table_addr + 2 * tile_bytes);
-                noc_async_read_page(st * 2 + 1, cos_accessor, table_addr + 3 * tile_bytes);
+                const uint32_t lo_page = st * tiles_per_head;
+                noc_async_read_page(lo_page, cos_accessor, table_addr);
+                noc_async_read_page(lo_page, sin_accessor, table_addr + tile_bytes);
+                noc_async_read_page(lo_page + 1, sin_accessor, table_addr + 2 * tile_bytes);
+                noc_async_read_page(lo_page + 1, cos_accessor, table_addr + 3 * tile_bytes);
                 noc_async_read_barrier();
                 negate_bf16_tile<tile_bytes>(table_addr + tile_bytes);
                 cb_push_back(cb_rotary_table, table_tiles_per_row);

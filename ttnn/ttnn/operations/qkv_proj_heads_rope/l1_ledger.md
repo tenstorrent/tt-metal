@@ -79,3 +79,17 @@ stock (best: 2x512 123 us at h_c=2, 8x512 278 us at h_c=4). R1 is data-movement 
 the next refinements are R3 (x multicast within each M-group) and R2 (W multicast within each N-group),
 which cut x/W crossings to 1x. Per-core read stagger (both halves) is in place and cut 2x512 table-read
 stalls in the epilogue (68 -> 40 us).
+
+### Measured placement sensitivity (verifier, R1 built, 8x512, SUPPORTED widened at runtime for the probe only)
+
+| x | q/k/v | cos/sin | device us |
+|---|-------|---------|-----------|
+| L1 | L1 | L1 | 279.4 |
+| DRAM | L1 | L1 | 316.7 |
+| L1 | DRAM | L1 | 275.0 |
+| L1 | L1 | DRAM | 281.1 |
+| DRAM | DRAM | DRAM | 377.9 |
+
+At 2x512 (h_c = 1, grid 3x36): x L1 189.5 us, x DRAM 221.1 us. Output and table placement are
+traffic-neutral under R1; x in DRAM adds the `grid_n` DRAM re-crossings counted above, which is why
+`buffer_type = DRAM` ships with R3 (x multicast) rather than alone.

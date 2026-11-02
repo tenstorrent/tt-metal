@@ -211,6 +211,7 @@ def create_program_descriptor(input_tensor, weight, bias, cos, sin, outputs, blo
         HIDDEN_TILES,
         blocking.seq_tiles,
         BF16_TILE_BYTES,
+        TILES_PER_HEAD,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(cos).get_compile_time_args())

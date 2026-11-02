@@ -1,0 +1,2876 @@
+{
+  "summary": {
+    "total": 210,
+    "supported_pass": 25,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 175,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 10
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[32x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[64x64_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[128x32_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab256-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab384-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x32_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op_loose[8x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op_loose[16x256_tab256-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op_loose[32x128_tab128-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op_loose[8x384_tab384-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op_loose[4x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op_loose[8x256_tab256-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op_loose[2x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op_loose[4x256_tab256-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x256_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x256_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[32x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[32x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[32x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[32x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[32x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[32x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[32x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[64x64_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[64x64_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[64x64_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[64x64_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[64x64_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[64x64_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[64x64_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[128x32_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[128x32_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[128x32_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[128x32_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[128x32_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[128x32_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[128x32_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x500_tab500-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x500_tab500-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x500_tab500-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x500_tab500-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x500_tab500-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x500_tab500-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x500_tab500-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x500_tab500-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[7x511_tab511-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[7x511_tab511-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[7x511_tab511-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[7x511_tab511-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[7x511_tab511-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[7x511_tab511-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[7x511_tab511-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[7x511_tab511-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[13x300_tab300-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[13x300_tab300-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[13x300_tab300-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[13x300_tab300-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[13x300_tab300-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[13x300_tab300-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[13x300_tab300-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[13x300_tab300-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab256-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab256-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab256-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab256-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab256-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab256-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[4x256_tab256-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab384-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab384-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab384-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab384-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab384-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab384-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[8x384_tab384-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x32_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x32_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x32_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x32_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x32_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x32_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x32_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x128_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x128_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x512_tab512-alignment=tile_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x512_tab512-alignment=tile_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x37_tab37-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x37_tab37-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x37_tab37-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x37_tab37-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x37_tab37-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x37_tab37-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x37_tab37-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[2x37_tab37-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[3x100_tab100-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[3x100_tab100-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[3x100_tab100-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[3x100_tab100-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[3x100_tab100-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[3x100_tab100-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[3x100_tab100-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[3x100_tab100-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x8_tab8-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x8_tab8-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x8_tab8-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x8_tab8-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x8_tab8-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x8_tab8-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x8_tab8-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[1x8_tab8-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x8_tab8-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x8_tab8-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x8_tab8-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x8_tab8-alignment=h_non_aligned-buffer_type=L1-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "L1",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x8_tab8-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x8_tab8-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "L1",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x8_tab8-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=L1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "L1",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_golden.py::test_op[16x8_tab8-alignment=h_non_aligned-buffer_type=DRAM-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=DRAM-table_buffer_type=DRAM]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "out_buffer_type": "DRAM",
+          "table_buffer_type": "DRAM",
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_regression.py::test_late_positions",
+        "test_name": "test_late_positions",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_regression.py::test_lane_pairing_rotate_half",
+        "test_name": "test_lane_pairing_rotate_half",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_regression.py::test_long_tables[model_tables]",
+        "test_name": "test_long_tables[model_tables]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_regression.py::test_long_tables[inf_beyond_S]",
+        "test_name": "test_long_tables[inf_beyond_S]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_regression.py::test_padded_rows_zero[x_pad_inf]",
+        "test_name": "test_padded_rows_zero[x_pad_inf]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_regression.py::test_padded_rows_zero[x_and_tables_pad_inf]",
+        "test_name": "test_padded_rows_zero[x_and_tables_pad_inf]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_regression.py::test_large_mean_input[2x128-mean+50]",
+        "test_name": "test_large_mean_input[2x128-mean+50]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_regression.py::test_large_mean_input[2x128-mean-50]",
+        "test_name": "test_large_mean_input[2x128-mean-50]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_regression.py::test_large_mean_input[3x100-mean+50]",
+        "test_name": "test_large_mean_input[3x100-mean+50]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/qkv_proj_heads_rope/test_regression.py::test_large_mean_input[3x100-mean-50]",
+        "test_name": "test_large_mean_input[3x100-mean-50]",
+        "status": "failed"
+      }
+    ]
+  }
+}
