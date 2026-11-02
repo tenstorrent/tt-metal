@@ -39,15 +39,17 @@ def test_prefill_profile(mesh_device):
         mesh_device, max_batch_size=1, max_seq_len=NUM_BLOCKS * BLOCK_SIZE, enable_mtp=False
     )
     args = model.args
-    model.allocate_kv_caches([NUM_BLOCKS, args.n_kv_heads, BLOCK_SIZE, args.head_dim], ttnn.bfloat16, batch_size=1)
-    page_table = torch.arange(NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
     tokens = torch.randint(1000, 100000, (1, PROMPT_LEN), dtype=torch.long)
     bucket = ((PROMPT_LEN + CHUNK - 1) // CHUNK) * CHUNK
     padded = torch.cat([tokens, tokens[:, -1:].expand(1, bucket - PROMPT_LEN)], dim=1)
 
+    # Same order as text_demo: warmup prefill (non-paged) BEFORE the paged KV caches exist, then reset, then
+    # allocate the caches and capture. The first version allocated the caches first; it hung chip 3 (20:37).
     model.prefill(tokens)  # text_demo's _warmup_prefill: compiles the eager programs
     ttnn.synchronize_device(mesh_device)
     model.reset_state()
+    model.allocate_kv_caches([NUM_BLOCKS, args.n_kv_heads, BLOCK_SIZE, args.head_dim], ttnn.bfloat16, batch_size=1)
+    page_table = torch.arange(NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
     model.capture_prefill_trace_chunked(mesh_device, page_table, chunk_size=CHUNK, warmup_masked_buckets=False)
 
     def run():
