@@ -8,7 +8,8 @@ Every talker and code-predictor step writes its cache with `paged_fused_update_c
 moving position. A write that runs past the end corrupts whatever was allocated next, with
 no error and audio that is only slightly wrong. So each cache gets a sentinel buffer
 allocated right after it, two traced utterances run, and every sentinel must read back
-exactly as written.
+exactly as written. Frames only: neither codec has a KV cache, so the clip is encoded for its
+voice alone and nothing is decoded to audio.
 
 The sentinels are allocated with the caches, before any capture. A buffer allocated after
 capture is no use as a sentinel: a trace replays into addresses that were free when it was
@@ -24,13 +25,16 @@ import torch
 import ttnn
 from models.demos.audio.qwen3_tts.tests.reference_helpers import synthetic_voiced_clip
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor_decode import TtCodePredictorCachedDecoder
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline, build_clone_reference
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
+    Qwen3TTSPipeline,
+    build_clone_reference,
+    build_x_vector_prefill,
+)
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import TtTalkerCachedDecoder
 
 DEVICE_PARAMS = [{"l1_small_size": 65536, "trace_region_size": 90_000_000}]
 
 TEXT = "Good morning. Today is a beautiful day for a walk in the park, with bright sun and a gentle breeze."
-REFERENCE_TEXT = "Good morning. This sentence is being spoken by a language model."
 LANGUAGE = "English"
 CLIP_SECONDS = 2.0
 MAX_FRAMES = 128
@@ -88,8 +92,9 @@ def test_kv_cache_writes_stay_inside_their_caches(device, monkeypatch):
 
     monkeypatch.setattr(TtCodePredictorCachedDecoder, "__init__", predictor_init_with_sentinels)
 
-    reference = build_clone_reference(device, synthetic_voiced_clip(seconds=CLIP_SECONDS), REFERENCE_TEXT)
-    pipeline = Qwen3TTSPipeline(device, max_frames=MAX_FRAMES, seed=SEED)
+    reference = build_clone_reference(device, synthetic_voiced_clip(seconds=CLIP_SECONDS), x_vector_only=True)
+    pipeline = Qwen3TTSPipeline(device, max_frames=MAX_FRAMES, seed=SEED, codec=False)
+    prompt = build_x_vector_prefill(TEXT, reference, LANGUAGE, pipeline.tables)[0]
 
     caches = {
         "talker": pipeline.talker.k_cache + pipeline.talker.v_cache,
@@ -101,7 +106,7 @@ def test_kv_cache_writes_stay_inside_their_caches(device, monkeypatch):
     frames = []
     for _ in range(UTTERANCES):
         pipeline.reseed(SEED)
-        _, codes = pipeline.generate_clone(TEXT, reference, language=LANGUAGE)
+        codes = pipeline._decode_frames(prompt, MAX_FRAMES)
         frames.append(int(codes.shape[0]))
     pipeline.release()
     assert min(frames) >= MIN_FRAMES, f"too few traced steps to mean anything: {frames} frames"
