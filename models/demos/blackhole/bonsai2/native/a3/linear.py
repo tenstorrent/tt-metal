@@ -89,7 +89,7 @@ class TernaryLinear:
 
 
 # Sites that passed their e2e gate; each joins in its own commit.
-VALIDATED = {"mlp", "gdn_out", "gdn_in", "attn_qkv", "attn_o", "lm_head"}
+VALIDATED = {"mlp", "gdn_out", "gdn_in", "attn_qkv", "attn_o", "lm_head", "ffnorm", "attnnorm", "lmnorm"}
 # ffnorm / attnnorm / lmnorm: the decode RMSNorm in front of the MLP / attention or GDN in-projection / LM head
 # fused into the prep (rmsprep)
 WIRED = {"mlp", "gdn_out", "gdn_in", "attn_o", "attn_qkv", "lm_head", "ffnorm", "attnnorm", "lmnorm"}
