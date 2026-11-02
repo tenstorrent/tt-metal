@@ -18,7 +18,8 @@ open it in a browser; GitHub shows HTML files as source. Its source is the Curso
 as a live canvas in Cursor.
 
 **Status:** design. Nothing below is implemented yet except Tier D (2.4), which already
-runs in the pipeline builder and is not changed. Rewritten after the SAT joint-placement
+runs in the pipeline builder and is not changed by Tiers A to C (3.5 is a later option that
+gives it the same solver as Tier C). Rewritten after the SAT joint-placement
 rework of the topology mapper landed; the Tier C plan (2.3, 4, 5) follows that code.
 
 ### Scope: STRICT first; RELAXED and the policy plan's candidate table later
@@ -1918,6 +1919,163 @@ with every slice used.
 | per-chain resolution | `_resolve_chains_separately` (Python) | **rebuild**: a loop over the resolver, one call per fabric chain |
 | default core counts | `_pipeline_core_defaults` (Python) | **rebuild** (open question 7) |
 | submesh links | `discover_submesh_links` (C++, asks the control plane) | its loop, in C1 with the MGD's links and PSD cables in place of the control plane (4.1) |
+
+### 3.5 One pipeline solver for blaze and the topology mapper (later option)
+
+Tier C's footprint solve (4.1, 4.2) and blaze's runtime carve answer the same question: given
+a pipeline graph and a fabric, which rectangle of host slices does each stage get, and does the
+resolver accept that carve. Today they are two codes: the solve lives in the mapper's session,
+and blaze runs its Python planner (3.2) and then the resolver. This section splits the session
+so the solve takes plain data, and gives blaze a direct call to it. The MGD is not involved:
+blaze builds the input from its own `PipelineGraph`, and the mapper builds it from the
+pipeline descriptor or from a file blaze writes. Nothing in Tiers A to C depends on it. It is a
+refactor of P5 plus a blaze change, done once Tier C works.
+
+On the 132 carve-requiring benchmark cases the footprint plus resolver decided 127, and blaze's
+planner placed none (4.2, "Speed";
+[`CARVE_PLANNER_VS_FOOTPRINT.md`](pipeline_placement_experiments/CARVE_PLANNER_VS_FOOTPRINT.md)).
+
+#### The split
+
+```
+                  PipelinePlacementProblem    plain data: no control plane, no PSD, no MGD
+                    graph:  pipelines -> stages {name, shape in chips, core slots}
+                                         edges  {src, dst, loopback, soft}
+                    fabric: host slices {mesh, chip range, host ranks}
+                            chips {FabricNodeId, mesh coordinate}, chip links
+                       ^                                          ^
+  problem_from_mapper(logical, psd, full)       problem_from_control_plane(pipelines)
+    Tier C: C1's slices and links (4.1),          blaze at runtime: the control plane's mesh graph
+    PSD cables via inter_mesh_cables (3.3)        (host ranks, coord ranges), chip ids, and the
+                                                  link test discover_submesh_links uses
+                       \                                          /
+                  PipelinePlacementSession(problem, conflict_cap)          pipeline_builder.cpp
+                    positions, position graph, constraints (below), pre-checks, resolver inputs
+                    next(): one more carve, the resolver on it -> PipelinePlacement per pipeline
+```
+
+The mapper keeps its own state around the session. `channels_`, `R`, `record_channels` and the
+demand check (4.2, 4.3) read the session's carve and layout and never enter the problem. P5's
+`PipelinePlacementEnumerationSession` becomes `problem_from_mapper`, a `PipelinePlacementSession`,
+and that mapper-only state.
+
+```cpp
+// pipeline_builder.hpp, beside resolve_graph_layout. Every field is plain data.
+struct PipelinePlacementProblem {
+    struct Stage { std::string name; MeshShape shape; std::optional<std::uint32_t> core_slots; };
+    struct Edge  { std::string src, dst; bool loopback = false; bool soft = false; };  // soft: RELAXED (later)
+    struct Pipeline { std::vector<Stage> stages; std::vector<Edge> edges; };           // fabric edges only
+    struct HostSlice { MeshId mesh; MeshCoordinateRange chips; std::vector<MeshHostRankId> host_ranks; };
+
+    std::map<std::string, Pipeline> pipelines;               // one target component each (3.4)
+    std::vector<HostSlice> slices;                           // every mesh's host grid
+    std::map<FabricNodeId, MeshCoordinate> chip_coords;      // every chip of every slice
+    std::set<std::pair<FabricNodeId, FabricNodeId>> links;   // chip pairs the fabric routes over, both orders
+};
+
+class PipelinePlacementSession {                             // P5's solve and check, minus the mapper's state
+public:
+    PipelinePlacementSession(const PipelinePlacementProblem& problem, std::uint64_t conflict_cap);
+    PipelineLayoutResult next();                             // failure_stage pipeline_carve or pipeline_layout
+};
+
+PipelinePlacementProblem problem_from_control_plane(std::map<std::string, PipelinePlacementProblem::Pipeline>);
+```
+
+#### The solve: graph, positions and constraints
+
+The encoding of 4.1 and 4.2, in one place. Three graphs:
+
+| Part | Built from | In the solver |
+|---|---|---|
+| target graph | each pipeline's stages, and its fabric edges both ways (a repeated edge is a duplicate entry); host edges are left out | `AdjacencyGraph<stage>` |
+| positions | for each distinct stage shape and each mesh, every rectangle of whole host slices the shape fills exactly; positions overlap | global nodes |
+| global graph | two positions are adjacent when they share no slice and some slice of one borders some slice of the other, by a link inside the mesh or a cable between meshes | `AdjacencyGraph<std::size_t>` |
+
+The constraints. Every row is today's solver API; the topology solver gets no pipeline code.
+
+| Rule | How | Kind |
+|---|---|---|
+| every stage gets exactly one position | `solve_topology_mapping` maps every target node | built in |
+| no two stages take the same position | the mapping is injective | built in |
+| a stage only on positions of its own shape (no rotation, 2.1) | `add_required_constraint(stage, positions)` | hard |
+| a stage only where it fits on its own: its endpoints (one per edge, plus 2 for stage 0's H2D and D2H) fit core slots x chips | positions that fail are left out of the stage's required set, before the solver session; stage 0 is never offered a one-chip position | filter |
+| chosen positions do not overlap | `add_resource_constraint(position -> slice ids)`: at most one chosen position per slice | hard |
+| every fabric edge joins touching positions | each target edge must land on a global edge (`ConnectionValidationMode::STRICT`) | hard |
+| a tight carve uses every slice | when the stage areas add up to the slice count, one `add_cardinality_constraint(pairs covering slice s, 1)` per slice | redundant, for speed (report 5.4: 66 s to 0.59 s, 170 s to 0.32 s) |
+| RELAXED (later): an edge may go over host | `set_allow_unmatched_target_edges` (#56762) on soft edges; stage 0's outgoing edge stays hard | soft |
+| the solve stops | `conflict_cap` on the `TopologyMappingEnumerationSession`; `Auto` picks SAT because a resource constraint is present | bound |
+
+The benchmark ran the shape, overlap and edge rows as `topo/carve_footprint_bench.cpp` builds
+them, with completeness from the uncommitted `topo/resource_completeness.patch`; the
+cardinality form replaces that patch (4.2).
+
+The solve does not see which chip carries each edge, two edges landing on one chip, core slot
+numbers, or the H2D and D2H chips. The resolver check on the chosen rectangles catches those
+(4.2, "From the chosen rectangles to the resolver call"). The pre-checks (area, lattice count,
+colour and segment tests) run before the solve, as in 4.2.
+
+#### Blaze at runtime
+
+Where `plan_carve` runs today (`_collect_submeshes`, multi-mesh with no `submesh_shape`, 3.4):
+
+```python
+# pipeline_builder/graph.py, sketch
+pipelines = self.to_placement_pipelines()   # names, shapes, fabric edges, core pools; no factories, no device
+placement = experimental.solve_pipeline_placement(pipelines, conflict_cap=cap)   # control plane read in C++
+# Same input on every rank and a deterministic solve, so the same carve; the crc32 exchange stays as a guard.
+submeshes = [mesh_device.create_submesh(s.shape, s.offset) for s in placement.slots if s.mesh == my_mesh]
+layout = placement.layout                   # submesh i is placement.submeshes[i]; global_submesh_chips follows
+```
+
+| Today (3.2, 3.4) | With the solver |
+|---|---|
+| allgather every rank's chips (`discover_host_slices`) | the control plane's host ranks and coord ranges, read in C++; no allgather |
+| probe each chip's links from Python (`discover_slice_adjacency`) | the same link test, in C++ |
+| `plan_ring_carve` or `plan_fork_carve`, then `resolve_graph_layout` on the carve | one call: carve and layout |
+| stage 0 must be one slice; `no-alignment` and budget failures (3.2) | none of these limits |
+| harness `pipeline_core_coords()` unknown to Tier C (open question 7) | blaze passes them, so the runtime solve uses the real pools |
+
+The first version sits behind a flag and still runs `resolve_graph_layout` on the carved
+submeshes as a cross-check. The check and the Python planners go once the two agree on every
+test. Per-rank tiling (`submesh_shape` given) and single-mesh tiling are unchanged. Every rank
+must build the problem in the same order (sorted slices, chips and links) so the SAT solve sees
+the same clauses; otherwise rank 0 solves and broadcasts the plan from C++.
+
+#### Without the MGD pipeline descriptor
+
+The graph half is small, so blaze can write it. A parser runs the model's graph construction
+(not the stage factories), writes the pipelines as JSON and stops.
+`generate_rank_bindings --pipeline-spec <file>` then fills Tier C's stage graph from the file
+instead of the descriptor; the session is the same. This feeds the rank-binding sweep with no
+MGD change. Its limit: some model builders need weights or checkpoint configs to build their
+graph (DFlash, reload), so they need a topology-only build path first.
+
+#### Where the two calls can differ
+
+Only the fabric half. The mapper reads cables from the PSD through the seating's layout (3.3);
+blaze reads links from the control plane, which drops links with no active routing plane and
+knows only the cables it bound (4.3). Phase 0 binds `R`, so the crossings the mapper relied on
+are among the links blaze sees, and the carve the mapper accepted stays available to blaze's
+solve. Blaze may still pick a different valid carve; Tier C does not need to match runtime's
+placement (2.3). Both run the same solve, so 3.2's question of whether they agree that a carve
+exists (open question 8) goes away.
+
+#### Pieces
+
+| Piece | Where | Change |
+|---|---|---|
+| `PipelinePlacementProblem`, `PipelinePlacementSession` | `pipeline_builder.hpp`, `pipeline_builder.cpp` | P5's session, split at its inputs |
+| `problem_from_mapper` | `pipeline_builder.cpp` | C1 as written (4.1) |
+| `problem_from_control_plane` | `pipeline_builder.cpp` | new: slices from the control plane mesh graph's `get_host_ranks` and `get_coord_range`, links by `discover_submesh_links`' test |
+| `solve_pipeline_placement` | `pipeline_module_nanobind.cpp` | new binding beside `resolve_graph_layout` |
+| `_collect_submeshes` | tt-blaze `pipeline_builder/graph.py` | calls it behind a flag |
+| `carve_planner.py`, the host-edge search | tt-blaze | removed after parity |
+| MGD, topology solver | | none |
+
+Still open: a stage smaller than a host slice (open question 15), and a capped solve that reads
+as "no mapping" (open question 13).
+
 ## 4. Pipeline mapping in the topology mapper (Tier C)
 
 The topology mapper places meshes with SAT joint seating. A *seat* is a physical footprint
