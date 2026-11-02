@@ -56,6 +56,13 @@ def from_chunks(ch, rows, users, Sp, S, tail):
     return xr.reshape(rows * users, Sp, *tail)[:, :S]
 
 
+def er_shard():
+    """DSV41_PF_ER_SHARD=1 (default OFF): the Engram rows of a window are uploaded ONCE per mesh row, every column holding only the rows of its own 32-token chunks ([n_own, Kin] per device,
+    the layout of ``tok``) and gathered over the 8 columns on the device (all_gather, [n8, 8, T, Kin] -> [1, 1, R, Kin]) instead of being replicated 8x over PCIe: 2 layers x R x Kin x 2 B x 32 chips =
+    805 MB per Up=2 window (about 28 ms of host-to-device time between two replays)."""
+    return os.environ.get("DSV41_PF_ER_SHARD", "0") == "1" and ER_RM
+
+
 def engram_own():
     """DSV41_PF_ENGRAM_OWN=1: column-split Engram on the own chunks only (forward_v2_own); read at call time."""
     return os.environ.get("DSV41_PF_ENGRAM_OWN", "0") == "1"
@@ -178,7 +185,22 @@ class DSV41PrefillModel:
                 ttnn.ROW_MAJOR_LAYOUT if ER_RM else ttnn.TILE_LAYOUT,
             )
             for lid, e in self.engram.items()
+            if not (er_shard() and self.cs)
         }
+        if (
+            er_shard() and self.cs
+        ):  # per device [R / 8, Kin]: the rows of the own 32-token chunks (uploaded once per row, gathered on the device)
+            er = {
+                lid: ttnn.from_torch(
+                    torch.zeros(rows * (R // self.cols), self.cols * e.kin, dtype=torch.bfloat16),
+                    device=self.md,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.shard_rc,
+                )
+                for lid, e in self.engram.items()
+            }
         vb = None
         if self.vis:
             assert (
@@ -287,9 +309,22 @@ class DSV41PrefillModel:
             h2d(self._host(prepped["tok"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), tok)
         for lid, dev in er.items():
             t1 = time.perf_counter()
-            h = self._host(
-                prepped[lid], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT if ER_RM else ttnn.TILE_LAYOUT
-            )  # row-major upload: the 32-token slices are tilized on the device (host tilize was ~0.7 s per 16k-token chunk)
+            if (
+                er_shard() and self.cs
+            ):  # once per row: column c gets the rows of its own chunks (chunk 8g + c): [rows * n8 * T, cols * Kin]
+                p_ = prepped[lid]
+                n8_ = p_.shape[2] // T // self.cols
+                p_ = p_.reshape(self.rows, n8_, self.cols, T, p_.shape[-1]).permute(0, 1, 3, 2, 4)
+                h = ttnn.from_torch(
+                    p_.reshape(self.rows * n8_ * T, self.cols * p_.shape[-1]).contiguous(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=self.shard_rc,
+                )
+            else:
+                h = self._host(
+                    prepped[lid], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT if ER_RM else ttnn.TILE_LAYOUT
+                )  # row-major upload: the 32-token slices are tilized on the device (host tilize was ~0.7 s per 16k-token chunk)
             t2 = time.perf_counter()
             h2d(h, dev)
             t3 = time.perf_counter()
@@ -342,6 +377,15 @@ class DSV41PrefillModel:
         ov = ttnn.reshape(ttnn.to_layout(ov_dev, ttnn.TILE_LAYOUT), [1, 1, n_own, DIM])
         vl = ttnn.reshape(ttnn.to_layout(vl_dev, ttnn.TILE_LAYOUT), [1, 1, n_own, 1])
         return {"ov": ov, "vl": vl, "keep": ttnn.rsub(vl, 1.0)}
+
+    def _er_gather(self, buf, pl):
+        """DSV41_PF_ER_SHARD: per device [n8 * T, Kin] own-chunk Engram rows -> [1, 1, R, Kin] rows of the whole row, in the order [group][column][token] (chunk 8g + c at rows (8g + c) * T)."""
+        n_own, kin = int(buf.shape[0]), int(buf.shape[-1])
+        n8 = n_own // T
+        g = pl.L.mesh_config.allgather(
+            ttnn.reshape(buf, [n8, 1, T, kin]), pl.L.ccl, axis=1, dim=1
+        )  # [n8, cols, T, Kin]
+        return ttnn.reshape(g, [1, 1, n8 * self.cols * T, kin])
 
     def _pad_rows(self, C):
         """DSV41_PF_MOE_PAD=1 (default OFF): [1,1,n_own,1] fp32 tile of the column's own rows, 1 for the rows of a prefill slot that is NOT part of this replay (DynCtx.umask == 0; needs
@@ -473,9 +517,11 @@ class DSV41PrefillModel:
                     if os.environ.get("DSV41_ENGRAM_V2") == "0"
                     else self.engram[lid].forward_v2
                 )
-                kin = erows_dev[lid].shape[3]
+                er_g = self._er_gather(erows_dev[lid], pl) if er_shard() else None
+                erl = er_g if er_g is not None else erows_dev[lid]
+                kin = erl.shape[3]
                 sl = lambda c: ttnn.to_layout(
-                    ttnn.slice(erows_dev[lid], [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin]), ttnn.TILE_LAYOUT
+                    ttnn.slice(erl, [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin]), ttnn.TILE_LAYOUT
                 )  # (to_layout is a no-op for tile rows)
                 if (
                     self.cs
@@ -487,9 +533,7 @@ class DSV41PrefillModel:
                     new = []
                     for g, x in enumerate(xs):
                         rg = ttnn.to_layout(
-                            ttnn.slice(
-                                erows_dev[lid], [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]
-                            ),
+                            ttnn.slice(erl, [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]),
                             ttnn.TILE_LAYOUT,
                         )
                         new.append(self.engram[lid].forward_v2_own(x, rg))
@@ -506,9 +550,7 @@ class DSV41PrefillModel:
                             pf_tune._env("DSV41_PFA_ENGRAM_BATCH", "0") == "1" and fe.__name__ == "forward_v2"
                         ):  # ONE T = 8*32 forward per group instead of 8 forwards at T = 32 (same maths, 8x fewer ops / CCLs)
                             rg = ttnn.to_layout(
-                                ttnn.slice(
-                                    erows_dev[lid], [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]
-                                ),
+                                ttnn.slice(erl, [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]),
                                 ttnn.TILE_LAYOUT,
                             )
                             cat8 = fe(xg, rg)
@@ -540,6 +582,8 @@ class DSV41PrefillModel:
                 for x in xs:
                     ttnn.deallocate(x)
                 xs = new
+                if er_g is not None:
+                    ttnn.deallocate(er_g)
                 sync("engram_dev", t0)
             if taps is not None and lid in TAP_LAYERS:
                 # drafter taps (tt/prefill_taps.py): mean over the 4 streams at the input of layers 37 / 38 / 39 (after the Engram), last 128 positions of every user -> persistent stash

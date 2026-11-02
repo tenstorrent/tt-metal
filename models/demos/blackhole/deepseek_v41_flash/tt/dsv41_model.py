@@ -2446,10 +2446,10 @@ class Model:
                 ):  # (DSV41_PF_PROFILE_BUILD diagnostics: the host work of every window build is profiled)
                     _build_plain = _build
 
-                    def _build(k, _b=_build_plain, _p=pm.build_prof):  # noqa: F811
+                    def _build(k, *a_, _b=_build_plain, _p=pm.build_prof, **kw_):  # noqa: F811
                         _p.enable()
                         try:
-                            return _b(k)
+                            return _b(k, *a_, **kw_)
                         finally:
                             _p.disable()
 

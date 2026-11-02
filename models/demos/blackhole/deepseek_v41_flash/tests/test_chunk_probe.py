@@ -316,6 +316,15 @@ def test_chunk_probe(mesh_device):
             wl_ = pm.__dict__.get("winlog")
             if wl_ is not None:
                 pm.winlog_drain()
+                import json as _json
+
+                _json.dump(
+                    [
+                        {k_: (v_ if isinstance(v_, (int, float, bool)) else str(v_)) for k_, v_ in w_.items()}
+                        for w_ in wl_["windows"]
+                    ],
+                    open(os.path.join(os.environ.get("PO_OUT", "/tmp"), f"winlog_E{E}_rep{rep}.json"), "w"),
+                )
                 W_, A_, B_, C_, B0_, nB_ = wl_["windows"], 0.0, 0.0, 0.0, 0.0, 0
                 A_parts = [0.0, 0.0, 0.0]
                 gaps = []

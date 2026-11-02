@@ -12,7 +12,7 @@ DATA = {
     2: {1024: (48.5, 36.2), 2048: (88.7, 60.0), 4096: (163.8, 103.8)},  # Up=2 (B=8): C = 512, 1024, 2048
     1: {512: (28.8, 19.4), 1024: (49.0, 30.3), 2048: (85.7, 51.0)},  # Up=1 (B=4 / B=16): C = 512, 1024, 2048
 }
-EXTRA = {}  # filled from the C=4096 runs: {Up: {row_tokens: (A4, B4)}}
+EXTRA = {1: {4096: (163.4, 92.1)}}  # C=4096 runs (cs3_*): {Up: {row_tokens: (A4, B4)}}
 
 
 def ta(up, n):
@@ -53,14 +53,18 @@ if __name__ == "__main__":
     for up, name in ((2, "B=8 (Up=2, loaded)"), (1, "B=16 / B=4 (Up=1)")):
         cs = [c for c in (512, 1024, 2048, 4096) if up * c in {**DATA[up], **EXTRA.get(up, {})}]
         print(f"\n== {name}: device-time TTFT (s) of one S-token prompt, chunk C per slot")
-        print("S        " + "".join(f"C={c:<8d}" for c in cs) + "dyn(2048,512)  dyn(1024,512)  dyn(4096,1024,512)")
+        print(
+            "S        "
+            + "".join(f"C={c:<8d}" for c in cs)
+            + "dyn(2048,512)  dyn(1024,512)  dyn(4096,1024,512)  dyn(4096,512)"
+        )
         for S in (8192, 32768, 131072, 8192 + 300, 32768 + 300, 131072 + 300):
             base = fixed_chunk(S, 512, up)
             row = f"{S:<8d} " + "".join(
                 f"{fixed_chunk(S, c, up):6.2f} {100 * (fixed_chunk(S, c, up) / base - 1):+5.1f}% " for c in cs
             )
             dd = []
-            for sz in ((2048, 512), (1024, 512), (4096, 1024, 512)):
+            for sz in ((2048, 512), (1024, 512), (4096, 1024, 512), (4096, 512)):
                 if all(up * c in {**DATA[up], **EXTRA.get(up, {})} for c in sz):
                     v = dynamic(S, up, list(sz))
                     dd.append(f"{v:6.2f} {100 * (v / base - 1):+5.1f}%")
