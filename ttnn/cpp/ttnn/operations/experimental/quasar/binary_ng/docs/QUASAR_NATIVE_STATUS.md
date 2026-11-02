@@ -17,6 +17,15 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-10-26 — batching beside DRAM
+
+- **#61774 fixed:** `llk_unpack_AB` steps a batch by the ring stride, so every compute batch is exact.
+- **The DRAM batch:** with every operand interleaved and an input in DRAM, both batches follow a compute thread's
+  share, up to a DST section. On craq-sim, bf16 add is 2.10x faster at 256 tiles per cluster, bit-identical.
+  `TTNN_QSR_DRAM_BATCH=0` turns it off.
+
+---
+
 # ► Week of 2026-10-19, part 3 — the tests follow the hardware: the arch from the device, the FPU add's two roundings
 
 ## 1. TL;DR

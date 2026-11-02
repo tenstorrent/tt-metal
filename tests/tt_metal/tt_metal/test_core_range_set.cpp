@@ -93,7 +93,7 @@ void check_semaphores_are_initialized(
 TEST_F(UnitMeshFixture, CoreRangeSet) {
     auto device_range = distributed::MeshCoordinateRange(this->device().shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, CreateProgram());
+    workload.add_program(device_range, CreateProgram(this->device()));
     Program& program = workload.get_programs().at(device_range);
 
     CoreRange core_range_one({0, 0}, {1, 1});
