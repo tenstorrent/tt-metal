@@ -149,6 +149,8 @@ struct KernelAdvancedOptions {
     //   - Every `members` entry is a TensorBinding::accessor_name on this kernel
     //   - No duplicate members within a sequence (one binding may appear in several sequences)
     //   - `sequence_name` is a valid C++ identifier, unique in this kernel's `tensor::` namespace
+    //     (or a scoped name, unique in its scope: see NAMES AND SCOPES in kernel_spec.hpp)
+    //   - A scoped sequence's members are in the sequence's own scope
     //   - An empty members list is legal; this produces an empty std::tuple<>.
 
     struct TensorBindingSequence {

@@ -28,10 +28,11 @@ void ValidateTensorBindings(const KernelSpec& kernel) {
         TT_FATAL(
             inserted, "Kernel '{}' has duplicate tensor accessor_name '{}'", kernel.unique_id, binding.accessor_name);
         TT_FATAL(
-            IsValidCppIdentifier(binding.accessor_name),
-            "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
+            IsValidKernelVisibleName(binding.accessor_name),
+            "Kernel '{}' tensor accessor_name '{}' must be {}",
             kernel.unique_id,
-            binding.accessor_name);
+            binding.accessor_name,
+            KERNEL_VISIBLE_NAME_RULE);
         ValidateAccessorNameLength(kernel.unique_id, "tensor", binding.accessor_name);
     }
 
@@ -44,10 +45,11 @@ void ValidateTensorBindings(const KernelSpec& kernel) {
     std::unordered_set<std::string> sequence_names;
     for (const auto& sequence : kernel.advanced_options.tensor_binding_sequences) {
         TT_FATAL(
-            IsValidCppIdentifier(sequence.sequence_name),
-            "Kernel '{}' tensor binding sequence_name '{}' must be a valid C++ identifier",
+            IsValidKernelVisibleName(sequence.sequence_name),
+            "Kernel '{}' tensor binding sequence_name '{}' must be {}",
             kernel.unique_id,
-            sequence.sequence_name);
+            sequence.sequence_name,
+            KERNEL_VISIBLE_NAME_RULE);
         TT_FATAL(
             !accessor_names.contains(sequence.sequence_name),
             "Kernel '{}' tensor binding sequence_name '{}' collides with a TensorBinding accessor_name",
@@ -71,6 +73,14 @@ void ValidateTensorBindings(const KernelSpec& kernel) {
             TT_FATAL(
                 accessor_names.contains(member),
                 "Kernel '{}' tensor binding sequence '{}' references unknown tensor accessor_name '{}'",
+                kernel.unique_id,
+                sequence.sequence_name,
+                member);
+            // The generated sequence names its members unqualified, so they must share its scope.
+            TT_FATAL(
+                split_scoped_name(member).scope == split_scoped_name(sequence.sequence_name).scope,
+                "Kernel '{}' tensor binding sequence '{}' has member '{}' from a different scope. "
+                "A sequence's members must be in the sequence's own scope.",
                 kernel.unique_id,
                 sequence.sequence_name,
                 member);

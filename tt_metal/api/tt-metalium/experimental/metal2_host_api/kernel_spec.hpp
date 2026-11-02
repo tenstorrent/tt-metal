@@ -65,12 +65,36 @@ namespace tt::tt_metal::experimental {
 //
 // PLACEMENT: The nodes the kernel runs on are derived from WorkUnitSpec membership.
 //
+// NAMES AND SCOPES: Kernel source code reaches each resource binding and argument by name
+//   (a binding's accessor_name, or an argument's name). Unscoped names are grouped by kind:
+//   dfb::<name>, args::<name>, and so on.
+//   A name may instead be scoped, written "<scope>.<name>". All of a kernel's names in one
+//   scope, of every kind, are emitted together as static members of one struct, so kernel
+//   code spells them <scope>::<name>. A scope is a C++ type, so device code can be written
+//   once and used with any scope that has the names it needs:
+//     template <typename Scope> void op() { DataflowBuffer in(Scope::in); auto n = get_arg(Scope::n); }
+//   This lets one kernel combine several pieces of device code (or several uses of one piece),
+//   each with its own names, as kernel fusion needs.
+//   Each scope also gets by-name binding lookups, the counterparts of dfb::get_token_if_present
+//   and so on: <scope>::get_dfb_token_if_present<"name">(), and likewise get_tensor_ and
+//   get_scratch_. (Through a template parameter: Scope::template get_dfb_token_if_present<"name">().)
+//   Rules:
+//    - There is one level of scope.
+//    - Names in one scope are unique across all kinds, and don't collide with the members the
+//      generator adds: the lookups, and the type alias <name>_t of each tensor binding.
+//    - A scope may not be named after a namespace the generated kernel headers declare or use:
+//      args, dfb, pipe, sem, scratch, tensor, sem_internal, binding_details, experimental,
+//      internal, std, tensor_accessor.
+//    - Scopes belong to their KernelSpec: two KernelSpecs may use the same scope independently.
+//   Not yet supported: scoped arguments of a TT_KERNEL entry, and scoped names under emulation.
+//
 // ============================================================================
 
 // A name identifying a KernelSpec within a ProgramSpec.
 using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
 
 // Maximum length of a resource binding's accessor_name (DFB, semaphore, scratchpad, tensor).
+// For a scoped accessor_name, the limit applies to the whole "<scope>.<name>".
 //
 // MAINTAINER: This constant is in sync with MAX_TEMPLATE_STRING_LEN on device side.
 inline constexpr std::size_t MAX_ACCESSOR_NAME_LENGTH = 64;
@@ -204,10 +228,10 @@ struct KernelSpec {
     // Currently, only arguments of uint32_t are supported.
 
     struct RuntimeArgSchema {
-        // Runtime argument names (must be unique, valid C++ identifiers.)
+        // Runtime argument names (must be unique, valid C++ identifiers; may be scoped, see NAMES AND SCOPES.)
         Group<std::string> runtime_arg_names;
 
-        // Common runtime argument names (must be unique, valid C++ identifiers.)
+        // Common runtime argument names (must be unique, valid C++ identifiers; may be scoped, see NAMES AND SCOPES.)
         Group<std::string> common_runtime_arg_names;
     };
     RuntimeArgSchema runtime_arg_schema{};

@@ -49,7 +49,8 @@ struct KernelSpec {
 
         DFBSpecName dfb_spec_name;
 
-        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
+        // Invariant: A valid C++ identifier, or scoped name (see below), shorter than (or equal to)
+        // MAX_ACCESSOR_NAME_LENGTH.
         std::string accessor_name;
 
         EndpointType endpoint_type;
@@ -73,7 +74,8 @@ struct KernelSpec {
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;
 
-        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
+        // Invariant: A valid C++ identifier, or scoped name (see below), shorter than (or equal to)
+        // MAX_ACCESSOR_NAME_LENGTH.
         std::string accessor_name;
     };
     // Invariant:
@@ -85,7 +87,8 @@ struct KernelSpec {
     struct ScratchpadBinding {
         ScratchpadSpecName scratchpad_spec_name;
 
-        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
+        // Invariant: A valid C++ identifier, or scoped name (see below), shorter than (or equal to)
+        // MAX_ACCESSOR_NAME_LENGTH.
         std::string accessor_name;
     };
     // Invariant:
@@ -96,7 +99,8 @@ struct KernelSpec {
     struct TensorBinding {
         TensorParamName tensor_parameter_name;
 
-        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
+        // Invariant: A valid C++ identifier, or scoped name (see below), shorter than (or equal to)
+        // MAX_ACCESSOR_NAME_LENGTH.
         std::string accessor_name;
     };
     // Invariant:
@@ -106,19 +110,19 @@ struct KernelSpec {
     using CompileTimeArgs = Table<std::string, ArgValue>;
     // Table key represents the accessor name of the CTA.
     // Invariant:
-    // - The key must be a valid C++ identifier.
+    // - The key must be a valid C++ identifier, or scoped name (see below).
     // - Must not have repeated name with runtime_arg_schema.
     CompileTimeArgs compile_time_args;
 
     struct RuntimeArgSchema {
         // Invariant:
         // - Must not have repeated names.
-        // - All argument names must be valid C++ identifiers.
+        // - All argument names must be valid C++ identifiers, or scoped names (see below).
         Group<std::string> runtime_arg_names;
 
         // Invariant:
         // - Must not have repeated names.
-        // - All argument names must be valid C++ identifiers.
+        // - All argument names must be valid C++ identifiers, or scoped names (see below).
         Group<std::string> common_runtime_arg_names;
     };
     // Invariant:
@@ -141,3 +145,16 @@ struct KernelSpec {
     KernelAdvancedOptions advanced_options;
 };
 ```
+
+### Scoped names
+
+Any of the names above may be scoped, written `"<scope>.<name>"` (see "NAMES AND SCOPES" in `kernel_spec.hpp`), as
+may a tensor binding sequence's `sequence_name` in `advanced_options`. Invariants:
+
+- `<scope>` and `<name>` are each a valid C++ identifier: there is one level of scope.
+- `<scope>` is not the name of a namespace the generated headers declare or use: `args`, `dfb`, `pipe`, `sem`,
+  `scratch`, `tensor`, `sem_internal`, `binding_details`, `experimental`, `internal`, `std` or `tensor_accessor`.
+- Names in one scope are unique across all kinds, and don't collide with the members the generator adds to the scope:
+  a tensor binding's type alias `<name>_t`, and the by-name lookups `get_dfb_token_if_present`,
+  `get_tensor_token_if_present` and `get_scratch_token_if_present`.
+- A scoped tensor binding sequence's members are in the sequence's own scope.

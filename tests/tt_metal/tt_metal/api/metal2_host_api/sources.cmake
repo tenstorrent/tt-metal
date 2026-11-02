@@ -28,6 +28,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/dfb_binding.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/hardware_config.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/kernel_arguments.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/scoped_names.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/scratchpad_binding.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/semaphore_binding.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/tensor_binding.cpp
@@ -83,6 +84,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/compile_time_varargs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/tt_kernel_shim.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_kernel_defines.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/scoped_names/scoped_names.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/binding_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/compute_semaphore.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/kernel_args_loopbacks.cpp

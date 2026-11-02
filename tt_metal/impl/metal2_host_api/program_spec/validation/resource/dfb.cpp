@@ -179,10 +179,11 @@ void ValidateDFBBindings(const KernelSpec& kernel, const ValidationContext& ctx)
         AccessorBindingInfo& info = it->second;
         if (inserted) {
             TT_FATAL(
-                IsValidCppIdentifier(dfb_binding.accessor_name),
-                "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
+                IsValidKernelVisibleName(dfb_binding.accessor_name),
+                "Kernel '{}' DFB accessor_name '{}' must be {}",
                 kernel.unique_id,
-                dfb_binding.accessor_name);
+                dfb_binding.accessor_name,
+                KERNEL_VISIBLE_NAME_RULE);
             ValidateAccessorNameLength(kernel.unique_id, "DFB", dfb_binding.accessor_name);
         } else {
             TT_FATAL(

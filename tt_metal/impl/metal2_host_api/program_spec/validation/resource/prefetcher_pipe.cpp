@@ -369,10 +369,11 @@ void ValidatePrefetcherPipeBindings(const KernelSpec& kernel) {
             kernel.unique_id,
             binding.accessor_name);
         TT_FATAL(
-            IsValidCppIdentifier(binding.accessor_name),
-            "Kernel '{}' PrefetcherPipe accessor_name '{}' must be a valid C++ identifier",
+            IsValidKernelVisibleName(binding.accessor_name),
+            "Kernel '{}' PrefetcherPipe accessor_name '{}' must be {}",
             kernel.unique_id,
-            binding.accessor_name);
+            binding.accessor_name,
+            KERNEL_VISIBLE_NAME_RULE);
         ValidateAccessorNameLength(kernel.unique_id, "PrefetcherPipe", binding.accessor_name);
         TT_FATAL(
             !binding.pipe_parameter_names.empty(),
