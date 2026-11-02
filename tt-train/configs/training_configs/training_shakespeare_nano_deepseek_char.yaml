@@ -7,7 +7,7 @@ training_config:
   use_clip_grad_norm: true
   clip_grad_norm_max_norm: 1.0
   precision:
-    param_dtype: float32
+    master_dtype: float32
   data_path: "data/shakespeare.txt"
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/nano_deepseek_char.yaml"
   optimizer:

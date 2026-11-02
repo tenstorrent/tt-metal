@@ -378,7 +378,7 @@ def test_registry_reads_variant_only_adamw_options():
         assert len(opt.get_state_dict()["kahan_compensation"]) == num_buffers
 
 
-def _param_dtypes(model) -> set:
+def _stored_dtypes(model) -> set:
     return {t.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for t in model.parameters().values()}
 
 
@@ -386,14 +386,14 @@ def _param_dtypes(model) -> set:
 @pytest.mark.parametrize(
     "precision, expected",
     [
-        ({"param_dtype": "float32"}, ttnn.DataType.FLOAT32),
+        ({"master_dtype": "float32"}, ttnn.DataType.FLOAT32),
         (None, ttnn.DataType.BFLOAT16),
         ({}, ttnn.DataType.BFLOAT16),
-        ({"param_dtype": None}, ttnn.DataType.BFLOAT16),
+        ({"master_dtype": None}, ttnn.DataType.BFLOAT16),
     ],
 )
-def test_create_optimizer_applies_param_dtype(precision, expected):
-    """With a full config, create_optimizer first stores the trainable parameters in precision.param_dtype, so every
+def test_create_optimizer_applies_master_dtype(precision, expected):
+    """With a full config, create_optimizer first stores the trainable parameters in precision.master_dtype, so every
     runner that calls it gets fp32 master weights for float32; without the key they keep the model's dtype."""
     model = ttml.modules.LinearLayer(32, 32)
     training_config = {"optimizer": {"type": "AdamW"}}
@@ -402,7 +402,7 @@ def test_create_optimizer_applies_param_dtype(precision, expected):
 
     create_optimizer(model, {"training_config": training_config})
 
-    assert _param_dtypes(model) == {expected}
+    assert _stored_dtypes(model) == {expected}
 
 
 class _ModelWithoutParameters:
@@ -410,8 +410,8 @@ class _ModelWithoutParameters:
         return ttml.NamedParameters()
 
 
-def test_create_optimizer_rejects_an_unknown_param_dtype(expect_error):
+def test_create_optimizer_rejects_an_unknown_master_dtype(expect_error):
     """The name is checked before any parameter is touched, so this needs no device."""
-    config = {"training_config": {"precision": {"param_dtype": "float16"}, "optimizer": {"type": "AdamW"}}}
-    with expect_error(RuntimeError, "param_dtype"):
+    config = {"training_config": {"precision": {"master_dtype": "float16"}, "optimizer": {"type": "AdamW"}}}
+    with expect_error(RuntimeError, "master_dtype"):
         create_optimizer(_ModelWithoutParameters(), config)

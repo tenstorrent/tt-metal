@@ -185,7 +185,7 @@ def create_optimizer(model, yaml_config: dict):
     Accepts either a top-level YAML config dict (with training_config.optimizer)
     or the optimizer dict directly (detected by the presence of a "type" key).
     Passes the dict straight to the C++ optimizer factory. With a top-level
-    config, training_config.precision.param_dtype first stores the model's
+    config, training_config.precision.master_dtype first stores the model's
     trainable parameters in that dtype, so the optimizer state follows it.
 
     Args:

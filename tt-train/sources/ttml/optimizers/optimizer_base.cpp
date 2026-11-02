@@ -25,7 +25,7 @@ void require_bf16_parameters(const serialization::NamedParameters& parameters, s
         TT_FATAL(
             dtype == ttnn::DataType::BFLOAT16,
             "{} supports bf16 parameters only, but parameter '{}' is stored as {}. fp32 parameters "
-            "(precision.param_dtype: float32) are supported by AdamW; the other optimizers get fp32 support later "
+            "(precision.master_dtype: float32) are supported by AdamW; the other optimizers get fp32 support later "
             "(#56513).",
             optimizer_name,
             name,

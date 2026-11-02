@@ -724,9 +724,9 @@ int main(int argc, char **argv) {
     // Before the checkpoint is loaded and the optimizer is created, so both follow the stored dtype. 3-tier workers
     // keep bf16 parameters for RemoteOptimizer; the optimizer worker holds the fp32 master weights.
     if (!is_three_tier_training(multihost_config)) {
-        if (auto param_dtype =
+        if (auto master_dtype =
                 ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
-            fmt::print("Parameter dtype: {}\n", *param_dtype);
+            fmt::print("Master dtype: {}\n", *master_dtype);
         }
     }
 

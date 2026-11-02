@@ -16,23 +16,23 @@ bool is_float_dtype(ttnn::DataType dtype) {
     return dtype == ttnn::DataType::BFLOAT16 || dtype == ttnn::DataType::FLOAT32;
 }
 
-ttnn::DataType parse_param_dtype(std::string_view name) {
+ttnn::DataType parse_master_dtype(std::string_view name) {
     if (name == "bfloat16") {
         return ttnn::DataType::BFLOAT16;
     }
-    TT_FATAL(name == "float32", "precision.param_dtype must be \"bfloat16\" or \"float32\", got \"{}\"", name);
+    TT_FATAL(name == "float32", "precision.master_dtype must be \"bfloat16\" or \"float32\", got \"{}\"", name);
     return ttnn::DataType::FLOAT32;
 }
 
-std::optional<ttnn::DataType> param_dtype_from_config(const YAML::Node& training_config) {
+std::optional<ttnn::DataType> master_dtype_from_config(const YAML::Node& training_config) {
     if (!training_config || !training_config["precision"]) {
         return std::nullopt;
     }
-    const auto name = training_config["precision"]["param_dtype"];
+    const auto name = training_config["precision"]["master_dtype"];
     if (!name || name.IsNull()) {
         return std::nullopt;
     }
-    return parse_param_dtype(name.as<std::string>());
+    return parse_master_dtype(name.as<std::string>());
 }
 
 }  // namespace
@@ -57,11 +57,11 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters) {
-    const auto param_dtype = param_dtype_from_config(training_config);
-    if (param_dtype) {
-        store_trainable_parameters_as(parameters, *param_dtype);
+    const auto master_dtype = master_dtype_from_config(training_config);
+    if (master_dtype) {
+        store_trainable_parameters_as(parameters, *master_dtype);
     }
-    return param_dtype;
+    return master_dtype;
 }
 
 }  // namespace ttml::core

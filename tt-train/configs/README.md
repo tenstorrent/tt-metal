@@ -57,7 +57,7 @@ Optimizer is configured inline under `training_config.optimizer`. See [Optimizer
 ### Precision Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `precision.param_dtype` | str | unset | Dtype trainable parameters are stored in: `"bfloat16"` or `"float32"`. `"float32"` gives fp32 master weights with fused `AdamW`; see [fp32 master weights](../docs/MIXED_PRECISION.md#fp32-master-weights). Unset keeps the model's dtype (bf16) |
+| `precision.master_dtype` | str | unset | Dtype trainable parameters (the master weights) are stored in: `"bfloat16"` or `"float32"`. `"float32"` gives fp32 master weights with fused `AdamW`; forward and backward still run in bf16. Not PyTorch FSDP2's `param_dtype`, which is the compute dtype. See [fp32 master weights](../docs/MIXED_PRECISION.md#fp32-master-weights). Unset keeps the model's dtype (bf16) |
 
 ### Example
 ```yaml
@@ -250,7 +250,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 
 | Type | Description |
 |------|-------------|
-| `AdamW` | Fused AdamW, a single custom kernel per step (default, recommended). Its state takes the parameters' dtype: bf16, or fp32 with `precision.param_dtype: float32` for fp32 master weights (use when bf16 accumulation causes training instability). Supports stochastic rounding for bf16 parameters. |
+| `AdamW` | Fused AdamW, a single custom kernel per step (default, recommended). Its state takes the parameters' dtype: bf16, or fp32 with `precision.master_dtype: float32` for fp32 master weights (use when bf16 accumulation causes training instability). Supports stochastic rounding for bf16 parameters. |
 | `MorehAdamW` | AdamW via `ttnn::moreh_adamw` — uses the Moreh team's kernel implementation. |
 | `AdamWComposite` | AdamW built from individual TTNN ops (no custom kernel). Supports Kahan summation. |
 | `SGD` | Fused SGD — bf16 state, single custom kernel per step (default, recommended). |

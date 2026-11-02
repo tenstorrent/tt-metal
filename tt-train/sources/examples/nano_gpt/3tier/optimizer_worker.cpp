@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
 
-    // The optimizer worker holds the master weights, so precision.param_dtype applies here; it still sends the bf16
+    // The optimizer worker holds the master weights, so precision.master_dtype applies here; it still sends the bf16
     // view to the workers.
     (void)ttml::core::apply_precision_config(yaml_config["training_config"], model_parameters);
     auto optimizer = ttml::optimizers::create_optimizer(optimizer_node, model_parameters);

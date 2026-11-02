@@ -128,7 +128,7 @@ void py_module(nb::module_& m) {
         nb::arg("error_if_nonfinite") = false,
         "Clip gradients of parameters to a maximum norm. Returns the total norm after clipping.");
 
-    // Parameter precision (training_config.precision.param_dtype)
+    // Parameter precision (training_config.precision.master_dtype)
     m.def(
         "store_trainable_parameters_as",
         [](const ttml::serialization::NamedParameters& parameters, ttnn::DataType dtype) {
@@ -146,7 +146,7 @@ void py_module(nb::module_& m) {
         },
         nb::arg("training_config"),
         nb::arg("parameters"),
-        "Apply training_config.precision to the parameters (precision.param_dtype) before creating the optimizer. "
+        "Apply training_config.precision to the parameters (precision.master_dtype) before creating the optimizer. "
         "Returns the dtype applied, or None.");
 
     {

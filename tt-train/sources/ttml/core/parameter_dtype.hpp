@@ -19,7 +19,7 @@ namespace ttml::core {
 // the parameters themselves, and forward and backward run on their bf16 view.
 void store_trainable_parameters_as(const serialization::NamedParameters& parameters, ttnn::DataType dtype);
 
-// Applies training_config.precision to the parameters: stores them in precision.param_dtype ("bfloat16" or "float32";
+// Applies training_config.precision to the parameters: stores them in precision.master_dtype ("bfloat16" or "float32";
 // any other name is a TT_FATAL). Unset, or set to null, leaves the parameters in the dtype the model builds them in.
 // Called right before the optimizer is created by ttml.common.utils.create_optimizer() (given the whole config), the
 // nano_gpt runner and the 3-tier optimizer worker. Returns the dtype it applied, if any.

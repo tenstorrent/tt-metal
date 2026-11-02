@@ -46,16 +46,16 @@ const ttnn::Tensor& native(const autograd::TensorPtr& tensor) {
 }  // namespace
 
 // The two names are applied, any other is rejected, and unset or null means "keep the dtype the model builds".
-TEST_F(ParameterDtypeTest, ReadsParamDtypeFromTheTrainingConfig) {
+TEST_F(ParameterDtypeTest, ReadsMasterDtypeFromTheTrainingConfig) {
     const auto apply = [](const char* training_config) {
         return core::apply_precision_config(YAML::Load(training_config), serialization::NamedParameters{});
     };
-    EXPECT_EQ(apply("precision: {param_dtype: float32}"), ttnn::DataType::FLOAT32);
-    EXPECT_EQ(apply("precision: {param_dtype: bfloat16}"), ttnn::DataType::BFLOAT16);
-    EXPECT_ANY_THROW(apply("precision: {param_dtype: float16}"));
+    EXPECT_EQ(apply("precision: {master_dtype: float32}"), ttnn::DataType::FLOAT32);
+    EXPECT_EQ(apply("precision: {master_dtype: bfloat16}"), ttnn::DataType::BFLOAT16);
+    EXPECT_ANY_THROW(apply("precision: {master_dtype: float16}"));
     EXPECT_EQ(apply("seed: 5489"), std::nullopt);
-    EXPECT_EQ(apply("precision: {param_dtype: }"), std::nullopt);
-    EXPECT_EQ(apply("precision: {param_dtype: ~}"), std::nullopt);
+    EXPECT_EQ(apply("precision: {master_dtype: }"), std::nullopt);
+    EXPECT_EQ(apply("precision: {master_dtype: ~}"), std::nullopt);
 }
 
 TEST_F(ParameterDtypeTest, AppliesThePrecisionConfig) {
@@ -66,7 +66,7 @@ TEST_F(ParameterDtypeTest, AppliesThePrecisionConfig) {
     EXPECT_EQ(native(parameter).dtype(), ttnn::DataType::BFLOAT16);
 
     EXPECT_EQ(
-        core::apply_precision_config(YAML::Load("precision: {param_dtype: float32}"), parameters),
+        core::apply_precision_config(YAML::Load("precision: {master_dtype: float32}"), parameters),
         ttnn::DataType::FLOAT32);
     EXPECT_EQ(native(parameter).dtype(), ttnn::DataType::FLOAT32);
 }
