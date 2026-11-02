@@ -11,11 +11,12 @@
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
-
-// perf.h declares PerfRunType, which the generated params.h uses.
-#include "params.h"
 #include "quasar_test_common.h"
 #include "sfpu_stub.h"
+
+// The generated params.h names PerfRunType (perf.h) and an unqualified p_unpacr, so it must follow sfpu_stub.h's
+// `using namespace ckernel`.
+#include "params.h"
 
 static_assert(!unpack_to_dest, "acc_to_dest is not supported when unpacking to dest");
 
