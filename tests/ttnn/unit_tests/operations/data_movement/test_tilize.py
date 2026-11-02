@@ -1346,6 +1346,78 @@ def test_tilize_bf16_to_int32_sharded(device):
     assert torch.equal(ttnn.to_torch(tt_output), torch_input.to(torch.int32))
 
 
+# The other dtype pairs tilize composes with ttnn.typecast: unsigned <-> float, and integer pairs
+# whose bit patterns the packer cannot carry over. Tilizing in the input dtype and then casting is
+# the reference, so the composed path must agree with it bit for bit.
+_UINT_MAX = {ttnn.uint8: 255, ttnn.uint16: 65535, ttnn.uint32: 2**32 - 1}
+
+_TYPECAST_ROUTED_PAIRS = [
+    (ttnn.bfloat16, ttnn.uint8),
+    (ttnn.bfloat16, ttnn.uint16),
+    (ttnn.bfloat16, ttnn.uint32),
+    (ttnn.float32, ttnn.uint8),
+    (ttnn.float32, ttnn.uint16),
+    (ttnn.float32, ttnn.uint32),
+    (ttnn.uint8, ttnn.bfloat16),
+    (ttnn.uint8, ttnn.float32),
+    (ttnn.uint16, ttnn.bfloat16),
+    (ttnn.uint16, ttnn.float32),
+    (ttnn.uint32, ttnn.bfloat16),
+    (ttnn.uint32, ttnn.float32),
+    (ttnn.uint16, ttnn.int32),
+    (ttnn.uint16, ttnn.uint32),
+    (ttnn.uint16, ttnn.uint8),
+    (ttnn.uint8, ttnn.uint16),
+    (ttnn.int32, ttnn.uint16),
+    (ttnn.uint32, ttnn.uint16),
+    (ttnn.int32, ttnn.uint8),
+    (ttnn.uint32, ttnn.uint8),
+]
+
+
+def _dtype_id(dtype):
+    return {ttnn.bfloat16: "bf16", ttnn.float32: "fp32"}.get(dtype, str(dtype).split(".")[-1].lower())
+
+
+def _typecast_routed_input(shape, in_dtype, out_dtype):
+    torch.manual_seed(0)
+    if in_dtype in (ttnn.bfloat16, ttnn.float32):
+        out_max = float(_UINT_MAX[out_dtype])
+        values = torch.empty(shape, dtype=torch.float32).uniform_(-1000.0, 80000.0)
+        # Zero, fractions, negatives, the unsigned maximum, just past it and far past it.
+        edges = [0.0, -0.0, 0.99, -0.99, -1.0, -1000.5, 123.75, out_max, out_max + 1, 2 * out_max, 1e10]
+        edges += [float("inf"), float("-inf")]
+    else:
+        # Integers are staged as int32; from_torch reinterprets them as the unsigned input dtype.
+        if in_dtype == ttnn.int32:
+            values = torch.randint(-1000, 80000, shape, dtype=torch.int32)
+            edges = [0, -1, 255, 256, 65535, 65536, 2**31 - 1, -(2**31)]
+        elif in_dtype == ttnn.uint32:
+            values = torch.randint(0, 2**31 - 1, shape, dtype=torch.int32)
+            # -1 and int32 min land on uint32 max and 2**31.
+            edges = [0, 1, 255, 256, 65535, 65536, 2**31 - 1, -1, -(2**31)]
+        else:
+            values = torch.randint(0, _UINT_MAX[in_dtype] + 1, shape, dtype=torch.int32)
+            edges = [0, 1, 127, 128, 255] + ([256, 32767, 32768, 65535] if in_dtype == ttnn.uint16 else [])
+    values[..., 0, : len(edges)] = torch.tensor(edges, dtype=values.dtype)
+    return values
+
+
+@pytest.mark.parametrize(
+    "in_dtype, out_dtype",
+    _TYPECAST_ROUTED_PAIRS,
+    ids=[f"{_dtype_id(i)}_to_{_dtype_id(o)}" for i, o in _TYPECAST_ROUTED_PAIRS],
+)
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32), (1, 2, 64, 96)], ids=["one_tile", "multi_tile"])
+def test_tilize_typecast_routed_conversion_matches_typecast(device, shape, in_dtype, out_dtype):
+    torch_input = _typecast_routed_input(shape, in_dtype, out_dtype)
+    tt_input = ttnn.from_torch(torch_input, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize(tt_input, dtype=out_dtype)
+    assert tt_output.layout == ttnn.TILE_LAYOUT and tt_output.dtype == out_dtype
+    reference = ttnn.typecast(ttnn.tilize(tt_input), out_dtype)
+    assert torch.equal(ttnn.to_torch(tt_output), ttnn.to_torch(reference))
+
+
 # Out-of-range and infinite inputs saturate to the int32 limits, as ttnn.typecast does. NaN is left
 # out: its result follows the sign bit, which torch does not define.
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
