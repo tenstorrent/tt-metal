@@ -106,7 +106,7 @@ uint64_t l1_bytes(const SDPAForwardCbTiles& tiles);
 
 // Work item = one Q chunk of one head stack, see kernels/sdpa_fw_work_list.hpp. Each core gets a list
 // of units: a run of whole items, or one K/V step range of one item that is sent to / merged on a core.
-using UnitRole = sdpa_fw_items::UnitRole;
+using UnitRole = sdpa_items::UnitRole;
 
 struct WorkUnit {
     uint32_t item = 0;

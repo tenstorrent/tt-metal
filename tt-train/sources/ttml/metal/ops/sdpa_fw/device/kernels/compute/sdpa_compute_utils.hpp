@@ -20,7 +20,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
-#include "tt-train/sources/ttml/metal/ops/sdpa_fw/device/sdpa_fw_item_math.hpp"
+#include "tt-train/sources/ttml/metal/common/sdpa_item_math.hpp"
 #ifdef TRISC_MATH
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h"
 #endif
@@ -447,7 +447,7 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
 }
 
 // Split units. A sender packs its running state, per row [max, unreduced sum, output tiles] (the layout
-// in sdpa_fw_item_math.hpp), into cb_partial_out (fp32) for the writer; a merger folds such a partial into
+// in sdpa_item_math.hpp), into cb_partial_out (fp32) for the writer; a merger folds such a partial into
 // its own running state, like one more K/V step: m = max(m_own, m_p), alpha_x = exp(scale * (m_x - m)),
 // sum = sum_own * alpha_own + sum_p * alpha_p, O = O_own * alpha_own + O_p * alpha_p. The partials stream
 // through the CBs one row (Wt + 2 tiles) at a time. The partial's tiles and the sums are multiplied on the
@@ -472,7 +472,7 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
 // dst_tiles: output tiles per DST pass when copying the output tiles through.
 template <uint32_t rows, uint32_t dst_tiles>
 void send_partial(uint32_t Wt, uint32_t cb_mm_out, uint32_t cb_max, uint32_t cb_sum_exp, uint32_t cb_partial_out) {
-    const uint32_t tiles_per_row = sdpa_fw_items::partial_row_tiles(Wt);
+    const uint32_t tiles_per_row = sdpa_items::partial_row_tiles(Wt);
     cb_wait_front(cb_mm_out, rows * Wt);
     cb_wait_front(cb_max, rows);
     cb_wait_front(cb_sum_exp, rows);
@@ -535,10 +535,10 @@ void merge_partial(
     uint32_t cb_cur_sum_exp,
     uint32_t cb_alpha_own,
     uint32_t cb_alpha_p) {
-    const uint32_t tiles_per_row = sdpa_fw_items::partial_row_tiles(Wt);
-    using sdpa_fw_items::kPartialFirstOutTile;
-    using sdpa_fw_items::kPartialMaxTile;
-    using sdpa_fw_items::kPartialSumTile;
+    const uint32_t tiles_per_row = sdpa_items::partial_row_tiles(Wt);
+    using sdpa_items::kPartialFirstOutTile;
+    using sdpa_items::kPartialMaxTile;
+    using sdpa_items::kPartialSumTile;
     cb_wait_front(cb_prev_mm_out, rows * Wt);
     cb_wait_front(cb_prev_max, rows);
     cb_wait_front(cb_prev_sum_exp, rows);

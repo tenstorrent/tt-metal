@@ -68,8 +68,8 @@ void kernel_main() {
     const auto gate_address_generator = TensorAccessor(gate_args, gate_address);
 #endif
 #ifdef SPLIT_UNITS
-    constexpr uint32_t partial_row_tiles = sdpa_fw_items::partial_row_tiles(vWt);
-    constexpr uint32_t kPartialRowsPerBatch = sdpa_fw_items::partial_rows_per_batch(rows);
+    constexpr uint32_t partial_row_tiles = sdpa_items::partial_row_tiles(vWt);
+    constexpr uint32_t kPartialRowsPerBatch = sdpa_items::partial_rows_per_batch(rows);
     const uint32_t partial_tile_bytes = get_tile_size(cb_partial_in);
     const auto scratch_address_generator = TensorAccessor(scratch_args, scratch_address, partial_tile_bytes);
 #endif

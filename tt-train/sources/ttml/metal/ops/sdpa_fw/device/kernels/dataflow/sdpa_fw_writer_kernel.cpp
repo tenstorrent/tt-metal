@@ -46,8 +46,8 @@ void kernel_main() {
     [[maybe_unused]] constexpr auto scratch_args =
         TensorAccessorArgs<intermediates_args.next_compile_time_args_offset()>();
 #ifdef SPLIT_UNITS
-    constexpr uint32_t partial_row_tiles = sdpa_fw_items::partial_row_tiles(vWt);
-    constexpr uint32_t kPartialRowsPerBatch = sdpa_fw_items::partial_rows_per_batch(rows);
+    constexpr uint32_t partial_row_tiles = sdpa_items::partial_row_tiles(vWt);
+    constexpr uint32_t kPartialRowsPerBatch = sdpa_items::partial_rows_per_batch(rows);
     const uint32_t partial_tile_bytes = get_tile_size(cb_partial_out);
     const auto scratch_addr_generator = TensorAccessor(scratch_args, scratch_addr, partial_tile_bytes);
 #endif
