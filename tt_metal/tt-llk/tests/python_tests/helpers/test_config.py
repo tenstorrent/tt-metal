@@ -2017,7 +2017,13 @@ class TestConfig:
             raise ValueError("Quasar only supports TRISC boot mode")
 
         # BRISC boot: BRISC already put all four cores back in reset when the last launch ended (brisc.cpp), unless it hung.
-        commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+        # Versim (this experiment): BRISC stays alive between launches and is started again through versim_go.
+        versim_loop = (
+            not TestConfig.TEST_TARGET.has_host_register_access
+            and TestConfig.BRISC_ELF_LOADED
+        )
+        if not versim_loop:
+            commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
         if boot_mode == BootMode.BRISC and not TestConfig.BRISC_ELF_LOADED:
             load_elf(
                 elf_file=str((TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()),
@@ -2086,8 +2092,14 @@ class TestConfig:
                     write_words_to_device(
                         TestConfig.TENSIX_LOCATION, launch_done, [0], safe_mode=False
                     )
-                # Not a committed write: a short kernel can be done and back in reset before a readback.
-                set_tensix_soft_reset(0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION)
+                if versim_loop:
+                    reset_mailboxes(TestConfig.TENSIX_LOCATION)
+                    write_words_to_device(TestConfig.TENSIX_LOCATION, 0x16DFFC, [1])
+                else:
+                    # Not a committed write: a short kernel can be done and back in reset before a readback.
+                    set_tensix_soft_reset(
+                        0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
+                    )
             case BootMode.TRISC:
                 reset_mailboxes(TestConfig.TENSIX_LOCATION)
                 set_tensix_soft_reset(0, [RiscCore.TRISC0], TestConfig.TENSIX_LOCATION)

@@ -35,51 +35,61 @@ static const mailbox_t trisc_pc_bufs[] = {
 
 // One launch per release from soft reset: the host loads the kernels and releases BRISC, BRISC starts the TRISCs, waits
 // on their PC buffers with no L1 traffic, then puts all four cores back in soft reset, which is what the host polls.
+// RC experiment (Versim only, warmup-agent): Versim ignores every host reset deassert after the first, so BRISC
+// cannot be released per launch. BRISC stays alive: after a launch it puts only the TRISCs in soft reset and waits
+// for the host to write 1 to versim_go, then runs the next launch.
+static const mailbox_t versim_go = reinterpret_cast<mailbox_t>(0x16DFFCU);
+
 int main()
 {
     disable_branch_prediction();
+    commit_store(versim_go, 0U);
+    for (;;)
+    {
+        commit_store(mailbox_math, ckernel::RESET_VAL);
+        commit_store(mailbox_unpack, ckernel::RESET_VAL);
+        commit_store(mailbox_pack, ckernel::RESET_VAL);
 
-    commit_store(mailbox_math, ckernel::RESET_VAL);
-    commit_store(mailbox_unpack, ckernel::RESET_VAL);
-    commit_store(mailbox_pack, ckernel::RESET_VAL);
+        commit_store(profiler_barrier, 0U);
+        commit_store(profiler_barrier + 1, 0U);
+        commit_store(profiler_barrier + 2, 0U);
 
-    commit_store(profiler_barrier, 0U);
-    commit_store(profiler_barrier + 1, 0U);
-    commit_store(profiler_barrier + 2, 0U);
+        device_setup();
 
-    device_setup();
+        llk_perf::clear_debug_features();
+        // Counters on only (empty otherwise, counters.h): set up the counter banks before the TRISCs start.
+        llk_perf::configure_from_brisc();
 
-    llk_perf::clear_debug_features();
-    // Counters on only (empty otherwise, counters.h): set up the counter banks before the TRISCs start.
-    llk_perf::configure_from_brisc();
-
-    clear_trisc_soft_reset();
+        clear_trisc_soft_reset();
 
 #if defined(TT_METAL_TTSIM) // ttsim models no BRISC reads of the TRISC PC buffers, and nothing there is timed: wait on L1
-    for (const mailbox_t mailbox : {mailbox_unpack, mailbox_math, mailbox_pack})
-    {
+        for (const mailbox_t mailbox : {mailbox_unpack, mailbox_math, mailbox_pack})
+        {
+            do
+            {
+                ckernel::invalidate_data_cache();
+            } while (ckernel::load_blocking(mailbox) != ckernel::KERNEL_COMPLETE);
+        }
+#else
+        for (const mailbox_t pc_buf : trisc_pc_bufs)
+        {
+            (void)ckernel::load_blocking(pc_buf);
+        }
+        // What the host waits on: polling the soft reset register instead shares the Tensix register bus with the
+        // kernel's wall clock reads and moves its timings.
+        *host_signal::launch_done() = ckernel::KERNEL_COMPLETE;
+        while ((*host_signal::launch_done() & 0xFFU) != ckernel::KERNEL_COMPLETE)
+        {
+        }
+#endif
+
+        ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) | TRISC_SOFT_RESET_MASK);
         do
         {
             ckernel::invalidate_data_cache();
-        } while (ckernel::load_blocking(mailbox) != ckernel::KERNEL_COMPLETE);
+        } while (ckernel::load_blocking(versim_go) != 1U);
+        commit_store(versim_go, 0U);
     }
-#else
-    for (const mailbox_t pc_buf : trisc_pc_bufs)
-    {
-        (void)ckernel::load_blocking(pc_buf);
-    }
-    // What the host waits on: polling the soft reset register instead shares the Tensix register bus with the
-    // kernel's wall clock reads and moves its timings.
-    *host_signal::launch_done() = ckernel::KERNEL_COMPLETE;
-    while ((*host_signal::launch_done() & 0xFFU) != ckernel::KERNEL_COMPLETE)
-    {
-    }
-#endif
-
-    ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) | TRISC_SOFT_RESET_MASK | BRISC_SOFT_RESET_MASK);
-    for (;;)
-    {
-    } // the write above stops this core
 }
 
 #else
