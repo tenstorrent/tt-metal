@@ -3,9 +3,8 @@
 """The KDA state migration contract: segment geometry, contract layouts, per-layer export/import.
 
 ``ttKDA`` reads and writes its state in the *native* form: ``recurrent`` ``[1, H_local, D, D]`` FP32
-TILE and ``convolution`` ``[1, 3*H_local*D/64, (K-1)*64]`` BF16 ROW_MAJOR (one 64-channel segment per
-row, ``config.convolution_tail_shape``), both interleaved DRAM, heads sharded across TP and the complete
-state replicated across SP. The kernels accept nothing else, so a layer runs on one native scratch
+TILE and ``convolution`` BF16 ROW_MAJOR in the layout of ``config.convolution_tail_shape``, both
+interleaved DRAM, heads sharded across TP and the complete state replicated across SP. The kernels accept nothing else, so a layer runs on one native scratch
 carry, loaded from and stored back to the *contract* form, which is the carries' only store and what
 migration reads.
 
@@ -14,22 +13,22 @@ DRAM span, round-robin over the DRAM banks exactly like the kvpe cache:
 
 * recurrent: one ``[D, 32]`` FP32 V-band per (head, band), ``D/32`` tiles = 16384 bytes at D=128;
   ``num_heads * D/32`` segments per layer (384 for Kimi-K3).
-* convolution: one ``[K-1, 64]`` BF16 rectangle per (branch, head, half), three 128-byte pages =
-  384 bytes; ``3 * num_heads * D/64`` segments per layer (576 for Kimi-K3).
+* convolution: one ``[K-1, 64]`` BF16 rectangle per (branch, head, half), one 384-byte page;
+  ``3 * num_heads * D/64`` segments per layer (576 for Kimi-K3).
 
 Two physical forms hold identical bytes at identical addresses, so the address table cannot tell
 them apart:
 
-* a single-layer ND-sharded tensor whose shard IS the segment (``[1, 1, D, 32]`` / ``[1, K-1, 64]``),
+* a single-layer ND-sharded tensor whose shard IS the segment (``[1, 1, D, 32]`` / ``[1, 1, (K-1)*64]``),
   the form PR #56443 measured and the one ``to_memory_config`` produces from a native tensor;
 * the consolidated per-rank slabs the engine owns (``KdaStates``): the recurrent slab keeps the ND
   form over ``[slots * layers, H_local, D, D]`` and is written per layer with ``indexed_entry_copy``;
   the convolution slab is an INTERLEAVED row-major ``[slots * layers, SEG, (K-1)*64]`` tensor whose
-  384-byte pages are the segments (``row0[64c:64c+64] | row1[...] | row2[...]``). Interleaved page
-  ``p`` lives at bank ``p % N``, offset ``(p // N) * 384``, which is where ND shard ``s = p`` would
-  live, so the bytes and the table math are the same while the write becomes a plain whole-row copy.
-  The native convolution tail has the same ``[SEG, (K-1)*64]`` rows, so a slab batch is a byte copy
-  of the native tensor: the per-layer convolution export and import are one ``indexed_entry_copy``.
+  384-byte pages are the segments. Interleaved page ``p`` lives at bank ``p % N``, offset
+  ``(p // N) * 384``, which is where ND shard ``s = p`` would live, so the bytes and the table math
+  are the same while the write becomes a plain whole-row copy. The native convolution tail has the
+  same pages, so a slab batch is a byte copy of the native tensor: the per-layer convolution export
+  and import are one ``indexed_entry_copy``.
 
 Exports take the slot as a replicated one-element UINT32 device tensor (``device_scalar``, or the traced
 metadata's slot word) and write slab batch ``slot * L + layer_position`` with ``indexed_entry_copy``, which

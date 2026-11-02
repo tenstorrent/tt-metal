@@ -134,10 +134,9 @@ class KdaState:
     """Caller-owned KDA carries.
 
     ``recurrent`` is TP-local and must be replicated across the SP axis.
-    ``convolution`` is the BF16 row-major DRAM stream tail in the device layout
-    ``[B, W / 64, (kernel_size - 1) * 64]`` (:func:`convolution_tail_shape`, one
-    64-channel segment of ``W = Q_local + K_local + V_local`` per page). Its channels
-    are sharded across TP and the complete tail is replicated across SP. This history
+    ``convolution`` is the BF16 row-major DRAM stream tail ``[1, W / 64, (kernel_size - 1) * 64]``
+    over ``W = Q_local + K_local + V_local`` channels, laid out as ``config.convolution_tail_shape``
+    describes. Its channels are sharded across TP and the complete tail is replicated across SP. This history
     seeds the logical sequence start; the halo exchange supplies predecessor
     histories from projected tokens for the other segments. Construct state with
     :meth:`ttKDA.allocate_state` or reuse a state returned by :meth:`ttKDA.forward`.
