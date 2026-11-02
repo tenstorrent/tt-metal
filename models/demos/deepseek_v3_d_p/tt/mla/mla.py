@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 )
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCache,
@@ -797,16 +798,8 @@ class ttMLA:
                 coords = [(a0, a1) for a1 in range(n1) for a0 in range(n0)]
             host = torch.cat([sharded[:, a1 : a1 + 1, a0 * rows : (a0 + 1) * rows] for a0, a1 in coords], dim=2)
         else:
-            # SP shards concatenate on the sequence dim; the TP replicas stack on dim 1 and one is kept.
-            shard_dims = [None, None]
-            shard_dims[sp_axis] = 2
-            shard_dims[1 - sp_axis] = 1
-            host = ttnn.to_torch(
-                storage,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, dims=tuple(shard_dims), mesh_shape=mesh_device.shape
-                ),
-            )[:, :1]
+            # SP shards concatenate on the sequence dim; only one TP replica is read back.
+            host = ttnn.to_torch(storage, mesh_composer=get_sp_mesh_composer(mesh_device, sp_axis, concat_dim=2))
         return kvpe_cache.unpack_host(host)
 
     def get_weight_shapes(self) -> dict[str, tuple]:
