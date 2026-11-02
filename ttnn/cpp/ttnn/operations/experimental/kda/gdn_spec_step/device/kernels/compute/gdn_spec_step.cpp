@@ -1549,10 +1549,10 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         hd32.wait_front(KVs);
         // hn (o operand), hnew (writer), hn32 (next token's S_cur) = hd32 + kt @ delta, outer product fused in DST
 #if GDN_RING_SPLIT
-        if (t & 1u) {
-            outer_add_state_sfpu(hn, hnew2, hn32, Kt, Vs, dfb::hnew2);
-        } else {
-            outer_add_state_sfpu(hn, hnew, hn32, Kt, Vs, dfb::hnew);
+        {
+            // one inlined copy (code size), the token's ring DFB picked at run time
+            DataflowBuffer& hring = (t & 1u) ? hnew2 : hnew;
+            outer_add_state_sfpu(hn, hring, hn32, Kt, Vs, (t & 1u) ? static_cast<uint32_t>(dfb::hnew2) : static_cast<uint32_t>(dfb::hnew));
         }
 #else
         outer_add_state_sfpu(hn, hnew, hn32, Kt, Vs);
