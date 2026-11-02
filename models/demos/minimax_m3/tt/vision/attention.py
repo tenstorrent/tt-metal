@@ -12,9 +12,9 @@ Per `MiniMaxM3VLVisionAttention` (transformers 5.12):
   attn = sdpa(q, k, v, attn_mask=None, scale=1/sqrt(head_dim))   # FULL attention, no window
   out  = out_proj(attn.flatten(-2))
 
-Differences from MoonViT attention: separate q/k/v (packed host-side into a
-single wqkv here), rotate_half RoPE (not interleaved), and plain full
-bidirectional SDPA (the tower passes attention_mask=None — no cu_seqlens).
+The separate q/k/v projections are packed host-side into a single wqkv
+here, and SDPA is plain full bidirectional attention (the tower passes
+attention_mask=None, no cu_seqlens).
 
 head_dim=80 is not tile-aligned, so q/k/v are padded to 96 across wqkv,
 the heads, and wo input. Padded slots hold zeros: they add nothing to
@@ -44,12 +44,12 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.minimax_m3.reference.vision import rope_axis_dim
 from models.demos.minimax_m3.tt.vision.common import (
+    as_linear_bias,
     hifi4_compute_config,
+    linear,
     linear_compute_config,
-    linear_program_config,
-    mesh_mapper,
-    next_tile_multiple,
     sdpa_program_config,
+    to_device,
 )
 from models.demos.minimax_m3.utils.weight_conversion import meta_partial_permute
 
@@ -118,81 +118,26 @@ class M3VLAttention(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        hidden_size: int,
         num_heads: int,
         head_dim: int,
-        wqkv_weight: torch.Tensor,
-        wo_weight: torch.Tensor,
+        wqkv_weight: torch.Tensor,  # [hidden, 3*num_heads*padded_head_dim], _pack_wqkv_weight
+        wo_weight: torch.Tensor,  # [num_heads*padded_head_dim, hidden], _pad_wo_weight
         wqkv_bias: Optional[torch.Tensor] = None,
         wo_bias: Optional[torch.Tensor] = None,
         dtype=ttnn.bfloat16,
     ):
         super().__init__()
-        assert (
-            num_heads * head_dim == hidden_size
-        ), f"num_heads*head_dim ({num_heads}*{head_dim}) != hidden_size {hidden_size}"
-        self.device = mesh_device
-        self.dtype = dtype
-        self.hidden_size = int(hidden_size)
         self.num_heads = int(num_heads)
-        self.head_dim = int(head_dim)
-        self.padded_head_dim = next_tile_multiple(self.head_dim)
-        self.scale = 1.0 / math.sqrt(self.head_dim)
+        self.scale = 1.0 / math.sqrt(head_dim)
 
-        mm = mesh_mapper(mesh_device)
-
-        self.wqkv = ttnn.as_tensor(
-            wqkv_weight,
-            device=mesh_device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mm,
-        )
-        self.wqkv_bias = (
-            ttnn.as_tensor(
-                wqkv_bias.view(1, 1, 1, -1).contiguous(),
-                device=mesh_device,
-                dtype=dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mm,
-            )
-            if wqkv_bias is not None
-            else None
-        )
-
-        self.wo = ttnn.as_tensor(
-            wo_weight,
-            device=mesh_device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mm,
-        )
-        self.wo_bias = (
-            ttnn.as_tensor(
-                wo_bias.view(1, 1, 1, -1).contiguous(),
-                device=mesh_device,
-                dtype=dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mm,
-            )
-            if wo_bias is not None
-            else None
-        )
+        self.wqkv = to_device(wqkv_weight, mesh_device, dtype)
+        self.wqkv_bias = as_linear_bias(mesh_device, wqkv_bias, dtype) if wqkv_bias is not None else None
+        self.wo = to_device(wo_weight, mesh_device, dtype)
+        self.wo_bias = as_linear_bias(mesh_device, wo_bias, dtype) if wo_bias is not None else None
 
         # rotary_embedding_llama's transformation matrix, one tile: x @ trans_mat turns each lane pair (a, b) of a tile
         # into (-b, a). Like cos and sin, it must be bfloat16 whatever the weights' dtype.
-        self.trans_mat = ttnn.as_tensor(
-            get_rot_transformation_mat(),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mm,
-        )
+        self.trans_mat = to_device(get_rot_transformation_mat(), mesh_device)
 
         # QKV and the output projection accumulate in L1; RoPE and SDPA keep the plain HiFi4 config.
         self.compute_kernel_config = linear_compute_config()
@@ -204,22 +149,23 @@ class M3VLAttention(LightweightModule):
     def from_torch(
         cls,
         mesh_device,
-        ref_attn: torch.nn.Module,  # VisionAttention (reference/vision.py): q_proj/k_proj/v_proj/out_proj
-        hidden_size: int,
-        num_heads: int,
-        head_dim: int,
+        ref_attn: torch.nn.Module,  # VisionAttention (reference/vision.py): q_proj/k_proj/v_proj/out_proj, head_dim
+        padded_head_dim: int,
         dtype=ttnn.bfloat16,
     ) -> "M3VLAttention":
+        """head_dim is ref_attn's, the head count follows from q_proj, and q, k and v heads are padded to
+        padded_head_dim lanes (module docstring)."""
         for n in ("q_proj", "k_proj", "v_proj", "out_proj"):
             assert hasattr(ref_attn, n), f"expected {n} on {type(ref_attn).__name__}"
-        padded = next_tile_multiple(head_dim)
+        head_dim = ref_attn.head_dim
+        num_heads = ref_attn.q_proj.weight.shape[0] // head_dim
         wqkv = _pack_wqkv_weight(
             ref_attn.q_proj.weight.data,
             ref_attn.k_proj.weight.data,
             ref_attn.v_proj.weight.data,
             num_heads,
             head_dim,
-            padded,
+            padded_head_dim,
         )
         has_bias = ref_attn.q_proj.bias is not None
         wqkv_bias = (
@@ -229,16 +175,15 @@ class M3VLAttention(LightweightModule):
                 ref_attn.v_proj.bias.data,
                 num_heads,
                 head_dim,
-                padded,
+                padded_head_dim,
             )
             if has_bias
             else None
         )
-        wo = _pad_wo_weight(ref_attn.out_proj.weight.data, num_heads, head_dim, padded)
+        wo = _pad_wo_weight(ref_attn.out_proj.weight.data, num_heads, head_dim, padded_head_dim)
         wo_bias = ref_attn.out_proj.bias.data if ref_attn.out_proj.bias is not None else None
         return cls(
             mesh_device=mesh_device,
-            hidden_size=hidden_size,
             num_heads=num_heads,
             head_dim=head_dim,
             wqkv_weight=wqkv,
@@ -266,20 +211,8 @@ class M3VLAttention(LightweightModule):
         x: ttnn.Tensor,  # (1, 1, L, hidden_size)
         cos: ttnn.Tensor,  # (1, 1, L, padded_head_dim)
         sin: ttnn.Tensor,
-        memory_config: Optional["ttnn.MemoryConfig"] = None,
     ) -> ttnn.Tensor:
-        rows = x.shape[-2]
-        heads_size = self.num_heads * self.padded_head_dim  # q, k and v each, with the heads padded
-        xqkv = ttnn.linear(
-            x,
-            self.wqkv,
-            bias=self.wqkv_bias,
-            compute_kernel_config=self.compute_kernel_config,
-            program_config=linear_program_config(
-                self.device, rows, self.hidden_size, 3 * heads_size, self.compute_kernel_config
-            ),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        xqkv = linear(x, self.wqkv, self.wqkv_bias, self.compute_kernel_config)
 
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
@@ -310,15 +243,6 @@ class M3VLAttention(LightweightModule):
         attn_flat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn)
 
-        out = ttnn.linear(
-            attn_flat,
-            self.wo,
-            bias=self.wo_bias,
-            compute_kernel_config=self.compute_kernel_config,
-            program_config=linear_program_config(
-                self.device, rows, heads_size, self.hidden_size, self.compute_kernel_config
-            ),
-            memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
-        )
+        out = linear(attn_flat, self.wo, self.wo_bias, self.compute_kernel_config)
         ttnn.deallocate(attn_flat)
         return out

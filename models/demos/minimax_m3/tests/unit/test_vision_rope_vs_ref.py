@@ -35,7 +35,6 @@ from models.demos.minimax_m3.tt.vision.attention import (
     _rope_head_order,
 )
 from models.demos.minimax_m3.tt.vision.model import ROPE_CACHE_GRIDS, M3VLVisionModel
-from models.demos.minimax_m3.tt.vision.model_config import MiniMaxM3VLModelArgs
 from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
 
 HEAD_DIM, PADDED_HEAD_DIM, NUM_HEADS, THETA, MERGE = 80, 96, 16, 10000.0, 2
@@ -151,15 +150,15 @@ def test_vision_rope_tables_kept_per_grid(monkeypatch):
 
     monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **kwargs: tensor.clone())
     monkeypatch.setattr(ttnn, "deallocate", freed.append)
-    monkeypatch.setattr("models.demos.minimax_m3.tt.vision.model.mesh_mapper", lambda mesh_device: None)
-    monkeypatch.setattr("models.demos.minimax_m3.tt.vision.rope.mesh_mapper", lambda mesh_device: None)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
+    config = ref.MiniMaxM3VisionConfig()
     model = M3VLVisionModel(
-        None, MiniMaxM3VLModelArgs(), patch_embed=lambda x: x, pre_layrnorm=lambda x: x, blocks=[block]
+        None, config, PADDED_HEAD_DIM, patch_embed=lambda x: x, pre_layrnorm=lambda x: x, blocks=[block]
     )
 
     def forward(grid):
         """The tables the blocks get for an image of grid, which must be the grid's own and not freed."""
-        model.forward_tower(torch.zeros(grid[1] * grid[2], 1176), torch.tensor([grid]))
+        model.forward_tower(torch.zeros(grid[1] * grid[2], config.patch_dim), torch.tensor([grid]))
         expected = rope_cos_sin_padded(torch.tensor([grid]), HEAD_DIM, PADDED_HEAD_DIM, THETA, MERGE)
         for table, table_ref in zip(tables[-1], expected):
             assert torch.equal(table, table_ref.to(torch.bfloat16)[None, None]), f"{grid} got another grid's tables"

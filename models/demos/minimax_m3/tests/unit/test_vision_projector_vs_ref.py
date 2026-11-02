@@ -31,9 +31,7 @@ def test_vision_projector_vs_ref(mesh_device, device_params, grid_thw, vision_re
     reference = vision_reference()
     ref_out = reference.projector(x_in)
 
-    tt_projector = M3VLProjector.from_torch(
-        mesh_device, reference.projector, spatial_merge_size=reference.config.spatial_merge_size, dtype=ttnn.bfloat16
-    )
+    tt_projector = M3VLProjector.from_torch(mesh_device, reference.projector, dtype=ttnn.bfloat16)
     out = to_host(tt_projector(to_device(x_in, mesh_device)), mesh_device, ref_out.shape)
 
     name = f"projector {grid_name(grid_thw)} L={x_in.shape[0]}->{ref_out.shape[0]}"

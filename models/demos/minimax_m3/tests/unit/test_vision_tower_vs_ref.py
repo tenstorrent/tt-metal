@@ -23,7 +23,6 @@ import torch
 
 import ttnn
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
-from models.demos.minimax_m3.tt.vision.model_config import MiniMaxM3VLModelArgs
 
 from ..test_factory import parametrize_mesh_with_fabric
 from .vision_helpers import MAX_REL_L2, assert_pcc, grid_name, parametrize_vision_grids, to_host
@@ -40,10 +39,7 @@ def test_vision_tower_vs_ref(mesh_device, device_params, grid_thw, num_layers, v
     pixel_values, grid = acts["pixel_values"], acts["grid_thw"]
     tower_ref, final_ref = acts["tower.out"], acts["final"]
 
-    model_args = MiniMaxM3VLModelArgs(mesh_device=mesh_device, dtype=ttnn.bfloat16, num_hidden_layers=num_layers)
-    model = M3VLVisionModel.from_torch(
-        mesh_device, vision_reference(num_layers), model_args, with_projector=True, dtype=ttnn.bfloat16
-    )
+    model = M3VLVisionModel.from_torch(mesh_device, vision_reference(num_layers), dtype=ttnn.bfloat16)
     name = f"{grid_name(grid_thw)} layers={num_layers}"
 
     tower_tt = to_host(model.forward_tower(pixel_values, grid), mesh_device, tower_ref.shape)
@@ -65,9 +61,8 @@ def test_vision_tower_new_grid_on_cached_programs(
     image stages them again."""
     monkeypatch.setattr("models.demos.minimax_m3.tt.vision.model.ROPE_CACHE_GRIDS", 2)
     num_layers = 2
-    model_args = MiniMaxM3VLModelArgs(mesh_device=mesh_device, dtype=ttnn.bfloat16, num_hidden_layers=num_layers)
     model = M3VLVisionModel.from_torch(
-        mesh_device, vision_reference(num_layers), model_args, with_projector=False, dtype=ttnn.bfloat16
+        mesh_device, vision_reference(num_layers), with_projector=False, dtype=ttnn.bfloat16
     )
     grids = ((1, 16, 16), (1, 8, 32), (1, 32, 8), (1, 16, 16))
     cache_entries = None

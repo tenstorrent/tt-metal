@@ -7,14 +7,14 @@ Reads only the vision tensors (`vision_tower.*`, `multi_modal_projector.*`, `pat
 `safetensors`, from the shards that the checkpoint's model.safetensors.index.json lists for them; no
 transformers needed. The checkpoint was saved with transformers 4.52.4 names, which `_remap` turns into
 the transformers 5.12 MiniMaxM3VLModel names. `build_reference` puts the weights into the Torch
-reference (reference/vision.py), the module tree that the TT `from_torch` builders read.
+reference (reference/vision.py), the module tree that the TT `from_torch` builders read, built with
+the vision config of the checkpoint's config.json.
 """
 from __future__ import annotations
 
 import json
 import os
-from dataclasses import fields
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import torch
 from safetensors import safe_open
@@ -36,9 +36,16 @@ def _remap(key: str) -> str:
     return key  # multi_modal_projector.linear_* unchanged
 
 
+def _checkpoint_file(snapshot_dir: str, name: str) -> str:
+    """snapshot_dir/name. An empty snapshot_dir raises instead of naming a file in the current directory."""
+    if not snapshot_dir:
+        raise ValueError(f"snapshot_dir must be a MiniMax-M3 checkpoint directory, got {snapshot_dir!r}")
+    return os.path.join(snapshot_dir, name)
+
+
 def vision_shards(snapshot_dir: str) -> List[str]:
     """The shard files that hold vision tensors, from the checkpoint's model.safetensors.index.json."""
-    index_path = os.path.join(snapshot_dir, "model.safetensors.index.json")
+    index_path = _checkpoint_file(snapshot_dir, "model.safetensors.index.json")
     with open(index_path) as f:
         weight_map = json.load(f)["weight_map"]
     shards = sorted({shard for key, shard in weight_map.items() if key.startswith(_WANT)})
@@ -47,10 +54,8 @@ def vision_shards(snapshot_dir: str) -> List[str]:
     return shards
 
 
-def load_vision_state_dict(snapshot_dir: Optional[str], dtype: torch.dtype = torch.float32) -> Dict[str, torch.Tensor]:
+def load_vision_state_dict(snapshot_dir: str, dtype: torch.dtype = torch.float32) -> Dict[str, torch.Tensor]:
     """Return {v5.12 key: tensor} for the vision tower and projector, remapped from the checkpoint."""
-    if not snapshot_dir:
-        raise ValueError("HF_MODEL is not set: point it at a MiniMax-M3 checkpoint directory")
     sd: Dict[str, torch.Tensor] = {}
     for shard in vision_shards(snapshot_dir):
         with safe_open(os.path.join(snapshot_dir, shard), framework="pt") as f:
@@ -60,13 +65,10 @@ def load_vision_state_dict(snapshot_dir: Optional[str], dtype: torch.dtype = tor
     return sd
 
 
-def build_reference(args) -> MiniMaxM3VisionEncoder:
-    """Torch reference with the checkpoint's vision weights, for args (MiniMaxM3VLModelArgs).
-
-    Takes the first args.num_hidden_layers layers, and the checkpoint from args.snapshot_dir (HF_MODEL).
-    """
-    config = MiniMaxM3VisionConfig(
-        **{f.name: getattr(args, f.name) for f in fields(MiniMaxM3VisionConfig) if hasattr(args, f.name)}
-    )
-    reference = MiniMaxM3VisionEncoder(config)
-    return reference.load_hf_state_dict(load_vision_state_dict(args.snapshot_dir)).eval()
+def build_reference(snapshot_dir: str) -> MiniMaxM3VisionEncoder:
+    """Torch reference with the vision config (MiniMaxM3VisionConfig.from_hf_config of its config.json) and the vision
+    weights of the checkpoint in snapshot_dir. config.json is read first, so a missing or malformed one fails before the
+    weights are read."""
+    with open(_checkpoint_file(snapshot_dir, "config.json")) as f:
+        config = MiniMaxM3VisionConfig.from_hf_config(json.load(f))
+    return MiniMaxM3VisionEncoder(config).load_hf_state_dict(load_vision_state_dict(snapshot_dir)).eval()

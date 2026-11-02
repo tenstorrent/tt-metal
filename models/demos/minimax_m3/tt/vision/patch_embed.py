@@ -14,8 +14,8 @@ per-patch Linear from 1176 to 1280, with no bias.
 
 We implement exactly that: flatten the Conv3d weight `[1280, 3, 2, 14, 14]`
 to `[1280, 1176]` and run one `ttnn.linear`. `from_torch` takes the Conv3d
-of the Torch reference (reference/vision.py) and also accepts a weight
-already flattened to 2D.
+of the Torch reference (reference/vision.py), whose shape gives the patch
+geometry.
 
 There is no learned position embedding (M3-VL is RoPE-only) and no class
 token, so the projection output feeds straight into `pre_layrnorm`.
@@ -24,19 +24,11 @@ Reference: `MiniMaxM3VLVisionEmbeddings.proj` (Conv3d).
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import linear_compute_config, linear_program_config, mesh_mapper
-
-PATCH_SIZE = 14
-IN_CHANNELS = 3
-TEMPORAL_PATCH_SIZE = 2
-# Flattened patch dim: 3 * 2 * 14 * 14 = 1176.
-PATCH_FLAT_DIM = IN_CHANNELS * TEMPORAL_PATCH_SIZE * PATCH_SIZE * PATCH_SIZE
+from models.demos.minimax_m3.tt.vision.common import as_linear_weight, linear, linear_compute_config
 
 
 class M3VLPatchEmbed(LightweightModule):
@@ -45,63 +37,27 @@ class M3VLPatchEmbed(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        out_dim: int,
-        proj_weight: torch.Tensor,  # [out_dim, 1176] (Linear) or [out_dim, 3, 2, 14, 14] (Conv3d)
+        proj_weight: torch.Tensor,  # [out_dim, 3, 2, 14, 14] (Conv3d)
         dtype=ttnn.bfloat16,
     ):
         super().__init__()
-        self.device = mesh_device
-        self.dtype = dtype
-        self.out_dim = int(out_dim)
-
-        # Accept either a pre-flattened Linear weight or a raw Conv3d weight.
-        if proj_weight.ndim == 5:
-            c_out, c_in, kt, kh, kw = proj_weight.shape
-            assert c_out == out_dim, f"weight out dim {c_out} != out_dim {out_dim}"
-            assert c_in == IN_CHANNELS, f"weight in channels {c_in} != {IN_CHANNELS}"
-            assert (kt, kh, kw) == (
-                TEMPORAL_PATCH_SIZE,
-                PATCH_SIZE,
-                PATCH_SIZE,
-            ), f"kernel {(kt, kh, kw)} != {(TEMPORAL_PATCH_SIZE, PATCH_SIZE, PATCH_SIZE)}"
-            flat = proj_weight.reshape(out_dim, -1)
-        else:
-            assert proj_weight.ndim == 2, f"expected 2D or 5D weight, got {tuple(proj_weight.shape)}"
-            assert proj_weight.shape[0] == out_dim, f"weight out dim {proj_weight.shape[0]} != {out_dim}"
-            flat = proj_weight
-        assert flat.shape[1] == PATCH_FLAT_DIM, f"flattened in dim {flat.shape[1]} != {PATCH_FLAT_DIM}"
-
-        # Flatten to ttnn.linear convention [in, out].
-        flat_weight = flat.detach().to(torch.bfloat16).transpose(0, 1).contiguous()  # [1176, out_dim]
-        self.weight = ttnn.as_tensor(
-            flat_weight,
-            device=mesh_device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper(mesh_device),
-        )
-
+        # Flattened to [out_dim, 1176] in the order of a patch row's values, then ttnn.linear convention [in, out].
+        self.weight = as_linear_weight(mesh_device, proj_weight.flatten(1), dtype)
         self.compute_kernel_config = linear_compute_config()
 
     @classmethod
     def from_torch(
         cls,
         mesh_device,
-        ref_proj: torch.nn.Module,  # nn.Linear (pre-flattened) or nn.Conv3d
-        out_dim: Optional[int] = None,
+        ref_proj: torch.nn.Conv3d,
         dtype=ttnn.bfloat16,
     ) -> "M3VLPatchEmbed":
-        assert hasattr(ref_proj, "weight"), f"expected a Conv3d/Linear-like module, got {type(ref_proj).__name__}"
-        weight = ref_proj.weight.data
-        return cls(
-            mesh_device=mesh_device,
-            out_dim=int(out_dim if out_dim is not None else weight.shape[0]),
-            proj_weight=weight,
-            dtype=dtype,
-        )
+        assert (
+            isinstance(ref_proj, torch.nn.Conv3d) and ref_proj.stride == ref_proj.kernel_size and ref_proj.bias is None
+        ), f"expected a Conv3d with stride equal to its kernel and no bias, got {ref_proj}"
+        return cls(mesh_device=mesh_device, proj_weight=ref_proj.weight.data, dtype=dtype)
 
-    def forward(self, x_flat: ttnn.Tensor, memory_config: Optional["ttnn.MemoryConfig"] = None) -> ttnn.Tensor:
+    def forward(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
         """Apply the per-patch projection.
 
         Args:
@@ -110,12 +66,4 @@ class M3VLPatchEmbed(LightweightModule):
         Returns:
             device tensor of shape (..., L, out_dim).
         """
-        return ttnn.linear(
-            x_flat,
-            self.weight,
-            compute_kernel_config=self.compute_kernel_config,
-            program_config=linear_program_config(
-                self.device, x_flat.shape[-2], PATCH_FLAT_DIM, self.out_dim, self.compute_kernel_config
-            ),
-            memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
-        )
+        return linear(x_flat, self.weight, None, self.compute_kernel_config)

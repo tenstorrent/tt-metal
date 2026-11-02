@@ -15,7 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.minimax_m3.tt.vision.common import mesh_composer, mesh_mapper
+from models.demos.minimax_m3.tt.vision import common
 from tests.ttnn.utils_for_testing import comp_relative_frobenius
 
 # Patch grid (t, h, w) of one image: its size in pixels divided by the 14 pixel patch. The ids name the grid in
@@ -65,20 +65,13 @@ def grid_name(grid_thw) -> str:
 
 
 def to_device(x: torch.Tensor, mesh_device) -> ttnn.Tensor:
-    """(L, D) host tensor -> (1, 1, L, D) bf16 tile tensor in DRAM, replicated over the mesh."""
-    return ttnn.from_torch(
-        x.to(torch.bfloat16).reshape(1, 1, *x.shape).contiguous(),
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mesh_mapper(mesh_device),
-    )
+    """(L, D) host tensor -> (1, 1, L, D) bf16 tile tensor in DRAM, replicated over the mesh (common.to_device)."""
+    return common.to_device(x.reshape(1, 1, *x.shape), mesh_device)
 
 
 def to_host(x: ttnn.Tensor, mesh_device, shape) -> torch.Tensor:
     """The first device's copy of x, as an fp32 host tensor of the given shape."""
-    out = ttnn.to_torch(x, mesh_composer=mesh_composer(mesh_device, dim=0))
+    out = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     return out[:1].reshape(shape).float()
 
 

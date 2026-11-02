@@ -9,6 +9,8 @@ Per `MiniMaxM3VLMultiModalProjector.forward`:
     x = x.reshape(L // merge**2, -1)                   # group 4 patches -> 24576
     x = merge_linear_2(merge_act(merge_linear_1(x)))   # 24576 -> 6144 -> 6144
 
+so here an M3VLMLP, fold_patches and a second M3VLMLP.
+
 There is no pre-norm. The 4 grouped patches are consecutive in the
 sequence (the image processor pre-orders patches so each group of
 spatial_merge**2 is a 2x2 spatial block — same ordering the 3D RoPE coords
@@ -17,82 +19,57 @@ GELU (`ACT2FN["gelu"]`).
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import (
-    as_linear_bias,
-    as_linear_weight,
-    linear_compute_config,
-    linear_program_config,
-)
+from models.demos.minimax_m3.tt.vision.mlp import M3VLMLP
+
+
+def fold_patches(x: ttnn.Tensor, merge_factor: int) -> ttnn.Tensor:
+    """(1, 1, L, D) tile tensor -> (1, 1, L // merge_factor, merge_factor * D): each merge_factor consecutive patches
+    become one row. The reshape crosses tile rows; go through row-major to keep it exact.
+
+    Consumes x: it is freed once its row-major copy exists, so the fold holds two copies of the activations at a time,
+    not three.
+    """
+    rows, width = x.shape[-2], x.shape[-1]
+    folded = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(x)
+    folded = ttnn.reshape(folded, (1, 1, rows // merge_factor, width * merge_factor))
+    return ttnn.to_layout(folded, ttnn.TILE_LAYOUT)
 
 
 class M3VLProjector(LightweightModule):
     """Per-patch MLP -> spatial-merge fold (4 patches) -> merge MLP."""
 
-    def __init__(
-        self,
-        mesh_device,
-        ref_projector: torch.nn.Module,  # MultiModalProjector (reference/vision.py): linear_1/2, merge_linear_1/2
-        spatial_merge_size: int,
-        dtype=ttnn.bfloat16,
-    ):
+    def __init__(self, mlp: M3VLMLP, merge_mlp: M3VLMLP, spatial_merge_size: int):
         super().__init__()
-        self.device = mesh_device
-        self.dtype = dtype
+        self.mlp = mlp
+        self.merge_mlp = merge_mlp
         self.merge_factor = int(spatial_merge_size) ** 2
 
+    @classmethod
+    def from_torch(
+        cls,
+        mesh_device,
+        ref_projector: torch.nn.Module,  # MultiModalProjector (reference/vision.py): linear_1/2, merge_linear_1/2
+        dtype=ttnn.bfloat16,
+    ) -> "M3VLProjector":
         for n in ("linear_1", "linear_2", "merge_linear_1", "merge_linear_2"):
             assert hasattr(ref_projector, n), f"expected {n} on {type(ref_projector).__name__}"
 
-        self.linear_1_w = as_linear_weight(mesh_device, ref_projector.linear_1.weight.data, dtype)
-        self.linear_1_b = as_linear_bias(mesh_device, ref_projector.linear_1.bias.data, dtype)
-        self.linear_2_w = as_linear_weight(mesh_device, ref_projector.linear_2.weight.data, dtype)
-        self.linear_2_b = as_linear_bias(mesh_device, ref_projector.linear_2.bias.data, dtype)
-        self.merge_1_w = as_linear_weight(mesh_device, ref_projector.merge_linear_1.weight.data, dtype)
-        self.merge_1_b = as_linear_bias(mesh_device, ref_projector.merge_linear_1.bias.data, dtype)
-        self.merge_2_w = as_linear_weight(mesh_device, ref_projector.merge_linear_2.weight.data, dtype)
-        self.merge_2_b = as_linear_bias(mesh_device, ref_projector.merge_linear_2.bias.data, dtype)
+        def build_mlp(fc1: torch.nn.Linear, fc2: torch.nn.Linear) -> M3VLMLP:
+            return M3VLMLP(mesh_device, fc1.weight.data, fc1.bias.data, fc2.weight.data, fc2.bias.data, dtype=dtype)
 
-        self.compute_kernel_config = linear_compute_config()
-
-    @classmethod
-    def from_torch(cls, mesh_device, ref_projector, spatial_merge_size, dtype=ttnn.bfloat16) -> "M3VLProjector":
-        return cls(mesh_device, ref_projector, spatial_merge_size, dtype=dtype)
-
-    def _linear(self, x, w, b, act=False, memory_config=None):
-        out = ttnn.linear(
-            x,
-            w,
-            bias=b,
-            compute_kernel_config=self.compute_kernel_config,
-            program_config=linear_program_config(
-                self.device, x.shape[-2], w.shape[-2], w.shape[-1], self.compute_kernel_config
-            ),
-            memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
+        return cls(
+            mlp=build_mlp(ref_projector.linear_1, ref_projector.linear_2),
+            merge_mlp=build_mlp(ref_projector.merge_linear_1, ref_projector.merge_linear_2),
+            spatial_merge_size=ref_projector.spatial_merge_size,
         )
-        if act:
-            out = ttnn.gelu(out, fast_and_approximate_mode=False)
-        return out
 
-    def forward(self, x: ttnn.Tensor, memory_config: Optional["ttnn.MemoryConfig"] = None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x: (1, 1, L, hidden) -> (1, 1, L//merge_factor, text_hidden)."""
-        # Per-patch MLP: linear_1 -> gelu -> linear_2.
-        h = self._linear(x, self.linear_1_w, self.linear_1_b, act=True)
-        h = self._linear(h, self.linear_2_w, self.linear_2_b, act=False)
-
-        # Fold spatial_merge**2 consecutive patches into the channel dim.
-        L = h.shape[-2]
-        merged_dim = h.shape[-1] * self.merge_factor
-        # Reshape crosses tile rows; go through row-major to keep it exact.
-        h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
-        h = ttnn.reshape(h, (1, 1, L // self.merge_factor, merged_dim))
-        h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
-
-        # Merge MLP: merge_linear_1 -> gelu -> merge_linear_2.
-        h = self._linear(h, self.merge_1_w, self.merge_1_b, act=True)
-        return self._linear(h, self.merge_2_w, self.merge_2_b, memory_config=memory_config)
+        x = self.mlp(x)
+        x = fold_patches(x, self.merge_factor)
+        return self.merge_mlp(x)
