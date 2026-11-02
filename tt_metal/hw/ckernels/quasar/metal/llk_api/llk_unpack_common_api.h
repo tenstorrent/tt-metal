@@ -133,9 +133,9 @@ inline void llk_unpack_wait_for_dest_available() {
  *         @ref llk_pack_dest_section_done for this op, or the two sides address different DEST halves (the two calls
  *         live in different TRISC TUs, so no static_assert can compare them). values = <true/false>
  * @note Math blocks in tile_regs_acquire until this post, so it sees nothing of the section before the unpack thread
- *       commits it. SrcA / SrcB unpacks issued in the same section are therefore consumed only after this call and
- *       must fit the src banks. A section that mixes unpack-to-dest copies with a src-path run is outside
- *       this contract and stalls both threads!
+ *       commits it. SrcA / SrcB unpacks issued in the same section before this call are therefore consumed only after
+ *       it and must fit the src banks, or both threads stall. A section with a longer src-path run calls this before
+ *       that run (tile_regs_unpack_commit) and ends with math's half alone (tile_regs_math_commit).
  */
 template <bool EN_32BIT_DEST>
 inline void llk_unpack_dest_section_done() {

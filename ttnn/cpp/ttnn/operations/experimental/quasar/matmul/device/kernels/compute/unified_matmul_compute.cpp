@@ -158,6 +158,9 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                             subblock_M_tiles,
                             K_chunk_tiles);
                     }
+                    // Hand the section to MATH before the SrcA / SrcB unpacks below: with fp32 partials unpacked to
+                    // DST, MATH starts on it only then (Quasar), and a K chunk's unpacks overflow the src banks.
+                    tile_regs_unpack_commit();
 #ifdef FUSE_BIAS
                     if (K_chunk == 0) {
                         // The bias tile over each subblock column, broadcast down every row of the DST tiles
@@ -215,7 +218,7 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                             K_chunk_tiles);
                     }
 #endif
-                    tile_regs_commit();
+                    tile_regs_math_commit();
 
                     // pack_block continues where the previous subblock's pack left off in the thread's entries.
                     // Accumulating in C_slice, the K chunks before the last add onto the same entries every time.
