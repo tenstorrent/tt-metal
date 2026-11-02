@@ -146,6 +146,28 @@ def test_packed_forecast_on_mesh(mesh_device):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_trace_rejects_horizon_change(mesh_device, expect_error):
+    """ctx512 b64 packs 6 per 224 rows at every horizon up to 64, so only the horizon check catches it."""
+    from models.experimental.chronos_forecast.tt.trace_runner import TtChronosTraceRunner
+
+    _, model = _models(mesh_device, "default")
+    model.pack_tokens = None
+    context = _series(64, 512, seed=3)
+    prepared = model.prepare_inputs(context, num_output_patches=4)
+    shorter = model.prepare_inputs(context, num_output_patches=3)
+    assert prepared.pack == shorter.pack > 1
+    assert prepared.patched_tokens.shape == shorter.patched_tokens.shape
+    runner = TtChronosTraceRunner(model, prepared)
+    try:
+        runner.capture()
+        with expect_error(ValueError, "trace horizon changed"):
+            runner.execute(shorter)
+    finally:
+        runner.release()
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_default_does_not_pack(mesh_device):
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
     from models.experimental.chronos_forecast.tt.model import TtChronos

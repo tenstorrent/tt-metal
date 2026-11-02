@@ -99,6 +99,13 @@ class TtChronosTraceRunner:
             raise ValueError(
                 f"trace token packing changed: {prepared.pack} != {self._prepared.pack} series per sequence"
             )
+        # Packed shapes can match across horizons (ctx512 b64: O=1..4 all pack 6 per 224 rows), but the
+        # captured masks, RoPE and tail slice follow the captured horizon.
+        if prepared.num_output_patches != self._prepared.num_output_patches:
+            raise ValueError(
+                f"trace horizon changed: {prepared.num_output_patches} != "
+                f"{self._prepared.num_output_patches} output patches"
+            )
         same_groups = prepared.unique_groups == self._prepared.unique_groups and (
             prepared.unique_groups
             or (
