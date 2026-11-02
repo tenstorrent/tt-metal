@@ -50,6 +50,14 @@ IMAGE_TILE_ROWS = list(range(0, TEXT_BEFORE + IMAGE_ROWS - TILE_START))
 TEXT_TILE_ROWS = list(range(TEXT_BEFORE + IMAGE_ROWS - TILE_START, TILE))
 assert PROMPT % TILE == 0 and CACHED % TILE == 0, "the tile must cover the same absolute rows on every path"
 assert len(IMAGE_TILE_ROWS) == 20 and len(TEXT_TILE_ROWS) == TEXT_AFTER
+# Mean total variation over the 12 text rows after the image, Gemma-4-12B on a (1,4) Blackhole block with the exact
+# (whole == chunked) SDPA: the supported paths measure 0.13-0.15 against the whole prompt (a continuation recomputes
+# the vision rows against the bfloat8_b paged cache); the overlay-off control measures 0.55 against the matched
+# continuation; the floors 0.015. The SDPA precision recipes add about 0.1 per row (tt-metal #63857).
+TEXT_ROWS_BOUND = 0.35  # a supported path's mean over the text rows, 2.3x the measured 0.15
+CONTROL_MIN = 0.4  # the overlay-off control's mean over the text rows, above TEXT_ROWS_BOUND so a path never passes as the control
+CONTROL_ENVELOPE_MULT = 1.5  # ... and above the largest distance any supported path or floor shows on those rows
+assert CONTROL_MIN > TEXT_ROWS_BOUND
 
 
 def _host_embeds(generator, ids):
@@ -260,11 +268,11 @@ def test_vision_attention_survives_cached_prefix_and_chunking(mesh_device, monke
     # rounding, three times the floors), and the rows after the image within the documented tolerance.
     bound = max(0.05, 3 * max(floors_last))
     assert d_cached <= bound and d_chunked <= bound, (d_cached, d_chunked, floors_last)
-    TEXT_ROWS_BOUND = 0.35
     assert t_cached[0] <= TEXT_ROWS_BOUND and t_chunked[0] <= TEXT_ROWS_BOUND, (t_cached, t_chunked, floors_text)
-    # The control: the overlay alone must move the rows after the image well past anything a supported path does.
+    # The control: the overlay alone must move the rows after the image past the bound a supported path must keep and
+    # well past anything a supported path or floor does on those rows.
     envelope = max(t_cached[0], t_chunked[0], t_mutual[0], *floors_text)
-    assert control[0] > max(0.4, 1.5 * envelope), (
+    assert control[0] > max(CONTROL_MIN, CONTROL_ENVELOPE_MULT * envelope), (
         "the overlay-off control must move the text rows after the image more than any supported path",
         control,
         envelope,
