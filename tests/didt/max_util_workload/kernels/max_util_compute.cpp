@@ -55,7 +55,7 @@ ALWI void max_util_unpack(
 
     load_replay_buf(
         0,
-        12,
+        14,
         // Lambda function to set up replay buffer
         [] {
             TTI_UNPACR(
@@ -73,6 +73,7 @@ ALWI void max_util_unpack(
                 0,
                 1);
             TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);
+            TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::CFGEXU);
             TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
             TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
             TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
@@ -93,6 +94,7 @@ ALWI void max_util_unpack(
                 0,
                 1);
             TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+            TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::CFGEXU);
             TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);
             TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
             TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
@@ -103,11 +105,11 @@ ALWI void max_util_unpack(
     ckernel_unpack_template tmp = ckernel_unpack_template(
         false,                    // src B
         false,                    // halo - just used for 4 unpacks
-        lltt::replay_insn(0, 6),  // runs when context is 0
+        lltt::replay_insn(0, 7),  // runs when context is 0
         0,
         0,
         0,
-        lltt::replay_insn(6, 6),  // runs when context is 1
+        lltt::replay_insn(7, 7),  // runs when context is 1
         0,
         0);
 
