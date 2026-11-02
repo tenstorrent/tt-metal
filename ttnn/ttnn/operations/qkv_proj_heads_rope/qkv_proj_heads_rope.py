@@ -116,8 +116,6 @@ def validate(
         raise UnsupportedAxisValue("qkv_proj_heads_rope: output memory_layout must be INTERLEAVED")
     if sin.memory_config().buffer_type != cos.memory_config().buffer_type:
         raise UnsupportedAxisValue("qkv_proj_heads_rope: cos and sin must share a buffer type")
-    if not getattr(cfg, "packer_l1_acc", True):
-        raise UnsupportedAxisValue("qkv_proj_heads_rope: packer_l1_acc=False")
 
 
 def _check_shapes(input_tensor, weight, bias, cos, sin, num_heads):
@@ -130,8 +128,9 @@ def _check_shapes(input_tensor, weight, bias, cos, sin, num_heads):
     head_dim = hidden // num_heads
     if list(weight.shape) != [hidden, 3 * hidden]:
         raise ValueError(f"qkv_proj_heads_rope: weight shape {list(weight.shape)} != {[hidden, 3 * hidden]}")
-    if math.prod(bias.shape) != 3 * hidden:
-        raise ValueError(f"qkv_proj_heads_rope: bias must have {3 * hidden} elements, got {list(bias.shape)}")
+    # One row of 3H: the reader takes the bias from tile row 0 of each column tile.
+    if bias.shape[-1] != 3 * hidden or math.prod(bias.shape) != 3 * hidden:
+        raise ValueError(f"qkv_proj_heads_rope: bias must be one row of {3 * hidden}, got {list(bias.shape)}")
     for name, table in (("cos", cos), ("sin", sin)):
         t_shape = list(table.shape)
         if len(t_shape) != 4 or t_shape[:2] != [1, 1] or t_shape[3] != head_dim:
