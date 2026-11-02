@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
@@ -351,42 +352,6 @@ def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults
         )
 
 
-@pytest.mark.parametrize(
-    ("widths", "channel_chunk_size"),
-    [
-        # Two channel tiles per block: one destination group, eight diagonal tiles in two FP32 groups.
-        pytest.param((128, 128, 128), 64, id="kimi-k3-block"),
-        # Twelve channel tiles per block: three FP32 groups of four, against two BFLOAT16 groups of six.
-        pytest.param((128, 128, 128), 384, id="wide-block"),
-    ],
-)
-def test_qkv_causal_conv1d_silu_fp32_accumulation(
-    zero_actual_start, device: ttnn.Device, widths: tuple[int, int, int], channel_chunk_size: int
-) -> None:
-    """FP32 destination accumulation halves the tiles per destination acquire and still matches the reference."""
-    (inputs, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(
-        device, sequence=64, widths=widths, seed=819
-    )
-    fp32_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
-    outputs = _run(
-        input_tt,
-        history_tt,
-        taps_tt,
-        widths=widths,
-        channel_chunk_size=channel_chunk_size,
-        compute_kernel_config=fp32_config,
-        actual_start=zero_actual_start,
-    )
-    for name, golden, output in zip(("q", "k", "v"), qkv_reference(inputs, history, taps, widths), outputs):
-        assert_accurate(golden, ttnn.to_torch(output), name=f"fp32 {name}", pcc_threshold=0.999, nrmse_threshold=0.008)
-
-
 def test_qkv_causal_conv1d_silu_rejects_approximate_math(
     zero_actual_start, device: ttnn.Device, expect_error: Callable
 ) -> None:
@@ -493,7 +458,8 @@ _K3_ROWS = 640
 _K3_WIDTHS = (3072, 3072, 3072)
 _K3_TRAILING_COLUMNS = 128 + 3072 + 32
 _K3_CHANNEL_CHUNK_SIZE = 64
-_K3_EXPECTED_DURATION_NS = 54_100
+# Measured on a P150b with the production FP32-DST config and scaled by main's ratio to the CI reference.
+_K3_EXPECTED_DURATION_NS = 74_000
 
 
 @pytest.mark.requires_host_iommu
@@ -521,6 +487,15 @@ def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: t
         for _ in range(KDA_HISTORY_EXCHANGE_SEMAPHORES)
     ]
 
+    # The KDA layer's compute config (FP32 DST), which the production call runs.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
     def run() -> tuple[ttnn.Tensor, ...]:
         return ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
             projected_tt,
@@ -528,6 +503,7 @@ def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: t
             *taps_tt,
             *_K3_WIDTHS,
             program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=_K3_CHANNEL_CHUNK_SIZE),
+            compute_kernel_config=compute_kernel_config,
             actual_start=zero_actual_start,
             exchange_buffer=exchange_buffer,
             exchange_semaphores=exchange_semaphores,
@@ -697,6 +673,95 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
             channel_chunk_size=384,
             actual_start=zero_actual_start,
         )
+
+
+def _cancelling_tap_inputs(
+    sequence: int, widths: tuple[int, int, int], seed: int
+) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]]:
+    """Massive activations (|x| 32-96, as real projected q/k/v channels) under taps whose sum nearly cancels.
+
+    Taps 0-2 share a sign and tap 3 cancels them to within ``delta`` (|delta| <= 0.02 of the tap sum in [0.15, 0.45)),
+    so the partial sums are about S/2 with S = sum_j |x_j w_j|, while the pre-activation is about |x| delta ~ 1. Rows
+    vary by about 1 % so neighbouring outputs differ. All values are bf16, so the reference products are exact.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    channels = sum(widths)
+    rows = 3 + sequence
+    magnitude = 32 + 64 * torch.rand(channels, generator=generator)
+    sign = torch.where(torch.rand(channels, generator=generator) < 0.5, -1.0, 1.0)
+    window = (sign * magnitude * (1 + 0.01 * torch.randn(rows, channels, generator=generator))).bfloat16()
+    same_sign = (0.05 + 0.1 * torch.rand(3, channels, generator=generator)).bfloat16().float()
+    delta = 0.02 * (2 * torch.rand(channels, generator=generator) - 1)
+    tap_sign = torch.where(torch.rand(channels, generator=generator) < 0.5, -1.0, 1.0)
+    taps = [(tap_sign * same_sign[j]).bfloat16() for j in range(3)]
+    taps.append((tap_sign * (delta - same_sign.sum(0))).bfloat16())
+    window = window[None]
+    return window[:, 3:].contiguous(), window[:, :3].contiguous(), tuple(tap[None, None] for tap in taps)
+
+
+@pytest.mark.parametrize(
+    ("widths", "channel_chunk_size"),
+    [
+        # Two channel tiles per block: one destination group, eight diagonal tiles in two FP32 groups.
+        pytest.param((128, 128, 128), 64, id="kimi-k3-block"),
+        # Twelve channel tiles per block: three FP32 groups of four, against two BFLOAT16 groups of six.
+        pytest.param((128, 128, 128), 384, id="wide-block"),
+        pytest.param(_DEFAULT_WIDTHS, 768, id="default-widths"),
+    ],
+)
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32-dst", "bf16-dst"])
+def test_qkv_causal_conv1d_silu_fp32_accumulation(
+    zero_actual_start,
+    device: ttnn.Device,
+    widths: tuple[int, int, int],
+    channel_chunk_size: int,
+    fp32_dest_acc_en: bool,
+) -> None:
+    """With fp32_dest_acc_en the four taps accumulate in FP32 destination registers, not rounded to BF16 per tap.
+
+    Contract: per element, |out - silu(sum x_j w_j)| <= 2^-8 |out| + 2^-10 S with S = sum_j |x_j w_j|: the output
+    rounding plus a few FP32 roundings of terms and sums of magnitude <= S. BF16 destination registers must breach the
+    bound on these inputs (the case is sensitive to the accumulation precision).
+    """
+    inputs, history, taps = _cancelling_tap_inputs(_SEQUENCE, widths, seed=519)
+    window = torch.cat((history, inputs), dim=1).double()
+    terms = torch.stack([window[:, j : j + _SEQUENCE] * taps[j].double() for j in range(4)])
+    expected = F.silu(terms.sum(0))
+    bound = 2.0**-8 * expected.abs() + 2.0**-10 * terms.abs().sum(0)
+    assert float(terms[:3].sum(0).abs().median()) > 8 * float(terms.sum(0).abs().median()), "taps must cancel"
+
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+    )
+    outputs = _run(
+        qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        qkv_to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        tuple(qkv_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps),
+        widths=widths,
+        channel_chunk_size=channel_chunk_size,
+        compute_kernel_config=config,
+        actual_start=zero_actual_start,
+    )
+    actual = torch.cat([ttnn.to_torch(output) for output in outputs], dim=-1).double()
+    ratio = (actual - expected).abs() / bound
+    worst = int(ratio.argmax())
+    logger.info(
+        f"cancelling taps (fp32_dest_acc_en={fp32_dest_acc_en}): peak error/bound {float(ratio.max()):.3f}, "
+        f"median {float(ratio.median()):.3f}, elements over bound {int((ratio > 1).sum())}/{ratio.numel()}, "
+        f"peak abs error {float((actual - expected).abs().max()):.4e}"
+    )
+    if not fp32_dest_acc_en:
+        assert float(ratio.max()) > 1.0, "BF16 DST must breach the FP32 DST bound on cancelling taps"
+        return
+    assert float(ratio.max()) <= 1.0, (
+        f"element {worst}: |out - ref| = {float((actual - expected).flatten()[worst].abs()):.4e} exceeds "
+        f"2^-8 |ref| + 2^-10 sum|terms| = {float(bound.flatten()[worst]):.4e} "
+        f"({int((ratio > 1).sum())} of {ratio.numel()} elements over)"
+    )
 
 
 @pytest.mark.parametrize(
