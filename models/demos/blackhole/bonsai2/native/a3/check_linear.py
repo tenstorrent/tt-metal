@@ -44,6 +44,11 @@ def main() -> int:
             ("attn_qkv L3", "blk.3.attn_qkv_fused", al.attn_qkv_rows(sh, 3)),
             ("attn_o L3", "blk.3.attn_output.weight", None),
         ]
+        if os.environ.get("CL_CACHE_HITS") == "1":
+            # The model runs one cached program per site shape over all layers (runtime args change, compile args
+            # don't). Same shapes again on other layers: these calls are program-cache hits with new tensors.
+            sites += [("gdn_out L1", "blk.1.ssm_out.weight", None), ("gdn_out L2", "blk.2.ssm_out.weight", None),
+                      ("attn_o L7", "blk.7.attn_output.weight", None), ("gdn_in L1", "blk.1.gdn_in", al.gdn_in_rows(sh, 1))]
         rng = np.random.default_rng(0)
         for label, name, rows in sites:
             codes, scales = rows if rows is not None else gg(name)
@@ -55,6 +60,8 @@ def main() -> int:
                 xt = ttnn.from_torch(x.reshape(1, s, tl.k), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
                                      memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 y = ttnn.to_torch(pf.prefill_linear(tl, xt)).float().numpy().reshape(s, tl.n)
+                y2 = ttnn.to_torch(pf.prefill_linear(tl, xt)).float().numpy().reshape(s, tl.n)  # same call again: cache hit
+                same = float(np.mean(y2 == y))
                 ref = sh.had.rotate(x.float().numpy()) @ w.T
                 x0 = ttnn.from_torch(x[:1].repeat(32, 1).reshape(1, 1, 32, tl.k), dtype=ttnn.bfloat16,
                                      layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -71,8 +78,8 @@ def main() -> int:
                     ts.append((time.perf_counter() - t0) * 1e3)
                     ttnn.deallocate(r)
                 print(f"{label} [{tl.k}->{tl.n}] S={s}: pcc vs float64 {p:.6f}; row0 vs A3 decode {p0:.6f}; "
-                      f"{np.median(ts):.3f} ms", flush=True)
-                rc |= p < 0.999 or p0 < 0.999
+                      f"{np.median(ts):.3f} ms; repeat call bit-same {same * 100:.2f}%", flush=True)
+                rc |= p < 0.999 or p0 < 0.999 or same < 1.0
                 ttnn.deallocate(xt)
                 ttnn.deallocate(x0)
     finally:
