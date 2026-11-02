@@ -78,6 +78,12 @@
 #ifndef GDN_ROWS_SFPU
 #define GDN_ROWS_SFPU 0  // kernel_opts bit 14 (T even): SFPU tails on the user's row pairs only (see sfpu_rows)
 #endif
+#ifndef GDN_RING_SPLIT
+#define GDN_RING_SPLIT 0  // kernel_opts bit 18: odd tokens' states into hnew2 (the reader's ring writes)
+#endif
+#if GDN_RING_SPLIT && (GDN_FUSED_DECAY || !GDN_FP32_STATE)
+#error "GDN_RING_SPLIT needs GDN_FP32_STATE without GDN_FUSED_DECAY"
+#endif
 #ifndef GDN_ROWS_NORM
 #define GDN_ROWS_NORM 0  // kernel_opts bit 16 (with ROWS_SFPU): the norms' rsqrt / scalar-multiply SFPU tails on the user's row pairs
 #endif
@@ -759,7 +765,12 @@ inline void decay_state_sfpu(
 // UnpackToDest unpack are exact), and the add is commutative, so every output bit is unchanged. The `outer` DFB stays
 // declared (the factory is not touched) but is not used.
 inline void outer_add_state_sfpu(
-    DataflowBuffer& hn_dfb, DataflowBuffer& hnew_dfb, DataflowBuffer& hn32_dfb, uint32_t Kt, uint32_t Vt) {
+    DataflowBuffer& hn_dfb,
+    DataflowBuffer& hnew_dfb,
+    DataflowBuffer& hn32_dfb,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t hnew_id = dfb::hnew) {  // RING_SPLIT: odd tokens pack into hnew2 (same format)
     constexpr uint32_t kPair = 2;
     hn_dfb.reserve_back(Kt * Vt);
     hnew_dfb.reserve_back(Kt * Vt);
@@ -788,7 +799,7 @@ inline void outer_add_state_sfpu(
             tile_regs_wait();
             for (uint32_t jj = 0; jj < n; ++jj) {
                 pack_tile(jj, dfb::hn, base + jj);
-                pack_tile(jj, dfb::hnew, base + jj);
+                pack_tile(jj, hnew_id, base + jj);
                 pack_tile(jj, dfb::hn32, base + jj);
             }
             tile_regs_release();
@@ -1027,6 +1038,9 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     DataflowBuffer on(dfb::on);
     DataflowBuffer zs(dfb::zs);
     DataflowBuffer hnew(dfb::hnew);
+#if GDN_RING_SPLIT
+    DataflowBuffer hnew2(dfb::hnew2);  // odd tokens' post-token states (the reader writes them to the ring)
+#endif
     DataflowBuffer out(dfb::out);
     DataflowBuffer wout(dfb::wout);
 #if GDN_HOIST_INV
@@ -1534,7 +1548,15 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         hd.pop_front(KVs);  // the FPU copy served vread only; the add reads the exact hd32
         hd32.wait_front(KVs);
         // hn (o operand), hnew (writer), hn32 (next token's S_cur) = hd32 + kt @ delta, outer product fused in DST
+#if GDN_RING_SPLIT
+        if (t & 1u) {
+            outer_add_state_sfpu(hn, hnew2, hn32, Kt, Vs, dfb::hnew2);
+        } else {
+            outer_add_state_sfpu(hn, hnew, hn32, Kt, Vs, dfb::hnew);
+        }
+#else
         outer_add_state_sfpu(hn, hnew, hn32, Kt, Vs);
+#endif
         hd32.pop_front(KVs);
         delta.pop_front(Vs);
 #else

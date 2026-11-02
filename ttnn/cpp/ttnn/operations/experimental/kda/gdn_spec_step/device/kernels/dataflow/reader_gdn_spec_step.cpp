@@ -39,6 +39,9 @@
 #ifndef GDN_QKSHARE
 #define GDN_QKSHARE 0  // kernel_opts bit 4 (VB > 1): this block reads only its q/k share + its v chunks
 #endif
+#ifndef GDN_RING_SPLIT
+#define GDN_RING_SPLIT 0  // kernel_opts bit 18: this reader writes the odd tokens' post-token states to the ring (NoC 1)
+#endif
 #ifndef GDN_NARROW_SRC
 #define GDN_NARROW_SRC 0  // kernel_opts bit 13: row-narrow src / z reads into zero-filled slots (bit-identical)
 #endif
@@ -191,6 +194,8 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         ctrl_r.wait_front(1);
         ctrl_r.pop_front(1);
     }
+    const bool hold = (blk == hold_sentinel);  // RING_SPLIT: held heads skip their (odd tokens') ring writes too
+    (void)hold;
     if (blk == hold_sentinel) {
         // HOLD: the writer skips this head's ring writes and copies the window through, so any valid block and any
         // mi serve the (discarded) recurrence -- this head's own slot-0 block, mi = 0.
@@ -484,6 +489,35 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         read_state();
         noc.async_read_barrier();
         state_in.push_back(KVs);
+    }
+#endif
+#if GDN_RING_SPLIT
+    // ---- RING_SPLIT: the odd tokens' post-token states (hnew2, KVs tiles each) to ring block t*BH + bh at this block's
+    //      column tiles -- the writer's ring loop for those tokens, on this RISC's NoC
+    {
+        DataflowBuffer hnew2(dfb::hnew2);
+        constexpr uint32_t BH = M * Nv;
+        const uint32_t v0 = s * Vs;
+        const uint32_t entry = hnew2.get_entry_size();
+        for (uint32_t t = 1; t < T; t += 2) {
+            hnew2.wait_front(KVs);
+            DeviceZoneScopedN("rd_ring");
+            if (!hold) {
+                const uint32_t page0 = (t * BH + bh) * KV + v0;
+                for (uint32_t i = 0; i < Kt; ++i) {
+                    for (uint32_t j = 0; j < Vs; ++j) {
+                        noc.async_write(
+                            hnew2,
+                            ring_acc,
+                            entry,
+                            {.offset_bytes = (i * Vs + j) * entry},
+                            {.page_id = page0 + i * Vt + j});
+                    }
+                }
+                noc.async_write_barrier();
+            }
+            hnew2.pop_front(KVs);
+        }
     }
 #endif
 }

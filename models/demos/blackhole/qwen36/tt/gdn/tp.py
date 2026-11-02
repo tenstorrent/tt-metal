@@ -140,6 +140,9 @@ SPEC_STEP_OPT_ROWS_NORM = 65536
 # gov gdn-v2 (kernel_opts bit 17, kGdnSpecOptFastSoftfloat, with gate scalars): the writer's gate math with fast
 # bit-exact IEEE multiply / add. Bit-identical; QWEN36_SPEC_STEP_FAST_SF=1 adds it wherever gate scalars (bit 1) are on.
 SPEC_STEP_OPT_FAST_SF = 131072
+# gov gdn-v2 (kernel_opts bit 18, kGdnSpecOptRingSplit): the post-token ring writes split between the writer (even tokens,
+# NoC 0) and the reader (odd tokens, NoC 1). Bit-identical; QWEN36_SPEC_STEP_RING_SPLIT=1 adds it like NARROW_SRC.
+SPEC_STEP_OPT_RING_SPLIT = 262144
 
 
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
@@ -3729,6 +3732,12 @@ class TPGatedDeltaNet:
                     ("rows_norm", T),
                     "[gdn-spec-step] QWEN36_SPEC_STEP_ROWS_NORM=1: user-row norm SFPU tails (bit-identical)",
                 )
+        if os.environ.get("QWEN36_SPEC_STEP_RING_SPLIT", "0").strip() == "1" and extra.get("kernel_opts", 0):
+            extra["kernel_opts"] |= SPEC_STEP_OPT_RING_SPLIT
+            _log_spec_step_once(
+                ("ring_split", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_RING_SPLIT=1: ring writes split over both NoCs (bit-identical)",
+            )
         if (
             os.environ.get("QWEN36_SPEC_STEP_FAST_SF", "0").strip() == "1"
             and extra.get("kernel_opts", 0) & SPEC_STEP_OPT_GATE_SCALARS

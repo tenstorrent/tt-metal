@@ -106,10 +106,15 @@ enum GdnSpecStepKernelOpt : uint32_t {
     // gov gdn-v2 (gate scalars): the writer's software-fp32 gate math with fast bit-exact IEEE multiply / add (normal
     // operand fast path, the compiler's soft-float otherwise), op for op. Bit-identical.
     kGdnSpecOptFastSoftfloat = 1u << 17,
+    // gov gdn-v2 (fp32_state without FUSED_DECAY, T >= 2): the post-token ring writes are split between the two NoCs --
+    // even tokens' states from the writer (`hnew`, NoC 0), odd tokens' from the reader (`hnew2`, NoC 1), same pages, same
+    // bytes, same total state buffering (hnew_depth / 2 states each). Bit-identical.
+    kGdnSpecOptRingSplit = 1u << 18,
     kGdnSpecOptAll = kGdnSpecOptFusedDecay | kGdnSpecOptGateScalars | kGdnSpecOptEarlySrc | kGdnSpecOptHoistInv |
                      kGdnSpecOptQkShare | kGdnSpecOptA3Half | kGdnSpecOptGscSplit | kGdnSpecOptVsTail |
                      kGdnSpecOptNarrowGateReads | kGdnSpecOptNarrowSrc | kGdnSpecOptRowsSfpu |
-                     kGdnSpecOptNarrowGr2 | kGdnSpecOptRowsNorm | kGdnSpecOptFastSoftfloat,
+                     kGdnSpecOptNarrowGr2 | kGdnSpecOptRowsNorm | kGdnSpecOptFastSoftfloat |
+                     kGdnSpecOptRingSplit,
 };
 
 struct GdnSpecStepInputs {

@@ -533,7 +533,12 @@ TT_KERNEL void writer(
     //      j)
     {
         const uint32_t entry = hnew.get_entry_size();
-        for (uint32_t t = 0; t < T; ++t) {
+#ifndef GDN_RING_SPLIT
+#define GDN_RING_SPLIT 0
+#endif
+        // RING_SPLIT (kernel_opts bit 18): the even tokens only; the reader writes the odd tokens' states from hnew2
+        constexpr uint32_t t_step = GDN_RING_SPLIT ? 2u : 1u;
+        for (uint32_t t = 0; t < T; t += t_step) {
             {
                 DeviceZoneScopedN("wr_wait_hnew");
                 hnew.wait_front(KVs);

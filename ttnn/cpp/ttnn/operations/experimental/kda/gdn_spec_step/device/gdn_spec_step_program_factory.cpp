@@ -246,8 +246,15 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         // in the VB = 1 kernel, since an indexed block must not straddle a DFB's ring end (see the compute header)
         compute_local.push_back({"tmpv", Vs, t32, fp32});
     }
+    // RING_SPLIT (kernel_opts bit 18): even tokens' states go to the writer through `hnew`, odd tokens' to the reader
+    // through `hnew2` (each hnew_depth / 2 states deep: the same total buffering)
+    const bool RSPLIT = FP32 && !FUSED_DECAY && T >= 2 && (a.kernel_opts & kGdnSpecOptRingSplit) != 0;
+    const uint32_t hnew_states = RSPLIT ? std::max<uint32_t>(1u, a.hnew_depth / 2) : a.hnew_depth;
     std::vector<Dfb> compute_out = {
-        {"hnew", a.hnew_depth * KVs, t32, fp32}, {"out", Vs, tout, out_fmt}, {"wout", ChA, t16, bf16}};
+        {"hnew", hnew_states * KVs, t32, fp32}, {"out", Vs, tout, out_fmt}, {"wout", ChA, t16, bf16}};
+    if (RSPLIT) {
+        compute_out.push_back({"hnew2", hnew_states * KVs, t32, fp32});
+    }
     std::vector<Dfb> writer_local = {{"ctrl_w", 1, ctrl_bytes, u32}, {"bounce", Ch, t16, bf16}};
     // VSPLIT: acc_mine = this block's last-token pre-norm output tiles (compute -> writer); acc_x = the head's full
     // pre-norm row, every block's tiles at offset s*Vs (writer -> compute, filled over the NoC by all VB blocks)
@@ -324,6 +331,10 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     }
     if (FP32 && (a.kernel_opts & kGdnSpecOptNarrowSrc) != 0) {
         reader.compiler_options.defines.emplace("GDN_NARROW_SRC", "1");  // row-narrow src / z reads (bit-identical)
+    }
+    if (RSPLIT) {
+        reader.compiler_options.defines.emplace("GDN_RING_SPLIT", "1");  // odd tokens' ring writes (bit-identical)
+        reader.dfb_bindings.push_back(bind("hnew2", EP::CONSUMER));
     }
     if (QKS) {
         reader.compiler_options.defines.emplace("GDN_QKSHARE", "1");
@@ -432,6 +443,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         writer.semaphore_bindings.push_back(m2::SemaphoreBinding{VALID, "valid"});
         writer.compiler_options.defines.emplace("GDN_VSPLIT", "1");
     }
+    if (RSPLIT) {
+        writer.compiler_options.defines.emplace("GDN_RING_SPLIT", "1");  // even tokens' ring writes only
+    }
     if (QKS) {
         writer.dfb_bindings.push_back(bind("qkm", EP::CONSUMER));
         writer.semaphore_bindings.push_back(m2::SemaphoreBinding{QKSEM, "qkv"});
@@ -519,6 +533,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     if (QKS) {
         // qc / kc are writer-produced then and qkm exists; the kernel guards both with #if GDN_QKSHARE
         compute.compiler_options.defines.emplace("GDN_QKSHARE", "1");
+    }
+    if (RSPLIT) {
+        compute.compiler_options.defines.emplace("GDN_RING_SPLIT", "1");  // odd tokens' states into hnew2
     }
     if (FP32 && (a.kernel_opts & kGdnSpecOptRowsSfpu) != 0 && T % 2 == 0) {
         compute.compiler_options.defines.emplace("GDN_ROWS_SFPU", "1");  // user-row SFPU tails (bit-identical)
