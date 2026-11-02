@@ -1017,6 +1017,17 @@ class PerfConfig(TestConfig):
 
         PerfConfig.TEST_COUNTER += 1
 
+        # RC experiment (warmup-agent): math tail mode (trisc.cpp), once per process. 0 = math last, 1 = natural end.
+        if PerfConfig.TEST_COUNTER == 1 and not TestConfig.TEST_TARGET.run_simulator:
+            from helpers.device_io import write_words_to_device
+
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                0xFFB40000 + 249 * 4,
+                [int(os.environ.get("LLK_TAIL_MODE", "0"))],
+                safe_mode=False,
+            )
+
         for templates, runtimes, run_type in self.run_configs:
             self.current_run_type = run_type
             # We need to manually assign different modified templates here if the speed of light is set,

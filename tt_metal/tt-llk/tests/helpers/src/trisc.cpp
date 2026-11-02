@@ -148,6 +148,12 @@ extern "C" __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_pr
         {
         }
     }
+    // RC experiment (warmup-agent): LLK_TAIL_MODE=1 (overlay stream 0 SCRATCH_1) skips the settle and the last load,
+    // so the kernel ends with its natural last port-3 requester. Same ELFs for both modes.
+    if (*reinterpret_cast<volatile std::uint32_t*>(host_signal::NOC_OVERLAY_START_ADDR + (host_signal::STREAM_SCRATCH_REG_INDEX + 1) * 4) == 1)
+    {
+        return;
+    }
     const std::uint64_t settle_start = ckernel::read_wall_clock();
     while (ckernel::read_wall_clock() - settle_start < SETTLE_CYCLES)
     {
