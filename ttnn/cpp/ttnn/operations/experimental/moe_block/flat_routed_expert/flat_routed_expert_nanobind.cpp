@@ -7,12 +7,14 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/mesh_device.hpp>
@@ -101,6 +103,18 @@ void bind_flat_routed_expert(nb::module_& mod) {
         .value("free_only", FlatDriscTiles::free_only)
         .value("noc1_endpoint_only", FlatDriscTiles::noc1_endpoint_only);
 
+    nb::enum_<FlatDriscProbe>(mod, "FlatDriscProbe", R"doc(
+        A measurement probe of the flat expert's DRISC senders (garbage y). ``timing``: the normal sender with cycle
+        counters (FlatDriscSenders.read_prof); ``dma_only``: GDDR DMA, no grant checks / weight writes;
+        ``write_only``: grants and weight writes, no DMA; ``loop_only``: the loop and semaphore increments only.
+    )doc")
+        .value("none", FlatDriscProbe::none)
+        .value("timing", FlatDriscProbe::timing)
+        .value("dma_only", FlatDriscProbe::dma_only)
+        .value("write_only", FlatDriscProbe::write_only)
+        .value("loop_only", FlatDriscProbe::loop_only)
+        .value("call_time", FlatDriscProbe::call_time);
+
     nb::class_<FlatLayoutOptions>(mod, "FlatLayoutOptions", R"doc(
         The flat routed expert's layout / program choices (part of the plan key and of the program hash). Unset
         fields keep the plan's own choice.
@@ -113,6 +127,11 @@ void bind_flat_routed_expert(nb::module_& mod) {
             x_ready (int): > 0 - the x relays wait for this count in their x-ready word before reading x (a caller
                 running the dispatch in the same program); -1: x is in place at launch.
             drisc_tiles (FlatDriscTiles): the DRISC tiles a bank sends its gate/up weight slots from (both).
+            drisc_ub (int): DRISC blocks per unit (-1: the sender's choice).
+            drisc_dma_cap (int): DRISC DMA reads in flight a job, 1..3 (-1: 2).
+            drisc_mpfe (int): the GDDR MPFE arbitration word (se_drisc.hpp SD_MPFE; 0: untouched).
+            drisc_early_free (int): DRISC L1 slots refill once their writes left L1, not once acked (-1: the plan's).
+            drisc_probe (FlatDriscProbe): a DRISC sender measurement probe (none).
     )doc")
         .def(
             "__init__",
@@ -121,25 +140,45 @@ void bind_flat_routed_expert(nb::module_& mod) {
                uint32_t pin_ratio,
                int32_t rows_hint,
                int32_t x_ready,
-               FlatDriscTiles drisc_tiles) {
+               FlatDriscTiles drisc_tiles,
+               int32_t drisc_ub,
+               int32_t drisc_dma_cap,
+               uint32_t drisc_mpfe,
+               int32_t drisc_early_free,
+               FlatDriscProbe drisc_probe) {
                 new (self) FlatLayoutOptions{
                     .x_helpers = x_helpers,
                     .pin_ratio = pin_ratio,
                     .rows_hint = rows_hint,
                     .x_ready = x_ready,
-                    .drisc_tiles = drisc_tiles};
+                    .drisc_tiles = drisc_tiles,
+                    .drisc_ub = drisc_ub,
+                    .drisc_dma_cap = drisc_dma_cap,
+                    .drisc_mpfe = drisc_mpfe,
+                    .drisc_early_free = drisc_early_free,
+                    .drisc_probe = drisc_probe};
             },
             nb::kw_only(),
             nb::arg("x_helpers") = -1,
             nb::arg("pin_ratio") = 8,
             nb::arg("rows_hint") = -1,
             nb::arg("x_ready") = -1,
-            nb::arg("drisc_tiles") = FlatDriscTiles::both)
+            nb::arg("drisc_tiles") = FlatDriscTiles::both,
+            nb::arg("drisc_ub") = -1,
+            nb::arg("drisc_dma_cap") = -1,
+            nb::arg("drisc_mpfe") = 0,
+            nb::arg("drisc_early_free") = -1,
+            nb::arg("drisc_probe") = FlatDriscProbe::none)
         .def_rw("x_helpers", &FlatLayoutOptions::x_helpers)
         .def_rw("pin_ratio", &FlatLayoutOptions::pin_ratio)
         .def_rw("rows_hint", &FlatLayoutOptions::rows_hint)
         .def_rw("x_ready", &FlatLayoutOptions::x_ready)
         .def_rw("drisc_tiles", &FlatLayoutOptions::drisc_tiles)
+        .def_rw("drisc_ub", &FlatLayoutOptions::drisc_ub)
+        .def_rw("drisc_dma_cap", &FlatLayoutOptions::drisc_dma_cap)
+        .def_rw("drisc_mpfe", &FlatLayoutOptions::drisc_mpfe)
+        .def_rw("drisc_early_free", &FlatLayoutOptions::drisc_early_free)
+        .def_rw("drisc_probe", &FlatLayoutOptions::drisc_probe)
         .def("key", &FlatLayoutOptions::key)
         .def("__repr__", [](const FlatLayoutOptions& o) { return "FlatLayoutOptions(" + o.str() + ")"; })
         .def("__eq__", [](const FlatLayoutOptions& a, const FlatLayoutOptions& b) { return a == b; });
@@ -151,6 +190,7 @@ void bind_flat_routed_expert(nb::module_& mod) {
         .def("as_dict", [](const PlanHandle& h) { return plan_dict(*h.plan); })
         .def_prop_ro("drisc_n", [](const PlanHandle& h) { return h.plan->drisc_n; })
         .def_prop_ro("drisc_tiles", [](const PlanHandle& h) { return h.plan->drisc_tiles; })
+        .def_prop_ro("drisc_probe", [](const PlanHandle& h) { return h.plan->drisc_probe; })
         .def_prop_ro("arena_tiles", [](const PlanHandle& h) { return h.plan->arena_tiles; });
 
     mod.def(
@@ -219,18 +259,30 @@ void bind_flat_routed_expert(nb::module_& mod) {
             "Whether the mesh device can run them (programmable DRAM cores, the streaming profiler off).")
         .def_static(
             "get",
-            [](MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles drisc_tiles) {
-                return FlatDriscSenders::get(mesh_device, n_slots, drisc_tiles);
+            [](MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles drisc_tiles, FlatDriscProbe drisc_probe) {
+                return FlatDriscSenders::get(mesh_device, n_slots, drisc_tiles, drisc_probe);
             },
             nb::arg("mesh_device"),
             nb::arg("n_slots"),
             nb::arg("drisc_tiles") = FlatDriscTiles::both,
+            nb::arg("drisc_probe") = FlatDriscProbe::none,
             "The running senders for ``n_slots`` slots and ``drisc_tiles`` (plan.drisc_tiles); a set running for "
             "another tile choice is stopped first.")
         .def("stop", &FlatDriscSenders::stop, "Finishes the mesh's command queue, then stops the senders.")
         .def_prop_ro("running", &FlatDriscSenders::running)
         .def_prop_ro("n_slots", &FlatDriscSenders::n_slots)
-        .def_prop_ro("drisc_tiles", &FlatDriscSenders::tiles);
+        .def_prop_ro("drisc_tiles", &FlatDriscSenders::tiles)
+        .def_prop_ro("drisc_probe", &FlatDriscSenders::probe)
+        .def(
+            "read_prof",
+            [](const FlatDriscSenders& s) {
+                std::vector<std::tuple<uint32_t, uint32_t, std::vector<uint32_t>>> out;
+                for (auto& [c, w] : s.read_prof()) {
+                    out.emplace_back(static_cast<uint32_t>(c.x), static_cast<uint32_t>(c.y), std::move(w));
+                }
+                return out;
+            },
+            "Probes: each sender's counters (bank, tile index, words; se_drisc_gu.cpp SE_DRISC_PROF_*).");
 
     ttnn::bind_function<"flat_routed_expert", "ttnn.experimental.moe_block.">(
         mod,

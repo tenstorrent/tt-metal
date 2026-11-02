@@ -25,6 +25,7 @@ namespace mx = tt::tt_metal::experimental;
 
 // se_drisc.hpp
 constexpr uint32_t STOP = 16, READY = 32, READY_MAGIC = 0xD815C0DE;
+constexpr uint32_t PROF = 1792, PROF_WORDS = 64;  // (se_drisc.hpp SE_DRISC_PROF)
 constexpr const char* SENDER_KERNEL =
     "ttnn/cpp/ttnn/operations/experimental/moe_block/flat_routed_expert/device/kernels/se_drisc_gu.cpp";
 constexpr auto READY_TIMEOUT = std::chrono::seconds(10);
@@ -140,7 +141,7 @@ uint32_t FlatDriscTopology::virtual_xy(const CoreCoord& logical) const {
 }
 
 std::shared_ptr<FlatDriscSenders> FlatDriscSenders::get(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles tiles) {
+    tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles tiles, FlatDriscProbe probe) {
     std::lock_guard<std::mutex> lock(registry_mutex);
     if (auto it = registry.find(&mesh_device); it != registry.end()) {
         if (auto live = it->second.lock(); live && live->running()) {
@@ -149,38 +150,47 @@ std::shared_ptr<FlatDriscSenders> FlatDriscSenders::get(
                 "flat DRISC senders: running for {} slots, {} requested",
                 live->n_slots(),
                 n_slots);
-            if (live->tiles() == tiles) {
+            if (live->tiles() == tiles && live->probe() == probe) {
                 return live;
             }
-            // another tile choice: the running set owns the DRAM cores (and runs other kernels' tiles), so it stops
-            // (its holders' flat calls then fail the running check) and the requested set launches
+            // another tile choice (or probe): the running set owns the DRAM cores (and runs other kernels' tiles), so
+            // it stops (its holders' flat calls then fail the running check) and the requested set launches
             log_info(
                 tt::LogOp,
-                "flat DRISC senders: stopping the {} set for a {} one",
+                "flat DRISC senders: stopping the {} / {} set for a {} / {} one",
                 to_string(live->tiles()),
-                to_string(tiles));
+                to_string(live->probe()),
+                to_string(tiles),
+                to_string(probe));
             live->stop();
         }
     }
-    std::shared_ptr<FlatDriscSenders> senders(new FlatDriscSenders(mesh_device, n_slots, tiles));
+    std::shared_ptr<FlatDriscSenders> senders(new FlatDriscSenders(mesh_device, n_slots, tiles, probe));
     registry[&mesh_device] = senders;
     return senders;
 }
 
 bool FlatDriscSenders::running_on(
-    const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles tiles) {
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    uint32_t n_slots,
+    FlatDriscTiles tiles,
+    FlatDriscProbe probe) {
     std::lock_guard<std::mutex> lock(registry_mutex);
     auto it = registry.find(&mesh_device);
     if (it == registry.end()) {
         return false;
     }
     auto live = it->second.lock();
-    return live && live->running() && live->n_slots() == n_slots && live->tiles() == tiles;
+    return live && live->running() && live->n_slots() == n_slots && live->tiles() == tiles && live->probe() == probe;
 }
 
 FlatDriscSenders::FlatDriscSenders(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles tiles) :
-    mesh_device_(&mesh_device), n_slots_(n_slots), tiles_(tiles), topo_(FlatDriscTopology::of(mesh_device, tiles)) {
+    tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles tiles, FlatDriscProbe probe) :
+    mesh_device_(&mesh_device),
+    n_slots_(n_slots),
+    tiles_(tiles),
+    probe_(probe),
+    topo_(FlatDriscTopology::of(mesh_device, tiles)) {
     const uint32_t banks = topo_.banks;
     TT_FATAL(n_slots <= 2 * banks, "flat DRISC: {} reader slots > 2 DRISCs x {} banks", n_slots, banks);
     // per tile: its jobs' (NoC, DMA stream) by job index
@@ -232,6 +242,11 @@ FlatDriscSenders::FlatDriscSenders(
                     .kernel_file = SENDER_KERNEL,
                     .core = c,
                     .noc = jobs[0].first ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0};
+                if (probe != FlatDriscProbe::none) {  // (se_drisc_gu.cpp: counters; probe variants)
+                    // (call_time: the call cycles only; the others count every step)
+                    k.defines["SE_DRISC_PROF"] = probe == FlatDriscProbe::call_time ? "1" : "2";
+                    k.defines["SE_DRISC_PROBE"] = std::to_string(static_cast<uint32_t>(probe));
+                }
                 // (se_drisc_gu.cpp RT) a tile's jobs never share a stream; nor do a bank's two tiles in switch mode
                 k.runtime_args = {base, size, static_cast<uint32_t>(jobs.size())};
                 for (const auto& j : jobs) {
@@ -257,6 +272,17 @@ FlatDriscSenders::FlatDriscSenders(
             "flat DRISC sender on DRAM core {} did not start",
             c.str());
     }
+}
+
+std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> FlatDriscSenders::read_prof() const {
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> out;
+    if (!running()) {
+        return out;
+    }
+    for (const auto& c : cores_) {
+        out.emplace_back(c, mx::ReadDramCoreL1(*mesh_device_, topo_.coord, c, topo_.base + PROF, PROF_WORDS));
+    }
+    return out;
 }
 
 bool FlatDriscSenders::running() const { return kernels_ && kernels_->running(); }

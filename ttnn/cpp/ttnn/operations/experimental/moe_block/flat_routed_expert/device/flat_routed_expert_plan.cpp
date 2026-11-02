@@ -305,6 +305,21 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
     // (FlatDriscTopology::of fails on a device without programmable DRAM cores)
     const FlatDriscTopology drisc = FlatDriscTopology::of(mesh_device, lo.drisc_tiles);
     p.drisc_tiles = lo.drisc_tiles;
+    TT_FATAL(
+        lo.drisc_dma_cap < 0 || (lo.drisc_dma_cap >= 1 && lo.drisc_dma_cap <= 3),
+        "flat layout drisc_dma_cap {}: 1..3 (4 or more DMA reads in flight a job sent wrong weights)",
+        lo.drisc_dma_cap);
+    if (lo.drisc_dma_cap > 0) {
+        p.drisc_dma_cap = lo.drisc_dma_cap;
+    }
+    if (lo.drisc_ub > 0) {
+        p.drisc_ub = lo.drisc_ub;
+    }
+    p.drisc_mpfe = lo.drisc_mpfe;
+    if (lo.drisc_early_free >= 0) {
+        p.drisc_early_free = lo.drisc_early_free != 0;
+    }
+    p.drisc_probe = lo.drisc_probe;
     // layout.rows_hint (expected rows per expert, <= 320): 64-row sub-blocks for the plans with 128-row ones and
     // gate/up row passes - one pass a sub-block, so the next sub-block's x streams in during the whole pass and the
     // drain after the last weights is halved (GLM-5.3 E 8 M 32 / 128 / 256: 408 / 516 / 642 -> 403 / 498 / 632 us)

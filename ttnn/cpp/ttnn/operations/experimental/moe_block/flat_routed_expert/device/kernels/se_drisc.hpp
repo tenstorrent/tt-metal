@@ -27,6 +27,8 @@ constexpr uint32_t se_drisc_skips(uint32_t k) { return se_drisc_jobs(k) + 4; }
 constexpr uint32_t se_drisc_credit(uint32_t k) { return 128 + 128 * k; }
 constexpr uint32_t se_drisc_state(uint32_t k) { return 384 + 32 * k; }
 constexpr uint32_t se_drisc_desc(uint32_t k) { return 512 + 640 * k; }
+// probes (se_drisc_gu.cpp SE_DRISC_PROF): 64 counter words after the descriptors
+constexpr uint32_t SE_DRISC_PROF_OFF = 1792;
 
 // descriptor words
 constexpr uint32_t SD_GDDR = 0;      // this slot's weight region in the bank (bank-local address)
@@ -49,11 +51,14 @@ constexpr uint32_t SD_MPFE =
 // or one tile: clean). One tile serving both of its bank's slots (two jobs, streams 0 and 1) with 4 or more 9 KB reads
 // in flight a job sent wrong weights (GLM-Flash, 2026-11-02: y differs; 3: bit-exact): keep 2, no faster at 1-3 there
 constexpr uint32_t SD_DMA_CAP = SD_MPFE + 1;
-// blocks per unit (one DMA, one transaction id, one flush check; 0: the sender's choice, se_drisc_gu.cpp)
+// bits 0-7: blocks per unit (one DMA, one transaction id, one flush check; 0: the sender's choice, se_drisc_gu.cpp).
+// SD_UB_EARLY_FREE: a unit's L1 slot refills once its writes have left L1 (sent), not once they are acked (the
+// receivers' data semaphores still move only on the ack); units of 2+ blocks only
 constexpr uint32_t SD_UB = SD_MPFE + 2;
+constexpr uint32_t SD_UB_EARLY_FREE = 1u << 8;
 constexpr uint32_t SD_LOADS = SD_MPFE + 3;  // N_LOAD x (expert | region << 8)
 constexpr uint32_t SD_MAX_LOADS = 128;
-static_assert((SD_LOADS + SD_MAX_LOADS) * 4 <= 640 && se_drisc_desc(2) <= SE_DRISC_SLOTS);
+static_assert((SD_LOADS + SD_MAX_LOADS) * 4 <= 640 && se_drisc_desc(2) <= SE_DRISC_PROF_OFF);
 
 // The receivers count their grants in their own L1 (no NoC writes from them: they are the x multicast's
 // destinations); the DRISC reads the counters when it runs out of grants.

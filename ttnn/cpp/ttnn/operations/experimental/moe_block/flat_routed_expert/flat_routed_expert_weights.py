@@ -172,11 +172,25 @@ def flat_weight_shapes(H, I, E, lay):
     return {"w_gu": (len(regions), regions[0].shape[0]), "w_d": (len(dregs), dregs[0].shape[0])}
 
 
+FLAT_LAYOUT_FIELDS = (
+    "x_helpers",
+    "pin_ratio",
+    "rows_hint",
+    "x_ready",
+    "drisc_tiles",
+    "drisc_ub",
+    "drisc_dma_cap",
+    "drisc_mpfe",
+    "drisc_early_free",
+    "drisc_probe",
+)
+
+
 def flat_layout(layout=None, **kw):
     """A FlatLayoutOptions from a dict of fields / an existing FlatLayoutOptions / None, plus field overrides."""
     opts = _moe_block().FlatLayoutOptions
     if isinstance(layout, opts):
-        layout = {f: getattr(layout, f) for f in ("x_helpers", "pin_ratio", "rows_hint", "x_ready", "drisc_tiles")}
+        layout = {f: getattr(layout, f) for f in FLAT_LAYOUT_FIELDS}
     return opts(**{**(layout or {}), **kw})
 
 
@@ -240,7 +254,9 @@ class FlatRoutedExpert:
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0) if n_dev > 1 else None,
         )
         self.done = mb.create_flat_routed_expert_done_words(mesh_device, self.plan, done_buffer_type)
-        self.drisc = mb.FlatDriscSenders.get(mesh_device, self.plan.drisc_n, self.plan.drisc_tiles)
+        self.drisc = mb.FlatDriscSenders.get(
+            mesh_device, self.plan.drisc_n, self.plan.drisc_tiles, self.plan.drisc_probe
+        )
 
     def __call__(
         self,

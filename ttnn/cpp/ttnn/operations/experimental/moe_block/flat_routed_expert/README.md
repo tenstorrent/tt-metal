@@ -66,6 +66,11 @@ every core; another op rebuilds it from the counts with `flat_schedule_defines`.
 | `x_ready` | -1 | > 0: the relays wait for the dispatch ports' count in their x-ready word (dispatch in the same program) |
 | `pin_ratio` | 8 | pin an expert only at this many times the next one's rows |
 | `drisc_tiles` | `both` | DRISC tiles a bank sends its gate/up slots from: `both` (free + NOC1 endpoint, every call), `free_only`, `noc1_endpoint_only` (one tile serves both of the bank's slots; the latter leaves the free tiles to another resident kernel) |
+| `drisc_ub` | -1 | DRISC blocks per DMA unit (-1: pairs when two jobs share a tile and each keeps two in flight, else singles) |
+| `drisc_dma_cap` | -1 (2) | DRISC DMA reads in flight a job, 1..3 (4+ sent wrong weights with two jobs on one tile) |
+| `drisc_early_free` | -1 (on) | a DRISC L1 slot refills once its writes have left L1, not once acked (units of 2+ blocks) |
+| `drisc_mpfe` | 0 | the GDDR MPFE arbitration word for the call (0: untouched) |
+| `drisc_probe` | `none` | measurement probes of the DRISC senders (`timing`, `call_time`, `dma_only`, `write_only`, `loop_only`; garbage y except `timing` / `call_time`); counters via `FlatDriscSenders.read_prof()` |
 
 ## Tests
 

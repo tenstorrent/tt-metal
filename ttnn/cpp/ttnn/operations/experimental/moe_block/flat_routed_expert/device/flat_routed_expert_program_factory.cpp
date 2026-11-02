@@ -320,20 +320,28 @@ FlatProgramHandles add_flat_routed_expert_program(
     {
         TT_FATAL(p.r_ <= 8, "flat DRISC: <= 8 receivers a slot (se_drisc.hpp SE_DRISC_MAX_R)");
         TT_FATAL(
-            FlatDriscSenders::running_on(mesh_device, p.drisc_n, p.drisc_tiles),
+            FlatDriscSenders::running_on(mesh_device, p.drisc_n, p.drisc_tiles, p.drisc_probe),
             "flat_routed_expert: the DRISC senders of {} slots ({}) are not running on this mesh device "
             "(FlatDriscSenders::get)",
             p.drisc_n,
             to_string(p.drisc_tiles));
-        // the job posting args (se_drisc_post.hpp); the GDDR arbitration weights (SD_MPFE) untouched
+        // the job posting args (se_drisc_post.hpp); the GDDR arbitration weights (SD_MPFE: layout.drisc_mpfe, 0
+        // untouched)
         Args post;
         post.lit(drisc_base)
             .a(FlatAddr::GateUp)
             .a(FlatAddr::Arena)
             .lit(p.drisc_n)
             .lit(p.r_)
-            .lit(0)
-            .lits({p.drisc_dma_cap, p.slot * w_tile, p.drisc_ub, G, p.nk_gu, GRANT, DATA});
+            .lit(p.drisc_mpfe)
+            .lits(
+                {p.drisc_dma_cap,
+                 p.slot * w_tile,
+                 p.drisc_ub | (p.drisc_early_free ? 1u << 8 : 0u),  // (se_drisc.hpp SD_UB_EARLY_FREE)
+                 G,
+                 p.nk_gu,
+                 GRANT,
+                 DATA});
         // per slot (se_drisc_post.hpp): its DRISC / alternate, region, and its chunk / blocks / receivers
         for (uint32_t r = 0; r < p.drisc_n; ++r) {
             const auto [ac, aj] = drisc.alt(r);

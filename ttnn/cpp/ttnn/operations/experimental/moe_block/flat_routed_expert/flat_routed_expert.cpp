@@ -140,7 +140,8 @@ ttnn::Tensor flat_routed_expert(
     cfg.math_fidelity = math_fidelity;
     const auto plan = flat_routed_expert_plan(*device, cfg);
     TT_FATAL(
-        drisc_senders.n_slots() == plan->drisc_n && drisc_senders.tiles() == plan->drisc_tiles,
+        drisc_senders.n_slots() == plan->drisc_n && drisc_senders.tiles() == plan->drisc_tiles &&
+            drisc_senders.probe() == plan->drisc_probe,
         "flat_routed_expert: DRISC senders of {} slots ({}), the plan has {} ({})",
         drisc_senders.n_slots(),
         to_string(drisc_senders.tiles()),
@@ -202,7 +203,7 @@ FlatRoutedExpertResources ensure_flat_routed_expert_resources(
     const std::string drisc_name = r.plan->drisc_tiles == FlatDriscTiles::both
                                        ? std::string("flat_routed_expert/drisc")
                                        : std::string("flat_routed_expert/drisc/") + to_string(r.plan->drisc_tiles);
-    r.drisc_senders = FlatDriscSenders::get(mesh_device, r.plan->drisc_n, r.plan->drisc_tiles);
+    r.drisc_senders = FlatDriscSenders::get(mesh_device, r.plan->drisc_n, r.plan->drisc_tiles, r.plan->drisc_probe);
     if (!resources.has(drisc_name)) {
         resources.attach(drisc_name, r.drisc_senders);
     }

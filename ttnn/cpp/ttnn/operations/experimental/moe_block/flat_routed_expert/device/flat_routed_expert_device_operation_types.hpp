@@ -34,6 +34,18 @@ enum class FlatDriscTiles : uint32_t {
 };
 const char* to_string(FlatDriscTiles tiles);
 
+// DRISC sender probes (measurement only: the probes' y is garbage). Every probe also counts the sender's loop cycles
+// and events into its L1 (FlatDriscSenders::read_prof).
+enum class FlatDriscProbe : uint32_t {
+    none = 0,
+    timing = 1,      // the normal sender, with cycle counters
+    dma_only = 2,    // GDDR DMA as usual; no grant checks, no NoC weight writes (the data semaphores still move)
+    write_only = 3,  // no DMA (the L1 slots as they are); grants and NoC weight writes as usual
+    loop_only = 4,   // neither DMA nor grant checks nor weight writes: the loop and the semaphore increments
+    call_time = 5,   // the normal sender, counting only each call's loop cycles (no per-step counters)
+};
+const char* to_string(FlatDriscProbe probe);
+
 // The layout / program choices a caller makes for the flat routed expert: part of the plan cache key and of every
 // program hash. -1: unset (the plan's own choice). The plan itself is fixed: DRISC-only gate/up weight readers (every
 // slot from the DRAM cores, tiles in switch mode), even gate/up and down splits, x read once by the helper relays and
@@ -53,6 +65,15 @@ struct FlatLayoutOptions {
     // which DRISC tiles of each bank send the gate/up weights (FlatDriscTiles): both, or one tile serving both of its
     // bank's slots
     FlatDriscTiles drisc_tiles = FlatDriscTiles::both;
+    // DRISC sender tuning (-1: the plan's choice): blocks per unit (se_drisc.hpp SD_UB), DMA reads in flight a job
+    // (SD_DMA_CAP, 1..3), the GDDR MPFE arbitration word (SD_MPFE; 0: untouched)
+    int32_t drisc_ub = -1;
+    int32_t drisc_dma_cap = -1;
+    uint32_t drisc_mpfe = 0;
+    // DRISC L1 slots refill once a unit's writes have left L1 rather than once they are acked (-1: the plan's choice)
+    int32_t drisc_early_free = -1;
+    // a measurement probe of the DRISC senders (FlatDriscProbe; none in production)
+    FlatDriscProbe drisc_probe = FlatDriscProbe::none;
 
     // every field, for the plan cache key and the program hashes
     std::vector<uint32_t> key() const;

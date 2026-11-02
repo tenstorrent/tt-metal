@@ -77,14 +77,16 @@ public:
     static std::shared_ptr<FlatDriscSenders> get(
         tt::tt_metal::distributed::MeshDevice& mesh_device,
         uint32_t n_slots,
-        FlatDriscTiles tiles = FlatDriscTiles::both);
+        FlatDriscTiles tiles = FlatDriscTiles::both,
+        FlatDriscProbe probe = FlatDriscProbe::none);
 
     // Whether the mesh device's senders of `n_slots` slots and this tile choice are running (a flat program needs
     // them).
     static bool running_on(
         const tt::tt_metal::distributed::MeshDevice& mesh_device,
         uint32_t n_slots,
-        FlatDriscTiles tiles = FlatDriscTiles::both);
+        FlatDriscTiles tiles = FlatDriscTiles::both,
+        FlatDriscProbe probe = FlatDriscProbe::none);
 
     ~FlatDriscSenders();
     FlatDriscSenders(const FlatDriscSenders&) = delete;
@@ -96,14 +98,23 @@ public:
     bool running() const;
     uint32_t n_slots() const { return n_slots_; }
     FlatDriscTiles tiles() const { return tiles_; }
+    FlatDriscProbe probe() const { return probe_; }
+    // Probes (probe != none): every running sender's counters (se_drisc_gu.cpp SE_DRISC_PROF_*) on the reference chip,
+    // as (logical DRAM core, words)
+    std::vector<std::pair<tt::tt_metal::CoreCoord, std::vector<uint32_t>>> read_prof() const;
     const tt::tt_metal::distributed::MeshDevice* mesh_device() const { return mesh_device_; }
 
 private:
-    FlatDriscSenders(tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t n_slots, FlatDriscTiles tiles);
+    FlatDriscSenders(
+        tt::tt_metal::distributed::MeshDevice& mesh_device,
+        uint32_t n_slots,
+        FlatDriscTiles tiles,
+        FlatDriscProbe probe);
 
     tt::tt_metal::distributed::MeshDevice* mesh_device_;
     uint32_t n_slots_;
     FlatDriscTiles tiles_;
+    FlatDriscProbe probe_;
     FlatDriscTopology topo_;
     std::vector<tt::tt_metal::CoreCoord> cores_;  // logical DRAM tiles that run a sender
     std::unique_ptr<tt::tt_metal::experimental::DramCoreKernels> kernels_;

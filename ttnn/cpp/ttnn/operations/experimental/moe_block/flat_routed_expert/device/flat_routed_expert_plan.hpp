@@ -73,6 +73,9 @@ struct FlatRoutedExpertPlan {
     uint32_t drisc_dma_cap = 2;
     // blocks per DRISC unit (se_drisc.hpp SD_UB; 0: the sender's choice)
     uint32_t drisc_ub = 0;
+    uint32_t drisc_mpfe = 0;       // (SD_MPFE: 0 untouched)
+    bool drisc_early_free = true;  // (SD_UB_EARLY_FREE: the senders apply it to units of 2+ blocks)
+    FlatDriscProbe drisc_probe = FlatDriscProbe::none;
     // the relays' copy of the call's token index (indexed x): 4 B per capacity row at ti_off, read once per call
     uint32_t ti_off = 0;
     // down
