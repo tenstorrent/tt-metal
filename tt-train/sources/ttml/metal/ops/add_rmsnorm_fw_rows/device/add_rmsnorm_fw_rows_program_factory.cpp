@@ -24,7 +24,7 @@ constexpr auto kComputeKernelPath =
 constexpr uint32_t kBlockTiles = 4U;  // pass-2 output block
 constexpr uint32_t kGroupTiles =
     4U;  // pass-1 group: residual / delta streamed four tiles at a time (fp32 DEST holds 4)
-constexpr uint32_t kMaxSlices = 8U;
+constexpr uint32_t kMaxSlices = 16U;  // iteration 44: 13 slices x 8 rows on the sequence-parallel shard (104 cores)
 
 constexpr uint32_t kReaderResidualIdx = 0U;
 constexpr uint32_t kReaderDeltaIdx = 1U;

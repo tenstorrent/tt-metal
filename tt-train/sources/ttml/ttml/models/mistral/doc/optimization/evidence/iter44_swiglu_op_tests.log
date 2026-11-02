@@ -1,0 +1,185 @@
+2026-11-02 18:20:00.179 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 35 items
+
+tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-32-32] 2026-11-02 18:20:01.140 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-02 18:20:01.140 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-11-02 18:20:01.141 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-11-02 18:20:01.141 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-11-02 18:20:01.161 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-11-02 18:20:01.161 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-11-02 18:20:01.450 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-11-02 18:20:01.450 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-11-02 18:20:01.450 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-11-02 18:20:01.450 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-11-02 18:20:01.467 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-11-02 18:20:01.811 | warning  |             UMD | AICLK failed to settle after 200 ms. Expected 1350, observed 800. ASIC temperature: 82.19277954101562, AICLK clamped by max-arbiter index 7 at 800 MHz (blackhole_device_firmware.cpp:206)
+2026-11-02 18:20:01.863 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-11-02 18:20:01.937 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-11-02 18:20:01.937 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-11-02 18:20:01.937 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-11-02 18:20:02.087 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+PASSED
+tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-64-64] PASSED
+tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-32-96] PASSED
+tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-128-128] PASSED
+tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-64-512] PASSED
+tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[2-2048-128] PASSED
+tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-4192-32] PASSED
+tests/python/test_swiglu_packed.py::TestForward::test_writes_into_preallocated_output PASSED
+tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-32-32] PASSED
+tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-64-64] PASSED
+tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-32-96] PASSED
+tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-128-128] PASSED
+tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-64-512] PASSED
+tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[2-2048-128] PASSED
+tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-4192-32] PASSED
+tests/python/test_swiglu_packed.py::TestBackward::test_writes_into_preallocated_grad PASSED
+tests/python/test_swiglu_packed.py::TestProgramCache::test_forward_reads_the_new_buffers PASSED
+tests/python/test_swiglu_packed.py::TestProgramCache::test_backward_reads_the_new_buffers PASSED
+tests/python/test_swiglu_packed.py::TestAutogradWrapper::test_forward[1-64-64] PASSED
+tests/python/test_swiglu_packed.py::TestAutogradWrapper::test_forward[2-128-128] PASSED
+tests/python/test_swiglu_packed.py::TestAutogradWrapper::test_backward[1-64-64] PASSED
+tests/python/test_swiglu_packed.py::TestAutogradWrapper::test_backward[2-128-128] PASSED
+tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[64-32] PASSED
+tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[96-96] PASSED
+tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[512-1024] PASSED
+tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[8192-1024] PASSED
+tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[64-32] PASSED
+tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[96-96] PASSED
+tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[512-1024] PASSED
+tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[8192-1024] PASSED
+tests/python/test_swiglu_packed.py::TestTransposedIO::test_rejects_padding_and_mixed_modes 2026-11-02 18:20:17.634 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="exclusive"
+2026-11-02 18:20:17.635 | critical |          Always | TT_FATAL: SwigluPackedFw: transposed_input (packed^T in, h^T out) and transposed_output (token-major in, h^T out) are exclusive (assert.hpp:104)
+2026-11-02 18:20:17.638 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="exclusive"
+2026-11-02 18:20:17.638 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="needs lora_a"
+2026-11-02 18:20:17.643 | critical |          Always | TT_FATAL: SwigluPackedBw: the transposed IO needs lora_a (assert.hpp:104)
+2026-11-02 18:20:17.645 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="needs lora_a"
+2026-11-02 18:20:17.645 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="no padding"
+2026-11-02 18:20:17.655 | critical |          Always | TT_FATAL: SwigluPackedFw: packed^T Shape([1, 1, 128, 20]) must be [1, 1, 2I, T] with 2I a multiple of 64 and no padding (assert.hpp:104)
+2026-11-02 18:20:17.657 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="no padding"
+PASSED
+tests/python/test_swiglu_packed.py::TestValidation::test_rejects_half_width_that_is_not_tile_aligned 2026-11-02 18:20:17.664 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="multiple of"
+2026-11-02 18:20:17.665 | critical |          Always | TT_FATAL: SwigluPackedFw: packed last padded dim 96 must be a multiple of 64 so each half is tile-aligned (assert.hpp:104)
+2026-11-02 18:20:17.667 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="multiple of"
+PASSED
+tests/python/test_swiglu_packed.py::TestValidation::test_rejects_upstream_grad_that_is_not_half_the_packed_width 2026-11-02 18:20:17.673 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message=">= I"
+2026-11-02 18:20:17.674 | critical |          Always | TT_FATAL: SwigluPackedBw: dL_dh Shape([1, 1, 32, 32]) must be [.., R, >= I 64] (a multiple of 32 wide) (assert.hpp:104)
+2026-11-02 18:20:17.676 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message=">= I"
+PASSED
+tests/python/test_swiglu_packed.py::TestValidation::test_fw_rejects_a_logical_width_that_pads_into_alignment 2026-11-02 18:20:17.689 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="logical dim"
+2026-11-02 18:20:17.690 | critical |          Always | TT_FATAL: SwigluPackedFw: packed last logical dim 100 must be a multiple of 64 so the gate|up split lands on the tile boundary where the kernels split the padded row (assert.hpp:104)
+2026-11-02 18:20:17.692 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="logical dim"
+PASSED
+tests/python/test_swiglu_packed.py::TestValidation::test_bw_rejects_a_logical_width_that_pads_into_alignment 2026-11-02 18:20:17.706 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="logical dim"
+2026-11-02 18:20:17.707 | critical |          Always | TT_FATAL: SwigluPackedBw: packed last logical dim 100 must be a multiple of 64 so the gate|up split lands on the tile boundary where the kernels split the padded row (assert.hpp:104)
+2026-11-02 18:20:17.709 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="logical dim"
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+8.01s call     tt-train/tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[8192-1024]
+4.52s call     tt-train/tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[8192-1024]
+1.79s call     tt-train/tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-32-32]
+0.49s call     tt-train/tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[512-1024]
+0.27s call     tt-train/tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[512-1024]
+0.26s call     tt-train/tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[2-2048-128]
+0.21s call     tt-train/tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[2-2048-128]
+0.09s call     tt-train/tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-4192-32]
+0.09s call     tt-train/tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-4192-32]
+0.05s call     tt-train/tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[96-96]
+0.05s call     tt-train/tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[64-32]
+0.04s call     tt-train/tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-64-512]
+0.04s call     tt-train/tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-128-128]
+0.04s call     tt-train/tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-32-96]
+0.04s call     tt-train/tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[96-96]
+0.03s call     tt-train/tests/python/test_swiglu_packed.py::TestAutogradWrapper::test_backward[2-128-128]
+0.03s call     tt-train/tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-64-64]
+0.03s call     tt-train/tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-64-512]
+0.03s call     tt-train/tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[64-32]
+0.03s call     tt-train/tests/python/test_swiglu_packed.py::TestAutogradWrapper::test_forward[2-128-128]
+0.03s call     tt-train/tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-128-128]
+0.03s call     tt-train/tests/python/test_swiglu_packed.py::TestTransposedIO::test_rejects_padding_and_mixed_modes
+0.02s call     tt-train/tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-32-32]
+0.02s call     tt-train/tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-64-64]
+0.02s call     tt-train/tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-32-96]
+=========================== short test summary info ============================
+PASSED tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-32-32]
+PASSED tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-64-64]
+PASSED tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-32-96]
+PASSED tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-128-128]
+PASSED tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-64-512]
+PASSED tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[2-2048-128]
+PASSED tests/python/test_swiglu_packed.py::TestForward::test_matches_reference[1-4192-32]
+PASSED tests/python/test_swiglu_packed.py::TestForward::test_writes_into_preallocated_output
+PASSED tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-32-32]
+PASSED tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-64-64]
+PASSED tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-32-96]
+PASSED tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-128-128]
+PASSED tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-64-512]
+PASSED tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[2-2048-128]
+PASSED tests/python/test_swiglu_packed.py::TestBackward::test_matches_reference[1-4192-32]
+PASSED tests/python/test_swiglu_packed.py::TestBackward::test_writes_into_preallocated_grad
+PASSED tests/python/test_swiglu_packed.py::TestProgramCache::test_forward_reads_the_new_buffers
+PASSED tests/python/test_swiglu_packed.py::TestProgramCache::test_backward_reads_the_new_buffers
+PASSED tests/python/test_swiglu_packed.py::TestAutogradWrapper::test_forward[1-64-64]
+PASSED tests/python/test_swiglu_packed.py::TestAutogradWrapper::test_forward[2-128-128]
+PASSED tests/python/test_swiglu_packed.py::TestAutogradWrapper::test_backward[1-64-64]
+PASSED tests/python/test_swiglu_packed.py::TestAutogradWrapper::test_backward[2-128-128]
+PASSED tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[64-32]
+PASSED tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[96-96]
+PASSED tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[512-1024]
+PASSED tests/python/test_swiglu_packed.py::TestTransposedIO::test_forward_matches_the_token_major_op[8192-1024]
+PASSED tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[64-32]
+PASSED tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[96-96]
+PASSED tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[512-1024]
+PASSED tests/python/test_swiglu_packed.py::TestTransposedIO::test_backward_matches_the_token_major_op_with_the_low_rank_term[8192-1024]
+PASSED tests/python/test_swiglu_packed.py::TestTransposedIO::test_rejects_padding_and_mixed_modes
+PASSED tests/python/test_swiglu_packed.py::TestValidation::test_rejects_half_width_that_is_not_tile_aligned
+PASSED tests/python/test_swiglu_packed.py::TestValidation::test_rejects_upstream_grad_that_is_not_half_the_packed_width
+PASSED tests/python/test_swiglu_packed.py::TestValidation::test_fw_rejects_a_logical_width_that_pads_into_alignment
+PASSED tests/python/test_swiglu_packed.py::TestValidation::test_bw_rejects_a_logical_width_that_pads_into_alignment
+============================= 35 passed in 16.72s ==============================
+nanobind: leaked 2 instances!
+nanobind: leaked 20 types!
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 272 functions!
+ - leaked function "buffer_address"
+ - leaked function "experimental_set_range_lockstep_allocation"
+ - leaked function ""
+ - leaked function "invoke"
+ - leaked function ""
+ - leaked function "clear_program_cache"
+ - leaked function "is_per_core_allocated"
+ - leaked function "experimental_per_core_buffer_address"
+ - leaked function "experimental_is_per_core_allocation"
+ - leaked function "quiesce_devices"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-11-02 18:20:20.212 | info     |    BuildKernels | JIT cache stats: 281/281 hits (100.0%) [281 cached, 98 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-02 18:20:20.212 | info     |    BuildKernels | JIT telemetry: 30 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-02 18:20:20.255 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-11-02 18:20:20.255 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-11-02 18:20:20.467 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-11-02 18:20:20.468 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-11-02 18:20:20.468 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

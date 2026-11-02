@@ -32,7 +32,8 @@ std::vector<ttnn::Tensor> add_rmsnorm_fw_allcore(
     // op (A/B checks).
     static const bool force_two_phase = std::getenv("TTML_ADD_RMSNORM_TWO_PHASE") != nullptr;
     if (!force_two_phase && rows <= num_cores && residual_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0) {
-        const uint32_t slices = std::min<uint32_t>(num_cores / rows, 8U);
+        const uint32_t slices =
+            std::min<uint32_t>(num_cores / rows, 16U);  // 13 on the 8-row SP shard (review round 13)
         const uint32_t slice_tiles = (Wt + slices - 1U) / slices;
         const uint32_t slices_eff = (Wt + slice_tiles - 1U) / slice_tiles;
         // gamma and the sum resident in L1 (2 slices); at least 2 slices per row (one 160-tile slice per core is slower

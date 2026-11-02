@@ -30,7 +30,8 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw_allcore(
     // the NoC; one (row, slice) item per core, so it needs rows * slices <= cores (3 x 54-tile slices for a
     // [1024, 5120] input on 110 cores) and the frozen-gamma path (no dgamma components).
     if (!compute_dgamma && rows <= num_cores && input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0) {
-        const uint32_t slices = std::min<uint32_t>(num_cores / rows, 8U);
+        const uint32_t slices =
+            std::min<uint32_t>(num_cores / rows, 16U);  // 13 on the 8-row SP shard (review round 13)
         const uint32_t slice_tiles = (Wt + slices - 1U) / slices;
         const uint32_t slices_eff = (Wt + slice_tiles - 1U) / slice_tiles;
         if (slice_tiles * 3U * tt::tile_size(tt::DataFormat::Float16_b) <= 512U * 1024U) {  // resident slices in L1

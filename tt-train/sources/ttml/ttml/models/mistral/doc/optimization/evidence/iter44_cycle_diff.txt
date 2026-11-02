@@ -1,0 +1,7 @@
+kernel ms per profiled 4-layer step, iteration 42 -> 44 (O/iter42_tp_ranked_ops_full.txt vs O/iter44_tp_ranked_ops_full.txt)
+chip 0: total 40.438 -> 44.509 (+4.071); collectives 5.299 -> 9.335 (+4.036); kernels without collectives 35.139 -> 35.174 (+0.035)
+    0.000 ->   0.160  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x256x5120 | 104
+    0.000 ->   0.162  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x5120x256 | 104
+    0.000 ->   0.391  RMSNormBackwardRows | 1x1x256x5120 | 1x1x32[1]x5120 | 104
+    0.122 ->   0.122  RMSNormForward | 1x1x256x5120 | 1x1x32[1]x5120 | 8
+chip 2: total 42.206 -> 39.017 (-3.189); collectives 7.124 -> 4.192 (-2.932); kernels without collectives 35.082 -> 34.825 (-0.257)

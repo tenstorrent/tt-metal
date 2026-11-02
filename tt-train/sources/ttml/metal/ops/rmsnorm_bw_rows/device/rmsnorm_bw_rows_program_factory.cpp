@@ -22,7 +22,7 @@ constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/rmsnorm_bw_rows/device/kernels/compute/rmsnorm_bw_rows_kernel.cpp";
 
 constexpr uint32_t kBlockTiles = 4U;
-constexpr uint32_t kMaxSlices = 8U;
+constexpr uint32_t kMaxSlices = 16U;  // iteration 44: 13 slices x 8 rows on the sequence-parallel shard (104 cores)
 
 constexpr uint32_t kReaderInputIdx = 0U;
 constexpr uint32_t kReaderGammaIdx = 1U;
