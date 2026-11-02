@@ -276,6 +276,17 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
         }
     }
 
+    // ---------------- Kernel NOCs ----------------
+
+    // On Blackhole, keep DRAM reads on NoC 0 and writes on NoC 1 to avoid deadlock.
+    // Both data-movement kernels must use dynamic NoC mode.
+    auto reader_hw_config = create_reader_datamovement_config();
+    auto writer_hw_config = create_writer_datamovement_config();
+    if (device->arch() == tt::ARCH::BLACKHOLE) {
+        reader_hw_config.config_1xx->noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+        writer_hw_config.config_1xx->noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+    }
+
     // ---------------- Reader ----------------
 
     KernelSpec reader{
@@ -300,7 +311,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
             },
         .compile_time_args = {{"Wt", Wt}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_tile_id", "num_rows", "noop"}},
-        .hw_config = create_reader_datamovement_config(),
+        .hw_config = std::move(reader_hw_config),
     };
 
     // ---------------- Writer ----------------
@@ -419,7 +430,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args = std::move(writer_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_runtime_arg_names)},
-        .hw_config = create_writer_datamovement_config(),
+        .hw_config = std::move(writer_hw_config),
     };
 
     // ---------------- Tensor parameters ----------------
