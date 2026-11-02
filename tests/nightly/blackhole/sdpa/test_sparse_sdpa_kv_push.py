@@ -204,7 +204,7 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
     from safetensors.numpy import load_file
 
     from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
-    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import _shard_over_mesh, packet_shape
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import packet_shape
 
     f = _trace_1m_topk(layer)
     grid = mesh_device.compute_with_storage_grid_size()
@@ -252,7 +252,6 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
         page_bytes=page_bytes,
         chunk_start=start,
     )
-    _shard_over_mesh(table, mesh_device)
     tables = ttnn.from_torch(
         torch.zeros(1, 1, table.shape[2] * n_dev, table.shape[3], dtype=torch.int32),
         dtype=ttnn.uint32,
@@ -341,7 +340,7 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
     from safetensors.numpy import load_file
 
     from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
-    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner, _shard_over_mesh
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
 
     f = _trace_1m_topk(layer)
     kv_fmt, chunk_global, links = "fp8", 5120, 2
@@ -382,7 +381,6 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
         chunk_start=start,
     )
     table, compact_idx = ttnn.experimental.sparse_push_plan(indices, **plan_kw)
-    _shard_over_mesh(table, mesh_device)
     tables = ttnn.from_torch(
         torch.zeros(1, 1, table.shape[2] * num_devices, table.shape[3], dtype=torch.int32),
         dtype=ttnn.uint32,
