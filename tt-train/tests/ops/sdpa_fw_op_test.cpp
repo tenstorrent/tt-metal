@@ -514,9 +514,13 @@ struct SDPATestConfig {
     float gate_min = -4.0F;  // sigmoid(-4) ~ 0.018
     float gate_max = 4.0F;   // sigmoid(+4) ~ 0.982
     // V's range. Zero-mean values make the late (long) rows average out to ~0, where an absolute
-    // tolerance hides relative errors; the split tests use [0, 1] so every output is ~0.5.
+    // tolerance hides relative errors; the split tests use positive values so every output is well above 0.
     float value_min = -1.0F;
     float value_max = 1.0F;
+    // Added to V along the sequence: value_key_ramp * s / S for key position s. Uniform V gives every K/V
+    // range the same mean, so an output can not tell how a merger weighted its partials against each other;
+    // a ramp makes the partials' means differ and the split-vs-unsplit output check see a mis-weighting.
+    float value_key_ramp = 0.0F;
     float dropout_prob = 0.0F;
     // 0 = program factory default.
     ttml::metal::SDPAForwardProgramConfig program_config{};
@@ -567,8 +571,15 @@ void run_sdpa_test(
 
     const std::array<std::size_t, 4> value_shape{
         config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
-    xt::xarray<float> value_tensor = round_to_bf16(
-        ttml::test_utils::make_uniform_xarray<float>(value_shape, config.value_min, config.value_max, seed + 2U));
+    xt::xarray<float> value_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(value_shape, config.value_min, config.value_max, seed + 2U);
+    if (config.value_key_ramp != 0.0F) {
+        for (std::size_t s = 0; s < config.sequence_length; ++s) {
+            xt::view(value_tensor, xt::all(), xt::all(), s, xt::all()) +=
+                config.value_key_ramp * static_cast<float>(s) / static_cast<float>(config.sequence_length);
+        }
+    }
+    value_tensor = round_to_bf16(value_tensor);
 
     // Optional gate: (B, num_query_heads, S, head_dim_v) - same shape as the kernel output.
     std::optional<xt::xarray<float>> gate_tensor;
@@ -1615,7 +1626,10 @@ FoldErrorTerms fold_error_terms(
 // and about as much again from the rescale chain (the weights of a peaked row reach the output through a
 // different product of exps in the two runs; measured, not derived). The callers give V a nonzero mean so
 // that no output sits near zero, where a bf16 ULP of the output would be smaller than the fp32 noise of
-// the fold. The mean gap is held to the mean truncation, 2^-11 per unshared step.
+// the fold, and a ramp along the keys (value_key_ramp) so the partials' means differ: with uniform V every
+// K/V range averages the same and the output does not move when a partial is mis-weighted (a 6% error on
+// every partial's weight left this check at the same share of its bound; the logsumexp caught it). The
+// mean gap is held to the mean truncation, 2^-11 per unshared step.
 void expect_split_matches_unsplit(
     const xt::xarray<float>& split_output,
     const xt::xarray<float>& unsplit_output,
@@ -1682,8 +1696,10 @@ void run_split_vs_unsplit(SDPATestConfig base, const ChunkKnobs& knobs) {
         config.test_name = base.test_name + tag;
         return config;
     };
-    base.value_min = 0.0F;  // see expect_split_matches_unsplit
-    base.value_max = 1.0F;
+    // V in [0, 1] with the early keys near 0.1 and the late ones near 0.9: see expect_split_matches_unsplit.
+    base.value_min = 0.0F;
+    base.value_max = 0.25F;
+    base.value_key_ramp = 0.75F;
     const SDPATestConfig split = arm(knobs.max_pieces, "_split");
     const SDPATestConfig unsplit = arm(1U, "_unsplit");
     // The split arm must really split, or the check proves nothing.
@@ -2794,14 +2810,19 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     auto make = [&](uint32_t seed, float lo, float hi) {
         return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, lo, hi, seed), device);
     };
-    auto make = [&](const xt::xarray<float>& host) { return core::from_xtensor(host, device); };
+    // V in [0, 1] with the early keys near 0.1 and the late ones near 0.9: see expect_split_matches_unsplit.
+    auto make_value = [&](uint32_t seed) {
+        xt::xarray<float> value = test_utils::make_uniform_xarray<float>(shape, 0.0F, 0.25F, seed);
+        for (std::size_t s = 0; s < shape[2]; ++s) {
+            xt::view(value, xt::all(), xt::all(), s, xt::all()) += 0.75F * static_cast<float>(s) / shape[2];
+        }
+        return core::from_xtensor(value, device);
+    };
     struct Inputs {
         ttnn::Tensor query, key, value;
     };
-    // V in [0, 1]: see expect_split_matches_unsplit.
-    const Inputs first{make(1U, -1.0F, 1.0F), make(2U, -1.0F, 1.0F), make(3U, 0.0F, 1.0F)};
-    const Inputs second{
-        make(4U, -1.0F, 1.0F), make(5U, -1.0F, 1.0F), make(6U, 0.0F, 1.0F)};  // live at once: other addresses
+    const Inputs first{make(1U, -1.0F, 1.0F), make(2U, -1.0F, 1.0F), make_value(3U)};
+    const Inputs second{make(4U, -1.0F, 1.0F), make(5U, -1.0F, 1.0F), make_value(6U)};  // live at once: other addresses
     auto run = [&](const metal::SDPAForwardProgramConfig& cfg, const Inputs& in) {
         return core::to_xtensor(metal::sdpa_fw(
                                     in.query,
