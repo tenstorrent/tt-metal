@@ -11,6 +11,16 @@
 #include "llk_assert.h"
 #include "utils/gpr.h"
 
+/**
+ * @brief Scalar-unit programming: GPR loads, arithmetic, bitwise, shift, and
+ *        comparison operations.
+ *
+ * @note Scalar operations write their destination GPR from the scalar unit,
+ *       asynchronously from this RISC. Precede a WRCFG that reads such a GPR
+ *       (e.g. a hal::cfg write from a GPR) with a scalar drain: call
+ *       @ref hal::sync::wait::stall(StallTarget::Cfg, StallCondition::ScalarIdle)
+ *       first. The consumer side of this contract is on hal::cfg's GPR transfer.
+ */
 namespace hal::scalar
 {
 namespace detail
