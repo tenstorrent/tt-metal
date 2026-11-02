@@ -96,6 +96,7 @@ jobs:
       perf-run-types: L1_TO_L1
       upload-to-warehouse: false
       pipeline: pr
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_pr_gate_tests.yaml
     secrets: inherit
 
   measure:
@@ -123,6 +124,7 @@ jobs:
       perf-run-types: ${{ inputs.run_types || 'L1_TO_L1' }}
       upload-to-warehouse: false
       pipeline: pr
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_pr_gate_tests.yaml
     secrets: inherit
 
   llk-perf-gate:
