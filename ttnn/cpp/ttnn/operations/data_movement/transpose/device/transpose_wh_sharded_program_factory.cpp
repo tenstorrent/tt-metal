@@ -33,7 +33,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     const auto& output = output_tensor.mesh_tensor();
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     tt::DataFormat src0_dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_dfb_data_format);

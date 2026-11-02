@@ -9,7 +9,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::prim {
@@ -34,7 +33,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
         constexpr uint32_t input_num_units_per_shard_width = 1;
         const ShardSpec& shard_spec = input_tensors[input_id].shard_spec().value();
         const uint32_t num_input_units = shard_spec.shape[0] * input_num_units_per_shard_width;
-        const uint32_t input_page_size = round_up_to_mul32(input_unit_size);
+        const uint32_t input_page_size = tt::round_up(input_unit_size, 32u);
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_input_units * input_page_size,
             .core_ranges = all_cores,

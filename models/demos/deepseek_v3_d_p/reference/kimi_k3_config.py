@@ -61,6 +61,12 @@ class KimiK3Config:
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
+    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
+    # region on both traffic shapes, at -3.7% balanced and +4.7% hot_expert.
+    DISPATCH_FWD_VC_PAGES = 64
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the
     # 3584x3072 routed-expert shape, between 128 and 192: the composite's cost is flat inside an M

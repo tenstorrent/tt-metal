@@ -103,7 +103,7 @@ TEST_F(UnitMeshFixture, GenericBinaryReaderMatmulLargeBlock) {
     bool pass = true;
 
     try {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(this->device());
 
         CoreCoord core = {0, 0};
         uint32_t M = 2;
