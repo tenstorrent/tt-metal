@@ -58,7 +58,8 @@ inline void init_typecast() {
 
 // Load one SFPU pass worth of rows from Dest as VTYPE (vFloat for floats, vSMag/vInt for ints —
 // ints load as sign-magnitude int32, and unsigned sources zero-extend so the sign-mag view stays
-// non-negative).
+// non-negative). Native Int32 is two's complement in Dest (unpack-to-dest copies the L1 bits), so
+// it is cast to sign-magnitude on the way in.
 template <typename VTYPE, DataFormat FMT>
 inline VTYPE _typecast_load_() {
     if constexpr (
@@ -69,11 +70,11 @@ inline VTYPE _typecast_load_() {
                                     : FMT == DataFormat::Float32 || FMT == DataFormat::Tf32
                                     ? sfpi::DataLayout::F32 : sfpi::DataLayout::None;
         return sfpi::as<VTYPE>(sfpi::vFloat(sfpi::dst_reg[0].mode<layout>()));
-    } else if constexpr (FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8) {
-        constexpr sfpi::DataLayout layout = FMT == DataFormat::Int32 ? sfpi::DataLayout::SM32
-                                    : FMT == DataFormat::Int16 ? sfpi::DataLayout::SM16
-                                    : FMT == DataFormat::Int8  ? sfpi::DataLayout::SM8
-            : sfpi::DataLayout::None;
+    } else if constexpr (FMT == DataFormat::Int32) {
+        const sfpi::vInt value = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        return sfpi::as<VTYPE>(sfpi::convert<sfpi::vSMag>(value));
+    } else if constexpr (FMT == DataFormat::Int16 || FMT == DataFormat::Int8) {
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::Int16 ? sfpi::DataLayout::SM16 : sfpi::DataLayout::SM8;
         return sfpi::as<VTYPE>(sfpi::vSMag(sfpi::dst_reg[0].mode<layout>()));
     } else if constexpr (FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8) {
         constexpr sfpi::DataLayout layout = FMT == DataFormat::UInt16 ? sfpi::DataLayout::U16
@@ -89,7 +90,8 @@ inline VTYPE _typecast_load_() {
 
 // ADDR_MOD_6 post-increments Dest by one SFPU pass (SFP_ROWS), so the store both writes the result
 // and advances to the next pair of rows — replacing the per-iteration _incr_counters_. Requires
-// init_typecast to have programmed ADDR_MOD_6.
+// init_typecast to have programmed ADDR_MOD_6. An Int32 result arrives sign-magnitude and is stored
+// as two's complement, the native Int32 Dest/L1 encoding.
 template <DataFormat FMT, typename TYPE>
 inline void _typecast_store_(TYPE value) {
     if constexpr (
@@ -100,11 +102,11 @@ inline void _typecast_store_(TYPE value) {
                                     : FMT == DataFormat::Float32 || FMT == DataFormat::Tf32
                                     ? sfpi::DataLayout::F32 : sfpi::DataLayout::None;
         sfpi::dst_reg[0].mode<layout>(ADDR_MOD_6) = sfpi::as<sfpi::vFloat>(value);
-    } else if constexpr (FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8) {
-        constexpr sfpi::DataLayout layout = FMT == DataFormat::Int32 ? sfpi::DataLayout::SM32
-                                    : FMT == DataFormat::Int16 ? sfpi::DataLayout::SM16
-                                    : FMT == DataFormat::Int8  ? sfpi::DataLayout::SM8
-                                    : sfpi::DataLayout::None;
+    } else if constexpr (FMT == DataFormat::Int32) {
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>(ADDR_MOD_6) =
+            sfpi::convert<sfpi::vInt>(sfpi::as<sfpi::vSMag>(value));
+    } else if constexpr (FMT == DataFormat::Int16 || FMT == DataFormat::Int8) {
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::Int16 ? sfpi::DataLayout::SM16 : sfpi::DataLayout::SM8;
         sfpi::dst_reg[0].mode<layout>(ADDR_MOD_6) = sfpi::as<sfpi::vSMag>(value);
     } else if constexpr (FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8) {
         constexpr sfpi::DataLayout layout = FMT == DataFormat::UInt16  ? sfpi::DataLayout::U16
@@ -169,7 +171,7 @@ inline void _calculate_typecast_arith_sfp_rows_() {
         if constexpr (_typecast_is_int8_<DST_FMT>()) {
             _typecast_store_<DST_FMT>(_typecast_narrow_to_int8_<DST_FMT>(sfpi::as<sfpi::vInt>(int_value)));
         } else {
-            // Int32/16-bit dst: the store sfpmem mode narrows a 16-bit dst; int32 stores as-is.
+            // 16-bit dst: the store sfpmem mode narrows; Int32 dst: the store casts to two's complement.
             _typecast_store_<DST_FMT>(int_value);
         }
     } else if constexpr (!src_float && dst_float) {

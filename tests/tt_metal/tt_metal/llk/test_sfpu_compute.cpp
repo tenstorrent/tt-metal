@@ -1771,11 +1771,11 @@ inline std::vector<uint32_t> typecast_pack(tt::DataFormat fmt, const std::vector
             return out;
         }
         case tt::DataFormat::Int32: {
-            // Quasar Int32 in L1 is sign-magnitude (same encoding as the int8->int32 binary path).
+            // Native Int32 in L1 (and in Dest through unpack-to-dest) is two's complement (#59016).
             std::vector<uint32_t> out;
             out.reserve(vals.size());
             for (const float v : vals) {
-                out.push_back(int32_to_sign_mag_word(static_cast<int32_t>(std::lround(v))));
+                out.push_back(std::bit_cast<uint32_t>(static_cast<int32_t>(std::lround(v))));
             }
             return out;
         }
@@ -1827,9 +1827,7 @@ inline std::vector<float> typecast_decode(tt::DataFormat fmt, const std::vector<
         case tt::DataFormat::Int32: {
             std::vector<float> out(bytes.size());
             for (size_t i = 0; i < bytes.size(); ++i) {
-                const uint32_t w = bytes[i];
-                const int32_t mag = static_cast<int32_t>(w & 0x7fffffffu);
-                out[i] = static_cast<float>((w & 0x80000000u) ? -mag : mag);
+                out[i] = static_cast<float>(std::bit_cast<int32_t>(bytes[i]));
             }
             return out;
         }
