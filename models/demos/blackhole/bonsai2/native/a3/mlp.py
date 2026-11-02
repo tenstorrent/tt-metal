@@ -60,8 +60,8 @@ class TernaryMLP:
             d = read_ternary(shared.gguf, f"blk.{layer}.ffn_down.weight")
             return d.codes.T.astype(np.float32), d.scales.T.astype(np.float32)
 
-        self.w_gu, self.s_gu = a3.weights_for_device(dev, gu, cache=cache("gu"))
-        self.w_d, self.s_d = a3.weights_for_device(dev, down, cache=cache("down"))
+        self.w_gu, self.s_gu = a3.weights_for_device(dev, gu, cache=cache("gu"), kn=(5120, 2 * 17408))
+        self.w_d, self.s_d = a3.weights_for_device(dev, down, cache=cache("down"), kn=(17408, 5120))
 
     def forward(self, x):
         sh = self.sh
