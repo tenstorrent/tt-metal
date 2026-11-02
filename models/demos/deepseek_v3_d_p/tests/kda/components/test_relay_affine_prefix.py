@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """The SP relay must leave every rank the entry state the gather + chain gives it, and the final state on the first
-and last chronological ranks, call after call.
-
-Galaxy runs the relay on its SP8 torus axis, as Kimi-K3 does, and on an unwrapped Fabric2D, where the last rank's hand-off
-to the first crosses the SP line. LoudBox SP8xTP1 and QuietBox SP4xTP1 run it on a TorusY ring with Galaxy's per-chip
-workload, as their KDA layer gates do, and LoudBox's 4x2 and 2x4 on Fabric2D (SP4 and SP2 lines). Every rank holds 640
-rows of 24 heads, and every fabric carries K3's payload: one FP32 tile per packet.
+and last chronological ranks, call after call: on torus, unwrapped 2D and 1D ring fabrics, with Kimi-K3's per-chip
+workload (640 rows of 24 heads) and fabric payload.
 """
 
 import statistics
@@ -18,7 +14,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
     AffineTransform,
@@ -46,6 +42,13 @@ def _mesh_case(shape: tuple[int, int], topology: str, case_id: str, device_param
     )
 
 
+def _fabric_1d_ring_params() -> dict:
+    """FABRIC_1D_RING with K3's payload."""
+    return fabric_1d_device_params(
+        fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE
+    )
+
+
 _MESH = pytest.mark.parametrize(
     "mesh_device,device_params",
     [
@@ -57,9 +60,11 @@ _MESH = pytest.mark.parametrize(
             fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
         ),
         _mesh_case((8, 1), "ring", "loudbox-SP8xTP1-ring"),
+        _mesh_case((8, 1), "ring", "loudbox-SP8xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
         _mesh_case((4, 2), "mesh-4x2", "loudbox-SP4xTP2-fabric-2d"),
         _mesh_case((2, 4), "mesh-2x4", "loudbox-SP2xTP4-fabric-2d"),
         _mesh_case((4, 1), "ring", "quietbox-SP4xTP1-ring"),
+        _mesh_case((4, 1), "ring", "quietbox-SP4xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
     ],
     indirect=True,
 )
@@ -224,7 +229,7 @@ def _perf_case(shape: tuple[int, int], case_id: str, reference_us: float):
     return pytest.param(*ring.values, reference_us, marks=ring.marks, id=case_id)
 
 
-# Measured on the dedicated runners with K3's payload on TorusY.
+# Device-time references in us, on TorusY with K3's payload.
 _PERF_CASES = [
     _perf_case((8, 1), "loudbox-SP8xTP1-ring", 119.6),
     _perf_case((4, 1), "quietbox-SP4xTP1-ring", 75.5),
@@ -235,7 +240,7 @@ _PERF_CASES = [
     "mesh_device,device_params,reference_us", _PERF_CASES, indirect=["mesh_device", "device_params"]
 )
 def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us):
-    """The model's relay: Galaxy's per-chip 24 heads, HiFi2, entry states in L1 for the entry correction."""
+    """The model's relay: 24 heads per chip, HiFi2, entry states in L1 for the entry correction."""
     require_realtime_profiler("the relay_affine_prefix device-time gate")
     layout = "SP{}xTP{}".format(*tuple(mesh_device.shape))
     transforms = _Transforms(mesh_device, seed=_PERF_START)
