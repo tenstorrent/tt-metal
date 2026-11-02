@@ -26,7 +26,10 @@ from ttexalens.tt_exalens_lib import (
     TTException,
     load_elf,
     parse_elf,
+    read_from_device,
     read_word_from_device,
+    write_to_device,
+    write_words_to_device,
 )
 
 from . import device as device_module
@@ -51,7 +54,6 @@ from .device import (
     set_tensix_soft_reset,
     wait_brisc_boot_ready,
 )
-from .device_io import read_from_device, write_to_device, write_words_to_device
 from .device_print import aux_size_for
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -533,9 +535,8 @@ class TestConfig:
                 # Some SFPU kernels include their neighbours unqualified
                 # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
                 # resolves with this on the path. Its order against tt-llk's common/inc/sfpu
-                # no longer matters: tests/hardware_free/kernels/test_sfpu_header_location.py
-                # keeps each SFPU kernel in only one of the two, and the few basenames in both
-                # (its FORWARDED list) are plain forwards to the tt-llk copy.
+                # does not matter: tests/hardware_free/kernels/test_sfpu_header_location.py
+                # keeps each SFPU header in only one of the two.
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
                 # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
                 # ClassVar, so anything added here lands in the compile command for every Blackhole test. A
@@ -744,14 +745,19 @@ class TestConfig:
 
         For a ``tt_llk_quasar`` tree, prepend the selected variant's header root
         and expose the tree root for qualified includes of the base headers.
+        The in-tree Quasar tree has no ``common/inc/sfpu``: its eltwise SFPU kernels are in
+        ``llk_sfpu`` and its experimental ones under ``common/inc/experimental``. A Quasar tree
+        that still ships the directory keeps it as a root.
         """
         root = Path(arch_root)
         roots = [
             root / "llk_lib",
             root / "llk_lib" / "hal",
             root / "common" / "inc",
-            root / "common" / "inc" / "sfpu",
         ]
+        sfpu = root / "common" / "inc" / "sfpu"
+        if root.name != "tt_llk_quasar" or sfpu.is_dir():
+            roots.append(sfpu)
         if root.name == "tt_llk_quasar":
             roots.append(root)
             variant = quasar_variant()

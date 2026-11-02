@@ -18,6 +18,8 @@ python -m models.experimental.bevformer.demo.demo \
   --checkpoint random \
   --dataset-format synthetic \
   --num-frames 10 \
+  --trace \
+  --num-command-queues 2 \
   --output-dir generated/demo/bevformer/synthetic_tiny
 
 python -m models.experimental.bevformer.demo.demo \
@@ -25,6 +27,8 @@ python -m models.experimental.bevformer.demo.demo \
   --checkpoint random \
   --dataset-format synthetic \
   --num-frames 10 \
+  --trace \
+  --num-command-queues 2 \
   --output-dir generated/demo/bevformer/synthetic_small
 
 python -m models.experimental.bevformer.demo.demo \
@@ -32,30 +36,35 @@ python -m models.experimental.bevformer.demo.demo \
   --checkpoint random \
   --dataset-format synthetic \
   --num-frames 10 \
+  --trace \
+  --num-command-queues 2 \
   --output-dir generated/demo/bevformer/synthetic_base
 ```
 
 `--variant tiny|small|base` is a shorthand for the corresponding bundled config.
 
+These commands replay each frame from traces (`tt/tt_bevformer_trace.py`) and pipeline the frames:
+a host thread prepares the next frames' inputs while the current one runs on the device, and their
+images upload on a second command queue. Drop `--num-command-queues 2` to run the traced frames one
+at a time, and `--trace` as well to dispatch every op from Python. Two command queues have been run
+on Blackhole only.
+
 ## Recorded smoke results
 
 These runs were performed on a BH P100 with tt-metal commit
-`326b4e8aa4b28500e875d2503f3bb88cc6ecf904`. The generated `detections.json` artifacts contain
-these recorded results for ten measured frames. Each row used the corresponding bundled local
-`config/bevformer_<variant>.json` file shown in the commands above:
+`6751a2cb94555c40445a62ad09b2aac3f995e47d`, with the commands above:
 
-| Variant | BEV size | Encoder layers | Device-path mean (ms) | Device-path p50 (ms) | E2E mean (ms) | E2E p50 (ms) | Device FPS |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 138.6 | 138.2 | 306.9 | 305.9 | 7.21 |
-| small | 150 | 3 | 563.0 | 514.4 | 1145.8 | 1103.1 | 1.78 |
-| base | 200 | 6 | 1227.4 | 1222.5 | 2148.0 | 2124.6 | 0.81 |
+| Variant | BEV size | Encoder layers | Device FPS | E2E FPS |
+| --- | ---: | ---: | ---: | ---: |
+| tiny | 50 | 3 | 11.67 | 10.19 |
+| small | 150 | 3 | 2.32 | 2.31 |
+| base | 200 | 6 | 1.10 | 1.10 |
 
-These values come from one ten-frame smoke run per variant and validate end-to-end execution only.
-No repeated-run statistics were collected, so they are not statistically characterized benchmark
-results. The device-path columns report host wall-clock `device_latency_ms`, not profiler device
-duration. The artifacts record random weights, synthetic inputs, `synthetic-0` as the unmeasured
-preparation frame, ten measured frames, the TT architecture and card, and the full tt-metal commit
-SHA. They do not record the firmware version or original command line.
+Compare runs by Device FPS (see [Output](#output)). E2E FPS is informative: it depends on the host's
+CPU. On small and base the host keeps up with the device, so E2E FPS matches Device FPS; on tiny the
+host's preparation is the slower side. These come from one ten-frame run per variant with random
+weights and validate end-to-end execution only; they are not statistically characterized benchmark
+results.
 
 ## Model configuration
 
@@ -151,8 +160,8 @@ size; the loader rescales them with the images and pads normalized images at the
 relative to the preceding frame.
 
 The synthetic smoke runs above reuse one calibrated `lidar2img` matrix per camera for every frame.
-Real datasets may provide frame-dependent matrices, which change the visibility mask, spatial
-cross-attention rebatching, and `max_len`. The recorded synthetic timings therefore may not
+Real datasets may provide frame-dependent matrices, which change the visibility mask and the
+spatial cross-attention's rebatch, and can grow its capacity, which reallocates the plan. The recorded synthetic timings therefore may not
 represent real-sequence performance. Deterministic synthetic sequences with variable, valid
 projection geometry are tracked in [#55190](https://github.com/tenstorrent/tt-metal/issues/55190).
 
@@ -280,15 +289,20 @@ metrics. The first output frame position is loaded again as measured frame 0. Ma
 the same stored images, while synthetic mode generates fresh deterministic random images. In both
 modes, all reported latencies describe the already-compiled temporal execution path.
 
-`device_latency_ms` measures host wall-clock time around the TT model forward, device-side
-detection, synchronization, and input deallocation. `end_to_end_latency_ms` additionally includes
-image loading, preprocessing, transfer preparation, and host box readback.
+Each frame records two latencies:
+
+| Field | Meaning |
+| --- | --- |
+| `device_latency_ms` | The device's time for the frame: from queuing it until the device finishes its last work for it. The images are already on the device or uploading on the second command queue by then, so their upload counts only toward `end_to_end_latency_ms`. |
+| `end_to_end_latency_ms` | Adds the frame's host work: image loading, preprocessing, the images' upload and the detections' readback. With `--num-command-queues 2` the host prepares the next frame while the device runs this one, so this is the interval between two frames' detections. |
 
 The `summary` object contains:
 
 | Field | Meaning |
 | --- | --- |
-| `variant` | Selected model variant. |
+| `variant` | Selected model variant, repeated from `model_config` for quick lookup. |
+| `model_config` | Complete normalized model configuration used for the run. |
+| `seed` | Random seed for synthetic inputs and random checkpoint weights. |
 | `architecture` | TT architecture reported by the runtime, for example `blackhole`. |
 | `device_card` | TT card reported by device discovery, for example `P100`. |
 | `hardware` | Compact architecture and card label, for example `BH P100`. |
@@ -298,15 +312,14 @@ The `summary` object contains:
 | `score_threshold` | Device-side minimum detection score. |
 | `preparation_frame` | Unmeasured temporal-state frame token. |
 | `num_frames` | Number of measured output frames. |
-| `mean_device_latency_ms` | Arithmetic mean of device latency samples. |
-| `p50_device_latency_ms` | Median device latency sample. |
-| `mean_end_to_end_latency_ms` | Arithmetic mean of end-to-end samples. |
-| `p50_end_to_end_latency_ms` | Median end-to-end latency sample. |
-| `device_fps` | Estimated steady-state device-path throughput: `1000 / mean_device_latency_ms`. |
+| `mean_device_latency_ms`, `p50_device_latency_ms` | Mean and median of the frames' `device_latency_ms`. |
+| `mean_end_to_end_latency_ms`, `p50_end_to_end_latency_ms` | Mean and median of the frames' `end_to_end_latency_ms`. |
+| `execution` | `eager`; `trace` with `--trace`; `trace_2cq_pipelined` with `--num-command-queues 2`. |
+| `device_fps` | `1000 / mean_device_latency_ms`. |
+| `end_to_end_fps` | `1000 / mean_end_to_end_latency_ms`. |
+| `trace_capture_ms` | With `--trace` only: the first capture's time, then one per growth of the plan. |
 
-The p50 fields use the standard median. `device_fps` remains mean-based, so its value accounts for
-every measured frame. It excludes image loading, preprocessing, host box readback, preparation,
-and cold-start warmup.
+No field includes the preparation frame, the warmup, filling the pipeline or the trace captures.
 
 ## Visualize detections
 

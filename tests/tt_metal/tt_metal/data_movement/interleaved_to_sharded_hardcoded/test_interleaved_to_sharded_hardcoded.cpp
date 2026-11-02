@@ -6,7 +6,7 @@
 #include "tt_metal.hpp"
 #include "dm_common.hpp"
 
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_metal {
 

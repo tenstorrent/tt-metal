@@ -855,6 +855,13 @@ TEST_F(RMSNormOpTest, GatedPreallocatedOutputsOnCachedProgram) {
             ttml::metal::rmsnorm_fw(first_x, first_gamma, /* return_intermediates */ true, kEps, first_gate);
         const auto first_bw =
             ttml::metal::rmsnorm_bw(first_x, first_gamma, first_fw[1].value(), first_dy, compute_dgamma, first_gate);
+        // Preallocated outputs, made before the entry count: core::zeros fills them on the device with a program.
+        const auto out = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
+        const auto rms = ttml::core::zeros(ttnn::Shape(s.rms()), device);
+        const auto da = ttml::core::zeros(ttnn::Shape(s.head_major()), device);
+        const auto dgamma_components =
+            compute_dgamma ? std::make_optional(ttml::core::zeros(ttnn::Shape(s.head_major()), device)) : std::nullopt;
+        const auto dgate = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
         const auto num_programs = device->num_program_cache_entries();
         // Else the program cache is off and the unchanged count below proves nothing.
         ASSERT_GT(num_programs, num_programs_before) << "program cache not populated" << suffix;
@@ -865,12 +872,6 @@ TEST_F(RMSNormOpTest, GatedPreallocatedOutputsOnCachedProgram) {
         const auto gate = to_device(in.gate);
         const auto gamma = to_device(in.gamma);
         const auto dy = to_device(in.dy);
-        const auto out = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
-        const auto rms = ttml::core::zeros(ttnn::Shape(s.rms()), device);
-        const auto da = ttml::core::zeros(ttnn::Shape(s.head_major()), device);
-        const auto dgamma_components =
-            compute_dgamma ? std::make_optional(ttml::core::zeros(ttnn::Shape(s.head_major()), device)) : std::nullopt;
-        const auto dgate = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
 
         const auto fw = ttnn::prim::ttml_rmsnorm_fw(x, gamma, gate, /* return_intermediates */ true, kEps, rms, out);
         const auto bw =
