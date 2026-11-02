@@ -224,7 +224,9 @@ class Qwen36DecoderLayer:
             elif self._tp1_gdn:
                 if "gdn_out" in sites():
                     self.attention._native_out = TernaryLinear(
-                        _sh, f"blk.{layer_num}.ssm_out.weight", _cache, out_mem=ttnn.DRAM_MEMORY_CONFIG
+                        _sh, f"blk.{layer_num}.ssm_out.weight", _cache,
+                        # BONSAI_RES_ADD: rmsprep reads the residual delta 5.6 us faster from L1
+                        out_mem=ttnn.L1_MEMORY_CONFIG if os.environ.get("BONSAI_RES_ADD", "0") != "0" else ttnn.DRAM_MEMORY_CONFIG,
                     )
                 if "gdn_in" in sites():
                     import torch
@@ -410,7 +412,21 @@ class Qwen36DecoderLayer:
             )
         sharded_norm = self._sharded_norm_1c and mode == "decode"
         fuse_attn = self._attn_native is not None and mode == "decode"
-        if fuse_attn:  # rmsprep; full attention passes x itself (its qkv picks up the fused prep)
+        # BONSAI_RES_ADD=2: the previous layer handed over its MLP output unadded (x) and kept its residual
+        # h; the add runs fused in this layer's norm, which writes the real residual
+        _stash = getattr(getattr(self, "_res_prev", None), "_res_stash", None)
+        if _stash is not None:
+            self._res_prev._res_stash = None
+            assert fuse_attn and mode == "decode" and _stash[0] == x.buffer_address(), "deferred residual add lost"
+            x_ff, x = x, ttnn.allocate_tensor_on_device(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, x.device(),
+                                                       ttnn.L1_MEMORY_CONFIG)
+            attn_input = self._attn_native.norm(_stash[1], self._attn_gamma, self._norm_eps,
+                                                emit=not self.is_full_attention, add=x_ff, h_out=x)
+            ttnn.deallocate(_stash[1])
+            ttnn.deallocate(x_ff)
+            if attn_input is None:
+                attn_input = x
+        elif fuse_attn:  # rmsprep; full attention passes x itself (its qkv picks up the fused prep)
             attn_input = self._attn_native.norm(x, self._attn_gamma, self._norm_eps, emit=not self.is_full_attention)
             if attn_input is None:
                 attn_input = x
@@ -527,6 +543,18 @@ class Qwen36DecoderLayer:
             ttnn.deallocate(attn_input)
 
         fuse_ff = self._ff_gamma is not None and mode == "decode"
+        res_add = int(os.environ.get("BONSAI_RES_ADD", "0")) if fuse_ff else 0
+        if res_add:  # BONSAI_RES_ADD>=1: the attention residual add runs fused in the ff norm (rmsprep add mode)
+            h = ttnn.allocate_tensor_on_device(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, x.device(), ttnn.L1_MEMORY_CONFIG)
+            ff_output = self.feed_forward.native.forward_residual(x, self._ff_gamma, self._norm_eps, add=attn_output, h_out=h)
+            ttnn.deallocate(attn_output)
+            if res_add >= 2 and getattr(self, "_res_next", False):  # hand ff_output over unadded; the next layer adds
+                self._res_stash = (ff_output.buffer_address(), h)
+                return ff_output
+            output = ttnn.add(h, ff_output)
+            ttnn.deallocate(h)
+            ttnn.deallocate(ff_output)
+            return output
         h = ttnn.add(x, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG) if fuse_ff else ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 
