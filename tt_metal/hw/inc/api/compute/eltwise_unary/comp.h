@@ -732,9 +732,8 @@ ALWI void unary_le_tile_uint32(uint32_t idst, uint32_t param0) {
         param0));
 }
 
-// Integer comparison-to-zero variants. These read int32/uint operands from Dest, which on Quasar
-// requires 32-bit unpack-to-Dest that is not supported yet, so the whole block stays gated off there.
-#ifndef ARCH_QUASAR
+// Integer comparison-to-zero variants. On Quasar only the Int32 ones exist (native Int32 reaches a 32-bit
+// Dest through unpack-to-dest as two's complement); the UInt16 / UInt32 ones stay gated off there.
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is greater than zero.
@@ -840,6 +839,7 @@ ALWI void eqz_tile_int32(uint32_t idst) {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_int, (APPROX, SfpuType::equal_zero), idst, VectorMode::RC));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element of a tile is equal to zero.
@@ -877,6 +877,7 @@ ALWI void eqz_tile_uint32(uint32_t idst) {
     MATH((SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_eqz_uint32, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC)));
 }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -902,6 +903,7 @@ ALWI void lez_tile_int32(uint32_t idst) {
         VectorMode::RC));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is not equal to zero.
