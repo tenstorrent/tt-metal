@@ -150,9 +150,8 @@ do not work, so the data-movement loops use the ``DataflowBuffer`` calls instead
 .. _reader_unary_interleaved_start_id_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp
 
 Some features of the ``ProgramDescriptor`` form are not available in the ``ProgramSpec`` form yet, such as global
-circular buffers, fabric connections and per-core allocated tensors. Programs that use them stay on ``ttnn.generic_op``.
-A global semaphore works in both forms: pass the address from ``ttnn.get_global_semaphore_address`` as a runtime
-argument.
+circular buffers, global semaphores, fabric connections and per-core allocated tensors. Programs that use them stay on
+``ttnn.generic_op``.
 
 More examples
 *************
