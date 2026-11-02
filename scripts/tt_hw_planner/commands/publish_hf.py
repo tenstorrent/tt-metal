@@ -179,6 +179,10 @@ def _write_tt_model_yaml(
     serve_max = _batch or 32
     serve_maxlen = None
     serve_hf_override = None
+    # The adapter's own launch settings (on-chip sampling, trace memory, batched-token budget):
+    # the speed it was measured at depends on them, so a republish must carry them, not drop them.
+    serve_additional = {}
+    serve_extra_args = []
     try:
         _bm = Path(checkout) / extra_models_dir / slug / "vllm_metadata.json"
         if _bm.is_file():
@@ -192,6 +196,12 @@ def _write_tt_model_yaml(
             _ovr = _md.get("serve_hf_override_arch")
             if isinstance(_ovr, str) and _ovr:
                 serve_hf_override = _ovr
+            _ac = _md.get("additional_config")
+            if isinstance(_ac, dict):
+                serve_additional = _ac
+            _sa = _md.get("serve_args")
+            if isinstance(_sa, list):
+                serve_extra_args = [str(x) for x in _sa]
     except Exception:
         pass
     arch = arch or a
@@ -200,6 +210,7 @@ def _write_tt_model_yaml(
     _serve_args = ["--trust-remote-code"]
     if serve_hf_override:
         _serve_args += ["--hf-overrides", json.dumps({"architectures": [serve_hf_override]})]
+    _serve_args += serve_extra_args
     hardware_given = hardware
     hardware = hardware or hw
     mesh_device = mesh_device or mesh
@@ -277,6 +288,7 @@ def _write_tt_model_yaml(
         "  block_size: 64",
         f"  max_num_seqs: {serve_max}",
         *([f"  max_model_len: {serve_maxlen}"] if serve_maxlen else []),
+        *([f"  additional_config: {json.dumps(serve_additional)}"] if serve_additional else []),
         f"  hardware: {hardware}",
         f"  mesh_device: {mesh_device}",
         "  env:",
@@ -428,15 +440,31 @@ def _tt_validated_block(state: dict, hw_phrase: str, commit: str | None) -> str:
     pt = sv.get("per_token") or {}
     ft = sv.get("first_token") or {}
     batch = state.get("batch")
+    served = state.get("served") or {}
     rows = [f"| Hardware | {hw_phrase} |"]
-    if batch is not None:
-        rows.append(f"| Concurrency (batch) | {batch} |")
-    if thr.get("current") is not None:
-        rows.append(f"| Decode throughput | {_fmt(thr['current'])} tok/s/user |")
-    if ft.get("ms") is not None:
-        rows.append(f"| TTFT | {_fmt(ft['ms'], 1)} ms |")
-    if pt.get("ms") is not None:
-        rows.append(f"| TPOT / ITL | {_fmt(pt['ms'], 1)} ms |")
+    if served.get("rows"):
+        # What a customer gets from `tt serve`, measured on this package before it was uploaded. The
+        # perf test's figures are bring-up measurements (fixed batch, no server) and go below it.
+        rows.append(f"| Concurrent users (`tt serve`) | up to {served.get('max_num_seqs')} |")
+        for users, isl, osl, ttft, tpot_ms, per_user, total in served["rows"]:
+            who = "1 user" if users == 1 else f"{users} users at once"
+            rows.append(
+                f"| Served, {who} (ISL {isl} / OSL {osl}) | {_fmt(per_user, 1)} tok/s/user, "
+                f"{_fmt(total, 0)} tok/s total, TTFT {_fmt(ttft, 2)} s |"
+            )
+        if thr.get("current") is not None:
+            rows.append(
+                f"| Optimized decode (on-device perf test, batch {batch}) | {_fmt(thr['current'])} tok/s/user |"
+            )
+    else:
+        if batch is not None:
+            rows.append(f"| Concurrency (batch) | {batch} |")
+        if thr.get("current") is not None:
+            rows.append(f"| Decode throughput | {_fmt(thr['current'])} tok/s/user |")
+        if ft.get("ms") is not None:
+            rows.append(f"| TTFT | {_fmt(ft['ms'], 1)} ms |")
+        if pt.get("ms") is not None:
+            rows.append(f"| TPOT / ITL | {_fmt(pt['ms'], 1)} ms |")
     if m.get("name") and m.get("current") is not None:
         rows.append(f"| {m['name']} | {_fmt(m.get('current'), 1)} {m.get('unit', '')} |")
     if cfg.get("pcc_test"):
@@ -1551,6 +1579,41 @@ def _perf_card_body(rows, depth, perf_name: str) -> str:
     )
 
 
+def _full_depth(demo_dir, weights: str | None, token: str | None) -> int | None:
+    """The model's full layer count, from a config.json in the demo or else the base-weights repo."""
+    import glob as _g
+
+    cfgs = []
+    for cfg in _g.glob(str(Path(demo_dir) / "**" / "config.json"), recursive=True):
+        try:
+            cfgs.append(json.loads(Path(cfg).read_text()))
+        except Exception:  # noqa: BLE001
+            continue
+    if not cfgs and weights:
+        try:
+            from huggingface_hub import hf_hub_download
+
+            cfgs.append(json.load(open(hf_hub_download(repo_id=weights, filename="config.json", token=token))))
+        except Exception:  # noqa: BLE001
+            pass
+    for d in cfgs:
+        for c in (d, d.get("text_config") or {}):
+            for k in ("num_hidden_layers", "n_layers", "num_layers"):
+                if isinstance(c.get(k), int) and c[k] > 0:
+                    return c[k]
+    return None
+
+
+def _bench_layers_env(args, demo_dir) -> dict:
+    """TT_PERF_LAYERS for the card's sweep: --bench-layers, else the model's full depth. Never the
+    perf test's own default or a cap inherited from the shell: nemotron's test defaults to 7 of its 52
+    layers, and a card filled from that showed a 7-layer ~80 tok/s/user as the model's speed."""
+    if getattr(args, "bench_layers", None):
+        return {"TT_PERF_LAYERS": str(args.bench_layers)}
+    full = _full_depth(demo_dir, getattr(args, "weights", None), _hf_token(args))
+    return {"TT_PERF_LAYERS": str(full)} if full else {}
+
+
 def _enrich_card_with_benchmarks(
     args, slug: str, checkout: Path, demo_dir: Path, perf_node: str | None, pcc_node: str | None
 ) -> None:
@@ -1573,14 +1636,16 @@ def _enrich_card_with_benchmarks(
     isls = [int(x) for x in (getattr(args, "bench_isl", None) or "128,1024").split(",")]
     osl = int(getattr(args, "bench_osl", None) or "128")
     users_grid = [int(x) for x in (getattr(args, "bench_batches", None) or "1,8,32").split(",")]
-    layers_env = {}
-    if getattr(args, "bench_layers", None):
-        layers_env["TT_PERF_LAYERS"] = str(args.bench_layers)
-    print(f"  [publish-hf] bench: on-device sweep via {perf_node} — ISL {isls} x Users {users_grid}, OSL {osl}…")
+    layers_env = _bench_layers_env(args, demo_dir)
+    base_env = {k: v for k, v in os.environ.items() if k != "TT_PERF_LAYERS"}
+    print(
+        f"  [publish-hf] bench: on-device sweep via {perf_node} — ISL {isls} x Users {users_grid}, OSL {osl}, "
+        f"layers {layers_env.get('TT_PERF_LAYERS', 'the test default (no depth found in config.json)')}…"
+    )
 
     def _run(isl, users):
         env = dict(
-            os.environ,
+            base_env,
             TT_METAL_HOME=str(checkout),
             TT_HW_PLANNER_SHARD_RUN="1",
             TT_PERF_ISL_TOKENS=str(isl),
@@ -1733,6 +1798,260 @@ def _refresh_eager_pipeline_adapter(checkout, slug, bundle_dir) -> bool:
     kv, _mesh = _pipeline_serve_profile(checkout, slug)
     ap.write_text(_pipeline_adapter_src(slug, arch, tt_arch, pipeline_mod, kv))
     return True
+
+
+def _adapter_never_traces(bundle_dir) -> bool:
+    """True when the bundle's adapter runs decode itself (defines decode_forward) but never replays a
+    trace, so every served token runs eagerly. An adapter riding a stock generator inherits that
+    generator's traced decode and is not flagged."""
+    try:
+        src = (Path(bundle_dir) / "adapter.py").read_text()
+    except Exception:  # noqa: BLE001
+        return False
+    return "def decode_forward" in src and "execute_trace" not in src
+
+
+_SERVED_TITLE = "Served speed (tt serve)"
+# What a served adapter logs when it decodes without its trace. The server still starts and answers,
+# at a fraction of the optimized speed: kolibri_1's package served ~9.5 tok/s against a traced 39.47.
+_EAGER_SERVE_MARKS = ("decoding eagerly", "decode eagerly", "decode trace capture failed")
+_SERVE_GATE_MIN = 0.7
+
+
+def _eager_serve_lines(log: str) -> list:
+    return [ln.strip() for ln in (log or "").splitlines() if any(m in ln for m in _EAGER_SERVE_MARKS)]
+
+
+def _time_served_decode(base_url: str, model: str, users: int, osl: int = 128, timeout: int = 1800) -> dict:
+    """``users`` concurrent streamed greedy completions of exactly ``osl`` tokens, each with its own
+    ~128-token prompt. Mean TTFT (s) and TPOT (ms), per-user and total decode tok/s."""
+    import threading
+    import time
+    import urllib.request
+
+    res = [None] * users
+
+    def one(u):
+        body = {
+            "model": model,
+            "prompt": f"Reader {u}: " + " ".join(["The quick brown fox jumps over the lazy dog."] * 12),
+            "max_tokens": osl,
+            "min_tokens": osl,
+            "ignore_eos": True,
+            "temperature": 0,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        req = urllib.request.Request(
+            base_url.rstrip("/") + "/v1/completions",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        t0, first, last, chunks, n = time.time(), None, None, 0, 0
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                for raw in r:
+                    ln = raw.decode(errors="replace").strip()
+                    if not ln.startswith("data:") or ln[5:].strip() == "[DONE]":
+                        continue
+                    d = json.loads(ln[5:])
+                    n = (d.get("usage") or {}).get("completion_tokens") or n
+                    if any(c.get("text") for c in d.get("choices") or []):
+                        last = time.time()
+                        first = first or last
+                        chunks += 1
+        except Exception as e:  # noqa: BLE001
+            res[u] = {"error": str(e)}
+            return
+        n = n or chunks
+        res[u] = {
+            "ttft": (first - t0) if first else None,
+            "tpot": (last - first) / (n - 1) if first and n > 1 else None,
+        }
+
+    threads = [threading.Thread(target=one, args=(u,)) for u in range(users)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    ok = [r for r in res if r and r.get("tpot")]
+    errors = [r["error"] for r in res if r and r.get("error")]
+    if not ok:
+        return {"users": users, "completed": 0, "error": errors[0] if errors else "no tokens came back"}
+    tpot = sum(r["tpot"] for r in ok) / len(ok)
+    return {
+        "users": users,
+        "completed": len(ok),
+        "errors": errors,
+        "ttft": sum(r["ttft"] for r in ok) / len(ok),
+        "tpot_ms": 1000.0 * tpot,
+        "per_user": 1.0 / tpot,
+        "total": len(ok) / tpot,
+    }
+
+
+def _serve_gate_problems(optimized, one_user: dict, many: dict | None, eager_lines: list, min_ratio: float) -> list:
+    """Why the built package must not be uploaded; empty when it serves at its optimized speed."""
+    problems = []
+    if eager_lines:
+        problems.append("the server decodes without its trace (%s)" % eager_lines[0][:240])
+    if not one_user or not one_user.get("per_user"):
+        problems.append("a 1-user request did not complete (%s)" % ((one_user or {}).get("error") or "no reply"))
+    elif optimized and one_user["per_user"] < min_ratio * optimized:
+        problems.append(
+            "1 user decodes at %.1f tok/s, under %d%% of the %.1f tok/s/user the model was optimized to"
+            % (one_user["per_user"], round(100 * min_ratio), optimized)
+        )
+    if many and many.get("completed", 0) < many["users"]:
+        problems.append(
+            "only %d of %d concurrent requests completed (%s)"
+            % (many.get("completed", 0), many["users"], (many.get("errors") or [many.get("error")])[0])
+        )
+    return problems
+
+
+def _served_speed_gate(args, state: dict, staged) -> tuple:
+    """Serve the BUILT package the way a customer will (``tt-model serve`` on its manifest) BEFORE it
+    is uploaded, and time real requests: 1 user, then max_num_seqs users at once. (ok, served): not ok
+    when the server cannot serve, decodes without its trace, drops concurrent requests, or decodes 1
+    user under --serve-gate-min (default 70%) of the optimized tok/s/user. A clean startup proves
+    nothing about speed: kolibri_1's package started cleanly and served a quarter of its traced speed."""
+    import datetime as _dt
+    import socket
+    import time
+    import urllib.request
+
+    if getattr(args, "no_serve_gate", False):
+        print("  [publish-hf] serve gate: skipped (--no-serve-gate); uploading without timing the served package.")
+        return True, None
+    manifest = Path(staged) / "tt_kernel_manifest.json"
+    docker = shutil.which("docker")
+    if not docker or not manifest.is_file():
+        print(
+            f"  [publish-hf] serve gate: cannot serve the build here ({'no docker' if not docker else 'no ' + str(manifest)})."
+        )
+        return False, None
+    try:
+        mani = json.loads(manifest.read_text())
+    except Exception:  # noqa: BLE001
+        mani = {}
+    seqs = int(((mani.get("container") or {}).get("serve") or {}).get("max_num_seqs") or 1)
+    port = 20500
+    while port < 20600:
+        with socket.socket() as s:
+            if s.connect_ex(("127.0.0.1", port)) != 0:
+                break
+        port += 1
+    base = f"http://127.0.0.1:{port}"
+    ttm = getattr(args, "tt_model_bin", None) or "tt-model"
+    cname_key = "tt-model-%s-" % (mani.get("name") or Path(staged).name)
+
+    def _containers():
+        ps = subprocess.run(
+            [docker, "ps", "-a", "--filter", "name=" + cname_key, "--format", "{{.Names}} {{.Status}}"],
+            capture_output=True,
+            text=True,
+        ).stdout
+        return [ln.split(" ", 1) for ln in ps.splitlines() if ln.strip()]
+
+    def _logs():
+        return "".join(
+            (r.stdout or "") + (r.stderr or "")
+            for r in (subprocess.run([docker, "logs", c[0]], capture_output=True, text=True) for c in _containers())
+        )
+
+    print(
+        f"  [publish-hf] serve gate: serving the built package on port {port} before upload (first start compiles kernels) …"
+    )
+    timeout = int(getattr(args, "serve_gate_timeout", None) or 5400)
+    model, one, many, log = None, None, None, ""
+    try:
+        st = subprocess.run(
+            [ttm, "serve", str(manifest), "--detach", "--port", str(port)],
+            capture_output=True,
+            text=True,
+            timeout=4 * 3600,
+        )
+        if st.returncode != 0:
+            print(
+                "  [publish-hf] serve gate: tt-model serve failed:\n" + ((st.stdout or "") + (st.stderr or ""))[-1500:]
+            )
+            return False, None
+        t0 = time.time()
+        while time.time() < t0 + timeout:
+            try:
+                with urllib.request.urlopen(base + "/v1/models", timeout=10) as r:
+                    model = json.loads(r.read())["data"][0]["id"]
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+            cs = _containers()
+            if (cs and all(c[1].startswith("Exited") for c in cs)) or (not cs and time.time() > t0 + 300):
+                break
+            time.sleep(15)
+        if model is None:
+            print("  [publish-hf] serve gate: the built package did not start serving:\n" + _logs()[-1500:])
+            return False, None
+        print(f"  [publish-hf] serve gate: serving {model}; timing 1 user, then {seqs} at once …")
+        _time_served_decode(base, model, 1, osl=16)  # first request: one-time compiles and trace capture
+        one = _time_served_decode(base, model, 1)
+        if seqs > 1:
+            _time_served_decode(base, model, seqs, osl=16)
+            many = _time_served_decode(base, model, seqs)
+        log = _logs()
+    except Exception as e:  # noqa: BLE001
+        print(f"  [publish-hf] serve gate: could not serve and time the build ({e}).")
+        return False, None
+    finally:
+        for c in _containers():
+            subprocess.run([docker, "rm", "-f", c[0]], capture_output=True, text=True)
+    optimized = (state.get("throughput") or {}).get("current")
+    min_ratio = float(getattr(args, "serve_gate_min", None) or _SERVE_GATE_MIN)
+    for r in (one, many):
+        if r and r.get("per_user"):
+            print(
+                f"  [publish-hf] serve gate: {r['users']} user(s): {r['per_user']:.1f} tok/s/user, "
+                f"{r['total']:.0f} tok/s total, TTFT {r['ttft']:.2f} s"
+            )
+    if optimized:
+        print(f"  [publish-hf] serve gate: optimized on-device decode: {optimized:.1f} tok/s/user")
+    problems = _serve_gate_problems(optimized, one, many, _eager_serve_lines(log), min_ratio)
+    if problems:
+        for p in problems:
+            print("  [publish-hf] serve gate: FAIL -> " + p)
+        return False, None
+    rows = [
+        (r["users"], 128, 128, r["ttft"], r["tpot_ms"], r["per_user"], r["total"])
+        for r in (one, many)
+        if r and r.get("per_user")
+    ]
+    print("  [publish-hf] serve gate: PASS")
+    return True, {
+        "rows": rows,
+        "max_num_seqs": seqs,
+        "optimized": optimized,
+        "date": _dt.date.today().isoformat(),
+    }
+
+
+def _served_card_body(served: dict) -> str:
+    tbl = [
+        "| Users (at once) | ISL | OSL | TTFT (s) | TPOT (ms) | tok/s/user | tok/s total |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for users, isl, osl, ttft, tpot_ms, per_user, total in served["rows"]:
+        tbl.append(f"| {users} | ~{isl} | {osl} | {ttft:.2f} | {tpot_ms:.1f} | {per_user:.1f} | {total:,.0f} |")
+    opt = served.get("optimized")
+    tail = (
+        f"\n\nThe model's optimized on-device decode (its perf test, no server) is {opt:.1f} tok/s/user." if opt else ""
+    )
+    return (
+        f"Measured on this package with `tt serve` before it was uploaded: greedy decoding, each user "
+        f"streaming its own prompt, up to {served['max_num_seqs']} users at once. TPOT is the time per "
+        f"output token after the first; tok/s/user = 1000 / TPOT. _Measured {served['date']}._\n\n"
+        + "\n".join(tbl)
+        + tail
+    )
 
 
 def _git_info(path):
@@ -2106,6 +2425,14 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
             f"  [publish-hf] re-rendered {bundle_dir / 'adapter.py'}: it was an earlier copy of the tool's "
             "pipeline adapter, which decoded every token eagerly; decode is now traced when vLLM asks"
         )
+    if adapter_ready and _adapter_never_traces(bundle_dir) and not getattr(args, "no_serve_gate", False):
+        print(
+            f"  [publish-hf] NOT publishing: {bundle_dir / 'adapter.py'} runs decode itself but never calls "
+            "ttnn.execute_trace, so every served token would run eagerly, several times slower than the speed "
+            "the model was optimized to. Make decode_forward replay a captured trace when vLLM passes "
+            "enable_trace (the tool's pipeline adapter template does), or pass --no-serve-gate to publish it anyway."
+        )
+        return 5
     servable = True
     if not adapter_ready:
         if arch_det:
@@ -2256,6 +2583,17 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
         subs = [p for p in Path(out).iterdir() if p.is_dir()] if Path(out).is_dir() else []
         if subs:
             staged = max(subs, key=lambda p: p.stat().st_mtime)
+    gate_ok, served = _served_speed_gate(args, state, staged) if servable else (True, None)
+    if not gate_ok:
+        print(
+            f"  [publish-hf] NOT uploading {staged}: the package does not serve at the speed it was optimized to "
+            "(see the serve gate lines above). Fix the adapter or its serve settings in vllm_metadata.json "
+            "(e.g. additional_config.tt.trace_region_size when the trace capture failed) and re-run, or pass "
+            "--no-serve-gate to upload it anyway."
+        )
+        return 5
+    if served:
+        state["served"] = served
     # Upload the built bundle OURSELVES (create_repo + upload_large_folder) rather than `tt-model push`:
     # tt-model's push depends on a huggingface_hub version whose folder-upload API drifts between
     # releases, so doing it in-process with this interpreter's hub keeps the whole flow one automated
@@ -2307,11 +2645,17 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
         if run_it:
             _upload_card_section(args, _RUN_IT_TITLE, run_it)
         print("  [publish-hf] card marked NOT-YET-SERVABLE + added on-device run instructions.")
-    # Auto-benchmark: serve the bundle and write a measured latency sweep into the card. Universal +
-    # best-effort — measures any model that serves, skips (publish stands) for one that can't yet.
+    if served:
+        _upload_card_section(args, _SERVED_TITLE, _served_card_body(served))
+    # Card speed: a package that serves shows what `tt serve` measured above; only one that cannot serve
+    # falls back to the perf test's sweep (a bring-up measurement, run at the model's full depth).
     if not getattr(args, "no_bench", False):
         cfg = state.get("config") or {}
-        _enrich_card_with_benchmarks(args, slug, checkout, demo_dir, cfg.get("perf_test"), cfg.get("pcc_test"))
+        if served:
+            py = str(Path(checkout) / "python_env" / "bin" / "python")
+            _enrich_card_with_accuracy(args, checkout, Path(demo_dir), py, cfg.get("pcc_test"))
+        else:
+            _enrich_card_with_benchmarks(args, slug, checkout, demo_dir, cfg.get("perf_test"), cfg.get("pcc_test"))
     _verify_published_package(args, slug, servable)
     return 0
 
@@ -2375,7 +2719,11 @@ def _verify_published_package(args, slug: str, servable: bool) -> None:
                 r = subprocess.run([docker, "logs", cname], capture_output=True, text=True)
                 low = ((r.stdout or "") + (r.stderr or "")).lower()
                 if "application startup complete" in low:
-                    outcome, detail = "ready", "Application startup complete"
+                    eager = _eager_serve_lines((r.stdout or "") + (r.stderr or ""))
+                    if eager:
+                        outcome, detail = "eager", eager[0][:240]
+                    else:
+                        outcome, detail = "ready", "Application startup complete"
                     break
                 if (
                     "initialize_vllm_model" in low
@@ -2405,6 +2753,8 @@ def _verify_published_package(args, slug: str, servable: bool) -> None:
         verdict = "FAIL (the published package did not pull)"
     elif servable and outcome == "ready":
         verdict = "PASS (pulled + served: Application startup complete)"
+    elif outcome == "eager":
+        verdict = f"MISMATCH (served, but decodes without its trace -- several times slower: {detail})"
     elif (not servable) and outcome == "scaffold_stop":
         verdict = "PASS as documented (pulled; serve stops at the pending vLLM adapter)"
     elif servable and outcome != "ready":

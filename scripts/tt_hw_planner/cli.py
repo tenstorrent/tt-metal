@@ -11750,7 +11750,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     pph.add_argument("--bench-isl", dest="bench_isl", help="input-length grid for the sweep (default 128,1024)")
     pph.add_argument("--bench-osl", dest="bench_osl", help="output length for the sweep (default 128)")
-    pph.add_argument("--bench-layers", dest="bench_layers", help="TT_PERF_LAYERS override (default: device-max)")
+    pph.add_argument(
+        "--bench-layers",
+        dest="bench_layers",
+        help="TT_PERF_LAYERS for the sweep (default: the model's full depth from its config.json)",
+    )
+    pph.add_argument(
+        "--no-serve-gate",
+        dest="no_serve_gate",
+        action="store_true",
+        help="upload --container builds without first serving them and timing real requests "
+        "(by default a package that serves under --serve-gate-min of its optimized speed is not uploaded)",
+    )
+    pph.add_argument(
+        "--serve-gate-min",
+        dest="serve_gate_min",
+        type=float,
+        help="lowest served 1-user tok/s as a fraction of the optimized tok/s/user (default 0.7)",
+    )
+    pph.add_argument(
+        "--serve-gate-timeout",
+        dest="serve_gate_timeout",
+        type=int,
+        help="seconds to wait for the built package to start serving before the gate fails (default 5400)",
+    )
     pph.add_argument("--out", help="tt-model build staging dir (default ~/tt-model-builds)")
     pph.add_argument("--tt-model-bin", dest="tt_model_bin", help="path to the tt-model executable")
     pph.add_argument("--public", action="store_true", help="push the bundle public (shared by link)")
