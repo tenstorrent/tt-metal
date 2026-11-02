@@ -89,7 +89,8 @@ These use a shared prompt on purpose, so they hit the prefix cache (`res_a1/`): 
 
 ## Known limitations
 
-- The determinism check FAILS (`res_a1/det.log`, `res_a2/det.log`): identical requests give different texts (5 sequential identical requests gave 2 distinct texts, 8 concurrent identical ones 2, and mixed-batch repeats diverged after 107-245 characters). Cause not investigated.
+- Greedy output is not bit-reproducible across batch composition, or when adaptive speculation changes the verify width k (bf16 accumulation differs). The differences occur at near-tie tokens and the text stays coherent; earlier releases behave the same way (`dsv4-logs/det_rc4c/RESULTS.md`).
+- For sequential repeatability set `DSV41_VLLM_SPEC_ADAPT=0` (fixed k = 5) or `DSV41_VLLM_SPEC_FORCED_K` in the catalog entry (mount a modified `model_spec.json`; the throughput cost was not measured). Concurrent and mixed batches can still differ at near-tie tokens.
 - One structured-matrix cell failed once (27/28, above) and passed on both reruns; the cause was not investigated.
 - Image prompts: no prefix-cache hit was observed in the validation (small prompts below the cached block size); vLLM's own prefix reads are skipped for requests with images.
 - A long prompt stalls the other users' decoding while it prefills (token budget); concurrent very long prompts prefill one after another.
