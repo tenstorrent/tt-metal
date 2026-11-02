@@ -64,17 +64,24 @@ class _HistoryExchange:
     every call. The semaphores live on the exchange core (``qkv_causal_conv1d_silu_exchange_core``), and in L1_SMALL when
     the device has one: their counts carry across calls, and a fabric mux may overwrite raw L1 below it.
 
-    Every KDA layer on a mesh shares one exchange. The entry barrier orders calls, not layers, so layers taking turns
-    are no different from one layer called repeatedly, and per-layer copies would exhaust a small L1_SMALL at depth.
+    Every KDA layer on a mesh shares one exchange PER CHRONOLOGY MODE (``scope``: the sequence-parallel scan over the
+    SP axis, or the row-local scan of one prompt per row). The entry barrier orders calls, not layers, so layers
+    taking turns are no different from one layer called repeatedly, and per-layer copies would exhaust a small
+    L1_SMALL at depth. The two modes must not share: on the stock ops the row-local scan runs the multi-rank
+    exchange with every rank the owner of its own interval, whose carry multicast bumps every rank's carry
+    semaphore with no consumer; a sequence-parallel call after that would pass its non-owner ranks' carry wait on
+    the stale counts and read a stale carry page (2026-11-02: the served c1 1 M needle's conv history drifted after
+    the boot-time wave captures, the chunk-18 token flip).
     """
 
     buffer: ttnn.Tensor
     semaphores: list[ttnn.GlobalSemaphore]
 
     @classmethod
-    def shared(cls, mesh_device: ttnn.MeshDevice, width: int) -> _HistoryExchange:
-        """The mesh's exchange for this width, allocated on first use (mesh ids are never reused)."""
-        key = (mesh_device.id(), width)
+    def shared(cls, mesh_device: ttnn.MeshDevice, width: int, scope: str = "sp") -> _HistoryExchange:
+        """The mesh's exchange for this width and chronology mode (``scope``: "sp" / "local"), allocated on first
+        use (mesh ids are never reused)."""
+        key = (mesh_device.id(), width, scope)
         if key not in _history_exchanges:
             _history_exchanges[key] = cls.allocate(mesh_device, width)
         return _history_exchanges[key]
@@ -102,7 +109,7 @@ class _HistoryExchange:
         )
 
 
-_history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
+_history_exchanges: dict[tuple[int, int, str], _HistoryExchange] = {}
 
 
 @dataclass(frozen=True)
@@ -305,7 +312,10 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
+        # the row-local scan on a multi-row mesh (sequence_parallel_size=1) and the sequence-parallel scan keep
+        # separate exchange buffers and semaphores (see _HistoryExchange)
+        exchange_scope = "local" if (self.sequence_parallel_size == 1 and mesh_extent > 1) else "sp"
+        self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width, exchange_scope)
 
     @property
     def _convolution_width(self) -> int:

@@ -99,11 +99,20 @@ def test_local_kda_prefill_one_prompt_per_row_vs_hf(mesh_device, weights):
     assert T % (rows * 32) == 0
     x_sp = mesh.upload(xs[0], ttnn.bfloat16, rows=1)  # slab r = rows [r*T/rows, (r+1)*T/rows) of prompt 0
     state_sp = tt.allocate_state(1)
-    y_sp, _ = tt.prefill_forward(x_sp, state_sp, tt.scalar(0), None)
+    y_sp, state_sp = tt.prefill_forward(x_sp, state_sp, tt.scalar(0), None)
     out_sp = mesh.to_host(y_sp, rows=1).float()  # [1, T, 4096]
     p_sp = pcc(out_sp, out[0:1])
-    logger.info(f"  sequence-parallel vs local on prompt 0: pcc {p_sp:.6f} (worst local gate {worst:.6f})")
+    # the SP carries after a row-local run: the two modes keep separate conv history exchanges (a shared one left
+    # the SP ranks' carry semaphores bumped by the all-owner local calls: a stale conv carry, 2026-11-02)
+    rec_sp, conv_sp = _carries(mesh, state_sp, cfg)[0]
+    p_rec_sp = pcc(refs[0][1].recurrent_states[0], rec_sp)
+    p_conv_sp = pcc(refs[0][1].conv_states[0][:, :, -3:].transpose(1, 2), conv_sp)
+    logger.info(
+        f"  sequence-parallel vs local on prompt 0: pcc {p_sp:.6f} (worst local gate {worst:.6f}); SP carries vs HF: "
+        f"recurrent {p_rec_sp:.6f}, conv {p_conv_sp:.6f}"
+    )
     assert p_sp > 0.999
+    assert p_rec_sp > 0.995 and p_conv_sp > 0.995, "the SP carries after a row-local run"
 
 
 @pytest.mark.timeout(1800)
@@ -176,7 +185,8 @@ def test_sp_prefill_padded_ragged_chunk_carry(mesh_device, weights):
         state = tt.allocate_state(1)
         outs = []
         for s0, e, Tp in plan:
-            assert Tp % unit == 0 and e - s0 <= Tp and s0 % 32 == 0, (s0, e, Tp)
+            Tp = -(-Tp // unit) * unit  # the plan's padded length, rounded up to the mesh's slab unit (32 x rows)
+            assert e - s0 <= Tp and s0 % 32 == 0, (s0, e, Tp)
             xp = torch.zeros(1, Tp, cfg.hidden_size, dtype=torch.bfloat16)
             xp[:, : e - s0] = x2[:, s0:e]
             x_dev = mesh.upload(xp, ttnn.bfloat16, rows=1)
@@ -194,15 +204,14 @@ def test_sp_prefill_padded_ragged_chunk_carry(mesh_device, weights):
             (2048, 2176, 256),
             (2176, 2348, 256),
         ],
-        "one chunk to 2176 then 172/512": [(0, 2176, 2176), (2176, 2348, 512)],
-    }
-    if unit <= 128:  # the minimal padded chunk of 128 rows exists on up to 4 rows (one 32-row slab per row)
-        plans["128 minimal then 172/256 from 2176"] = [
+        "128 minimal then 172/256 from 2176": [
             (0, 1024, 1024),
             (1024, 2048, 1024),
             (2048, 2176, 128),
             (2176, 2348, 256),
-        ]
+        ],
+        "one chunk to 2176 then 172/512": [(0, 2176, 2176), (2176, 2348, 512)],
+    }
     results = {}
     for name, plan in plans.items():
         y_p, (rec_p, conv_p) = run_plan(plan)
@@ -215,3 +224,96 @@ def test_sp_prefill_padded_ragged_chunk_carry(mesh_device, weights):
         logger.info(f"SP KDA layer {LAYER} plan {name}: " + ", ".join(f"{k} {v:.6f}" for k, v in results[name].items()))
     for name, r in results.items():
         assert min(r.values()) > 0.995, f"plan {name}: {r}"
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_local_kda_chunked_carry_vs_hf(mesh_device, weights):
+    """The row-local scan CHAINED through its carries (the served 1 M prefill: 64 chunks per row): every row's
+    prompt of 2T rows in two T-row chunks, the second from the first's carries, against HF on the whole prompt
+    (the second chunk's output and the final carries). On the stock ttnn ops the conv history exchange runs its
+    multi-rank branch with every rank its own owner; the incoming history of chunk 2 must be chunk 1's carry."""
+    snapshot, text, raw = weights
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    hf = _hf_linear_attention(snapshot, text, raw)
+    attn = {k[len("self_attn.") :]: v for k, v in raw.items()}
+    mesh = GLMMesh.from_device(mesh_device)
+    rows = mesh.rows
+    assert rows > 1, "the row-local mode is the multi-row case"
+    tt = TtKDA(mesh_device, cfg, attn, layer_idx=LAYER, mesh=mesh)
+    torch.manual_seed(1)
+    xs = [(torch.randn(1, 2 * T, cfg.hidden_size) * 0.8).to(torch.bfloat16) for _ in range(rows)]
+    refs = [_hf_run(hf, text, x) for x in xs]
+    state = tt.allocate_state(1)
+    outs = []
+    for c in range(2):
+        x_dev = mesh.upload(torch.cat([x[:, c * T : (c + 1) * T] for x in xs], dim=0), ttnn.bfloat16, rows=0)
+        y, state = tt.prefill_forward(x_dev, state, *tt.local_bounds(T, (T,) * rows), local=True)
+        outs.append(mesh.to_host(y, rows=0).float())  # [rows, T, 4096]
+    out = torch.cat(outs, dim=1)  # [rows, 2T, 4096]
+    carries = _carries(mesh, state, cfg)
+    worst = 1.0
+    for r in range(rows):
+        y_hf, layer = refs[r]
+        p1 = pcc(y_hf[:, :T], out[r : r + 1, :T])
+        p2 = pcc(y_hf[:, T:], out[r : r + 1, T:])
+        p_rec = pcc(layer.recurrent_states[0], carries[r][0])
+        conv_hf = layer.conv_states[0][:, :, -3:].transpose(1, 2)
+        p_conv = pcc(conv_hf, carries[r][1])
+        # the first rows of chunk 2 read chunk 1's carried history: the conv taps see three carried rows
+        p_seam = pcc(y_hf[:, T : T + 32], out[r : r + 1, T : T + 32])
+        cross = max(pcc(refs[q][0][:, T:], out[r : r + 1, T:]) for q in range(rows) if q != r)
+        logger.info(
+            f"chunked local ttKDA layer {LAYER} 2 x T={T} on {MESH}: row {r} chunk 1 pcc {p1:.6f}, chunk 2 {p2:.6f} "
+            f"(seam rows {p_seam:.6f}; vs another row's prompt {cross:.4f}), recurrent {p_rec:.6f}, conv {p_conv:.6f}"
+        )
+        worst = min(worst, p1, p2, p_seam, p_rec, p_conv)
+        assert p1 > 0.995 and p2 > 0.995 and p_seam > 0.99 and p_rec > 0.995 and p_conv > 0.995, f"row {r}"
+        assert cross < 0.9, f"row {r}'s chunk 2 matches another row's prompt"
+    logger.info(f"  chunked local worst gate {worst:.6f}")
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_local_kda_single_member_matches_all_active(mesh_device, weights):
+    """The served single-user 1 M prefill: ONE member row, every other row idle (an empty interval). Row 0's chained
+    outputs and carries must be bit-identical whether the other rows are idle or busy with their own prompts (on
+    the stock ops the idle rows still take part in the conv history exchange's ring barrier and multicast their
+    carries into every rank's exchange buffer: nothing of it may reach row 0's scan)."""
+    snapshot, text, raw = weights
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    hf = _hf_linear_attention(snapshot, text, raw)
+    attn = {k[len("self_attn.") :]: v for k, v in raw.items()}
+    mesh = GLMMesh.from_device(mesh_device)
+    rows = mesh.rows
+    assert rows > 1, "the row-local mode is the multi-row case"
+    tt = TtKDA(mesh_device, cfg, attn, layer_idx=LAYER, mesh=mesh)
+    torch.manual_seed(3)
+    xs = [(torch.randn(1, 2 * T, cfg.hidden_size) * 0.8).to(torch.bfloat16) for _ in range(rows)]
+    y_hf, layer = _hf_run(hf, text, xs[0])
+
+    def run(valids):
+        state = tt.allocate_state(1)
+        outs = []
+        for c in range(2):
+            x_dev = mesh.upload(torch.cat([x[:, c * T : (c + 1) * T] for x in xs], dim=0), ttnn.bfloat16, rows=0)
+            y, state = tt.prefill_forward(x_dev, state, *tt.local_bounds(T, valids), local=True)
+            outs.append(mesh.to_host(y, rows=0).float())
+        return torch.cat(outs, dim=1), _carries(mesh, state, cfg)
+
+    out_all, car_all = run((T,) * rows)
+    out_one, car_one = run((T,) + (0,) * (rows - 1))
+    p_hf = pcc(y_hf, out_one[0:1])
+    same_out = torch.equal(out_all[0], out_one[0])
+    same_rec = torch.equal(car_all[0][0], car_one[0][0])
+    same_conv = torch.equal(car_all[0][1], car_one[0][1])
+    p_rec = pcc(layer.recurrent_states[0], car_one[0][0])
+    p_conv = pcc(layer.conv_states[0][:, :, -3:].transpose(1, 2), car_one[0][1])
+    logger.info(
+        f"single-member local ttKDA layer {LAYER} 2 x T={T} on {MESH}: row 0 vs HF {p_hf:.6f} (recurrent {p_rec:.6f}, "
+        f"conv {p_conv:.6f}); identical to the all-active run: out {same_out} recurrent {same_rec} conv {same_conv}"
+    )
+    assert p_hf > 0.995 and p_rec > 0.995 and p_conv > 0.995
+    assert same_out and same_rec and same_conv, "idle rows changed row 0's scan"
