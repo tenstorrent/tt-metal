@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::prim {
 

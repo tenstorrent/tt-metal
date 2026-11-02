@@ -8,12 +8,13 @@ PYTHON="$(command -v python3 || command -v python)"
 SKIP_RESET=0
 CONTINUE_ON_FAILURE=0
 RESET_CMD="tt-smi -glx_reset"
+MGD="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
 usage() {
 	cat << EOF
-Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links]
+Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links] [--mgd <path>]
 
-Run the deployment test suite (Ethernet, DRAM, PCIe read/write).
+Run the deployment test suite (Ethernet, DRAM, PCIe read/write, DIDT).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
@@ -30,6 +31,8 @@ Optional:
     --no-eth-links                          Do not require a specific number of Ethernet links per
                                             chip. Use on partially cabled systems, otherwise
                                             10 links per chip are expected.
+    --mgd <path>                            Path to the mesh graph descriptor (.textproto) file to
+                                            use for the Ethernet, DRAM and PCIe tests (default: $MGD).
     -h                                      Display this help message and exit
 
 Examples:
@@ -73,6 +76,11 @@ do
 		ETH_TEST_EXPECTED_LINKS=0
 		export ETH_TEST_EXPECTED_LINKS
 		;;
+	--mgd)
+		if [ -z "$2" ]; then echo "Missing argument to $1"; exit 1; fi
+		MGD="$2"
+		shift
+		;;
 	-h)
 		usage
 		exit
@@ -86,6 +94,20 @@ do
 	shift
 done
 
+if [ -n "$MGD" ]; then
+	case "$MGD" in
+	/*) ;;
+	*) MGD="$PWD/$MGD" ;;
+	esac
+	if [ ! -f "$MGD" ]; then echo "Mesh graph descriptor not found: $MGD"; exit 1; fi
+fi
+
+# All deployment tests (eth, DRAM, PCIe) source the MGD purely via this env var.
+if [ -n "$MGD" ]; then
+	TT_MESH_GRAPH_DESC_PATH="$MGD"
+	export TT_MESH_GRAPH_DESC_PATH
+fi
+
 mkdir -p "$LOGDIR"
 
 RUN_LOG="$LOGDIR/deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
@@ -93,7 +115,8 @@ RUN_LOG="$LOGDIR/deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
 
 # Carries a command's exit status out of the tee pipeline
 RCFILE="$(mktemp)"
-trap 'rm -f "$RCFILE"' EXIT HUP INT TERM
+trap 'rm -f "$RCFILE"' EXIT
+trap 'rm -f "$RCFILE"; exit 130' HUP INT TERM
 
 RULE_HEAVY='=============================================================================='
 RULE_LIGHT='------------------------------------------------------------------------------'
@@ -148,6 +171,7 @@ emit_setup() {
 	emit "$(printf '%-24s %s' 'Using board resets:' "$using_board_resets")"
 	emit "$(printf '%-24s %s' 'Continue on failure:' "$([ "$CONTINUE_ON_FAILURE" -eq 1 ] && echo true || echo false)")"
 	emit "$(printf '%-24s %s' 'Checking eth links:' "$checking_eth_links")"
+	emit "$(printf '%-24s %s' 'Mesh graph descriptor:' "${MGD:-<auto>}")"
 }
 
 # emit_status <text> <passed|failed>: print a line ending in a pass/fail verdict.
@@ -196,7 +220,7 @@ run_test() {
 	return 0
 }
 
-# run_tests: runs one round of every test.
+# run_tests: runs one round of every per-iteration test (DIDT runs once, separately, after all iterations).
 # Sets last_eth_ok, last_dram_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
 # Returns 1 if any test failed, 0 otherwise.
 run_tests() {
@@ -234,7 +258,7 @@ run_tests() {
 emit_banner "DEPLOYMENT TESTS RUN"
 emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
-emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write')"
+emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write (per iteration), DIDT (once, after all iterations)')"
 emit_setup
 emit "$RULE_HEAVY"
 
@@ -285,6 +309,27 @@ do
 	fi
 done
 
+# DIDT runs once, after all iterations, regardless of whether any iteration above failed.
+emit_banner "DIDT (single run after all iterations)"
+didt_reset_ok=1
+if [ "$SKIP_RESET" -eq 0 ]
+then
+	if ! run_reset "Resetting boards ($RESET_CMD)..."
+	then
+		didt_reset_ok=0
+	fi
+fi
+failures=0
+passes=0
+if [ "$didt_reset_ok" -eq 0 ]
+then
+	emit_status "DIDT tests:" failed
+	didt_ok=0
+else
+	run_test 'DIDT tests' sh tests/tt_metal/tt_metal/deployment/didt/test_runner.sh --output "$LOGDIR/didt" --mgd "$MGD" &&
+		didt_ok=1 || didt_ok=0
+fi
+
 emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${iterations_run}/${ITERATIONS} iterations ran)"
 emit "$(printf '%-20s %s' 'Host:'            "$(hostname)")"
 emit_setup
@@ -294,12 +339,13 @@ emit "$(printf '%-20s %s' 'Ethernet tests:'  "$eth_pass/$iterations_run iteratio
 emit "$(printf '%-20s %s' 'DRAM tests:'      "$dram_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe write test:' "$pcie_write_pass/$iterations_run iterations passed")"
+emit "$(printf '%-20s %s' 'DIDT tests:'      "$([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
 emit "$RULE_LIGHT"
-if [ "$iteration_failures" -gt 0 ]
+if [ "$iteration_failures" -gt 0 ] || [ "$didt_ok" -eq 0 ]
 then
-	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed")"
+	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed, DIDT $([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
 	emit "$RULE_HEAVY"
 	exit 1
 fi
-emit_bold "$(printf '%-20s %s' 'Overall:' "All $iterations_run iterations passed")"
+emit_bold "$(printf '%-20s %s' 'Overall:' "All $iterations_run iterations passed, DIDT passed")"
 emit "$RULE_HEAVY"

@@ -17,9 +17,9 @@
 #include <tt_stl/assert.hpp>
 
 #include "context/metal_context.hpp"
+#include "debug/l1_ecc_halt.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "core_coord.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/noc_logging.hpp"
@@ -36,10 +36,10 @@
 #include "fabric/fabric_builder_context.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "tt_align.hpp"
-#include <umd/device/types/blackhole_eth.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-umd/types/blackhole_eth.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -59,18 +59,20 @@ bool mock_firmware_sources_available_for(tt::ARCH arch) {
     }
 }
 
-int firmware_wait_timeout_ms() {
+int firmware_wait_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
     // Default timeout for real silicon.
     constexpr int kDefaultTimeoutMs = 10'000;
     // Functional sim (.so) is slower than silicon; sometimes 10s is not enough, so use half a minute.
     constexpr int kFunctionalSimTimeoutMs = 30'000;
 
-    const auto& rtoptions = MetalContext::instance().rtoptions();
     if (rtoptions.get_simulator_enabled()) {
         // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
-        // llrt treats timeout_ms==0 on sim as infinite wait.
+        // llrt treats timeout_ms==0 on sim as infinite wait; TT_METAL_OPERATION_TIMEOUT_SECONDS bounds it.
         if (rtoptions.get_simulator_path().extension() != ".so") {
-            return 0;
+            const auto bound = rtoptions.get_timeout_duration_for_operations();
+            return bound.count() > 0.0f
+                       ? static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(bound).count())
+                       : 0;
         }
         return kFunctionalSimTimeoutMs;
     }
@@ -234,8 +236,21 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                         virtual_core.y);
                 }
             }
+            // 1. Find BRISCs an earlier process left in an interrupt handler, before their halt records are cleared.
+            const std::vector<internal::LatchedBrisc> released_briscs =
+                internal::find_latched_briscs(descriptor_->metal_context(), device_id);
+            internal::clear_l1_ecc_halt_records(descriptor_->metal_context(), device_id);
+            // 2. With every core held in reset, point those interrupts at code that returns from the handler.
             reset_cores(device_id);
-            initialize_and_launch_firmware(device_id);
+            internal::release_latched_briscs(descriptor_->metal_context(), device_id, released_briscs);
+            // 3. Load firmware and release the cores. A latched BRISC returns from the handler first, then boots.
+            try {
+                initialize_and_launch_firmware(device_id);
+            } catch (const std::exception&) {
+                // A BRISC that stayed in its interrupt handler is the likelier cause of a firmware init timeout.
+                internal::check_briscs_released(descriptor_->metal_context(), device_id, released_briscs);
+                throw;
+            }
         }
     }
     initialized_ = true;
@@ -280,6 +295,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 log_warning(
                     tt::LogMetal, "Skipping RISC reset on device {} during teardown: {}", device_id, e.what());
             }
+            try {
+                internal::report_l1_ecc_at_close(descriptor_->metal_context(), device_id);
+            } catch (const std::runtime_error& e) {
+                log_warning(
+                    tt::LogMetal, "Skipping L1 ECC report on device {} during teardown: {}", device_id, e.what());
+            }
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW
         // Must be last
@@ -316,13 +337,19 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         }
     }
 
-    for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
-        static uint32_t zero_vec_size = hal::get_erisc_l1_unreserved_size();
-        auto zero_vec_addr = hal::get_erisc_l1_unreserved_base();
-        static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
-        CoreCoord virtual_core =
-            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-        cluster_.write_core(device_id, virtual_core, zero_vec, zero_vec_addr);
+    const auto active_eth_cores = this->get_control_plane_().get_active_ethernet_cores(device_id);
+    if (!active_eth_cores.empty()) {
+        // Resolved from this context's HAL, once per call (not cached across contexts).
+        const uint32_t eth_zero_vec_size =
+            hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        const uint32_t eth_zero_vec_addr =
+            hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        const std::vector<uint32_t> eth_zero_vec(eth_zero_vec_size / sizeof(uint32_t), 0);
+        for (const auto& eth_core : active_eth_cores) {
+            CoreCoord virtual_core =
+                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+            cluster_.write_core(device_id, virtual_core, eth_zero_vec, eth_zero_vec_addr);
+        }
     }
 
     bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
@@ -502,7 +529,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     }
 
     for (auto& id_and_cores : device_to_early_exit_cores) {
-        const int timeout_ms = firmware_wait_timeout_ms();
+        const int timeout_ms = firmware_wait_timeout_ms(rtoptions_);
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
@@ -1582,7 +1609,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
-    const int timeout_ms = firmware_wait_timeout_ms();
+    const int timeout_ms = firmware_wait_timeout_ms(rtoptions_);
     try {
         llrt::internal_::wait_until_cores_done(
             descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);

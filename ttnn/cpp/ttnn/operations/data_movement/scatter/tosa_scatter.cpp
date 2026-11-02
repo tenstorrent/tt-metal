@@ -130,6 +130,23 @@ Tensor tosa_scatter(
 
     operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_tensors(input_shape, index_shape, source_shape);
 
+    // Same bail-out as ttnn::scatter; this entry point builds the device op itself. Source is not
+    // checked - validate_tensors pins it to (N, W, C), so an empty source implies an empty input or
+    // index. See #56881.
+    if (input_tensor.logical_volume() == 0 || index_tensor.logical_volume() == 0) {
+        // validate_tensors checks shapes only, so run the device operation's validation too. The
+        // index dtype rule applies to the original index here, while the non-empty path converts to
+        // UINT16 first; TOSA indices are integral either way.
+        ttnn::prim::ScatterDeviceOperation::validate_on_program_cache_miss(
+            ttnn::prim::ScatterParams{
+                operations::data_movement::LAST_DIMENSION,
+                output_memory_config.value_or(input_tensor.memory_config()),
+                operations::data_movement::scatter::ScatterReductionType::INVALID,
+                std::nullopt},
+            ttnn::prim::ScatterInputs{input_tensor, index_tensor, source_tensor});
+        return input_tensor;
+    }
+
     const uint32_t N = input_shape[0];
     const uint32_t W = index_shape[1];
     const uint32_t C = input_shape[2];

@@ -15,7 +15,7 @@ void CloneOperation::validate_inputs(
         TT_FATAL(input.layout() == Layout::TILE, "Clone: data type conversion is only supported with tile layout");
     }
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Clone: input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "Clone: input must be allocated in buffer on device");
+    TT_FATAL(input.is_allocated(), "Clone: input must be allocated in buffer on device");
 
     auto input_memory_layout = input.memory_config().memory_layout();
     auto output_memory_layout = operation_attributes.memory_config.memory_layout();

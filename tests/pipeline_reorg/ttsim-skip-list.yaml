@@ -3,39 +3,27 @@
 #
 # Structure: Each architecture has its own section with all tests to skip.
 # Tests that apply to all architectures are duplicated in each section.
+# Paths are pytest node ids from the repo root, the same form ttnn sim legs pass
+# to --deselect. Each entry must load as a yaml string: quote an id that ends in
+# ':' (yaml would otherwise read it as a mapping key).
+#
+# run_ttsim_regression.sh reads this file too. It keeps entries under
+# tt_metal/tt-llk/tests/python_tests/ and drops that prefix, because the LLK
+# suite collects pytest with python_tests/ as rootdir.
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
-  - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_interleaved_to_nd_sharded_large_row
-  - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_interleaved_to_legacy_2D_sharded_large_row
-  - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_nd_sharded_to_interleaved_large_row
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
-  - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_interleaved_to_nd_sharded_large_row
-  - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_interleaved_to_legacy_2D_sharded_large_row
-  - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_nd_sharded_to_interleaved_large_row
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
-  # Representative cases extracted from the excluded sharded LayerNorm suite.
-  - tests/ttnn/unit_tests/operations/fused/test_two_pass_normalization_sanity.py::test_two_pass_sharded_layer_norm_large_offset
-  - tests/ttnn/unit_tests/operations/fused/test_two_pass_normalization_sanity.py::test_two_pass_sharded_layer_norm_low_bits
-  - tests/ttnn/unit_tests/operations/fused/test_two_pass_normalization_sanity.py::test_two_pass_sharded_layer_norm_beta_only
-  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
-  - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
-  - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
-
-  # Long-running tests that cause the group's 40-minute job timeout on ttsim (#54860); still run on HW.
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_2d_topk
-
-  # Likely OOM killer related failures -- probably need to run these tests serially
-  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
 blackhole:
   # Job-level timeouts
@@ -43,30 +31,48 @@ blackhole:
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
-  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
-  # Representative cases extracted from the excluded DRAM GroupNorm suite.
-  - tests/ttnn/unit_tests/operations/fused/test_two_pass_normalization_sanity.py::test_two_pass_group_norm_dram_large_offset
-  - tests/ttnn/unit_tests/operations/fused/test_two_pass_normalization_sanity.py::test_two_pass_group_norm_dirty_padding
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
-  - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
-  # tensix_cfg_wr32 reg=119 (THCON_SEC1_REG1, the fp8/LF8 SEC1 config)
-  - tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_fp8_input_to_tile
+  # fp8 operands in tensix_elw_op (e.g. src_a_fmt=4 src_b_fmt=10) are not modeled by ttsim
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py
-
-  # Long-running tests that cause the group's 40-minute job timeout on ttsim (#54860); still run on HW.
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_2d_topk
-
-  # Likely OOM killer related failures -- probably need to run these tests serially
-  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
+
+quasar:
+  # ttsim: rv32_v_alu baby-RISC V extension is out of scope.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_vector_add_l1_quasar.py::test_vector_add_l1_quasar
+  # ttsim: tensix_stallwait wait_res_idx=10 (PACK1) is unimplemented; the multi-loop epilogue handshake needs it.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_matmul_int4_dequant_quasar.py::test_matmul_int4_dequant_loops_quasar
+  # ttsim: tensix_cfg_wr32 reg=80 is unimplemented.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_rand_quasar.py::test_rand_quasar
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_rand_quasar.py::test_rand_seed_quasar
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest16__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16_b]
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest16__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16]
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16_b]
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16]
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float32]
+  # ttsim: tensix_cfg_wr32 reg=82 (PRNG_SEED_OVERRIDE_CTRL, dropout's seeding) is unimplemented.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_dropout_reseed_quasar
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:"
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
+
+  # --- Sanity ttnn sim_quasar tests ---
+  - models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_update_cache.py::test_paged_update_cache[00_128x8x32x64_bf8_int-dram-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_softmax.py::test_softmax[l_s-640-dfl-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_nlp_concat_heads_decode.py::test_nlp_concat_heads_decode[00_32x128_bf16_hs-l1-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_channel[detect_out-640-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_channel[dist2bbox-640-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_detect_cv2cv3[hw20-ttnn_mesh_device0]  # #62417: hang in tilize kernel
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_detect_cv2cv3[hw40-ttnn_mesh_device0]  # #62417
+  - models/experimental/ops/quasar/tests/yolo_ops/test_permute.py::test_permute_detect[dfl_nhwc_to_nchw-ttnn_mesh_device0]  # #62417
+  - models/experimental/ops/quasar/tests/yolo_ops/test_permute.py::test_permute_detect[dfl_transpose-ttnn_mesh_device0]  # #62417

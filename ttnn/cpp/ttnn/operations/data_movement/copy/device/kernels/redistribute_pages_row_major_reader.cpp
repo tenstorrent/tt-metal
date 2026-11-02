@@ -35,7 +35,7 @@ void kernel_main() {
     Noc noc;
     // scratch::in0 is a reader-private L1 scratchpad: the reader stages input pages in it.
     // dfb::in1 is the reader->writer output-page FIFO.
-    // uint8_t view: the kernel only takes the base address; a byte element type keeps the
+    // uint8_t view: the kernel only addresses it by byte offset; a byte element type keeps the
     // Scratchpad size%sizeof(T) invariant valid for any page size (UINT8/FP8, odd RM widths).
     Scratchpad<std::uint8_t> in0(scratch::in0);
     DataflowBuffer dfb_in1(dfb::in1);
@@ -62,8 +62,6 @@ void kernel_main() {
     // Thus, the start of a page will always align with the start of a subblock. This is required to guarantee
     // aligned noc reads/writes.
 
-    const std::uint32_t input_l1_write_addr = in0.get_base_address();
-
     for (std::uint32_t row = start_row; row < start_row + num_rows_to_process; ++row) {
         std::uint32_t input_start_column = 0;
         std::uint32_t input_end_column = input_start_column + elements_per_input_subblock - 1;
@@ -77,10 +75,9 @@ void kernel_main() {
                     ((input_start_column % elements_per_input_page) / elements_per_input_subblock) *
                     bytes_per_input_subblock;
                 std::uint32_t num_bytes_to_read = (input_end_column - input_start_column + 1) * bytes_per_element;
-                CoreLocalMem<std::uint32_t> dst(input_l1_write_addr);
                 noc.async_read(
                     accessor_src,
-                    dst,
+                    in0,
                     num_bytes_to_read,
                     {.page_id = input_page_id, .offset_bytes = input_subblock_offset},
                     {.offset_bytes = 0});
@@ -112,8 +109,8 @@ void kernel_main() {
                     dfb_in1.get_write_ptr();  // write the output subblock to the output DFB
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
                     noc,
-                    l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset,
-                    input_l1_write_addr + l1_input_subblock_read_addr_offset,
+                    CoreLocalMem<std::uint8_t>(l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset),
+                    in0.local_mem() + l1_input_subblock_read_addr_offset,
                     bytes_to_write_to_output_subblock);
 
                 if (input_end_column == output_end_column) {
@@ -166,8 +163,8 @@ void kernel_main() {
                     dfb_in1.get_write_ptr();  // Write the output subblock to the output DFB
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
                     noc,
-                    l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset,
-                    input_l1_write_addr + l1_input_subblock_read_addr_offset,
+                    CoreLocalMem<std::uint8_t>(l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset),
+                    in0.local_mem() + l1_input_subblock_read_addr_offset,
                     bytes_to_write_to_output_subblock);
 
                 // We have processed the entire input subblock, so we must update the start and end indices of the input

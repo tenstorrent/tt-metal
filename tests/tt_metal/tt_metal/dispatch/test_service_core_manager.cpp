@@ -28,6 +28,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/mesh_device.hpp>
 #include "impl/program/program_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
 
@@ -36,6 +37,7 @@
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_dispatch_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
 
@@ -47,10 +49,10 @@ static void assert_counter_incrementing(const std::function<uint32_t()>& read_fn
 }
 
 // Builds a trivial workload to exercise the FD/SD dispatch pipeline
-static std::shared_ptr<MeshWorkload> make_trivial_workload(IDevice* device) {
+static std::shared_ptr<MeshWorkload> make_trivial_workload(MeshDevice& mesh_device, IDevice* device) {
     const uint32_t l1_scratch = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const CoreCoord grid = device->compute_with_storage_grid_size();
-    Program prog;
+    Program prog = CreateProgram(mesh_device);
     CreateKernel(
         prog,
         "tests/tt_metal/tt_metal/test_kernels/misc/dram_write_one_uint32.cpp",
@@ -107,7 +109,7 @@ protected:
 //   2. allocate_l1 / deallocate_l1 / bytes_available on an unclaimed core
 TEST_F(ServiceCoreSdFixture, ServiceCoreFatalGuards) {
     auto& mesh_device = this->devices_[0];
-    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+    IDevice* device = internal::get_device(*mesh_device, MeshCoordinate(0, 0));
 
     // Before FD is active, both query and claim must fatal
     EXPECT_THROW(MetalContext::instance().get_service_core_manager().get_claimable_cores(device), std::exception);
@@ -136,7 +138,7 @@ TEST_F(ServiceCoreSdFixture, ServiceCoreFatalGuards) {
 //   2. leaves no idle dispatch cores when FD is re-initialized.
 TEST_F(ServiceCoreSdFixture, ServiceCoreGridCap) {
     auto& mesh_device = this->devices_[0];
-    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+    IDevice* device = internal::get_device(*mesh_device, MeshCoordinate(0, 0));
 
     // Phase 1: record full SD grid (no services active)
     const CoreCoord sd_grid = device->compute_with_storage_grid_size();
@@ -182,7 +184,7 @@ TEST_F(ServiceCoreSdFixture, ServiceCoreGridCap) {
 // We verify the counter is still incrementing after each FD lifecycle transition
 TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
     auto& mesh_device = this->devices_[0];
-    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+    IDevice* device = internal::get_device(*mesh_device, MeshCoordinate(0, 0));
     const auto& cluster = MetalContext::instance().get_cluster();
 
     uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
@@ -230,7 +232,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         cluster.write_core(&zero, sizeof(uint32_t), phys_cxy, service_done_addr);
 
         // Phase 2: launch persistent kernel (SD, non-blocking).
-        Program prog;
+        Program prog = CreateProgram(*mesh_device);
         auto kernel = CreateKernel(
             prog,
             "tests/tt_metal/tt_metal/test_kernels/misc/service_counter.cpp",
@@ -272,7 +274,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         assert_counter_incrementing(read_counter, "after FD terminate (cycle " + std::to_string(cycle) + ")");
 
         // Dispatch a trivial workload to stress the dispatch path
-        auto stressor = make_trivial_workload(device);
+        auto stressor = make_trivial_workload(*mesh_device, device);
         EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *stressor, true);
         Finish(mesh_device->mesh_command_queue());
 
@@ -299,7 +301,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
 // Per-core Allocator sanity check: verify alignment, non-overlap, bytes_available accounting, and deallocation
 TEST_F(ServiceCoreFdFixture, ServiceCoreAllocatorCorrectness) {
     auto& mesh_device = this->devices_[0];
-    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+    IDevice* device = internal::get_device(*mesh_device, MeshCoordinate(0, 0));
 
     auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
     CoreCoord core = claimable[0];
@@ -348,36 +350,26 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreAllocatorCorrectness) {
 // then reserves that span via reserve_l1_to_top so the two allocators stay disjoint.
 TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
     auto& mesh_device = this->devices_[0];
-    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+    IDevice* device = internal::get_device(*mesh_device, MeshCoordinate(0, 0));
 
     auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
     const CoreCoord core = claimable[0];
     ASSERT_FALSE(device->allocator_impl()->has_bank(BufferType::L1, core))
         << "a claimable dispatch-column core is not expected to own an L1 bank";
 
-    // Qualified: in this namespace an unqualified ShardedBufferConfig is the mesh-level one.
     constexpr uint32_t kPageSize = 1024;
-    const tt::tt_metal::ShardedBufferConfig config{
-        .device = device,
-        .size = kPageSize,
-        .page_size = kPageSize,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = ShardSpecBuffer(
+    const BufferShardingArgs sharding_args(
+        ShardSpecBuffer(
             CoreRangeSet(CoreRange(core, core)),
             {1, kPageSize / sizeof(uint32_t)},
             ShardOrientation::ROW_MAJOR,
             {1, 1},
-            {1, kPageSize / sizeof(uint32_t)})};
+            {1, kPageSize / sizeof(uint32_t)}),
+        TensorMemoryLayout::WIDTH_SHARDED);
 
     // Unclaimed, it is just a core the allocator knows nothing about.
     auto create_buffer = [&] {
-        return BufferImpl::create(
-            config.device,
-            config.size,
-            config.page_size,
-            config.buffer_type,
-            BufferShardingArgs(config.shard_parameters, config.buffer_layout));
+        return BufferImpl::create(device, kPageSize, kPageSize, BufferType::L1, sharding_args);
     };
     EXPECT_ANY_THROW(create_buffer());
 
@@ -399,7 +391,7 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
 // claim lookup rather than an incidental layout difference.
 TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1MeshBufferOnClaimedCore) {
     auto& mesh_device = this->devices_[0];
-    const auto devices = mesh_device->get_devices();
+    const auto devices = mesh_device->impl().get_devices();
     auto& svc = MetalContext::instance().get_service_core_manager();
 
     // One coordinate for the whole mesh: MeshBuffer applies a single shard spec on every device, so
@@ -445,7 +437,7 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1MeshBufferOnClaimedCore) {
 // independent. Needed for prefill in Blitz.
 TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
     auto& mesh_device = this->devices_[0];
-    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+    IDevice* device = internal::get_device(*mesh_device, MeshCoordinate(0, 0));
     const auto& cluster = MetalContext::instance().get_cluster();
 
     auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
@@ -473,7 +465,7 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
 
     // Build one program targeting all service cores with per-core runtime args.
     CoreRangeSet svc_cores(claimable);
-    Program svc_prog;
+    Program svc_prog = CreateProgram(*mesh_device);
     auto kernel = CreateKernel(
         svc_prog,
         "tests/tt_metal/tt_metal/test_kernels/misc/service_counter.cpp",
@@ -508,7 +500,7 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
     assert_counter_incrementing(read_counter, "after service launch");
 
     // Launch FD workloads on the regular worker grid while the service kernel runs.
-    auto fd_workload = make_trivial_workload(device);
+    auto fd_workload = make_trivial_workload(*mesh_device, device);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *fd_workload, false);
     assert_counter_incrementing(read_counter, "during FD workload");
     Finish(mesh_device->mesh_command_queue());
@@ -545,14 +537,14 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
 // a second TT_FATALs until the core is released and re-claimed, after which a fresh enqueue succeeds.
 TEST_F(ServiceCoreFdFixture, ServiceWorkloadReenqueueRequiresRelease) {
     auto& mesh_device = this->devices_[0];
-    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+    IDevice* device = internal::get_device(*mesh_device, MeshCoordinate(0, 0));
 
     auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
     ASSERT_GE(claimable.size(), 1u) << "Need at least one claimable service core for this test.";
     const CoreCoord svc_core = claimable[0];
 
     auto build_service_workload = [&]() {
-        Program prog;
+        Program prog = CreateProgram(*mesh_device);
         CreateKernel(
             prog,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -586,7 +578,7 @@ TEST_F(ServiceCoreFdFixture, ServiceWorkloadReenqueueRequiresRelease) {
 // a claimed service core and an unclaimed worker core.
 TEST_F(ServiceCoreFdFixture, ServiceWorkloadMixingFatal) {
     auto& mesh_device = this->devices_[0];
-    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+    IDevice* device = internal::get_device(*mesh_device, MeshCoordinate(0, 0));
 
     auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
     ASSERT_GE(claimable.size(), 1u) << "Need at least one claimable service core for this test.";
@@ -596,7 +588,7 @@ TEST_F(ServiceCoreFdFixture, ServiceWorkloadMixingFatal) {
     MetalContext::instance().get_service_core_manager().claim(device, {svc_core});
 
     // One program spanning the claimed service core and an unclaimed worker core -> mixed -> TT_FATAL.
-    Program prog;
+    Program prog = CreateProgram(*mesh_device);
     CreateKernel(
         prog,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",

@@ -4,14 +4,19 @@
 
 #pragma once
 
+#include <compare>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
 #include <tt-metalium/program.hpp>
 #include <tt_stl/unique_any.hpp>
-#include <tt_stl/overloaded.hpp>
 
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <utility>
 
 namespace tt::tt_metal::program_cache::detail {
 

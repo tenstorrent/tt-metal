@@ -22,7 +22,7 @@ void kernel_main() {
 
     const auto s = TensorAccessor(tensor::dst);
 
-    Noc noc;
+    const Noc noc;
     // Destination for the packed output tiles, drained here and written out to the output tensor.
     DataflowBuffer dfb_out_buf(dfb::out);
 

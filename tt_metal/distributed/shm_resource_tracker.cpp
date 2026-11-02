@@ -56,6 +56,15 @@ pid_t extract_pid_from_shm_name(const std::string& filename) {
     }
 }
 
+std::string manifest_path_for_pid(pid_t pid) { return fmt::format("/dev/shm/tt_socket_manifest_{}", pid); }
+
+bool is_pid_alive(pid_t pid) {
+    if (pid <= 0) {
+        return false;
+    }
+    return kill(pid, 0) == 0 || errno == EPERM;
+}
+
 struct sigaction prev_sigint, prev_sigterm;
 
 void invoke_previous_handler(int sig, const struct sigaction& prev) {
@@ -91,17 +100,6 @@ void signal_handler(int sig) {
 }
 
 }  // namespace
-
-std::string ShmResourceTracker::manifest_path_for_pid(pid_t pid) {
-    return fmt::format("/dev/shm/tt_socket_manifest_{}", pid);
-}
-
-bool ShmResourceTracker::is_pid_alive(pid_t pid) {
-    if (pid <= 0) {
-        return false;
-    }
-    return kill(pid, 0) == 0 || errno == EPERM;
-}
 
 ShmResourceTracker::ShmResourceTracker() : manifest_path_(manifest_path_for_pid(getpid())) {
     cleanup_stale_resources();

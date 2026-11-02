@@ -13,6 +13,10 @@
 #include <span>
 #include <string>
 
+namespace ll_api {
+class ElfFile;
+}
+
 namespace tt::llrt {
 
 struct ZoneMetaEntry {
@@ -26,8 +30,10 @@ class ZoneMetaRegistry {
 public:
     static ZoneMetaRegistry& instance();
 
-    // Idempotent per path. Never throws: failing to name a zone must not fail a run.
-    void ingest_elf(const std::string& elf_path);
+    // Harvest zone names from an already-open ELF. `elf_path` is the idempotency key and diagnostic label only.
+    // A no-op for an ELF without .tt_zone_meta, so it can be called for every binary. Idempotent per path.
+    // Never throws: failing to name a zone must not fail a run.
+    void ingest_elf(const ll_api::ElfFile& elf, const std::string& elf_path);
 
     // One listener, called under the registry's lock with each ELF's new entries as they register, after a replay of
     // every entry already registered. Entries never move or die.

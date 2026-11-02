@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import struct
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
 from helpers.llk_params import (
@@ -15,7 +15,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.sfpu_accuracy_budget import accuracy_contract
+from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     SPECIALS_READY_OPS,
     edge_spec,
@@ -29,13 +29,8 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     SFPU_BINOP_MODE,
     SFPU_UNARY_SCALAR,
+    fp32_bits,
 )
-from helpers.utils import passed_test
-
-
-def _bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
 
 # The scalar is a swept axis: zero, unity, a sign flip, a large multiplier, and a value
 # small enough to matter against the tolerance. Kept deliberately small -- inputs are
@@ -65,8 +60,8 @@ _ZERO_DIVISOR_UNREACHABLE = (
 def _scalar_bits_for(mathop, scalar):
     """The 32-bit pattern the kernel is given for *mathop* at *scalar*."""
     if mathop == MathOperation.ScalarDiv:
-        return _bits(1.0 / scalar)
-    return _bits(scalar)
+        return fp32_bits(1.0 / scalar)
+    return fp32_bits(scalar)
 
 
 # Keep inputs small and bounded so the bf16 result stays accurate across all five scalar
@@ -141,25 +136,17 @@ def _run_sfpu_binop_scalar(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # The registry's tolerance arm, as the unary functional driver uses it. A step
-    # budget from the exhaustive sweep is derived from a whole format, far wider than
-    # this sampled domain, and would loosen the gate here.
-    contract = accuracy_contract(
+    # The whole contract, step budget included, as the binary and ternary drivers gate:
+    # every Scalar* row was measured over this driver's own variants. The mode the
+    # kernel compiled: an unset query dimension would not match a row keyed on it.
+    assert_against_contract(
         mathop,
-        output_format=formats.output_format,
-        input_format=formats.input_format,
-        # The mode the kernel compiled: an unset query dimension would not match a row
-        # keyed on it.
-        approx_mode=_APPROX_MODE,
-        dest_acc=dest_acc,
-        arch=get_chip_architecture(),
-    )
-    assert passed_test(
+        formats,
+        dest_acc,
         golden_tensor,
         res_tensor,
-        formats.output_format,
-        **contract.tolerance_kwargs(),
-    ), "Assert against golden failed"
+        approx_mode=_APPROX_MODE,
+    )
 
 
 _SCALAR_FORMATS = input_output_formats(
@@ -180,8 +167,7 @@ _SCALAR_OPS = [
 
 
 def _skip_unsupported(formats, dest_acc, mathop, scalar):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if (
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
@@ -230,7 +216,7 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
 #
 # Still out of scope, and both need a per-op tolerance first -- the default bf16 tolerance is
 # only meaningful while the result stays in range: |scalar| > 8, and +/-tiny / +/-large on the
-# tensor operand. That is the pattern sfpu_accuracy_budget.yaml uses for pow and xlogy.
+# tensor operand. That is the pattern sfpu_accuracy_budget_*.yaml uses for pow and xlogy.
 @pytest.mark.nightly
 @parametrize(
     formats=_SCALAR_FORMATS,

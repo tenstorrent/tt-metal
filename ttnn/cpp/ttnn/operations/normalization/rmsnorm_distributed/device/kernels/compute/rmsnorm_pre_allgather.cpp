@@ -45,6 +45,11 @@ void kernel_main() {
     constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
     DataflowBuffer dfb_inp(dfb_inp_id);
     DataflowBuffer dfb_reduce(dfb::reduce);
+    DataflowBuffer dfb_x2(dfb::x2);
+#ifdef FUSE_PRE_ADD
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_res(dfb::res);
+#endif
 #ifdef FUSE_PRE_ADD
     constexpr auto in0_input =
         ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
@@ -71,13 +76,13 @@ void kernel_main() {
                 in0_input,
                 res_input,
                 ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-                squaring_shape);
+                squaring_shape, dfb_in0, dfb_res, dfb_inp);
         } else {
             ckl::add<
                 in0_input,
                 res_input,
                 ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-                squaring_shape);
+                squaring_shape, dfb_in0, dfb_res, dfb_inp);
         }
 #endif
 
@@ -85,11 +90,13 @@ void kernel_main() {
             ckl::unary<
                 ckl::Square<>,
                 input_squared,
-                ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
+                ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                squaring_shape, dfb_inp, dfb_x2);
         } else {
             ckl::square<
                 input_squared,
-                ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
+                ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                squaring_shape, dfb_inp, dfb_x2);
         }
 
         // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)

@@ -9,6 +9,7 @@
 #include <gmock/gmock.h>
 #include <array>
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <utility>
 
@@ -27,6 +28,7 @@ using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ProgramSpecTestBlackhole;
+using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
 TEST_F(ProgramSpecTestQuasar, DFBCustomTileCompiles) {
@@ -41,6 +43,42 @@ TEST_F(ProgramSpecTestQuasar, DFBCustomTileCompiles) {
 // alias must JIT under a Blackhole mock; WH Gen1 cannot include that header.
 // Fold checks for LLKOperandFrom (SPEC Part II). Reuses ProgramSpecTestBlackhole from mock_device_fixtures.hpp.
 using LLKOperandInterop = ProgramSpecTestBlackhole;
+
+TEST_F(ProgramSpecTestGen1, CPU_ScratchpadWithoutMetadataFailsToGetDataFormat) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+    }};
+    spec.kernels[0].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/scratchpad_binding_token.h"
+void kernel_main() {
+    constexpr auto format = get_dataformat(scratch::pad);
+    (void)format;
+}
+)"};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("data_format_metadata_not_set")));
+}
+
+// A compute-bound DFB must have host format metadata; construct an id-only token to exercise the getter's guard.
+TEST_F(ProgramSpecTestGen1, CPU_DFBWithoutMetadataFailsToGetDataFormat) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dfb_binding_token.h"
+void kernel_main() {
+    constexpr DFBBindingToken<> token{0};
+    constexpr auto format = get_dataformat(token);
+    (void)format;
+}
+)"};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("data_format_metadata_not_set")));
+}
 
 TEST_F(LLKOperandInterop, ScratchpadWithoutMetadataFailsToFormOperand) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
@@ -75,6 +113,11 @@ void kernel_main() {
     static_assert(PadOp::descriptor.shape.face_c_dim == 16);
     static_assert(PadOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(PadOp::descriptor.shape.num_faces_c_dim == 2);
+    static_assert(get_dataformat(scratch::pad) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(scratch::pad) == 16);
+    static_assert(get_face_c_dim(scratch::pad) == 16);
+    static_assert(get_num_faces_r_dim(scratch::pad) == 2);
+    static_assert(get_num_faces_c_dim(scratch::pad) == 2);
     (void)pad.operand<PadOp>();
 }
 )"};
@@ -102,6 +145,11 @@ void kernel_main() {
     static_assert(PadOp::descriptor.shape.face_c_dim == 16);
     static_assert(PadOp::descriptor.shape.num_faces_r_dim == 1);
     static_assert(PadOp::descriptor.shape.num_faces_c_dim == 2);
+    static_assert(get_dataformat(scratch::pad) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(scratch::pad) == 16);
+    static_assert(get_face_c_dim(scratch::pad) == 16);
+    static_assert(get_num_faces_r_dim(scratch::pad) == 1);
+    static_assert(get_num_faces_c_dim(scratch::pad) == 2);
     (void)pad.operand<PadOp>();
 }
 )"};
@@ -130,6 +178,11 @@ void kernel_main() {
     static_assert(PadOp::descriptor.shape.face_c_dim == 16);
     static_assert(PadOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(PadOp::descriptor.shape.num_faces_c_dim == 2);
+    static_assert(get_dataformat(scratch::pad) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(scratch::pad) == 1);
+    static_assert(get_face_c_dim(scratch::pad) == 16);
+    static_assert(get_num_faces_r_dim(scratch::pad) == 2);
+    static_assert(get_num_faces_c_dim(scratch::pad) == 2);
     (void)pad.operand<PadOp>();
 }
 )"};
@@ -158,6 +211,11 @@ void kernel_main() {
     static_assert(InOp::descriptor.shape.face_c_dim == 16);
     static_assert(InOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(InOp::descriptor.shape.num_faces_c_dim == 2);
+    static_assert(get_dataformat(dfb::input_dfb) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(dfb::input_dfb) == 16);
+    static_assert(get_face_c_dim(dfb::input_dfb) == 16);
+    static_assert(get_num_faces_r_dim(dfb::input_dfb) == 2);
+    static_assert(get_num_faces_c_dim(dfb::input_dfb) == 2);
     (void)in.front<InOp>();
     (void)in.back<InOp>();
 }
@@ -180,6 +238,11 @@ void kernel_main() {
     static_assert(InOp::descriptor.shape.face_c_dim == 16);
     static_assert(InOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(InOp::descriptor.shape.num_faces_c_dim == 2);
+    static_assert(get_dataformat(dfb::input_dfb) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(dfb::input_dfb) == 1);
+    static_assert(get_face_c_dim(dfb::input_dfb) == 16);
+    static_assert(get_num_faces_r_dim(dfb::input_dfb) == 2);
+    static_assert(get_num_faces_c_dim(dfb::input_dfb) == 2);
     (void)in.front<InOp>();
     (void)in.back<InOp>();
 }
@@ -200,6 +263,67 @@ TensorParameter MakeL1ShardedTiledTensor(std::string name, std::array<uint32_t, 
         Tile{tile_shape});
 }
 
+// Generated tensor tokens always have a format. Preserve rejection of manually constructed invalid tokens as well.
+TEST_F(ProgramSpecTestGen1, CPU_TensorWithoutMetadataFailsToGetDataFormat) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakeL1ShardedTiledTensor("a", {32, 32})};
+    BindTensorParameterToKernel(spec.kernels[0], "a", "a");
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/tensor/tensor_binding_token.h"
+void kernel_main() {
+    constexpr decltype(tensor::a) token{binding_details::LLKMetadata{}};
+    constexpr auto format = get_dataformat(token);
+    (void)format;
+}
+)"};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("data_format_metadata_not_set")));
+}
+
+// The existing dataflow include path must define the token overloads without the Blackhole-only LLK header.
+TEST_F(ProgramSpecTestGen1, TokenMetadataGettersThroughDataflowInclude) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.dataflow_buffers[0].tile_format_metadata = Tile{{8, 32}};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float32,
+        .tile_format_metadata = Tile{{32, 16}},
+    }};
+    spec.kernels[0].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    spec.tensor_parameters = {MakeL1ShardedTiledTensor("a", {16, 32}), MakeL1ShardedTiledTensor("b", {32, 16})};
+    BindTensorParameterToKernel(spec.kernels[0], "a", "a");
+    BindTensorParameterToKernel(spec.kernels[0], "b", "b");
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+void kernel_main() {
+    static_assert(get_dataformat(dfb::input_dfb) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(dfb::input_dfb) == 8);
+    static_assert(get_face_c_dim(dfb::input_dfb) == 16);
+    static_assert(get_num_faces_r_dim(dfb::input_dfb) == 1);
+    static_assert(get_num_faces_c_dim(dfb::input_dfb) == 2);
+    static_assert(get_dataformat(scratch::pad) == DataFormat::Float32);
+    static_assert(get_face_r_dim(scratch::pad) == 16);
+    static_assert(get_face_c_dim(scratch::pad) == 16);
+    static_assert(get_num_faces_r_dim(scratch::pad) == 2);
+    static_assert(get_num_faces_c_dim(scratch::pad) == 1);
+    static_assert(get_dataformat(tensor::a) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(tensor::a) == 16);
+    static_assert(get_face_c_dim(tensor::a) == 16);
+    static_assert(get_num_faces_r_dim(tensor::a) == 1);
+    static_assert(get_num_faces_c_dim(tensor::a) == 2);
+    static_assert(get_dataformat(tensor::b) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(tensor::b) == 16);
+    static_assert(get_face_c_dim(tensor::b) == 16);
+    static_assert(get_num_faces_r_dim(tensor::b) == 2);
+    static_assert(get_num_faces_c_dim(tensor::b) == 1);
+}
+)"};
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
 TEST_F(LLKOperandInterop, L1TensorDefaultCompiles) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
@@ -216,6 +340,11 @@ void kernel_main() {
     static_assert(AOp::descriptor.shape.face_c_dim == 16);
     static_assert(AOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(AOp::descriptor.shape.num_faces_c_dim == 2);
+    static_assert(get_dataformat(tensor::a) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(tensor::a) == 16);
+    static_assert(get_face_c_dim(tensor::a) == 16);
+    static_assert(get_num_faces_r_dim(tensor::a) == 2);
+    static_assert(get_num_faces_c_dim(tensor::a) == 2);
     (void)a.operand<AOp>();
 }
 )"};
@@ -239,6 +368,11 @@ void kernel_main() {
     static_assert(AOp::descriptor.shape.face_c_dim == 16);
     static_assert(AOp::descriptor.shape.num_faces_r_dim == 1);
     static_assert(AOp::descriptor.shape.num_faces_c_dim == 2);
+    static_assert(get_dataformat(tensor::a) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(tensor::a) == 16);
+    static_assert(get_face_c_dim(tensor::a) == 16);
+    static_assert(get_num_faces_r_dim(tensor::a) == 1);
+    static_assert(get_num_faces_c_dim(tensor::a) == 2);
     (void)a.operand<AOp>();
 }
 )"};
@@ -262,7 +396,90 @@ void kernel_main() {
     static_assert(AOp::descriptor.shape.face_c_dim == 16);
     static_assert(AOp::descriptor.shape.num_faces_r_dim == 2);
     static_assert(AOp::descriptor.shape.num_faces_c_dim == 1);
+    static_assert(get_dataformat(tensor::a) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(tensor::a) == 16);
+    static_assert(get_face_c_dim(tensor::a) == 16);
+    static_assert(get_num_faces_r_dim(tensor::a) == 2);
+    static_assert(get_num_faces_c_dim(tensor::a) == 1);
     (void)a.operand<AOp>();
+}
+)"};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// Tile getters remain usable without data-format metadata. A DFB bound to a compute kernel must
+// have a format, so exercise its metadata-free constructor directly; the scratchpad is host-generated.
+TEST_F(LLKOperandInterop, TileGettersWithoutMetadataUseDefaults) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+    }};
+    spec.kernels[1].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/llk_operand_from_tokens.h"
+void kernel_main() {
+    constexpr DFBBindingToken bare_dfb{0};
+    static_assert(get_face_r_dim(bare_dfb) == 16);
+    static_assert(get_face_c_dim(bare_dfb) == 16);
+    static_assert(get_num_faces_r_dim(bare_dfb) == 2);
+    static_assert(get_num_faces_c_dim(bare_dfb) == 2);
+    static_assert(get_face_r_dim(scratch::pad) == 16);
+    static_assert(get_face_c_dim(scratch::pad) == 16);
+    static_assert(get_num_faces_r_dim(scratch::pad) == 2);
+    static_assert(get_num_faces_c_dim(scratch::pad) == 2);
+}
+)"};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(LLKOperandInterop, MetadataGettersDistinguishBindings) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float32;
+    spec.dataflow_buffers[0].tile_format_metadata = Tile{{32, 16}};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Bfp8_b,
+        .tile_format_metadata = Tile{{8, 32}},
+    }};
+    spec.kernels[1].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    auto float_tensor = MakeL1ShardedTiledTensor("b", {32, 16});
+    float_tensor.spec = TensorSpec(
+        float_tensor.spec.logical_shape(),
+        TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, Tile{{32, 16}}), float_tensor.spec.memory_config()));
+    spec.tensor_parameters = {MakeL1ShardedTiledTensor("a", {16, 32}), std::move(float_tensor)};
+    BindTensorParameterToKernel(spec.kernels[1], "a", "a");
+    BindTensorParameterToKernel(spec.kernels[1], "b", "b");
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/llk_operand_from_tokens.h"
+void kernel_main() {
+    static_assert(get_dataformat(dfb::input_dfb) == DataFormat::Float32);
+    static_assert(get_face_r_dim(dfb::input_dfb) == 16);
+    static_assert(get_face_c_dim(dfb::input_dfb) == 16);
+    static_assert(get_num_faces_r_dim(dfb::input_dfb) == 2);
+    static_assert(get_num_faces_c_dim(dfb::input_dfb) == 1);
+    static_assert(get_dataformat(scratch::pad) == DataFormat::Bfp8_b);
+    static_assert(get_face_r_dim(scratch::pad) == 8);
+    static_assert(get_face_c_dim(scratch::pad) == 16);
+    static_assert(get_num_faces_r_dim(scratch::pad) == 1);
+    static_assert(get_num_faces_c_dim(scratch::pad) == 2);
+    static_assert(get_dataformat(tensor::a) == DataFormat::Float16_b);
+    static_assert(get_face_r_dim(tensor::a) == 16);
+    static_assert(get_face_c_dim(tensor::a) == 16);
+    static_assert(get_num_faces_r_dim(tensor::a) == 1);
+    static_assert(get_num_faces_c_dim(tensor::a) == 2);
+    static_assert(get_dataformat(tensor::b) == DataFormat::Float32);
+    static_assert(get_face_r_dim(tensor::b) == 16);
+    static_assert(get_face_c_dim(tensor::b) == 16);
+    static_assert(get_num_faces_r_dim(tensor::b) == 2);
+    static_assert(get_num_faces_c_dim(tensor::b) == 1);
 }
 )"};
 
