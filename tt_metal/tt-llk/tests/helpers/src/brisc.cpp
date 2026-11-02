@@ -77,10 +77,7 @@ int main()
         }
         // What the host waits on: polling the soft reset register instead shares the Tensix register bus with the
         // kernel's wall clock reads and moves its timings.
-        *host_signal::launch_done() = ckernel::KERNEL_COMPLETE;
-        while ((*host_signal::launch_done() & 0xFFU) != ckernel::KERNEL_COMPLETE)
-        {
-        }
+        // Versim experiment: no overlay launch_done handshake (its read-back never matches on Versim); the host waits on L1.
 #endif
 
         ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) | TRISC_SOFT_RESET_MASK);
