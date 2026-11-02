@@ -120,10 +120,35 @@ enum GdnSpecStepKernelOpt : uint32_t {
     // x8 (with kGdnSpecOptSfpuGate + kGdnSpecOptNarrowGateReads): the writer issues the ctrl-independent gate reads (a|b
     // rows, dt_bias / -exp(A) face rows) together with its ctrl read, ahead of the reader's bulk reads. Bit-identical.
     kGdnSpecOptEarlyGateReads = 1u << 12,
+    // gov gdn-v2: the reader's src / z reads fetch only the rows the op uses -- window rows [0, Lw) and the user's T
+    // rows [r0, r0 + T) of the raw qkv / z tiles (every user's core reads the same qkv / z pages) -- into slots that
+    // are zero-filled first, so the rows the one-hot gathers / row masks multiply by 0 hold finite zeros. Bit-identical.
+    // (Bits 8 / 9 = K4 / SFPU gates, 11 / 12 = SFPU_FACE / EARLY_GR above.) Under K4 (bit 8) the reader's src / z
+    // reads are the same code: applies there too.
+    kGdnSpecOptNarrowSrc = 1u << 13,
+    // gov gdn-v2: the SFPU tails whose rows outside the user's T rows never reach an output -- the conv's tap sum +
+    // silu (with A3_HALF: same tile half) and the silu(z) gate operand -- run only on the SFPU row pairs holding the
+    // user's rows (T even). Rows outside keep finite values that the one-hot placement / per-row tail ignore. Bit-identical.
+    kGdnSpecOptRowsSfpu = 1u << 14,
+    // gov gdn-v2 (with NARROW_GR): the writer's a|b gate read is one contiguous read of the user's T rows per face
+    // holding a[h] / b[Nv + h] (1 request per core at Nv <= 16 instead of 2 * T): every core reads the same page.
+    kGdnSpecOptNarrowGr2 = 1u << 15,
+    // gov gdn-v2 (with ROWS_SFPU): the norms' SFPU tails (k / q l2 rsqrt + scale, the output rmsnorm's scale + rsqrt) on
+    // the user's row pairs; every consumer masks / multiplies the other rows to the same zeros. Bit-identical.
+    kGdnSpecOptRowsNorm = 1u << 16,
+    // gov gdn-v2 (gate scalars): the writer's software-fp32 gate math with fast bit-exact IEEE multiply / add (normal
+    // operand fast path, the compiler's soft-float otherwise), op for op. Bit-identical.
+    kGdnSpecOptFastSoftfloat = 1u << 17,
+    // gov gdn-v2 (fp32_state without FUSED_DECAY, T >= 2): the post-token ring writes are split between the two NoCs --
+    // even tokens' states from the writer (`hnew`, NoC 0), odd tokens' from the reader (`hnew2`, NoC 1), same pages, same
+    // bytes, same total state buffering (hnew_depth / 2 states each). Bit-identical.
+    // Not under K4 (bit 8: no token loop, no hnew; the device op clears it there).
+    kGdnSpecOptRingSplit = 1u << 18,
     kGdnSpecOptAll = kGdnSpecOptFusedDecay | kGdnSpecOptGateScalars | kGdnSpecOptEarlySrc | kGdnSpecOptHoistInv |
                      kGdnSpecOptQkShare | kGdnSpecOptA3Half | kGdnSpecOptGscSplit | kGdnSpecOptVsTail |
                      kGdnSpecOptLazy | kGdnSpecOptSfpuGate | kGdnSpecOptNarrowGateReads | kGdnSpecOptSfpuGateFace |
-                     kGdnSpecOptEarlyGateReads,
+                     kGdnSpecOptEarlyGateReads | kGdnSpecOptNarrowSrc | kGdnSpecOptRowsSfpu | kGdnSpecOptNarrowGr2 |
+                     kGdnSpecOptRowsNorm | kGdnSpecOptFastSoftfloat | kGdnSpecOptRingSplit,
 };
 
 struct GdnSpecStepInputs {

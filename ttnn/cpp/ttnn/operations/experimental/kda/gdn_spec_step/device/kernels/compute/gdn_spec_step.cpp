@@ -89,6 +89,21 @@
 #if GDN_VS_TAIL && !GDN_VSPLIT
 #error "GDN_VS_TAIL needs GDN_VSPLIT"
 #endif
+#ifndef GDN_ROWS_SFPU
+#define GDN_ROWS_SFPU 0  // kernel_opts bit 14 (T even): SFPU tails on the user's row pairs only (see sfpu_rows)
+#endif
+#ifndef GDN_RING_SPLIT
+#define GDN_RING_SPLIT 0  // kernel_opts bit 18: odd tokens' states into hnew2 (the reader's ring writes)
+#endif
+#if GDN_RING_SPLIT && (GDN_FUSED_DECAY || !GDN_FP32_STATE)
+#error "GDN_RING_SPLIT needs GDN_FP32_STATE without GDN_FUSED_DECAY"
+#endif
+#ifndef GDN_ROWS_NORM
+#define GDN_ROWS_NORM 0  // kernel_opts bit 16 (with ROWS_SFPU): the norms' rsqrt / scalar-multiply SFPU tails on the user's row pairs
+#endif
+#if GDN_ROWS_NORM && !GDN_ROWS_SFPU
+#error "GDN_ROWS_NORM needs GDN_ROWS_SFPU"
+#endif
 #ifndef GDN_HOIST_INV
 #define GDN_HOIST_INV 0  // kernel_opts bit 3: the token-independent rsqrt(stats + eps) * scale of qn, once
 #endif
@@ -392,6 +407,188 @@ ALWI void sfpu_half(F f, uint32_t base_tile, bool bottom, Args... args) {
 }
 #endif  // GDN_A3_HALF
 
+#if GDN_ROWS_SFPU
+// ROWS_SFPU: one SFPU face routine instantiated with N = T / 2 iterations (an iteration covers one dest row pair of a
+// face, as calculate_silu's dst_reg++ stride of 2 rows does), run on rows [lr, lr + T) of the two faces of the tile half
+// that holds the user's rows (lr = r0 % 16, even since T is even): `skip` = lr / 2 row-pair advances first. The face
+// advance (_llk_math_eltwise_sfpu_inc_dst_face_addr_) is relative to the face base, as in sfpu_half (whose routines
+// advance 8 row pairs per face). Operand dst indices of binary routines are relative to the same counter, so every
+// operand tile is offset alike. MATH thread only.
+template <typename F, typename... Args>
+ALWI void sfpu_rows(F f, uint32_t base_tile, bool bottom, uint32_t skip, Args... args) {
+#ifdef TRISC_MATH
+    _llk_math_eltwise_sfpu_start_(base_tile);
+    if (bottom) {
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    }
+#pragma GCC unroll 0
+    for (int face = 0; face < 2; face++) {
+#pragma GCC unroll 0
+        for (uint32_t i = 0; i < skip; ++i) {
+            sfpi::dst_reg++;
+        }
+        f(args...);
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    }
+    _llk_math_eltwise_sfpu_done_();
+#else
+    (void)f;
+    (void)base_tile;
+    (void)bottom;
+    (void)skip;
+    ((void)args, ...);
+#endif
+}
+
+// zs[i] = silu(z[i]) on the user's row pairs (sfpu_rows); the other rows keep the copied z values, which only ever
+// meet other users' rows of the per-row phase-D tail (the writer emits the user's T rows only)
+template <uint32_t T>
+__attribute__((noinline)) void silu_tiles_rows(
+    uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32_t n, bool bottom, uint32_t skip) {
+    out_dfb.reserve_back(n);
+    pack_reconfig_data_format(out);
+    reconfig_data_format_srca(a);
+    copy_init(a);
+    silu_tile_init();
+    for (uint32_t i = 0; i < n; ++i) {
+        tile_regs_acquire();
+        copy_tile(a, i, 0);
+#ifdef TRISC_MATH
+        sfpu_rows(ckernel::sfpu::calculate_silu<DST_ACCUM_MODE, T / 2>, 0, bottom, skip);
+#endif
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out, i);
+        tile_regs_release();
+    }
+    out_dfb.push_back(n);
+}
+
+#if GDN_ROWS_NORM
+// ROWS_NORM: the SFPU halves of gdn_step's inverse_l2 / inverse_rms and of l2_scale_once (rsqrt, the scalar multiply)
+// on the user's row pairs only (sfpu_rows, same face routines and template arguments as rsqrt_tile / mul_unary_tile).
+// Every consumer multiplies the result by a mask that is 0 outside the user's rows (inverse_l2: mask / e_t) or scales
+// rows that are exactly 0 there (rmsnorm of acc), and the skipped elements keep finite positive values (stats + eps or
+// stats * inv_n + eps; rsqrt / the scale would also give finite positive values), so the outputs are unchanged.
+template <uint32_t T>
+ALWI void rows_rsqrt(bool bottom, uint32_t skip) {
+    rsqrt_tile_init();
+#ifdef TRISC_MATH
+    sfpu_rows(ckernel::sfpu::calculate_rsqrt<APPROX, T / 2, DST_ACCUM_MODE, false>, 0, bottom, skip);
+#endif
+}
+template <uint32_t T>
+ALWI void rows_mul_scalar(bool bottom, uint32_t skip, uint32_t bits) {
+    binop_with_scalar_tile_init();
+#ifdef TRISC_MATH
+    sfpu_rows(ckernel::sfpu::calculate_binop_with_scalar<APPROX, MUL_UNARY, T / 2, DST_ACCUM_MODE>, 0, bottom, skip, bits);
+#endif
+}
+
+template <uint32_t T>
+__attribute__((noinline)) void inverse_l2_rows(
+    uint32_t stats, uint32_t eps, uint32_t mask, uint32_t scratch, DataflowBuffer& scratch_dfb, uint32_t inv,
+    DataflowBuffer& inv_dfb, uint32_t post_scale_bits, bool bottom, uint32_t skip) {
+    scratch_dfb.reserve_back(1);
+    pack_reconfig_data_format(scratch);
+    reconfig_data_format(stats, eps);
+    add_init(stats, eps);
+    tile_regs_acquire();
+    add_tiles(stats, eps, 0, 0, 0);
+    rows_rsqrt<T>(bottom, skip);
+    rows_mul_scalar<T>(bottom, skip, post_scale_bits);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, scratch, 0);
+    tile_regs_release();
+    scratch_dfb.push_back(1);
+    scratch_dfb.wait_front(1);
+    inv_dfb.reserve_back(1);
+    pack_reconfig_data_format(inv);
+    reconfig_data_format(scratch, mask);
+    mul_init(scratch, mask);
+    tile_regs_acquire();
+    mul_tiles(scratch, mask, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, inv, 0);
+    tile_regs_release();
+    inv_dfb.push_back(1);
+    scratch_dfb.pop_front(1);
+}
+
+template <uint32_t T>
+__attribute__((noinline)) void inverse_rms_rows(
+    uint32_t stats, uint32_t eps, uint32_t scratch, DataflowBuffer& scratch_dfb, uint32_t inv, DataflowBuffer& inv_dfb,
+    uint32_t inv_n_bits, bool bottom, uint32_t skip) {
+    scratch_dfb.reserve_back(1);
+    pack_reconfig_data_format(scratch);
+    reconfig_data_format_srca(stats);
+    copy_init(stats);
+    tile_regs_acquire();
+    copy_tile(stats, 0, 0);
+    rows_mul_scalar<T>(bottom, skip, inv_n_bits);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, scratch, 0);
+    tile_regs_release();
+    scratch_dfb.push_back(1);
+    scratch_dfb.wait_front(1);
+    inv_dfb.reserve_back(1);
+    pack_reconfig_data_format(inv);
+    reconfig_data_format(scratch, eps);
+    add_init(scratch, eps);
+    tile_regs_acquire();
+    add_tiles(scratch, eps, 0, 0, 0);
+    rows_rsqrt<T>(bottom, skip);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, inv, 0);
+    tile_regs_release();
+    inv_dfb.push_back(1);
+    scratch_dfb.pop_front(1);
+}
+
+// l2norm_rows with inverse_l2_rows (same ops otherwise)
+template <uint32_t N, uint32_t T>
+inline void l2norm_rows_rn(
+    uint32_t src, uint32_t mask, uint32_t dst, DataflowBuffer& dst_dfb, DataflowBuffer& tmp, DataflowBuffer& stats,
+    DataflowBuffer& scratch, DataflowBuffer& inv, uint32_t post_bits, bool bottom, uint32_t skip) {
+    square_tiles(src, dfb::tmp, tmp, N);
+    reduce_rows(N);
+    stats.wait_front(1);
+    inverse_l2_rows<T>(dfb::stats, dfb::eps_l2, mask, dfb::scratch, scratch, dfb::inv, inv, post_bits, bottom, skip);
+    stats.pop_front(1);
+    inv.wait_front(1);
+    scale_rows(src, dfb::inv, dst, dst_dfb, N);
+    inv.pop_front(1);
+}
+
+#if GDN_HOIST_INV
+// l2_scale_once with the rows tails
+template <uint32_t T>
+inline void l2_scale_once_rn(
+    uint32_t stats, uint32_t eps, uint32_t out, DataflowBuffer& out_dfb, uint32_t post_scale_bits, bool bottom,
+    uint32_t skip) {
+    out_dfb.reserve_back(1);
+    pack_reconfig_data_format(out);
+    reconfig_data_format(stats, eps);
+    add_init(stats, eps);
+    tile_regs_acquire();
+    add_tiles(stats, eps, 0, 0, 0);
+    rows_rsqrt<T>(bottom, skip);
+    rows_mul_scalar<T>(bottom, skip, post_scale_bits);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, out, 0);
+    tile_regs_release();
+    out_dfb.push_back(1);
+}
+#endif
+#endif  // GDN_ROWS_NORM
+#endif  // GDN_ROWS_SFPU
+
 #if GDN_VS_TAIL
 // VS_TAIL: scale_rows / gated_out on tiles [first, first + n) of their row operands only (per-tile ops unchanged)
 inline void scale_rows_from(uint32_t a, uint32_t first, uint32_t b, uint32_t out, DataflowBuffer& out_dfb, uint32_t n) {
@@ -608,7 +805,12 @@ inline void decay_state_sfpu(
 // UnpackToDest unpack are exact), and the add is commutative, so every output bit is unchanged. The `outer` DFB stays
 // declared (the factory is not touched) but is not used.
 inline void outer_add_state_sfpu(
-    DataflowBuffer& hn_dfb, DataflowBuffer& hnew_dfb, DataflowBuffer& hn32_dfb, uint32_t Kt, uint32_t Vt) {
+    DataflowBuffer& hn_dfb,
+    DataflowBuffer& hnew_dfb,
+    DataflowBuffer& hn32_dfb,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t hnew_id = dfb::hnew) {  // RING_SPLIT: odd tokens pack into hnew2 (same format)
     constexpr uint32_t kPair = 2;
     hn_dfb.reserve_back(Kt * Vt);
     hnew_dfb.reserve_back(Kt * Vt);
@@ -637,7 +839,7 @@ inline void outer_add_state_sfpu(
             tile_regs_wait();
             for (uint32_t jj = 0; jj < n; ++jj) {
                 pack_tile(jj, dfb::hn, base + jj);
-                pack_tile(jj, dfb::hnew, base + jj);
+                pack_tile(jj, hnew_id, base + jj);
                 pack_tile(jj, dfb::hn32, base + jj);
             }
             tile_regs_release();
@@ -1033,11 +1235,26 @@ template <
     uint32_t VB>
 TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     (void)u;
+#if GDN_ROWS_SFPU
+    // T | 16 (T = 2, 4, 8, 16): u*T % 16 is a multiple of T, so the user's rows never cross row 16 -- a compile-time
+    // fact that folds the fallback branches below away (code size: the 69 KB kernel config buffer)
+    constexpr bool rows_static = (16 % T) == 0;
+#else
+    constexpr bool rows_static = false;
+#endif
 #if GDN_A3_HALF
     // the user's rows r0 .. r0+T-1 of the tile row: one tile half (faces 0-1 or 2-3) when they do not cross row 16
     const uint32_t a3_r0 = (u * T) % 32;
-    const bool a3_half = (a3_r0 / 16) == ((a3_r0 + T - 1) / 16);
+    const bool a3_half = rows_static || (a3_r0 / 16) == ((a3_r0 + T - 1) / 16);
     const bool a3_bottom = a3_r0 >= 16;
+#endif
+#if GDN_ROWS_SFPU
+    static_assert(T % 2 == 0, "ROWS_SFPU: T even (the factory defines it only then)");
+    // the user's rows within its tile half: lr = r0 % 16 (even), lr + T <= 16 when they do not cross row 16
+    const uint32_t rows_r0 = (u * T) % 32;
+    const bool rows_ok = rows_static || (rows_r0 / 16) == ((rows_r0 + T - 1) / 16);
+    const bool rows_bottom = rows_r0 >= 16;
+    const uint32_t rows_skip = (rows_r0 % 16) / 2;
 #endif
 #if GDN_GSC_SPLIT
     // gsc word of beta[t] / dec[t]: one 16-word (64 B) slot per token, so each value block writes its tokens' slots
@@ -1152,7 +1369,10 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     DataflowBuffer zs(dfb::zs);
 #if !GDN_LAZY
     DataflowBuffer hnew(dfb::hnew);
+#if GDN_RING_SPLIT
+    DataflowBuffer hnew2(dfb::hnew2);  // odd tokens' post-token states (the reader writes them to the ring)
 #endif
+#endif  // !GDN_LAZY
     DataflowBuffer out(dfb::out);
     DataflowBuffer wout(dfb::wout);
 #if GDN_HOIST_INV
@@ -1207,7 +1427,15 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     {
         DeviceZoneScopedN("c_silu");
         z_in.wait_front(Vt);
+#if GDN_ROWS_SFPU
+        if (rows_ok) {
+            silu_tiles_rows<T>(dfb::z_in, dfb::zs, zs, Vt, rows_bottom, rows_skip);
+        } else {
+            silu_tiles(dfb::z_in, dfb::zs, zs, Vt);
+        }
+#else
         silu_tiles(dfb::z_in, dfb::zs, zs, Vt);
+#endif
         z_in.pop_front(Vt);
         zs.wait_front(Vt);
     }
@@ -1315,8 +1543,60 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
             // rvtt_synth_renumber) in this body
             add_binary_tile_init();
 #if GDN_A3_HALF
+#if GDN_ROWS_SFPU
+            if (a3_half && rows_ok) {
+#else
             if (a3_half) {
+#endif
                 static_assert(K == 4, "A3_HALF: the K = 4 tap sum");
+#if GDN_ROWS_SFPU
+#ifdef TRISC_MATH
+                sfpu_rows(
+                    ckernel::sfpu::calculate_sfpu_binary<
+                        APPROX,
+                        ckernel::BinaryOp::ADD,
+                        T / 2,
+                        DST_ACCUM_MODE,
+                        ckernel::DstRoundingMode::Default>,
+                    0,
+                    a3_bottom,
+                    rows_skip,
+                    0u,
+                    1u,
+                    0u);
+                sfpu_rows(
+                    ckernel::sfpu::calculate_sfpu_binary<
+                        APPROX,
+                        ckernel::BinaryOp::ADD,
+                        T / 2,
+                        DST_ACCUM_MODE,
+                        ckernel::DstRoundingMode::Default>,
+                    0,
+                    a3_bottom,
+                    rows_skip,
+                    0u,
+                    2u,
+                    0u);
+                sfpu_rows(
+                    ckernel::sfpu::calculate_sfpu_binary<
+                        APPROX,
+                        ckernel::BinaryOp::ADD,
+                        T / 2,
+                        DST_ACCUM_MODE,
+                        ckernel::DstRoundingMode::Default>,
+                    0,
+                    a3_bottom,
+                    rows_skip,
+                    0u,
+                    3u,
+                    0u);
+#endif
+                silu_tile_init();
+#ifdef TRISC_MATH
+                sfpu_rows(ckernel::sfpu::calculate_silu<DST_ACCUM_MODE, T / 2>, 0, a3_bottom, rows_skip);
+#endif
+            } else if (a3_half) {
+#endif  // GDN_ROWS_SFPU
 #ifdef TRISC_MATH  // the face routines exist on the math thread only (both branches are no-ops elsewhere)
                 sfpu_half(
                     ckernel::sfpu::calculate_sfpu_binary<
@@ -1508,13 +1788,29 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         // k, v row-batched; then the q row sums of squares once into `stats` (kept through the token loop): qn_t itself
         // is formed per token with the e_t mask, exactly the plain kernel's inverse_l2(mask) + scale_rows, so o_t =
         // qn_t @ S_t has only the token's row non-zero
+#if GDN_ROWS_NORM
+        if (rows_ok) {
+            l2norm_rows_rn<Kt, T>(dfb::kc, dfb::mask_T, dfb::kn, kn, tmp, stats, scratch, inv, kOneBits, rows_bottom, rows_skip);
+        } else {
+            l2norm_rows<Kt>(dfb::kc, dfb::mask_T, dfb::kn, kn, tmp, stats, scratch, inv, kOneBits);
+        }
+#else
         l2norm_rows<Kt>(dfb::kc, dfb::mask_T, dfb::kn, kn, tmp, stats, scratch, inv, kOneBits);
+#endif
         scale_rows(dfb::vc, dfb::mask_T, dfb::vm, vm, Vs);
         square_tiles(dfb::qc, dfb::tmp, tmp, Kt);
         reduce_rows(Kt);
         stats.wait_front(1);
 #if GDN_HOIST_INV
+#if GDN_ROWS_NORM
+        if (rows_ok) {
+            l2_scale_once_rn<T>(dfb::stats, dfb::eps_l2, dfb::qsc, qsc, scale_bits, rows_bottom, rows_skip);
+        } else {
+            l2_scale_once(dfb::stats, dfb::eps_l2, dfb::qsc, qsc, scale_bits);
+        }
+#else
         l2_scale_once(dfb::stats, dfb::eps_l2, dfb::qsc, qsc, scale_bits);
+#endif
         qsc.wait_front(1);
 #endif
         kc.pop_front(Kt);
@@ -1837,7 +2133,15 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
         hd.pop_front(KVs);  // the FPU copy served vread only; the add reads the exact hd32
         hd32.wait_front(KVs);
         // hn (o operand), hnew (writer), hn32 (next token's S_cur) = hd32 + kt @ delta, outer product fused in DST
+#if GDN_RING_SPLIT
+        {
+            // one inlined copy (code size), the token's ring DFB picked at run time
+            DataflowBuffer& hring = (t & 1u) ? hnew2 : hnew;
+            outer_add_state_sfpu(hn, hring, hn32, Kt, Vs, (t & 1u) ? static_cast<uint32_t>(dfb::hnew2) : static_cast<uint32_t>(dfb::hnew));
+        }
+#else
         outer_add_state_sfpu(hn, hnew, hn32, Kt, Vs);
+#endif
         hd32.pop_front(KVs);
         delta.pop_front(Vs);
 #else
@@ -1921,7 +2225,15 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     square_tiles(dfb::acc_x, dfb::tmp, tmp, Vt);
     reduce_rows(Vt);
     stats.wait_front(1);
+#if GDN_ROWS_NORM
+    if (rows_ok) {
+        inverse_rms_rows<T>(dfb::stats, dfb::eps_norm, dfb::scratch, scratch, dfb::inv, inv, inv_dv_bits, rows_bottom, rows_skip);
+    } else {
+        inverse_rms(dfb::stats, dfb::eps_norm, dfb::scratch, scratch, dfb::inv, inv, inv_dv_bits);
+    }
+#else
     inverse_rms(dfb::stats, dfb::eps_norm, dfb::scratch, scratch, dfb::inv, inv, inv_dv_bits);
+#endif
     stats.pop_front(1);
     inv.wait_front(1);
     scale_rows_from(dfb::acc_x, v0, dfb::inv, dfb::on, on, Vs);

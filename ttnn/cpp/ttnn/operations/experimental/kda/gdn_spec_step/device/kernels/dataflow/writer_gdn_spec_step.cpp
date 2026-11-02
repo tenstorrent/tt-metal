@@ -75,6 +75,9 @@
 #if GDN_SFPU_GATE && (!GDN_LAZY || GDN_GSC_SPLIT)
 #error "GDN_SFPU_GATE needs GDN_LAZY and no GDN_GSC_SPLIT"
 #endif
+#ifndef GDN_NARROW_GR2
+#define GDN_NARROW_GR2 0  // kernel_opts bit 15 (with NARROW_GR): one contiguous read per face holding a / b (bit-identical)
+#endif
 #if GDN_GATE_SCALARS
 #if !GDN_SFPU_GATE
 #define GDN_GATE_NOINLINE 1  // code size; see gdn_step_gate_math.hpp (SFPU_GATE: exp_acc / log1p_acc unused, inline)
@@ -184,6 +187,25 @@ __attribute__((noinline)) void lz_xchg(
         sem.up(noc, px[p], py[p], 1);
     }
     sem.wait(VB);
+}
+#endif
+#if GDN_NARROW_GR2
+// NARROW_GR2: rows [r0, r0 + n) of the tile half `right` (columns 16..31) or left (0..15) of bf16 tile `page`, one
+// contiguous read per face group (a face stores its 16 rows of 16 elements row-major, 32 B per row), into the same
+// offsets of slot `dst_tile`. Every core reads the same a|b page: 1 request per core instead of 2 * n (NARROW_GR).
+template <typename Accessor>
+inline void read_rows_half(
+    const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t page, uint32_t dst_tile, uint32_t r0, uint32_t n, bool right) {
+    const uint32_t base = dst_tile * dfb.get_entry_size();
+    for (uint32_t fr = 0; fr < 2; ++fr) {
+        const uint32_t lo = r0 > fr * 16 ? r0 : fr * 16;
+        const uint32_t hi = (r0 + n) < (fr * 16 + 16) ? (r0 + n) : (fr * 16 + 16);
+        if (lo >= hi) {
+            continue;
+        }
+        const uint32_t off = ((2 * fr + (right ? 1u : 0u)) * 256u + (lo - fr * 16) * 16u) * 2u;
+        noc.async_read(acc, dfb, (hi - lo) * 32u, {.page_id = page, .offset_bytes = off}, {.offset_bytes = base + off});
+    }
 }
 #endif
 }  // namespace
@@ -402,10 +424,25 @@ TT_KERNEL void writer(
 #elif GDN_NARROW_GR
         // only the user's T rows of the a|b tile(s) (both halves: a at column h, b at column Nv + h), tile 0's face row
         // of dt_bias / -exp(A) holding column h, and the r replay rows of the decay page's column 0 (left half)
+#if GDN_NARROW_GR2
+        {
+            // a[r0 + t] sits in column h & 31 of tile 0, b[r0 + t] in column (Nv + h) & 31 of tile b_tile: read the
+            // user's rows of only the tile half (face) holding each -- the very bytes the math below reads
+            const bool a_right = (h & 31u) >= 16;
+            const bool b_right = ((Nv + h) & 31u) >= 16;
+            read_rows_half(qkv_acc, ab_w, noc, pg + GDN_AB_PAGE + (h >> 5), 0, r0, T, a_right);
+            if (b_tile != 0) {
+                read_rows_half(qkv_acc, ab_w, noc, pg + GDN_AB_PAGE + ((Nv + h) >> 5), 1, r0, T, b_right);
+            } else if (b_right != a_right) {
+                read_rows_half(qkv_acc, ab_w, noc, pg + GDN_AB_PAGE + (h >> 5), 0, r0, T, b_right);
+            }
+        }
+#else
         read_rows_at(qkv_acc, ab_w, noc, pg + GDN_AB_PAGE + (h >> 5), 0, r0, T, true, true, 2);
         if (b_tile != 0) {
             read_rows_at(qkv_acc, ab_w, noc, pg + GDN_AB_PAGE + ((Nv + h) >> 5), 1, r0, T, true, true, 2);
         }
+#endif
         dtb_ws.reserve_back(1);
         nea_ws.reserve_back(1);
         read_rows_at(dtb_acc, dtb_ws, noc, 0, 0, 0, 1, (h & 16u) == 0, (h & 16u) != 0, GDN_DTB_FP32 ? 4 : 2);
@@ -512,6 +549,7 @@ TT_KERNEL void writer(
         // slots [t0, t1) (64 B aligned) into every block's gsc (itself included); `gsv` up on every block; once all VB
         // blocks' slots are in, gsc goes to the compute
         {
+            DeviceZoneScopedN("wr_gsw");  // gov gdn-v2 profiling zone: the head's gate-slot swap
             Semaphore gsv(sem::gsv);
             gsc.wait_front(1);
 #if GDN_LAZY
@@ -929,7 +967,12 @@ TT_KERNEL void writer(
     //      j)
     {
         const uint32_t entry = hnew.get_entry_size();
-        for (uint32_t t = 0; t < T; ++t) {
+#ifndef GDN_RING_SPLIT
+#define GDN_RING_SPLIT 0
+#endif
+        // RING_SPLIT (kernel_opts bit 18): the even tokens only; the reader writes the odd tokens' states from hnew2
+        constexpr uint32_t t_step = GDN_RING_SPLIT ? 2u : 1u;
+        for (uint32_t t = 0; t < T; t += t_step) {
             {
                 DeviceZoneScopedN("wr_wait_hnew");
                 hnew.wait_front(KVs);

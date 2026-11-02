@@ -46,6 +46,12 @@
 #ifndef GDN_LAZY
 #define GDN_LAZY 0  // kernel_opts bit 8 (K4): D from ring slot 0 + the previous verify's stash
 #endif
+#ifndef GDN_RING_SPLIT
+#define GDN_RING_SPLIT 0  // kernel_opts bit 18: this reader writes the odd tokens' post-token states to the ring (NoC 1)
+#endif
+#ifndef GDN_NARROW_SRC
+#define GDN_NARROW_SRC 0  // kernel_opts bit 13: row-narrow src / z reads into zero-filled slots (bit-identical)
+#endif
 #if GDN_FAST && !GDN_GATE_SCALARS
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_spec_step/device/kernels/dataflow/gdn_step_gate_math.hpp"
 #endif
@@ -57,6 +63,27 @@ template <typename P>
 FORCE_INLINE void set_one(P& p, uint32_t tile, uint32_t row, uint32_t col) {
     p[tile * 1024 + tile_elem_index(row, col)] = 0x3F80;  // bf16 1.0 (p: the lock's CoreLocalMem<volatile uint16_t>)
 }
+#if GDN_NARROW_SRC
+// NARROW_SRC: rows [r0, r0 + n) of bf16 tile `page` into the same rows of slot `dst_tile` (already zero-filled): per
+// face-row group (rows 0..15 = faces 0 / 1, rows 16..31 = faces 2 / 3) one contiguous read per face of the rows that
+// fall in it (a face stores its 16 rows of 16 elements row-major, 32 B per row). Source / destination offsets are equal.
+template <typename Accessor>
+inline void read_rows_bf16(
+    const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t page, uint32_t dst_tile, uint32_t r0, uint32_t n) {
+    const uint32_t base = dst_tile * dfb.get_entry_size();
+    for (uint32_t fr = 0; fr < 2; ++fr) {
+        const uint32_t lo = r0 > fr * 16 ? r0 : fr * 16;
+        const uint32_t hi = (r0 + n) < (fr * 16 + 16) ? (r0 + n) : (fr * 16 + 16);
+        if (lo >= hi) {
+            continue;
+        }
+        for (uint32_t half = 0; half < 2; ++half) {
+            const uint32_t off = ((2 * fr + half) * 256u + (lo - fr * 16) * 16u) * 2u;
+            noc.async_read(acc, dfb, (hi - lo) * 32u, {.page_id = page, .offset_bytes = off}, {.offset_bytes = base + off});
+        }
+    }
+}
+#endif
 }  // namespace
 
 template <
@@ -184,6 +211,8 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     // writer's r_rep)
     const bool lazy_no_replay = (blk == hold_sentinel) || (mi >= T);
 #endif
+    const bool hold = (blk == hold_sentinel);  // RING_SPLIT: held heads skip their (odd tokens') ring writes too
+    (void)hold;
     if (blk == hold_sentinel) {
         // HOLD: the writer skips this head's ring writes and copies the window through, so any valid block and any
         // mi serve the (discarded) recurrence -- this head's own slot-0 block, mi = 0.
@@ -229,9 +258,21 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
 
     // ---- phase 1 (small): z, the a|b tile(s), the gates -> compute starts silu(z) (and, plain mode, the T gate pairs)
     z_in.reserve_back(Vt);
+#if GDN_NARROW_SRC
+    // only the user's T rows of the head's z tiles (rows outside them are zero: silu(0) = 0, and they never reach the
+    // user's output rows -- every phase-D op is per row)
+    zero_reserved(z_in, noc, Vt);
+    for (uint32_t t = 0; t < Vt; ++t) {
+        read_rows_bf16(qkv_acc, z_in, noc, pg + z_tile0 + h * Vt + t, t, r0, T);
+    }
+#else
     read_tiles_at(qkv_acc, z_in, noc, pg + z_tile0 + h * Vt, Vt, 0);
+#endif
 #if GDN_GATE_SCALARS
-    noc.async_read_barrier();
+    {
+        DeviceZoneScopedN("rd_zwait");  // gov gdn-v2 profiling zone (no code without PROFILE_KERNEL)
+        noc.async_read_barrier();
+    }
     z_in.push_back(Vt);
 #else
     // ab_in[0] = a's tile (ab_page + h/32); ab_in[1] = b's tile (ab_page + (Nv+h)/32) only when it differs (b_idx = 1;
@@ -317,6 +358,29 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         DeviceZoneScopedN("rd_bulk");
         // src_in[c] = whole window tile of user u, chunk c (win[par]); src_in[Ch + c] = whole raw projection tile
         src_in.reserve_back(2 * ChA);
+#if GDN_NARROW_SRC
+        // window rows [0, Lw) (the only rows WO_W selects: mi + 1 + i <= Lw - 1) and the user's rows [r0, r0 + T) of
+        // the raw qkv tile (the only rows WO_N selects); every other row is a finite zero, so the one-hot matmuls
+        // (0 * x = 0 for finite x) give the same W_c. Lw > 16 falls back to whole window tiles.
+        zero_reserved(src_in, noc, 2 * ChA);
+        for (uint32_t c = 0; c < ChA; ++c) {
+            const uint32_t col = chunk_col(blk_chunk(c));
+            if constexpr (Lw <= 16) {
+                if (par) {
+                    read_rows_bf16(wb_acc, src_in, noc, u * Ct + col, c, 0, Lw);
+                } else {
+                    read_rows_bf16(wa_acc, src_in, noc, u * Ct + col, c, 0, Lw);
+                }
+            } else {
+                if (par) {
+                    read_tiles_at(wb_acc, src_in, noc, u * Ct + col, 1, c);
+                } else {
+                    read_tiles_at(wa_acc, src_in, noc, u * Ct + col, 1, c);
+                }
+            }
+            read_rows_bf16(qkv_acc, src_in, noc, pg + col, ChA + c, r0, T);
+        }
+#else
         for (uint32_t c = 0; c < ChA; ++c) {
             const uint32_t col = chunk_col(blk_chunk(c));
             if (par) {
@@ -326,6 +390,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             }
             read_tiles_at(qkv_acc, src_in, noc, pg + col, 1, ChA + c);
         }
+#endif
 #if GDN_EARLY_SRC
         // phase A1 / A2 need only src_in and the selectors: hand them over before the taps / weight row / masks
         build_sel();
@@ -467,6 +532,35 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         read_state();
         noc.async_read_barrier();
         state_in.push_back(KVs);
+    }
+#endif
+#if GDN_RING_SPLIT
+    // ---- RING_SPLIT: the odd tokens' post-token states (hnew2, KVs tiles each) to ring block t*BH + bh at this block's
+    //      column tiles -- the writer's ring loop for those tokens, on this RISC's NoC
+    {
+        DataflowBuffer hnew2(dfb::hnew2);
+        constexpr uint32_t BH = M * Nv;
+        const uint32_t v0 = s * Vs;
+        const uint32_t entry = hnew2.get_entry_size();
+        for (uint32_t t = 1; t < T; t += 2) {
+            hnew2.wait_front(KVs);
+            DeviceZoneScopedN("rd_ring");
+            if (!hold) {
+                const uint32_t page0 = (t * BH + bh) * KV + v0;
+                for (uint32_t i = 0; i < Kt; ++i) {
+                    for (uint32_t j = 0; j < Vs; ++j) {
+                        noc.async_write(
+                            hnew2,
+                            ring_acc,
+                            entry,
+                            {.offset_bytes = (i * Vs + j) * entry},
+                            {.page_id = page0 + i * Vt + j});
+                    }
+                }
+                noc.async_write_barrier();
+            }
+            hnew2.pop_front(KVs);
+        }
     }
 #endif
 }

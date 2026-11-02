@@ -1337,3 +1337,51 @@ def test_lazy_sfpu_gates_realistic_dtbias(device, request, B, T, variant, a_scal
     assert worst["dec_neg"] < 2e-6, f"{variant}: decay max|d| where a + dt_bias < -5: {worst['dec_neg']:.3e}"
     assert worst["s0_neg"] < 1e-2 and worst["s0_pos"] < 1e-2, f"{variant}: slot-0 drift {worst}"
     assert worst["p_out"] > 0.999
+
+
+# --------------------------------------------------------------------------- #
+# x12 stack: the gov gdn-v2 bits (2 EARLY_SRC, 13 NARROW_SRC, 14 ROWS_SFPU, 15 NARROW_GR2, 16 ROWS_NORM, 17 FAST_SF) on
+# the K4 + SFPU-gate + face program (the x11 ship arm: kernel_opts 250 | K4 | NARROW_GR | SFPU_GATE | SFPU_FACE). They
+# are bit-identical restructurings on the serial program; this checks the K4 program: every step's output, the whole
+# ring (slot 0 = D, both stash parities; NaN-initialized slots compared by bits) and both conv windows must be equal
+# bit for bit to the arm without them, over a verify sequence with FRESH rows, random accepted prefixes and HOLD.
+# --------------------------------------------------------------------------- #
+X12_V2_BITS = 4 | 8192 | 16384 | 32768 | 65536 | 131072
+X12_SHIP = LAZY_OPTS | NARROW_GR_BIT | SFPU_GATE_BIT | SFPU_FACE_BIT
+
+
+@pytest.mark.parametrize("v2", [X12_V2_BITS, 4 | 8192, 16384 | 65536, 32768, 131072], ids=lambda v: f"v2_{v}")
+@pytest.mark.parametrize("B,T,vb", [(8, 4, 4), (1, 4, 4), (8, 4, 1)])
+def test_x12_lazy_v2_bits_bit_identical(device, request, B, T, vb, v2):
+    g = GEOS[0]
+    cases = [LazyCase(device, g, B, T, seed=3301 + 10 * B + T) for _ in range(2)]
+    for c in cases:  # realistic dt_bias (the SFPU softplus branch the ship arm exercises)
+        c.dtb = torch.tensor(DTB_REALISTIC).bfloat16().float()
+        c.nea = torch.tensor(NEA_REALISTIC).bfloat16().float()
+        dev = lambda t, dt, lay=ttnn.TILE_LAYOUT: ttnn.from_torch(t, dtype=dt, layout=lay, device=device)
+        c.dtb_d = dev(c.dtb.reshape(1, 1, g.Nv), ttnn.float32)
+        c.nea_d = dev(c.nea.reshape(1, 1, g.Nv), ttnn.float32)
+    mi_ctrl = [T] * B
+    gen = torch.Generator().manual_seed(911 + B + T)
+    bits = lambda t: t.contiguous().view(torch.int32)
+    for step in range(int(os.environ.get("GDN_X12_SEQ_STEPS", "5"))):
+        rows = make_rows(g, round_up32(B * T) if B * T % 32 else B * T)
+        rows[:, g.QKVZ : g.QKVZ + g.Nv] = (2.0 * torch.randn(rows.shape[0], g.Nv)).bfloat16().float()
+        hold = (1,) if (B > 1 and step == 2) else ()
+        outs = []
+        for c, opts in zip(cases, (X12_SHIP, X12_SHIP | v2)):
+            o = c.run(rows, mi_ctrl, hold=hold, kernel_opts=opts, value_blocks=vb)
+            outs.append(ttnn.to_torch(o).float())
+            ttnn.deallocate(o)
+        r0, r1 = cases[0].ring_host(), cases[1].ring_host()
+        same_out = torch.equal(bits(outs[0]), bits(outs[1]))
+        same_ring = torch.equal(bits(r0), bits(r1))
+        same_win = all(torch.equal(cases[0].win_host(p), cases[1].win_host(p)) for p in (0, 1))
+        print(
+            f"x12-v2 step {step} B={B} T={T} vb={vb} v2={v2} hold={hold} mi={mi_ctrl}: out {same_out} ring {same_ring} "
+            f"win {same_win} | out max|d|={(outs[0] - outs[1]).abs().nan_to_num(0).max().item():.3e}"
+        )
+        assert same_out and same_ring and same_win, f"step {step}: v2 bits {v2} not bit-identical on the K4 ship program"
+        mi_ctrl = [int(x) for x in torch.randint(0, T, (B,), generator=gen)]
+        for c in cases:
+            c.par = 1 - c.par

@@ -228,8 +228,10 @@ Tensor gdn_spec_step(
         // the effective K4 program: gate scalars on (the writer's coefficient tiles build on them); the token-loop
         // restructurings have no token loop to act on and the half-tile conv tail does not fit the kernel config buffer
         // next to the WY phase, so they are dropped (one program / hash per effective variant)
+        // (x12: RING_SPLIT splits the token loop's per-token ring writes: none under K4)
         kernel_opts = (kernel_opts | kGdnSpecOptGateScalars) &
-                      ~static_cast<uint32_t>(kGdnSpecOptFusedDecay | kGdnSpecOptHoistInv | kGdnSpecOptA3Half);
+                      ~static_cast<uint32_t>(
+                          kGdnSpecOptFusedDecay | kGdnSpecOptHoistInv | kGdnSpecOptA3Half | kGdnSpecOptRingSplit);
         if ((kernel_opts & kGdnSpecOptSfpuGate) != 0) {
             kernel_opts &= ~static_cast<uint32_t>(kGdnSpecOptGscSplit);  // every block evaluates all T gates itself
         }

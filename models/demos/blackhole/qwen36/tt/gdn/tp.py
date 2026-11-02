@@ -155,6 +155,24 @@ def gdn_spec_step_lazy_enabled():
     FRESH with ctrl mi = T (lazy_ref.fresh_mi) and parks rows through lazy_ref.parked_slot0_lazy. Needs T >= 3 and
     QWEN36_SPEC_FAST_JOIN=1."""
     return os.environ.get("QWEN36_SPEC_STEP_LAZY", "0").strip() == "1"
+# gov gdn-v2 (kernel_opts bit 13, kGdnSpecOptNarrowSrc): the reader fetches only the rows the op uses from the window
+# (rows < Lw) and from the raw qkv / z tiles (the user's T rows) into zero-filled slots. Bit-identical;
+# QWEN36_SPEC_STEP_NARROW_SRC=1 adds it wherever the fp32-state restructurings (QWEN36_SPEC_STEP_OPT) are on.
+SPEC_STEP_OPT_NARROW_SRC = 8192
+# gov gdn-v2 (kernel_opts bit 14, kGdnSpecOptRowsSfpu): the conv's SFPU tail (with A3_HALF) and silu(z) run only on the
+# SFPU row pairs holding the user's T rows (T even). Bit-identical; QWEN36_SPEC_STEP_ROWS_SFPU=1 adds it like NARROW_SRC.
+SPEC_STEP_OPT_ROWS_SFPU = 16384
+# gov gdn-v2 (kernel_opts bit 15, kGdnSpecOptNarrowGr2, with NARROW_GR): one contiguous a|b read per face holding a / b
+# (every core reads the same page). Bit-identical; QWEN36_SPEC_STEP_NARROW_GR2=1 adds it wherever NARROW_GR is on.
+SPEC_STEP_OPT_NARROW_GR2 = 32768
+# gov gdn-v2 (kernel_opts bit 16, kGdnSpecOptRowsNorm, with ROWS_SFPU): the norms' SFPU tails on the user's row pairs.
+SPEC_STEP_OPT_ROWS_NORM = 65536
+# gov gdn-v2 (kernel_opts bit 17, kGdnSpecOptFastSoftfloat, with gate scalars): the writer's gate math with fast
+# bit-exact IEEE multiply / add. Bit-identical; QWEN36_SPEC_STEP_FAST_SF=1 adds it wherever gate scalars (bit 1) are on.
+SPEC_STEP_OPT_FAST_SF = 131072
+# gov gdn-v2 (kernel_opts bit 18, kGdnSpecOptRingSplit): the post-token ring writes split between the writer (even tokens,
+# NoC 0) and the reader (odd tokens, NoC 1). Bit-identical; QWEN36_SPEC_STEP_RING_SPLIT=1 adds it like NARROW_SRC.
+SPEC_STEP_OPT_RING_SPLIT = 262144
 
 
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
@@ -3749,6 +3767,49 @@ class TPGatedDeltaNet:
                 and extra["kernel_opts"] & SPEC_STEP_OPT_NARROW_GR
             ):
                 extra["kernel_opts"] |= SPEC_STEP_OPT_EARLY_GR
+        if os.environ.get("QWEN36_SPEC_STEP_NARROW_SRC", "0").strip() == "1" and extra.get("kernel_opts", 0):
+            extra["kernel_opts"] |= SPEC_STEP_OPT_NARROW_SRC
+            _log_spec_step_once(
+                ("narrow_src", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_SRC=1: row-narrow src / z reads (bit-identical)",
+            )
+        if os.environ.get("QWEN36_SPEC_STEP_NARROW_GR2", "0").strip() == "1" and extra.get("kernel_opts", 0) & SPEC_STEP_OPT_NARROW_GR:
+            extra["kernel_opts"] |= SPEC_STEP_OPT_NARROW_GR2
+            _log_spec_step_once(
+                ("narrow_gr2", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_NARROW_GR2=1: one gate read per face (bit-identical)",
+            )
+        if os.environ.get("QWEN36_SPEC_STEP_ROWS_SFPU", "0").strip() == "1" and extra.get("kernel_opts", 0):
+            extra["kernel_opts"] |= SPEC_STEP_OPT_ROWS_SFPU
+            _log_spec_step_once(
+                ("rows_sfpu", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_ROWS_SFPU=1: user-row SFPU tails (bit-identical)",
+            )
+            if os.environ.get("QWEN36_SPEC_STEP_ROWS_NORM", "0").strip() == "1":
+                extra["kernel_opts"] |= SPEC_STEP_OPT_ROWS_NORM
+                _log_spec_step_once(
+                    ("rows_norm", T),
+                    "[gdn-spec-step] QWEN36_SPEC_STEP_ROWS_NORM=1: user-row norm SFPU tails (bit-identical)",
+                )
+        if (
+            os.environ.get("QWEN36_SPEC_STEP_RING_SPLIT", "0").strip() == "1"
+            and extra.get("kernel_opts", 0)
+            and not extra["kernel_opts"] & SPEC_STEP_OPT_LAZY  # no token-loop ring writes under K4
+        ):
+            extra["kernel_opts"] |= SPEC_STEP_OPT_RING_SPLIT
+            _log_spec_step_once(
+                ("ring_split", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_RING_SPLIT=1: ring writes split over both NoCs (bit-identical)",
+            )
+        if (
+            os.environ.get("QWEN36_SPEC_STEP_FAST_SF", "0").strip() == "1"
+            and extra.get("kernel_opts", 0) & SPEC_STEP_OPT_GATE_SCALARS
+        ):
+            extra["kernel_opts"] |= SPEC_STEP_OPT_FAST_SF
+            _log_spec_step_once(
+                ("fast_sf", T),
+                "[gdn-spec-step] QWEN36_SPEC_STEP_FAST_SF=1: fast exact gate math (bit-identical)",
+            )
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,
             win_a,
