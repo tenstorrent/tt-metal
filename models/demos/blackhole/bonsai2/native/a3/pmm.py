@@ -1,0 +1,153 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""A3 at M>1: short-prefill ternary matmul straight from the resident A3 weights (kernels/pmm_*.cpp).
+
+y [M, N] = x' [M, K] @ (codes * scales) for M <= 128 rows of an already-rotated x'. Each code block is
+dequantized in L1 right before its matmul, so no [K, N] scratch is written or read back (that scratch is
+what the short-prefill path spends its time on: ~3.3 ms per GDN layer at S=128).
+
+Self-check: python -m models.demos.blackhole.bonsai2.native.a3.pmm [--seqs 32,128]
+"""
+
+from __future__ import annotations
+
+import os
+
+import numpy as np
+import torch
+
+import ttnn
+
+KDIR = "models/demos/blackhole/bonsai2/native/a3/kernels/"
+MAX_ROWS = 128
+
+
+def pmm(x, w, s, k: int, n: int, gu: bool = False):
+    """x: [1, 1, M, K] bf16 DRAM interleaved (rotated). w, s: a3.weights_for_device tensors.
+    n: real output columns (gu: per half). Returns [1, 1, M, n] bf16 DRAM (gu: (gate, up))."""
+    device = x.device()
+    m = x.shape[-2]
+    assert m % 32 == 0 and m <= MAX_ROWS and k % 1024 == 0
+    mt, kt = m // 32, k // 32
+    ng = kt // 32
+    s_tiles = (ng + 3) // 4
+    cpb = w.memory_config().shard_spec.shape[1] // 32
+    wtb = w.get_tile().get_tile_size(w.dtype)
+    xtb = ttnn.Tile([32, 32]).get_tile_size(ttnn.bfloat16)
+    ncols = (2 if gu else 1) * n // 32
+    outs = [ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, m, n]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device,
+                                           ttnn.DRAM_MEMORY_CONFIG) for _ in range(2 if gu else 1)]
+    g = device.compute_with_storage_grid_size()
+    cores = [ttnn.CoreCoord(cx, cy) for cy in range(g.y) for cx in range(g.x)]
+    # Every core streams all of x', so x traffic = cores x |x'| and binds at M=128 (down: 80 cores x 4.4 MB).
+    # ~160/MT cores balances it (sweep at S=128: down 4 cols/core 0.78 ms vs 2/core 1.43; gate|up 16/core 0.84 vs 10/core 1.25).
+    per = max(-(-ncols // len(cores)), -(-ncols // (160 // mt)), int(os.environ.get("BONSAI_PMM_PER", "0")))
+    cores = cores[: -(-ncols // per)]
+    crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    rd, cp, wr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    for i, c in enumerate(cores):
+        c0, nc = i * per, min(per, ncols - i * per)
+        rd[c.x][c.y] = [x.buffer_address(), w.buffer_address(), s.buffer_address(), c0, nc]
+        cp[c.x][c.y] = [nc]
+        wr[c.x][c.y] = [outs[0].buffer_address(), outs[-1].buffer_address(), c0, nc]
+
+    def cb(idx, fmt, page, nt):
+        return ttnn.CBDescriptor(total_size=nt * page, core_ranges=crs, format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page)])
+
+    kd = lambda src, ct, rt, cfg: ttnn.KernelDescriptor(  # noqa: E731
+        kernel_source=KDIR + src, source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH, core_ranges=crs,
+        compile_time_args=ct, runtime_args=rt, config=cfg)
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    modes[4] = ttnn.UnpackToDestMode.UnpackToDestFp32  # fp32 partials reload exactly
+    cfg = ttnn.ComputeConfigDescriptor(math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("BONSAI_PMM_FID", "HiFi2")), fp32_dest_acc_en=True,
+                                       math_approx_mode=False)
+    cfg.unpack_to_dest_mode = modes
+    prog = ttnn.ProgramDescriptor(
+        kernels=[
+            kd("pmm_reader.cpp", [ng, mt, kt, cpb, wtb, s_tiles, xtb], rd, ttnn.ReaderConfigDescriptor()),
+            kd("pmm_writer.cpp", [mt, n // 32, int(gu), xtb], wr, ttnn.WriterConfigDescriptor()),
+            kd("pmm_compute.cpp", [ng, mt, int(os.environ.get("BONSAI_PMM_DBG", "0"))], cp, cfg),
+        ],
+        semaphores=[],
+        cbs=[cb(0, ttnn.bfloat16, xtb, 2 * mt * 32), cb(1, w.dtype, wtb, 64), cb(2, ttnn.float32, 4096, 2),
+             cb(3, ttnn.bfloat16, xtb, 32), cb(4, ttnn.float32, 4096, per * mt), cb(16, ttnn.bfloat16, xtb, 2 * mt)])
+    ttnn.generic_op([x, w, s] + outs, prog)
+    return tuple(outs) if gu else outs[0]
+
+
+def _selfcheck():
+    import argparse
+    import os
+    import time
+
+    from models.demos.blackhole.bonsai2.native import cpu_ref
+    from models.demos.blackhole.bonsai2.native.a3 import linear as al
+    from models.demos.blackhole.bonsai2.native.a3 import prefill as pf
+    from models.demos.blackhole.bonsai2.native.a3.mlp import Shared, TernaryMLP
+    from models.demos.blackhole.bonsai2.native.gguf_ternary import read_ternary
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--seqs", default="32,128")
+    args = ap.parse_args()
+    dev = ttnn.open_device(device_id=int(os.environ.get("BONSAI_DEVICE", 0)), l1_small_size=24576)
+
+    def timed(f, n=5):
+        r = f()
+        [ttnn.deallocate(t) for t in (r if isinstance(r, tuple) else (r,))]
+        ttnn.synchronize_device(dev)
+        ts = []
+        for _ in range(n):
+            t0 = time.perf_counter()
+            r = f()
+            ttnn.synchronize_device(dev)
+            ts.append((time.perf_counter() - t0) * 1e3)
+            [ttnn.deallocate(t) for t in (r if isinstance(r, tuple) else (r,))]
+        return float(np.median(ts))
+
+    try:
+        sh = Shared(dev)
+        mlp = TernaryMLP(sh, 0, os.path.join(os.environ["TT_CACHE_PATH"], "a3_mlp"))
+        cache = os.path.join(os.environ["TT_CACHE_PATH"], "a3_linear")
+        gi = al.TernaryLinear(sh, "blk.0.gdn_in", cache, rows=al.gdn_in_rows(sh, 0))
+        go = al.TernaryLinear(sh, "blk.0.ssm_out.weight", cache)
+        t = {nm: read_ternary(sh.gguf, f"blk.0.ffn_{nm}.weight") for nm in ("gate", "up", "down")}
+        dense = lambda tt: tt.codes.astype(np.float64) * np.repeat(tt.scales.astype(np.float64), 128, axis=1)  # noqa: E731
+        wref = {"gate": dense(t["gate"]), "up": dense(t["up"]), "down": dense(t["down"]),
+                "gdn_in": np.asarray(al.gdn_in_rows(sh, 0)[0], np.float64) * np.repeat(
+                    np.asarray(al.gdn_in_rows(sh, 0)[1], np.float64), 128, axis=1),
+                "gdn_out": dense(read_ternary(sh.gguf, "blk.0.ssm_out.weight"))}
+        cases = [("gu", 5120, None), ("down", 17408, None), ("gdn_in", 5120, gi), ("gdn_out", 6144, go)]
+        for srows in [int(v) for v in args.seqs.split(",")]:
+            for name, k, tl in cases:
+                xh = torch.randn(1, 1, srows, k).bfloat16()
+                x = ttnn.from_torch(xh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev,
+                                    memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                xf = xh.float().numpy().reshape(srows, k)
+                if name == "gu":
+                    f_new = lambda: pmm(x, mlp.w_gu, mlp.s_gu, k, 17408, gu=True)  # noqa: E731
+                    f_old = lambda: tuple(ttnn.linear(x, wt, compute_kernel_config=pf._LOFI)  # noqa: E731
+                                          for wt in pf.dequant(mlp.w_gu, mlp.s_gu, k, 17408, gu=True))
+                    got = [ttnn.to_torch(o).float().numpy().reshape(srows, -1) for o in f_new()]
+                    pcs = [cpu_ref.pcc(got[0], xf @ wref["gate"].T), cpu_ref.pcc(got[1], xf @ wref["up"].T)]
+                elif name == "down":
+                    f_new = lambda: pmm(x, mlp.w_d, mlp.s_d, k, 5120)  # noqa: E731
+                    f_old = lambda: ttnn.linear(x, pf.dequant(mlp.w_d, mlp.s_d, k, 5120), compute_kernel_config=pf._LOFI)  # noqa: E731
+                    pcs = [cpu_ref.pcc(ttnn.to_torch(f_new()).float().numpy().reshape(srows, -1), xf @ wref["down"].T)]
+                else:
+                    f_new = lambda: pmm(x, tl.w, tl.s, k, tl.n)  # noqa: E731
+                    f_old = lambda: ttnn.linear(x, pf.dequant(tl.w, tl.s, k, tl.n), compute_kernel_config=pf._LOFI)  # noqa: E731
+                    pcs = [cpu_ref.pcc(ttnn.to_torch(f_new()).float().numpy().reshape(srows, -1), xf @ wref[name].T)]
+                got_all = f_new()
+                for o in (got_all if isinstance(got_all, tuple) else (got_all,)):
+                    assert torch.isfinite(ttnn.to_torch(o).float()).all(), "non-finite pmm output"
+                print(f"S={srows} {name}: pmm pcc vs float64 {' '.join(f'{p:.6f}' for p in pcs)}; "
+                      f"ms pmm {timed(f_new):.3f} vs dequant+matmul {timed(f_old):.3f}", flush=True)
+                ttnn.deallocate(x)
+    finally:
+        ttnn.close_device(dev)
+
+
+if __name__ == "__main__":
+    _selfcheck()

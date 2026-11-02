@@ -21,6 +21,7 @@ import torch
 import ttnn
 
 from . import op as a3
+from .pmm import MAX_ROWS, pmm
 
 import os
 
@@ -157,6 +158,13 @@ def wide_pc(s: int, k: int, n: int):
         per_core_M=-(-s // 32 // gy), per_core_N=pcn, transpose_mcast=False, fused_activation=None, fuse_batch=False)
 
 
+def _use_pmm(xr) -> bool:
+    """Short prefill rows (S <= 128): pmm.py, A3 at M>1, dequantizes in L1 with no scratch. S=128, chip 3, ms vs
+    dequant+matmul: gate|up 0.93 vs 1.95, down 0.85 vs 1.16, gdn_in 0.57 vs 1.08, gdn_out 0.55 vs 0.76,
+    PCC 0.99999 vs float64 (0.99986 on the scratch path). BONSAI_PF_PMM=0 turns it off."""
+    return xr.shape[-2] <= MAX_ROWS and os.environ.get("BONSAI_PF_PMM", "1") == "1"
+
+
 def _pf_dtype():
     """BONSAI_PF_W=bfp4: every prefill scratch except MLP gate/up (BONSAI_PF_GU) in bfp4 instead of bfp8."""
     return ttnn.bfloat4_b if os.environ.get("BONSAI_PF_W") == "bfp4" else ttnn.bfloat8_b
@@ -165,6 +173,14 @@ def _pf_dtype():
 def prefill_linear(tl, x, mem=ttnn.DRAM_MEMORY_CONFIG, program_config=None):
     """Prefill for any a3.linear.TernaryLinear site: x [.., S, K] -> [1, 1, S, N] bf16."""
     xr = rotator(tl.sh)(x)
+    if _use_pmm(xr):
+        y = pmm(xr, tl.w, tl.s, tl.k, tl.n)
+        ttnn.deallocate(xr)
+        if mem != ttnn.DRAM_MEMORY_CONFIG:
+            y2 = ttnn.to_memory_config(y, mem)
+            ttnn.deallocate(y)
+            y = y2
+        return ttnn.reshape(y, list(x.shape)[:-1] + [tl.n])
     wd = dequant(tl.w, tl.s, tl.k, tl.n, dtype=_pf_dtype())
     pc = program_config or wide_pc(xr.shape[-2], tl.k, tl.n)
     y = ttnn.linear(xr, wd, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
@@ -180,20 +196,27 @@ def prefill_mlp(mlp, x, mem=ttnn.DRAM_MEMORY_CONFIG, down_pc=None):
     k, h = x.shape[-1], mlp.w_d.shape[-2]  # w_d is [K=hidden, N=dim]
     xr = rot(x)
     # BONSAI_PF_GU=bfp4: gate/up scratch in bfp4 (the dense path's gate/up dtype): 0.9 vs 1.3 ms dequant per layer.
-    gu_dt = ttnn.bfloat4_b if os.environ.get("BONSAI_PF_GU") == "bfp4" else ttnn.bfloat8_b
-    wg, wu = dequant(mlp.w_gu, mlp.s_gu, k, h, gu=True, dtype=gu_dt)
-    pc = wide_pc(xr.shape[-2], k, h)
-    g = ttnn.linear(xr, wg, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
-    u = ttnn.linear(xr, wu, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
-    for t in (wg, wu, xr):
-        ttnn.deallocate(t)
+    if _use_pmm(xr):
+        g, u = pmm(xr, mlp.w_gu, mlp.s_gu, k, h, gu=True)
+        ttnn.deallocate(xr)
+    else:
+        gu_dt = ttnn.bfloat4_b if os.environ.get("BONSAI_PF_GU") == "bfp4" else ttnn.bfloat8_b
+        wg, wu = dequant(mlp.w_gu, mlp.s_gu, k, h, gu=True, dtype=gu_dt)
+        pc = wide_pc(xr.shape[-2], k, h)
+        g = ttnn.linear(xr, wg, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
+        u = ttnn.linear(xr, wu, compute_kernel_config=_LOFI, memory_config=mem, program_config=pc)
+        for t in (wg, wu, xr):
+            ttnn.deallocate(t)
     hid = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mem)
     ttnn.deallocate(g)
     ttnn.deallocate(u)
     hr = rot(hid)
     ttnn.deallocate(hid)
-    wd = dequant(mlp.w_d, mlp.s_d, h, k, dtype=_pf_dtype())
-    y = ttnn.linear(hr, wd, compute_kernel_config=_LOFI, memory_config=mem, program_config=down_pc)
-    ttnn.deallocate(wd)
+    if _use_pmm(hr):
+        y = pmm(hr, mlp.w_d, mlp.s_d, h, k)
+    else:
+        wd = dequant(mlp.w_d, mlp.s_d, h, k, dtype=_pf_dtype())
+        y = ttnn.linear(hr, wd, compute_kernel_config=_LOFI, memory_config=mem, program_config=down_pc)
+        ttnn.deallocate(wd)
     ttnn.deallocate(hr)
     return ttnn.reshape(y, list(x.shape))
