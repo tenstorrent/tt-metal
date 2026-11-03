@@ -208,11 +208,11 @@ class TtNomicExperts(LightweightModule):
         rows, hidden = activated.shape[-2], self.w2_columns.shape[-2]
         memory_config = self.routed_memory_config(rows, hidden * BFLOAT16_BYTES)
         if W2_IMPL == "generated":
-            from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+            from ttnn.operations._op_contract import SupportRefusal
             from ttnn.operations.moe_down_proj import moe_down_proj
 
-            # The op refuses what its contract excludes (> 4096 tokens, other dtypes or sizes) before it
-            # allocates anything; those calls take grouped_matmul.
+            # The op refuses what its contract excludes (> 4096 tokens, other dtypes or sizes, no blocking fitting the
+            # L1 left free); its output is freed before it refuses. Those calls take grouped_matmul.
             try:
                 return moe_down_proj(
                     activated,
@@ -223,7 +223,7 @@ class TtNomicExperts(LightweightModule):
                     ),
                     memory_config=memory_config,
                 )
-            except (UnsupportedAxisValue, ExcludedCell):
+            except SupportRefusal:
                 pass
         return ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul(
             activated,

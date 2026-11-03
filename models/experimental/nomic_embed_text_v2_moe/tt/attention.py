@@ -263,7 +263,7 @@ class TtNomicBertAttention(LightweightModule):
         """Rotated q, rotated k and v, each (B, A, S, D) on heads_memory."""
         cos, sin = rot_mats
         if QKV_IMPL == "fused":
-            from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+            from ttnn.operations._op_contract import SupportRefusal
             from ttnn.operations.qkv_proj_heads_rope import qkv_proj_heads_rope
 
             # The op refuses what its contract excludes (S > 512, > 4096 tokens, other dtypes or model sizes)
@@ -279,7 +279,7 @@ class TtNomicBertAttention(LightweightModule):
                     compute_kernel_config=compute_config_descriptor(self.tt_config.compute_kernel_config(OpGroup.QKV)),
                     memory_config=heads_memory,
                 )
-            except (UnsupportedAxisValue, ExcludedCell):
+            except SupportRefusal:
                 pass
 
         qkv = dense_linear(x, self.qkv_weight, self.qkv_bias, OpGroup.QKV, self.tt_config)

@@ -75,7 +75,7 @@ class TtNomicBertMLP(LightweightModule):
     def _fc1(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """gelu(x @ fc1 + b), (B, 1, S, F)."""
         if FC1_IMPL == "generated" and self.tt_config.dense_gelu == ttnn.GeluVariant.Tanh:
-            from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+            from ttnn.operations._op_contract import SupportRefusal
             from ttnn.operations.linear_gelu import linear_gelu
 
             m_tiles = x.shape[0] * ttnn.core.divup(x.shape[-2], ttnn.TILE_SIZE)
@@ -91,7 +91,7 @@ class TtNomicBertMLP(LightweightModule):
                     compute_kernel_config=compute_config_descriptor(self.tt_config.compute_kernel_config(OpGroup.FC1)),
                     memory_config=ttnn.L1_MEMORY_CONFIG if in_l1 else ttnn.DRAM_MEMORY_CONFIG,
                 )
-            except (UnsupportedAxisValue, ExcludedCell):
+            except SupportRefusal:
                 pass
         return dense_linear(
             x, self.fc1_weight, self.fc1_bias, OpGroup.FC1, self.tt_config, gelu=self.tt_config.dense_gelu
