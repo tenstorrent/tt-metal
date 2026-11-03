@@ -28,6 +28,9 @@ jobs:
         timeout-minutes: 20
         with:
           fetch-depth: 0 # Fetch all history and all branches / tags so 'origin/main' is available
+          # pre-commit diffs with a merge base, so the commit graph has to be real,
+          # but the blobs do not: fetch them on demand instead of up front.
+          filter: blob:none
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -129,7 +132,15 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
-          fetch-depth: 0 # Fetch all history for git diff comparison
+          # This check only ever diffs two commits, so it only needs two commits.
+          # fetch-depth: 0 mirrors every ref in the repo (~11k branches, ~2.8k tags,
+          # 2.4 GB) and leaves no headroom under the 20 minute cap above.
+          fetch-depth: 2
+      - name: Fetch the base ref to diff against
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin \
+            "+refs/heads/${{ github.event.pull_request.base.ref }}:refs/remotes/origin/${{ github.event.pull_request.base.ref }}"
       - name: Check for new InterleavedAddrGen usages in changed files
         run: |
           set -euo pipefail
