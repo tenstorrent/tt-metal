@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Local invariants of KernelSpec::DFBBinding and KernelSpec::dfb_bindings (kernel_spec.hpp): accessor
-// names, at most one PRODUCER and one CONSUMER binding per DFB, self-loop rules, and every DFB a compute
-// kernel binds sets a data format.
+// names, at most one PRODUCER and one CONSUMER binding per DFB, self-loop rules, when trisc3 can be used
+// with DFBs, and every DFB a compute kernel binds sets a data format.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -22,6 +22,7 @@ namespace tt::tt_metal::experimental {
 namespace {
 
 using test_helpers::MakeMinimalDFB;
+using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
@@ -322,6 +323,111 @@ TEST_F(ProgramSpecTestQuasar, CPU_DMOnlyProgramSucceeds) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBBindingOnTrisc3Succeeds) {
+    // use_trisc3 moves a compute kernel's endpoint from trisc0 (consumer) / trisc2 (producer) to trisc3.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "trisc3_consumer";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto compute = MakeMinimalGen2ComputeKernel("compute");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    auto consumer_binding = ConsumerOf(DFBSpecName{"dfb"}, "in");
+    consumer_binding.use_trisc3 = true;
+    compute.dfb_bindings.push_back(consumer_binding);
+
+    spec.kernels = {producer, compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "compute"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBSelfLoopBothSidesOnTrisc3Succeeds) {
+    // A compute kernel may put both sides of a self-looped DFB on trisc3.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "trisc3_self_loop";
+
+    auto compute = MakeMinimalGen2ComputeKernel("compute");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    auto producer_binding = ProducerOf(DFBSpecName{"dfb"}, "out");
+    producer_binding.use_trisc3 = true;
+    auto consumer_binding = ConsumerOf(DFBSpecName{"dfb"}, "in");
+    consumer_binding.use_trisc3 = true;
+    compute.dfb_bindings = {producer_binding, consumer_binding};
+
+    spec.kernels = {compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBBindingOnTrisc3ForDMKernelFails) {
+    // trisc3 is a compute thread, so a data-movement kernel cannot ask for it.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "trisc3_dm_binding";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto compute = MakeMinimalGen2ComputeKernel("compute");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    auto producer_binding = ProducerOf(DFBSpecName{"dfb"}, "out");
+    producer_binding.use_trisc3 = true;
+    producer.dfb_bindings.push_back(producer_binding);
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "compute"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("use_trisc3 is only valid on a compute kernel")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_DFBBindingOnTrisc3OnGen1Fails) {
+    // WH/BH have no trisc3.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "trisc3_gen1";
+
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    auto consumer_binding = ConsumerOf(DFBSpecName{"dfb"}, "in");
+    consumer_binding.use_trisc3 = true;
+    compute.dfb_bindings.push_back(consumer_binding);
+
+    spec.kernels = {producer, compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "compute"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("use_trisc3 needs a Quasar device")));
 }
 
 }  // namespace

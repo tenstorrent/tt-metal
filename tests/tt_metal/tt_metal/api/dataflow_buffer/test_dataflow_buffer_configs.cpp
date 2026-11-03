@@ -1567,7 +1567,6 @@ struct M2ConfigDFBParams {
     bool implicit_sync = false;
     uint32_t block_size = 0;                                   // BLOCKED sides only: tiles per block
     std::optional<m2::NodeRange> target_nodes = std::nullopt;  // override single-core default
-    bool producer_on_trisc3 = false;                           // use_trisc3 on the producer binding
 };
 
 static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, const M2ConfigDFBParams& p) {
@@ -1600,8 +1599,7 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
                  .accessor_name = "out",
                  .endpoint_type = m2::DFBEndpointType::PRODUCER,
                  .access_pattern = p.pap,
-                 .block_size = p.pap == m2::DFBAccessPattern::BLOCKED ? p.block_size : 0u,
-                 .use_trisc3 = p.producer_on_trisc3}};
+                 .block_size = p.pap == m2::DFBAccessPattern::BLOCKED ? p.block_size : 0u}};
             k.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
             k.compile_time_args = {
                 {"num_entries_per_producer", per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
@@ -1618,7 +1616,8 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
              .endpoint_type = m2::DFBEndpointType::PRODUCER,
              .access_pattern = p.pap,
              .block_size = p.pap == m2::DFBAccessPattern::BLOCKED ? p.block_size : 0u}};
-        k.compile_time_args = {{"num_entries_per_producer", per_producer}};
+        k.compile_time_args = {
+            {"num_entries_per_producer", per_producer}, {"producer_on_trisc3", 0u}, {"producer_stamp_base", 0u}};
         return k;
     };
 
@@ -2239,27 +2238,6 @@ TEST_F(UnitMeshFixture, B6_AllProducer_Rejected_2_0) {
         .pap = m2::DFBAccessPattern::ALL,  // <-- the offense (producer ALL not supported)
         .cap = m2::DFBAccessPattern::STRIDED,
         .implicit_sync = false,
-    };
-    EXPECT_THROW(
-        {
-            Program program = build_single_dfb_program_2_0(this->device(), p);
-            program.impl().finalize_dataflow_buffer_configs();
-        },
-        std::exception);
-}
-
-// use_trisc3 on a DM kernel's binding is rejected.
-TEST_F(UnitMeshFixture, Trisc3OnDMBinding_Rejected_2_0) {
-    if (this->device().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "DFB validation tested on Quasar";
-    }
-    using namespace m2_config_test_helpers;
-    M2ConfigDFBParams p{
-        .producer_type = M2PorCType::DM,
-        .consumer_type = M2PorCType::TENSIX,
-        .num_producers = 1,
-        .num_consumers = 1,
-        .producer_on_trisc3 = true,  // only a compute kernel can run on trisc3
     };
     EXPECT_THROW(
         {
