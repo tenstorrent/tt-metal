@@ -65,7 +65,44 @@ class _DecodeOProjTtnn:
         return ttnn.linear(a, b, *args, **kwargs)
 
 
+class _PrefillInProjTtnn:
+    """ttnn shim for the prefill (mode='chunk') path only: the 2048-token in_proj
+    (mega fused qkvz+ab, 2048x5120x16480) gets the auto 2D 13x10 geometry with
+    in0_block_w=4 instead of the auto in0_block_w=1 (160 K-steps), as mlp.py gate/up."""
+
+    def __getattr__(self, name):
+        return getattr(ttnn, name)
+
+    def linear(self, a, b, *args, **kwargs):
+        if kwargs.get("program_config") is None and list(b.shape)[-2:] == [5120, 16480]:
+            shp = list(a.shape)
+            m = 1
+            for d in shp[:-1]:
+                m *= d
+            if m == 2048:
+                kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                    in0_block_w=4,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    out_block_h=7,
+                    out_block_w=20,
+                    per_core_M=7,
+                    per_core_N=40,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                )
+        return ttnn.linear(a, b, *args, **kwargs)
+
+
 def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None):
+    if mode == "chunk":
+        _orig_ttnn = _gdn_mod.ttnn
+        _gdn_mod.ttnn = _PrefillInProjTtnn()
+        try:
+            return _recurrent_forward_impl(gdn, x, mode=mode, chunk_size=chunk_size, valid_len=valid_len)
+        finally:
+            _gdn_mod.ttnn = _orig_ttnn
     if mode == "recurrent":
         _orig_ttnn = _gdn_mod.ttnn
         _gdn_mod.ttnn = _DecodeOProjTtnn(gdn.weights.o_proj_weight)
