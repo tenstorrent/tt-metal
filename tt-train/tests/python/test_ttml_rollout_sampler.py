@@ -248,7 +248,7 @@ def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutB
     B = inputs.shape[0]
     layout = sampler._batch_layout
     with run_mode(model, RunMode.EVAL), no_grad():
-        nlog = policy_nlog_probs(model, inputs, targets, layout.mapper)
+        nlog = policy_nlog_probs(model, inputs, targets, mapper=layout.mapper)
         teacher = -np.asarray(nlog.to_numpy(ttnn.DataType.FLOAT32, composer=layout.composer), dtype=np.float32)
         teacher = teacher.reshape(B, Tp)
     ttml.autograd.AutoContext.get_instance().reset_graph()

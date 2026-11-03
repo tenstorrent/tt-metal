@@ -926,7 +926,9 @@ def layout_microbatch(
     return inputs, targets, mask, Tp
 
 
-def policy_nlog_probs(model: Any, inputs: np.ndarray, targets: np.ndarray, mapper: Any = None) -> ttml.autograd.Tensor:
+def policy_nlog_probs(
+    model: Any, inputs: np.ndarray, targets: np.ndarray, *, mapper: Any = None
+) -> ttml.autograd.Tensor:
     """Teacher-forced forward over the :func:`layout_microbatch` tensors.
     Returns ``-log pi(target)`` of shape ``[B_local, Tp]``.
     """
@@ -1482,7 +1484,7 @@ class GRPOTrainer:
         """Teacher-forced forward with grad over the :func:`layout_microbatch`
         tensors. Returns ``-log pi(target)`` of shape ``[B_local, Tp]``.
         """
-        return policy_nlog_probs(self.model, inputs, targets, self._batch_layout.mapper)
+        return policy_nlog_probs(self.model, inputs, targets, mapper=self._batch_layout.mapper)
 
     def _compute_loss_and_backward(
         self,
