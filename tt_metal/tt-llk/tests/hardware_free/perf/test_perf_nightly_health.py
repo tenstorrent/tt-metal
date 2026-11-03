@@ -9,15 +9,20 @@ _PERF = pathlib.Path(__file__).parents[3] / "perf"
 sys.path.insert(0, str(_PERF))
 import baseline_from_warehouse
 import gate_slack_notify
+import pytest
+import yaml
 from nightly_health import (
+    NIGHTLIES,
     assess,
     build_text,
     gate_result,
-    last_to_finish,
     leg_limits,
     owners,
     payloads,
 )
+
+_WORKFLOWS = pathlib.Path(__file__).parents[5] / ".github" / "workflows"
+_HEALTH = "llk-perf-nightly-health.yaml"
 
 DAY = dt.date(2026, 10, 13)
 RUN = {
@@ -141,12 +146,40 @@ def test_a_failed_job_outside_legs_upload_and_gates_is_a_problem():
     assert report["problems"] == ["SoL: LLK perf tests / Quasar perf compile failure"]
 
 
-def test_only_the_last_nightly_to_finish_sends():
-    sol = {**RUN, "id": 1, "updated_at": "2026-10-13T07:00:00Z"}
-    non_sol = {**RUN, "id": 2, "updated_at": "2026-10-13T06:00:00Z"}
-    assert last_to_finish([sol, non_sol], 1)
-    assert not last_to_finish([sol, non_sol], 2)
-    assert not last_to_finish([sol, {**non_sol, "status": "in_progress"}], 1)
+def _crons(workflow):
+    """The ``(hour, minute)`` of every daily schedule in a workflow file."""
+    doc = yaml.safe_load((_WORKFLOWS / workflow).read_text()) or {}
+    # A bare ``on:`` key parses as the boolean True, not as the string.
+    triggers = doc.get("on", doc.get(True)) or {}
+    out = []
+    for item in triggers.get("schedule") or []:
+        minute, hour = str(item.get("cron", "")).split()[:2]
+        out.append((int(hour), int(minute)))
+    return sorted(out)
+
+
+@pytest.mark.skipif(
+    not (_WORKFLOWS / _HEALTH).exists(),
+    reason="the workflow files are not in this checkout",
+)
+def test_the_health_check_starts_after_every_nightly_is_due():
+    """A check that runs before a nightly starts reports that nightly missing."""
+    health = _crons(_HEALTH)
+    assert health, "the health check needs its own schedule"
+    nightlies = [c for _, workflow in NIGHTLIES for c in _crons(workflow)]
+    assert nightlies, "a nightly without a schedule cannot be checked for"
+    assert min(health) > max(nightlies)
+
+
+@pytest.mark.skipif(
+    not (_WORKFLOWS / _HEALTH).exists(),
+    reason="the workflow files are not in this checkout",
+)
+def test_the_health_check_is_not_driven_by_the_nightlies_finishing():
+    """The first nightly to finish would ask about a run that does not exist yet."""
+    doc = yaml.safe_load((_WORKFLOWS / _HEALTH).read_text()) or {}
+    triggers = doc.get("on", doc.get(True)) or {}
+    assert "workflow_run" not in triggers
 
 
 def test_gate_result_reads_the_lines_the_gate_really_prints(

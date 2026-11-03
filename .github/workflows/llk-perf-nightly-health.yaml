@@ -1,9 +1,14 @@
 name: "LLK perf nightly health"
 
 on:
-  workflow_run:
-    workflows: ["LLK perf", "LLK perf gate"]
-    types: [completed]
+  # One check a day, after both nightlies are expected to be done. The SoL
+  # nightly runs at 03:00 and the gate nightly at 05:00, and the first usually
+  # finishes before the second is created, so a completion-driven check asks
+  # about a run that does not exist yet and calls it missing. A schedule also
+  # still reports when a nightly did not run at all, which a completion of that
+  # nightly never could.
+  schedule:
+    - cron: '0 8 * * *'
   workflow_dispatch:
     inputs:
       date:
@@ -18,7 +23,6 @@ permissions:
 jobs:
   health:
     name: "Check the nightlies and report"
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'schedule'
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
@@ -38,12 +42,11 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           OWNER_SLACK_ID: U0BCPNHUF43
           SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
-          DAY: ${{ inputs.date || github.event.workflow_run.created_at }}
-          TRIGGER_RUN: ${{ github.event.workflow_run.id }}
+          DAY: ${{ inputs.date }}
         run: |
           python3 tt_metal/tt-llk/perf/nightly_health.py \
             --repo "$GITHUB_REPOSITORY" --dm "$OWNER_SLACK_ID" --channel "$SLACK_CHANNEL_ID" \
-            ${DAY:+--date "${DAY:0:10}"} ${TRIGGER_RUN:+--trigger-run "$TRIGGER_RUN"}
+            ${DAY:+--date "${DAY:0:10}"}
           [ -f health_payloads.json ] || exit 0
           python3 -c 'import json; [json.dump(p, open(f"payload_{i}.json", "w")) for i, p in enumerate(json.load(open("health_payloads.json")))]'
           for payload in payload_*.json; do
