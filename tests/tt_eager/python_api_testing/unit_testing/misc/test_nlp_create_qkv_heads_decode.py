@@ -561,3 +561,64 @@ def test_create_width_shard_by_head(
             n_local_kv_heads,
             head_dim,
         )
+
+
+@pytest.mark.parametrize(
+    "num_shard_cores, shard_tiles, covers_width",
+    (
+        (5, 2, True),  # 5 x 2 tiles == 10 tiles
+        (4, 3, False),  # 4 x 3 tiles == 12 tiles, last shard is partial
+        (3, 4, False),  # 3 x 4 tiles == 12 tiles, last shard is partial
+    ),
+)
+def test_create_heads_width_shard_must_cover_fused_width(
+    device, expect_error, num_shard_cores, shard_tiles, covers_width
+):
+    torch.manual_seed(0)
+    n_local_heads, n_local_kv_heads, head_dim, batch = 6, 2, 32, 8
+    fused_width = (n_local_heads + 2 * n_local_kv_heads) * head_dim
+    grid_size = device.compute_with_storage_grid_size()
+
+    in_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_shard_cores - 1, 0))})
+    in_memcfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(in_grid, [32, shard_tiles * 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    out_memcfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
+            [32, head_dim],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    proj_output = torch.rand(1, 1, batch, fused_width)
+    proj_output_tt = ttnn.from_torch(
+        proj_output, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=in_memcfg
+    )
+
+    def run():
+        return ttnn.experimental.nlp_create_qkv_heads_decode(
+            proj_output_tt,
+            num_heads=n_local_heads,
+            num_kv_heads=n_local_kv_heads,
+            overlap_qk_coregrid=True,
+            memory_config=out_memcfg,
+        )
+
+    if not covers_width:
+        with expect_error(RuntimeError, "covered exactly by its shards"):
+            run()
+        return
+
+    q, k, v = run()
+    q_torch = ttnn.to_torch(q)[:, :batch, :n_local_heads, :]
+    k_torch = ttnn.to_torch(k)[:, :batch, :n_local_kv_heads, :]
+    v_torch = ttnn.to_torch(v)[:, :batch, :n_local_kv_heads, :]
+    ref = proj_output[0, 0].reshape(batch, -1, head_dim)
+    assert torch.allclose(q_torch, ref[:, :n_local_heads].unsqueeze(0), atol=1e-2)
+    assert torch.allclose(k_torch, ref[:, n_local_heads : n_local_heads + n_local_kv_heads].unsqueeze(0), atol=1e-2)
+    assert torch.allclose(v_torch, ref[:, n_local_heads + n_local_kv_heads :].unsqueeze(0), atol=1e-2)
