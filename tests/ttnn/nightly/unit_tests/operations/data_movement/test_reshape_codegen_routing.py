@@ -370,31 +370,6 @@ def test_reshape_codegen_tile_program_key_stable_while_full_plan_fits(
     _check_program_key_stable(device, in_shape, out_shape, dtype, layout, mem)
 
 
-def test_reshape_codegen_lcm_shrinks_write_batch_under_l1_pressure(device):
-    # Three 96 -> 192 fp32 chunks on one core. The full plan takes 144 KiB: 12 in and mid tiles and a 24-tile output CB
-    # for 8-tile write batches. With 120 KiB free only 2-tile batches fit, over a 12-tile output CB.
-    in_shape, out_shape, dtype = [1, 1, 3 * 64, 96], [1, 1, 3 * 32, 192], ttnn.float32
-    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
-    source = _make(in_shape, dtype)
-    expected = source.reshape(out_shape)
-    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)
-
-    def run():
-        out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
-        _assert_bits(expected, ttnn.to_torch(out), dtype)
-
-    run()
-    entries = device.num_program_cache_entries()
-    hog = _l1_hog_leaving(device, 120 * 1024)
-    try:
-        run()
-        assert device.num_program_cache_entries() == entries + 1
-    finally:
-        ttnn.deallocate(hog)
-    run()
-    assert device.num_program_cache_entries() == entries + 1
-
-
 def test_reshape_codegen_mapped_shrinks_input_depth_under_l1_pressure(device):
     # The fp32 segment map's map row is under 2 KiB, so its 8-, 4- and 1-deep input CBs take about 38, 22 and 10 KiB.
     # 30 and 14 KiB free pick the 4- and 1-deep programs, each a new cache entry, and auto still takes them. Native
@@ -556,6 +531,17 @@ def _capturing(device):
         _best_effort(lambda: ttnn.end_trace_capture(device, trace_id, cq_id=0))
 
 
+# (id, in shape, out shape, KiB free) for fp32 calls whose plan the pressure moves.
+_TRACE_PRESSURE_CASES = [
+    # Tile rows: the head split's full plan takes 301 KiB per core, its single-buffered plan 173 KiB.
+    ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], 240),
+    # LCM to segment map: a 96 -> 128 chunk is lcm(96, 128) / 32 = 12 tiles, so the in and mid CBs take 2 * 48 KiB
+    # and the smallest output CB (Wt_out = 4 tiles) 16 KiB more: 112 KiB. The segment map's 8-deep input CB, scratch
+    # tile and map page take under 40 KiB.
+    ("lcm_to_map", [1, 1, 140 * 128, 96], [1, 1, 140 * 96, 128], 96),
+]
+
+
 @pytest.mark.parametrize(
     "hog_before_warmup",
     [
@@ -573,28 +559,33 @@ def _capturing(device):
     ],
     ids=["warm_under_pressure", "warm_then_pressure"],
 )
+@pytest.mark.parametrize(
+    "case,in_shape,out_shape,free_kib", _TRACE_PRESSURE_CASES, ids=[c[0] for c in _TRACE_PRESSURE_CASES]
+)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 4 * 1024 * 1024}], indirect=True)
 @skip_for_slow_dispatch("trace capture requires fast dispatch")
-def test_reshape_codegen_trace_capture_under_l1_pressure(device, hog_before_warmup):
-    # Trace capture compiles nothing, so it needs the plan warm-up cached. With 240 KiB free this head split takes
-    # its single-buffered plan instead of the full one. warm_under_pressure warms up under that pressure, as
-    # TraceCorrectness.md asks of a model, and the capture reuses the warm entry. warm_then_pressure warms up on
-    # free L1 and captures under pressure: the capture needs a plan warm-up never compiled and aborts. Strict, so the
-    # case fails if the pressure stops moving the plan.
-    in_shape, out_shape, dtype = [1, 256, 4096], [1, 256, 32, 128], ttnn.float32
+def test_reshape_codegen_trace_capture_under_l1_pressure(
+    device, case, in_shape, out_shape, free_kib, hog_before_warmup
+):
+    # Trace capture compiles nothing, so it needs the plan warm-up cached. With `free_kib` free each call runs a
+    # smaller plan than with L1 free. warm_under_pressure warms up under that pressure, as TraceCorrectness.md asks of
+    # a model, and the capture reuses the warm entry. warm_then_pressure warms up on free L1 and captures under
+    # pressure: the capture needs a plan warm-up never compiled and aborts. Strict, so the case fails if the pressure
+    # stops moving the plan.
+    dtype = ttnn.float32
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)
     trace_id = None
     hog = None
     try:
         if hog_before_warmup:
-            hog = _l1_hog_leaving(device, 240 * 1024)
+            hog = _l1_hog_leaving(device, free_kib * 1024)
         warm = ttnn.reshape(x, out_shape, memory_config=_DRAM)
         _assert_bits(source.reshape(out_shape), ttnn.to_torch(warm), dtype)
         ttnn.deallocate(warm)
         entries = device.num_program_cache_entries()
         if not hog_before_warmup:
-            hog = _l1_hog_leaving(device, 240 * 1024)
+            hog = _l1_hog_leaving(device, free_kib * 1024)
 
         with _capturing(device) as trace_id:
             out = ttnn.reshape(x, out_shape, memory_config=_DRAM)

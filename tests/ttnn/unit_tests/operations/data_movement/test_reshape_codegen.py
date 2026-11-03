@@ -158,9 +158,16 @@ _EDGE = [
     ("odd_outer", [7, 32, 96], [3, 7, 32, 32]),
     ("outer_to_h", [3, 50, 64], [50, 3, 64]),
 ]
-_EDGE_CASES = [(*e, ttnn.bfloat16) for e in _EDGE] + [
-    (*e, ttnn.float32) for e in _EDGE if e[0] in ("h50", "rank5", "outer_to_h")
-]
+_EDGE_CASES = (
+    [(*e, ttnn.bfloat16) for e in _EDGE]
+    + [(*e, ttnn.float32) for e in _EDGE if e[0] in ("h50", "rank5", "outer_to_h")]
+    + [
+        # Unpadded input, tile-padded output height: LCM must refuse it, or its unpadded tile stream lands in the
+        # output's padding. With 64 batches LCM's 32 six-tile chunks would beat native by lcm_beats_native, so only
+        # the guard keeps forced codegen off LCM.
+        ("h_out_pad", [64, 32, 96], [64, 48, 64], ttnn.float32),
+    ]
+)
 
 
 @pytest.mark.parametrize(
@@ -398,6 +405,35 @@ def test_reshape_codegen_shrinks_plan_under_l1_pressure(device):
         ttnn.deallocate(hog)
     # With the L1 free again the full plan fits, so the call hits the full plan's entry.
     _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries + 1
+
+
+def test_reshape_codegen_lcm_shrinks_write_batch_under_l1_pressure(device):
+    # Three 96 -> 192 fp32 chunks on one core. The full plan takes 144 KiB: 12 in and mid tiles and a 24-tile output CB
+    # for 8-tile write batches. With 120 KiB free only 2-tile batches fit, over a 12-tile output CB.
+    in_shape, out_shape, dtype = [1, 1, 3 * 64, 96], [1, 1, 3 * 32, 192], ttnn.float32
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)
+
+    def run():
+        out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+        _assert_bits(expected, ttnn.to_torch(out), dtype)
+
+    run()
+    entries = device.num_program_cache_entries()
+    hog = _l1_hog_leaving(device, 120 * 1024)
+    try:
+        run()
+        assert device.num_program_cache_entries() == entries + 1
+        # Auto routes to the smaller LCM program just compiled; native would compile a new one.
+        out = ttnn.reshape(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+        _assert_bits(expected, ttnn.to_torch(out), dtype)
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
+    run()
     assert device.num_program_cache_entries() == entries + 1
 
 
