@@ -45,7 +45,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (!tilize_en)
         {
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-                formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
+                formats.unpack_A_src,
+                formats.unpack_B_src,
+                formats.unpack_A_dst,
+                formats.unpack_B_dst,
+                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
             _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                 0 /* transpose_of_faces */,
                 0 /* within_face_16x16_transpose */,
@@ -56,7 +61,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else
         {
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-                formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
+                formats.unpack_A_src,
+                formats.unpack_B_src,
+                formats.unpack_A_dst,
+                formats.unpack_B_dst,
+                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
             _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, num_faces);
         }
         PROFILER_SYNC();

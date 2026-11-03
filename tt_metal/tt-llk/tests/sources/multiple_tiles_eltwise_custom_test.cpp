@@ -27,14 +27,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces);
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        params.TEST_FACE_R_DIM,
-        params.TEST_FACE_R_DIM,
-        params.num_faces,
-        params.num_faces);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);

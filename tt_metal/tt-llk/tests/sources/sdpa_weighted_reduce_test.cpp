@@ -96,14 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     // operandA (buffer_A) = WEIGHTS -> SrcB; operandB (buffer_B) = QK -> SrcA.
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        4 /* unpA_num_faces */,
-        4 /* unpB_num_faces */);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_unpack_AB_matmul_init_<>(0 /* transpose */, WR_CT_DIM, WR_RT_DIM, WR_KT_DIM, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
     // buffer_A = weights (-> SrcB), buffer_B = qk (-> SrcA). Single k-tile.
     _llk_unpack_AB_matmul_<>(

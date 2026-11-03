@@ -126,10 +126,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, TEST_FACE_R_DIM, TEST_FACE_R_DIM, num_faces, num_faces);
-        _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
         const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
+        _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
         _llk_unpack_A_init_<BROADCAST_TYPE, unpack_acc_to_dest, unpack_binary_reuse_dest, unpack_to_dest>(
             0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();

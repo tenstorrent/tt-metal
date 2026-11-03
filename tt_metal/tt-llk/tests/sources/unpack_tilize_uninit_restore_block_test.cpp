@@ -68,10 +68,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[run].unpack_B_src,
         formats_array[run].unpack_A_dst,
         formats_array[run].unpack_B_dst,
-        face_r_dim,
-        face_r_dim,
-        num_faces,
-        num_faces);
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces),
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces));
 
     const std::uint32_t tilize_num_faces = num_faces;
     const std::uint32_t block_ct_dim     = _llk_unpack_tilize_block_ct_dim_wrapper_(params.BLOCK_CT_DIM);
