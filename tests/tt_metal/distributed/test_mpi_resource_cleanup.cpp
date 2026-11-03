@@ -155,11 +155,11 @@ protected:
         int status = 0;
     };
 
-    std::vector<std::string> child_environment() const {
+    std::vector<std::string> child_environment(const std::vector<std::string>& extra_env) const {
         std::vector<std::string> env;
         for (char** entry = environ; *entry != nullptr; ++entry) {
             const std::string_view var(*entry);
-            bool drop = var.starts_with("TMPDIR=");
+            bool drop = var.starts_with("TMPDIR=") || var.starts_with("TT_METAL_MPI_INIT=");
             for (std::string_view prefix : kLauncherEnvPrefixes) {
                 drop = drop || var.starts_with(prefix);
             }
@@ -171,11 +171,15 @@ protected:
         env.push_back("OMPI_MCA_btl_sm_backing_directory=" + shm_dir(scratch_).string());
         env.push_back("OMPI_MCA_osc_sm_backing_directory=" + shm_dir(scratch_).string());
         env.push_back(std::string(kScratchDirEnv) + "=" + scratch_.string());
+        env.insert(env.end(), extra_env.begin(), extra_env.end());
         return env;
     }
 
-    ChildResult spawn_and_wait(const std::vector<std::string>& args, std::chrono::seconds timeout) const {
-        std::vector<std::string> env = child_environment();
+    ChildResult spawn_and_wait(
+        const std::vector<std::string>& args,
+        std::chrono::seconds timeout,
+        const std::vector<std::string>& extra_env = {}) const {
+        std::vector<std::string> env = child_environment(extra_env);
         std::vector<char*> envp;
         for (auto& var : env) {
             envp.push_back(var.data());
@@ -214,9 +218,14 @@ protected:
         return result;
     }
 
-    ChildResult run_child(std::string_view child_test, std::chrono::seconds timeout) const {
+    ChildResult run_child(
+        std::string_view child_test,
+        std::chrono::seconds timeout,
+        const std::vector<std::string>& extra_env = {}) const {
         return spawn_and_wait(
-            {"/proc/self/exe", "--gtest_filter=MpiResourceCleanupChild." + std::string(child_test)}, timeout);
+            {"/proc/self/exe", "--gtest_filter=MpiResourceCleanupChild." + std::string(child_test)},
+            timeout,
+            extra_env);
     }
 
     void expect_clean_exit(const ChildResult& result, std::chrono::seconds timeout) const {
@@ -252,10 +261,17 @@ TEST_F(MpiResourceCleanupTest, HarnessDetectsLiveMpiSingleton) {
 // The trigger named in #63870: asking for the current world starts an MPI runtime when no launcher started one.
 TEST_F(MpiResourceCleanupTest, CurrentWorldWithoutLauncherLeavesNoMpiFiles) {
     constexpr auto timeout = std::chrono::seconds(120);
-    const auto result = run_child("GetCurrentWorld", timeout);
+    const auto result = run_child("GetCurrentWorldWithoutMpi", timeout);
     expect_clean_exit(result, timeout);
     expect_child_ran();
     expect_no_mpi_leftovers();
+}
+
+TEST_F(MpiResourceCleanupTest, MpiInitOverrideStartsMpiWithoutLauncher) {
+    constexpr auto timeout = std::chrono::seconds(120);
+    const auto result = run_child("GetCurrentWorldWithMpi", timeout, {"TT_METAL_MPI_INIT=always"});
+    expect_clean_exit(result, timeout);
+    expect_child_ran();
 }
 
 // What every single-process tt-metal program does. Uses real hardware, or a mock cluster when
@@ -311,7 +327,8 @@ TEST(MpiResourceCleanupChild, RawMpiSingletonIsVisible) {
     mark_child_ran(*scratch);
 }
 
-TEST(MpiResourceCleanupChild, GetCurrentWorld) {
+// Asks for the current world and checks whether that started MPI; a size-1 world is expected either way.
+void get_current_world_and_expect_mpi(bool expect_mpi) {
     const auto scratch = child_scratch_dir();
     if (!scratch.has_value()) {
         GTEST_SKIP() << "runs only as a child of MpiResourceCleanupTest";
@@ -320,8 +337,15 @@ TEST(MpiResourceCleanupChild, GetCurrentWorld) {
     ASSERT_NE(world, nullptr);
     EXPECT_EQ(*world->size(), 1);
     EXPECT_EQ(*world->rank(), 0);
+    int mpi_initialized = 0;
+    MPI_Initialized(&mpi_initialized);
+    EXPECT_EQ(mpi_initialized != 0, expect_mpi) << "MPI_Initialized after get_current_world()";
     mark_child_ran(*scratch);
 }
+
+TEST(MpiResourceCleanupChild, GetCurrentWorldWithoutMpi) { get_current_world_and_expect_mpi(false); }
+
+TEST(MpiResourceCleanupChild, GetCurrentWorldWithMpi) { get_current_world_and_expect_mpi(true); }
 
 TEST(MpiResourceCleanupChild, OpenAndCloseUnitMesh) {
     const auto scratch = child_scratch_dir();
