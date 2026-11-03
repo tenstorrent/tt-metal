@@ -53,7 +53,14 @@ struct UnifiedRoutedExpertFfnProgramFactory {
     struct WavePlannerConfig {
         uint32_t per_core_M_max = 0;
         bool partial_eighth = false;
+        // URE_TAPER_TAIL of the program overlapped with combine (EmbeddedOptions::report_predicted_order), the
+        // only one whose finish order is predicted.
+        uint32_t taper_tail = 0;
     };
+    // Overlapped with combine, the last this many experts of a walk run at most as pairs (adaptive_chunk::WavePlanner,
+    // URE_TAPER_TAIL): a whole eighth or quad wave finishing last leaves combine all of its tokens to ship after
+    // the routed expert is done, which on a hot chip is most of the op's tail.
+    static constexpr uint32_t kOverlapTaperTail = 4;
     static WavePlannerConfig wave_planner_config(
         const UnifiedRoutedExpertFfnParams& operation_attributes, const UnifiedRoutedExpertFfnInputs& tensor_args);
 

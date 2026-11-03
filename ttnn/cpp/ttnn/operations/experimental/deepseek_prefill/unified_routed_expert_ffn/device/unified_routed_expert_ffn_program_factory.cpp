@@ -647,7 +647,8 @@ std::pair<uint32_t, uint32_t> UnifiedRoutedExpertFfnProgramFactory::select_l1_pl
 UnifiedRoutedExpertFfnProgramFactory::WavePlannerConfig UnifiedRoutedExpertFfnProgramFactory::wave_planner_config(
     const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t) {
     const Geometry g = plan_geometry(op, t, t.output.dtype());
-    return WavePlannerConfig{.per_core_M_max = g.per_core_M, .partial_eighth = partial_eighth_fits(g)};
+    return WavePlannerConfig{
+        .per_core_M_max = g.per_core_M, .partial_eighth = partial_eighth_fits(g), .taper_tail = kOverlapTaperTail};
 }
 
 tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_descriptor(
@@ -1189,6 +1190,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_emb
     if (partial_eighth) {
         reader_defines.emplace_back("PARTIAL_EIGHTH", "1");
     }
+    // Same taper on all three kernels, so their planners agree (and with combine's prediction).
+    const uint32_t taper_tail = options.report_predicted_order ? kOverlapTaperTail : 0;
+    if (taper_tail > 0) {
+        reader_defines.emplace_back("URE_TAPER_TAIL", std::to_string(taper_tail));
+    }
     if (fuse_bias) {
         reader_ct_args.push_back(CB_GATE_BIAS);
         reader_ct_args.push_back(CB_UP_BIAS);
@@ -1284,6 +1290,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_emb
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
     if (partial_eighth) {
         writer_kernel_desc.defines.emplace_back("PARTIAL_EIGHTH", "1");
+    }
+    if (taper_tail > 0) {
+        writer_kernel_desc.defines.emplace_back("URE_TAPER_TAIL", std::to_string(taper_tail));
     }
     if (options.far_chunk_table) {
         writer_kernel_desc.defines.emplace_back("URE_FAR_EXT_OFF", std::to_string(far_ext_off));
@@ -1388,6 +1397,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_emb
     }
     if (partial_eighth) {
         compute_defines.emplace_back("PARTIAL_EIGHTH", "1");
+    }
+    if (taper_tail > 0) {
+        compute_defines.emplace_back("URE_TAPER_TAIL", std::to_string(taper_tail));
     }
     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
     // the SFPU fp32-dest template derive from this, staying in sync with

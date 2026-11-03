@@ -571,6 +571,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             if (args.walk_partial_eighth) {
                 kernel.defines.emplace_back("PARTIAL_EIGHTH", "1");
             }
+            if (args.walk_taper_tail > 0) {
+                kernel.defines.emplace_back("URE_TAPER_TAIL", std::to_string(args.walk_taper_tail));
+            }
         }
     };
 
@@ -731,9 +734,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 }
 }  // namespace
 
-uint32_t channel_semaphore_count(uint32_t ring_extent) {
-    return channel_semaphore_count_for_vcs(num_vcs(ring_extent));
-}
+uint32_t channel_semaphore_count(uint32_t ring_extent) { return channel_semaphore_count_for_vcs(num_vcs(ring_extent)); }
 
 tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes) {
     TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);

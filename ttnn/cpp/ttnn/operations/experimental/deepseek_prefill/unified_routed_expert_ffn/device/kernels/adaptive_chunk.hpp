@@ -294,7 +294,22 @@ struct WavePlanner {
                 ++found;
             }
         }
-        if (found == 7 && eight_on_rows(nc, per_core_M_max)) {
+#ifdef URE_TAPER_TAIL
+        // TAPER (overlapped with combine): the last URE_TAPER_TAIL non-empty experts of a walk go at most two at a
+        // time, so the program's last releases are small and combine has little left to ship once the expert ends.
+        uint32_t after = 0;  // non-empty experts after e
+        for (uint32_t n = e + 1; n < num_experts; ++n) {
+            after += tiles_of(n) != 0 ? 1u : 0u;
+        }
+        const bool eighth_ok = after >= 7 + URE_TAPER_TAIL;
+        const bool partial_eighth_ok = false;
+        const bool quad_ok = after >= 3 + URE_TAPER_TAIL;
+#else
+        constexpr bool eighth_ok = true;
+        constexpr bool partial_eighth_ok = true;
+        constexpr bool quad_ok = true;
+#endif
+        if (eighth_ok && found == 7 && eight_on_rows(nc, per_core_M_max)) {
             for (uint32_t i = 0; i < 7; ++i) {
                 pend_e[i] = nx[i];
                 pend_role[i] = kRoleEighth0 + 1 + i;
@@ -304,7 +319,7 @@ struct WavePlanner {
         }
         // found < 7: the scan reached the last expert, so these are ALL the remaining ones.
 #if defined(PARTIAL_EIGHTH)
-        if (found < 7 && partial_eighth_on_rows(nc, found + 1, per_core_M_max)) {
+        if (partial_eighth_ok && found < 7 && partial_eighth_on_rows(nc, found + 1, per_core_M_max)) {
             for (uint32_t i = 0; i < found; ++i) {
                 pend_e[i] = nx[i];
                 pend_role[i] = kRoleEighth0 + partial_eighth_row(i + 1, found + 1);
@@ -313,7 +328,7 @@ struct WavePlanner {
             return kRoleEighth0 + partial_eighth_row(0, found + 1);
         }
 #endif
-        if (found >= 3 && quad_on_quarters(c, nc[1], nc[2], nc[3], per_core_M_max)) {
+        if (quad_ok && found >= 3 && quad_on_quarters(c, nc[1], nc[2], nc[3], per_core_M_max)) {
             for (uint32_t i = 0; i < 3; ++i) {
                 pend_e[i] = nx[i];
                 pend_role[i] = kRoleQuarter0 + 1 + i;

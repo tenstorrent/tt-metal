@@ -114,6 +114,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
         combine_args.predicted_walk = true;
         combine_args.walk_per_core_M_max = planner.per_core_M_max;
         combine_args.walk_partial_eighth = planner.partial_eighth;
+        combine_args.walk_taper_tail = planner.taper_tail;
         combine_args.walk_big_first_threshold = op.big_first_threshold;
     }
     combine_args.routed_expert_writers = expert_done_writer_count(re_descriptor);
