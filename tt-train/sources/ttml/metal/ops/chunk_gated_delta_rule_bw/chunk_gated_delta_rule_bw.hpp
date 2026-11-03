@@ -32,11 +32,13 @@ struct ChunkGatedDeltaRuleBwNeeds {
 //   v      [B, T, HV*V]
 //   g, beta [B, T, HV]    log-space decay gate and write strength
 //   d_out  [B, T, HV*V], or head-major [B*HV, 1, T, V]
-//   initial_state, d_final_state [B, HV, K, V], optional
+//   initial_state [B, HV, K, V], optional, BFLOAT16 or FLOAT32 (the forward takes it in FLOAT32)
+//   d_final_state [B, HV, K, V], optional, in q's dtype
 // HK must divide HV; value head h reads key head h / (HV / HK).  K cannot be read off the flat q
 // width, so key_head_dim is required.  T must be a multiple of chunk_size (32 or 64), K and V
-// multiples of 32 and HV <= 32.  q, k, v, d_out and the optional states share one dtype (BFLOAT16 or
-// FLOAT32); g and beta share another and may be BFLOAT16 or FLOAT32 whatever q's is, as in the forward.
+// multiples of 32 and HV <= 32.  q, k, v, d_out and d_final_state share one dtype (BFLOAT16 or FLOAT32); g
+// and beta share another, and initial_state a third, each BFLOAT16 or FLOAT32 whatever q's is, as in the
+// forward.
 //
 // h [B*HV, NC, K, V], v_new [B*HV, 1, T, V], a [B*HV, 1, T, C]: the FLOAT32 intermediates returned by
 // chunk_gated_delta_rule_fw (save_for_backward), all required.  The backward reads the forward's states, its
@@ -47,9 +49,10 @@ struct ChunkGatedDeltaRuleBwNeeds {
 // Ct, Kt, Vt the chunk, K and V extents in tiles, an item is 2*Ct*Kt + 2*Ct*Vt + 2*Kt*Vt + 4*Ct tiles:
 // at chunk_size 64, K = V = 128, 288 KB per item, i.e. 576 MiB for B*HV = 32 at T = 4096.
 //
-// Returns {dq, dk, dv, dg, dbeta, dh0} with the shapes of {q, k, v, g, beta, initial_state}, all in
-// q's dtype (cast dg / dbeta back if the gates are in the other dtype); dh0 is nullopt when
-// initial_state is, and every entry that `needs` clears is nullopt.
+// Returns {dq, dk, dv, dg, dbeta, dh0} with the shapes of {q, k, v, g, beta, initial_state}: dq, dk and dv in
+// q's dtype, dg and dbeta in the gates' dtype and dh0 in initial_state's.  The kernel accumulates all of them
+// in fp32 and rounds once, on the way out.  dh0 is nullopt when initial_state is, and every entry that
+// `needs` clears is nullopt.
 std::vector<std::optional<ttnn::Tensor>> chunk_gated_delta_rule_bw(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,

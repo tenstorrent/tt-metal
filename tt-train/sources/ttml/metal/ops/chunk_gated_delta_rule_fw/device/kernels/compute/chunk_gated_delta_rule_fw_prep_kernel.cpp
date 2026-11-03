@@ -10,7 +10,7 @@
 // Per chunk (C=chunk, K=key dim, V=val dim; Ct=C/32, Kt=K/32, Vt=V/32), with q already scaled and
 // q, k already L2-normalized along K by the caller:
 //   v_beta = v*beta ; k_beta = k*beta
-//   decay = cumsum(g) = tril @ g ; decay_exp = exp(decay)          (decay is teed out as g_cumsum)
+//   decay = cumsum(g) = tril @ g ; decay_exp = exp(decay)
 //   L_mask = tril( exp(decay_i - decay_j) ), span formed as tril @ (g * strictly_lower)
 //   N = strictly_lower(k_beta@k^T * L_mask) ; T_inv = (I+N)^-1     (T_inv is the saved A)
 //   kd = k_beta*decay_exp ; intra = (q@k^T) * L_mask
@@ -35,7 +35,7 @@ namespace {
 
 using namespace chunk_gated_delta_rule_fw::prep;
 
-// Scratch-CB push quantum. cb_scr1/2/3 carry blocks of many sizes (1, Ct, cc, ck, kc tiles). The
+// Scratch-CB push quantum. cb_scr1/2/3 carry blocks of several sizes (1, Ct, cc, ck tiles). The
 // LLK pack/unpack address of tile i is fifo_ptr + i*page with no wrap
 // (llk_pack_common_api.h::get_output_tile_address), so a block that straddles the ring end would
 // read/write past the CB into the next CB's L1. Every reserve/push/wait/pop on a scratch CB therefore
@@ -43,11 +43,7 @@ using namespace chunk_gated_delta_rule_fw::prep;
 // tiles 0..n-1. This requires each scratch CB to hold at most one live block.
 constexpr uint32_t kCt = get_compile_time_arg_val(0);
 constexpr uint32_t kKt = get_compile_time_arg_val(1);
-constexpr uint32_t kVt = get_compile_time_arg_val(2);
-constexpr uint32_t cmax(uint32_t a, uint32_t b) {
-    return a > b ? a : b;
-}
-constexpr uint32_t SCR = cmax(cmax(cmax(kCt * kCt, kCt* kKt), cmax(kCt* kVt, kKt* kVt)), kKt* kCt);
+constexpr uint32_t SCR = scratch_tiles(kCt, kKt);
 inline uint32_t qn(uint32_t cb, uint32_t n) {
     return (cb == cb_scr1 || cb == cb_scr2 || cb == cb_scr3) ? SCR : n;
 }
@@ -59,17 +55,9 @@ inline void POP(uint32_t cb, uint32_t n) {
     CircularBuffer(cb).pop_front(qn(cb, n));
 }
 
-constexpr uint32_t NO_CB = 0xFFFFFFFFu;
-
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
-// o2 (optional, same data format as o): every result tile is ALSO packed from DEST into o2 — an
-// exact fp32 tee for a writer-drained output (a copy_tile round-trip would unpack through the tf32
-// source register and truncate it).
-void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr, uint32_t o2 = NO_CB) {
+void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
     cb_reserve_back(o, qn(o, Mt * Nt));
-    if (o2 != NO_CB) {
-        cb_reserve_back(o2, qn(o2, Mt * Nt));
-    }
     pack_reconfig_data_format(o);  // mixed bf16/fp32 CBs: set packer to this output's format
     // matmul_tiles(a,b): in0=a->srcB, in1=b->srcA. Reconfig unpack src formats to match (the op
     // init only asserts formats, it does not set them), else fp32/bf16 CBs are read at the wrong
@@ -86,16 +74,10 @@ void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t N
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, o, mi * Nt + ni);
-            if (o2 != NO_CB) {
-                pack_tile(0, o2, mi * Nt + ni);
-            }
             tile_regs_release();
         }
     }
     cb_push_back(o, qn(o, Mt * Nt));
-    if (o2 != NO_CB) {
-        cb_push_back(o2, qn(o2, Mt * Nt));
-    }
 }
 
 // out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul.
@@ -319,8 +301,8 @@ void kernel_main() {
     WAIT(cb_sut, cc);
     WAIT(cb_mask, kNumMasks);  // Qtl, Qbr, Q10 (used by invert_block)
 
-    // Per item: v_beta, T_inv, kd, intra, q_decay, k_dec_t, dl and g_cumsum stay pushed in their CBs
-    // for the prep writer.
+    // Per item: v_beta, T_inv, kd, intra, q_decay, k_dec_t and dl stay pushed in their CBs for the prep
+    // writer.
     for (uint32_t c = 0; c < num_items; c++) {
         WAIT(cb_q, ck);
         WAIT(cb_k, ck);
@@ -339,8 +321,7 @@ void kernel_main() {
         POP(cb_v, cv);
 
         // ---- P2: decay = tril@g, decay_exp ----
-        // (decay is also packed straight into cb_gcum -> writer -> g_cumsum.)
-        mm(cb_tril, cb_g, cb_decay, Ct, Ct, 1, false, cb_gcum);
+        mm(cb_tril, cb_g, cb_decay, Ct, Ct, 1, false);
         WAIT(cb_decay, Ct);
         expc(cb_decay, cb_decay_exp, Ct);
         WAIT(cb_decay_exp, Ct);

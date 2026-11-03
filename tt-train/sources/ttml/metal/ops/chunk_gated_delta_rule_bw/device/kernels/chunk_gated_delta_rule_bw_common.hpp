@@ -14,8 +14,8 @@
 //   q, k        [B, 1, T, HK*K]      v, do   [B, 1, T, HV*V]      g, beta [B, 1, T, HV]
 //   (rank-3 [B, T, X] pages identically; do may instead be head-major [B*HV, 1, T, V])
 //   dq, dk      [G*B, 1, T, HK*K]    plane g holds value head hk*G + g; the host sums the G planes
-//   dv          [B, 1, T, HV*V]      dg, dbeta [B, 1, T, HV]
-//   h0, dht, dh0 [B, HV, K, V]
+//   dv          [B, 1, T, HV*V]      dg, dbeta [B, 1, T, HV]  (the gate dtype)
+//   h0, dht, dh0 [B, HV, K, V]       dh0 is in h0's dtype
 //   saved h [B*HV, NC, K, V], v_new [B*HV, 1, T, V], A [B*HV, 1, T, C] (f32), the forward's outputs:
 //   item wi's block starts at tile wi * ST_S / ST_VNEW / ST_ATTN.  A is T_inv = (I + N)^-1 itself, so the
 //   backward never rebuilds the inverse, the states or the corrected values.
@@ -71,10 +71,13 @@ constexpr uint32_t gG = get_compile_time_arg_val(37);             // value heads
 constexpr uint32_t DO_HEAD_MAJOR = get_compile_time_arg_val(38);  // d_out is [B*HV, 1, T, V]
 
 // g / beta element bytes: the gate dtype is independent of q's (BF16 or FP32 gates with either input
-// dtype), and only the reader's column gather sees it.  dg / dbeta are written in the input dtype.
+// dtype).  The reader's column gather reads it and the writer's dg / dbeta scatter writes it: both
+// gradients are in the gate dtype.
 constexpr uint32_t GATE_ESZ = get_compile_time_arg_val(39);
+// dh0 element bytes: the dtype of the initial state (BF16 or FP32, independent of q's); 4 without one.
+constexpr uint32_t STATE_ESZ = get_compile_time_arg_val(40);
 
-constexpr uint32_t CT_ACC_BASE = 40;
+constexpr uint32_t CT_ACC_BASE = 41;
 
 constexpr uint32_t CHUNK = Ct * 32;
 constexpr uint32_t CtCt = Ct * Ct;

@@ -9,6 +9,8 @@
     dq, dk [B, 1, T, HK*K]      dv [B, 1, T, HV*V]     dg, dbeta [B, 1, T, HV]
     dh0    [B, HV, K, V]
 
+dq, dk and dv come back in q's dtype, dg and dbeta in the gates' dtype and dh0 in initial_state's.
+
 The backward takes the saved h / v_new / A of ttml.ops.metal.chunk_gated_delta_rule_fw as required inputs: A
 is the forward's UT inverse, and the backward reads it (and h, v_new) instead of rebuilding any of them.  The
 inputs here are bf16-representable, because the forward only takes bf16 q / k / v, so that an fp32 backward
@@ -24,8 +26,9 @@ Pinned here:
 5. Head-major d_out [B*HV, 1, T, V] and rank-3 [B, T, X] inputs give bit-identical gradients.
 6. Several items per core at Vb > 1 (every CB keeps a uniform push size across items).
 7. Strong gates (|cumsum(g)| in the hundreds within a chunk) still match the oracle.
-8. FLOAT32 gates with BFLOAT16 q/k/v/d_out (the forward's dtype contract) match the oracle; dg / dbeta come
-   back in q's dtype.
+8. FLOAT32 gates with BFLOAT16 q/k/v/d_out (the forward's dtype contract) match the oracle.  dg / dbeta come
+   back in the gates' dtype and dh0 in the state's, whatever q's is: the fp32 accumulators are rounded once,
+   so the bf16 gradients are exactly the fp32 ones rounded to bf16.
 9. Weak gates (the default here) keep the inter-chunk state carry observable; one decaying-gate case
    covers the other regime.  See `WEAK_GATE`.
 10. An explicit `scale` is checked against the oracle in absolute terms, not only by correlation.
@@ -223,14 +226,15 @@ def _flat(x, shape):
     }
 
 
-def _upload(x, shape, dtype, device, *, rank=4, do_head_major=False, gate_dtype=None):
-    """The device tensors of `x`; callers that keep the result keep the inputs alive."""
+def _upload(x, shape, dtype, device, *, rank=4, do_head_major=False, gate_dtype=None, state_dtype=None):
+    """The device tensors of `x`; callers that keep the result keep the inputs alive.  The gates are in
+    `gate_dtype` and initial_state in `state_dtype`, q's `dtype` by default."""
     B, T, HK, HV, K, V = shape
     f = {n: t.unsqueeze(1) if rank == 4 else t for n, t in _flat(x, shape).items()}
     if do_head_major:
         f["do"] = x["do"].permute(0, 2, 1, 3).reshape(B * HV, 1, T, V)
     f = {n: _dev(t, device, (gate_dtype or dtype) if n in ("g", "beta") else dtype) for n, t in f.items()}
-    f["h0"], f["dht"] = _dev(x["h0"], device, dtype), _dev(x["dht"], device, dtype)
+    f["h0"], f["dht"] = _dev(x["h0"], device, state_dtype or dtype), _dev(x["dht"], device, dtype)
     return f
 
 
@@ -252,12 +256,25 @@ def _dispatch(f, shape, chunk_size, *, saved, scale=None):
 
 
 def _run_ttml(
-    x, shape, chunk_size, dtype, device, *, rank=4, do_head_major=False, saved=None, gate_dtype=None, scale=None
+    x,
+    shape,
+    chunk_size,
+    dtype,
+    device,
+    *,
+    rank=4,
+    do_head_major=False,
+    saved=None,
+    gate_dtype=None,
+    state_dtype=None,
+    scale=None,
 ):
     """The backward fed the saved forward `saved`, or the one ttml's forward saves for `x` when it is None."""
     if saved is None:
         saved = _run_ttml_fw(x, shape, chunk_size, device, gate_dtype or ttnn.bfloat16, scale)
-    f = _upload(x, shape, dtype, device, rank=rank, do_head_major=do_head_major, gate_dtype=gate_dtype)
+    f = _upload(
+        x, shape, dtype, device, rank=rank, do_head_major=do_head_major, gate_dtype=gate_dtype, state_dtype=state_dtype
+    )
     return _dispatch(f, shape, chunk_size, saved=saved, scale=scale)
 
 
@@ -268,7 +285,7 @@ def _run_ttml_fw(x, shape, chunk_size, device, gate_dtype=ttnn.bfloat16, scale=N
         for n, t in _flat(x, shape).items()
         if n != "do"
     }
-    _, _, h, v_new, _, a = ttml.ops.metal.chunk_gated_delta_rule_fw(
+    _, _, h, v_new, a = ttml.ops.metal.chunk_gated_delta_rule_fw(
         f["q"],
         f["k"],
         f["v"],
@@ -294,14 +311,17 @@ def _out_shapes(shape):
     }
 
 
-def _check_grads(got, expected, shape, dtype, *, bounds=None):
-    """`bounds` maps a gradient name to its own (pcc_min, rms_max) where the default pair does not apply."""
+def _check_grads(got, expected, shape, dtype, *, bounds=None, gate_dtype=None, state_dtype=None):
+    """`bounds` maps a gradient name to its own (pcc_min, rms_max) where the default pair does not apply.
+    dq, dk, dv are in `dtype`, dg and dbeta in `gate_dtype` and dh0 in `state_dtype` (each `dtype` by default)."""
     shapes = _out_shapes(shape)
+    dtypes = {"dg": gate_dtype or dtype, "dbeta": gate_dtype or dtype, "dh0": state_dtype or dtype}
     for name, dev_t, exp in zip(GRAD_NAMES, got, expected):
         if exp is None:
             assert dev_t is None, f"{name}: expected None without initial_state"
             continue
-        assert dev_t.layout == ttnn.TILE_LAYOUT and dev_t.dtype == dtype, f"{name}: {dev_t.layout} {dev_t.dtype}"
+        want = dtypes.get(name, dtype)
+        assert dev_t.layout == ttnn.TILE_LAYOUT and dev_t.dtype == want, f"{name}: {dev_t.layout} {dev_t.dtype}"
         host = ttnn.to_torch(dev_t).double()
         assert tuple(host.shape) == shapes[name], f"{name}: shape {tuple(host.shape)} != {shapes[name]}"
         pcc_min, rms_max = (bounds or {}).get(name, (PCC_MIN, RMS_MAX))
@@ -438,7 +458,32 @@ def test_fp32_gates_with_bf16_inputs(device):
     x["g"], x["beta"] = x32["g"], x32["beta"]  # not representable in bf16
     sv = _run_ttml_fw(x, shape, chunk_size, device, ttnn.float32)
     got = _run_ttml(x, shape, chunk_size, dtype, device, saved=sv, gate_dtype=ttnn.float32)
-    _check_grads(got, _oracle(x, shape), shape, dtype)
+    _check_grads(got, _oracle(x, shape), shape, dtype, gate_dtype=ttnn.float32)
+
+
+@pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
+def test_dg_dbeta_dh0_follow_the_gate_and_state_dtypes(dtype, device):
+    """dg / dbeta come back in the gates' dtype and dh0 in initial_state's, whatever q's is.  The kernel
+    accumulates all three in fp32 and rounds once, on the way out, so a bf16 gradient is the fp32 one rounded to
+    nearest even, and dq / dk / dv do not depend on either dtype."""
+    shape, chunk_size = SHAPES[2]
+    x = _build_inputs(shape, "with_h0_and_dht", dtype)
+    saved = _run_ttml_fw(x, shape, chunk_size, device)  # the backward's gate / state dtype does not change it
+    run = lambda gate, state: _run_ttml(
+        x, shape, chunk_size, dtype, device, saved=saved, gate_dtype=gate, state_dtype=state
+    )
+    wide = run(ttnn.float32, ttnn.float32)
+    _check_grads(wide, _oracle(x, shape), shape, dtype, gate_dtype=ttnn.float32, state_dtype=ttnn.float32)
+    wide_host = [ttnn.to_torch(t) for t in wide]
+    for gate, state in [(ttnn.bfloat16, ttnn.bfloat16), (ttnn.float32, ttnn.bfloat16), (ttnn.bfloat16, ttnn.float32)]:
+        got = run(gate, state)
+        want = {"dg": gate, "dbeta": gate, "dh0": state}
+        for name, t, ref in zip(GRAD_NAMES, got, wide_host):
+            assert t.dtype == want.get(name, dtype), f"gate {gate} state {state}: {name} is {t.dtype}"
+            host = ttnn.to_torch(t)
+            if name in want:
+                ref = ref.to(TORCH_DTYPE[want[name]])  # round to nearest even, like the kernel
+            assert torch.equal(host, ref), f"gate {gate} state {state}: {name} is not the fp32 gradient rounded once"
 
 
 @pytest.mark.parametrize("dtype", DTYPES, ids=DTYPE_IDS)
@@ -603,7 +648,7 @@ def _bad_input(name, device):
     elif name == "beta_dtype":
         beta = z(1, 1, 64, 1, dt=f32)
     elif name == "h0_dtype":
-        kwargs["initial_state"] = z(1, 1, 32, 32, dt=f32)
+        kwargs["initial_state"] = z(1, 1, 32, 32, dt=ttnn.bfloat8_b)
     elif name == "h0_shape":
         kwargs["initial_state"] = z(1, 1, 64, 32)
     elif name == "dht_shape":
@@ -622,7 +667,7 @@ def _bad_input(name, device):
         ("v_row_major", "v requires TILE layout. Got: ROW_MAJOR"),
         ("k_in_l1", "k must be in DRAM. Got: L1"),
         ("beta_dtype", "beta has unsupported dtype FLOAT32"),
-        ("h0_dtype", "initial_state has unsupported dtype FLOAT32"),
+        ("h0_dtype", "initial_state has unsupported dtype BFLOAT8_B"),
         ("h0_shape", re.escape("initial_state must be Shape([1, 1, 32, 32]), got Shape([1, 1, 64, 32])")),
         ("dht_shape", re.escape("d_final_state must be Shape([1, 1, 32, 32]), got Shape([1, 2, 32, 32])")),
         ("h_shape", re.escape("h must be Shape([1, 2, 32, 32]), got Shape([1, 1, 32, 32])")),

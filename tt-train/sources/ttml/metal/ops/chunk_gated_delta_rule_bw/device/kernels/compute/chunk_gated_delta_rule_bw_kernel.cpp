@@ -438,6 +438,8 @@ static __attribute__((noipa)) void egress_vec4(uint32_t cbg, uint32_t g0) {
     COPY_BLK(cb_veca, cb_egr, VA_W, 3 * Ct, Ct);
     cb_push_back(cb_egr, MAXBLK);
 }
+// A gradient that leaves in the input dtype (dq, dk), through cb_gegr.  dg, dbeta and dh0 leave as exact
+// fp32 through cb_egr (egress_f32): the writer rounds them to the gate / state dtype.
 static __attribute__((noipa)) void egress_grad(uint32_t cbi, uint32_t i0, uint32_t n) {
     cb_reserve_back(cb_gegr, MAXBLK_G);
     pack_reconfig_data_format(cb_gegr);
@@ -610,7 +612,7 @@ void kernel_main() {
             }
 
             if constexpr (HAS_H0) {
-                egress_grad(cb_sb, 0, KtVb);  // dh0 = dS_0
+                egress_f32(cb_sb, 0, KtVb);  // dh0 = dS_0
             }
             cb_pop_front(cb_sb, KtVb);
         }
@@ -778,7 +780,7 @@ void kernel_main() {
         PMM(cb_kf, cb_colones, cb_vecc, 0, 0, Ct, Kt, 1, Ct);
         PADD(cb_vecb, cb_vecc, cb_vecb, VB_DBETA_V, 0, Ct, 6 * Ct);  // vecb[6] = dbeta
         cb_pop_front(cb_vecc, Ct);
-        egress_grad(cb_vecb, VB_DBETA, Ct);
+        egress_f32(cb_vecb, VB_DBETA, Ct);
 
         // ---- dk = M^T q~ + dP*w + W^T k_beta + dk_beta*beta ------------
         p_tr(cb_cc, cb_ca, 0, Ct, Ct, CtCt);
@@ -822,11 +824,9 @@ void kernel_main() {
         cb_pop_front(cb_vecc, Ct);
         PMM(cb_const, cb_vecb, cb_vecc, CST_NSTRICT, VB_DWW, Ct, Ct, 1, Ct);
         PSUB(cb_vecb, cb_vecc, cb_vecc, VB_UTE, 0, Ct, 0);
-        cb_reserve_back(cb_gegr, MAXBLK_G);
-        pack_reconfig_data_format(cb_gegr);
-        ADD_BLK(cb_vecc, cb_vecb, cb_gegr, 0, VB_DGGAM, 0, Ct);
-        pack_reconfig_data_format(cb_egr);
-        cb_push_back(cb_gegr, MAXBLK_G);
+        cb_reserve_back(cb_egr, MAXBLK);
+        ADD_BLK(cb_vecc, cb_vecb, cb_egr, 0, VB_DGGAM, 0, Ct);
+        cb_push_back(cb_egr, MAXBLK);
         cb_pop_front(cb_vecc, Ct);
 
         // ---- release the item ------------------------------------------

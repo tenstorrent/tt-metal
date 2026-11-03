@@ -8,8 +8,9 @@
 //   h      [BH, NC, K, V]   state entering chunk c (h_0 from the reader, h_{c>=1} from the compute)
 //   v_new  [BH, 1, T, V]
 //   o      [B, 1, T, HV*V]  token-major, value head hv at column block hv (or head-major [BH, 1, T, V])
-// and once at the end final_state [B, HV, K, V].  All fp32.  Without SAVE_STATE h and v_new are popped
-// instead of written (no backward will read them).
+// and once at the end final_state [B, HV, K, V].  All fp32 except o, which is whatever cb_out holds (fp32 or
+// bfloat16, the op's output dtype): each page is as large as its own circular buffer's tile.  Without
+// SAVE_STATE h and v_new are popped instead of written (no backward will read them).
 
 #include <cstdint>
 
@@ -40,11 +41,11 @@ void kernel_main() {
     const uint32_t unit_start = get_arg_val<uint32_t>(0);
     const uint32_t num_units = get_arg_val<uint32_t>(1);
 
-    const uint32_t tb = get_tile_size(cb_out);
-    const auto o_acc = TensorAccessor(o_args, get_arg_val<uint32_t>(2), tb);
-    const auto fs_acc = TensorAccessor(fs_args, get_arg_val<uint32_t>(3), tb);
-    const auto h_acc = TensorAccessor(h_args, get_arg_val<uint32_t>(4), tb);
-    const auto vn_acc = TensorAccessor(vn_args, get_arg_val<uint32_t>(5), tb);
+    const uint32_t fp32_tb = get_tile_size(cb_final);  // page of final_state, h and v_new
+    const auto o_acc = TensorAccessor(o_args, get_arg_val<uint32_t>(2), get_tile_size(cb_out));
+    const auto fs_acc = TensorAccessor(fs_args, get_arg_val<uint32_t>(3), fp32_tb);
+    [[maybe_unused]] const auto h_acc = TensorAccessor(h_args, get_arg_val<uint32_t>(4), fp32_tb);
+    [[maybe_unused]] const auto vn_acc = TensorAccessor(vn_args, get_arg_val<uint32_t>(5), fp32_tb);
 
     constexpr uint32_t NV = Vt_full / Vt;
 
@@ -54,6 +55,7 @@ void kernel_main() {
     // R tile rows of `cb_id` ([R, Vt]) into this core's V-slice of rows starting at tile `row_base`,
     // `row_stride` tiles apart.
     auto scatter_vslice = [&](uint32_t cb_id, const auto& acc, uint32_t row_base, uint32_t row_stride, uint32_t R) {
+        const uint32_t tb = get_tile_size(cb_id);  // the page size of acc
         CircularBuffer cb(cb_id);
         cb.wait_front(R * Vt);
         auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cb);
@@ -66,7 +68,7 @@ void kernel_main() {
         noc.async_write_barrier();
         cb.pop_front(R * Vt);
     };
-    auto discard = [&](uint32_t cb_id, uint32_t R) {
+    [[maybe_unused]] auto discard = [&](uint32_t cb_id, uint32_t R) {
         CircularBuffer cb(cb_id);
         cb.wait_front(R * Vt);
         cb.pop_front(R * Vt);

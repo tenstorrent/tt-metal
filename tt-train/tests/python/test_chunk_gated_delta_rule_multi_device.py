@@ -40,9 +40,12 @@ def submeshes(tp_mesh):
     # A submesh keeps its parent mesh alive, and a mesh that stays open leaves the fabric initialised, so the
     # next module that opens a single device times out on its ethernet cores.  Drop every reference (the
     # tensors of failed tests live in their tracebacks) and close the submeshes before the fixture tears the
-    # mesh down.
+    # mesh down.  Each submesh also owns the programs its ops compiled, and the parent mesh frees them in its
+    # destructor after the submesh's allocator is gone (any op, a plain ttnn.add included, then segfaults in
+    # ProgramImpl::deallocate_circular_buffers), so clear the program caches while the submeshes are open.
     gc.collect()
     for submesh in (first, second):
+        submesh.disable_and_clear_program_cache()
         ttnn.close_mesh_device(submesh)
     del first, second
     gc.collect()

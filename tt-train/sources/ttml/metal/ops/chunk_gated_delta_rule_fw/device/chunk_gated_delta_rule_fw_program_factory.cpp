@@ -4,7 +4,6 @@
 
 #include "chunk_gated_delta_rule_fw_program_factory.hpp"
 
-#include <algorithm>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -27,10 +26,6 @@ using chunk_gated_delta_rule_common::kL1KernelConfigReserve;
 
 // Double-buffered: the scan's o egress.
 constexpr uint32_t kDoubleBuffer = 2U;
-
-uint32_t scratch_tiles(uint32_t Ct, uint32_t Kt, uint32_t Vt) {
-    return std::max({Ct * Ct, Ct * Kt, Ct * Vt, Kt * Vt, Kt * Ct});
-}
 
 void create_cbs(
     tt::tt_metal::Program& program,
@@ -70,25 +65,45 @@ namespace ttml::metal::ops::chunk_gated_delta_rule_fw::device {
 std::vector<CbSpec> prep_cb_plan(uint32_t Ct, uint32_t Kt, uint32_t Vt) {
     using namespace ::chunk_gated_delta_rule_fw::prep;
     const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kc = Kt * Ct;
-    const uint32_t scr = scratch_tiles(Ct, Kt, Vt);
+    const uint32_t scr = ::chunk_gated_delta_rule_fw::prep::scratch_tiles(Ct, Kt);
     // cb_S/cb_final/cb_s2/cb_s3 (the WY inverse's private scratch) and cb_supd/cb_stmp/cb_ointer
     // (the Ct == 2 block merge) never hold more than one tile in the prep.
     return {
-        {cb_q, ck, true},       {cb_k, ck, true},          {cb_v, cv, true},
-        {cb_g, Ct, false},      {cb_beta, Ct, false},      {cb_eye, cc, false},
-        {cb_tril, cc, false},   {cb_sut, cc, false},       {cb_S, 1U, false},
-        {cb_decay, Ct, false},  {cb_decay_exp, Ct, false}, {cb_decayfac, Ct, false},
-        {cb_lmask, cc, false},  {cb_Tinv, cc, false},      {cb_vbeta, cv, false},
-        {cb_kbeta, ck, false},  {cb_gcum, Ct, false},      {cb_mask, kNumMasks, false},
-        {cb_kd, ck, false},     {cb_qdecay, ck, false},    {cb_intra, cc, false},
-        {cb_s2, 1U, false},     {cb_dl, 1U, false},        {cb_ointer, 1U, false},
-        {cb_kdec_t, kc, false}, {cb_supd, 1U, false},      {cb_stmp, 1U, false},
-        {cb_final, 1U, false},  {cb_scr1, scr, false},     {cb_scr2, scr, false},
-        {cb_scr3, scr, false},  {cb_s3, 1U, false},
+        {cb_q, ck, true},
+        {cb_k, ck, true},
+        {cb_v, cv, true},
+        {cb_g, Ct, false},
+        {cb_beta, Ct, false},
+        {cb_eye, cc, false},
+        {cb_tril, cc, false},
+        {cb_sut, cc, false},
+        {cb_S, 1U, false},
+        {cb_decay, Ct, false},
+        {cb_decay_exp, Ct, false},
+        {cb_decayfac, Ct, false},
+        {cb_lmask, cc, false},
+        {cb_Tinv, cc, false},
+        {cb_vbeta, cv, false},
+        {cb_kbeta, ck, false},
+        {cb_mask, kNumMasks, false},
+        {cb_kd, ck, false},
+        {cb_qdecay, ck, false},
+        {cb_intra, cc, false},
+        {cb_s2, 1U, false},
+        {cb_dl, 1U, false},
+        {cb_ointer, 1U, false},
+        {cb_kdec_t, kc, false},
+        {cb_supd, 1U, false},
+        {cb_stmp, 1U, false},
+        {cb_final, 1U, false},
+        {cb_scr1, scr, false},
+        {cb_scr2, scr, false},
+        {cb_scr3, scr, false},
+        {cb_s3, 1U, false},
     };
 }
 
-std::vector<CbSpec> scan_cb_plan(uint32_t Ct, uint32_t Kt, uint32_t Vt_block) {
+std::vector<CbSpec> scan_cb_plan(uint32_t Ct, uint32_t Kt, uint32_t Vt_block, bool o_bf16) {
     using namespace ::chunk_gated_delta_rule_fw::scan;
     const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt_block, kv = Kt * Vt_block, kc = Kt * Ct;
     return {
@@ -102,7 +117,7 @@ std::vector<CbSpec> scan_cb_plan(uint32_t Ct, uint32_t Kt, uint32_t Vt_block) {
         {cb_S, kv, false},
         {cb_s2, kv, false},
         {cb_s3, kv, false},
-        {cb_out, cv * kDoubleBuffer, false},
+        {cb_out, cv * kDoubleBuffer, o_bf16},
         {cb_final, kv, false},
         {cb_vnew, cv, false},
         {cb_ointer, cv, false},
@@ -129,7 +144,7 @@ uint32_t cb_l1_budget() {
     return static_cast<uint32_t>(tt::tt_metal::hal::get_max_worker_l1_unreserved_size()) - kL1KernelConfigReserve;
 }
 
-ScanSplit make_scan_split(uint32_t BH, uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t num_cores) {
+ScanSplit make_scan_split(uint32_t BH, uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t num_cores, bool o_bf16) {
     // Prefer the largest split that gives every (value head, V-block) its own core ...
     uint32_t nv_min = 1U;
     for (uint32_t nv = Vt; nv > 1U; --nv) {
@@ -141,7 +156,7 @@ ScanSplit make_scan_split(uint32_t BH, uint32_t Ct, uint32_t Kt, uint32_t Vt, ui
     // ... and split further, past the core count, only when the state block does not fit L1.  A core
     // then runs several scans back to back.
     for (uint32_t nv = nv_min; nv <= Vt; ++nv) {
-        if (Vt % nv == 0U && cb_plan_bytes(scan_cb_plan(Ct, Kt, Vt / nv)) <= cb_l1_budget()) {
+        if (Vt % nv == 0U && cb_plan_bytes(scan_cb_plan(Ct, Kt, Vt / nv, o_bf16)) <= cb_l1_budget()) {
             return {nv, Vt / nv};
         }
     }
@@ -195,8 +210,7 @@ ChunkGatedDeltaRuleForwardPrepProgramFactory::cached_program_t ChunkGatedDeltaRu
     const std::vector<uint32_t> compute_ct = {Ct, Kt, Vt};
 
     const auto reader_id = create_reader_kernel(program, all_cores, reader_ct, {}, kPrepReaderPath);
-    const auto writer_id = create_writer_kernel(
-        program, all_cores, writer_ct, {{"SAVE_G_CUMSUM", args.save_g_cumsum ? "1" : "0"}}, kPrepWriterPath);
+    const auto writer_id = create_writer_kernel(program, all_cores, writer_ct, {}, kPrepWriterPath);
     const auto compute_id =
         create_compute(program, all_cores, kPrepComputePath, compute_ct, args.compute_kernel_config, device->arch());
 
@@ -283,12 +297,13 @@ ChunkGatedDeltaRuleForwardScanProgramFactory::cached_program_t ChunkGatedDeltaRu
     // one (value head, V-block); the units are shared out over the grid, and a core with more than one
     // runs them back to back (B*HV may exceed the core count).
     const auto grid = device->compute_with_storage_grid_size();
-    const ScanSplit split = make_scan_split(BH, Ct, Kt, Vt, grid.x * grid.y);
+    const bool o_bf16 = args.output_dtype == tt::tt_metal::DataType::BFLOAT16;
+    const ScanSplit split = make_scan_split(BH, Ct, Kt, Vt, grid.x * grid.y, o_bf16);
     const uint32_t num_units = BH * split.num_vblocks;
     const auto [num_cores, all_cores, group1, group2, units1, units2] =
         tt::tt_metal::split_work_to_cores(grid, num_units, /*row_wise=*/true);
 
-    create_cbs(program, all_cores, scan_cb_plan(Ct, Kt, split.vblock_tiles));
+    create_cbs(program, all_cores, scan_cb_plan(Ct, Kt, split.vblock_tiles, o_bf16));
 
     const std::vector<uint32_t> common_ct = {
         Ct,

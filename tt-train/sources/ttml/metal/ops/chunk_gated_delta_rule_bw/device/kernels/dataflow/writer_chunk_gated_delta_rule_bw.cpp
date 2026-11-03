@@ -9,6 +9,9 @@
 //   Stage S : drains dS / dv_new / dh0, then sends one sem_scan increment to every
 //             core holding stage-G work in the group it just scanned (Barrier 2 fan-out).
 //   Stage G : the five gradients.
+// dq, dk and dv leave in q's dtype through cb_gegr.  dg, dbeta and dh0 leave as exact fp32 blocks through
+// cb_egr and are converted here to the gate dtype (dg, dbeta) and the initial state's dtype (dh0), so the
+// fp32 accumulators are rounded at most once, to the dtype the caller asked for.
 // ALL prep increments are issued before ANY wait anywhere in the program, so the rendezvous cannot
 // deadlock.
 
@@ -20,6 +23,28 @@
 
 constexpr uint32_t f32_tile = 32 * 32 * 4;
 constexpr uint32_t in_tile = 32 * 32 * ESZ;
+constexpr uint32_t gate_tile = 32 * 32 * GATE_ESZ;
+constexpr uint32_t state_tile = 32 * 32 * STATE_ESZ;
+
+// The bfloat16 nearest to an fp32 value (ties to even), as its 16 bits.
+FORCE_INLINE uint16_t f32_bits_to_bf16(uint32_t bits) {
+    if ((bits & 0x7FFFFFFFu) > 0x7F800000u) {
+        return static_cast<uint16_t>((bits >> 16) | 0x40u);  // NaN stays a NaN
+    }
+    return static_cast<uint16_t>((bits + 0x7FFFu + ((bits >> 16) & 1u)) >> 16);
+}
+
+// Rewrite `ntiles` fp32 tiles, `f32_tile` bytes apart from `src`, as bfloat16 tiles at the start of their
+// slots (the face layout is the same in both formats).  Element i is read before the write at or beyond it.
+static __attribute__((noipa)) void f32_tiles_to_bf16(uint32_t src, uint32_t ntiles) {
+    for (uint32_t t = 0; t < ntiles; ++t) {
+        volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + t * f32_tile);
+        volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src + t * f32_tile);
+        for (uint32_t i = 0; i < 32 * 32; ++i) {
+            d[i] = f32_bits_to_bf16(s[i]);
+        }
+    }
+}
 
 template <typename ACC>
 static __attribute__((noipa)) void write_sub(
@@ -79,30 +104,29 @@ static __attribute__((noipa)) void write_flat_block(
     }
 }
 
-// Scalar scatter of a [C, 1] gradient column into column h of a [B,1,T,HV] output.  A DRAM write
-// needs (l1_src & 15) == (dram_dst & 15), and the element offset of column h is not 16-byte
-// aligned, so each value is first staged at a matching offset inside cb_stage.
+// Scalar scatter of a [C, 1] gradient column (fp32 tiles, `f32_tile` apart) into column h of a [B,1,T,HV]
+// output in the gate dtype.  A DRAM write needs (l1_src & 15) == (dram_dst & 15), and the element offset of
+// column h is not 16-byte aligned, so each value is first staged at a matching offset inside cb_stage.
 template <typename ACC>
 static __attribute__((noipa)) void scatter_scalars(
     const ACC& acc, uint32_t src_base, uint32_t wstage, uint32_t b, uint32_t t0, uint32_t h) {
     for (uint32_t ct = 0; ct < Ct; ++ct) {
         const uint32_t tbase = t0 + ct * 32;
         const uint32_t tt = tbase >> 5;
-        const uint32_t tile_addr = src_base + ct * in_tile;
+        const uint32_t tile_addr = src_base + ct * f32_tile;
         uint32_t issued = 0;
         for (uint32_t r = 0; r < 32; ++r) {
-            const uint32_t doff = tile_elem_off(r, h) * ESZ;
+            const uint32_t doff = tile_elem_off(r, h) * GATE_ESZ;
             const uint32_t slot = wstage + r * 16u + (doff & 15u);
-            if constexpr (ESZ == 4) {
-                volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
+            volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
+            if constexpr (GATE_ESZ == 4) {
                 volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
                 d[0] = s[tile_elem_off(r, 0)];
             } else {
-                volatile tt_l1_ptr uint16_t* s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile_addr);
                 volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(slot);
-                d[0] = s[tile_elem_off(r, 0)];
+                d[0] = f32_bits_to_bf16(s[tile_elem_off(r, 0)]);
             }
-            noc_async_write(slot, acc.get_noc_addr(b * Tt + tt, doff), ESZ);
+            noc_async_write(slot, acc.get_noc_addr(b * Tt + tt, doff), GATE_ESZ);
             ++issued;
         }
         if (issued) {
@@ -111,8 +135,8 @@ static __attribute__((noipa)) void scatter_scalars(
     }
 }
 
-// Columns gH..31 of a [B,1,T,HV] output are tile padding that no head writes; the item of head
-// gH-1 zeroes them for its rows.  `zbuf` holds 80 zero bytes, enough for a 16-element face row at
+// Columns gH..31 of a [B,1,T,HV] output (gate dtype) are tile padding that no head writes; the item of
+// head gH-1 zeroes them for its rows.  `zbuf` holds 80 zero bytes, enough for a 16-element face row at
 // any 16-byte phase.
 template <typename ACC>
 static __attribute__((noipa)) void zero_pad_columns(const ACC& acc, uint32_t zbuf, uint32_t b, uint32_t t0) {
@@ -122,8 +146,8 @@ static __attribute__((noipa)) void zero_pad_columns(const ACC& acc, uint32_t zbu
         for (uint32_t r = 0; r < 32; ++r) {
             for (uint32_t c0 = gH; c0 < 32;) {
                 const uint32_t c1 = (c0 < 16) ? 16 : 32;
-                const uint32_t doff = tile_elem_off(r, c0) * ESZ;
-                noc_async_write(zbuf + (doff & 15u), acc.get_noc_addr(b * Tt + tt, doff), (c1 - c0) * ESZ);
+                const uint32_t doff = tile_elem_off(r, c0) * GATE_ESZ;
+                noc_async_write(zbuf + (doff & 15u), acc.get_noc_addr(b * Tt + tt, doff), (c1 - c0) * GATE_ESZ);
                 c0 = c1;
             }
         }
@@ -161,9 +185,9 @@ void kernel_main() {
     const auto dq_acc = TensorAccessor(dqa, dq_addr, in_tile);
     const auto dk_acc = TensorAccessor(dka, dk_addr, in_tile);
     const auto dv_acc = TensorAccessor(dva, dv_addr, in_tile);
-    const auto dg_acc = TensorAccessor(dga, dg_addr, in_tile);
-    const auto db_acc = TensorAccessor(dba, dbeta_addr, in_tile);
-    [[maybe_unused]] const auto dh0_acc = TensorAccessor(dh0a, dh0_addr, in_tile);
+    const auto dg_acc = TensorAccessor(dga, dg_addr, gate_tile);
+    const auto db_acc = TensorAccessor(dba, dbeta_addr, gate_tile);
+    [[maybe_unused]] const auto dh0_acc = TensorAccessor(dh0a, dh0_addr, state_tile);
 
     const uint32_t sem_prep_addr = get_semaphore(SEM_PREP);
     const uint32_t sem_scan_addr = get_semaphore(SEM_SCAN);
@@ -213,18 +237,21 @@ void kernel_main() {
                     drain_strided(sc_acc, SC_DVNEW + wi * ST_DVNEW, Ct, Vt, vb * Vb, Vb);
                 }
                 if constexpr (HAS_H0) {
-                    cb_wait_front(cb_gegr, MAXBLK_G);
-                    const uint32_t src = get_read_ptr(cb_gegr);
+                    cb_wait_front(cb_egr, MAXBLK);
+                    const uint32_t src = get_read_ptr(cb_egr);
+                    if constexpr (STATE_ESZ == 2) {
+                        f32_tiles_to_bf16(src, KtVb);
+                    }
                     for (uint32_t kt = 0; kt < Kt; ++kt) {
                         for (uint32_t j = 0; j < Vb; ++j) {
                             noc_async_write(
-                                src + (kt * Vb + j) * in_tile,
+                                src + (kt * Vb + j) * f32_tile,
                                 dh0_acc.get_noc_addr(((b * gH + h) * Kt + kt) * Vt + vb * Vb + j),
-                                in_tile);
+                                state_tile);
                         }
                     }
                     noc_async_write_barrier();
-                    cb_pop_front(cb_gegr, MAXBLK_G);
+                    cb_pop_front(cb_egr, MAXBLK);
                 }
             }
 
@@ -280,18 +307,18 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_gegr, MAXBLK_G);
 
-        cb_wait_front(cb_gegr, MAXBLK_G);
-        scatter_scalars(db_acc, get_read_ptr(cb_gegr), wstage, b, t0, h);
-        cb_pop_front(cb_gegr, MAXBLK_G);
+        cb_wait_front(cb_egr, MAXBLK);
+        scatter_scalars(db_acc, get_read_ptr(cb_egr), wstage, b, t0, h);
+        cb_pop_front(cb_egr, MAXBLK);
 
         cb_wait_front(cb_gegr, MAXBLK_G);
         write_flat_block(dk_acc, get_read_ptr(cb_gegr), plane, tt0, gHK * Kt, hk, Kt, 0, Kt);
         noc_async_write_barrier();
         cb_pop_front(cb_gegr, MAXBLK_G);
 
-        cb_wait_front(cb_gegr, MAXBLK_G);
-        scatter_scalars(dg_acc, get_read_ptr(cb_gegr), wstage, b, t0, h);
-        cb_pop_front(cb_gegr, MAXBLK_G);
+        cb_wait_front(cb_egr, MAXBLK);
+        scatter_scalars(dg_acc, get_read_ptr(cb_egr), wstage, b, t0, h);
+        cb_pop_front(cb_egr, MAXBLK);
 
         if constexpr (gH < 32) {
             if (h == gH - 1) {

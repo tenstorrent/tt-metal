@@ -18,7 +18,6 @@ namespace ttml::metal::ops::chunk_gated_delta_rule_fw::device {
 struct ChunkGatedDeltaRuleForwardPrepParams {
     uint32_t chunk_size = 64U;
     uint32_t key_head_dim = 0U;  // K; the flat q width is only HK * K, so it cannot be inferred
-    bool save_g_cumsum = true;   // write kGCumsum; false leaves it a one-tile placeholder and skips the writes
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     tt::tt_metal::MemoryConfig output_memory_config;
 };
@@ -34,8 +33,8 @@ struct ChunkGatedDeltaRuleForwardPrepInputs {
 
 // All fp32 TILE, BH = B*HV and NC = T/C:
 //   kVBeta [BH,NC,C,V]   kKd [BH,NC,C,K]   kQDecay [BH,NC,C,K]   kIntra [BH,NC,C,C]
-//   kKDecT [BH,NC,K,C]   kDl [BH,NC,1,1]   kA [BH,1,T,C]         kGCumsum [BH,1,T,1]
-enum PrepOutputIndex : size_t { kVBeta = 0, kKd, kQDecay, kIntra, kKDecT, kDl, kA, kGCumsum, kNumPrepOutputs };
+//   kKDecT [BH,NC,K,C]   kDl [BH,NC,1,1]   kA [BH,1,T,C]
+enum PrepOutputIndex : size_t { kVBeta = 0, kKd, kQDecay, kIntra, kKDecT, kDl, kA, kNumPrepOutputs };
 
 // ---------------------------------------------------------------------------------------------
 // Scan: the recurrence over chunks, one core per (value head, V-block).
@@ -43,6 +42,7 @@ enum PrepOutputIndex : size_t { kVBeta = 0, kKd, kQDecay, kIntra, kKDecT, kDl, k
 struct ChunkGatedDeltaRuleForwardScanParams {
     uint32_t num_value_heads = 0U;   // HV; the scan inputs only carry BH = B * HV
     bool output_head_major = false;  // o as [BH,1,T,V] instead of [B,1,T,HV*V]
+    tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::FLOAT32;  // dtype of o: FLOAT32 or BFLOAT16
     bool save_state = true;          // write kH and kVNew; false leaves them one-tile placeholders, skips the writes
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     tt::tt_metal::MemoryConfig output_memory_config;
@@ -60,7 +60,7 @@ struct ChunkGatedDeltaRuleForwardScanInputs {
     std::optional<ttnn::Tensor> initial_state;
 };
 
-// All fp32 TILE:
+// All fp32 TILE except kO, which is output_dtype:
 //   kO [B,1,T,HV*V] (or [BH,1,T,V])   kFinalState [B,HV,K,V]   kH [BH,NC,K,V] (state entering each chunk)   kVNew
 //   [BH,1,T,V]
 enum ScanOutputIndex : size_t { kO = 0, kFinalState, kH, kVNew, kNumScanOutputs };

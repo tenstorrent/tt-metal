@@ -302,7 +302,7 @@ def test_head_major_output_is_permuted_token_major(shape, chunk_size):
     token_major, head_major = run(False), run(True)
     tm = ttnn.to_torch(token_major[0]).reshape(B, T, HV, V).permute(0, 2, 1, 3).reshape(B * HV, 1, T, V)
     assert torch.equal(ttnn.to_torch(head_major[0]), tm)
-    for i in range(1, 6):
+    for i in range(1, 5):
         assert torch.equal(ttnn.to_torch(head_major[i]), ttnn.to_torch(token_major[i]))
 
 

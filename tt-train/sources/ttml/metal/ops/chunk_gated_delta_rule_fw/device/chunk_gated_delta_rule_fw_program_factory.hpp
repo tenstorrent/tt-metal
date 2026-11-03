@@ -11,8 +11,7 @@
 
 namespace ttml::metal::ops::chunk_gated_delta_rule_fw::device {
 
-// One circular buffer of a program: index, tile count, and whether it holds BFLOAT16 input tiles
-// (otherwise fp32).
+// One circular buffer of a program: index, tile count, and whether it holds BFLOAT16 tiles (otherwise fp32).
 struct CbSpec {
     uint32_t index{};
     uint32_t tiles{};
@@ -21,7 +20,8 @@ struct CbSpec {
 
 // The circular buffers of each program in creation order, shared by the factories and the L1 check.
 std::vector<CbSpec> prep_cb_plan(uint32_t Ct, uint32_t Kt, uint32_t Vt);
-std::vector<CbSpec> scan_cb_plan(uint32_t Ct, uint32_t Kt, uint32_t Vt_block);
+// o_bf16: the scan's o output (cb_out) is BFLOAT16 instead of fp32.
+std::vector<CbSpec> scan_cb_plan(uint32_t Ct, uint32_t Kt, uint32_t Vt_block, bool o_bf16);
 uint32_t cb_plan_bytes(const std::vector<CbSpec>& plan);
 // L1 available to circular buffers on a worker core.
 uint32_t cb_l1_budget();
@@ -33,7 +33,7 @@ struct ScanSplit {
     uint32_t num_vblocks{};
     uint32_t vblock_tiles{};
 };
-ScanSplit make_scan_split(uint32_t BH, uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t num_cores);
+ScanSplit make_scan_split(uint32_t BH, uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t num_cores, bool o_bf16);
 
 struct ChunkGatedDeltaRuleForwardPrepProgramFactory {
     struct shared_variables_t {

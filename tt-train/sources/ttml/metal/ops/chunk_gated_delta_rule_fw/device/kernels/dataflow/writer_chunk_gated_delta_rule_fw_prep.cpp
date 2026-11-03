@@ -4,10 +4,8 @@
 //
 // Prep writer.  For each (value head, chunk) work-item wi = bh * NC + c, drains the fp32 per-chunk
 // blocks to DRAM at tile offset wi * (tiles per chunk):
-//   v_beta [C,V], A = T_inv [C,C], kd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl [1 tile],
-//   g_cumsum [C,1].
-// A and g_cumsum are the saved intermediates; the rest feed the scan.  Without SAVE_G_CUMSUM g_cumsum is
-// popped instead of written (no backward will read it).
+//   v_beta [C,V], A = T_inv [C,C], kd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl [1 tile].
+// A is the saved intermediate (the backward reads it); the rest feed the scan.
 
 #include <cstdint>
 
@@ -31,7 +29,6 @@ void kernel_main() {
     constexpr auto kc_args = TensorAccessorArgs<it_args.next_compile_time_args_offset()>();
     constexpr auto dl_args = TensorAccessorArgs<kc_args.next_compile_time_args_offset()>();
     constexpr auto a_args = TensorAccessorArgs<dl_args.next_compile_time_args_offset()>();
-    constexpr auto gc_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
 
     const uint32_t wi_start = get_arg_val<uint32_t>(0);
     const uint32_t wi_count = get_arg_val<uint32_t>(1);
@@ -44,7 +41,6 @@ void kernel_main() {
     const auto kc_acc = TensorAccessor(kc_args, get_arg_val<uint32_t>(6), tb);
     const auto dl_acc = TensorAccessor(dl_args, get_arg_val<uint32_t>(7), tb);
     const auto a_acc = TensorAccessor(a_args, get_arg_val<uint32_t>(8), tb);
-    const auto gc_acc = TensorAccessor(gc_args, get_arg_val<uint32_t>(9), tb);
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
@@ -74,12 +70,5 @@ void kernel_main() {
         drain(cb_qdecay, qd_acc, ck, wi * ck);
         drain(cb_kdec_t, kc_acc, kc, wi * kc);
         drain(cb_dl, dl_acc, 1, wi);
-#if SAVE_G_CUMSUM
-        drain(cb_gcum, gc_acc, Ct, wi * Ct);
-#else
-        CircularBuffer gcum(cb_gcum);
-        gcum.wait_front(Ct);
-        gcum.pop_front(Ct);
-#endif
     }
 }

@@ -93,8 +93,9 @@ CbBlocks cb_blocks(uint32_t Ct, uint32_t Kt, uint32_t Vb) {
             2U * Ct * Vb + 2U * Kt * Vb),           // stage-G V slice
         .litem = Ct * Ct + 4U * Ct,
         .maxblk = std::max({Ct * Ct, Ct * Kt, Ct * Vb, Kt * Vb, 4U * Ct}),
-        // dh0 leaves through the gradient egress as a [Kt, Vb] block.
-        .maxblk_g = std::max({Ct * Kt, Ct * Vb, Ct, Kt * Vb}),
+        // The gradient egress carries only dq, dk (Ct*Kt) and dv (Ct*Vb); dg, dbeta and dh0 leave as fp32
+        // through the f32 egress (maxblk).
+        .maxblk_g = std::max(Ct * Kt, Ct * Vb),
     };
 }
 
@@ -353,6 +354,7 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
         geo.G,
         static_cast<uint32_t>(d_out_is_head_major(tensor_args)),
         static_cast<uint32_t>(tensor_args.g.element_size()),
+        has_h0 ? static_cast<uint32_t>(tensor_args.initial_state->element_size()) : 4U,
     };
 
     const auto& scratch = outputs[kScratch];

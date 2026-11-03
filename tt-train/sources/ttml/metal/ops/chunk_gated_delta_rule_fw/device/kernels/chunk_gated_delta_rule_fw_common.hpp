@@ -21,11 +21,18 @@ constexpr uint32_t cb_intra = 20, cb_s2 = 21, cb_vnew = 22, cb_ointer = 23;
 constexpr uint32_t cb_kdec_t = 24, cb_supd = 25, cb_stmp = 26, cb_final = 27;
 constexpr uint32_t cb_scr1 = 28, cb_scr2 = 29, cb_scr3 = 30, cb_s3 = 31;
 // Role aliases: prep never uses these slots for their scan-side meaning.
-constexpr uint32_t cb_gcum = cb_out;  // chunk-local cumsum(g), drained as g_cumsum
-constexpr uint32_t cb_mask = cb_u;    // the three 16x16 quadrant masks of the WY inverse
-constexpr uint32_t cb_kd = cb_w;      // k * beta * exp(cumsum g), drained for the scan
-constexpr uint32_t cb_dl = cb_vnew;   // exp(sum of g over the chunk), drained for the scan
-constexpr uint32_t kNumMasks = 3;     // top-left, bottom-right, bottom-left 16x16 quadrant
+constexpr uint32_t cb_mask = cb_u;   // the three 16x16 quadrant masks of the WY inverse
+constexpr uint32_t cb_kd = cb_w;     // k * beta * exp(cumsum g), drained for the scan
+constexpr uint32_t cb_dl = cb_vnew;  // exp(sum of g over the chunk), drained for the scan
+constexpr uint32_t kNumMasks = 3;    // top-left, bottom-right, bottom-left 16x16 quadrant
+
+// Capacity, in tiles, of each of cb_scr1/2/3.  The prep pushes only [C, C] blocks (Ct * Ct tiles),
+// [C, K] blocks (Ct * Kt, the k-side products and their transposes) and single tiles through them, never
+// anything V-sized: the V-side blocks (v_beta) go straight to their own circular buffers.  The kernel (which
+// moves whole rings, see qn() there) and the host factory both size the ring from here, so they cannot drift.
+constexpr uint32_t scratch_tiles(uint32_t Ct, uint32_t Kt) {
+    return Ct * Ct > Ct * Kt ? Ct * Ct : Ct * Kt;
+}
 }  // namespace prep
 
 namespace scan {

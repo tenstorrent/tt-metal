@@ -6,7 +6,7 @@
 
     q, k [B, 1, T, HK*K]      v [B, 1, T, HV*V]      g, beta [B, 1, T, HV]      initial_state [B, HV, K, V]
     o [B, 1, T, HV*V]         final_state [B, HV, K, V]
-    h [B*HV, NC, K, V]        v_new [B*HV, 1, T, V]  g_cumsum [B*HV, 1, T, 1]   A [B*HV, 1, T, C]
+    h [B*HV, NC, K, V]        v_new [B*HV, 1, T, V]  A [B*HV, 1, T, C]
 
 Pinned here:
 1. Every output against the float64 chunked reference, including a Qwen3.8-sized shape.
@@ -27,6 +27,9 @@ Pinned here:
 12. Rejections name the offending value (exact text), for shapes, dtypes, layouts, placement, T = 0,
     B = 0, an `initial_state` of the wrong dtype or shape, and a shape that overflows L1.
 13. A tensor placed differently (L1 instead of DRAM) is rejected even with the DRAM program cached.
+14. `output_dtype=bfloat16` packs `o` directly: it matches the fp32 `o` to bf16 rounding, every other
+    output is bit-identical, and the dtype is part of the program key.
+15. A V of 1024 (the prep's scratch no longer scales with V) fits L1 and matches the reference.
 
 Tolerances: every output must reach PCC >= `PCC_MIN` and a relative RMS error <= `RMS_MAX`.  Measured
 on Blackhole over all cases here the worst relative RMS is 4.1e-3 (`o`, 2^-8 is the bf16 rounding of
@@ -60,7 +63,7 @@ pytestmark = pytest.mark.requires_device
 PCC_MIN = 0.9999
 RMS_MAX = 0.01
 
-OUT_NAMES = ("o", "final_state", "h", "v_new", "g_cumsum", "A")
+OUT_NAMES = ("o", "final_state", "h", "v_new", "A")
 TORCH_DTYPE = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16}
 
 # (B, T, HK, HV, K, V), chunk_size
@@ -144,7 +147,7 @@ def _upload(x, shape, gate_dtype, device):
     }
 
 
-def _dispatch(t, shape, chunk, scale=None, output_head_major=False, save_for_backward=True):
+def _dispatch(t, shape, chunk, scale=None, output_head_major=False, save_for_backward=True, output_dtype=ttnn.float32):
     return ttml.ops.metal.chunk_gated_delta_rule_fw(
         t["q"],
         t["k"],
@@ -156,6 +159,7 @@ def _dispatch(t, shape, chunk, scale=None, output_head_major=False, save_for_bac
         chunk_size=chunk,
         scale=scale,
         output_head_major=output_head_major,
+        output_dtype=output_dtype,
         save_for_backward=save_for_backward,
     )
 
@@ -169,11 +173,11 @@ def _to_host(outs):
 
 
 def _to_head_major(outs, shape):
-    """ttml outputs -> o [BH,T,V], final [B,HV,K,V], h [BH,NC,K,V], v_new [BH,T,V], g_cumsum [BH,T], A [BH,T,C]."""
+    """ttml outputs -> o [BH,T,V], final [B,HV,K,V], h [BH,NC,K,V], v_new [BH,T,V], A [BH,T,C]."""
     B, T, HK, HV, K, V = shape
-    o, fs, h, vn, gc, a = outs
+    o, fs, h, vn, a = outs
     o = o.reshape(B, T, HV, V).permute(0, 2, 1, 3).reshape(B * HV, T, V)
-    return [o, fs, h, vn.reshape(B * HV, T, V), gc.reshape(B * HV, T), a.reshape(B * HV, T, -1)]
+    return [o, fs, h, vn.reshape(B * HV, T, V), a.reshape(B * HV, T, -1)]
 
 
 def _reference(x, shape, chunk, gate_dtype, scale=None):
@@ -181,7 +185,7 @@ def _reference(x, shape, chunk, gate_dtype, scale=None):
     B, T, HK, HV, K, V = shape
     G = HV // HK
     gate = lambda t: t.to(TORCH_DTYPE[gate_dtype]).double()
-    o, fs, h, vn, gc, a = chunked_forward(
+    o, fs, h, vn, _, a = chunked_forward(
         x["q"].repeat_interleave(G, dim=2),
         x["k"].repeat_interleave(G, dim=2),
         x["v"],
@@ -197,7 +201,6 @@ def _reference(x, shape, chunk, gate_dtype, scale=None):
         fs,
         h.transpose(1, 2).reshape(B * HV, -1, K, V),
         tok(vn),
-        gc.transpose(1, 2).reshape(B * HV, T),
         tok(a),
     ]
 
@@ -266,9 +269,61 @@ def test_qwen_shape_vs_reference(device):
 
 
 def test_wide_v_fits_l1(device):
-    """K=128, V=256 at chunk 64: the prep's single-tile scratch CBs keep it inside one core's L1."""
+    """K=128, V=256 at chunk 64: the prep's scratch CBs keep it inside one core's L1."""
     shape, chunk = (1, 64, 1, 1, 128, 256), 64
     _check_vs_reference(_build_inputs(shape, with_h0=True), shape, chunk, ttnn.bfloat16, device, with_h0=True)
+
+
+def test_wide_v_lifts_the_prep_scratch_cap(device):
+    """The prep's scratch rings were sized for blocks as large as K x V that it never pushes through them, so
+    K=64 at V=1024 (about 1.5 MB of scratch) was rejected for L1.  They now hold only the largest [C, C] / [C, K]
+    block, whatever V is."""
+    shape, chunk = (1, 128, 1, 1, 64, 1024), 64
+    _check_vs_reference(_build_inputs(shape, with_h0=True), shape, chunk, ttnn.bfloat16, device, with_h0=True)
+
+
+@pytest.mark.parametrize("head_major", [False, True], ids=["token_major", "head_major"])
+@pytest.mark.parametrize(
+    "shape,chunk",
+    [SHAPES[1], SHAPES[2], ((1, 96, 2, 6, 64, 128), 32), ((1, 64, 1, 2, 96, 96), 64)],
+    ids=["B1_T128_HK2_HV2_K64_V64_c64", "B1_T128_HK2_HV4_K64_V64_c32", "B1_T96_HK2_HV6_K64_V128_c32", "K96_V96_c64"],
+)
+def test_bf16_output_matches_the_fp32_output(shape, chunk, head_major, device):
+    """`output_dtype=bfloat16` is packed by the scan: `o` is bf16 and within bf16 rounding of the fp32 `o`, and
+    every other output is bit-identical."""
+    x = _build_inputs(shape, with_h0=True, seed=11)
+    t = _upload(x, shape, ttnn.float32, device)
+    full = _dispatch(t, shape, chunk, output_head_major=head_major)
+    packed = _dispatch(t, shape, chunk, output_head_major=head_major, output_dtype=ttnn.bfloat16)
+    assert full[0].dtype == ttnn.float32 and packed[0].dtype == ttnn.bfloat16
+    assert all(p.dtype == ttnn.float32 for p in packed[1:]), "only o follows output_dtype"
+    assert tuple(packed[0].shape) == tuple(full[0].shape)
+    o32, o16 = ttnn.to_torch(full[0]).double(), ttnn.to_torch(packed[0]).double()
+    # bf16 keeps 8 significant bits, so whichever way the pack rounds, it is within 2^-7 of the value.
+    assert torch.all((o16 - o32).abs() <= o32.abs() * 2**-7), "o differs from the fp32 o by more than bf16 rounding"
+    for name, a, b in zip(OUT_NAMES[1:], full[1:], packed[1:]):
+        assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"{name}: output_dtype changed it"
+    got = _to_head_major(_to_host(packed), shape) if not head_major else None
+    if got is not None:
+        _compare(got, _reference(x, shape, chunk, ttnn.float32), chunk, with_h0=True)
+
+
+def test_output_dtype_is_part_of_the_program_hash(device):
+    shape, chunk = (1, 192, 1, 2, 64, 64), 32  # a shape no other test dispatches
+    t = _upload(_build_inputs(shape, True), shape, ttnn.float32, device)
+    keep = [_dispatch(t, shape, chunk)]
+    entries = device.num_program_cache_entries()
+    keep.append(_dispatch(t, shape, chunk, output_dtype=ttnn.bfloat16))
+    assert device.num_program_cache_entries() > entries, "a bf16 output reused the fp32-output program"
+    entries = device.num_program_cache_entries()
+    keep.append(_dispatch(t, shape, chunk, output_dtype=ttnn.bfloat16))
+    assert device.num_program_cache_entries() == entries, "an identical bf16-output call missed the cache"
+
+
+def test_rejects_an_unsupported_output_dtype(device, expect_error):
+    args, kwargs = _bad_input("none", device)
+    with expect_error(RuntimeError, "the output dtype must be FLOAT32 or BFLOAT16, got UINT32"):
+        ttml.ops.metal.chunk_gated_delta_rule_fw(*args, 32, output_dtype=ttnn.uint32, **kwargs)
 
 
 @pytest.mark.parametrize("shape,chunk", [SHAPES[1], SHAPES[2]], ids=[SHAPE_IDS[1], SHAPE_IDS[2]])
@@ -392,7 +447,7 @@ def _zero_inputs(device, B=1, T=64, HK=1, HV=1, K=32, V=32, gate_dtype=ttnn.floa
         ({"chunk_size": 32}, {"T": 0}, "B=1 must be at least 1 and T=0 at least chunk_size=32"),
         ({"chunk_size": 32}, {"B": 0}, "B=0 must be at least 1 and T=64 at least chunk_size=32"),
         ({"chunk_size": 32}, {"K": 48, "V": 48}, "K=48 and V=48 must be multiples of 32"),
-        ({"chunk_size": 64}, {"K": 512, "V": 512}, "the prep at chunk_size=64 K=512 V=512 needs 4190208 B of L1"),
+        ({"chunk_size": 64}, {"K": 1024, "V": 1024}, "the prep at chunk_size=64 K=1024 V=1024 needs 2674688 B of L1"),
     ],
     ids=[
         "chunk_48",
@@ -478,8 +533,8 @@ def test_placement_is_rejected_after_the_program_is_cached(device, expect_error)
     ids=["B1_T128_HK2_HV4_K64_V64_c64", "B1_T96_HK2_HV6_K64_V128_c32", "B1_T128_HK1_HV3_K128_V128_c64"],
 )
 def test_save_for_backward_false_skips_only_the_saved_state(shape, chunk, with_h0, device):
-    """o and final_state must be bit-identical with and without the saved-state writes; h, v_new, g_cumsum and
-    A come back None.  Both orders of the two modes run on one cache, so a program built for one mode cannot
+    """o and final_state must be bit-identical with and without the saved-state writes; h, v_new and A come
+    back None.  Both orders of the two modes run on one cache, so a program built for one mode cannot
     be served to the other."""
     x = _build_inputs(shape, with_h0, seed=7)
     t = _upload(x, shape, ttnn.float32, device)

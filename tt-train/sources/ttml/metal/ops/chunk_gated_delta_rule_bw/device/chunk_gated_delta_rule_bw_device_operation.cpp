@@ -44,7 +44,7 @@ void ChunkGatedDeltaRuleBackwardDeviceOperation::validate_on_program_cache_miss(
     const std::vector<tt::tt_metal::DataType> float_dtypes = {
         tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32};
     check_device_tensor(tensor_args.q, kOp, "q", dram_tile(float_dtypes));
-    // Every input but the gates (including the optional states) follows q's dtype.
+    // Every input but the gates and the initial state follows q's dtype.
     const auto dtype = tensor_args.q.dtype();
     const auto like_q = dram_tile({dtype});
     check_device_tensor(tensor_args.k, kOp, "k", like_q);
@@ -54,8 +54,9 @@ void ChunkGatedDeltaRuleBackwardDeviceOperation::validate_on_program_cache_miss(
     check_device_tensor(tensor_args.g, kOp, "g", dram_tile(float_dtypes));
     check_device_tensor(tensor_args.beta, kOp, "beta", dram_tile({gate_dtype}));
     check_device_tensor(tensor_args.d_out, kOp, "d_out", like_q);
+    // The state may be BF16 or FP32 whatever q's dtype is (the forward takes it in FP32); dh0 comes back in it.
     if (tensor_args.initial_state.has_value()) {
-        check_device_tensor(*tensor_args.initial_state, kOp, "initial_state", like_q);
+        check_device_tensor(*tensor_args.initial_state, kOp, "initial_state", dram_tile(float_dtypes));
     }
     if (tensor_args.d_final_state.has_value()) {
         check_device_tensor(*tensor_args.d_final_state, kOp, "d_final_state", like_q);
@@ -212,13 +213,16 @@ spec_return_value_t ChunkGatedDeltaRuleBackwardDeviceOperation::compute_output_s
     specs.emplace_back(dqk_shape, layout(dtype, out_mem));
     specs.emplace_back(dqk_shape, layout(dtype, out_mem));
     specs.emplace_back(tensor_args.v.logical_shape(), layout(dtype, out_mem));
-    specs.emplace_back(tensor_args.g.logical_shape(), layout(dtype, out_mem));
-    specs.emplace_back(tensor_args.g.logical_shape(), layout(dtype, out_mem));
+    // dg and dbeta come back in the gates' dtype and dh0 in the state's: the fp32 accumulators are rounded once,
+    // to the dtype the caller keeps them in.
+    specs.emplace_back(tensor_args.g.logical_shape(), layout(tensor_args.g.dtype(), out_mem));
+    specs.emplace_back(tensor_args.g.logical_shape(), layout(tensor_args.g.dtype(), out_mem));
     specs.emplace_back(
         ttnn::Shape({1U, 1U, geo.scratch_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
         layout(tt::tt_metal::DataType::FLOAT32, ttnn::DRAM_MEMORY_CONFIG));
     if (tensor_args.initial_state.has_value()) {
-        specs.emplace_back(ttnn::Shape({geo.B, geo.HV, geo.K, geo.V}), layout(dtype, out_mem));
+        specs.emplace_back(
+            ttnn::Shape({geo.B, geo.HV, geo.K, geo.V}), layout(tensor_args.initial_state->dtype(), out_mem));
     }
     return specs;
 }
