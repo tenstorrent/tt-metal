@@ -13,10 +13,8 @@ from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
     DataCopyType,
     DestSync,
-    ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
@@ -31,7 +29,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     MATH_OP,
     NUM_FACES,
     TEST_FACE_DIMS,
@@ -39,7 +36,7 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_constants import MAX_NUM_FACES
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Reuse the square input-prep and format list from the consolidated unary-SFPU
 # test (the standalone test_sfpu_square_quasar.py was folded into it).
@@ -52,48 +49,41 @@ from test_eltwise_unary_sfpu_quasar import (
 def generate_sfpu_square_combinations(formats_list):
     """
     Square-only sweep for the TRISC3 variant: (fmt, dest_acc, dest_sync,
-    implied_math_format, input_dimensions) tuples. Uniform dims [32,32]/[64,64]
+    input_dimensions) tuples. Uniform dims [32,32]/[64,64]
     x {Half,Full} sync (the redundant [32,64] dim is dropped, matching the
     consolidated unary test).
     """
     combinations = []
     dest_sync_modes = (DestSync.Half, DestSync.Full)
-    implied_math_modes = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
     input_dimension_options = ([32, 32], [64, 64])
     for format_variant in generate_quasar_sfpu_format_variants(
         MathOperation.Square, formats_list
     ):
         for dest_sync in dest_sync_modes:
-            for implied_math_format in implied_math_modes:
-                for input_dimensions in input_dimension_options:
-                    combinations.append(
-                        (
-                            format_variant,
-                            dest_sync,
-                            implied_math_format,
-                            runtime(input_dimensions),
-                        )
+            for input_dimensions in input_dimension_options:
+                combinations.append(
+                    (
+                        format_variant,
+                        dest_sync,
+                        runtime(input_dimensions),
                     )
+                )
     return combinations
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_implied_math_dims=generate_sfpu_square_combinations(
-        SFPU_SQUARE_FORMATS
-    ),
+    formats_dest_acc_sync_dims=generate_sfpu_square_combinations(SFPU_SQUARE_FORMATS),
 )
 def test_sfpu_square_trisc3_quasar(
-    formats_dest_acc_sync_implied_math_dims,
+    formats_dest_acc_sync_dims,
 ):
     """
     Test square operation on Quasar with SFPU on TRISC3.
 
     Same parameter coverage as test_sfpu_square_quasar.
     """
-    format_variant, dest_sync_mode, implied_math_format, input_dimensions = (
-        formats_dest_acc_sync_implied_math_dims[0]
-    )
+    format_variant, dest_sync_mode, input_dimensions = formats_dest_acc_sync_dims[0]
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
@@ -129,7 +119,6 @@ def test_sfpu_square_trisc3_quasar(
         formats,
         templates=[
             MATH_OP(mathop=MathOperation.Square),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -160,7 +149,5 @@ def test_sfpu_square_trisc3_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(golden_tensor)
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

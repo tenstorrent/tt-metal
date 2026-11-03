@@ -62,7 +62,7 @@ std::tuple<
     uint32_t,
     uint32_t>
 create_program(
-    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
@@ -78,7 +78,7 @@ create_program(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    Program program = tt_metal::CreateProgram();
+    Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 

@@ -59,6 +59,7 @@
 // to both and simply unread by the sub.
 constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
 constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(1);
+constexpr uint32_t terminate_value = get_named_compile_time_arg_val("terminate_value");
 constexpr uint32_t socket_page_size = get_compile_time_arg_val(2);
 constexpr uint32_t num_socket_pages = get_compile_time_arg_val(3);
 constexpr uint32_t pages_per_chunk = get_compile_time_arg_val(4);
@@ -315,7 +316,7 @@ void kernel_main() {
             bool ready = false;
             while (!ready) {
                 invalidate_l1_cache();
-                if (termination_semaphore[0] == 1) {
+                if (termination_semaphore[0] == terminate_value) {
                     terminated = true;
                     break;
                 }
@@ -420,7 +421,7 @@ void kernel_main() {
             // on termination (the master stops bumping go_count at teardown).
             while (true) {
                 invalidate_l1_cache();
-                if (termination_semaphore[0] == 1) {
+                if (termination_semaphore[0] == terminate_value) {
                     terminated = true;
                     break;
                 }

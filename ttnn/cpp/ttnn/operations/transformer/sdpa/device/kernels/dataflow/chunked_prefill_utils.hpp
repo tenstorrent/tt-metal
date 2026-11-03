@@ -70,7 +70,7 @@ constexpr uint32_t kRotatedHandoffSemCount = 1;
 constexpr uint32_t kRotatedNoRemainder = ~0u;
 constexpr uint32_t kRotatedReaderIterWords = 2;   // [remainder_start, group_has_remainder]
 constexpr uint32_t kRotatedWriterIterWords = 2;   // [remainder_start, float_dest]
-constexpr uint32_t kRotatedComputeIterWords = 1;  // [remainder_start]
+constexpr uint32_t kRotatedComputeIterWords = 2;  // [remainder_start, group_has_remainder]
 
 struct RotatedQSlots {
     uint32_t base_start = 0;
@@ -85,6 +85,19 @@ struct RotatedQSlots {
         return slot < base_count ? base_start + slot : remainder_start + slot - base_count;
     }
 };
+
+// Flat Q chunk that padded multicast slot `q_iter` (>= owned_count) stands for. The reader decodes it so
+// causal skips match the multicast group; compute decodes the same chunk to drain exactly the K/V entries
+// the reader pushed. Rotated: a member of the last owned unit. Static: the next flat chunk.
+template <bool Rotated>
+constexpr uint32_t padded_slot_flat_q(
+    const RotatedQSlots& slots, uint32_t flat_start, uint32_t owned_count, uint32_t q_iter, uint32_t unit_chunks) {
+    if constexpr (Rotated) {
+        return slots.at(owned_count - unit_chunks + q_iter % unit_chunks);
+    } else {
+        return flat_start + q_iter;
+    }
+}
 
 constexpr uint32_t rotated_iter_base(uint32_t args_base, uint32_t iter_stride, uint32_t ordinal) {
     return args_base + ordinal * iter_stride;

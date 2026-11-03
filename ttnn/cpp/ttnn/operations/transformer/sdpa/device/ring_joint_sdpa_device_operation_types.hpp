@@ -194,6 +194,9 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> logical_n_tensor;
     std::optional<Tensor> logical_l_tensor;
 
+    // Global real-token count (metadata path only); attention stops at the tile holding the last real token.
+    std::optional<Tensor> kv_valid_end;
+
     // Sol-Attn block-sparse mode. Contract: models/tt_dit/models/transformers/minimax_h3/SOL_ATTN_INTERFACE.md.
     // The routing pre-pass produces the first three; mask alone, or mask + pooled K + pooled V together:
     //   sol_block_mask  uint32 row-major [1, NH, nqc_pad, W]. Chunk mode (W = nkc_pad, global K chunks): 1 =
@@ -263,6 +266,8 @@ struct RingJointSDPAInputs {
     bool has_logical_n_tensor() const { return logical_n_tensor.has_value(); }
 
     bool has_logical_l_tensor() const { return logical_l_tensor.has_value(); }
+
+    bool has_kv_valid_end() const { return kv_valid_end.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.

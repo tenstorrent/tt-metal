@@ -275,6 +275,30 @@ struct DFBAdvancedOptions {
     Group<PrefetcherPipeParamName> prefetcher_pipe_relays;
 };
 
+struct ScratchpadAdvancedOptions {
+    ////////////////////////////////////////////////////////////////////////////////
+    // Scratchpad multi-bindings
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // By default, a scratchpad instance (i.e., a scratchpad on a particular node) is
+    // bound by exactly one kernel instance. A *ScratchpadSpec* may still be bound by
+    // more than one KernelSpec, as long as their node sets are disjoint.
+    //
+    // "Multi-binding" refers to a scratchpad instance bound by more than one kernel
+    // instance. All binding kernel instances on a node access the same backing memory.
+    //
+    // CAUTION:
+    // Multi-binding a scratchpad instance is UNSAFE in most circumstances.
+    // Scratchpad provides no synchronization; kernel logic must explicitly ensure
+    // access safety and synchronization.
+    //
+    // Note:
+    // On Gen2 (Quasar), only DM kernel instances may share a node's scratchpad.
+    // DM cores and Compute cores have cache coherency misalignment that currently
+    // lacks ways to synchronize. See: #62551
+    bool allow_instance_multi_binding = false;
+};
+
 struct ProgramAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
     // PrefetcherPipe parameters (experimental)
@@ -360,11 +384,12 @@ struct SemaphoreAdvancedOptions {
     // Unpack stages of a single compute kernel instance (e.g. to hand tiles from Pack back to Unpack
     // through an L1 ring, without a DFB). Data-movement kernels and other nodes cannot reach it.
     //
-    // Rules: Blackhole only. At most one compute semaphore per Program. It cannot also be bound by a
-    // data-movement kernel, and its initial value is always 0. For kernel-side usage, see api/semaphore.h.
+    // Rules: Not available on 11x architectures (Wormhole). At most one compute semaphore per Program. It cannot
+    // also be bound by a data-movement kernel, and its initial value is always 0. For kernel-side usage, see
+    // api/semaphore.h.
     //
     // max_value is the compute semaphore's capacity, in credits: typically the number of slots in the ring
-    // it guards. Semaphore::wait_not_full() blocks while the semaphore is at capacity.
+    // it guards. Waiting on not_full blocks when max_value is reached.
     // Range 1..15; 0 (the default) means 15. Must be 0 for a semaphore not bound by compute kernels.
     //
     // CAUTION: Compute semaphores are experimental, and may change or be removed.

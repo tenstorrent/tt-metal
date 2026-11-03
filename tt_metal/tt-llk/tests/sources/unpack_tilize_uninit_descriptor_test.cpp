@@ -10,6 +10,8 @@
 //
 // WH: init never writes the word, so uninit must leave it bit-identical.
 // BH: init writes Z-dim, so uninit re-establishes it; Y-dim untouched.
+// Both: uninit must also restore the canonical Tile_x_dim_cntx0 and clear the unpack-config
+// tileize_mode bit that init set, both asserted below.
 
 #include <cstdint>
 
@@ -38,6 +40,11 @@ static inline void drain_cfg_writes()
     }
 }
 
+static inline std::uint32_t read_tileize_mode(volatile std::uint32_t tt_reg_ptr* cfg)
+{
+    return (cfg[THCON_SEC0_REG2_Tileize_mode_ADDR32] & THCON_SEC0_REG2_Tileize_mode_MASK) >> THCON_SEC0_REG2_Tileize_mode_SHAMT;
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -60,8 +67,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t pre_desc_word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
 
-    _llk_unpack_tilize_init_wrapper_(
-        formats.unpack_A_src, formats.unpack_A_dst, 1 /* ct_dim */, face_r_dim, false /* narrow_tile */, tilize_num_faces);
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, 1 /* ct_dim */, face_r_dim, false /* narrow_tile */, tilize_num_faces);
+
+    drain_cfg_writes();
+
+    // Init must leave the bit set, so a clear bit after uninit is the uninit's doing.
+    LLK_ASSERT(read_tileize_mode(cfg) == 1, "tilize init must set tileize_mode");
 
     _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, tilize_num_faces, face_r_dim);
 
@@ -69,16 +80,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t post_desc_word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
 
-#ifdef ARCH_WORMHOLE
-    const std::uint32_t post_tile_x = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
+    LLK_ASSERT(read_tileize_mode(cfg) == 0, "tilize uninit must clear tileize_mode");
 
+    // Tile_x_dim_cntx0 IS tilize's to restore.
+    const std::uint32_t post_tile_x = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
+    LLK_ASSERT(post_tile_x == canonical_unpA_tile_x_dim_cntx(face_r_dim), "tilize uninit must restore the canonical Tile_x_dim_cntx0");
+
+#ifdef ARCH_WORMHOLE
     // Tilize does not own the descriptor on WH: the word must be bit-identical.
     LLK_ASSERT(post_desc_word == pre_desc_word, "WH tilize uninit must leave the SrcA tile-descriptor Y/Z-dim word untouched");
-
-    // Tile_x_dim_cntx0 IS tilize's to restore. Only checked on WH: the BH test wrapper
-    // cannot thread face_r_dim into uninit (it hardcodes MAX_FACE_R_DIM), so a tiny-tile
-    // expectation would not be meaningful there.
-    LLK_ASSERT(post_tile_x == canonical_unpA_tile_x_dim_cntx(face_r_dim), "tilize uninit must restore the canonical Tile_x_dim_cntx0");
 #else
     const std::uint32_t post_z_dim = UPPER_HALFWORD(post_desc_word);
     const std::uint32_t post_y_dim = LOWER_HALFWORD(post_desc_word);

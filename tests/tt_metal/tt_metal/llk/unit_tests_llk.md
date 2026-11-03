@@ -148,7 +148,7 @@ so per-test setup is bounded to copying a few handles.
        auto& mesh_device = *devices_[0];
        auto& cq = mesh_device.mesh_command_queue();
 
-       Program program = CreateProgram();
+       Program program = CreateProgram(mesh_device);
        // ... CreateBuffer, CreateCircularBuffer, CreateKernel, SetRuntimeArgs ...
 
        distributed::MeshWorkload workload;
@@ -228,8 +228,8 @@ The same binary runs in merge gate and L2 nightly with different filters:
 |---|---|---|---|---|
 | `llk-fd-unit-tests-wormhole` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | FD | default `*` filter |
 | `llk-fd-unit-tests-blackhole` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | FD | excludes `LLKBlackholeSingleCardFixture.*` and `*MulReduceScalarTest*`; those run in BH SD |
-| `llk-sd-unit-tests-wormhole` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | SD | `LLKMeshDeviceFixtureSlowDispatchOnly.*` plus Quasar fixture filters (currently skip on WH) |
-| `llk-sd-unit-tests-blackhole` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | SD | `LLKMeshDeviceFixtureSlowDispatchOnly.*`, `LLKBlackholeSingleCardFixture.*`, `*MulReduceScalarTest*`, plus Quasar fixture filters (currently skip on BH) |
+| `llk-sd-unit-tests-wormhole` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | SD | `LLKMeshDeviceFixtureSlowDispatchOnly.*` plus `LLKQuasarMeshDeviceSingleCardFixture.*` (currently skip on WH) |
+| `llk-sd-unit-tests-blackhole` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | SD | `LLKMeshDeviceFixtureSlowDispatchOnly.*`, `LLKBlackholeSingleCardFixture.*`, `*MulReduceScalarTest*`, plus `LLKQuasarMeshDeviceSingleCardFixture.*` (currently skip on BH) |
 | `llk-sd-unit-tests` | `tt-metal-l2-nightly.yaml` | nightly cron / `workflow_dispatch` | SD | default `*` filter |
 
 The merge-gate FD jobs are sharded across multiple runners using

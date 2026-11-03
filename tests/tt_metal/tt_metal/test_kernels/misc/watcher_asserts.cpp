@@ -26,7 +26,7 @@ void kernel_main() {
         //Need to signal completion to dispatcher before hanging so that
         //Dispatcher Kernel is able to finish.
         //Device Close () requires fast dispatch kernels to finish.
-        volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+        volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0].slot[0]);
 
         // Signal completion to dispatcher before assert hangs the kernel
         // SD signaling: IDLE_ERISC, DRISC, and dispatch-engine DMs require RUN_MSG_DONE

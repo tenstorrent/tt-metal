@@ -67,7 +67,7 @@ void drain_emule_run(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::Tar
     }
     tt::tt_metal::emule::flush_deferred_mesh_dispatch();
     std::vector<int> device_ids;
-    device_ids.reserve(mesh_device->get_devices().size());
+    device_ids.reserve(mesh_device->impl().get_devices().size());
     for (auto device_id : mesh_device->get_device_ids()) {
         device_ids.push_back(static_cast<int>(device_id));
     }
@@ -94,9 +94,26 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     active_distributed_context_(std::move(distributed_context)) {
     // Init thread pool with all local devices for parallel dispatch.
     // One thread per device enables NUMA-aware CPU binding.
-    auto local_devices = mesh_device_->get_devices();
+    auto local_devices = mesh_device_->impl().get_devices();
     if (local_devices.size() > 1) {
         launch_thread_pool_ = create_device_bound_thread_pool(mesh_device_->impl().get_context_id(), local_devices);
+    }
+}
+
+SDMeshCommandQueue::~SDMeshCommandQueue() {
+    // Drain workloads enqueued non-blocking before the queue goes away, matching FDMeshCommandQueue's
+    // destructor. Otherwise a program still running at device close is killed mid-flight by the core
+    // reset on the next open, and the Tensix state it leaves behind can hang or corrupt the next
+    // program on the same cores.
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+        wait_for_cores_idle();
+    } catch (const std::exception& e) {
+        // Destructors must not throw; leave the cores as they are and report it.
+        log_warning(tt::LogMetal, "SDMeshCommandQueue destructor: failed waiting for in-flight programs: {}", e.what());
     }
 }
 

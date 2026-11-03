@@ -8,11 +8,11 @@ pass under a SINGLE shared ``init_reduce`` (see ``sources/sfpu_reduce_multidim_t
 mirrors how a multi-axis reduce (e.g. ``ttir.max`` ``dim=[1,2]``) is lowered to two ``sfpu_reduce``
 calls sharing one ``sfpu_reduce_init``.
 
-This configuration is what exposed an Int32 MAX/MIN regression: the column Int32 path runs first
-(``INT32_2S_COMP``, and its own ``init_reduce_max_min_int32`` that flips the SFPSWAP-direction config
-bit), then the row path runs trusting state established by the shared init. Because the row stage
-inherited the column stage's inverted comparator direction, it misordered values and returned wrong
-results once negatives/extremes were present. The single-axis ``test_sfpu_reduce`` suite only
+This configuration is what exposed an Int32 MAX/MIN regression: the column Int32 path ran first and
+left the SFPSWAP-direction config bit inverted, then the row path ran trusting state established by the
+shared init. Because the row stage inherited the column stage's inverted comparator direction, it
+misordered values and returned wrong results once negatives/extremes were present. Every MAX/MIN
+calculate now sets the direction on entry. The single-axis ``test_sfpu_reduce`` suite only
 exercises one path per init (with its matching init) and therefore could not catch it.
 
 Pool coverage is MAX, SUM, MIN (all formats) and AVG (float formats only): the kernel's ``REDUCE_ROW``
@@ -30,13 +30,11 @@ MAX/MIN additionally run row-then-column and column-row-column under the same si
 path writes the replay slots holding the column path's window, or if a column path trusts the SFPSWAP
 direction its init wrote: the manual column paths (UInt16, signed Int32, every format under
 ``DISABLE_SFPLOADMACRO``) read the opposite SFPSWAP operand from the row path and so need the opposite
-direction for the same pool type. Orders other than column-then-row run on Blackhole only until the Wormhole
-kernel is ported (see the skip below).
+direction for the same pool type.
 """
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM, TILE_DIMENSIONS
 from helpers.llk_params import (
@@ -61,7 +59,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Number of stacked 32x32 row-tiles to reduce independently. Each tile yields one multi-axis
 # reduction result, so >= 2 keeps the PCC check non-degenerate. Stays <= 4 so the whole column of
@@ -191,20 +189,6 @@ def test_sfpu_reduce_multidim(
     dest_acc,
     input_bounds,
 ):
-    # Column-after-row under one init is fixed only in the Blackhole kernel so far. The Wormhole twin
-    # (tt_metal/hw/ckernels/wormhole_b0/.../ckernel_sfpu_reduce.h) still re-records replay slots [0, 16)
-    # in every row MAX/MIN calculate, which clobbers the column LOADMACRO window, and its manual column
-    # paths still trust the init's SFPSWAP direction. Until the WH port lands
-    # (https://github.com/tenstorrent/tt-metal/issues/58551), the row->col orders run on Blackhole only.
-    if (
-        reduce_order != ReduceOrder.ColRow
-        and get_chip_architecture() != ChipArchitecture.BLACKHOLE
-    ):
-        pytest.skip(
-            reason="Row-then-column under one init is only fixed in the Blackhole reduce kernel; "
-            "Wormhole port tracked in https://github.com/tenstorrent/tt-metal/issues/58551"
-        )
-
     # A column of num_row_tiles tiles, one column-tile wide: [num_row_tiles*32, 32].
     input_dimensions = [num_row_tiles * TILE_DIM, TILE_DIM]
     tile_cnt = num_row_tiles
@@ -284,7 +268,7 @@ def test_sfpu_reduce_multidim(
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_matrix = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
     # Each tile's multi-axis result lives at its element [0][0] -> row r*32, column 0.

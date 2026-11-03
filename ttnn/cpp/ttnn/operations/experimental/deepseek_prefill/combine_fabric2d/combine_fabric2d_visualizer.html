@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>combine_fabric2d — visual explainer</title>
+  <style>
+    :root { --bg:#09111f; --panel:#101d31; --line:#2b4262; --text:#e7efff; --muted:#9fb2ce; --cyan:#50d8ff; --purple:#ad8cff; --orange:#ffb75d; --green:#58e2a8; --red:#ff7386; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--text); background:radial-gradient(circle at 50% -30%,#193052 0,var(--bg) 48%); font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:1220px; margin:auto; padding:36px 24px 64px; }
+    h1 { margin:0; font-size:clamp(28px,5vw,52px); line-height:1.06; letter-spacing:-.04em; }
+    h1 span { color:var(--cyan); }
+    h2 { margin:0 0 12px; font-size:19px; }
+    p { color:var(--muted); margin:8px 0; }
+    code { color:#c7eaff; font-size:.92em; }
+    .subtitle { max-width:790px; font-size:18px; margin:16px 0 30px; }
+    .grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(280px,1fr); gap:18px; }
+    .panel { background:linear-gradient(135deg,rgba(20,37,61,.95),rgba(12,24,42,.96)); border:1px solid var(--line); border-radius:18px; padding:20px; box-shadow:0 14px 40px rgba(0,0,0,.2); }
+    .controls { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:16px 0 8px; }
+    label { display:grid; gap:5px; color:var(--muted); font-size:13px; }
+    select,button { appearance:none; border:1px solid #40618a; background:#0b1729; color:var(--text); border-radius:9px; padding:10px; font:inherit; }
+    button { cursor:pointer; background:linear-gradient(135deg,#1686a9,#3153a9); border:0; font-weight:650; }
+    button:hover { filter:brightness(1.12); }
+    #route { width:100%; min-height:380px; display:block; overflow:visible; }
+    .ring { fill:none; stroke:#35516f; stroke-width:3; }
+    .link { stroke:#35516f; stroke-width:2; }
+    .link.active { stroke:var(--cyan); stroke-width:5; filter:drop-shadow(0 0 4px var(--cyan)); }
+    .node circle { fill:#142a46; stroke:#6387ae; stroke-width:2; }
+    .node.origin circle { fill:#19566e; stroke:var(--cyan); stroke-width:4; }
+    .node.destination circle { fill:#5a3a71; stroke:var(--purple); stroke-width:4; }
+    .node.local circle { fill:#245947; stroke:var(--green); stroke-width:4; }
+    .node text { fill:var(--text); font-weight:700; text-anchor:middle; dominant-baseline:middle; }
+    .packet { fill:var(--orange); stroke:#fff0cc; stroke-width:2; filter:drop-shadow(0 0 7px var(--orange)); }
+    .packet-label { fill:#10213a; font-size:11px; font-weight:800; text-anchor:middle; dominant-baseline:middle; }
+    .legend { display:flex; flex-wrap:wrap; gap:12px; margin:6px 0 0; color:var(--muted); font-size:12px; }
+    .legend i { width:10px; height:10px; display:inline-block; border-radius:50%; margin-right:5px; }
+    .facts { display:grid; gap:12px; margin-top:16px; }
+    .fact { padding:12px; background:#0b1729; border-left:3px solid var(--cyan); border-radius:8px; }
+    .fact b { display:block; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.07em; }
+    .fact span { font-size:16px; }
+    .pipeline { grid-column:1/-1; }
+    .stages { display:grid; grid-template-columns:repeat(5,1fr); align-items:stretch; gap:8px; margin-top:18px; }
+    .stage { position:relative; min-height:120px; padding:15px 12px; background:#0b1729; border:1px solid #27415e; border-radius:12px; }
+    .stage:not(:last-child)::after { content:"→"; position:absolute; right:-17px; top:43px; z-index:2; color:var(--cyan); font-size:24px; }
+    .stage strong { display:block; color:var(--cyan); font-size:13px; }
+    .stage small { display:block; color:var(--muted); margin-top:7px; }
+    .stage.forward strong { color:var(--orange); }
+    .stage.final strong { color:var(--green); }
+    .bottom { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:18px; }
+    .formula { white-space:pre-wrap; color:#cce2ff; background:#081321; border:1px solid #294562; padding:14px; border-radius:10px; font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .status { color:var(--text); min-height:50px; }
+    @media (max-width:800px) { .grid,.bottom { grid-template-columns:1fr; } .stages { grid-template-columns:1fr; } .stage:not(:last-child)::after { content:"↓"; left:50%; top:auto; bottom:-24px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1><span>combine_fabric2d</span> in motion</h1>
+  <p class="subtitle">A four-chip, one-link model of the operation. Pick an origin and final destination, then animate the result token as it returns from an expert to its original token/top-k output slot.</p>
+
+  <section class="grid">
+    <div class="panel">
+      <h2>One-hop Fabric, explicit multi-hop routing</h2>
+      <div class="controls">
+        <label>Origin chip<select id="origin"></select></label>
+        <label>Final destination chip<select id="destination"></select></label>
+        <button id="animate">Animate token route</button>
+        <button id="reset">Reset</button>
+      </div>
+      <svg id="route" viewBox="0 0 680 400" aria-label="Four-chip fabric ring route"></svg>
+      <div class="legend">
+        <span><i style="background:#50d8ff"></i>origin</span><span><i style="background:#ad8cff"></i>destination</span><span><i style="background:#ffb75d"></i>packet</span><span><i style="background:#58e2a8"></i>local NoC path</span>
+      </div>
+    </div>
+    <aside class="panel">
+      <h2>Schedule decision</h2>
+      <div class="facts">
+        <div class="fact"><b>Route kind</b><span id="kind">—</span></div>
+        <div class="fact"><b>Assigned stream</b><span id="stream">—</span></div>
+        <div class="fact"><b>Packet command(s)</b><span id="commands">—</span></div>
+        <div class="fact"><b>Final write</b><span id="final">—</span></div>
+      </div>
+      <p id="explanation" class="status"></p>
+    </aside>
+
+    <div class="panel pipeline">
+      <h2>What the selected token passes through</h2>
+      <div class="stages" id="stages"></div>
+    </div>
+  </section>
+
+  <section class="bottom">
+    <div class="panel">
+      <h2>Why `expert_offsets` matters</h2>
+      <p>An expert region is ordered by origin chip. Both ends calculate a chunk's page range locally, so the forwarding buffer can remain dense without exchanging dynamic chunk sizes.</p>
+      <div class="formula">run_begin(d, e) = expert_offsets[d][e]
+run_end(d, e)   = expert_offsets[d+1][e]
+                  or region_offset[e] + token_count[e]
+
+output_page = token_idx * num_experts_per_tok + topk_idx</div>
+    </div>
+    <div class="panel">
+      <h2>The two independent rings</h2>
+      <div class="formula">L1 ring (8 slots)
+reader fills slot → filled semaphore → sender transmits
+sender flushes L1 read → freed semaphore → reader reuses slot
+
+Forwarding DRAM region
+upstream Fabric write → fwd_arrived semaphore → downstream reader relays</div>
+      <p>For TILE input, untilizer cores sit before the reader and turn tile rows into row-major token rows. The routing logic after that point is the same.</p>
+    </div>
+  </section>
+</main>
+<script>
+  const svg = document.querySelector('#route');
+  const originSelect = document.querySelector('#origin');
+  const destSelect = document.querySelector('#destination');
+  const P = [[340,65],[565,200],[340,335],[115,200]];
+  let timer;
+
+  for (let i=0;i<4;i++) [originSelect,destSelect].forEach(s => s.add(new Option(`chip ${i}`,i)));
+  originSelect.value = '0'; destSelect.value = '2';
+
+  const next = (n,dir) => (n + dir + 4) % 4;
+  function route(a,b) {
+    if (a === b) return { nodes:[a], dir:0, kind:'same-chip local copy', stream:'all streams partition the local run', commands:['local NoC write'] };
+    const cw = (b-a+4)%4, ccw=(a-b+4)%4;
+    // The opposite chip is split across both directions. This visual selects clockwise share 0.
+    const dir = cw <= ccw ? 1 : -1;
+    const hops = Math.min(cw,ccw);
+    const nodes=[a]; for(let i=0;i<hops;i++) nodes.push(next(nodes.at(-1),dir));
+    const opposite = cw===ccw;
+    const stream = opposite ? 'CW stream 0 (one of all directional/link shares)' : `${dir===1?'CW':'CCW'} stream 0`;
+    const commands = Array.from({length:hops},(_,i)=>i===hops-1?'FINAL_WRITE': i===hops-2?'FORWARD_END':'FORWARD');
+    return {nodes,dir,kind:opposite?'opposite-chip split':'shortest-direction remote route',stream,commands};
+  }
+  function edge(n,m) { return `${n}-${m}`; }
+  function draw(packetIndex=-1) {
+    const a=+originSelect.value,b=+destSelect.value,r=route(a,b);
+    const active=new Set(); for(let i=0;i<r.nodes.length-1;i++) active.add(edge(r.nodes[i],r.nodes[i+1]));
+    let html = `<circle class="ring" cx="340" cy="200" r="140"/>`;
+    for(let i=0;i<4;i++) { const j=(i+1)%4; html += `<line class="link ${active.has(edge(i,j))||active.has(edge(j,i))?'active':''}" x1="${P[i][0]}" y1="${P[i][1]}" x2="${P[j][0]}" y2="${P[j][1]}"/>`; }
+    P.forEach(([x,y],i)=>{ const c=i===a&&a===b?'local':i===a?'origin':i===b?'destination':''; html += `<g class="node ${c}"><circle cx="${x}" cy="${y}" r="35"/><text x="${x}" y="${y}">${i}</text></g>`; });
+    if(packetIndex>=0) { const [x,y]=P[r.nodes[Math.min(packetIndex,r.nodes.length-1)]]; html += `<circle class="packet" cx="${x}" cy="${y}" r="15"/><text class="packet-label" x="${x}" y="${y}">token</text>`; }
+    svg.innerHTML=html;
+    renderFacts(r,a,b);
+  }
+  function renderFacts(r,a,b) {
+    document.querySelector('#kind').textContent=r.kind;
+    document.querySelector('#stream').textContent=r.stream;
+    document.querySelector('#commands').textContent=r.commands.join(' → ');
+    document.querySelector('#final').textContent=`chip ${b}: output[token_idx][topk_idx]`;
+    const wording=a===b ? 'No Fabric packet is made. The reader copies this stream’s fraction of the same-chip run directly from expert-output DRAM into the output page.' : `The reader uses the run boundary for origin chip ${a}, attaches the final output address, and the sender moves it ${r.nodes.length-1} Fabric hop${r.nodes.length===2?'':'s'} toward chip ${b}.`;
+    document.querySelector('#explanation').textContent=wording;
+    const stages = a===b ? [ ['Expert output DRAM','token page'],['Reader staging','one private L1 slot'],['Local NoC copy','never published to sender'],['Output DRAM','token_idx × top-k + topk_idx'] ] : [ ['Expert output DRAM','read one BF16 token'],['Reader + L1 ring','attach final_addr, dst_chip, command'],...r.nodes.slice(1,-1).map((n,i)=>[`Chip ${n} forwarding DRAM`,`hop ${i+1}: read token + 16 B routing tail`]),['Fabric final write','payload only to final_addr'],['Output DRAM','output[token_idx][topk_idx]'] ];
+    document.querySelector('#stages').innerHTML=stages.map((s,i)=>`<div class="stage ${i===stages.length-1?'final':i>1?'forward':''}"><strong>${s[0]}</strong><small>${s[1]}</small></div>`).join('');
+  }
+  function animate() {
+    clearInterval(timer); const r=route(+originSelect.value,+destSelect.value); let i=0; draw(i);
+    timer=setInterval(()=>{ i++; draw(i); if(i>=r.nodes.length-1) clearInterval(timer); },900);
+  }
+  document.querySelector('#animate').onclick=animate;
+  document.querySelector('#reset').onclick=()=>{ clearInterval(timer); draw(-1); };
+  originSelect.onchange=destSelect.onchange=()=>{ clearInterval(timer); draw(-1); };
+  draw(-1);
+</script>
+</body>
+</html>

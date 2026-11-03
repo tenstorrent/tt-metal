@@ -10,15 +10,16 @@
  * Each wrapper is a pure inline forwarder to `eltwise_chain` for one common shape, so a
  * simple op needs one call instead of a hand-written chain. The op is baked into the name
  * (`add`/`sub`/`mul`, or the SFPU op as a type parameter); broadcast and the grouped input/output
- * configurations carry their buffer ids, so the streaming case is a three-argument call
- * and the broadcast / held-operand cases stay a single call:
+ * configurations carry their buffer ids, so the broadcast / held-operand cases stay a single call.
+ * After the shape, each wrapper takes the DataflowBuffer of every input(...) / output(...) spec by
+ * reference, in template-argument order (`square` has one input spec, so one input buffer):
  *
- *     mul<input(dfb_a), input(dfb_b), output(dfb_out)>(IterationShape::tiles(n));
- *     sub<input(dfb_x), input(dfb_row, BroadcastDim::Col, WaitPolicy::PerTile, PopPolicy::None),
- *         output(dfb_out)>(shape);
- *     unary<Exp<>, input(dfb_in), output(dfb_out)>(IterationShape::tiles(n));
- *     binary_sfpu<DivBinary<>, input(dfb_a), input(dfb_b), output(dfb_out)>(IterationShape::tiles(n));
- *     copy<input(dfb_in), output(dfb_out)>(IterationShape::one_tile());
+ *     mul<input(dfb::a), input(dfb::b), output(dfb::out)>(IterationShape::tiles(n), a, b, out);
+ *     sub<input(dfb::x), input(dfb::row, BroadcastDim::Col, WaitPolicy::PerTile, PopPolicy::None),
+ *         output(dfb::out)>(shape, x, row, out);
+ *     unary<Exp<>, input(dfb::in), output(dfb::out)>(IterationShape::tiles(n), in, out);
+ *     binary_sfpu<DivBinary<>, input(dfb::a), input(dfb::b), output(dfb::out)>(IterationShape::tiles(n), a, b, out);
+ *     copy<input(dfb::in), output(dfb::out)>(IterationShape::one_tile(), in, out);
  *
  * The shape argument is an `IterationShape`. A bare number is not accepted (the `uint32_t`
  * ctor is `explicit`): write `op<...>(IterationShape::tiles(n))`, `IterationShape::one_tile()`,
@@ -41,14 +42,32 @@ namespace compute_kernel_lib {
 // Defaults: no broadcast, both operands per-tile streaming.
 // ---------------------------------------------------------------------------
 
-template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
-ALWI void add(IterationShape shape);
+template <
+    InputSpec AInput,
+    BroadcastInputSpec BInput,
+    OutputSpec Output,
+    class DataflowBufferA,
+    class DataflowBufferB,
+    class OutputDataflowBuffer>
+ALWI void add(IterationShape shape, DataflowBufferA& a, DataflowBufferB& b, OutputDataflowBuffer& out);
 
-template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
-ALWI void sub(IterationShape shape);
+template <
+    InputSpec AInput,
+    BroadcastInputSpec BInput,
+    OutputSpec Output,
+    class DataflowBufferA,
+    class DataflowBufferB,
+    class OutputDataflowBuffer>
+ALWI void sub(IterationShape shape, DataflowBufferA& a, DataflowBufferB& b, OutputDataflowBuffer& out);
 
-template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
-ALWI void mul(IterationShape shape);
+template <
+    InputSpec AInput,
+    BroadcastInputSpec BInput,
+    OutputSpec Output,
+    class DataflowBufferA,
+    class DataflowBufferB,
+    class OutputDataflowBuffer>
+ALWI void mul(IterationShape shape, DataflowBufferA& a, DataflowBufferB& b, OutputDataflowBuffer& out);
 
 // ---------------------------------------------------------------------------
 // FPU square — x * x, via BinaryFpu reading the one input buffer for both operands
@@ -57,34 +76,41 @@ ALWI void mul(IterationShape shape);
 // operand lifecycle / index instead of separate A/B.
 // ---------------------------------------------------------------------------
 
-template <InputSpec Input, OutputSpec Output>
-ALWI void square(IterationShape shape);
+template <InputSpec Input, OutputSpec Output, class InputDataflowBuffer, class OutputDataflowBuffer>
+ALWI void square(IterationShape shape, InputDataflowBuffer& in, OutputDataflowBuffer& out);
 
 // ---------------------------------------------------------------------------
 // SFPU unary — CopyTile(D0) -> SfpuOp -> PackTile(D0). SfpuOp is the (DEST-only) op type.
 // ---------------------------------------------------------------------------
 
-template <class SfpuOp, InputSpec Input, OutputSpec Output>
-ALWI void unary(IterationShape shape);
+template <class SfpuOp, InputSpec Input, OutputSpec Output, class InputDataflowBuffer, class OutputDataflowBuffer>
+ALWI void unary(IterationShape shape, InputDataflowBuffer& in, OutputDataflowBuffer& out);
 
 // Typecast — derives the LLK input/output formats from the bound buffers.
-template <InputSpec Input, OutputSpec Output>
-ALWI void typecast(IterationShape shape);
+template <InputSpec Input, OutputSpec Output, class InputDataflowBuffer, class OutputDataflowBuffer>
+ALWI void typecast(IterationShape shape, InputDataflowBuffer& in, OutputDataflowBuffer& out);
 
 // ---------------------------------------------------------------------------
 // SFPU binary — two CopyTile loads (D0, D1) -> SfpuBinOp -> PackTile(D0).
 // SfpuBinOp is a DEST-only SFPU binary op type (e.g. DivBinary<>, BinaryMax<>).
 // ---------------------------------------------------------------------------
 
-template <class SfpuBinOp, InputSpec AInput, InputSpec BInput, OutputSpec Output>
-ALWI void binary_sfpu(IterationShape shape);
+template <
+    class SfpuBinOp,
+    InputSpec AInput,
+    InputSpec BInput,
+    OutputSpec Output,
+    class DataflowBufferA,
+    class DataflowBufferB,
+    class OutputDataflowBuffer>
+ALWI void binary_sfpu(IterationShape shape, DataflowBufferA& a, DataflowBufferB& b, OutputDataflowBuffer& out);
 
 // ---------------------------------------------------------------------------
 // Pure copy — CopyTile(D0) -> PackTile(D0).
 // ---------------------------------------------------------------------------
 
-template <InputSpec Input, OutputSpec Output>
-ALWI void copy(IterationShape shape);
+template <InputSpec Input, OutputSpec Output, class InputDataflowBuffer, class OutputDataflowBuffer>
+ALWI void copy(IterationShape shape, InputDataflowBuffer& in, OutputDataflowBuffer& out);
 
 }  // namespace compute_kernel_lib
 
