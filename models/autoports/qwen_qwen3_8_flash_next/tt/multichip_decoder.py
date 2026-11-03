@@ -199,6 +199,19 @@ class MeshOps:
         return ttnn.typecast(result, original_dtype) if transfer else result
 
     def reduce(self, value):
+        width = value.shape[-1]
+        if (
+            value.shape[-2] > 32
+            and value.dtype == ttnn.float32
+            and width % 32 == 0
+            and os.environ.get("QWEN_FLASH_PREFILL_REDUCE", "1") == "1"
+        ):
+            # Prefill-sized FP32 rows: the gather + sum(dim=0) below permutes the whole gathered tensor (~0.8 ms for
+            # 1024x352); gathering along the width and adding the four tile-aligned slices in FP32 takes ~0.19 ms.
+            # (ttnn.all_reduce is faster still but sums at BF16-level precision.) FP32 summation order differs.
+            g = self.gather(value, -1)
+            part = [g[..., r * width : (r + 1) * width] for r in range(4)]
+            return ttnn.add(ttnn.add(part[0], part[1]), ttnn.add(part[2], part[3]))
         # Preserve individual scalar/statistic rows; gathering the non-spatial
         # leading dimension needs no replication of logical tile padding.
         return ttnn.sum(self.gather(value, 0), dim=0, keepdim=True)
