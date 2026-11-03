@@ -31,6 +31,10 @@ def _mesh_coords(topology):
     return [tuple(coord) for coord in topology.mesh_coords()]
 
 
+def _storage_coords(tt_tensor):
+    return [tuple(coord) for coord in tt_tensor.device_coords()]
+
+
 def _from_torch(torch_tensor, mesh_device, mesh_mapper, **kwargs):
     kwargs.setdefault("dtype", ttnn.bfloat16)
     kwargs.setdefault("layout", ttnn.TILE_LAYOUT)
@@ -338,6 +342,47 @@ def test_sharded_src_into_replicated_dst_adopts_shard(mesh_device, write_into, d
     assert entries > 0
     keep_alive.append(run(2))
     assert mesh_device.num_program_cache_entries() == entries, "relabelling must not miss the program cache"
+
+
+# Sources stored on one device of the mesh, built from device 0's tensor of a mesh tensor: (how, what device 0 of
+# dst holds afterwards, given device 0's slice of the mesh tensor).
+_ONE_DEVICE_SOURCES = [
+    pytest.param(ttnn.neg, lambda x0: -x0, id="op_on_one_device_tensor"),
+]
+
+
+@MESH_PARAMS
+@pytest.mark.parametrize("make_src, expected_src", _ONE_DEVICE_SOURCES)
+@pytest.mark.parametrize("write_into, dst_dtype, dst_torch_dtype", _WRITE_INTO_DST)
+def test_src_on_one_device_overwrites_dst_there_only(
+    mesh_device, make_src, expected_src, write_into, dst_dtype, dst_torch_dtype
+):
+    """A source stored on one device overwrites a Shard(0) dst on that device only, and dst keeps its label.
+
+    dst is stored on every device and written in part, so the framework default labels it. The result of an op on one
+    device tensor of a mesh tensor is stored on that device, though its label can span the whole mesh: dst keeps its
+    Shard(0) next to the replicated source.
+    """
+    num_devices = mesh_device.get_num_devices()
+    shape = [num_devices, 1, 64, 64]
+    torch.manual_seed(0)
+    x = torch.randn(shape).bfloat16()
+    x_t = _sharded(x, mesh_device, 0)
+    src_t = make_src(ttnn.get_device_tensors(x_t)[0])
+    dst = torch.randn(shape).to(dst_torch_dtype)
+    dst_t = _sharded(dst, mesh_device, 0, dtype=dst_dtype)
+    dst_label = dst_t.tensor_topology()
+    assert _storage_coords(src_t) == _storage_coords(dst_t)[:1], "precondition: src is stored on dst's first device"
+
+    returned = write_into(src_t, dst_t)
+
+    assert dst_t.tensor_topology() == dst_label, "dst after write (caller's handle)"
+    assert returned.tensor_topology() == dst_label, "dst after write (returned handle)"
+    assert returned.buffer_address() == dst_t.buffer_address()
+    dst_shards = _per_device(dst_t)
+    assert torch.equal(dst_shards[0], expected_src(x[0:1]).to(dst_torch_dtype))
+    for device_index in range(1, num_devices):
+        assert torch.equal(dst_shards[device_index], dst[device_index : device_index + 1]), f"device {device_index}"
 
 
 @MESH_PARAMS
