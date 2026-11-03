@@ -56,7 +56,7 @@ HANG_APP_TTNN_ADD_INTEGERS = (
 )
 HANG_APP_MESH_SOCKET = "tools/tests/triage/hang_apps/mesh_socket_hang/mesh_socket_hang.py"
 
-MESH_SOCKET_FIFO_SIZE = 8192
+MESH_SOCKET_FIFO_SIZE = 1024
 
 SIMULATOR_HANG_DEADLINE_SECONDS = int(os.environ.get("TT_TRIAGE_SIMULATOR_HANG_DEADLINE_SECONDS", "900"))
 SIMULATOR_POLL_INTERVAL_SECONDS = 2
@@ -918,11 +918,14 @@ class TestTriage:
         (
             HANG_APP_MESH_SOCKET,
             [str(MESH_SOCKET_FIFO_SIZE)],
-            {"min_devices": 2, "expect_running": True},
+            {"expect_running": True},
             15,
         ),
     ],
     indirect=True,
+)
+@pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_SIMULATOR")), reason="The app's host sockets are untested on a simulator"
 )
 @pytest.mark.usefixtures("cause_hang_with_app")
 class TestMeshSocketTriage:
@@ -944,17 +947,9 @@ class TestMeshSocketTriage:
 
         rows = [check.result for check in result]
         device_of = {id(check.result): check.device_description.device.id for check in result}
-        senders = [row for row in rows if row.role == "sender"]
-        receivers = [row for row in rows if row.role == "receiver"]
 
-        # One 1:1 socket pair each way, plus a fan-out sender feeding two receiver cores. The fan-out
-        # sender is a single core, so it contributes one row per downstream.
-        pair_senders = [row for row in senders if row.num_downstreams == 1]
-        fanout_senders = [row for row in senders if row.num_downstreams == 2]
-        assert len(pair_senders) == 2, f"Expected 2 paired sender rows, got {len(pair_senders)}"
-        assert len(fanout_senders) == 2, f"Expected 2 fan-out sender rows, got {len(fanout_senders)}"
-        assert len(receivers) == 4, f"Expected 4 receiver rows, got {len(receivers)}"
-        assert len({device_of[id(r)] for r in pair_senders}) == 2, "Expected the paired senders on different devices"
+        def core_label(row):
+            return f"dev{device_of[id(row)]} ({row.location})"
 
         for row in rows:
             # A row only carries the columns that live in its own config buffer.
@@ -964,10 +959,47 @@ class TestMeshSocketTriage:
                 assert (row.sent_at_sender, row.acked_at_sender, row.write_ptr) == (None, None, None)
                 assert (row.downstream_config_addr, row.downstream, row.num_downstreams) == (None, None, None)
             assert row.fifo_size == MESH_SOCKET_FIFO_SIZE
-            # Every core is on this host, so each names its peer by device id.
-            assert row.peer.startswith("dev"), f"Expected a device id for a local peer, got {row.peer}"
             # Node is the core's own fabric node, so it agrees with the device the row came from.
             assert row.node == f"chip{device_of[id(row)]}/mesh0"
+
+        # The host sockets: the host filled the H2D fifo, and the D2H kernel wedged on its full fifo
+        # because the host never reads it.
+        h2d = [row for row in rows if row.peer == "host" and row.role == "receiver"]
+        d2h = [row for row in rows if row.peer == "host" and row.role == "sender"]
+        assert len(h2d) == 1, f"Expected 1 H2D receiver row, got {len(h2d)}"
+        assert len(d2h) == 1, f"Expected 1 D2H sender row, got {len(d2h)}"
+        assert h2d[0].sent_at_receiver == MESH_SOCKET_FIFO_SIZE, "Expected the host to have filled the H2D fifo"
+        # A D2H downstream is a host address, so Downstream Addr reads N/A. sent@snd and wr_off come from
+        # the kernel's locals, which triage cannot read for this kernel, so they are not checked.
+        assert (d2h[0].downstream_config_addr, d2h[0].num_downstreams, d2h[0].downstream) == (None, 1, 0)
+        assert d2h[0].acked_at_sender == 0, "Expected no acks, since the host never reads"
+        # Those values are the host-initialised ones, so check the callstack that the kernel really wedged.
+        triage.CHECKS.clear()
+        callstacks = run_script(
+            script_path=os.path.join(triage_home, "dump_callstacks.py"),
+            context=self.exalens_context,
+            argv=[],
+            return_result=True,
+        )
+        d2h_frames = [
+            frame.function_name
+            for check in callstacks
+            if check.location == d2h[0].location and check.result is not None
+            for frame in check.result.kernel_callstack_with_message.callstack
+        ]
+        assert "socket_reserve_pages" in d2h_frames, f"Expected the D2H kernel waiting for fifo space, got {d2h_frames}"
+
+        # The D2D sockets, all on one chip: a 1:1 pair, plus a fan-out sender feeding two receiver cores.
+        # The fan-out sender is a single core, so it contributes one row per downstream. No op runs on
+        # these sockets, so nothing reaches their receivers.
+        senders = [row for row in rows if row.peer != "host" and row.role == "sender"]
+        receivers = [row for row in rows if row.peer != "host" and row.role == "receiver"]
+        pair_senders = [row for row in senders if row.num_downstreams == 1]
+        fanout_senders = [row for row in senders if row.num_downstreams == 2]
+        assert len(pair_senders) == 1, f"Expected 1 paired sender row, got {len(pair_senders)}"
+        assert len(fanout_senders) == 2, f"Expected 2 fan-out sender rows, got {len(fanout_senders)}"
+        assert len(receivers) == 3, f"Expected 3 receiver rows, got {len(receivers)}"
+        assert all(row.sent_at_receiver == 0 for row in receivers), "Expected nothing sent to the D2D receivers"
 
         # The fan-out rows come from one core, so they share its config buffer and differ
         # only in which downstream they describe.
@@ -977,18 +1009,15 @@ class TestMeshSocketTriage:
         assert len({r.peer for r in fanout_senders}) == 2, "Each downstream should name its own receiver core"
 
         # Downstream Addr is the documented join key: it names the peer receiver's config buffer. The
-        # fan-out receivers are pages of one buffer, so they share an address and both match.
+        # fan-out receivers are pages of one buffer, so they share an address and both match. Peer
+        # names the core at the other end, so each side names the other's Dev and Loc.
         receivers_by_config_addr: dict[int, list] = {}
         for row in receivers:
             receivers_by_config_addr.setdefault(row.config_addr, []).append(row)
         for snd in senders:
             matched = receivers_by_config_addr.get(snd.downstream_config_addr)
             assert matched, f"Sender at {snd.config_addr:#x} points at no receiver row"
+            assert snd.peer in {core_label(rcv) for rcv in matched}, f"Sender peer {snd.peer} is not its receiver"
             for rcv in matched:
-                assert device_of[id(rcv)] != device_of[id(snd)], "Each socket should cross to the other device"
+                assert rcv.peer == core_label(snd), f"Receiver peer {rcv.peer} is not its sender"
         assert len(receivers_by_config_addr[fanout_senders[0].downstream_config_addr]) == 2
-
-        # Of the two 1:1 sockets, one is wedged with a full fifo and one never saw a byte.
-        paired_receivers = [rcv for snd in pair_senders for rcv in receivers_by_config_addr[snd.downstream_config_addr]]
-        sent = sorted(rcv.sent_at_receiver for rcv in paired_receivers)
-        assert sent == [0, MESH_SOCKET_FIFO_SIZE], f"Expected a starved and a backpressured receiver, got {sent}"

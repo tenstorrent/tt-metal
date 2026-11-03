@@ -441,6 +441,56 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
     }
 }
 
+void Inspector::host_socket_created(
+    const distributed::MeshBuffer* config_buffer,
+    const distributed::MeshCoreCoord& core,
+    bool is_sender,
+    uint32_t fifo_size,
+    uint64_t data_buffer_address) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        auto* mesh_device = config_buffer->device();
+        auto* device =
+            mesh_device->is_local(core.device_coord) ? internal::get_device(*mesh_device, core.device_coord) : nullptr;
+        if (device == nullptr) {
+            return;  // Another rank owns this core and reports it itself.
+        }
+        const distributed::SocketSenderSize sender_size(
+            mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
+        const auto node = mesh_device->get_fabric_node_id(core.device_coord);
+
+        // The peer is the host, so there are no peer cores and no peer mesh id.
+        inspector::MeshSocketData socket_data;
+        socket_data.is_sender = is_sender;
+        socket_data.peer_is_host = true;
+        socket_data.config_buffer_address = config_buffer->address();
+        socket_data.data_buffer_address = data_buffer_address;
+        socket_data.fifo_size = fifo_size;
+        socket_data.bytes_acked_offset_bytes = sender_size.md_size_bytes;
+        socket_data.bytes_acked_stride_bytes = sender_size.ack_size_bytes;
+        socket_data.local_mesh_id = *node.mesh_id;
+        auto& core_data = socket_data.local_cores.emplace_back();
+        core_data.chip_id = device->id();
+        core_data.core.core_x = core.core_coord.x;
+        core_data.core.core_y = core.core_coord.y;
+        core_data.core.fabric_chip_id = node.chip_id;
+
+        if (data->mesh_socket_logging_enabled) {
+            data->logger.log_mesh_socket_created(config_buffer, socket_data);
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_sockets_data.insert_or_assign(config_buffer, std::move(socket_data));
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log host socket created: {}", e.what());
+    }
+}
+
 void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept {
     if (!is_enabled()) {
         return;

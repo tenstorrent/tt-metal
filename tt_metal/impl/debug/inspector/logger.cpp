@@ -172,6 +172,7 @@ void Logger::log_mesh_socket_created(
         mesh_sockets_ostream << "- mesh_socket_created:\n";
         mesh_sockets_ostream << "    id: " << reinterpret_cast<uintptr_t>(config_buffer) << "\n";
         mesh_sockets_ostream << "    is_sender: " << (socket_data.is_sender ? "true" : "false") << "\n";
+        mesh_sockets_ostream << "    peer_is_host: " << (socket_data.peer_is_host ? "true" : "false") << "\n";
         mesh_sockets_ostream << "    config_buffer_address: " << socket_data.config_buffer_address << "\n";
         mesh_sockets_ostream << "    data_buffer_address: " << socket_data.data_buffer_address << "\n";
         mesh_sockets_ostream << "    fifo_size: " << socket_data.fifo_size << "\n";

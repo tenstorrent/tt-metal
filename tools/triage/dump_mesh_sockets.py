@@ -16,7 +16,8 @@ Description:
     gets one row each, numbered in Downstream #, with Peer naming the core that row describes.
     Match a sender's Downstream Addr to a receiver's Config Addr to pair the two halves of a socket
     (sockets, not cores). Node is a fabric node id, the one chip name shared across ranks; a peer on
-    this host shows its device id instead.
+    this host shows its device id instead. A D2H or H2D socket has only its device side: its Peer
+    reads host, and a D2H sender's Downstream Addr reads N/A.
 
     Counter columns, by source:
 
@@ -72,8 +73,11 @@ class Peer:
     core_x: int
     core_y: int
     device_id: int | None = None
+    is_host: bool = False  # D2H and H2D sockets: the other side is the host, not a core
 
     def label(self) -> str:
+        if self.is_host:
+            return "host"
         where = f"dev{self.device_id}" if self.device_id is not None else node_label(self.mesh_id, self.fabric_chip_id)
         return f"{where} ({self.core_x},{self.core_y})"
 
@@ -220,16 +224,20 @@ def discover(inspector_data, id_mapping, run_checks) -> list[SocketCore]:
                     config_addr=int(s.configBufferAddress),
                     acked_offset=int(s.bytesAckedOffsetBytes),
                     acked_stride=int(s.bytesAckedStrideBytes),
-                    peers=[
-                        Peer(
-                            mesh_id=peer_mesh_id,
-                            fabric_chip_id=int(p.fabricChipId),
-                            core_x=int(p.coreX),
-                            core_y=int(p.coreY),
-                            device_id=fabric_to_device_id.get((peer_mesh_id, int(p.fabricChipId))),
-                        )
-                        for p in e.peers
-                    ],
+                    peers=(
+                        [Peer(mesh_id=0, fabric_chip_id=0, core_x=0, core_y=0, is_host=True)]
+                        if s.peerIsHost
+                        else [
+                            Peer(
+                                mesh_id=peer_mesh_id,
+                                fabric_chip_id=int(p.fabricChipId),
+                                core_x=int(p.coreX),
+                                core_y=int(p.coreY),
+                                device_id=fabric_to_device_id.get((peer_mesh_id, int(p.fabricChipId))),
+                            )
+                            for p in e.peers
+                        ]
+                    ),
                 )
             )
 
@@ -242,7 +250,7 @@ def sender_row(core: SocketCore, md: SenderMd, index: int) -> SocketRow:
         location=core.location,
         node=core.node,
         config_addr=core.config_addr,
-        downstream_config_addr=md.downstream_config_addr,
+        downstream_config_addr=None if md.is_d2h else md.downstream_config_addr,  # a host address for D2H
         downstream=index,
         sent_at_sender=core.interface.get("bytes_sent"),
         acked_at_sender=md.bytes_acked[index],

@@ -16,6 +16,7 @@
 #include <tt-umd/driver_atomics.hpp>
 #include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/l2cpu_lim.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 #ifdef TT_METAL_USE_EMULE
@@ -430,6 +431,8 @@ D2HSocket::D2HSocket(
         return;
     }
     init_common(mesh_device);
+    Inspector::host_socket_created(
+        config_buffer_.get(), sender_core_, /*is_sender=*/true, fifo_size_, /*data_buffer_address=*/0);
 }
 
 D2HSocket::D2HSocket(

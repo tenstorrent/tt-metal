@@ -17,6 +17,7 @@
 #include <tt-umd/driver_atomics.hpp>
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
@@ -493,6 +494,8 @@ H2DSocketImpl::H2DSocketImpl(
         reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
     connector_state_->version = kHDSocketConnectorStateVersion;
     connector_state_->clean_shutdown = 1;
+    Inspector::host_socket_created(
+        config_buffer_.get(), recv_core_, /*is_sender=*/false, fifo_size_, aligned_data_buf_start_);
 }
 
 H2DSocketImpl::H2DSocketImpl(

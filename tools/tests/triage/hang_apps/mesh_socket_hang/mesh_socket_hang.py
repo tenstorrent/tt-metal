@@ -3,81 +3,87 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Triage hang app: wedges MeshSockets so dump_mesh_sockets has live flow-control state to read.
+"""Triage hang app: puts MeshSockets on one chip in known states so dump_mesh_sockets has live state to read.
 
-Needs two chips (n300). Builds a socket pair in each direction and drives exactly one half of each,
-so a single triage run sees four socket cores in two distinct flow-control states:
+The D2D ops (send_async, recv_async) route through the fabric, which has no route from a chip to itself, so
+the D2D sockets here carry no traffic: a 1:1 pair, and a socket whose single sender core feeds two receiver
+cores so the dump has a multi-downstream core to report. They exist only to be inspected; the Inspector
+records a socket when it is created, not when it is used. Nothing reaches their receivers, so those stay
+at zero.
 
-    dev0 -> dev1   send_async with no matching recv_async. The sender pushes until the fifo is full,
-                   then wedges in socket_reserve_pages waiting for acks that never come, so this
-                   receiver's bytes_sent sits at fifo_size (backpressure).
+The full fifo comes from the host sockets instead, seen from each side:
 
-    dev1 -> dev0   recv_async with no matching send_async. Nothing is ever sent, so this receiver
-                   stays at zero (starvation).
+    H2D   The host writes fifo_size bytes and nothing on the chip reads them, so this receiver's
+          bytes_sent sits at fifo_size.
 
-It also creates a third socket whose single sender core feeds two receiver cores, so the dump has a
-multi-downstream core to report. No op is dispatched on it; it exists only to be inspected.
-
-Note both dispatches target dev0, and dispatch is in-order per device, so the recv program actually
-queues behind the wedged sender and never launches. That does not change what triage sees: a starved
-receiver and an untouched one have identical config buffers, since bytes_sent, bytes_acked and
-read_ptr all still hold their host-init values.
+    D2H   send_async_d2h sends more than the fifo holds and the host never reads, so the sender kernel
+          fills the fifo, then wedges in socket_reserve_pages waiting for acks that never come
+          (backpressure).
 
 Takes the socket fifo size in bytes, so the caller asserting on it owns the value. Holds the device
 open once wedged, so triage can run against it; the caller decides how long to wait before triaging.
 """
 
+import os
 import sys
 import time
 
+import torch
 import ttnn
 
-TENSOR_SHAPE = (1, 1, 256, 128)  # bfloat16 -> 64 KB, well over any fifo, so the sender cannot drain it
-# Distinct cores per device so the two sockets never share one.
-FWD_SENDER_CORE = ttnn.CoreCoord(0, 0)  # on dev0
-FWD_RECEIVER_CORE = ttnn.CoreCoord(1, 1)  # on dev1
-REV_SENDER_CORE = ttnn.CoreCoord(2, 2)  # on dev1
-REV_RECEIVER_CORE = ttnn.CoreCoord(3, 3)  # on dev0
-# One sender core feeding two receivers. No op is dispatched on it: the Inspector records a socket
-# when it is created, not when it is used.
-FANOUT_SENDER_CORE = ttnn.CoreCoord(4, 4)  # on dev0
-FANOUT_RECEIVER_CORES = (ttnn.CoreCoord(5, 5), ttnn.CoreCoord(6, 6))  # on dev1
+PAIR_SENDER_CORE = ttnn.CoreCoord(1, 0)
+PAIR_RECEIVER_CORE = ttnn.CoreCoord(2, 1)
+# One sender core feeding two receivers.
+FANOUT_SENDER_CORE = ttnn.CoreCoord(3, 0)
+FANOUT_RECEIVER_CORES = (ttnn.CoreCoord(3, 2), ttnn.CoreCoord(4, 1))
+H2D_CORE = ttnn.CoreCoord(4, 2)
+D2H_CORE = ttnn.CoreCoord(5, 1)
+PAGE_SIZE = 256  # PCIe-aligned; the fifo holds a whole number of pages
 HOLD_SECONDS = 1800
 
 
-def make_socket(sender, receiver, fifo_size, sender_core, *receiver_cores):
-    connections = [
-        ttnn.SocketConnection(
-            ttnn.MeshCoreCoord(coord, sender_core),
-            ttnn.MeshCoreCoord(coord, receiver_core),
-        )
-        for coord in ttnn.MeshCoordinateRange(sender.shape)
-        for receiver_core in receiver_cores
-    ]
+def on_chip(core):
+    return ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), core)
+
+
+def make_socket(mesh, fifo_size, sender_core, *receiver_cores):
+    connections = [ttnn.SocketConnection(on_chip(sender_core), on_chip(core)) for core in receiver_cores]
     config = ttnn.SocketConfig(connections, ttnn.SocketMemoryConfig(ttnn.BufferType.L1, fifo_size))
-    return ttnn.create_socket_pair(sender, receiver, config)
+    return ttnn.create_socket_pair(mesh, mesh, config)
 
 
 def main(fifo_size: int) -> int:
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
-    dev0 = mesh.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, 0))
-    dev1 = mesh.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, 1))
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
 
-    fwd_send, _fwd_recv = make_socket(dev0, dev1, fifo_size, FWD_SENDER_CORE, FWD_RECEIVER_CORE)
-    _rev_send, rev_recv = make_socket(dev1, dev0, fifo_size, REV_SENDER_CORE, REV_RECEIVER_CORE)
-    # Held only so the sockets stay alive for the triage run.
-    _fanout = make_socket(dev0, dev1, fifo_size, FANOUT_SENDER_CORE, *FANOUT_RECEIVER_CORES)
+    # _pair, _fanout held only so the sockets stay alive for the triage run.
+    _pair = make_socket(mesh, fifo_size, PAIR_SENDER_CORE, PAIR_RECEIVER_CORE)
+    _fanout = make_socket(mesh, fifo_size, FANOUT_SENDER_CORE, *FANOUT_RECEIVER_CORES)
+    h2d = ttnn.H2DSocket(mesh, on_chip(H2D_CORE), ttnn.BufferType.L1, fifo_size, ttnn.H2DMode.HOST_PUSH)
+    d2h = ttnn.D2HSocket(mesh, on_chip(D2H_CORE), fifo_size)
 
-    def tensor_on(device):
-        return ttnn.zeros(ttnn.Shape(TENSOR_SHAPE), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    # Full H2D fifo: it is empty, so this fills it without blocking.
+    h2d.set_page_size(PAGE_SIZE)
+    h2d.write_tensor(torch.zeros(fifo_size, dtype=torch.uint8))
 
-    # Backpressure: only the sender half of dev0 -> dev1 runs, so the fifo fills and stays full.
-    ttnn.experimental.send_async(tensor_on(dev0), fwd_send)
-    # Starvation: only the receiver half of dev1 -> dev0 runs, so it waits on a page that never comes.
-    ttnn.experimental.recv_async(tensor_on(dev0), rev_recv)
+    # Full D2H fifo: two fifos' worth of pages, so the kernel wedges halfway. The only op, and it goes
+    # last: the sockets write their config through the command queue, and nothing queued behind this
+    # kernel ever runs.
+    d2h.set_page_size(PAGE_SIZE)
+    data = ttnn.from_torch(
+        torch.zeros((2 * fifo_size // PAGE_SIZE, PAGE_SIZE), dtype=torch.uint8),
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.experimental.send_async_d2h(data, d2h)
 
-    time.sleep(HOLD_SECONDS)
+    # The test stops this app with SIGINT (KeyboardInterrupt). A normal exit would wait forever on the wedged
+    # kernel while closing the device, so the test would kill it only after 20 s; exit at once instead.
+    try:
+        time.sleep(HOLD_SECONDS)
+    except KeyboardInterrupt:
+        os._exit(0)
     return 0
 
 

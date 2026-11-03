@@ -185,6 +185,7 @@ void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) 
     for (const auto& [config_buffer, socket_data] : mesh_sockets_data) {
         auto socket = sockets[i++];
         socket.setIsSender(socket_data.is_sender);
+        socket.setPeerIsHost(socket_data.peer_is_host);
         socket.setConfigBufferAddress(socket_data.config_buffer_address);
         socket.setDataBufferAddress(socket_data.data_buffer_address);
         socket.setFifoSize(socket_data.fifo_size);
