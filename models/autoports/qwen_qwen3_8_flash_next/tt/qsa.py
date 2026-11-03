@@ -18,6 +18,8 @@ from pathlib import Path
 
 import ttnn
 
+from .prefill_qsa_transfer import prefill_transfer, prefill_transfer_enabled
+
 
 class QSA:
     @classmethod
@@ -226,6 +228,10 @@ class QSA:
 
     def _transfer(self, source, output, positions, page_table, *, mode, sequence, heads, indices=None):
         """Raw BF16 tile-row transfer; scalar contents never reach Python."""
+        if self.paged_pooled and sequence > 1 and mode in (0, 1, 2) and prefill_transfer_enabled():
+            return prefill_transfer(
+                self, source, output, positions, page_table, mode=mode, sequence=sequence, heads=heads
+            )
         indices = positions if indices is None else indices
         width_tiles = source.shape[-1] // 32
         work = self.batch_size * heads * width_tiles
