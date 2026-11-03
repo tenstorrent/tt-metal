@@ -21,7 +21,12 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
+#include "llk_unpack_tilize_to_dest.h"
 #include "params.h"
+
+// The SrcA tilize family takes UNP_A/UNP_B only. The unpack_to_dest variants (UNPACKER_ENGINE_SEL == UNP_DEST) run the
+// to-dest family; their SrcA branches below are discarded but still checked, so give them a legal engine.
+constexpr std::uint32_t SRC_SEL = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_DEST) ? p_unpacr::UNP_A : UNPACKER_ENGINE_SEL;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -91,15 +96,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_unpack, tensor_shape);
+            _llk_unpack_dest_init_();
+            _llk_unpack_tilize_to_dest_init_(bfd_unpack, FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
         }
         else if (tensor_shape.face_r_dim < FACE_R_DIM)
         {
-            _llk_unpack_tilize_strided_init_small_faces_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
+            _llk_unpack_tilize_strided_init_small_faces_<SRC_SEL, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
         }
         else
         {
-            _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(bfd_unpack, FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
+            _llk_unpack_tilize_init_<SRC_SEL, is_fp32_dest_acc_en>(bfd_unpack, FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
         }
         PROFILER_SYNC();
     }
@@ -108,10 +114,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
         std::uint32_t y_stride_external         = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
-        // Quasar fused tilize emits one SrcA dvalid per tile: BLOCK_CT_DIM dvalids per
-        // `_llk_unpack_tilize_` call and BLOCK_RT_DIM calls per outer loop. With
+        // Quasar fused tilize emits one SrcA dvalid per tile: FULL_CT_DIM per row, in
+        // `_llk_unpack_tilize_` runs of BLOCK_CT_DIM, and BLOCK_RT_DIM rows per outer loop. With
         // is_fp32_dest_acc_en it also pulses SrcB because FP32 datacopy uses ELWADD.
-        const std::uint32_t src_handshake_iters = LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM;
+        const std::uint32_t src_handshake_iters = LOOP_FACTOR * BLOCK_RT_DIM * FULL_CT_DIM;
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -142,8 +148,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
-                        _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
-                        _llk_unpack_tilize_block_(0 /*l1_tile_idx*/, y * BLOCK_CT_DIM /*dest_tile_idx*/);
+                        _llk_unpack_tilize_to_dest_set_src_offset_(tensor_shape, y * y_stride_external);
+                        for (std::uint32_t x = 0; x < FULL_CT_DIM; x += BLOCK_CT_DIM)
+                        {
+                            _llk_unpack_tilize_to_dest_(x /*l1_tile_idx*/, y * FULL_CT_DIM + x /*dst_tile_idx*/);
+                        }
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
                     {
@@ -154,15 +163,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
-                        _llk_unpack_tilize_strided_small_faces_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external /*l1_tile_idx*/);
+                        _llk_unpack_tilize_strided_small_faces_<SRC_SEL>(tensor_shape, y * y_stride_external /*l1_tile_idx*/);
                     }
                 }
                 else
                 {
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
-                        _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
-                        _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
+                        _llk_unpack_tilize_set_src_offset_<SRC_SEL>(tensor_shape, y * y_stride_external);
+                        // A row of FULL_CT_DIM tiles in runs of BLOCK_CT_DIM, a divisor of FULL_CT_DIM.
+                        for (std::uint32_t x = 0; x < FULL_CT_DIM; x += BLOCK_CT_DIM)
+                        {
+                            _llk_unpack_tilize_<SRC_SEL>(x /*l1_tile_idx*/);
+                        }
                     }
                 }
             }
@@ -205,7 +218,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
 
             DataFormat math_format = static_cast<DataFormat>(formats.math);
-            _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
+            _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
             _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);

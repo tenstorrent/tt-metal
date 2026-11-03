@@ -14,6 +14,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
 #include "c_tensix_core.h"
+#include "internal/local_mem/address_access.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg(args::dst_addr);  // plain address, NOT a tensor binding
@@ -37,6 +38,10 @@ void kernel_main() {
     // Vanilla C NoC path: build the interleaved-DRAM NoC address for page 0 (bank 0, offset 0) and push the
     // scratchpad out with the free-function noc_async_write -- no Noc / AllocatorBank / TensorAccessor abstraction.
     const uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(/*bank_id=*/0, dst_addr);
-    noc_async_write(pad.get_base_address(), dst_noc_addr, pad.size_in_bytes());
+    // Raw address: the vanilla free-function path takes a uint32_t L1 source address.
+    noc_async_write(
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem())),
+        dst_noc_addr,
+        pad.size_in_bytes());
     noc_async_write_barrier();
 }

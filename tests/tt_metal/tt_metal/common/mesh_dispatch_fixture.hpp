@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "gtest/gtest.h"
 #include <functional>
 #include <map>

@@ -23,6 +23,21 @@ Groups:
     ``atan2``'s ``+/- pi`` scalar adds on [1, 159, 159] L1 [H]
 
 Hash prefixes in ids are the compute kernel variant.
+
+Second cache (in-tree OFT at ``628a4797bf7``, 3 scales, bf16), binary ops of ``tt_oft.py`` only:
+  * corner accumulation ``sub_`` / ``add_`` / ``mul_`` (vox *= area) in place on bf16
+    [1, 1, rows, 1792] TILE, all three operands HEIGHT_SHARDED (``hs_rows(rows)``, 1792) on the
+    5x4 grid, rows = 1408 / 2112 / 2304. sub/add are FPU ``eltwise_binary_no_bcast`` with
+    num_tiles_per_cycle=8 (733958 / 831168), mul is SFPU ``eltwise_binary_sfpu_no_bcast`` with
+    num_tiles_per_cycle=2 (492671; binary_ng runs bf16 MUL on SFPU unless fast_and_approximate).
+    Sharded reader/writer accessors: 20 banks, shard 168 tiles (rows 1408) / 224 tiles (2112, 2304)
+    (``reader_interleaved_no_bcast`` 148007 / 110446)                                           [H]
+  * integral-image quantization (the run used the ``"to_uint32"`` strategy, not the in-tree
+    default ``None``): ``ttnn.mul(features, prescaler, dtype=bf16)`` with a 0-d bf16 tensor
+    (2^20, then 2^-20 after the cumsum), features [1, H, W, 256] bf16 TILE DRAM:
+    ``eltwise_binary_sfpu`` mul with scalar-tensor broadcast (149548) +
+    ``reader_interleaved_scalar_bcast`` (160811, both DRAM) + ``writer_interleaved_no_bcast``
+    (DRAM)                                                                                  [H op, M shape]
 """
 
 import math
@@ -43,14 +58,15 @@ _INPLACE = {
 }
 
 
-def _run_inplace(mesh, op, shape, mem):
+def _run_inplace(mesh, op, shape, mem, dt="fp32"):
     tt_op, torch_op = _INPLACE[op]
-    a = U.torch_rand(shape, dtype=torch.float32)
-    b = U.torch_rand(shape, dtype=torch.float32)
-    tt_a = U.to_tt_mem(a, mesh, mem, dtype=ttnn.float32)
-    tt_b = U.to_tt_mem(b, mesh, mem, dtype=ttnn.float32)
+    torch_dt = torch.float32 if dt == "fp32" else torch.bfloat16
+    a = U.torch_rand(shape, dtype=torch_dt)
+    b = U.torch_rand(shape, dtype=torch_dt)
+    tt_a = U.to_tt_mem(a, mesh, mem, dtype=U.DTYPES[dt])
+    tt_b = U.to_tt_mem(b, mesh, mem, dtype=U.DTYPES[dt])
     U.op(tt_op)(tt_a, tt_b)
-    U.assert_pcc(torch_op(a, b), tt_a, pcc=0.9999, mesh_device=mesh)
+    U.assert_pcc(torch_op(a.float(), b.float()), tt_a, pcc=0.9999 if dt == "fp32" else 0.999, mesh_device=mesh)
 
 
 @pytest.mark.blackhole_scale
@@ -182,3 +198,73 @@ def test_binary_scalar(ttnn_mesh_device, reset_seeds, op, shape):
     else:
         out, ref = U.op("subtract")(tt_x, math.pi, memory_config=ttnn.L1_MEMORY_CONFIG), x.float() - math.pi
     U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
+
+
+# =============================================================================
+# Cache #2: in-tree OFT (bf16, 3 scales)
+# =============================================================================
+
+OFT8_ROWS, OFT16_ROWS, OFT32_ROWS = U.BEV_ROWS // 18, U.BEV_ROWS // 12, U.BEV_ROWS // 11  # 1408 / 2112 / 2304
+
+
+def _vox2(rows):
+    return (1, 1, rows, U.VOX_C)
+
+
+def _vox2_hs(rows):
+    return ("hs", (U.hs_rows(rows), U.VOX_C))
+
+
+@pytest.mark.blackhole_scale
+@U.with_default_mesh()
+@pytest.mark.parametrize(
+    "op, rows",
+    [
+        pytest.param("sub_", OFT8_ROWS, id="oft8-vox-sub_-bf16-hs96-733958"),
+        pytest.param("add_", OFT8_ROWS, id="oft8-vox-add_-bf16-hs96-831168"),
+        pytest.param("mul_", OFT8_ROWS, id="oft8-vox-mul_area-bf16-hs96-492671"),
+        pytest.param("sub_", OFT16_ROWS, id="oft16-vox-sub_-bf16-hs128-733958"),
+        pytest.param("sub_", OFT32_ROWS, id="oft32-vox-sub_-bf16-hs128-733958"),
+        pytest.param("add_", OFT32_ROWS, id="oft32-vox-add_-bf16-hs128-831168"),
+        pytest.param("mul_", OFT32_ROWS, id="oft32-vox-mul_area-bf16-hs128-492671"),
+    ],
+)
+def test_oft2_corner_inplace_sharded(ttnn_mesh_device, reset_seeds, op, rows):
+    """bf16 in-place corner ops, every operand HEIGHT_SHARDED (multi-tile FPU / SFPU sharded path)."""
+    _run_inplace(ttnn_mesh_device, op, _vox2(rows), _vox2_hs(rows), dt="bf16")
+
+
+@U.with_default_mesh()
+@pytest.mark.parametrize(
+    "op, shape",
+    [
+        pytest.param("sub_", (1, 1, 64, U.VOX_C), id="proxy-oft2-vox-sub_-bf16-l1"),
+        pytest.param("add_", (1, 1, 64, U.VOX_C), id="proxy-oft2-vox-add_-bf16-l1"),
+        pytest.param("mul_", (1, 1, 64, U.VOX_C), id="proxy-oft2-vox-mul_-bf16-l1"),
+    ],
+)
+def test_oft2_corner_inplace(ttnn_mesh_device, reset_seeds, op, shape):
+    """Same bf16 in-place ops (FPU sub/add, SFPU mul) on an L1-interleaved slice (emulator-sized)."""
+    _run_inplace(ttnn_mesh_device, op, shape, "l1", dt="bf16")
+
+
+@U.with_default_mesh()
+@pytest.mark.parametrize(
+    "shape, scale",
+    [
+        pytest.param((1, U.L2_H, U.L2_W, U.OFT_C), 2.0**20, id="oft8-intimg-prescale-2^20-149548"),
+        pytest.param((1, U.L2_H, U.L2_W, U.OFT_C), 2.0**-20, id="oft8-intimg-postscale-2^-20-149548"),
+        pytest.param((1, U.L2_H // 4, U.L2_W // 4, U.OFT_C), 2.0**20, id="oft32-intimg-prescale-2^20-149548"),
+    ],
+)
+def test_oft2_intimg_scale_mul(ttnn_mesh_device, reset_seeds, shape, scale):
+    """``ttnn.mul(features, scaler, dtype=bf16)`` with a 0-d bf16 scaler tensor, as ``tt_oft.py`` builds it
+    (``ttnn.from_torch(torch.tensor(s), device=..., dtype=bf16)``). Powers of two: exact in bf16."""
+    mesh = ttnn_mesh_device
+    x = U.rand_nonneg(shape, dtype=torch.bfloat16)
+    tt_x = U.to_tt(x, mesh)  # bf16 TILE DRAM
+    tt_s = ttnn.from_torch(torch.tensor(scale), device=mesh, dtype=ttnn.bfloat16)
+    out = U.op("multiply")(tt_x, tt_s, dtype=ttnn.bfloat16)
+    U.assert_shape_dtype(out, shape=shape, dtype=ttnn.bfloat16, finite=False)
+    # Power-of-two scaling of bf16 values is exact.
+    U.assert_lossless(x.float() * scale, out, mesh_device=mesh)

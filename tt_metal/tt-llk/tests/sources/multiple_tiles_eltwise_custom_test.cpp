@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     if constexpr (PRESERVE_SRC_ZERO_FLAG)
     {
-        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // Leave the Src zero flag at keep, as a preceding copy_init does. The init must restore the
         // operand-driven value, or the FPU keeps the denormal SrcB operands it should flush.
         math::_configure_preserve_zero_flag_state_();
     }
@@ -71,10 +71,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-        _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(params.num_faces);
 #ifdef ARCH_BLACKHOLE
-        _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP>(params.NUM_TILES_IN_BLOCK, tensor_shape);
+        _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(params.num_faces);
+        _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP, MATH_FIDELITY>(params.NUM_TILES_IN_BLOCK, tensor_shape);
 #else
+        _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(params.num_faces);
         _llk_math_sub_bcast_cols_reuse_custom_(params.NUM_TILES_IN_BLOCK, tensor_shape);
 #endif
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

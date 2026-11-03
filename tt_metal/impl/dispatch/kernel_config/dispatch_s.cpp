@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch_s.hpp"
 
+#include <algorithm>
 #include <span>
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
@@ -25,8 +26,8 @@
 #include "prefetch.hpp"
 #include "context/context_descriptor.hpp"
 #include "debug/inspector/inspector.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include "device/device_manager.hpp"
 #include <dispatch/dispatch_query_manager.hpp>
@@ -316,6 +317,12 @@ void DispatchSKernel::CreateKernel() {
         {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dependent_config_.upstream_dispatch_cb_sem_id.value())},
         {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
         {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},
+        // Workers report done for a go to the dispatcher that sent it.
+        {"GO_DONE_NOC_X", std::to_string(my_virtual_core.x)},
+        {"GO_DONE_NOC_Y", std::to_string(my_virtual_core.y)},
+        {"MCAST_GO_RING_SIZE",
+         std::to_string(
+             descriptor_.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::go_ring_t>())},
         {"DISTRIBUTED_DISPATCHER", std::to_string(static_config_.distributed_dispatcher.value())},
         {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
         {"COMPLETION_COUNTER_OFFSET", std::to_string(static_config_.completion_counter_offset.value())},
@@ -450,9 +457,29 @@ void DispatchSKernel::ConfigureCore() {
             entry.rw_ptr_addr = buffer_info.get_read_write_pointer_address();
             entry.buf_offset = buffer_info.buffer_offset;
             entry.buf_size = buffer_info.buffer_size;
+            entry.use_dram_alignment = core_desc.type == CoreType::DRAM;
             entries.push_back(entry);
         }
     }
+
+    // Sort the entries so that locations are ordered by distance descending from dispatch_s.
+    const auto& soc_desc = cluster.get_soc_desc(device_->id());
+    const auto my_noc0 = soc_desc.translate_coord_to(
+        device_->virtual_core_from_logical_core(logical_core_, GetCoreType()),
+        CoordSystem::TRANSLATED,
+        CoordSystem::NOC0);
+    auto noc_round_trip = [&](const device_print_dispatch::NocLocationInputInfo& entry) {
+        const auto noc0 =
+            soc_desc.translate_coord_to(tt_xy_pair(entry.x, entry.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
+        return (noc0.x != my_noc0.x ? soc_desc.grid_size.x : 0) + (noc0.y != my_noc0.y ? soc_desc.grid_size.y : 0);
+    };
+    std::stable_sort(entries.begin(), entries.end(), [&](const auto& a, const auto& b) {
+        // Prioritize entries that use DRAM alignment over those that do not.
+        if (a.use_dram_alignment != b.use_dram_alignment) {
+            return a.use_dram_alignment > b.use_dram_alignment;
+        }
+        return noc_round_trip(a) > noc_round_trip(b);
+    });
 
     // Write the packed array bitwise to L1. Each entry is 12 bytes.
     const uint32_t l1_addr = static_config_.device_print_noc_locations_addr.value();
