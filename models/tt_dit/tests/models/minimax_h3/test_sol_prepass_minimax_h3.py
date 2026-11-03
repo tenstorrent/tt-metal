@@ -213,7 +213,9 @@ def test_sol_prepass_extremes(mesh_device, sp_axis, tp_axis, num_links, topology
     geo = SolGeometry(shards=S, rows=1184, logical_n=9000, q_chunk=256, k_chunk=512)
     q, k, v = _structured_qkv(S, 1184, seed=3)
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
-    r = _check(mesh_device, sp_axis, tp_axis, ccl_manager, geo=geo, tau=tau, mode="chunk", sink_tokens=300, q=q, k=k, v=v)
+    r = _check(
+        mesh_device, sp_axis, tp_axis, ccl_manager, geo=geo, tau=tau, mode="chunk", sink_tokens=300, q=q, k=k, v=v
+    )
     assert r["agree_all"] == 1.0, r
 
 
@@ -239,7 +241,17 @@ def test_sol_prepass_bench(
     q, k, v = (torch.randn(S, H, rows, D).bfloat16().float() for _ in range(3))
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     r = _check(
-        mesh_device, sp_axis, tp_axis, ccl_manager, geo=geo, tau=1.0, mode="chunk", sink_tokens=sink_tokens, q=q, k=k, v=v
+        mesh_device,
+        sp_axis,
+        tp_axis,
+        ccl_manager,
+        geo=geo,
+        tau=1.0,
+        mode="chunk",
+        sink_tokens=sink_tokens,
+        q=q,
+        k=k,
+        v=v,
     )
     assert r["agree_real"] >= 0.985, r
 
@@ -465,4 +477,3 @@ def test_sol_prepass_tau_scan(mesh_device, sp_axis, tp_axis, num_links, topology
         for t in out.values():
             if t is not None:
                 ttnn.deallocate(t)
-

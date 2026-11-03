@@ -269,7 +269,6 @@ def build_route_constants(
     }
 
 
-
 # ----------------------------------------------------------------------------- device pre-pass
 
 
@@ -372,10 +371,7 @@ class SolPrepass(Module):
             "shsel": self._upload(c["shsel"], shard=False),
             "geo": self._upload(
                 torch.tensor(
-                    [
-                        [[[max(0, min(geo.rows, geo.logical_n - s * geo.rows))] + [0] * 31]]
-                        for s in range(geo.shards)
-                    ],
+                    [[[[max(0, min(geo.rows, geo.logical_n - s * geo.rows))] + [0] * 31]] for s in range(geo.shards)],
                     dtype=torch.int32,
                 ),
                 shard=True,
@@ -436,7 +432,10 @@ class SolPrepass(Module):
         # (tests/ttnn/unit_tests/kernel_lib/test_chain_oob.py). The route kernel addresses DST tiles 0..7, so it must
         # run full-sync; the pool kernel uses DT (<= 4) tiles and keeps the math/pack overlap of half-sync.
         return ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, dst_full_sync_en=full_sync
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=full_sync,
         )
 
     # ------------------------------------------------------------------ pool program
@@ -574,7 +573,9 @@ class SolPrepass(Module):
             20: DT,
             21: NKCLT,
         }
-        mask_rows_bytes = 32 * geo.nb_pad * 4  # (head, shard) units: one page = the 32 row-major uint32 mask rows of (it, sp)
+        mask_rows_bytes = (
+            32 * geo.nb_pad * 4
+        )  # (head, shard) units: one page = the 32 row-major uint32 mask rows of (it, sp)
         if units_per_shard:  # 23: gather tiles, 24: this shard's reduced tiles, 29: shsel; 16 becomes the row page
             sizes.update({23: (S + 3) // 4, 24: 8, 29: 8})
             del sizes[16]
@@ -608,7 +609,9 @@ class SolPrepass(Module):
     def _core_noc_xy(self, nx: int, ny: int) -> list[int]:
         """NoC coordinates (x | y << 8) of every logical worker core, index y*nx + x. One program with common runtime
         args runs on every chip of the mesh; the virtual worker coordinates are the same on every chip."""
-        xy = [self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y)) for y in range(ny) for x in range(nx)]
+        xy = [
+            self.mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y)) for y in range(ny) for x in range(nx)
+        ]
         return [w.x | (w.y << 8) for w in xy]
 
     def _run_route(self, q_bar: ttnn.Tensor, kc: ttnn.Tensor) -> ttnn.Tensor:
