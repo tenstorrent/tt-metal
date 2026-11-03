@@ -138,8 +138,9 @@ thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribu
 thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
 
-// Called from trisc_irq_entry.
-extern "C" __attribute__((noinline, used, hot)) void handle_interrupt() {
+// Called from trisc_irq_entry, which saves no vector registers, so built without the vector extension.
+extern "C" __attribute__((noinline, used, hot, target("arch=rv32im_zmmul_zaamo_zba_zbc_xtttensixqsr_xttzbkb"))) void
+handle_interrupt() {
     uint32_t trisc_id = internal_::get_trisc_id();
     uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
     if (error_code == trisc_id || (35 - error_code) == trisc_id ||
