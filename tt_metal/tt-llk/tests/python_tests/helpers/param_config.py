@@ -667,6 +667,17 @@ def _resolve_quasar_fpu_sfpu_variant(
     )
 
 
+def _quasar_dest_candidates(
+    formats: InputOutputFormat, dest_acc: DestAccumulation
+) -> Tuple[DataFormat, ...]:
+    if dest_acc == DestAccumulation.No:
+        return _quasar_narrow_dest_candidates(
+            formats.input_format, formats.output_format
+        )
+    wide = DataFormat.Int32 if formats.input_format.is_integer() else DataFormat.Float32
+    return (wide,)
+
+
 def resolve_quasar_sfpu_variant(
     op: Optional[MathOperation],
     formats: InputOutputFormat,
@@ -680,12 +691,7 @@ def resolve_quasar_sfpu_variant(
     if formats.input_format.is_integer() != formats.output_format.is_integer():
         return None
 
-    dest_candidates = (
-        (DataFormat.Int32 if formats.input_format.is_integer() else DataFormat.Float32,)
-        if dest_acc == DestAccumulation.Yes
-        else _quasar_narrow_dest_candidates(formats.input_format, formats.output_format)
-    )
-    for dest_format in dest_candidates:
+    for dest_format in _quasar_dest_candidates(formats, dest_acc):
         variant = _resolve_quasar_direct_sfpu_variant(formats, dest_acc, dest_format)
         if variant is not None:
             return variant
@@ -989,16 +995,25 @@ def generate_parallel_matmul_dest_depth_profiles(dest_acc, dest_sync=DestSync.Ha
 
 
 def quasar_sfpu_fpu_route_variants(
-    op: Optional[MathOperation], formats_list: List[InputOutputFormat]
+    formats_list: List[InputOutputFormat],
 ) -> List[QuasarSfpuVariant]:
-    """FPU-datacopy routes of *op* over *formats_list*, which the default variant dedup drops for Unpack-to-Dest."""
-    return [
-        variant
-        for variant in generate_quasar_sfpu_format_variants(
-            op, formats_list, full_format_route_sweep=True
-        )
-        if variant.uses_fpu
-    ]
+    """FPU-datacopy routes into a 16-bit and a 32-bit Dest for the formats SrcA holds unconverted.
+
+    The resolver prefers Unpack-to-Dest wherever it is valid, so it never picks these routes itself.
+    """
+    variants = []
+    for formats in formats_list:
+        if _quasar_fpu_source_format(formats.input_format) != formats.input_format:
+            continue
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+            for dest_format in _quasar_dest_candidates(formats, dest_acc):
+                variant = _resolve_quasar_fpu_sfpu_variant(
+                    formats, dest_acc, dest_format
+                )
+                if variant is not None:
+                    variants.append(variant)
+                    break
+    return variants
 
 
 PERF_INPUT_DIMENSIONS = (

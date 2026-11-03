@@ -119,10 +119,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         if (is_int_fill)
         {
-            // Int path: _calculate_fill_int_ writes 5 to every element of Dest
-            // via SFPLOADI + SFPSTORE; the SFPMEM store mode is selected by FILL_INT_FORMAT
-            // at compile time (no runtime dispatch).
-            // Fill every DEST lane in each tile with integer value 5.
+            // FILL_INT_FORMAT selects the SFPMEM store mode at compile time.
             for (std::uint32_t i = 0; i < section_tiles; ++i)
             {
                 SFPU_UNARY_CALL(
@@ -131,9 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // Float path: _calculate_fill_ uses SFPU DEFAULT store mode, which supports
-            // all float formats (Float16, Float16_b, Float32).
-            // Walk every tile in DEST starting at DST_INDEX, filling all lanes with 5.0f.
+            // The DEFAULT store mode covers Float16, Float16_b and Float32.
             for (std::uint32_t i = 0; i < section_tiles; i++)
             {
                 SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_fill_, (SFPU_ITERATIONS), DST_INDEX + i, VectorMode::RC, 5.0f /*value*/);

@@ -572,9 +572,8 @@ def test_eltwise_binary_sfpu_float_quasar(
     )
 
 
-# The float routes above plus the FPU datacopy route their dedup drops for Unpack-to-Dest.
+# The float routes above plus the FPU datacopy routes their dedup drops for Unpack-to-Dest.
 _DEST_DEPTH_FLOAT_VARIANTS = _FLOAT_VARIANTS + quasar_sfpu_fpu_route_variants(
-    MathOperation.SfpuElwadd,
     input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
 )
 

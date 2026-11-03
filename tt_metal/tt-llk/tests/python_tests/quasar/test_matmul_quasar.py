@@ -714,11 +714,7 @@ MATMUL_LOFI_HIFI4 = [MathFidelity.LoFi, MathFidelity.HiFi4]
 
 
 def matmul_deep_k_tile_dimensions(format, dest_acc):
-    """(ct, rt, kt) for test_matmul_deep_k.
-
-    A 16-bit Float16_b Dest rounds the sum to 8 mantissa bits after every K-tile; at kt=16 that
-    noise reaches ~1% of the spread of a uniform[0, 1] product sum and the 0.99 PCC gate fails.
-    """
+    """(ct, rt, kt); a 16-bit Dest rounds every K-tile, so kt=16 Float16_b fails the 0.99 PCC gate."""
     kt_dims = (
         [kt for kt in DEEP_KT_DIMS if kt <= 8]
         if format.input_format == DataFormat.Float16_b

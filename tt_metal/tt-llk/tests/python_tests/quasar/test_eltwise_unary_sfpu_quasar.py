@@ -1352,7 +1352,7 @@ def _dest_depth_variants(mathop) -> List[QuasarSfpuVariant]:
         resolve_quasar_sfpu_variant(mathop, fmt, dest_acc)
         for fmt in same_formats
         for dest_acc in _dest_acc_for_mathop_formats(mathop, fmt)
-    ] + quasar_sfpu_fpu_route_variants(mathop, same_formats)
+    ] + quasar_sfpu_fpu_route_variants(same_formats)
 
 
 @pytest.mark.quasar

@@ -76,13 +76,11 @@ def generate_sfpu_square_combinations(formats_list):
                         runtime(input_dimensions),
                     )
                 )
-    # The FPU datacopy route the dedup above drops, at the Dest-depth sizes.
+    # The FPU datacopy routes the dedup above drops, at the Dest-depth sizes.
     same_formats = [
         fmt for fmt in formats_list if fmt.input_format == fmt.output_format
     ]
-    for format_variant in quasar_sfpu_fpu_route_variants(
-        MathOperation.Square, same_formats
-    ):
+    for format_variant in quasar_sfpu_fpu_route_variants(same_formats):
         for dest_sync in dest_sync_modes:
             for input_dimensions in generate_dest_depth_input_dimensions(
                 format_variant.dest_acc, dest_sync

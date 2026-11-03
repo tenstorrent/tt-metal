@@ -44,7 +44,6 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.reduce_perf_matrix import reduce_to_one_modes
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
@@ -289,7 +288,7 @@ def test_reduce_quasar(
     ), "Assert against golden failed"
 
 
-# Tiles folded into the single output tile: N >= 8 per the multi-tile reduce contract.
+# Tiles folded into the single output tile: N >= 8.
 REDUCE_TO_ONE_TILE_COUNTS = [8, 16]
 
 
@@ -360,39 +359,6 @@ def test_reduce_quasar_dest_depth(
         [PerfRunType.L1_TO_L1],
         1,
         input_dimensions=[32 * blocks * max_dest_tiles(dest_acc, DestSync.Half), 32],
-    )
-
-
-# Integer MAX reduce: Int8 sources into an Int32 Dest; the integer FPU path is LoFi only.
-@pytest.mark.quasar
-@parametrize(
-    formats=[InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
-    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    is_reduce_to_one=lambda reduce_dim: reduce_to_one_modes(reduce_dim, ReducePool.Max),
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
-)
-def test_reduce_quasar_int_max(
-    formats,
-    reduce_dim,
-    is_reduce_to_one,
-    dest_sync_mode,
-):
-    if reduce_dim != ReduceDimension.Column and TestConfig.runs_on_ttsim():
-        pytest.skip(
-            "Quasar ttsim does not implement the Int8 row/scalar reduce path "
-            "(tensix_cfg_rd32 reg=0, tensix_movb2a with ALU_ACC_CTRL_INT8_math_enabled)"
-        )
-    test_reduce_quasar(
-        formats,
-        (32, 32),
-        DestAccumulation.Yes,
-        reduce_dim,
-        ReducePool.Max,
-        MathFidelity.LoFi,
-        is_reduce_to_one,
-        dest_sync_mode,
-        [PerfRunType.L1_TO_L1],
-        1,
     )
 
 

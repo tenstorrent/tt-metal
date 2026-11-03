@@ -42,9 +42,7 @@ BLOCK_CT_DIMS = [1, 2, 3, 4, 8, 16]
 TILE_DIMENSIONS = [(32, 32), (16, 32), (8, 32), (4, 32)]
 
 
-# Float32 L1 input unpacks to Float16_b on the 16-bit Dest this kernel runs on. Float32 -> Float32
-# needs a 32-bit Dest, which the block max-row LLK rejects on Quasar (static_assert in
-# llk_math_reduce_runtime_custom.h).
+# Float32 input runs on a 16-bit Dest only; the block max-row LLK static_asserts against a 32-bit Dest.
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b])
@@ -63,9 +61,8 @@ def test_reduce_block_max_row_quasar(
     """*num_rows* rows of block_ct_dim tiles, each reduced into its own result tile and Dest section."""
     tile_shape = construct_tile_shape(tile_dimensions)
 
-    # DIAGNOSTIC stimulus: each of the block_ct_dim tiles is a distinct ASCENDING constant
-    # (tile k = 0.1*(k+1)). Constant tiles are layout-invariant, so no tilize is needed. Each row's
-    # max is below every earlier row's, so a stale max left in Dest by an earlier row wins and fails.
+    # Constant tiles (layout-invariant, no tilize), ascending within a row; each row's max is below
+    # every earlier row's, so a stale max left in Dest by an earlier row wins and fails.
     tile_size = tile_shape.total_tile_size()
     row_inputs = [
         torch.cat(

@@ -177,11 +177,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t tiles_per_block = binary_sfpu_tiles_per_block(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX);
     const std::uint32_t num_passes      = LOOP_FACTOR * (TILE_CNT / tiles_per_block);
-    // Binary SFPU stages both operands from buffer_A into Dest. Each block stages
-    // tiles_per_block tiles, fixed by the test layout, not free-running:
-    // 2 when operands occupy Dest tiles 0/1 (result in-place or a separately
-    // written out tile, e.g. max/min's tile 2), or 4 for the result-aliasing
-    // variant that places operands at Dest tiles 2/3. Guard against any other count.
+    // Each block stages both operands from buffer_A into Dest, as laid out by the test.
     LLK_ASSERT(tiles_per_block == 2 || tiles_per_block == 4, "Binary SFPU expects 2 or 4 staged tiles per block");
     LLK_ASSERT(TILE_CNT % tiles_per_block == 0, "Binary SFPU expects whole blocks of staged tiles");
     const DataFormat math_format = static_cast<DataFormat>(formats.math);
