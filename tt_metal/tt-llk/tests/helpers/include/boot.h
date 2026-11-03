@@ -62,6 +62,8 @@ constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 36;
 #endif
 constexpr std::uint32_t NOC_OVERLAY_START_ADDR = 0xFFB40000;
 
+constexpr std::uint32_t LAUNCH_DONE_MASK = 0xFFFFFF; // the register's 24 bits (HOST_SIGNAL_MASK on the host)
+
 TT_ALWAYS_INLINE volatile std::uint32_t* launch_done()
 {
     return reinterpret_cast<volatile std::uint32_t*>(NOC_OVERLAY_START_ADDR + STREAM_SCRATCH_REG_INDEX * 4);
@@ -202,8 +204,11 @@ TT_ALWAYS_INLINE void device_setup()
 #endif
 }
 
-constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000;
-constexpr std::uint32_t BRISC_SOFT_RESET_MASK = 0x0800;
+#if defined(ARCH_QUASAR)
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000; // TRISC1..3 (TRISC0 is bit 11): what unpack releases
+#else
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK = RISCV_SOFT_RESET_0_TRISCS;
+#endif
 
 #ifndef ARCH_QUASAR
 

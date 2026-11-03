@@ -34,7 +34,8 @@ static const mailbox_t trisc_pc_bufs[] = {
     reinterpret_cast<mailbox_t>(PC_BUF_BASE), reinterpret_cast<mailbox_t>(PC1_BUF_BASE), reinterpret_cast<mailbox_t>(PC2_BUF_BASE)};
 
 // One launch per release from soft reset: the host loads the kernels and releases BRISC, BRISC starts the TRISCs, waits
-// on their PC buffers with no L1 traffic, then puts all four cores back in soft reset, which is what the host polls.
+// on their PC buffers with no L1 traffic (L1 mailboxes on ttsim), marks the launch done for the host on silicon, then puts
+// all four cores back in soft reset, which simulator hosts poll.
 int main()
 {
     disable_branch_prediction();
@@ -71,12 +72,12 @@ int main()
     // What the host waits on: polling the soft reset register instead shares the Tensix register bus with the
     // kernel's wall clock reads and moves its timings.
     *host_signal::launch_done() = ckernel::KERNEL_COMPLETE;
-    while ((*host_signal::launch_done() & 0xFFU) != ckernel::KERNEL_COMPLETE)
+    while ((*host_signal::launch_done() & host_signal::LAUNCH_DONE_MASK) != ckernel::KERNEL_COMPLETE)
     {
     }
 #endif
 
-    ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) | TRISC_SOFT_RESET_MASK | BRISC_SOFT_RESET_MASK);
+    ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) | TRISC_SOFT_RESET_MASK | RISCV_SOFT_RESET_0_BRISC);
     for (;;)
     {
     } // the write above stops this core
