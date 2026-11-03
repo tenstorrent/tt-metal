@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// BRISC (NOC 1): the distinct experts' count from the stick, their h tiny tiles from the row-major activation
-// (page j = expert j's kt [rows, 32] tiles), then the user rows 0..rows-1 (rows 4 or 8) of this core's output
-// columns (tile column t = j * banks + bank) into the compact [1, 1, 32, hidden * rows / 32] output: rows
-// rows * c .. rows * c + rows - 1 of compact tile t % compact_tiles, c = t / compact_tiles (the row all-reduce then
-// moves only the user rows; moe_expand_rows.cpp puts them back into the user rows of the [32, hidden] result).
+// BRISC (NOC 1): the distinct experts from the stick, their h tiny tiles from the row-major activation (page j = the
+// stick's expert j's kt [rows, 32] tiles) by ascending expert id (the reader's w_down order), then the user rows
+// 0..rows-1 (rows 4 or 8) of this core's output columns (tile column t = j * banks + bank) into the compact [1, 1, 32,
+// hidden * rows / 32] output: rows rows * c .. rows * c + rows - 1 of compact tile t % compact_tiles, c = t /
+// compact_tiles (the row all-reduce then moves only the user rows; moe_expand_rows.cpp puts them back into the user
+// rows of the [32, hidden] result).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "moe_stream_common.hpp"
@@ -36,17 +37,20 @@ void kernel_main() {
     const uint32_t bank = get_arg_val<uint32_t>(2);
     const uint32_t ids_addr = get_arg_val<uint32_t>(3);
 
-    // The expert count: word 0 of the stick (the reader keeps its own copy in cb_ids).
+    // The experts (the reader keeps its own copy of the stick in cb_ids).
     const uint32_t ids_l1 = get_write_ptr(cb_ids) + ids_bytes;
     noc_async_read(get_noc_addr_from_bank_id<true>(0, ids_addr), ids_l1, ids_bytes);
     noc_async_read_barrier();
-    const uint32_t experts = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ids_l1)[0];
+    volatile tt_l1_ptr uint16_t* ids = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ids_l1);
+    const uint32_t experts = ids[0];
+    uint32_t order[num_pairs];
+    mimo_moe::experts_by_id(ids, experts, order);
 
     const InterleavedAddrGen<false> act_gen = {.bank_base_address = act_addr, .page_size = act_page_bytes};
     cb_reserve_back(cb_h, experts * kt);
     const uint32_t h_l1 = get_write_ptr(cb_h);
     for (uint32_t p = 0; p < experts; p++) {
-        noc_async_read(act_gen.get_noc_addr(p, 0), h_l1 + p * act_page_bytes, act_page_bytes);
+        noc_async_read(act_gen.get_noc_addr(order[p], 0), h_l1 + p * act_page_bytes, act_page_bytes);
     }
     noc_async_read_barrier();
     cb_push_back(cb_h, experts * kt);

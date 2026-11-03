@@ -3,13 +3,15 @@
 
 // NCRISC (NOC 0): the distinct experts from the uint16 stick [count, ids...] (the deduplicated gate|up stream's),
 // their count for compute (cb_cnt), then every expert's w_down slice streamed from this core's DRAM bank, one group
-// of ct output columns of every expert at a time (the order compute accumulates in).
+// of ct output columns of every expert at a time, the experts by ascending id (mimo_moe::experts_by_id: the order
+// compute accumulates in, and the writer's order of the h tiles).
 //
 // The DRAM-interleaved w_down [1, E, kt * 32, 8 * cols * 32] puts tile column n in bank n % 8, so bank b holds expert
 // e as kt rows of cols tiles (output columns b, b + 8, ...), contiguous per expert; a block is one pair's group:
 // kt reads of ct tiles, landing as [kt][ct] for custom_mm.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "moe_stream_common.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_w = get_compile_time_arg_val(0);
@@ -38,9 +40,11 @@ void kernel_main() {
     noc_async_read_barrier();
     volatile tt_l1_ptr uint16_t* ids = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ids_l1);
     const uint32_t n = ids[0];
+    uint32_t order[num_pairs];
+    mimo_moe::experts_by_id(ids, n, order);
     uint32_t offsets[num_pairs];
     for (uint32_t p = 0; p < n; p++) {
-        offsets[p] = static_cast<uint32_t>(ids[1 + p]) * expert_bytes;
+        offsets[p] = static_cast<uint32_t>(ids[1 + order[p]]) * expert_bytes;
     }
     cb_reserve_back(cb_cnt, 1);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_cnt)) = n;
