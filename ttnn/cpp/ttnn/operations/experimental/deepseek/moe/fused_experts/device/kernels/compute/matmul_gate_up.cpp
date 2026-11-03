@@ -14,7 +14,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // Per-core gate_up matmul + SwiGLU gate + down matmul (runs on every compute core).
 //
@@ -215,15 +215,18 @@ void kernel_main() {
                 // the K-pieces (only the last one finalizes).
                 reconfig_full_operand(cb_weights_id, cb_input_id);
                 pack_reconfig_data_format(cb_mm_id);
-                custom_mm_block_init_short<false, true, false>(cb_input_id, cb_weights_id, cb_mm_id, kShardTileCols);
+                custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
+                    cb_input_id, cb_weights_id, cb_mm_id, kShardTileCols);
                 mm_cb.reserve_back(kShardTileCols);
                 tile_regs_acquire();
                 for (uint32_t p = 0; p < kGateUpPieces; ++p) {
                     w_cb.wait_front(gate_up_reserve_tiles);
                     if (p + 1 == kGateUpPieces) {
-                        custom_mm_block<true>(cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
+                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
+                            cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
                     } else {
-                        custom_mm_block<false>(cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
+                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
+                            cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
                     }
                     w_cb.pop_front(gate_up_reserve_tiles);
                 }
@@ -299,7 +302,7 @@ void kernel_main() {
                 mm_cb.push_back(kShardTileCols);
 
                 mm_cb.wait_front(kShardTileCols);
-                copy_tile_to_dst_init_short(cb_mm_id);
+                copy_init(cb_mm_id);
                 reconfig_full_operand_srca(cb_mm_id);
                 pack_reconfig_data_format(cb_out_id);
                 out_cb.reserve_back(swiglu_tiles);
@@ -348,7 +351,8 @@ void kernel_main() {
 #ifdef FE_CUSTOM_MM
             reconfig_full_operand(cb_shared_gate_up_id, cb_input_id);
             pack_reconfig_data_format(cb_mm_id);
-            custom_mm_block_init_short<false, true, false>(cb_input_id, cb_shared_gate_up_id, cb_mm_id, 2);
+            custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
+                cb_input_id, cb_shared_gate_up_id, cb_mm_id, 2);
 #else
             matmul_init(cb_input_id, cb_shared_gate_up_id);
             reconfig_full_operand(cb_shared_gate_up_id, cb_input_id);
@@ -363,10 +367,10 @@ void kernel_main() {
                 // A chunk is [shared_chunk_k, 2] tiles row-major: gate -> dst 0, up -> dst 1, chained over
                 // the chunks (only the last one finalizes).
                 if (c + 1 == kSharedChunks) {
-                    custom_mm_block<true>(
+                    custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
                         cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k, 0, 0, shared_chunk_k, 2);
                 } else {
-                    custom_mm_block<false>(
+                    custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
                         cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k, 0, 0, shared_chunk_k, 2);
                 }
 #else
@@ -385,7 +389,7 @@ void kernel_main() {
             mm_cb.push_back(2);
 
             mm_cb.wait_front(2);
-            copy_tile_to_dst_init_short(cb_mm_id);
+            copy_init(cb_mm_id);
             reconfig_full_operand_srca(cb_mm_id);
             pack_reconfig_data_format(cb_out_id);
             out_cb.reserve_back(1);
@@ -443,11 +447,13 @@ void kernel_main() {
 #ifdef FE_CUSTOM_MM
             reconfig_full_operand(cb_down_w_id, cb_act_id);
             pack_reconfig_data_format(cb_mm_id);
-            custom_mm_block_init_short<false, true, false>(cb_act_id, cb_down_w_id, cb_mm_id, kOutTilesPerCore);
+            custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
+                cb_act_id, cb_down_w_id, cb_mm_id, kOutTilesPerCore);
             mm_cb.reserve_back(kOutTilesPerCore);
 
             tile_regs_acquire();
-            custom_mm_block<true>(cb_act_id, cb_down_w_id, 0, 0, 0, i_tiles, kOutTilesPerCore);
+            custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
+                cb_act_id, cb_down_w_id, 0, 0, 0, i_tiles, kOutTilesPerCore);
 #else
             matmul_init(cb_act_id, cb_down_w_id);
             reconfig_full_operand(cb_down_w_id, cb_act_id);
@@ -587,17 +593,17 @@ void kernel_main() {
                     // custom_mm over the row-major slice, chained over the K-pieces.
                     reconfig_full_operand(cb_weights_id, cb_input_id);
                     pack_reconfig_data_format(cb_mm_id);
-                    custom_mm_block_init_short<false, true, false>(
+                    custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
                         cb_input_id, cb_weights_id, cb_mm_id, kShardTileCols);
                     mm_cb.reserve_back(kShardTileCols);
                     tile_regs_acquire();
                     for (uint32_t p = 0; p < kGateUpPieces; ++p) {
                         w_cb.wait_front(gate_up_reserve_tiles);
                         if (p + 1 == kGateUpPieces) {
-                            custom_mm_block<true>(
+                            custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
                                 cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
                         } else {
-                            custom_mm_block<false>(
+                            custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
                                 cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
                         }
                         w_cb.pop_front(gate_up_reserve_tiles);
@@ -692,7 +698,7 @@ void kernel_main() {
 
                     // ---- SwiGLU: cb_mm (gate | up) -> cb_out (swiglu_tiles tiles). ----
                     mm_cb.wait_front(kShardTileCols);
-                    copy_tile_to_dst_init_short(cb_mm_id);
+                    copy_init(cb_mm_id);
                     // reconfig_full_operand_srca: SrcA moves from cb_weights (face_r_dim=16) to
                     // cb_mm (face_r_dim = input_tile_h). The face geometry differs on a tiny input
                     // tile, so plain reconfig_data_format_srca (format-only) would leave the SrcA
@@ -765,11 +771,13 @@ void kernel_main() {
 #ifdef FE_CUSTOM_MM
                 reconfig_full_operand(cb_down_w_id, cb_act_id);
                 pack_reconfig_data_format(cb_mm_id);
-                custom_mm_block_init_short<false, true, false>(cb_act_id, cb_down_w_id, cb_mm_id, kOutTilesPerCore);
+                custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
+                    cb_act_id, cb_down_w_id, cb_mm_id, kOutTilesPerCore);
                 mm_cb.reserve_back(kOutTilesPerCore);
 
                 tile_regs_acquire();
-                custom_mm_block<true>(cb_act_id, cb_down_w_id, act_base, 0, 0, i_tiles, kOutTilesPerCore);
+                custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
+                    cb_act_id, cb_down_w_id, act_base, 0, 0, i_tiles, kOutTilesPerCore);
 #else
                 matmul_init(cb_act_id, cb_down_w_id);
                 // reconfig_full_operand: SrcA moves from cb_mm (face_r_dim = input_tile_h) back to

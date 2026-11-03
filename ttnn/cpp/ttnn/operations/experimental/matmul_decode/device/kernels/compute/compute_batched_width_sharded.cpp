@@ -70,8 +70,7 @@ void kernel_main() {
 
 #ifdef USE_CUSTOM_MM
     constexpr bool transpose = false;
-    constexpr bool split_acc = true;
-    constexpr bool dense_packing = true;
+    constexpr auto layout = CustomMmDestLayout::DenseSplitAcc;
     constexpr bool finalize = true;
 
     static_assert(K_tiles >= 2 && K_tiles <= 256 && K_tiles % 2 == 0);
@@ -83,7 +82,7 @@ void kernel_main() {
     static_assert(Bc % num_k_blocks == 0, "streamed custom_mm needs GCB pages to hold whole batches");
     constexpr uint32_t batches_per_page = Bc / num_k_blocks;
 
-    custom_mm_block_init_short<transpose, split_acc, dense_packing>(full_in0_cb_id, in1_cb_id, out_cb_id, Nc_tiles);
+    custom_mm_block_init_short<transpose, layout>(full_in0_cb_id, in1_cb_id, out_cb_id, Nc_tiles);
     pack_block_contiguous_init(out_cb_id);
 
     out_cb.reserve_back(out_num_tiles);
@@ -98,7 +97,7 @@ void kernel_main() {
             for (uint32_t mt = 0; mt < M_tiles; ++mt) {
                 tile_regs_acquire();
                 // in1 is indexed within the page currently at the front of the CB.
-                custom_mm_block<finalize, false>(
+                custom_mm_block<layout, finalize>(
                     full_in0_cb_id,
                     in1_cb_id,
                     (bc_i * M_tiles + mt) * K_tiles,
@@ -119,7 +118,7 @@ void kernel_main() {
         sync_cb.push_back(1);
 #endif
     }
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<layout>(out_cb_id);
     out_cb.push_back(out_num_tiles);
 #else
     matmul_block_init(full_in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);

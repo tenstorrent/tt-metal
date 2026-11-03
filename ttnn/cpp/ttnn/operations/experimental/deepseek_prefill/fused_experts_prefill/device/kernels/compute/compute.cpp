@@ -13,7 +13,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
@@ -218,13 +218,13 @@ void kernel_main() {
                             mm_cb.wait_front(2 * m_block);
                             pack_reconfig_data_format(cb_act_local_id);
                             for (uint32_t mi = 0; mi < mb; ++mi) {
-                                copy_tile_to_dst_init_short(cb_mm_id);
+                                copy_init(cb_mm_id);
                                 reconfig_full_operand_srca(cb_mm_id);
 
                                 tile_regs_acquire();
                                 copy_tile(cb_mm_id, mi, 0);
                                 copy_tile(cb_mm_id, m_block + mi, 1);
-                                copy_tile_to_dst_init_short(cb_rscal_id);
+                                copy_init(cb_rscal_id);
                                 reconfig_full_operand_srca(cb_rscal_id);
                                 copy_tile(cb_rscal_id, mi, 2);
                                 clamp_tile_init();
