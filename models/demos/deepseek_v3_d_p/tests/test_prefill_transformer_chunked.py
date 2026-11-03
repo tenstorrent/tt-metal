@@ -225,15 +225,15 @@ def _sparse_cache_format(has_indexer, kv_cache_format):
 # overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug), TP-deduped KV cache. Per-chunk median of CI runs 40424879138, 40494538796,
-    # 40532334659 and 40610708699.
-    (61, 11, 10): [0.311, 0.325, 0.356, 0.386, 0.418, 0.449, 0.475, 0.509, 0.551, 0.590, 0.623],
+    # (55k / code_debug), TP-deduped KV cache with K and V expanded in the SDPA (full-mesh KV gather); Galaxy
+    # bh-glx-120-c02u02, 2026-11-03, medians over nine post-warmup iterations.
+    (61, 11, 10): [0.349, 0.340, 0.343, 0.344, 0.372, 0.381, 0.399, 0.400, 0.422, 0.454, 0.455],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache with K and V expanded in the SDPA; medians over nine post-warmup
-    # iterations.
-    (61, 11, 10): [0.412, 0.418, 0.411, 0.411, 0.417, 0.420, 0.427, 0.445, 0.476, 0.493, 0.509],
+    # 55k / code_debug, TP-deduped KV cache with K and V expanded in the SDPA (full-mesh KV gather); Galaxy
+    # bh-glx-120-c02u02, 2026-11-03, medians over nine post-warmup iterations.
+    (61, 11, 10): [0.400, 0.384, 0.387, 0.388, 0.415, 0.423, 0.442, 0.440, 0.467, 0.496, 0.496],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
