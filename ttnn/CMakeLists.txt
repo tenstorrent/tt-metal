@@ -239,9 +239,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            ${ttnn_kernels}
-            cpp/ttnn/operations/common/shared_with_host/runtime_length.hpp
+        FILES ${ttnn_kernels} cpp/ttnn/operations/common/shared_with_host/runtime_length.hpp
     PRIVATE
         ${TTNNCPP_SRCS}
 )
