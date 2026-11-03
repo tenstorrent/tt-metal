@@ -9,7 +9,7 @@ patched, written once) and a mode 1 job is one source tile (read once; the up to
 are built once and written to every query of the group behind one barrier). Page addressing, row
 placement and bytes are unchanged. Toggle: QWEN_PREFILL_QSA_TRANSFER=0 restores the bounded kernel (default on).
 Also the prefill score slice + mask (prefill_slice_mask_scores): live columns below the top-k bound only.
-Toggle: QWEN_PREFILL_QSA_MASK=0 restores OptimizedQSA._mask_scores (default on).
+Toggle: QWEN_PREFILL_QSA_MASK=1 enables it (default OFF: the fused variant hung the device twice in text-mode runs, under investigation).
 """
 
 import os
@@ -199,7 +199,7 @@ def prefill_transfer(attention, source, output, positions, page_table, *, mode, 
 
 
 def prefill_mask_enabled():
-    return os.environ.get("QWEN_PREFILL_QSA_MASK", "1") != "0"
+    return os.environ.get("QWEN_PREFILL_QSA_MASK", "0") != "0"
 
 
 # OptimizedQSA._mask_scores writes -inf into every column of every row from the row's completed-block
