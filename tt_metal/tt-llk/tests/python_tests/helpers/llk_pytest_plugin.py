@@ -1134,6 +1134,8 @@ _MODULE_REPORTS: dict[str, PerfReport] = {}
 def _module_report(key: str, report: PerfReport, context: str) -> PerfReport:
     """This chunk's rows added to the earlier chunks of the module, failing before any write if their column schemas
     differ: a CSV must hold exactly one schema."""
+    # The chunk's own tests first, by test name: frame() below joins them and fills the columns a test lacks.
+    report.assert_single_schema(context=context)
     merged = _MODULE_REPORTS.setdefault(key, PerfReport())
     merged.append(report.frame(), label=context)
     merged.assert_single_schema(context=context)
