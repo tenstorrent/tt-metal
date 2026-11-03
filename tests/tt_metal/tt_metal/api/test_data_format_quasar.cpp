@@ -51,6 +51,20 @@ TEST(DataFormatQuasar, Int32BufferEnablesToDestWithoutModeEntry) {
     EXPECT_FALSE(tt::quasar_unpack_to_dest_en(fp32_formats, {}, /*fp32_dest_acc_en=*/true));
 }
 
+TEST(DataFormatQuasar, ExplicitToDestEntryRequires32BitOperand) {
+    // UNP_DEST writes a 16-bit datum with the 16-bit tile stride, off the 32-bit DEST addressing of the to-dest
+    // placers (emulator, 2026-11-02): an operand with an explicit entry must be Float32 / Int32 / UInt32.
+    const std::array<DataFormat, 2> bf16_then_fp32{DataFormat::Float16_b, DataFormat::Float32};
+    EXPECT_ANY_THROW(tt::quasar_unpack_to_dest_en(bf16_then_fp32, {kToDestFp32, kDefault}, /*fp32_dest_acc_en=*/true));
+    EXPECT_NO_THROW(tt::quasar_unpack_to_dest_en(bf16_then_fp32, {kDefault, kToDestFp32}, /*fp32_dest_acc_en=*/true));
+    const std::array<DataFormat, 2> int_formats{DataFormat::Int32, DataFormat::UInt32};
+    EXPECT_NO_THROW(tt::quasar_unpack_to_dest_en(int_formats, {kToDestFp32, kToDestFp32}, /*fp32_dest_acc_en=*/true));
+    const std::array<DataFormat, 1> int16_formats{DataFormat::Int16};
+    EXPECT_ANY_THROW(tt::quasar_unpack_to_dest_en(int16_formats, {kToDestFp32}, /*fp32_dest_acc_en=*/true));
+    // The mode-only query carries no formats and cannot check them.
+    EXPECT_NO_THROW(tt::quasar_unpack_to_dest_en({}, {kToDestFp32}, /*fp32_dest_acc_en=*/true));
+}
+
 TEST(DataFormatQuasar, CanonicalFormatFoldsUInt32IntoInt32) {
     EXPECT_EQ(tt::quasar_canonical_format(DataFormat::UInt32), DataFormat::Int32);
     EXPECT_EQ(tt::quasar_canonical_format(DataFormat::Int32), DataFormat::Int32);

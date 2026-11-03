@@ -237,10 +237,27 @@ bool quasar_unpack_to_dest_en(
     std::span<const DataFormat> buf_formats,
     const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode,
     bool fp32_dest_acc_en) {
-    for (const auto mode : unpack_to_dest_mode) {
-        if (mode != tt::tt_metal::UnpackToDestMode::Default) {
-            return true;
+    bool explicit_to_dest = false;
+    for (std::size_t i = 0; i < unpack_to_dest_mode.size(); ++i) {
+        if (unpack_to_dest_mode[i] == tt::tt_metal::UnpackToDestMode::Default) {
+            continue;
         }
+        explicit_to_dest = true;
+        if (i < buf_formats.size()) {
+            // UNP_DEST writes a 16-bit datum with the 16-bit tile stride, off the 32-bit DEST addressing of the
+            // to-dest placers; the mode-only query (no formats) cannot check this.
+            const DataFormat format = buf_formats[i];
+            TT_FATAL(
+                format == DataFormat::Invalid || format == DataFormat::Float32 || format == DataFormat::Int32 ||
+                    format == DataFormat::UInt32,
+                "Quasar unpack-to-dest operand {} is {}: only Float32 / Int32 / UInt32 operands can be routed to DEST "
+                "(a 16-bit datum misaddresses the 32-bit DEST)",
+                i,
+                format);
+        }
+    }
+    if (explicit_to_dest) {
+        return true;
     }
     if (!fp32_dest_acc_en) {
         return false;
