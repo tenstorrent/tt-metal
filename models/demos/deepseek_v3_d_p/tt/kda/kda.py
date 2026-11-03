@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -29,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
@@ -128,40 +130,49 @@ class _HistoryExchange:
 _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
 
 
-def _fused_output_staging(
-    mesh_device: ttnn.MeshDevice,
-    rows: int,
-    output_projection: ttnn.Tensor,
-    input_memory_config: ttnn.MemoryConfig,
-    ccl_kwargs: dict,
-) -> ttnn.Tensor:
-    """L1 staging for the fused output projection, allocated once and shared by layers of one geometry."""
-    weight_k, weight_n = tuple(output_projection.shape)[-2:]
-    key = (
-        mesh_device.id(),
-        rows,
-        weight_k,
-        weight_n,
-        output_projection.dtype,
-        input_memory_config.buffer_type,
-        tuple(sorted((name, str(value)) for name, value in ccl_kwargs.items())),
-    )
-    if key not in _fused_output_stagings:
-        activation = ttnn.empty(
-            (1, rows, weight_k),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=input_memory_config,
+class _FusedOutputStaging:
+    """L1 staging for the fused output projection, shared by live layers of one geometry; freed with the last one."""
+
+    def __init__(self, tensor: ttnn.Tensor) -> None:
+        self.tensor = tensor
+
+    @classmethod
+    def shared(
+        cls,
+        mesh_device: ttnn.MeshDevice,
+        rows: int,
+        output_projection: ttnn.Tensor,
+        input_memory_config: ttnn.MemoryConfig,
+        ccl_kwargs: dict,
+    ) -> _FusedOutputStaging:
+        weight_k, weight_n = tuple(output_projection.shape)[-2:]
+        key = (
+            mesh_device.id(),
+            rows,
+            weight_k,
+            weight_n,
+            output_projection.dtype,
+            input_memory_config.buffer_type,
+            tuple(sorted((name, str(value)) for name, value in ccl_kwargs.items())),
         )
-        _fused_output_stagings[key] = ttnn.experimental.matmul_reduce_scatter_prefill_staging(
-            activation, output_projection, **ccl_kwargs
-        )
-        ttnn.deallocate(activation)
-    return _fused_output_stagings[key]
+        staging = _fused_output_stagings.get(key)
+        if staging is None:
+            activation = ttnn.empty(
+                (1, rows, weight_k),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=input_memory_config,
+            )
+            staging = cls(
+                ttnn.experimental.matmul_reduce_scatter_prefill_staging(activation, output_projection, **ccl_kwargs)
+            )
+            ttnn.deallocate(activation)
+            _fused_output_stagings[key] = staging
+        return staging
 
 
-_fused_output_stagings: dict[tuple, ttnn.Tensor] = {}
+_fused_output_stagings: weakref.WeakValueDictionary[tuple, _FusedOutputStaging] = weakref.WeakValueDictionary()
 
 
 @dataclass(frozen=True)
@@ -281,6 +292,7 @@ class ttKDA:
             program_config.fused_output_reduce_scatter
             and self.tensor_parallel_size > 1
             and self.gated_rms_output_dtype == ttnn.bfloat16
+            and self.weights.output_projection.shape[-1] % (ttnn.TILE_SIZE * self.tensor_parallel_size) == 0
         )
         # The partial sums only feed the reduce-scatter; a single TP rank returns the projection itself.
         self.partial_output_memory_config = (
@@ -364,13 +376,21 @@ class ttKDA:
         )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
         if self._fused_output_reduce_scatter:
+            ring = (
+                self.tp_ccl_topology == ttnn.Topology.Ring
+                and per_axis_topology()[self.tensor_parallel_axis] == ttnn.Topology.Ring
+                and ttnn.get_usable_topology(
+                    self.weights.output_projection, ttnn.Topology.Ring, self.tensor_parallel_axis
+                )
+                == ttnn.Topology.Ring
+            )
             self._fused_output_ccl_kwargs = dict(
                 cluster_axis=self.tensor_parallel_axis,
                 scatter_dim=-1,
-                topology=self.tp_ccl_topology,
+                topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
                 num_links=min(self._tp_num_links, 2),
             )
-            self._fused_output_staging = _fused_output_staging(
+            self._fused_output_staging = _FusedOutputStaging.shared(
                 mesh_device,
                 self.active_seq_len_local,
                 self.weights.output_projection,
@@ -531,7 +551,7 @@ class ttKDA:
                 **self._fused_output_ccl_kwargs,
                 compute_kernel_config=self.fused_output_projection_compute_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                staging_tensor=self._fused_output_staging,
+                staging_tensor=self._fused_output_staging.tensor,
             )
         output = ttnn.linear(
             output,
