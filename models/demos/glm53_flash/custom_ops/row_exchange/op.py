@@ -287,10 +287,16 @@ class RowExchange:
         assert list(program.kernels[len(kernels) - 1].runtime_args[self.xchg_core.x][self.xchg_core.y]) == full
         return program
 
+    @property
+    def out_rows(self) -> int:
+        """The outputs' logical rows: the gathered users (gather) or this row's users (reduce / all-reduce); the
+        tile pads them to 32 and the kernels write whole tiles (the padding rows zero)."""
+        return self.nsrc * self.T if self.mode == 0 else self.T
+
     def allocate_outputs(self, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> list[ttnn.Tensor]:
         return [
             ttnn.allocate_tensor_on_device(
-                ttnn.Shape([1, 1, TILE, w]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, memory_config
+                ttnn.Shape([1, 1, self.out_rows, w]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, memory_config
             )
             for w in self.widths
         ]
