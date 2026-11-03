@@ -79,7 +79,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     uint32_t page_size = output.buffer()->page_size();
     uint32_t multi_buffering_size = 2;
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t packed_pad_value;
     bfloat16 bfloat_pad_value = bfloat16(pad_value);

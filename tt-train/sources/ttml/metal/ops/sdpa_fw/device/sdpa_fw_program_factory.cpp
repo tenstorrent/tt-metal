@@ -214,7 +214,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     auto* device = query.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
     const auto input_data_format = datatype_to_dataformat_converter(query.dtype());
     const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
