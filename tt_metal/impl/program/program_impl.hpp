@@ -510,8 +510,10 @@ public:
 
     // What a program bakes in from the pipe it binds: config page and ring addresses, entry size,
     // credit lanes and core layout. A pipe whose key matches the bound one's can replace it, e.g. one
-    // re-carved at the same addresses after the bound pipe was destroyed; the program cache keys pipes
-    // the same way.
+    // re-carved at the same addresses after the bound pipe was destroyed. A DRAM sender's core is not
+    // in it (sender_cores is empty): receivers read the sender's address from their config pages, so
+    // the program does not depend on which DRAM core sends. The program cache key
+    // (PrefetcherPipe::attribute_values) covers every field here, so a cache hit always rebinds.
     struct PrefetcherPipeBindingKey {
         experimental::SenderCoreType sender_core_type{};
         CoreRangeSet sender_cores;

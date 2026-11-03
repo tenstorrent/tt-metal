@@ -881,6 +881,13 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
             receiver_phys.push_back(target_device->worker_core_from_logical_core(receiver));
         }
         const auto sender_page = build_sender_config_page(common, receiver_sent_base - sender_page_addr, receiver_phys);
+        // Written over PCIe now rather than through the queue like the receiver pages below. Those
+        // live in allocator L1, which work already in the queue may still be using. This page lives
+        // in the DRISC sender-state zone the space reserved, which only this space's pipes on this
+        // sender use. A re-carve reuses the page of the pipe it replaces, and the destroy contract
+        // (see PrefetcherPipe) says every program using that pipe has Finished, so every request
+        // into it has been delivered. A request can only name this pipe after the create returns,
+        // past order_dram_sender_pages().
         write_dram_sender_l1(
             *mesh_device, target_device, sender_core_, sender_page_addr, std::as_bytes(std::span(sender_page)));
 

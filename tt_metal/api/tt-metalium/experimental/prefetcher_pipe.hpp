@@ -110,11 +110,14 @@ public:
     uint32_t num_credit_lanes() const;
 
     // Reflection follows shared_ptr<PrefetcherPipe> through the pointer for profiler output and
-    // cache keys. The key is what a Program bakes in, not identity(): a pipe re-carved with the same
-    // geometry at the same addresses hits the programs built for the one it replaces, and they rebind
-    // to it (see ProgramImpl::PrefetcherPipeBindingKey).
+    // cache keys. The key is the pipe's geometry and addresses, not identity(): a pipe re-carved with
+    // the same geometry at the same addresses hits the programs built for the one it replaces, and
+    // they rebind to it. A hit must be a pipe the cached Program accepts, so these attributes cover
+    // every field of ProgramImpl::PrefetcherPipeBindingKey. They also name a DRAM sender's core,
+    // which the binding key leaves out (see there) but a factory may read.
     static constexpr bool ttsl_reflect_through_shared_ptr = true;
     static constexpr auto attribute_names = std::forward_as_tuple(
+        "sender_core_type",
         "sender_core",
         "receiver_cores",
         "config_address",
@@ -122,9 +125,10 @@ public:
         "initial_entry_size",
         "ring_size",
         "num_credit_lanes");
-    std::tuple<CoreCoord, const CoreRangeSet&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> attribute_values()
-        const {
+    std::tuple<SenderCoreType, CoreCoord, const CoreRangeSet&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
+    attribute_values() const {
         return {
+            sender_core_type(),
             sender_core(),
             receiver_cores(),
             config_address(),
