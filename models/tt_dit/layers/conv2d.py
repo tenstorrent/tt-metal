@@ -434,6 +434,8 @@ class Conv2d(Module):
         self.out_mesh_axis_size = out_mesh_axis_size
         self.ccl_manager = ccl_manager
         self.use_barrier = use_barrier
+        # Extra ttnn.Conv2dConfig fields for this instance, e.g. {"config_tensors_in_dram": True}.
+        self.conv_config_overrides: dict[str, object] = {}
 
         # Prepared (device-resident) weight/bias tensors.  Populated lazily on the first
         # forward call so they are ready before any trace capture begins.  Stored as plain
@@ -548,7 +550,9 @@ class Conv2d(Module):
 
         in_channels = self.in_channels // self.in_mesh_axis_size
         out_channels = self.weight.data.shape[0]
-        conv_config = ttnn.Conv2dConfig(act_block_h_override=32, weights_dtype=self.weight.dtype)
+        conv_config = ttnn.Conv2dConfig(
+            act_block_h_override=32, weights_dtype=self.weight.dtype, **self.conv_config_overrides
+        )
 
         if self._prepared_weight is None:
             base_kwargs = {
