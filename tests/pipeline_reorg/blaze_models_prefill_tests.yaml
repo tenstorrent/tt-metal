@@ -2158,8 +2158,8 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # Not yet measured in CI. The 8x4 leg above takes 24-27 min with the same 1.5 TB of weights; eight
-      # ranks stream the same total.
+      # Run 41533146872 (2026-11-03): 12 min for this step and 19 min for the job, against 24-27 min for the
+      # 8x4 leg above with the same 1.5 TB of weights. 90 keeps over 4x of the job for a cold Weka cache.
       timeout: 90
       tier: 1
       release_ready: false
