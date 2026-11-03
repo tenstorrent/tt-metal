@@ -175,11 +175,14 @@ init_packages() {
                     echo "[INFO] Using g++-12 for Ubuntu 22.04 (gcc-12 will be installed as dependency)"
                     ;;
                 "noble"|"resolute") # 24.04, 26.04
-                    # Both carry g++-14 in their own archive. Naming it keeps the
-                    # compiler identical across the two LTS releases: 26.04's
-                    # default g++ is 15.2.0 against 24.04's 13.2.0, so without
-                    # this the OS upgrade would quietly bring a two-version
-                    # compiler bump along with it.
+                    # Both carry g++-14 in their own archive. Installing it by
+                    # name keeps the two LTS releases on one compiler: 26.04's
+                    # default g++ is 15.2.0 against 24.04's 13.2.0.
+                    # This only installs it. Unversioned gcc/g++ are repointed by
+                    # configure_compiler_alternatives, which the installer runs
+                    # for --docker builds only, so a host install still leaves
+                    # /usr/bin/g++ on the distro default -- as it already does on
+                    # 24.04. Out of scope here; CI builds are the --docker path.
                     gpp_package="g++-14"
                     echo "[INFO] Using g++-14 for Ubuntu $OS_VERSION (gcc-14 will be installed as dependency)"
                     ;;
@@ -271,6 +274,18 @@ prep_system() {
             echo "[WARNING] No specific system preparation for $OS_ID"
             ;;
     esac
+}
+
+# Drop the apt sources and pin that this script owns, so prep_ubuntu_system can
+# recreate exactly the ones the probe below confirms. The llvm-*.list namespace
+# in sources.list.d is this script's; a hand-rolled source wanting to survive
+# belongs under a different name.
+reset_llvm_apt_sources() {
+    if ! is_debian_based; then
+        return
+    fi
+
+    rm -f /etc/apt/sources.list.d/llvm-*.list /etc/apt/preferences.d/llvm-23
 }
 
 # Add the apt.llvm.org repository for one LLVM major version, but only if
@@ -585,6 +600,13 @@ configure_hugepages() {
 
 install() {
     echo "[INFO] Installing TT-Metalium dependencies for $OS_ID ($PKG_MANAGER)..."
+
+    # Must precede the update below: a leftover llvm-*.list from an earlier run
+    # can point at a suite apt.llvm.org never published for this release (older
+    # versions of this script wrote llvm-17 and llvm-20 unconditionally), and
+    # apt-get update exits 100 on it. Re-running the fixed script would then die
+    # on the stale source before the probe that was meant to avoid it.
+    reset_llvm_apt_sources
 
     # Update package cache first
     update_package_cache
