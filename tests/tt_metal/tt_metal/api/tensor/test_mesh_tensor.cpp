@@ -22,12 +22,18 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include <sys/mman.h>
 #include <unistd.h>
+
+#ifndef MADV_COLLAPSE
+#define MADV_COLLAPSE 25  // Linux 6.1; older C libraries do not define it.
+#endif
 
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
@@ -979,62 +985,38 @@ TEST_F(MeshTensorDeviceTest, LargeWriteRoundtrip_PinnedMemoryPath) {
     expect_host_tensors_eq(host_tensor, result);
 }
 
-// Shared body for the two read-only file-backed cases below. `mapping_flags` selects how the device-visible
-// mapping is created; both modes have to be pinned read-only on their own, because the kernel treats them
-// differently (see the call sites).
-void run_large_read_only_file_backed_write_test(distributed::MeshDevice& mesh_device, int mapping_flags) {
-    const Shape shape{1, 1, 1024, 9216};
-    const size_t buffer_size = static_cast<size_t>(shape.volume()) * sizeof(uint32_t);
-    ASSERT_GT(buffer_size, kPinnedWriteThresholdBytesForTest);
-
+// Why this device cannot issue a device-read-only pin of `size` bytes, or nothing if it can.
+std::optional<std::string> read_only_pin_unavailable(distributed::MeshDevice& mesh_device, size_t size) {
     const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(mesh_device);
     if (!pinning_params.can_map_to_noc || !pinning_params.supports_read_only) {
-        GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
+        return "Device-read-only pinned NOC mappings are not available";
     }
     // Budget guards, matching the sibling large-pin tests: without these an undersized pin budget makes try_pin
     // return nullptr and the ASSERT below fails the test instead of skipping it.
     const size_t cache_limit = tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes();
-    if (cache_limit < buffer_size || pinning_params.max_total_pin_size < buffer_size || pinning_params.max_pins < 1) {
-        GTEST_SKIP() << "Requires a pin budget large enough for a " << buffer_size << " byte mapping";
+    if (cache_limit < size || pinning_params.max_total_pin_size < size || pinning_params.max_pins < 1) {
+        return "Requires a pin budget large enough for a " + std::to_string(size) + " byte mapping";
     }
+    return std::nullopt;
+}
 
-    const std::string file_template =
-        (std::filesystem::temp_directory_path() / "tt_metal_read_only_tensor_XXXXXX").string();
-    std::vector<char> file_name(file_template.begin(), file_template.end());
-    file_name.push_back('\0');
-    int writable_fd = mkstemp(file_name.data());
-    ASSERT_NE(writable_fd, -1);
-    // The device-visible mapping has to come from a read-only descriptor: that is the shape real callers have (an
-    // mmap of a weights file opened O_RDONLY). Whether the mapping can still be widened to writable depends on
-    // `mapping_flags`, not on the descriptor -- see the call sites. Open it now, while the name still exists, and
-    // drop the name immediately -- the
-    // two descriptors keep the inode alive for the rest of the test, so no exit path, including an ASSERT failure
-    // below or a crash, can leave 36 MiB on disk. The file is still empty here; the ftruncate below extends the
-    // inode, which both descriptors see.
-    int read_only_fd = open(file_name.data(), O_RDONLY | O_CLOEXEC);
-    ASSERT_NE(read_only_fd, -1);
-    ASSERT_EQ(unlink(file_name.data()), 0);
-
-    ASSERT_EQ(ftruncate(writable_fd, buffer_size), 0);
-    void* writable_mapping = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_SHARED, writable_fd, 0);
-    ASSERT_NE(writable_mapping, MAP_FAILED);
-    // Position-dependent contents, so the round-trip check below can catch a wrong offset, a repeated page or a
-    // dropped host_offset_ adjustment. A uniform fill would compare equal through any of those.
-    uint32_t* writable_words = static_cast<uint32_t*>(writable_mapping);
-    for (size_t i = 0; i < static_cast<size_t>(shape.volume()); ++i) {
-        writable_words[i] = static_cast<uint32_t>(i) * 2654435761u + 0x9e3779b9u;
+// Position-dependent contents, so the round-trip check below can catch a wrong offset, a repeated page or a
+// dropped host_offset_ adjustment. A uniform fill would compare equal through any of those.
+void fill_position_dependent(uint32_t* words, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        words[i] = static_cast<uint32_t>(i) * 2654435761u + 0x9e3779b9u;
     }
-    ASSERT_EQ(munmap(writable_mapping, buffer_size), 0);
-    ASSERT_EQ(close(writable_fd), 0);
+}
 
-    void* read_only_mapping = mmap(nullptr, buffer_size, PROT_READ, mapping_flags, read_only_fd, 0);
-    ASSERT_NE(read_only_mapping, MAP_FAILED);
-    ASSERT_EQ(close(read_only_fd), 0);
-
-    auto mapping_owner = std::shared_ptr<void>(
-        read_only_mapping, [buffer_size](void* mapping) { EXPECT_EQ(munmap(mapping, buffer_size), 0); });
-    HostBuffer file_buffer(
-        ttsl::Span<uint32_t>(static_cast<uint32_t*>(read_only_mapping), shape.volume()), MemoryPin(mapping_owner));
+// Uploads a 1x1-mesh tensor that borrows `words` and reads it back. The upload must pin it read-only, or else copy it
+// and leave the cache refusing a read-only pin of it.
+void write_borrowed_tensor_and_check(
+    distributed::MeshDevice& mesh_device,
+    const Shape& shape,
+    uint32_t* words,
+    std::shared_ptr<void> owner,
+    bool expect_read_only_pin) {
+    HostBuffer file_buffer(ttsl::Span<uint32_t>(words, shape.volume()), MemoryPin(std::move(owner)));
     auto distributed_buffer = DistributedHostBuffer::create(mesh_device.shape());
     const auto coord = *distributed::MeshCoordinateRange(mesh_device.shape()).begin();
     distributed_buffer.emplace_shard(coord, [&file_buffer]() { return file_buffer; });
@@ -1048,22 +1030,67 @@ void run_large_read_only_file_backed_write_test(distributed::MeshDevice& mesh_de
     MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
     cq.finish();
 
-    // The write itself must have created the pin. Asserting only on a try_pin issued after the fact would pass
-    // even if the H2D path stopped pinning altogether, since that call would just build a fresh mapping.
-    ASSERT_EQ(cache.num_entries(), entries_before + 1);
-
     auto shard = host_tensor.buffer().get_shard(coord);
     ASSERT_TRUE(shard.has_value());
     const auto range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
-    auto pinned =
-        cache.try_pin(mesh_device, range, *shard, true, tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
-    ASSERT_TRUE(pinned);
-    // No new entry: this is the mapping the write created, not a second one, so its permissions are the write's.
-    EXPECT_EQ(cache.num_entries(), entries_before + 1);
-    EXPECT_EQ(pinned->get_device_access(), tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    if (!expect_read_only_pin) {
+        EXPECT_EQ(cache.num_entries(), entries_before);
+        EXPECT_EQ(
+            cache.try_pin(
+                mesh_device, range, *shard, true, tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly),
+            nullptr);
+        EXPECT_EQ(cache.num_entries(), entries_before);
+    } else {
+        // The write itself must have created the pin. Asserting only on a try_pin issued after the fact would pass
+        // even if the H2D path stopped pinning altogether, since that call would just build a fresh mapping.
+        ASSERT_EQ(cache.num_entries(), entries_before + 1);
+        auto pinned = cache.try_pin(
+            mesh_device, range, *shard, true, tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
+        ASSERT_TRUE(pinned);
+        // No new entry: this is the mapping the write created, not a second one, so its permissions are the write's.
+        EXPECT_EQ(cache.num_entries(), entries_before + 1);
+        EXPECT_EQ(pinned->get_device_access(), tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    }
 
     HostTensor result = cq.enqueue_read_tensor(device_tensor);
     expect_host_tensors_eq(host_tensor, result);
+}
+
+// Shared body for the two read-only file-backed cases below: a shared file mapping is pinned, a private one copied.
+void run_large_read_only_file_backed_write_test(distributed::MeshDevice& mesh_device, int mapping_flags) {
+    const Shape shape{1, 1, 1024, 9216};
+    const size_t buffer_size = static_cast<size_t>(shape.volume()) * sizeof(uint32_t);
+    ASSERT_GT(buffer_size, kPinnedWriteThresholdBytesForTest);
+    if (auto reason = read_only_pin_unavailable(mesh_device, buffer_size)) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const std::string file_template =
+        (std::filesystem::temp_directory_path() / "tt_metal_read_only_tensor_XXXXXX").string();
+    std::vector<char> file_name(file_template.begin(), file_template.end());
+    file_name.push_back('\0');
+    int writable_fd = mkstemp(file_name.data());
+    ASSERT_NE(writable_fd, -1);
+    // Map from a read-only descriptor, as real callers map weights files. Unlinking at once lets the two descriptors
+    // keep the inode alive without any exit path, an ASSERT or a crash included, leaving 36 MiB on disk.
+    int read_only_fd = open(file_name.data(), O_RDONLY | O_CLOEXEC);
+    ASSERT_NE(read_only_fd, -1);
+    ASSERT_EQ(unlink(file_name.data()), 0);
+
+    ASSERT_EQ(ftruncate(writable_fd, buffer_size), 0);
+    void* writable_mapping = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_SHARED, writable_fd, 0);
+    ASSERT_NE(writable_mapping, MAP_FAILED);
+    fill_position_dependent(static_cast<uint32_t*>(writable_mapping), shape.volume());
+    ASSERT_EQ(munmap(writable_mapping, buffer_size), 0);
+    ASSERT_EQ(close(writable_fd), 0);
+
+    void* read_only_mapping = mmap(nullptr, buffer_size, PROT_READ, mapping_flags, read_only_fd, 0);
+    ASSERT_NE(read_only_mapping, MAP_FAILED);
+    ASSERT_EQ(close(read_only_fd), 0);
+    auto mapping_owner = std::shared_ptr<void>(
+        read_only_mapping, [buffer_size](void* mapping) { EXPECT_EQ(munmap(mapping, buffer_size), 0); });
+    write_borrowed_tensor_and_check(
+        mesh_device, shape, static_cast<uint32_t*>(read_only_mapping), mapping_owner, mapping_flags == MAP_SHARED);
 }
 
 // MAP_SHARED is what the Python load_tensor() API creates (map_tensor_file in tensor_file_layout.cpp maps the file
@@ -1075,13 +1102,54 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
     run_large_read_only_file_backed_write_test(*mesh_device_, MAP_SHARED);
 }
 
-// MAP_PRIVATE is what load_tensor() falls back to on a filesystem that refuses a shared mapping. It is the weaker case
-// for the pin -- a private PROT_READ mapping keeps VM_MAYWRITE, so mprotect(PROT_WRITE) on it succeeds -- but a
-// read/write pin still fails on it, since VM_WRITE is clear. The kernel also handles the read-only pin differently: it
-// copies each page of a private file mapping into anonymous memory before pinning it, where a shared mapping's
-// page-cache pages are pinned in place. Covering only MAP_SHARED above would leave the fallback unproven.
-TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyPrivateFileBackedWriteUsesReadOnlyPinnedMemory) {
+// MAP_PRIVATE: load_tensor()'s fallback, and what safetensors and torch.load(mmap=True) return. A read-only pin of it
+// can loop forever in the kernel (#63423), so the write copies it instead.
+TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyPrivateFileBackedWriteIsCopiedNotPinned) {
     run_large_read_only_file_backed_write_test(*mesh_device_, MAP_PRIVATE);
+}
+
+// The #63423 hang: a read-only pin of a private view of a memfd collapsed into huge folios. If MADV_COLLAPSE fails
+// (recorded as the madv_collapse property), the view is still a private file mapping that must be copied.
+TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyPrivateHugeFolioWriteIsCopiedNotPinned) {
+    constexpr size_t kHugePageSize = 2 * 1024 * 1024;
+    const Shape shape{1, 1, 1024, 9216};
+    const size_t buffer_size = static_cast<size_t>(shape.volume()) * sizeof(uint32_t);
+    ASSERT_GT(buffer_size, kPinnedWriteThresholdBytesForTest);
+    ASSERT_EQ(buffer_size % kHugePageSize, 0u);
+    if (auto reason = read_only_pin_unavailable(*mesh_device_, buffer_size)) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const int fd = memfd_create("tt_metal_private_huge_folio", MFD_CLOEXEC);
+    ASSERT_NE(fd, -1) << std::strerror(errno);
+    ASSERT_EQ(ftruncate(fd, buffer_size), 0);
+    // Maps the memfd 2 MiB-aligned inside a reservation, so each 2 MiB of the file can be one huge PMD.
+    auto map_aligned = [&](int prot, int flags) -> std::pair<std::shared_ptr<void>, void*> {
+        void* reservation =
+            mmap(nullptr, buffer_size + kHugePageSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        if (reservation == MAP_FAILED) {
+            return {nullptr, nullptr};
+        }
+        std::shared_ptr<void> owner(
+            reservation, [buffer_size](void* mapping) { EXPECT_EQ(munmap(mapping, buffer_size + kHugePageSize), 0); });
+        void* aligned = reinterpret_cast<void*>(
+            (reinterpret_cast<uintptr_t>(reservation) + kHugePageSize - 1) & ~(uintptr_t{kHugePageSize} - 1));
+        if (mmap(aligned, buffer_size, prot, flags | MAP_FIXED, fd, 0) != aligned) {
+            return {nullptr, nullptr};
+        }
+        return {std::move(owner), aligned};
+    };
+    {
+        auto [writable_owner, writable_mapping] = map_aligned(PROT_READ | PROT_WRITE, MAP_SHARED);
+        ASSERT_NE(writable_mapping, nullptr);
+        fill_position_dependent(static_cast<uint32_t*>(writable_mapping), shape.volume());
+        const bool collapsed = madvise(writable_mapping, buffer_size, MADV_COLLAPSE) == 0;
+        RecordProperty("madv_collapse", collapsed ? "ok" : std::strerror(errno));
+    }  // Unmaps the shared view; the folios stay in the memfd.
+    auto [mapping_owner, private_view] = map_aligned(PROT_READ, MAP_PRIVATE);
+    ASSERT_NE(private_view, nullptr);
+    ASSERT_EQ(close(fd), 0);
+    write_borrowed_tensor_and_check(*mesh_device_, shape, static_cast<uint32_t*>(private_view), mapping_owner, false);
 }
 
 TEST_F(MeshTensorDeviceTest, LargeWriteRoundtrip_HeightShardedDeviceRequiringShardPadding) {

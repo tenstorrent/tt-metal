@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import numpy as np
 import pytest
 
 import torch
@@ -182,3 +185,28 @@ def test_col_tilize_to_device_and_back(device, dtype, K, N):
     assert result_col.shape == result_manual.shape
     pcc_threshold = 0.99 if dtype == ttnn.bfloat8_b else 0.98
     assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
+
+
+# #63423: private file mappings above 32 MiB upload correctly; a read-only pin of them used to hang the process.
+@pytest.mark.skipif("TT_METAL_SIMULATOR" in os.environ, reason="its thread timeout would end a slow simulator session")
+@pytest.mark.timeout(120, method="thread")
+@pytest.mark.parametrize("source", ["safetensors", "torch_load_mmap", "numpy_memmap_copy_on_write"])
+def test_from_torch_private_file_mapping_above_pin_threshold(device, tmp_path, source):
+    torch.manual_seed(0)
+    torch_input = torch.randn((7282, 2304), dtype=torch.bfloat16)  # 33,555,456 bytes, just above 32 MiB
+    if source == "safetensors":
+        safetensors = pytest.importorskip("safetensors")
+        from safetensors.torch import save_file
+
+        save_file({"w": torch_input}, str(tmp_path / "w.safetensors"))
+        mapped = safetensors.safe_open(str(tmp_path / "w.safetensors"), "pt").get_tensor("w")
+    elif source == "torch_load_mmap":
+        torch.save(torch_input, tmp_path / "w.pt")
+        mapped = torch.load(tmp_path / "w.pt", mmap=True, weights_only=True)
+    else:
+        torch_input.view(torch.int16).numpy().tofile(tmp_path / "w.bin")
+        memmap = np.memmap(tmp_path / "w.bin", mode="c", dtype=np.int16, shape=tuple(torch_input.shape))
+        mapped = torch.from_numpy(memmap).view(torch.bfloat16)
+
+    tensor = ttnn.from_torch(mapped, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    assert torch.equal(ttnn.to_torch(tensor), torch_input)

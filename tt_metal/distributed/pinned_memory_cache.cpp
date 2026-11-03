@@ -4,6 +4,22 @@
 
 #include "pinned_memory_cache.hpp"
 
+#include <array>
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <fcntl.h>
+#include <functional>
+#include <istream>
+#include <mutex>
+#include <streambuf>
+#include <string>
+#include <string_view>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
@@ -17,6 +33,175 @@
 namespace tt::tt_metal::experimental {
 
 using ChipId = int;
+
+namespace {
+
+// PROCMAP_QUERY (Linux 6.11, include/uapi/linux/fs.h), declared for older headers; its size is in the ioctl number.
+struct ProcmapQuery {
+    uint64_t size;
+    uint64_t query_flags;
+    uint64_t query_addr;
+    uint64_t vma_start;
+    uint64_t vma_end;
+    uint64_t vma_flags;
+    uint64_t vma_page_size;
+    uint64_t vma_offset;
+    uint64_t inode;
+    uint32_t dev_major;
+    uint32_t dev_minor;
+    uint32_t vma_name_size;
+    uint32_t build_id_size;
+    uint64_t vma_name_addr;
+    uint64_t build_id_addr;
+};
+constexpr unsigned long kProcmapQuery = _IOWR('f', 17, ProcmapQuery);
+constexpr uint64_t kProcmapQueryVmaShared = 0x08;
+constexpr uint64_t kProcmapQueryCoveringOrNextVma = 0x10;
+
+// Reads a file descriptor as a stream, so the maps text can be parsed as it arrives; remembers a read error.
+class FdReadBuffer : public std::streambuf {
+public:
+    explicit FdReadBuffer(int fd) : fd_(fd) {}
+    bool failed() const { return failed_; }
+
+protected:
+    int_type underflow() override {
+        while (true) {
+            const ssize_t got = read(fd_, buffer_.data(), buffer_.size());
+            if (got > 0) {
+                setg(buffer_.data(), buffer_.data(), buffer_.data() + got);
+                return traits_type::to_int_type(buffer_[0]);
+            }
+            if (got == 0 || errno != EINTR) {
+                failed_ = got < 0;
+                return traits_type::eof();
+            }
+        }
+    }
+
+private:
+    int fd_;
+    bool failed_ = false;
+    std::array<char, 65536> buffer_{};
+};
+
+}  // namespace
+
+PrivateFileMapping find_private_file_mapping_in_maps_text(std::istream& maps, uintptr_t begin, uintptr_t end) {
+    uintptr_t covered = begin;  // [begin, covered) holds no private file mapping
+    std::string line;
+    while (covered < end && std::getline(maps, line)) {
+        char* cursor = line.data();
+        const uintptr_t vma_begin = std::strtoull(cursor, &cursor, 16);
+        if (*cursor != '-') {
+            continue;  // An unreadable line leaves a gap, which makes the answer Unknown below.
+        }
+        const uintptr_t vma_end = std::strtoull(cursor + 1, &cursor, 16);
+        if (vma_end <= covered) {
+            continue;
+        }
+        char perms[5] = {};
+        unsigned long long inode = 0;
+        if (vma_begin > covered || std::sscanf(cursor, " %4s %*x %*x:%*x %llu", perms, &inode) != 2) {
+            return PrivateFileMapping::Unknown;
+        }
+        if (perms[3] == 'p' && inode != 0) {
+            return PrivateFileMapping::Found;
+        }
+        covered = vma_end;
+    }
+    return covered >= end ? PrivateFileMapping::NotFound : PrivateFileMapping::Unknown;
+}
+
+PrivateFileMapping find_private_file_mapping(
+    const void* address, size_t size, const char* maps_path, MapsSource* source) {
+    MapsSource ignored = MapsSource::None;
+    MapsSource& answered_by = source != nullptr ? *source : ignored;
+    answered_by = MapsSource::None;
+    if (size == 0) {
+        return PrivateFileMapping::NotFound;
+    }
+    const auto begin = reinterpret_cast<uintptr_t>(address);
+    const uintptr_t end = begin + size;
+    if (end < begin) {
+        return PrivateFileMapping::Unknown;
+    }
+    const int maps = open(maps_path, O_RDONLY | O_CLOEXEC);
+    if (maps < 0) {
+        return PrivateFileMapping::Unknown;
+    }
+    ProcmapQuery query{};
+    query.size = sizeof(query);
+    query.query_flags = kProcmapQueryCoveringOrNextVma;
+    auto result = PrivateFileMapping::NotFound;
+    bool use_text = false;
+    answered_by = MapsSource::Ioctl;
+    for (uintptr_t cursor = begin; cursor < end; cursor = query.vma_end) {
+        query.query_addr = cursor;
+        if (ioctl(maps, kProcmapQuery, &query) != 0) {
+            use_text = errno != ENOENT;  // ENOENT: no VMA at or after the cursor. Otherwise: no PROCMAP_QUERY.
+            result = PrivateFileMapping::Unknown;
+            break;
+        }
+        if (query.vma_start > cursor || query.vma_end <= cursor) {  // a gap in the range, or no progress
+            result = PrivateFileMapping::Unknown;
+            break;
+        }
+        if ((query.vma_flags & kProcmapQueryVmaShared) == 0 && query.inode != 0) {
+            result = PrivateFileMapping::Found;
+            break;
+        }
+    }
+    if (use_text) {
+        answered_by = MapsSource::Text;
+        FdReadBuffer buffer(maps);
+        std::istream text(&buffer);
+        result = find_private_file_mapping_in_maps_text(text, begin, end);
+        if (buffer.failed()) {
+            result = PrivateFileMapping::Unknown;
+        }
+    }
+    close(maps);
+    return result;
+}
+
+bool read_only_pin_allowed(
+    const void* address,
+    size_t size,
+    PrivateFileMapping mapping,
+    std::once_flag& unknown_warning,
+    const std::function<void(std::string_view)>& warn) {
+    if (mapping == PrivateFileMapping::NotFound) {
+        return true;
+    }
+    if (mapping == PrivateFileMapping::Unknown) {
+        std::call_once(unknown_warning, [&warn] {
+            constexpr std::string_view warning =
+                "PinnedMemoryCache: this thread's memory maps could not rule out a private file mapping (they were "
+                "unreadable, incomplete or unparsable), so read-only pins are declined and those uploads are copied";
+            if (warn) {
+                warn(warning);
+            } else {
+                log_warning(tt::LogMetal, "{}", warning);
+            }
+        });
+    }
+    log_debug(
+        tt::LogMetal,
+        "PinnedMemoryCache: not pinning {} bytes at {} read-only: {}",
+        size,
+        address,
+        mapping == PrivateFileMapping::Found
+            ? "it overlaps a private file mapping, whose read-only pin can stall in the kernel"
+            : "the thread's maps cannot rule out a private file mapping");
+    return false;
+}
+
+bool read_only_pin_allowed(
+    const void* address, size_t size, PrivateFileMapping mapping, const std::function<void(std::string_view)>& warn) {
+    static std::once_flag unknown_warning;
+    return read_only_pin_allowed(address, size, mapping, unknown_warning, warn);
+}
 
 PinnedMemoryCache& PinnedMemoryCache::instance() {
     static PinnedMemoryCache cache;
@@ -191,32 +376,39 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
 
     std::set<ChipId> target_mmio_ids = compute_mmio_device_ids(metal_env.get_cluster(), target_device_ids);
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
 
     // Search all entries for this host address for a usable cache hit.
-    auto [range_begin, range_end] = address_map_.equal_range(host_addr);
-    for (auto map_it = range_begin; map_it != range_end; ++map_it) {
-        auto list_it = map_it->second;
-        if (list_it->pinned_memory->get_buffer_size() < buffer_size) {
-            continue;
-        }
-        if (map_to_noc && !list_it->map_to_noc) {
-            continue;
-        }
-        if (access == PinnedMemoryDeviceAccess::ReadWrite && list_it->access == PinnedMemoryDeviceAccess::ReadOnly) {
-            continue;
-        }
-        bool covers_all_devices = true;
-        for (ChipId device_id : target_device_ids) {
-            if (!list_it->device_ids.contains(device_id)) {
-                covers_all_devices = false;
-                break;
+    auto find_cached = [&]() -> std::shared_ptr<PinnedMemory> {
+        auto [range_begin, range_end] = address_map_.equal_range(host_addr);
+        for (auto map_it = range_begin; map_it != range_end; ++map_it) {
+            auto list_it = map_it->second;
+            if (list_it->pinned_memory->get_buffer_size() < buffer_size) {
+                continue;
+            }
+            if (map_to_noc && !list_it->map_to_noc) {
+                continue;
+            }
+            if (access == PinnedMemoryDeviceAccess::ReadWrite &&
+                list_it->access == PinnedMemoryDeviceAccess::ReadOnly) {
+                continue;
+            }
+            bool covers_all_devices = true;
+            for (ChipId device_id : target_device_ids) {
+                if (!list_it->device_ids.contains(device_id)) {
+                    covers_all_devices = false;
+                    break;
+                }
+            }
+            if (covers_all_devices) {
+                lru_entries_.splice(lru_entries_.end(), lru_entries_, list_it);
+                return list_it->pinned_memory;
             }
         }
-        if (covers_all_devices) {
-            lru_entries_.splice(lru_entries_.end(), lru_entries_, list_it);
-            return list_it->pinned_memory;
-        }
+        return nullptr;
+    };
+    if (auto cached = find_cached()) {
+        return cached;
     }
 
     // Older KMDs cannot create a device-read-only mapping. Widen cache-created mappings to read/write so callers keep
@@ -229,6 +421,23 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
     // every time, no matter how many slots are free. Eviction cannot help, so such a failure must not drive the
     // retry loop below or it would unpin the entire cache for this device on the way to giving up.
     const bool widened_to_read_write = actual_access != access;
+
+    // A device-read-only pin of a private file mapping can loop forever in the kernel (#63423), so such memory is
+    // copied. The check reads the thread's maps, so it runs unlocked; another thread may pin this buffer meanwhile.
+    if (actual_access == PinnedMemoryDeviceAccess::ReadOnly) {
+        if (buffer_size > global_cache_limit || buffer_size > per_mmio_pin_limit) {
+            return nullptr;  // evict_oldest_until_within_limit would refuse it; skip the maps query
+        }
+        lock.unlock();
+        const auto mapping = find_private_file_mapping(host_addr, buffer_size);
+        lock.lock();
+        if (!read_only_pin_allowed(host_addr, buffer_size, mapping)) {
+            return nullptr;
+        }
+        if (auto cached = find_cached()) {
+            return cached;
+        }
+    }
 
     // No usable entry. Before creating a new pin, check whether any existing
     // entry for this address is still referenced externally on an MMIO device
