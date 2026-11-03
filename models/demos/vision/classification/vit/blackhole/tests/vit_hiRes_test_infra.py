@@ -46,7 +46,7 @@ class VitHiResTestInfra:
             config.num_attention_heads = 12
         config.num_hidden_layers = num_hidden_layers
 
-        self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, sequence_size)
+        self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, sequence_size, device)
 
         self.torch_layers = []
         self.tt_parameters_list = []
@@ -98,7 +98,9 @@ class VitHiResTestInfra:
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
             ),
             [
-                divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], dram_grid_size.x),
+                ttnn.core.roundup(
+                    divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], dram_grid_size.x), ttnn.TILE_SIZE
+                ),
                 tt_inputs_host.shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
