@@ -63,6 +63,8 @@ from .optimized_decoder import (
     weight_cache_key,
 )
 from .prefill_page_table import single_shot_fill_page_table
+from .routed_expert import routed_expert_stacked
+from .verify_kv_write import verify_kv_write
 
 TOKEN_DISPATCH_ENV = "TT_LAGUNA_MOE_TOKEN_DISPATCH"
 FOLD_GATE_QKV_ENV = "TT_LAGUNA_FOLD_GATE_QKV"  # 0 = separate 1-core g_proj matmul in decode
@@ -97,6 +99,11 @@ TOKEN_DISPATCH_METADATA_LEN = 5
 # 83.9 MB); S on one chip (134.2 MB) clashes with the static circular buffers. Above this bound decode uses
 # DRAM instead. S on P150x4 needs 33.5 MB and keeps L1.
 MOE_DECODE_L1_MAX_BYTES = 256 * TILE * (2 * 512 + 2 * 2048) * 2
+
+
+# ttnn.sparse_matmul's zero_init_output (tenstorrent/tt-metal#63897): False skips the output zero fill, which Laguna's
+# routed MoE never reads. Without it the fill runs (same results, a little slower).
+_SPARSE_MATMUL_ZERO_INIT = "zero_init_output" in (getattr(ttnn.sparse_matmul, "__doc__", None) or "")
 
 
 def _parse_binary_env(name: str, default: bool = False) -> bool:
@@ -321,7 +328,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._dflash_regroup = _parse_binary_env("TT_LAGUNA_DFLASH_REGROUP", True)
         self._router_1d = _parse_binary_env("TT_LAGUNA_ROUTER_1D", True)  # see _router_scores
         self._router_ksplit = _parse_binary_env("TT_LAGUNA_ROUTER_KSPLIT", True)  # see _router_scores
-        # multi-row verify KV writes through the fused K+V op (share_cache group mode) instead of one op per K / V
+        # multi-row verify KV writes as one K+V op (verify_kv_write) instead of one op per K / V
         self._seq_kv_fused = _parse_binary_env("TT_LAGUNA_SEQ_KV_FUSED", True)
         # draft query rows: the gate logits from the decode path's fused [Q|K|V|G] DRAM-sharded matmul instead of a
         # separate N = 18 g_proj matmul (one core, ~23 us per draft layer)
@@ -352,7 +359,8 @@ class MultichipDecoder(OptimizedDecoder):
         # 32-token decode MoE generic_ops: gate/up + SwiGLU + routing weight, then down + expert sum
         self._cp32 = self._colpage and _parse_binary_env("TT_LAGUNA_CP32", True)
         self._cp32_short = _parse_binary_env("TT_LAGUNA_CP32_SHORT", True)  # also 2..31 rows (16-row DFlash verify)
-        self._seq_kv_chain = _parse_binary_env("TT_LAGUNA_SEQ_KV_CHAIN", True)  # verify KV rows in one chained op
+        # verify KV rows in one op per K / V (verify_kv_write) instead of one op per row (_seq_kv_write)
+        self._seq_kv_chain = _parse_binary_env("TT_LAGUNA_SEQ_KV_CHAIN", True)
         self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
         # one-token decode: the router kernel writes this chip's local routing row directly (no EP-select matmul)
         self._route_local_row = _parse_binary_env("TT_LAGUNA_ROUTE_LOCAL_ROW", True)
@@ -377,8 +385,10 @@ class MultichipDecoder(OptimizedDecoder):
             self.D > 1 and self.PACK_GATE_UP and _parse_binary_env("TT_LAGUNA_ROUTER_FP32_OUT", True)
         )
         self._token_dispatch_fallback_reason = "feature flag is disabled"
-        # routed gate+up sparse matmul skips the output zero-fill (needs ttnn sparse_matmul zero_init_output)
-        self._gu_skip_zero_init = _parse_binary_env("TT_LAGUNA_MOE_GU_SKIP_ZERO_INIT", True)
+        # routed gate+up sparse matmul skips the output zero-fill (when ttnn sparse_matmul has zero_init_output)
+        self._gu_skip_zero_init = _SPARSE_MATMUL_ZERO_INIT and _parse_binary_env(
+            "TT_LAGUNA_MOE_GU_SKIP_ZERO_INIT", True
+        )
         # Prefill attention gate without head reshapes: a 0/1 [nh, nh*hd] matrix expands the per-head softplus gate
         # to full width (each output = 1.0 x one gate value, fp32 accumulation -> exact), then one flat multiply.
         # The [seq, nh, hd] reshape pads nh to a full tile (12 or 18 -> 32) and copied ~2.7x the attention output.
@@ -1240,7 +1250,7 @@ class MultichipDecoder(OptimizedDecoder):
         # All 64 local experts in ONE routed-expert program over the stacked gate|up and down weights (upstream
         # unified_routed_expert_moe + Laguna's stacked mode). It reads the row-major bf16 dispatch buffer at each
         # expert's region offset, tilizes it in-op and writes a TILE bf8 buffer that combine reads.
-        expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe_stacked(
+        expert_outputs = routed_expert_stacked(
             ttnn.squeeze(ttnn.squeeze(dispatched, 0), 0),
             region_offsets,
             counts,
@@ -1444,7 +1454,7 @@ class MultichipDecoder(OptimizedDecoder):
                 compute_kernel_config=self._ck_moe,
                 memory_config=moe_mem,
                 output_tile=otile,
-                **({"zero_init_output": False} if fused_sum else {}),
+                **({"zero_init_output": False} if fused_sum and _SPARSE_MATMUL_ZERO_INIT else {}),
             )  # [1, LE, T, H], already routing-weighted
             if fused_sum:
                 routed_local = moe_decode1.expert_sum32(weighted, sparsity)
@@ -2465,16 +2475,13 @@ class MultichipDecoder(OptimizedDecoder):
             )
             k_sh = self._shard_kv(k, B)
             v_sh = self._shard_kv(v, B, y0=4 if fused_kv else 0)  # B <= 32 -> K on rows 0-3, V on rows 4-7
-        if fused_kv:  # one op writes K and V (instead of two paged_update_cache)
-            # a multi-row verify (rows of one user): share_cache merges the rows of each cache tile on one core per K / V
+        if fused_kv and sequential_kv_write and B > 1:
+            # a multi-row verify (rows of one user at consecutive positions): one op writes K and V, the rows of each
+            # cache tile merged on one core (verify_kv_write.py)
+            verify_kv_write(kv_cache["k"], k_sh, kv_cache["v"], v_sh, cur_pos, page_table)
+        elif fused_kv:  # one op writes K and V (instead of two paged_update_cache)
             ttnn.experimental.paged_fused_update_cache(
-                kv_cache["k"],
-                k_sh,
-                kv_cache["v"],
-                v_sh,
-                update_idxs_tensor=cur_pos,
-                page_table=page_table,
-                share_cache=bool(sequential_kv_write and B > 1),
+                kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table
             )
         elif sequential_kv_write and B > 1:
             # Spec-decode VERIFY: the B candidate rows share ONE user's blocks; with BLOCK_SIZE==TILE==32
@@ -2482,15 +2489,10 @@ class MultichipDecoder(OptimizedDecoder):
             # corrupts KV. Serialize the tiny per-row writes (matmuls + SDPA above/below still run batched,
             # so the verify stays fast). Mirrors gemma4/tt/attention/decode.py:147.
             if self._seq_kv_chain:
-                # one op per K / V: share_cache chains the row cores (core i starts after core i - 1 finished its
-                # tile read-modify-write), the same serial order as the per-row writes without B x (3 slices +
-                # reshard + update) ops per layer (~4 ms of a 6-row DFlash verify)
-                ttnn.experimental.paged_update_cache(
-                    kv_cache["k"], k_sh, update_idxs_tensor=cur_pos, page_table=page_table, share_cache=True
-                )
-                ttnn.experimental.paged_update_cache(
-                    kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table, share_cache=True
-                )
+                # one op per K / V, the rows of each cache tile merged on one core (verify_kv_write.py), instead of
+                # B x (3 slices + reshard + update) ops per layer (~4 ms of a 6-row DFlash verify)
+                verify_kv_write(kv_cache["k"], k_sh, None, None, cur_pos, page_table)
+                verify_kv_write(kv_cache["v"], v_sh, None, None, cur_pos, page_table)
             else:
                 self._seq_kv_write(kv_cache["k"], k_sh, cur_pos, page_table, B)
                 self._seq_kv_write(kv_cache["v"], v_sh, cur_pos, page_table, B)
@@ -2580,7 +2582,7 @@ class MultichipDecoder(OptimizedDecoder):
         once over all T rows (input norm, fused QKV + gate matmul, WO matmul, all-reduce; the MoE half: post-attention
         norm, routed and shared experts reading each expert's weights once over T / 32 token tiles, all-reduce). The
         per-row attention runs the tuned batch-32 decode block per 32-row chunk (decode_forward with qkv_pre, up to
-        the joined heads): head split, q/k norms, RoPE, share_cache KV writes merging rows that land in one cache
+        the joined heads): head split, q/k norms, RoPE, KV writes (verify_kv_write) merging rows that land in one cache
         tile, paged SDPA, gate. x: [1, 1, T, H] bf16 TILE; chunks: one (cur_pos int32 [32], (cos, sin)
         [1, 32, 1, rotary_dim], page_table int32 [32, blocks]) per chunk (see LagunaModel.verify_layers_batched);
         rope_all: (cos, sin) [1, T, 1, rotary_dim] of every row (one prologue op over all rows)."""
@@ -2647,18 +2649,10 @@ class MultichipDecoder(OptimizedDecoder):
 
     def _verify_chunk_attention(self, q, k_sh, v_sh, cur_pos, page_table, kv_cache):
         """One 32-row chunk of the batched verify after the shared prologue (verify_rows_forward), as decode_forward
-        runs it for a chunk: the fused K/V cache write with share_cache (rows of one user landing in one cache tile
-        merged on one core), then the paged SDPA (verify program config). Returns the SDPA output."""
+        runs it for a chunk: the K/V cache write (verify_kv_write.py: rows of one user landing in one cache tile merged
+        on one core), then the paged SDPA (verify program config). Returns the SDPA output."""
         cfg = self.cfg
-        ttnn.experimental.paged_fused_update_cache(
-            kv_cache["k"],
-            k_sh,
-            kv_cache["v"],
-            v_sh,
-            update_idxs_tensor=cur_pos,
-            page_table=page_table,
-            share_cache=True,
-        )
+        verify_kv_write(kv_cache["k"], k_sh, kv_cache["v"], v_sh, cur_pos, page_table)
         kw = {"cur_pos_tensor": cur_pos, "page_table_tensor": page_table, "scale": cfg.scaling,
               "compute_kernel_config": self._sdpa_compute}  # fmt: skip
         if cfg.is_sliding:
