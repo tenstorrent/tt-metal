@@ -74,6 +74,13 @@ def test_incomplete_or_bad_gate_is_rejected(bundle, failure, expect_error):
         vbench_bundle.read_manifest(bundle)
 
 
+def test_missing_manifest_names_the_unrendered_bundle(tmp_path, expect_error):
+    # A skipped render leaves no manifest; evaluate must fail and say so, not raise a bare FileNotFoundError.
+    bundle = vbench_bundle.create_bundle(tmp_path / "vbench")
+    with expect_error(ValueError, "No VBench bundle at .*did not finish"):
+        vbench_bundle.evaluate(bundle)
+
+
 def test_rerun_into_a_bundle_removes_only_its_own_files(bundle):
     unrelated = [bundle / "notes.txt", bundle / "pizza_s1.mp4"]
     for path in unrelated:

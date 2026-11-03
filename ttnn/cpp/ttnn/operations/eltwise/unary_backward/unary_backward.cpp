@@ -36,13 +36,13 @@ namespace ttnn {
 
 namespace {
 
-// Whether one UnaryBackwardDeviceOperation program with a generated BF16 kernel computes this call
-// as the composite does. The kernels exist for Blackhole and Wormhole and read 32x32 tiles of BF16
-// operands in untransposed 16x16 faces, with one shape, interleaved or sharded in L1 or DRAM: the
-// device operation binds each operand's shard in place or addresses its pages. Every other call,
-// including a broadcast gradient, a host operand, or a call whose output placement the composite
-// chooses, keeps the composite.
-bool generated_bf16_kernel_applies(
+// Whether one UnaryBackwardDeviceOperation program with a generated BF16 kernel serves this call. The
+// kernels exist for Blackhole and Wormhole and read 32x32 tiles of BF16 operands in untransposed 16x16
+// faces, with one shape, interleaved or sharded in L1 or DRAM: the device operation binds each operand's
+// shard in place or addresses its pages. Every other call, including a broadcast gradient or a host
+// operand, keeps the path the program replaces. It is defined once for every generated route, so a tree
+// may hold it before any route calls it. input_grad, when given, overrides output_mem_config.
+[[maybe_unused]] bool generated_bf16_kernel_applies(
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -66,13 +66,15 @@ bool generated_bf16_kernel_applies(
     if (input_grad.has_value()) {
         return bf16_tiles(*input_grad);
     }
-    // The fused program defaults to the input's placement; the composite's default agrees with it
-    // only when both operands share one. A sharded output config without a shard spec leaves the
-    // composite's ops to derive one from their operands, which the program does not do.
-    return output_mem_config.has_value()
-               ? !output_mem_config->is_sharded() || output_mem_config->shard_spec().has_value() ||
-                     output_mem_config->nd_shard_spec().has_value()
-               : grad.memory_config() == input.memory_config();
+    // A sharded output config without a shard spec leaves the replaced path to derive one from its
+    // operands, which the program does not do.
+    if (output_mem_config.has_value()) {
+        return !output_mem_config->is_sharded() || output_mem_config->shard_spec().has_value() ||
+               output_mem_config->nd_shard_spec().has_value();
+    }
+    // Several replaced ops default to their operands' placement, which agrees with the program's only when
+    // both operands share one.
+    return grad.memory_config() == input.memory_config();
 }
 
 }  // namespace
@@ -579,7 +581,7 @@ std::vector<Tensor> sigmoid_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
     // other call keeps main's single program below.
-    if (generated_bf16_kernel_applies(grad, input, output_mem_config)) {
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config.value_or(input.memory_config()))) {
         return {ttnn::operations::unary_backward::launch_unary_backward(
             ttnn::operations::unary_backward::UnaryBackwardOpType::SIGMOID_BW_BF16,
             grad,
