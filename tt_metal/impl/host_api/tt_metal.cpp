@@ -659,18 +659,35 @@ KernelHandle CreateEthernetKernel(
     const EthernetConfig& config) {
     HalProgrammableCoreType eth_core_type =
         config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-    const DataMovementConfigStatus& data_movement_config_status =
-        CheckDataMovementConfig(eth_core_type, program, core_range_set);
-    const bool are_both_riscv_in_use =
-        data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
-    const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
-
-    TT_FATAL(
-        config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
-        "EthernetKernel creation failure: Ethernet kernels can only be created on DM0 or DM1 processors.");
-
     const ContextId context_id = program.impl().get_context_id();
     auto& metal_context = MetalContext::instance(context_id);
+    // Wormhole and Blackhole dedicate one NOC to each of their one or two ERISCs, and two kernels on the
+    // same NOC hang. A Quasar CCE has eight DMs and does not pair them with the two NOCs. DramKernel
+    // already allows every processor on such a core.
+    const uint32_t num_processors = metal_context.hal().get_num_risc_processors(eth_core_type);
+    if (num_processors <= 2) {
+        const DataMovementConfigStatus& data_movement_config_status =
+            CheckDataMovementConfig(eth_core_type, program, core_range_set);
+        const bool are_both_riscv_in_use =
+            data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
+        const bool are_both_noc_in_use =
+            data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
+
+        TT_FATAL(
+            config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
+            "EthernetKernel creation failure: Ethernet kernels can only be created on DM0 or DM1 processors.");
+        TT_FATAL(
+            !(are_both_riscv_in_use),
+            "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
+            "cores because both data movement processors are in use!",
+            kernel_src.source_);
+        TT_FATAL(
+            !(are_both_noc_in_use),
+            "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
+            "cores because both NOCs are in use!",
+            kernel_src.source_);
+    }
+
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(context_id, kernel_src, core_range_set, config);
 
     // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
@@ -693,17 +710,7 @@ KernelHandle CreateEthernetKernel(
         "Update DataMovementProcessor in the config.",
         kernel->name(),
         enchantum::to_string(config.processor),
-        metal_context.hal().get_num_risc_processors(eth_core_type));
-    TT_FATAL(
-        !(are_both_riscv_in_use),
-        "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
-        "cores because both data movement processors are in use!",
-        kernel->name());
-    TT_FATAL(
-        !(are_both_noc_in_use),
-        "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
-        "cores because both NOCs are in use!",
-        kernel->name());
+        num_processors);
 
     //
     // Valid configurations for Blackhole ERISC

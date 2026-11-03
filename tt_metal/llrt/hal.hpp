@@ -525,8 +525,9 @@ private:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         IpVariant quasar_arch_variant,
-        bool enable_cce_programmable_cores,
-        uint64_t cce_l1_noc_offset);
+        bool enable_dram_programmable_cores,
+        uint64_t drisc_l1_noc_offset,
+        bool enable_ethernet_cores);
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -557,8 +558,9 @@ public:
         bool enable_blackhole_dram_programmable_cores = false,
         bool enable_aerisc_ptp_trace = false,
         IpVariant quasar_arch_variant = IpVariant::GRENDEL,
-        bool enable_cce_programmable_cores = false,
-        uint64_t cce_l1_noc_offset = 0);
+        bool enable_quasar_dram_programmable_cores = false,
+        uint64_t quasar_drisc_l1_noc_offset = 0,
+        bool enable_ethernet_cores = false);
 
     tt::ARCH get_arch() const { return arch_; }
 

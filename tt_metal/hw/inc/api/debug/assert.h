@@ -28,6 +28,8 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) 
 #if defined(ARCH_QUASAR)
     // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
     uintptr_t addr = reinterpret_cast<uintptr_t>(v);
+    // Atomics have to use the cached alias. MEM_L1_UNCACHED_BASE is the alias this core's
+    // mailbox pointer was built with.
     if (addr >= MEM_L1_UNCACHED_BASE) {
         v = reinterpret_cast<debug_assert_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
     }
@@ -110,7 +112,8 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) 
         }
         v->tripped = assert_type;
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        // Flush the cache range covering debug_assert_msg_t to L1 so host sees all fields via NOC; may span multiple cache lines
+        // Flush the cache range covering debug_assert_msg_t to L1 so host sees all fields via NOC; may span multiple
+        // cache lines
         flush_l2_cache_range(reinterpret_cast<uintptr_t>(v), sizeof(debug_assert_msg_t));
 #endif
     }

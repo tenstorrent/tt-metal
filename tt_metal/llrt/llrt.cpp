@@ -553,10 +553,9 @@ void wait_until_cores_done(
 #endif
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = env.get_rtoptions();
-    bool is_simulator = rtoptions.get_simulator_enabled();
     // timeout_ms == 0 means infinite wait on sim; on silicon it means use configured operation timeout.
     // Callers that need a bounded wait on sim (e.g. dispatch-core teardown) pass an explicit timeout_ms > 0.
-    if (timeout_ms == 0 && !is_simulator) {
+    if (timeout_ms == 0) {
         timeout_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
                 .count();
@@ -614,7 +613,8 @@ void wait_until_cores_done(
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.
-        if (rtoptions.get_watcher_enabled() || rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+        if (rtoptions.get_watcher_enabled() || rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint) ||
+            rtoptions.get_target_device() == tt::TargetDevice::EmuAxi) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }

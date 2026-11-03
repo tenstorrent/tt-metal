@@ -171,9 +171,8 @@ uint32_t firmware_config_init(
             (uint32_t tt_l1_ptr*)(kernel_config_base[index] + launch_msg_address->kernel_config.sem_offset[index]);
     }
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when cache invalidating
-    // functionality is ready for Quasar
-    // Note that the uncached address range is only valid for Quasar DM cores.
+    // Host writes land in SRAM and are not snooped into L2, so the hart reads them through
+    // MEM_L1_UNCACHED_BASE, this core's uncached alias.
     rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
                                         launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset +
                                         MEM_L1_UNCACHED_BASE);

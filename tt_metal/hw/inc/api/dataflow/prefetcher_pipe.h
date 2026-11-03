@@ -1091,7 +1091,8 @@ private:
     // Quasar DM L2 does not snoop NOC→TL1; WH/BH needs invalidate_l1_cache.
     FORCE_INLINE static uint32_t load_remote_l1_credit(volatile tt_l1_ptr uint32_t* ptr) {
 #ifdef ARCH_QUASAR
-        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reinterpret_cast<uintptr_t>(ptr) + MEM_L1_UNCACHED_BASE);
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            reinterpret_cast<uintptr_t>(ptr) + MEM_L1_UNCACHED_BASE);
 #else
         invalidate_l1_cache();
         return *ptr;

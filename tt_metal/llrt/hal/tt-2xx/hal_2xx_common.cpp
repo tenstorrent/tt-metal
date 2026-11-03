@@ -62,6 +62,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             break;
         case HalProgrammableCoreType::ACTIVE_ETH: {
             defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
+            defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
             defines.push_back("COMPILE_FOR_ERISC");
             defines.push_back("ERISC");
             defines.push_back("RISC_B0_HW");
@@ -69,6 +70,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
         }
         case HalProgrammableCoreType::IDLE_ETH: {
             defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
+            defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
             defines.push_back(fmt::format("COMPILE_FOR_IDLE_ERISC={}", params.processor_id));
             defines.push_back("ERISC");
             defines.push_back("RISC_B0_HW");
