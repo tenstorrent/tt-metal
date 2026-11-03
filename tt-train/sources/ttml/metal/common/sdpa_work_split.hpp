@@ -10,7 +10,11 @@
 
 // How the SDPA programs (forward and backward) share their work units out to cores. A unit is a work
 // item (forward: one Q chunk of a head stack, sdpa_item_math.hpp) or a causal light/heavy pair (backward:
-// one row pair). Each core gets runs of consecutive units; one balancing rule for both ops.
+// one row pair). Each core gets runs of consecutive units. Only the contiguous split is shared: the ops
+// decide differently when to pair. The forward pairs only when there is a pair per core
+// (sdpa_fw_config.cpp, main's forward rule, which ring SDPA relies on) and then uses split_items_paired;
+// the backward pairs whenever there are more rows than cores, on min(cores, pairs) cores (its program
+// factories, main's backward rule).
 namespace ttml::metal {
 
 struct ItemRun {
