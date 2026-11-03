@@ -5,14 +5,15 @@
 #include "unary_backward_program_factory.hpp"
 
 #include <algorithm>
-#include <map>
+#include <filesystem>
+#include <optional>
 #include <string>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include "unary_backward_device_operation_types.hpp"
 #include "unary_backward_op_utils.hpp"
@@ -22,23 +23,30 @@ namespace ttnn::operations::unary_backward {
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts UnaryBackwardProgramFactory::create_program_artifacts(
     const UnaryBackwardParams& args, const UnaryBackwardInputs& tensor_args, Tensor& output) {
     const auto& grad_output = tensor_args.grad_output;
     const auto& input = tensor_args.input;
 
+    // The tensor parameters and their run-time arguments are built from the MeshTensors. The
+    // geometry below is still read from the ttnn::Tensor wrappers, as before.
+    const auto& grad_output_mesh_tensor = grad_output.mesh_tensor();
+    const auto& input_mesh_tensor = input.mesh_tensor();
+    const auto& output_mesh_tensor = output.mesh_tensor();
+
     const UnaryBackwardKernelSpec& spec = get_kernel_spec(args.op_type);
 
-    // c_0 carries grad_output and c_1 carries input, in both the CB formats and the buffers
-    // bound to them. Kernels index the operands by these buffer indices, so the pairing is
-    // part of the contract in UnaryBackwardKernelSpec, not a detail of one op.
-    const DataFormat grad_output_cb_data_format = datatype_to_dataformat_converter(grad_output.dtype());
-    const uint32_t grad_output_single_tile_size = tile_size(grad_output_cb_data_format);
-    const DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const uint32_t input_single_tile_size = tile_size(input_cb_data_format);
-    const DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const uint32_t output_single_tile_size = tile_size(output_cb_data_format);
+    // The grad_output DFB carries grad_output and the input DFB carries input, in both the DFB
+    // formats and the tensors bound to them. Kernels name the operands by these DFB bindings, so
+    // the pairing is part of the contract in UnaryBackwardKernelSpec, not a detail of one op.
+    const DataFormat grad_output_dfb_data_format = datatype_to_dataformat_converter(grad_output.dtype());
+    const uint32_t grad_output_single_tile_size = tile_size(grad_output_dfb_data_format);
+    const DataFormat input_dfb_data_format = datatype_to_dataformat_converter(input.dtype());
+    const uint32_t input_single_tile_size = tile_size(input_dfb_data_format);
+    const DataFormat output_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
+    const uint32_t output_single_tile_size = tile_size(output_dfb_data_format);
 
     const uint32_t num_tiles = input.physical_volume() / TILE_HW;
 
@@ -46,14 +54,14 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // unary/common/unary_utils.cpp):
     //
     //  1. ALIAS. Every operand and the output are L1-sharded on the same grid with the same
-    //     shard shape, so each circular buffer can be bound to its tensor's own buffer and the
-    //     dataflow kernels copy nothing -- the shard already is the CB.
+    //     shard shape, so each dataflow buffer can be bound to its tensor's own buffer and the
+    //     dataflow kernels copy nothing -- the shard already is the DFB.
     //  2. ADDRESS. Anything else: bind nothing and let TensorAccessor address every operand by
     //     logical page. A sharded buffer is fully addressable that way, because the accessor
     //     encodes the shard mapping, so this covers DRAM-sharded operands and any mix of
     //     sharded and interleaved.
     //
-    // Mixing the two is what must not happen. A bound CB presents the shard in PHYSICAL order
+    // Mixing the two is what must not happen. A bound DFB presents the shard in PHYSICAL order
     // while an addressed operand is read in LOGICAL order; for a height shard those coincide,
     // but for a width or block shard they do not, and the operands end up misaligned -- silently,
     // measured at PCC 0.25 and 0.50 before this rule existed.
@@ -112,7 +120,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         if (shard_elements * a.grid.num_cores() != input.physical_volume()) {
             return false;
         }
-        // A row-major shard is consumed as tile-sized CB pages, so it has to be a whole number of
+        // A row-major shard is consumed as tile-sized DFB entries, so it has to be a whole number of
         // them, and dense: a row padded out to the buffer alignment leaves gaps in the shard, and
         // those gaps sit at different element positions for operands of different dtypes.
         if (input.layout() == Layout::ROW_MAJOR) {
@@ -130,7 +138,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
 
     // ROW_MAJOR, following eltwise unary's RM_INTERLEAVED path. When the shards cannot be aliased
     // a row-major tensor is read and written in BLOCKS rather than tiles: rows_per_tile narrow rows
-    // packed into one tile-sized CB page, or a row wider than a tile split into chunks_per_row
+    // packed into one tile-sized DFB entry, or a row wider than a tile split into chunks_per_row
     // tile-sized chunks. Eltwise compute is position-independent and a page round-trips through
     // the same face layout on unpack and pack, so the compute kernel needs no change. An aliased
     // row-major shard needs none of this: its pages are consumed in place like a tiled shard's.
@@ -166,12 +174,12 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
                 .element_bytes = element_bytes,
                 .alignment = t.buffer()->alignment()};
         };
-        grad_paging = paging_of(grad_output, grad_output_cb_data_format);
-        input_paging = paging_of(input, input_cb_data_format);
-        output_paging = paging_of(output, output_cb_data_format);
+        grad_paging = paging_of(grad_output, grad_output_dfb_data_format);
+        input_paging = paging_of(input, input_dfb_data_format);
+        output_paging = paging_of(output, output_dfb_data_format);
 
-        // Several rows share one CB page only when a row is narrower than half a tile and every
-        // row lands at a NoC-aligned CB offset. Unary requires the latter as page_size ==
+        // Several rows share one DFB entry only when a row is narrower than half a tile and every
+        // row lands at a NoC-aligned DFB offset. Unary requires the latter as page_size ==
         // aligned_page_size on its one input; here every tensor has to satisfy it, for its whole
         // row and for each of its pages, since a piece may start at either boundary.
         const auto packs_rows = [&](const Tensor& t, const RmPaging& paging) {
@@ -220,50 +228,58 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         num_units_per_core_group_2 = std::get<5>(split);
     }
 
-    constexpr uint32_t grad_output_cb_index = CBIndex::c_0;
-    constexpr uint32_t input_cb_index = CBIndex::c_1;
-    constexpr uint32_t grad_input_cb_index = CBIndex::c_2;
+    // Spec names. They are declared inside this function because a unity build compiles several
+    // factories in one translation unit, where names at namespace scope could collide.
+    const DFBSpecName GRAD_OUTPUT_DFB{"grad_output"};
+    const DFBSpecName INPUT_DFB{"input"};
+    const DFBSpecName GRAD_INPUT_DFB{"grad_input"};
+    const DFBSpecName READER_SCRATCH_DFB{"reader_scratch"};
+    const DFBSpecName WRITER_SCRATCH_DFB{"writer_scratch"};
+    const TensorParamName GRAD_OUTPUT{"grad_output"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    // An addressed CB is a staging area: two pages, so the reader can fill one while compute
-    // drains the other. An aliased CB is the whole shard in place.
+    // An addressed DFB is a staging area: two pages, so the reader can fill one while compute
+    // drains the other. An aliased DFB is the whole shard in place.
     constexpr uint32_t kDoubleBufferPages = 2;
-    const uint32_t cb_pages = can_alias_shards ? shard_tiles : kDoubleBufferPages;
+    const uint32_t dfb_entries = can_alias_shards ? shard_tiles : kDoubleBufferPages;
 
-    ProgramDescriptor desc;
+    // ---- Dataflow buffers ----
 
-    // ---- Circular buffers ----
+    // `borrowed_from` set means the DFB is built on the tensor's own shard in L1 rather than on a
+    // staging area. The dataflow kernel then copies nothing for it.
+    using BorrowedFrom = std::optional<TensorParamName>;
+    const auto make_dfb =
+        [dfb_entries](
+            const DFBSpecName& name, DataFormat data_format, uint32_t tile_size, const BorrowedFrom& shard_tensor) {
+            return DataflowBufferSpec{
+                .unique_id = name,
+                .entry_size = tile_size,
+                .num_entries = dfb_entries,
+                .data_format_metadata = data_format,
+                .borrowed_from = shard_tensor,
+            };
+        };
 
-    auto* grad_output_buffer = grad_output.buffer();
-    auto* input_buffer = input.buffer();
-    auto* grad_input_buffer = output.buffer();
-
-    // `buffer` set means a globally allocated CB: the CB is the tensor's own shard in L1 rather
-    // than a staging area, so the dataflow kernel copies nothing for it.
-    const auto push_cb = [&desc, &all_cores, cb_pages](
-                             uint32_t index, DataFormat data_format, uint32_t tile_size, Buffer* shard_buffer) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = cb_pages * tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(index),
-                .data_format = data_format,
-                .page_size = tile_size,
-            }}},
-            .buffer = shard_buffer,
-        });
-    };
-
-    push_cb(
-        grad_output_cb_index,
-        grad_output_cb_data_format,
+    Group<DataflowBufferSpec> dataflow_buffers;
+    dataflow_buffers.push_back(make_dfb(
+        GRAD_OUTPUT_DFB,
+        grad_output_dfb_data_format,
         grad_output_single_tile_size,
-        can_alias_shards ? grad_output_buffer : nullptr);
-    push_cb(input_cb_index, input_cb_data_format, input_single_tile_size, can_alias_shards ? input_buffer : nullptr);
-    push_cb(
-        grad_input_cb_index,
-        output_cb_data_format,
+        can_alias_shards ? BorrowedFrom{GRAD_OUTPUT} : std::nullopt));
+    dataflow_buffers.push_back(make_dfb(
+        INPUT_DFB,
+        input_dfb_data_format,
+        input_single_tile_size,
+        can_alias_shards ? BorrowedFrom{INPUT} : std::nullopt));
+    dataflow_buffers.push_back(make_dfb(
+        GRAD_INPUT_DFB,
+        output_dfb_data_format,
         output_single_tile_size,
-        can_alias_shards ? grad_input_buffer : nullptr);
+        can_alias_shards ? BorrowedFrom{OUTPUT} : std::nullopt));
 
     // Scratch for the row-major kernels' unaligned pieces (see kernels/dataflow/row_major_pages.hpp):
     // one staging window of at most a chunk plus two alignment units, plus slack for rounding the
@@ -275,76 +291,246 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         const uint32_t scratch_bytes =
             std::max({grad_output_single_tile_size, input_single_tile_size, output_single_tile_size}) +
             (3 * max_alignment);
-        for (uint32_t index : {static_cast<uint32_t>(CBIndex::c_3), static_cast<uint32_t>(CBIndex::c_4)}) {
-            desc.cbs.push_back(CBDescriptor{
-                .total_size = scratch_bytes,
-                .core_ranges = all_cores,
-                .format_descriptors = {{CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(index),
-                    .data_format = output_cb_data_format,
-                    .page_size = scratch_bytes,
-                }}},
+        for (const DFBSpecName& name : {READER_SCRATCH_DFB, WRITER_SCRATCH_DFB}) {
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = name,
+                .entry_size = scratch_bytes,
+                .num_entries = 1,
+                .data_format_metadata = output_dfb_data_format,
             });
         }
     }
 
+    // ---- Tensor parameters ----
+
+    // Exact match. compute_program_hash keys on each bound tensor's whole TensorSpec.
+    // A cache hit therefore always sees the same specs as the miss that built the program.
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{
+            .unique_id = GRAD_OUTPUT,
+            .spec = grad_output_mesh_tensor.tensor_spec(),
+            .relaxations = {},
+        },
+        TensorParameter{
+            .unique_id = INPUT,
+            .spec = input_mesh_tensor.tensor_spec(),
+            .relaxations = {},
+        },
+        TensorParameter{
+            .unique_id = OUTPUT,
+            .spec = output_mesh_tensor.tensor_spec(),
+            .relaxations = {},
+        },
+    };
+
     // ---- Reader / writer kernels ----
 
-    KernelDescriptor reader_desc;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.config = WriterConfigDescriptor{};
+    KernelSpec reader;
+    KernelSpec writer;
 
     if (rm_blocked) {
         // Unary's row-major block scheme, with page addressing generalized per tensor -- see
         // kernels/dataflow/row_major_pages.hpp.
-        std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*grad_output_buffer).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-        reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/dataflow/"
-            "reader_unary_backward_row_major.cpp";
-        reader_desc.compile_time_args = reader_compile_time_args;
+        //
+        // Each scratch DFB is the staging window of one kernel. Only that kernel touches it, and only
+        // through get_write_ptr(), never through the FIFO. So the kernel is bound as both its
+        // producer and its consumer.
+        reader = KernelSpec{
+            .unique_id = READER,
+            .source =
+                "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/dataflow/"
+                "reader_unary_backward_row_major.cpp",
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = GRAD_OUTPUT_DFB,
+                        .accessor_name = "grad",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = INPUT_DFB,
+                        .accessor_name = "input",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = READER_SCRATCH_DFB,
+                        .accessor_name = "scratch",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = READER_SCRATCH_DFB,
+                        .accessor_name = "scratch",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                },
+            .tensor_bindings =
+                {
+                    TensorBinding{
+                        .tensor_parameter_name = GRAD_OUTPUT,
+                        .accessor_name = "grad",
+                    },
+                    TensorBinding{
+                        .tensor_parameter_name = INPUT,
+                        .accessor_name = "input",
+                    },
+                },
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names =
+                        {
+                            "num_blocks",
+                            "start_block",
+                            "row_elements",
+                            "chunk_elements",
+                            "chunks_per_row",
+                            "rows_per_tile",
+                            "total_rows",
+                            "grad_page_elements",
+                            "grad_pages_per_row",
+                            "grad_element_bytes",
+                            "grad_alignment",
+                            "input_page_elements",
+                            "input_pages_per_row",
+                            "input_element_bytes",
+                            "input_alignment",
+                        },
+                },
+            .hw_config = ttnn::create_reader_datamovement_config(),
+        };
 
-        std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*grad_input_buffer).append_to(writer_compile_time_args);
-        writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/dataflow/"
-            "writer_unary_backward_row_major.cpp";
-        writer_desc.compile_time_args = writer_compile_time_args;
+        writer = KernelSpec{
+            .unique_id = WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/dataflow/"
+                "writer_unary_backward_row_major.cpp",
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = GRAD_INPUT_DFB,
+                        .accessor_name = "dst",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = WRITER_SCRATCH_DFB,
+                        .accessor_name = "scratch",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = WRITER_SCRATCH_DFB,
+                        .accessor_name = "scratch",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                },
+            .tensor_bindings =
+                {
+                    TensorBinding{
+                        .tensor_parameter_name = OUTPUT,
+                        .accessor_name = "dst",
+                    },
+                },
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names =
+                        {
+                            "num_blocks",
+                            "start_block",
+                            "row_elements",
+                            "chunk_elements",
+                            "chunks_per_row",
+                            "rows_per_tile",
+                            "total_rows",
+                            "dst_page_elements",
+                            "dst_pages_per_row",
+                            "dst_element_bytes",
+                            "dst_alignment",
+                        },
+                },
+            .hw_config = ttnn::create_writer_datamovement_config(),
+        };
     } else {
-        // The reader declares a TensorAccessor only for an operand it actually reads, so the
-        // compile-time arg list must carry exactly the accessors the defines leave enabled --
-        // appending one for an aliased operand would shift the other's offset.
-        std::vector<uint32_t> reader_compile_time_args = {0};
-        std::map<std::string, std::string> reader_defines;
+        // The reader declares a TensorAccessor only for an operand it actually reads. It therefore
+        // binds exactly the tensors the defines leave enabled. An aliased operand is read in place,
+        // through the DFB that borrows its shard.
+        Table<std::string, std::string> reader_defines;
+        Group<TensorBinding> reader_tensor_bindings;
         if (can_alias_shards) {
             reader_defines["IN0_SHARDED"] = "1";
             reader_defines["IN1_SHARDED"] = "1";
         } else {
-            TensorAccessorArgs(*grad_output_buffer).append_to(reader_compile_time_args);
-            TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+            reader_tensor_bindings = {
+                TensorBinding{
+                    .tensor_parameter_name = GRAD_OUTPUT,
+                    .accessor_name = "src0",
+                },
+                TensorBinding{
+                    .tensor_parameter_name = INPUT,
+                    .accessor_name = "src1",
+                },
+            };
         }
-        reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp";
-        reader_desc.compile_time_args = reader_compile_time_args;
-        reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
+        reader = KernelSpec{
+            .unique_id = READER,
+            .source =
+                "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
+                "reader_binary_interleaved_start_id_metal2.cpp",
+            .compiler_options = {.defines = reader_defines},
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = GRAD_OUTPUT_DFB,
+                        .accessor_name = "in0",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = INPUT_DFB,
+                        .accessor_name = "in1",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                },
+            .tensor_bindings = reader_tensor_bindings,
+            .compile_time_args = {{"block_or_width_sharded", 0u}},
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names = {"num_tiles", "start_id", "block_height", "block_width", "num_cores_y"},
+                },
+            .hw_config = ttnn::create_reader_datamovement_config(),
+        };
 
-        // The writer declares its accessor unconditionally, so it is always appended; under
-        // OUT_SHARDED the kernel just waits on the CB and never uses it.
-        std::vector<uint32_t> writer_compile_time_args = {grad_input_cb_index};
-        TensorAccessorArgs(*grad_input_buffer).append_to(writer_compile_time_args);
-        writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-        writer_desc.compile_time_args = writer_compile_time_args;
+        // The writer uses its accessor only when OUT_SHARDED is not defined. The output is therefore
+        // bound only then. Under OUT_SHARDED the kernel just waits on the DFB and never uses it.
+        Table<std::string, std::string> writer_defines;
+        Group<TensorBinding> writer_tensor_bindings;
         if (can_alias_shards) {
-            writer_desc.defines = {{"OUT_SHARDED", "1"}};
+            writer_defines["OUT_SHARDED"] = "1";
+        } else {
+            writer_tensor_bindings = {
+                TensorBinding{
+                    .tensor_parameter_name = OUTPUT,
+                    .accessor_name = "dst",
+                },
+            };
         }
+        writer = KernelSpec{
+            .unique_id = WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                "writer_unary_interleaved_start_id_metal2.cpp",
+            .compiler_options = {.defines = writer_defines},
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = GRAD_INPUT_DFB,
+                        .accessor_name = "out",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                },
+            .tensor_bindings = writer_tensor_bindings,
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names = {"num_pages", "start_id"},
+                },
+            .hw_config = ttnn::create_writer_datamovement_config(),
+        };
     }
 
     // ---- Compute kernel ----
@@ -352,30 +538,38 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // A gradient chains several SFPU steps in DEST, so a float32 operand has to stay float32
     // all the way through: accumulate in fp32 if any operand or the output is fp32, and only
     // then ask the unpacker for fp32 DEST values, per operand that actually is fp32.
-    const bool fp32_dest_acc_en = spec.force_fp32_dest_acc || (grad_output_cb_data_format == DataFormat::Float32) ||
-                                  (input_cb_data_format == DataFormat::Float32) ||
-                                  (output_cb_data_format == DataFormat::Float32);
+    const bool fp32_dest_acc_en = spec.force_fp32_dest_acc || (grad_output_dfb_data_format == DataFormat::Float32) ||
+                                  (input_dfb_data_format == DataFormat::Float32) ||
+                                  (output_dfb_data_format == DataFormat::Float32);
+
+    // Every field not set here keeps its default, which matches the legacy compute config this
+    // replaces: precise SFPU math, double-buffered DEST and approximate BFP packing.
+    ComputeHardwareConfig compute_hw_config{
+        .fpu_math_fidelity = spec.math_fidelity,
+        .enable_32_bit_dest = fp32_dest_acc_en,
+    };
 
     // Ask the unpacker for float32 DEST values only where they can actually be held: when DEST
     // is accumulating in float32. Requesting it otherwise would widen values into a DEST that
     // cannot represent them.
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
-        unpack_to_dest_mode[grad_output_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[input_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        compute_hw_config.unpack_modes = {
+            {GRAD_OUTPUT_DFB, UnpackMode::UnpackToDest},
+            {INPUT_DFB, UnpackMode::UnpackToDest},
+        };
     }
 
     // Supplied to every kernel whether or not it copies between DEST slots or packs bfloat16:
     // both are properties of the program the factory built, so a kernel that needs them must
     // not have to re-derive them, and one that does not simply leaves the define unused.
-    std::map<std::string, std::string> compute_defines;
+    Table<std::string, std::string> compute_defines;
     // A kernel only needs the unpacker to switch format between the two operand buffers when the
     // operands actually carry different formats; otherwise the single configuration
     // compute_kernel_hw_startup() installs covers both, and reconfiguring per tile transition is
     // measurable overhead on the common same-dtype path (~2% for bfloat16). Both operand dtypes
     // are part of compute_program_hash, so a program built for one pairing is never replayed for
     // another and the kernel can make this a compile-time decision.
-    if (grad_output_cb_data_format != input_cb_data_format) {
+    if (grad_output_dfb_data_format != input_dfb_data_format) {
         compute_defines["MIXED_OPERAND_DATA_FORMATS"] = "1";
     }
     compute_defines["COPY_DEST_DATA_FORMAT"] = fp32_dest_acc_en ? "DataFormat::Float32" : "DataFormat::Float16_b";
@@ -383,19 +577,43 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
                                                 ? "ckernel::DstRoundingMode::NearestEven"
                                                 : "ckernel::DstRoundingMode::Default";
 
-    KernelDescriptor compute_desc;
     const std::string_view compute_kernel_path = (fp32_dest_acc_en && !spec.compute_kernel_path_fp32_dest.empty())
                                                      ? spec.compute_kernel_path_fp32_dest
                                                      : spec.compute_kernel_path;
-    compute_desc.kernel_source = std::string(compute_kernel_path);
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = spec.math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = std::filesystem::path(compute_kernel_path),
+        // A legacy compute kernel builds at O3 by default, but a KernelSpec defaults to O2. Set O3
+        // to keep the level the kernel was built at.
+        .compiler_options =
+            {
+                .defines = compute_defines,
+                .opt_level = KernelBuildOptLevel::O3,
+            },
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = GRAD_OUTPUT_DFB,
+                    .accessor_name = "grad_out",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INPUT_DFB,
+                    .accessor_name = "input",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = GRAD_INPUT_DFB,
+                    .accessor_name = "grad_in",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"per_core_tile_cnt"},
+            },
+        .hw_config = compute_hw_config,
     };
-    compute_desc.defines = {compute_defines.begin(), compute_defines.end()};
 
     // ---- Per-core runtime args ----
 
@@ -416,6 +634,10 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         }
     }
 
+    KernelRunArgs reader_args{.kernel = READER};
+    KernelRunArgs writer_args{.kernel = WRITER};
+    KernelRunArgs compute_args{.kernel = COMPUTE};
+
     for (uint32_t i = 0, units_done = 0; i < num_cores; i++) {
         CoreCoord core = cores[i];
         uint32_t units = 0;
@@ -428,56 +650,87 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         }
 
         if (rm_blocked) {
-            reader_desc.emplace_runtime_args(
+            AddRuntimeArgsForNode(
+                reader_args.runtime_arg_values,
                 core,
-                {units,
-                 units_done,
-                 row_elements,
-                 TILE_HW,
-                 chunks_per_row,
-                 rows_per_tile,
-                 total_rows,
-                 grad_output_buffer,
-                 grad_paging.page_elements,
-                 grad_paging.pages_per_row,
-                 grad_paging.element_bytes,
-                 grad_paging.alignment,
-                 input_buffer,
-                 input_paging.page_elements,
-                 input_paging.pages_per_row,
-                 input_paging.element_bytes,
-                 input_paging.alignment});
-            writer_desc.emplace_runtime_args(
+                {{"num_blocks", units},
+                 {"start_block", units_done},
+                 {"row_elements", row_elements},
+                 {"chunk_elements", TILE_HW},
+                 {"chunks_per_row", chunks_per_row},
+                 {"rows_per_tile", rows_per_tile},
+                 {"total_rows", total_rows},
+                 {"grad_page_elements", grad_paging.page_elements},
+                 {"grad_pages_per_row", grad_paging.pages_per_row},
+                 {"grad_element_bytes", grad_paging.element_bytes},
+                 {"grad_alignment", grad_paging.alignment},
+                 {"input_page_elements", input_paging.page_elements},
+                 {"input_pages_per_row", input_paging.pages_per_row},
+                 {"input_element_bytes", input_paging.element_bytes},
+                 {"input_alignment", input_paging.alignment}});
+            AddRuntimeArgsForNode(
+                writer_args.runtime_arg_values,
                 core,
-                {units,
-                 units_done,
-                 row_elements,
-                 TILE_HW,
-                 chunks_per_row,
-                 rows_per_tile,
-                 total_rows,
-                 grad_input_buffer,
-                 output_paging.page_elements,
-                 output_paging.pages_per_row,
-                 output_paging.element_bytes,
-                 output_paging.alignment});
-            // Each block is chunks_per_row CB pages.
-            compute_desc.emplace_runtime_args(core, {units * chunks_per_row});
+                {{"num_blocks", units},
+                 {"start_block", units_done},
+                 {"row_elements", row_elements},
+                 {"chunk_elements", TILE_HW},
+                 {"chunks_per_row", chunks_per_row},
+                 {"rows_per_tile", rows_per_tile},
+                 {"total_rows", total_rows},
+                 {"dst_page_elements", output_paging.page_elements},
+                 {"dst_pages_per_row", output_paging.pages_per_row},
+                 {"dst_element_bytes", output_paging.element_bytes},
+                 {"dst_alignment", output_paging.alignment}});
+            // Each block is chunks_per_row DFB entries.
+            AddRuntimeArgsForNode(
+                compute_args.runtime_arg_values, core, {{"per_core_tile_cnt", units * chunks_per_row}});
         } else {
-            reader_desc.emplace_runtime_args(
-                core, {grad_output_buffer, input_buffer, units, units_done, 0u, 0u, num_cores_y});
-            compute_desc.emplace_runtime_args(core, {units});
-            writer_desc.emplace_runtime_args(core, {grad_input_buffer, units, units_done});
+            AddRuntimeArgsForNode(
+                reader_args.runtime_arg_values,
+                core,
+                {{"num_tiles", units},
+                 {"start_id", units_done},
+                 {"block_height", 0u},
+                 {"block_width", 0u},
+                 {"num_cores_y", num_cores_y}});
+            AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"per_core_tile_cnt", units}});
+            AddRuntimeArgsForNode(
+                writer_args.runtime_arg_values, core, {{"num_pages", units}, {"start_id", units_done}});
         }
 
         units_done += units;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    ProgramSpec program_spec{
+        .name = "unary_backward",
+        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER, COMPUTE},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
 
-    return desc;
+    ProgramRunArgs run_args{
+        .kernel_run_args = {std::move(reader_args), std::move(writer_args), std::move(compute_args)},
+        .tensor_args =
+            {
+                {GRAD_OUTPUT, grad_output_mesh_tensor},
+                {INPUT, input_mesh_tensor},
+                {OUTPUT, output_mesh_tensor},
+            },
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(program_spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::operations::unary_backward
