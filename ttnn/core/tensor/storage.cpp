@@ -138,7 +138,11 @@ DeviceStorage::DeviceStorage(MeshTensor mesh_tensor_, std::vector<tt::tt_metal::
 
 DeviceStorage::DeviceStorage(
     const DeviceStorage& other, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords) :
-    DeviceStorage(other.mesh_tensor_holder_, std::move(coords), other.root_mesh_tensor_holder_) {}
+    DeviceStorage(other.mesh_tensor_holder_, std::move(coords), other.root_mesh_tensor_holder_) {
+    if (coords_ == other.coords_) {
+        tensor_topology_ = other.tensor_topology_;
+    }
+}
 
 DeviceStorage DeviceStorage::single_shard(
     const DeviceStorage& other, const tt::tt_metal::distributed::MeshCoordinate& coord) {

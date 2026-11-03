@@ -88,7 +88,8 @@ struct DeviceStorage {
     DeviceStorage& operator=(DeviceStorage&&) noexcept;
 
     // Creates a copy of the DeviceStorage that shares the underlying device memory,
-    // but with a different set of coords.
+    // but with a different set of coords. A storage with a topology of its own (single_shard) keeps it when the
+    // coords are the same.
     // Throws if the coords_ are out of bounds for the mesh_buffer_ device shape.
     DeviceStorage(const DeviceStorage& other, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords);
 
