@@ -128,21 +128,20 @@ void kernel_main() {
     // 2^-24 is the FP32 ulp on [0.5, 1), the finest step the FP32 cumulative comparison below can
     // resolve; a 16-bit lattice (max 1 - 2^-16) could never draw a last kept token whose share of
     // the mass is below 2^-16 (test_sampling_two_candidate_tail_below_2_pow_16).
-    // The three digits are draws of the SAME SFPU lane at three consecutive PRNG steps. The SFPU
-    // reaches Dst as 4 rows x 8 even (or odd) columns per store, and rand_tile advances the PRNG once
-    // per store, stepping the Dst offset by 2:
-    //   element 0  (face 0, row 0, col 0): lane 0 of the 1st store (offset 0: rows 0-3, even columns)
-    //   element 1  (face 0, row 0, col 1): lane 0 of the 2nd store (offset 2: rows 0-3, odd columns)
-    //   element 64 (face 0, row 4, col 0): lane 0 of the 3rd store (offset 4: rows 4-7, even columns)
-    // Do not take a digit from a different lane of the same store (e.g. element 2): every lane runs
-    // the same PRNG stream and is separated only by an additive salt before the finalizer, so two
-    // lanes at one step are not a safe source of jointly uniform top bits. The 2nd and 3rd stores
-    // land only because rand() programs its Dst address mode on every call; a dead digit shrinks
-    // the lattice (test_sampling_low_digit_reaches_the_tail guards the 2nd digit, the
-    // below-2^-16 tests the 3rd).
+    // The digits are tile elements 0, 16 and 32 (face 0, rows 0, 1 and 2 of column 0): lanes 0, 8
+    // and 16 of rand_tile's FIRST SFPU store, which covers rows 0-3 x even columns of face 0 (the
+    // SFPU reaches Dst as 4 rows x 8 even or odd columns per store). Every lane runs the same LFSR
+    // sequence with lane l lagging lane 0 by 2 * l reads, so these three digits come from PRNG words
+    // 16 and 32 reads apart. Nearby words are measurably less independent: in a bit-exact model of
+    // the rand LLK (checked against ttsim on WH and BH), the joint (hi, mid) table of elements 0 and
+    // 1 (adjacent words) is 3-5x further from uniform than that of elements 0 and 16, and some
+    // element pairs share a word outright (elements 0 and 66). Keeping all three digits in the first
+    // store also means the threshold does not depend on the Dst address mode that rand_tile's later
+    // stores need. A dead digit shrinks the lattice: test_sampling_low_digit_reaches_the_tail guards
+    // the 2nd digit, the below-2^-16 tests the 3rd.
     constexpr uint32_t RAND_HI_ELEMENT = 0;
-    constexpr uint32_t RAND_MID_ELEMENT = 1;
-    constexpr uint32_t RAND_LO_ELEMENT = 4 * FACE_WIDTH;
+    constexpr uint32_t RAND_MID_ELEMENT = 1 * FACE_WIDTH;
+    constexpr uint32_t RAND_LO_ELEMENT = 2 * FACE_WIDTH;
     const uint32_t rand_q24 = (rand_digit(rand_values[RAND_HI_ELEMENT]) << 16) |
                               (rand_digit(rand_values[RAND_MID_ELEMENT]) << 8) |
                               rand_digit(rand_values[RAND_LO_ELEMENT]);
