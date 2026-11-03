@@ -305,79 +305,6 @@ inline void calculate_sfpu_binary_div(
         {
             const std::uint32_t a0 = dst_index_in0 * 64, a1 = dst_index_in1 * 64, ao = dst_index_out * 64;
             TTI_SETC16(addr_mod_t::addr_mod_dest_reg_addr[ADDR_MOD_4], 2);
-#ifndef DISABLE_SFPLOADMACRO
-            if constexpr (!is_fp32_dest_acc_en) {
-                TTI_SFPSETMAN(0, p_sfpu::LCONST_neg1, 12, 0);
-                TTI_SFPLOADI(0, 2, 0x0084);
-                TTI_SFPCONFIG(0, 4 + 0, 0);
-                TTI_SFPLOADI(6, 0, 32640);
-                TTI_SFPLOADI(7, 2, 32767);
-                TTI_REPLAY(0, 12, 1, 1);
-                TT_SFPLOADMACRO((0 << 2) | 1, 0, 3, a1);
-                TT_SFPLOAD(3, 0, 3, a1);
-                TTI_SFPMAD(12, 1, 13, 0, 0);
-                TTI_SFPNOT(0, 3, 4, 0);
-                TTI_SFPMAD(0, 1, 14, 0, 0);
-                TTI_SFPSETMAN(0, 4, 4, 1);
-                TTI_SFPMAD(1, 0, 10, 5, 0);
-                TTI_SFPMULI(16128, 4, 0);
-                TTI_SFPMAD(0, 5, 0, 0, 0);
-                TT_SFPLOAD(2, 0, 3, a0);
-                TTI_SFPMAD(1, 0, 10, 1, 0);
-                TTI_SFPNOP;
-                TTI_SFPMAD(0, 1, 0, 0, 0);
-                TTI_SFPMOV(0, 3, 1, 2);
-                TTI_SFPMUL(0, 4, 9, 0, 0);
-                TTI_SFPNOP;
-                TTI_SFPSETSGN(0, 0, 1, 0);
-                TTI_SFPMUL(2, 1, 9, 1, 0);
-                TTI_SFPNOP;
-                TTI_SFPMOV(0, 1, 0, 2);
-                TTI_SFPSETCC(0, 3, 0, 6);
-                TTI_SFPMOV(0, 2, 0, 0);
-                TTI_SFPSETSGN(0, 6, 0, 0);
-                TTI_SFPSETCC(0, 2, 0, 6);
-                TTI_SFPLOADI(0, 0, 32704);
-                TTI_SFPENCC(3, 0, 0, 10);
-                TTI_SFPMOV(0, 0, 1, 2);
-                TTI_SFPSHFT(4080, 0, 1, 1);
-                TTI_SFPLOADI(2, 2, 1);
-                TTI_SFPAND(0, 2, 1, 0);
-                TTI_SFPIADD(0, 7, 0, 4);
-                TTI_SFPIADD(0, 1, 0, 4);
-                TTI_SFPLOADI(1, 0, 65535);
-                TTI_SFPAND(0, 1, 0, 0);
-                TT_SFPSTORE(0, 0, 0, ao);
-#pragma GCC unroll 1
-                for (int d = 1; d < ITERATIONS; d++) {
-                    TTI_REPLAY(0, 12, 0, 0);
-                    TTI_SFPMAD(0, 1, 0, 0, 0);
-                    TTI_SFPMOV(0, 3, 1, 2);
-                    TTI_SFPMUL(0, 4, 9, 0, 0);
-                    TTI_SFPNOP;
-                    TTI_SFPSETSGN(0, 0, 1, 0);
-                    TTI_SFPMUL(2, 1, 9, 1, 0);
-                    TTI_SFPNOP;
-                    TTI_SFPMOV(0, 1, 0, 2);
-                    TTI_SFPSETCC(0, 3, 0, 6);
-                    TTI_SFPMOV(0, 2, 0, 0);
-                    TTI_SFPSETSGN(0, 6, 0, 0);
-                    TTI_SFPSETCC(0, 2, 0, 6);
-                    TTI_SFPLOADI(0, 0, 32704);
-                    TTI_SFPENCC(3, 0, 0, 10);
-                    TTI_SFPMOV(0, 0, 1, 2);
-                    TTI_SFPSHFT(4080, 0, 1, 1);
-                    TTI_SFPLOADI(2, 2, 1);
-                    TTI_SFPAND(0, 2, 1, 0);
-                    TTI_SFPIADD(0, 7, 0, 4);
-                    TTI_SFPIADD(0, 1, 0, 4);
-                    TTI_SFPLOADI(1, 0, 65535);
-                    TTI_SFPAND(0, 1, 0, 0);
-                    TT_SFPSTORE(0, 0, 0, ao);
-                }
-                return;
-            }
-#else
             if constexpr (!is_fp32_dest_acc_en) {
                 TTI_SFPLOADI(6, 0, 32640);
                 TTI_SFPLOADI(7, 2, 32767);
@@ -448,7 +375,6 @@ inline void calculate_sfpu_binary_div(
                 }
                 return;
             }
-#endif
             if constexpr (is_fp32_dest_acc_en) {
                 TTI_REPLAY(0, 16, 1, 1);
                 TT_SFPLOAD(2, 0, 3, a1);
