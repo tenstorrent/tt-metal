@@ -60,8 +60,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/python_tests"
 mkdir -p perf_data
 
-PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false --enable-perf-counters"
+PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false --enable-perf-counters"
 
 REPORT="pytest-report-blackhole-${GROUP}${LLK_PERF_REPORT_TAG:-}"
 COMPILE_XML="${REPORT}-compile.xml"
