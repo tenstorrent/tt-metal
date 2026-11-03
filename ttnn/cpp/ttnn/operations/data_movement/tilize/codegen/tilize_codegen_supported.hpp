@@ -66,7 +66,6 @@ bool supported_execution_controls(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 // Routing-only: codegen is correct here but measured slower than native.
-bool is_demoted(
-    const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config, tt::tt_metal::DataType output_dtype);
+bool is_demoted(const Tensor& input, tt::tt_metal::DataType output_dtype);
 
 }  // namespace ttnn::operations::data_movement::tilize_codegen

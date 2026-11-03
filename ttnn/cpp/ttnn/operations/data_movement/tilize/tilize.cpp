@@ -221,9 +221,8 @@ ttnn::Tensor tilize(
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
         const DataType dtype = output_dtype.value_or(normalized_input.dtype());
         if (ttnn::operations::data_movement::codegen_supported_on_arch(normalized_input) && controls_ok &&
-            supported_by_codegen(normalized_input, output_mem_config, dtype)) {
-            if (const auto plan = plan_codegen(normalized_input, output_mem_config, dtype);
-                plan.has_value() && !is_demoted(normalized_input, output_mem_config, dtype)) {
+            supported_by_codegen(normalized_input, output_mem_config, dtype) && !is_demoted(normalized_input, dtype)) {
+            if (const auto plan = plan_codegen(normalized_input, output_mem_config, dtype); plan.has_value()) {
                 return ttnn::prim::tilize_codegen(
                     normalized_input, output_mem_config, dtype, use_multicore, use_low_perf, sub_core_grids, *plan);
             }

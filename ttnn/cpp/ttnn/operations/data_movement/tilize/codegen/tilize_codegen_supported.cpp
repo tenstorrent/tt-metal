@@ -56,8 +56,8 @@ constexpr uint32_t kMinFragmentBytes = 256;
 constexpr uint32_t kTargetCores = 24;
 // Few-row DRAM split: a cut onto fewer cores than this keeps the full grid split instead.
 constexpr uint32_t kMinSplitCores = 5;
-// Tile rows of the one-tile-wide DRAM-to-L1 case that routes to native; see is_demoted().
-constexpr uint32_t kDemotedTileRows = 2;
+// Most tile rows of a one-tile-wide, non-converting input that still routes to native; see is_demoted().
+constexpr uint32_t kDemoteMaxTileRows = 20;
 
 std::optional<uint32_t> row_major_element_size(DataType dtype) {
     switch (dtype) {
@@ -292,13 +292,11 @@ bool supported_execution_controls(
     return !unsupported_execution_control(use_multicore, use_low_perf, tile, sub_core_grids).has_value();
 }
 
-// Non-converting, one-tile-wide, kDemotedTileRows-tile-row DRAM input written to L1: the only measured region where
-// native still wins (Blackhole P150); 1.5-2.4us kernels, so every neighbouring shape and placement stays on codegen.
-bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config, DataType output_dtype) {
+// One tile per row has no width parallelism, so kernels this short don't amortize codegen's fixed per-launch cost.
+bool is_demoted(const Tensor& input, DataType output_dtype) {
     using namespace tt::constants;
 
-    if (output_dtype != input.dtype() || input.memory_config().buffer_type() != tt::tt_metal::BufferType::DRAM ||
-        output_mem_config.buffer_type() != tt::tt_metal::BufferType::L1) {
+    if (output_dtype != input.dtype()) {
         return false;
     }
     const auto& shape = input.padded_shape();
@@ -311,7 +309,7 @@ bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_me
     }
     const uint32_t wt = width / TILE_WIDTH;
     const uint32_t tile_rows = input.logical_shape().volume() / width / TILE_HEIGHT;
-    return wt == 1 && tile_rows == kDemotedTileRows;
+    return wt == 1 && tile_rows <= kDemoteMaxTileRows;
 }
 
 }  // namespace ttnn::operations::data_movement::tilize_codegen
