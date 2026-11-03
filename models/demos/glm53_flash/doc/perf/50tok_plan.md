@@ -152,3 +152,11 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   (DRAM-rate bound per core, ~230 KB each), multicast 3, conv 8, gates 5, derived 2, user 8 (compute), gather +
   out-norm 10 on part 0: span 69 us. Design for the next step: every part reads a fifth of the item inputs and
   multicasts its share (reads ~6 us), the out-norm per part on its own rows: ~40 us per op, -1 ms per step.
+* 22:25 KDA item reads split over all 5 parts (loopback multicast of each part's share, the history shift split
+  too): all 12 unit tests pass but the span stays 69.9 us: the reads still end ~30 us into the kernel (per-core
+  median 19 us, max 30) with 80 issuing cores as with 16, so the ~3.7 MB of 2 KB tile reads per step are a
+  DRAM / NoC latency floor for this access pattern, not an issue-rate limit. Variant not kept. The lever that
+  remains is prefetch: the 112 KB per slot of step-invariant KDA inputs (history taps, conv taps, channel
+  constants) read into a persistent L1 buffer on the slot's part-0 core by the preceding mHC pre-block program
+  (its readers idle for ~40 us), the KDA reader copying L1 -> CB in ~2 us: item phase ~32 -> ~10 us, -0.7 ms per
+  step. Needs host-side persistent L1 tensors allocated before the trace capture.
