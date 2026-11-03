@@ -22,6 +22,7 @@ struct PagedFusedUpdateCacheDeviceOperation {
     using operation_attributes_t = PagedFusedUpdateCacheParams;
     using tensor_args_t = PagedFusedUpdateCacheInputs;
     using spec_return_value_t = PagedFusedUpdateCacheResultSpec;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = PagedFusedUpdateCacheResult;
     using program_factory_t = std::variant<
         PagedTiledFusedUpdateCacheProgramFactory,
@@ -39,6 +40,9 @@ struct PagedFusedUpdateCacheDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static topology_return_value_t compute_output_topologies(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static ttsl::hash::hash_t compute_program_hash(
