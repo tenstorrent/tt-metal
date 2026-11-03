@@ -10,7 +10,14 @@ import math
 import ttnn
 
 from .multichip_decoder import _EXPERT_COMPACT_PACKED, _EXPERT_DISPATCH_PACKED, _expert_capacity_source, _expert_kernel
-from .prefill_moe_compact import COMPACT1024_PIPE, EXTRA_CB_BYTES, compact_pipe_enabled
+from .prefill_moe_compact import (
+    COMPACT1024_PIPE,
+    DISPATCH1024_PIPE,
+    EXTRA_CB_BYTES,
+    compact_pipe_enabled,
+    dispatch_cb_bytes,
+    dispatch_pipe_enabled,
+)
 
 DISPATCH1024 = _expert_capacity_source(_EXPERT_DISPATCH_PACKED, "e*128+count", "e*1024+count")
 COMPACT1024 = _expert_capacity_source(_EXPERT_COMPACT_PACKED, "ASSERT(packed<128)", "ASSERT(packed<1024)")
@@ -43,10 +50,10 @@ def group1024(self, x):
     _expert_kernel(
         self.ops.mesh,
         [source, ids, scores, self.rank, counts, mapping, capacity],
-        DISPATCH1024,
+        DISPATCH1024_PIPE if dispatch_pipe_enabled() else DISPATCH1024,
         [n],
         workers=32,
-        cb_size=5120 + n * 192 + 64,
+        cb_size=dispatch_cb_bytes(n) if dispatch_pipe_enabled() else 5120 + n * 192 + 64,
     )
     down = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
         capacity,
