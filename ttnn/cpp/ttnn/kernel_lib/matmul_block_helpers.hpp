@@ -324,6 +324,10 @@ struct NoIn1BaseOffset {
  *   out_row_width      N-tiles per row in the OUTPUT CB (TileRowMajor row stride). 0 =
  *                      reuse in1_per_core_w. Pass the larger pack width when the output is
  *                      padded above the in1 read width.
+ *   out_base_offset    caller_owns_pack_target only: tile offset added to every pack position
+ *                      in the caller-reserved target, so one reserved block can be filled by
+ *                      several calls that each own a band of rows (row r0 -> r0 * out_row_width).
+ *                      Must be 0 otherwise.
  *
  * @example  // Single K-block, all defaults. Boot once with
  *           // compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out). Pass
@@ -372,7 +376,8 @@ ALWI void matmul_block(
     PostKBlockFn post_k_block = {},
     KBlockInnerDimFn k_block_inner_dim = {},
     In0SourceFn in0_source_fn = {},
-    In1BaseOffsetFn in1_base_offset_fn = {});
+    In1BaseOffsetFn in1_base_offset_fn = {},
+    uint32_t out_base_offset = 0);
 
 }  // namespace compute_kernel_lib
 

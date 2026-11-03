@@ -101,7 +101,8 @@ ALWI void matmul_block(
     PostKBlockFn post_k_block,
     KBlockInnerDimFn k_block_inner_dim,
     In0SourceFn in0_source_fn,
-    In1BaseOffsetFn in1_base_offset_fn) {
+    In1BaseOffsetFn in1_base_offset_fn,
+    uint32_t out_base_offset) {
 
     // OutWithUntilize needs SubblockMajor: pack_untilize_dest packs from DST offset 0 for a
     // fixed block_ct_dim and can't compose with the per-tile absolute-offset row-major pack.
@@ -141,6 +142,7 @@ ALWI void matmul_block(
     static_assert(
         !seeded_pack_target || caller_owns_pack_target,
         "seeded_pack_target accumulates onto a caller-written target: requires caller_owns_pack_target");
+    ASSERT(caller_owns_pack_target || out_base_offset == 0);
     // L1-acc for K-block 0: off overwrites the target, on adds onto the caller's seed.
     constexpr uint32_t first_block_l1_acc = seeded_pack_target ? 1 : 0;
 
@@ -442,7 +444,7 @@ ALWI void matmul_block(
                             // (in0_subblock * row_group_tiles); otherwise every row group packs onto
                             // row 0 (latent when in0_num_subblocks == 1, garbles when > 1).
                             const uint32_t row_base =
-                                caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
+                                caller_owns_pack_target ? out_base_offset + in0_subblock * row_group_tiles : 0;
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
                                 0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
@@ -483,7 +485,7 @@ ALWI void matmul_block(
                             // caller_owns_pack_target: fold the M-row-group base into the offset,
                             // same as the last-block pack above.
                             const uint32_t row_base =
-                                caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
+                                caller_owns_pack_target ? out_base_offset + in0_subblock * row_group_tiles : 0;
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
                                 0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);

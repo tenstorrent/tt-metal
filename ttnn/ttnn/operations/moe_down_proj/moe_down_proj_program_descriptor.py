@@ -1,0 +1,300 @@
+# SPDX-FileCopyrightText: 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""moe_down_proj ProgramDescriptor: regime R1 (line-lockstep 2D, K-streamed, static multicasts).
+
+Rows (expert-sorted tile rows, split on device from counts) over m-groups, output columns over n-lines. Per K round,
+each m-group's rotating sender multicasts its rows' x block along the group, and each n-line's rotating sender
+multicasts every in-wave expert's w chunk along the line. Every core accumulates its rows x n-slice in fp32 L1
+partials (packer L1 accumulation), untilizes them per wave and stores bf16 row segments.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import ttnn
+
+KERNEL_DIR = Path(__file__).parent / "kernels"
+
+TILE = 32
+NUM_EXPERTS = 8
+HIDDEN = 768
+FFN = 3072
+TENSOR_K_TILES = FFN // TILE
+TENSOR_N_TILES = HIDDEN // TILE
+
+# Largest K block per round. Round 0 must land before compute starts, so a larger block lengthens the fill.
+K_BLOCK_MAX = 8
+MAX_WAVES = 4
+X_DEPTH = 2
+W_DEPTH = 2
+OUT_DEPTH = 2
+# x (about 250 KB per bank) and y (about 118 KB per bank) stay resident in L1 at R = 8416.
+CB_BUDGET_BYTES = 800 * 1024
+
+CB_X_ROUND = 0
+CB_W_ROUND = 1
+CB_PARTIALS = 2
+CB_OUTPUT_ROWS = 3
+CB_COUNTS_COMPUTE = 4
+CB_COUNTS_WRITER = 5
+
+X_MAIN, X_STRIP, W_MAIN, W_STRIP = "xa", "xb", "wa", "wb"
+
+
+def _div_up(a, b):
+    return -(-a // b)
+
+
+def _crs(x0, y0, x1, y1):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))])
+
+
+@dataclass
+class Layout:
+    name: str
+    num_n_lines: int
+    num_m_groups: int
+    cores: object
+    # (x, y) -> (n-line, m-group)
+    roles: dict = field(default_factory=dict)
+    # prefix -> (receivers, group size, sender config, receiver order)
+    channels: dict = field(default_factory=dict)
+
+    @property
+    def core_n_tiles(self):
+        return TENSOR_N_TILES // self.num_n_lines
+
+
+def _rotating(group_size):
+    # A one-core group has no other sender to rotate to.
+    if group_size > 1:
+        return ttnn.McastRotatingSenderConfig()
+    return ttnn.McastFixedSenderConfig(sender_index=0)
+
+
+def _rect_layout(grid):
+    """n-line l = grid row y = l, m-group g = grid column x = g."""
+    lines = max(d for d in range(1, grid.y + 1) if TENSOR_N_TILES % d == 0)
+    layout = Layout("rect", lines, grid.x, _crs(0, 0, grid.x - 1, lines - 1))
+    for x in range(grid.x):
+        for y in range(lines):
+            layout.roles[(x, y)] = (y, x)
+    layout.channels[W_MAIN] = (layout.cores, grid.x, _rotating(grid.x), ttnn.McastCoreOrder.RowMajor)
+    layout.channels[X_MAIN] = (layout.cores, lines, _rotating(lines), ttnn.McastCoreOrder.ColumnMajor)
+    return layout
+
+
+def _l_layout(grid):
+    """n-lines 0..gx-1 = columns of the rect (gx x h, h = gy - 1); n-line gx = the strip y = gy - 1, x < h.
+    m-group g = rect row g plus strip core (g, gy - 1). None where the shape does not exist."""
+    h = grid.y - 1
+    lines = grid.x + 1
+    if h < 2 or h > grid.x or TENSOR_N_TILES % lines:
+        return None
+    rect = _crs(0, 0, grid.x - 1, h - 1)
+    strip = _crs(0, grid.y - 1, h - 1, grid.y - 1)
+    layout = Layout("L", lines, h, rect.merge(strip))
+    for x in range(grid.x):
+        for y in range(h):
+            layout.roles[(x, y)] = (x, y)
+    for x in range(h):
+        layout.roles[(x, grid.y - 1)] = (grid.x, x)
+    layout.channels[W_MAIN] = (rect, h, _rotating(h), ttnn.McastCoreOrder.ColumnMajor)
+    layout.channels[W_STRIP] = (strip, h, _rotating(h), ttnn.McastCoreOrder.RowMajor)
+    layout.channels[X_MAIN] = (rect, grid.x, _rotating(grid.x), ttnn.McastCoreOrder.RowMajor)
+    # Group g's senders are rect row g, rotating in step with X_MAIN, so one core sends both copies of a round.
+    layout.channels[X_STRIP] = (
+        strip,
+        1,
+        ttnn.McastRotatingSenderConfig(rect, sender_order=ttnn.McastCoreOrder.RowMajor),
+        ttnn.McastCoreOrder.RowMajor,
+    )
+    return layout
+
+
+LAYOUTS = {"rect": _rect_layout, "L": _l_layout}
+
+
+def select_layout(grid, tensor_row_tiles, force=None):
+    """Lowest busiest-core output tile count wins; ties keep the rectangle. `force` pins one (tests only)."""
+    if force is not None:
+        layout = LAYOUTS[force](grid)
+        if layout is None:
+            raise RuntimeError(f"moe_down_proj: layout {force} does not exist on a {grid.x}x{grid.y} grid")
+        return layout
+    best = None
+    for build in (_rect_layout, _l_layout):
+        layout = build(grid)
+        if layout is None:
+            continue
+        score = _div_up(tensor_row_tiles, layout.num_m_groups) * layout.core_n_tiles
+        if best is None or score < best[0]:
+            best = (score, layout)
+    return best[1]
+
+
+@dataclass(frozen=True)
+class Blocking:
+    tensor_row_tiles: int
+    num_waves: int
+    k_block_tiles: int
+    core_row_tiles_max: int
+
+    @property
+    def num_k_rounds(self):
+        return TENSOR_K_TILES // self.k_block_tiles
+
+
+def _tile_bytes():
+    return ttnn.tile_size(ttnn.bfloat8_b), ttnn.tile_size(ttnn.float32), ttnn.tile_size(ttnn.bfloat16)
+
+
+def footprint_bytes(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes):
+    in_tile, acc_tile, out_tile = _tile_bytes()
+    return (
+        X_DEPTH * core_row_tiles_max * k_block_tiles * in_tile
+        + W_DEPTH * NUM_EXPERTS * core_n_tiles * k_block_tiles * in_tile
+        + core_row_tiles_max * core_n_tiles * acc_tile
+        + OUT_DEPTH * core_n_tiles * out_tile
+        + 2 * counts_page_bytes
+    )
+
+
+def select_blocking(tensor_row_tiles, layout, counts_page_bytes):
+    """Largest k_block_tiles (divisor of 96, <= K_BLOCK_MAX), then the fewest waves, that fit the CB budget."""
+    k_blocks = [k for k in range(K_BLOCK_MAX, 0, -1) if TENSOR_K_TILES % k == 0]
+    for k_block_tiles in k_blocks:
+        for num_waves in range(1, MAX_WAVES + 1):
+            core_row_tiles_max = _div_up(_div_up(tensor_row_tiles, num_waves), layout.num_m_groups)
+            if (
+                footprint_bytes(core_row_tiles_max, k_block_tiles, layout.core_n_tiles, counts_page_bytes)
+                <= CB_BUDGET_BYTES
+            ):
+                return Blocking(tensor_row_tiles, num_waves, k_block_tiles, core_row_tiles_max)
+    raise RuntimeError(
+        f"moe_down_proj: no (num_waves <= {MAX_WAVES}, k_block_tiles) fits {CB_BUDGET_BYTES} B of CBs "
+        f"for {tensor_row_tiles} tile rows on the {layout.name} layout"
+    )
+
+
+def _cb(index, num_pages, page_bytes, dtype, cores):
+    return ttnn.CBDescriptor(
+        total_size=num_pages * page_bytes,
+        core_ranges=cores,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_bytes)],
+    )
+
+
+def create_program_descriptor(input_tensor, weight, expert_counts, output, compute_kernel_config, layout_override=None):
+    device = input_tensor.device()
+    grid = device.compute_with_storage_grid_size()
+    tensor_row_tiles = list(input_tensor.shape)[-2] // TILE
+    counts_page_bytes = expert_counts.buffer_page_size()
+    layout = select_layout(grid, tensor_row_tiles, layout_override)
+    blocking = select_blocking(tensor_row_tiles, layout, counts_page_bytes)
+    core_n_tiles = layout.core_n_tiles
+    in_tile, acc_tile, out_tile = _tile_bytes()
+    cores = layout.cores
+
+    plan_ct = [tensor_row_tiles, blocking.num_waves, layout.num_m_groups]
+    reader_ct = [
+        CB_X_ROUND,
+        CB_W_ROUND,
+        CB_COUNTS_COMPUTE,
+        CB_COUNTS_WRITER,
+        *plan_ct,
+        blocking.k_block_tiles,
+        blocking.num_k_rounds,
+        blocking.core_row_tiles_max,
+        core_n_tiles,
+        TENSOR_K_TILES,
+        NUM_EXPERTS * TENSOR_K_TILES,
+        in_tile,
+        counts_page_bytes,
+    ]
+    for tensor in (input_tensor, weight, expert_counts):
+        reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+    writer_ct = [CB_OUTPUT_ROWS, CB_COUNTS_WRITER, *plan_ct, core_n_tiles, output.buffer_page_size()]
+    writer_ct.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
+    compute_ct = [
+        CB_X_ROUND,
+        CB_W_ROUND,
+        CB_PARTIALS,
+        CB_OUTPUT_ROWS,
+        CB_COUNTS_COMPUTE,
+        *plan_ct,
+        blocking.k_block_tiles,
+        blocking.num_k_rounds,
+        blocking.core_row_tiles_max,
+        core_n_tiles,
+    ]
+
+    reader_rt = ttnn.RuntimeArgs()
+    writer_rt = ttnn.RuntimeArgs()
+    compute_rt = ttnn.RuntimeArgs()
+    for (x, y), (line, group) in layout.roles.items():
+        reader_rt[x][y] = [
+            input_tensor.buffer_address(),
+            weight.buffer_address(),
+            expert_counts.buffer_address(),
+            group,
+            line,
+        ]
+        writer_rt[x][y] = [output.buffer_address(), group, line]
+        compute_rt[x][y] = [group]
+
+    w_round_tiles = NUM_EXPERTS * core_n_tiles * blocking.k_block_tiles
+    cbs = [
+        _cb(CB_X_ROUND, X_DEPTH * blocking.core_row_tiles_max * blocking.k_block_tiles, in_tile, ttnn.bfloat8_b, cores),
+        _cb(CB_W_ROUND, W_DEPTH * w_round_tiles, in_tile, ttnn.bfloat8_b, cores),
+        _cb(CB_PARTIALS, blocking.core_row_tiles_max * core_n_tiles, acc_tile, ttnn.float32, cores),
+        _cb(CB_OUTPUT_ROWS, OUT_DEPTH * core_n_tiles, out_tile, ttnn.bfloat16, cores),
+        _cb(CB_COUNTS_COMPUTE, 1, counts_page_bytes, ttnn.uint32, cores),
+        _cb(CB_COUNTS_WRITER, 1, counts_page_bytes, ttnn.uint32, cores),
+    ]
+
+    noc = ttnn.NOC.NOC_0
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "moe_down_proj_reader.cpp"),
+        core_ranges=cores,
+        compile_time_args=reader_ct,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "moe_down_proj_writer.cpp"),
+        core_ranges=cores,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    compute = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "moe_down_proj_compute.cpp"),
+        core_ranges=cores,
+        compile_time_args=compute_ct,
+        runtime_args=compute_rt,
+        config=compute_kernel_config,
+    )
+
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
+    semaphore_id = 0
+    for prefix in (X_MAIN, X_STRIP, W_MAIN, W_STRIP):
+        if prefix not in layout.channels:
+            ttnn.attach_absent_mcast(reader, prefix)
+            continue
+        receivers, group_size, sender_config, order = layout.channels[prefix]
+        mcast = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=noc, handshake=True),
+            receivers,
+            group_size,
+            sender_config,
+            order,
+        )
+        mcast.attach(descriptor, prefix, [reader], semaphore_id)
+        semaphore_id = mcast.next_semaphore_id()
+    descriptor.kernels = [reader, writer, compute]
+    return descriptor
