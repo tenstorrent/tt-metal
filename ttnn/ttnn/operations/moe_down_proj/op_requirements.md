@@ -192,3 +192,23 @@ t3072 are bound by their x / sync floors (92 / 124 us with w reads stubbed). Nex
 NoC0 footprint (multicast only the experts each column's rows touch, the deferred R2 range pruning, now that w
 binds at small t), then a per-row-count share rule refit at t2048. Not done here because pruning is a topology
 change, outside this phase's knob-turn scope.
+
+### [ ] Refinement 4 - Model L1 occupancy: CB budget from the live allocator state, fast within it
+
+**Type**: perf
+
+**Goal**: inside the Nomic v2 forward at 8x512 the op does not run on an empty L1. Other L1 tensors are alive
+while it runs, and only 853,568 B per bank is free below the lowest live L1 buffer for its circular buffers
+(measured on p100a at every one of the 6 calls; x is in L1). `CB_BUDGET_BYTES` (976 KiB) was tuned on an empty L1,
+so in the model the program fails with "static circular buffers clash with L1 buffers" (CBs end at 1,105,936 B,
+an L1 buffer starts at 966,144 B). A port-side patch that caps the budget at the live free space measured
+170-177 us per call in the model against 162-164 us on an empty L1, so the blocking chosen for the smaller budget
+is slower. The six t = 4096 LOOSE_CASES now carry `extras["l1_free_bytes_before_call"] = 853568`, and the harness
+reserves L1 to reproduce the model's occupancy (verified: lowest live buffer 966,784 B against 966,144 B in the
+model). They currently fail with the same clash.
+
+**Done when**: the CB budget is derived from the allocator state at call time (never a fixed constant that
+assumes free L1); an occupancy that cannot fit any blocking raises a support refusal before the op allocates
+anything, not a crash; all six occupied t = 4096 rows pass and their device-ns is as low as possible within 853,568
+B (target 90.8 us, today 179-192 us stock); the unoccupied rows do not regress; the golden suite is green; and the
+precision gates hold.
