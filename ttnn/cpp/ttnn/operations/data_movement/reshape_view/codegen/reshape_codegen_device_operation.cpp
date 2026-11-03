@@ -28,7 +28,7 @@ ReshapeCodegenDeviceOperation::program_factory_t ReshapeCodegenDeviceOperation::
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     namespace rcg = ttnn::operations::data_movement::reshape_codegen;
     if (tensor_args.input.layout() == Layout::TILE) {
-        // The live choice, not the planned route: a tile-rows or LCM call too big for live L1 runs the segment map.
+        // The planned route, except that a tile-rows or LCM call too big for live L1 runs the segment map.
         const auto chosen = rcg::live_tile_choice(
             tensor_args.input,
             operation_attributes.logical_output_shape,
@@ -41,7 +41,10 @@ ReshapeCodegenDeviceOperation::program_factory_t ReshapeCodegenDeviceOperation::
         if (operation_attributes.plan.tile_route == rcg::TileRoute::TileRows) {
             return ReshapeCodegenTileRowsProgramFactory{};
         }
-        TT_ASSERT(operation_attributes.plan.tile_route == rcg::TileRoute::Lcm);
+        TT_FATAL(
+            operation_attributes.plan.tile_route == rcg::TileRoute::Lcm,
+            "ReshapeCodegen: no TILE program factory for route {}",
+            static_cast<uint32_t>(operation_attributes.plan.tile_route));
         return ReshapeCodegenLcmProgramFactory{};
     }
     return ReshapeCodegenRMProgramFactory{};

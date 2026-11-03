@@ -163,7 +163,6 @@ struct LcmPlan {
     uint32_t chunk_tiles = 0;
     uint32_t total_chunks = 0;
     uint32_t tile_bytes = 0;
-    uint32_t out_page_bytes = 0;
     WorkCounts split;
     // Set by fit_lcm; zero in the unfitted geometry LaunchPlan holds.
     uint32_t out_cb_depth = 0;
@@ -243,7 +242,7 @@ bool lcm_bit_exact(tt::tt_metal::DataType dtype);
 // The LCM program's unfitted geometry; nullopt for a dtype lcm_bit_exact refuses, a rank below 2, equal widths, or a
 // width or height that is not a multiple of 32.
 std::optional<LcmPlan> lcm_tile_geometry(
-    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores);
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores);
 
 // `plan` with the largest write batch, then the deepest output CB, whose CBs fit `l1_budget`; nullopt when a one-tile
 // batch at its smallest depth does not.

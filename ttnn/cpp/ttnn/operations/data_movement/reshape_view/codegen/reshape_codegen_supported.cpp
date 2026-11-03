@@ -115,15 +115,18 @@ bool native_faster(const TileRowsChoice& choice, uint32_t num_cores) {
 }
 
 // A round is every core finishing one output tile in parallel; native takes about 5 us per round. The LCM kernel
-// untilizes and re-tilizes a tile in about 0.85 us, about 5.9x faster, rounded down for margin. Measured on
-// Blackhole; Wormhole uses the same constant unmeasured.
+// untilizes and re-tilizes a tile in about 0.85 us, about 5.9x faster, rounded down for margin. Calibrated by
+// tt-dm-codegen's forced-route sweep on Blackhole (P150, 110 cores). Every fp32 call this rule routes to LCM beats
+// native on both arches (device time 0.27-0.40x native on Blackhole P150, 0.36-0.82x on Wormhole N300); that check
+// cannot show calls the rule wrongly keeps on native.
 constexpr uint64_t kLcmTileSpeedup = 5;
 
 // Compares per-core critical paths: the chunk tiles on the busiest LCM core against the output tiles on the busiest
-// native core, since LCM splits whole chunks over the cores and native splits output tiles.
+// native core, since LCM splits whole chunks over the cores and native splits output tiles. `plan.split` was counted
+// over the same `num_cores`; its first group is the busiest.
 bool lcm_beats_native(const LcmPlan& plan, uint32_t num_cores) {
     const uint64_t out_tiles = static_cast<uint64_t>(plan.total_chunks) * plan.chunk_tiles;
-    return static_cast<uint64_t>(plan.chunk_tiles) * tt::div_up(plan.total_chunks, num_cores) <=
+    return static_cast<uint64_t>(plan.chunk_tiles) * plan.split.units_group1 <=
            kLcmTileSpeedup * tt::div_up(out_tiles, num_cores);
 }
 
@@ -432,14 +435,13 @@ const char* unsupported_reason(
         return geometry.fits_static() ? nullptr : kRmStaticFitViolation;
     }
     const auto& in_shape = input.logical_shape();
-    const auto spec = output_spec(input, logical_output_shape, output_mem_config);
     if (plan == nullptr) {
-        const bool within_caps =
-            plan_tile_rows(in_shape, logical_output_shape).has_value() ||
-            lcm_tile_geometry(input, logical_output_shape, output_aligned_page(input, spec), num_cores).has_value() ||
-            segment_map_within_caps(input, logical_output_shape, num_cores);
+        const bool within_caps = plan_tile_rows(in_shape, logical_output_shape).has_value() ||
+                                 lcm_tile_geometry(input, logical_output_shape, num_cores).has_value() ||
+                                 segment_map_within_caps(input, logical_output_shape, num_cores);
         return within_caps ? kTileStaticFitViolation : kTileCapsViolation;
     }
+    const auto spec = output_spec(input, logical_output_shape, output_mem_config);
     const uint64_t budget = static_l1_budget(input, spec);
     if (plan->tile_route == TileRoute::TileRows) {
         const uint32_t tile_bytes =
@@ -506,8 +508,7 @@ std::optional<LaunchPlan> plan_codegen(
         return rows;
     }
     std::optional<LaunchPlan> lcm;
-    const auto spec = output_spec(input, logical_output_shape, output_mem_config);
-    if (auto geometry = lcm_tile_geometry(input, logical_output_shape, output_aligned_page(input, spec), num_cores)) {
+    if (auto geometry = lcm_tile_geometry(input, logical_output_shape, num_cores)) {
         LaunchPlan plan{.tile_route = TileRoute::Lcm, .lcm = std::move(geometry)};
         if (supported(plan)) {
             lcm = std::move(plan);

@@ -271,7 +271,7 @@ ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& 
     Buffer* in_buf = input.buffer();
     Buffer* out_buf = output.buffer();
     // The compute config below round-trips only 32-bit datums unchanged (lcm_bit_exact).
-    TT_FATAL(input.element_size() == 4, "ReshapeCodegen: the LCM program takes only 32-bit dtypes");
+    TT_FATAL(rcg::lcm_bit_exact(input.dtype()), "ReshapeCodegen: the LCM program takes only 32-bit dtypes");
 
     desc.cbs.push_back(make_cb(kCbIn, fmt, p.tile_bytes, p.chunk_tiles, all_cores));
     desc.cbs.push_back(make_cb(kCbMid, fmt, p.tile_bytes, p.chunk_tiles, all_cores));
@@ -294,7 +294,7 @@ ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& 
     writer.kernel_source = common_kernel("writer_interleaved.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {kCbOut, p.out_page_bytes, p.write_batch};
+    writer.compile_time_args = {/*cb_out*/ kCbOut, /*write_size*/ p.tile_bytes, /*batch*/ p.write_batch};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
     writer.config = WriterConfigDescriptor{};
 
@@ -550,7 +550,6 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenLcmProgramFactory::create_descript
         "ReshapeCodegen: neither the LCM tile plan nor the segment map fits the {} B of L1 free per core below the "
         "lowest L1 allocation; free L1 tensors or use the native reshape",
         ttnn::operations::data_movement::get_max_l1_space(input));
-    TT_ASSERT(tensor_return_value.buffer()->aligned_page_size() == lcm->out_page_bytes);
     return build_lcm(*lcm, input, tensor_return_value, rcg::split_units(grid, lcm->split.units));
 }
 

@@ -161,7 +161,7 @@ bool lcm_bit_exact(tt::tt_metal::DataType dtype) {
 }
 
 std::optional<LcmPlan> lcm_tile_geometry(
-    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores) {
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores) {
     if (!lcm_bit_exact(input.dtype())) {
         return std::nullopt;
     }
@@ -195,7 +195,6 @@ std::optional<LcmPlan> lcm_tile_geometry(
     plan.total_chunks = static_cast<uint32_t>(ht_in / plan.in_tile_rows);
     plan.chunk_tiles = static_cast<uint32_t>(lcm_w / tile_w);
     plan.tile_bytes = tile_bytes_of(input);
-    plan.out_page_bytes = out_aligned_page;
     plan.split = count_units(grid_cores, plan.total_chunks);
     return plan;
 }
@@ -204,9 +203,10 @@ std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget) {
     // The in and mid CBs hold a whole chunk. The out CB must take what the two kernels move without wrapping: compute
     // tilizes Wt_out tiles in one write and the writer reads a batch from one offset, so its depth is a multiple of
     // both. The batched writer holds one batch while it waits for the next, so compute still needs Wt_out free slots
-    // while fewer than two batches are pushed: depth >= 2 * batch + Wt_out - 1. The unbatched writer waits only on an
-    // empty CB. Each batch offers two depths, a whole chunk's output and its minimum, so small moves of the L1
-    // frontier keep the same program and its cache key.
+    // while fewer than two batches are pushed: depth >= 2 * batch + Wt_out - 1. The writer alone needs 2 * batch
+    // (writer_interleaved.cpp); the Wt_out - 1 is compute packing a whole Wt_out tile row at once. The unbatched
+    // writer waits only on an empty CB. Each batch offers two depths, a whole chunk's output and its minimum, so small
+    // moves of the L1 frontier keep the same program and its cache key.
     const uint64_t in_mid_bytes = 2 * cb_footprint(static_cast<uint64_t>(plan.chunk_tiles) * plan.tile_bytes);
     for (const uint32_t batch : kLcmWriteBatches) {
         const uint64_t unit = std::lcm(plan.wt_out, batch);
