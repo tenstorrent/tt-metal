@@ -13,6 +13,7 @@
 #include <exception>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -150,6 +151,15 @@ std::pair<Tensor, Tensor> make_tensors(tt::tt_metal::distributed::MeshDevice* de
     return {input, output};
 }
 
+// a, b and out for out = a + b, with num_tiles tiles each.
+std::tuple<Tensor, Tensor, Tensor> make_add_tensors(tt::tt_metal::distributed::MeshDevice* device, uint32_t num_tiles) {
+    const ttnn::Shape shape{1, num_tiles, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+    Tensor a = ttnn::random::random(shape, DataType::BFLOAT16).to_layout(Layout::TILE).to_device(device);
+    Tensor b = ttnn::random::random(shape, DataType::BFLOAT16).to_layout(Layout::TILE).to_device(device);
+    Tensor out = ttnn::create_device_tensor(a.tensor_spec(), device);
+    return {a, b, out};
+}
+
 m2::ProgramSpec make_hash_spec() {
     const tt::tt_metal::TensorSpec tensor_spec(
         ttnn::Shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
@@ -183,8 +193,9 @@ void leave_out_a_core(m2::ProgramRunArgs& run_args) {
 }
 
 // out = a + b with the tiles split over the cores, with the kernels that test_generic_op_program_spec.py runs for
-// a * b.
-Program make_add_program(const Tensor& a, const Tensor& b, const Tensor& out) {
+// a * b. With varargs, which only C++ can set, the reader and writer take each core's tile count and first tile as
+// runtime varargs 0 and 1 instead of named arguments.
+Program make_add_program(const Tensor& a, const Tensor& b, const Tensor& out, bool varargs = false) {
     const uint32_t num_tiles = a.physical_volume() / tt::constants::TILE_HW;
     const auto [num_cores, cores, group_1, group_2, tiles_1, tiles_2] =
         tt::tt_metal::split_work_to_cores(a.device()->compute_with_storage_grid_size(), num_tiles);
@@ -193,7 +204,7 @@ Program make_add_program(const Tensor& a, const Tensor& b, const Tensor& out) {
     const m2::DFBSpecName in_b{"in_b"};
     const m2::DFBSpecName dfb_out{"out"};
 
-    const m2::KernelSpec reader{
+    m2::KernelSpec reader{
         .unique_id = m2::KernelSpecName{"reader"},
         .source = std::string(kBinaryKernels) + "/reader.cpp",
         .dfb_bindings = {m2::ProducerOf(in_a, "in_a"), m2::ProducerOf(in_b, "in_b")},
@@ -211,7 +222,7 @@ Program make_add_program(const Tensor& a, const Tensor& b, const Tensor& out) {
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config = m2::ComputeHardwareConfig{},
     };
-    const m2::KernelSpec writer{
+    m2::KernelSpec writer{
         .unique_id = m2::KernelSpecName{"writer"},
         .source = std::string(kBinaryKernels) + "/writer.cpp",
         .dfb_bindings = {m2::ConsumerOf(dfb_out, "out")},
@@ -219,6 +230,13 @@ Program make_add_program(const Tensor& a, const Tensor& b, const Tensor& out) {
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
+    if (varargs) {
+        for (auto* kernel : {&reader, &writer}) {
+            kernel->compiler_options.defines["USE_VARARGS"] = "1";
+            kernel->runtime_arg_schema = {};
+            kernel->advanced_options.num_runtime_varargs = 2;
+        }
+    }
     const auto dfb = [&](const m2::DFBSpecName& name) {
         return m2::DataflowBufferSpec{
             .unique_id = name,
@@ -247,11 +265,16 @@ Program make_add_program(const Tensor& a, const Tensor& b, const Tensor& out) {
     uint32_t start_id = 0;
     for (const auto& [group, tiles] : {std::pair{group_1, tiles_1}, std::pair{group_2, tiles_2}}) {
         for (const auto& core : corerange_to_cores(group)) {
-            m2::AddRuntimeArgsForNode(
-                reader_args.runtime_arg_values, core, {{"num_tiles", tiles}, {"start_id", start_id}});
+            if (varargs) {
+                reader_args.advanced_options.runtime_varargs[core] = {tiles, start_id};
+                writer_args.advanced_options.runtime_varargs[core] = {tiles, start_id};
+            } else {
+                m2::AddRuntimeArgsForNode(
+                    reader_args.runtime_arg_values, core, {{"num_tiles", tiles}, {"start_id", start_id}});
+                m2::AddRuntimeArgsForNode(
+                    writer_args.runtime_arg_values, core, {{"num_tiles", tiles}, {"start_id", start_id}});
+            }
             m2::AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"num_tiles", tiles}});
-            m2::AddRuntimeArgsForNode(
-                writer_args.runtime_arg_values, core, {{"num_tiles", tiles}, {"start_id", start_id}});
             start_id += tiles;
         }
     }
@@ -298,6 +321,19 @@ TEST(GenericOpProgramSpecHash, ArgumentNamesAndCompileTimeValuesChangeHash) {
 
     spec = make_hash_spec();
     spec.kernels[0].compile_time_args = {{"other", 1}};
+    EXPECT_NE(ttnn::experimental::compute_program_spec_hash(spec), base);
+}
+
+// Varargs are C++ only, so the Python hash tests do not cover their counts.
+TEST(GenericOpProgramSpecHash, VarargCountsChangeHash) {
+    const auto base = ttnn::experimental::compute_program_spec_hash(make_hash_spec());
+
+    auto spec = make_hash_spec();
+    spec.kernels[0].advanced_options.num_runtime_varargs = 1;
+    EXPECT_NE(ttnn::experimental::compute_program_spec_hash(spec), base);
+
+    spec = make_hash_spec();
+    spec.kernels[0].advanced_options.num_common_runtime_varargs = 1;
     EXPECT_NE(ttnn::experimental::compute_program_spec_hash(spec), base);
 }
 
@@ -633,6 +669,92 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecBinaryAdd) {
     const Tensor out = ttnn::create_device_tensor(a.tensor_spec(), this->device_);
     const auto program = make_add_program(a, b, out);
     ttnn::experimental::generic_op({a, b, out}, program.spec, program.run_args);
+    EXPECT_TRUE(ttnn::allclose<bfloat16>(ttnn::add(a, b).cpu(), out.cpu()));
+}
+
+// Varargs are C++ only. A later call writes its vararg values into the program the first call compiled.
+TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecVarargs) {
+    const auto [a, b, out] = make_add_tensors(this->device_, 4);
+    const auto program = make_add_program(a, b, out, /*varargs=*/true);
+    ttnn::experimental::generic_op({a, b, out}, program.spec, program.run_args);
+    EXPECT_TRUE(ttnn::allclose<bfloat16>(ttnn::add(a, b).cpu(), out.cpu()));
+
+    // Zero inputs and no tiles for any core: the output keeps what the first call wrote only if the new tile counts
+    // reached the kernels.
+    const Tensor zeros_a = ttnn::zeros(a.logical_shape(), DataType::BFLOAT16, Layout::TILE, *this->device_);
+    const Tensor zeros_b = ttnn::zeros(a.logical_shape(), DataType::BFLOAT16, Layout::TILE, *this->device_);
+    auto no_tiles = make_add_program(zeros_a, zeros_b, out, /*varargs=*/true).run_args;
+    auto& kernel_run_args = no_tiles.kernel_run_args;  // reader, compute, writer
+    for (auto* varargs :
+         {&kernel_run_args[0].advanced_options.runtime_varargs, &kernel_run_args[2].advanced_options.runtime_varargs}) {
+        for (auto& [node, values] : *varargs) {
+            values[0] = 0;
+        }
+    }
+    for (auto& [node, num_tiles] : kernel_run_args[1].runtime_arg_values["num_tiles"]) {
+        num_tiles = 0;
+    }
+    const auto entries = this->device_->num_program_cache_entries();
+    ttnn::experimental::generic_op({zeros_a, zeros_b, out}, program.spec, no_tiles);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), entries);
+    EXPECT_TRUE(ttnn::allclose<bfloat16>(ttnn::add(a, b).cpu(), out.cpu()));
+}
+
+// Metal writes a later call's varargs by position without checking their count, so generic_op checks the counts on
+// every call, and on a first call also that every core gets its varargs.
+TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksVarargCountsOnEveryCall) {
+    const auto [a, b, out] = make_add_tensors(this->device_, 4);
+    const auto program = make_add_program(a, b, out, /*varargs=*/true);
+
+    auto left_out_core = program.run_args;
+    auto& reader_varargs = left_out_core.kernel_run_args[0].advanced_options.runtime_varargs;
+    const auto node = reader_varargs.begin()->first;
+    reader_varargs.erase(node);
+    EXPECT_THAT(
+        [&] { ttnn::experimental::generic_op({a, b, out}, program.spec, left_out_core); },
+        ThrowsMessage<std::exception>(
+            HasSubstr("kernel 'reader' declares runtime varargs, but its run args give none for node")));
+
+    ttnn::experimental::generic_op({a, b, out}, program.spec, program.run_args);
+    const auto restore = set_validate_program_args(false);
+
+    auto more_varargs = program.run_args;
+    more_varargs.kernel_run_args[0].advanced_options.runtime_varargs.begin()->second.push_back(0);
+    EXPECT_THAT(
+        [&] { ttnn::experimental::generic_op({a, b, out}, program.spec, more_varargs); },
+        ThrowsMessage<std::exception>(HasSubstr("kernel 'reader' declares 2 runtime varargs on node")));
+
+    auto common_varargs = program.run_args;
+    common_varargs.kernel_run_args[0].advanced_options.common_runtime_varargs = {1};
+    EXPECT_THAT(
+        [&] { ttnn::experimental::generic_op({a, b, out}, program.spec, common_varargs); },
+        ThrowsMessage<std::exception>(
+            HasSubstr("kernel 'reader' declares 0 common runtime varargs, but its run args give 1")));
+}
+
+// Metal writes a later call's varargs by position into argument memory sized for the counts it compiled, so a program
+// compiled for two varargs per core must not run with three: under the same custom hash, the second call compiles a
+// program of its own.
+TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecCustomHashStillKeysOnVarargCounts) {
+    const auto [a, b, out] = make_add_tensors(this->device_, 4);
+    const auto program = make_add_program(a, b, out, /*varargs=*/true);
+    const auto entries = this->device_->num_program_cache_entries();
+    ttnn::experimental::generic_op({a, b, out}, program.spec, program.run_args, /*custom_program_hash=*/777);
+
+    auto three_varargs = program;
+    for (auto& kernel : three_varargs.spec.kernels) {
+        if (kernel.advanced_options.num_runtime_varargs == 2) {
+            kernel.advanced_options.num_runtime_varargs = 3;
+        }
+    }
+    for (auto& kernel_args : three_varargs.run_args.kernel_run_args) {
+        for (auto& [node, values] : kernel_args.advanced_options.runtime_varargs) {
+            values.push_back(0);
+        }
+    }
+    ttnn::experimental::generic_op(
+        {a, b, out}, three_varargs.spec, three_varargs.run_args, /*custom_program_hash=*/777);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), entries + 2);
     EXPECT_TRUE(ttnn::allclose<bfloat16>(ttnn::add(a, b).cpu(), out.cpu()));
 }
 

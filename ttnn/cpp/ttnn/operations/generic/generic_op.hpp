@@ -65,7 +65,8 @@ struct MeshProgramRunArgs {
 // must be on those devices too. It keys and runs as the MeshProgramSpec form would with those devices' ranges, so the
 // two forms share cache entries. The output is the last tensor in io_tensors, which the caller preallocates, and each
 // tensor parameter binds its own io_tensors entry. The program cache keys on a hash of the spec, or on
-// custom_program_hash combined with the names the run args refer to, each kernel's cores and its vararg counts.
+// custom_program_hash combined with the names the run args refer to, and each kernel's cores, array lengths and vararg
+// counts.
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const ProgramSpec& spec,

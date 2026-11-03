@@ -58,11 +58,12 @@ def split_tiles(device, num_tiles, tile_limit=None):
 
 
 def mul_program(
-    a, b, out, *, tile_limit=None, cores_for_tiles=None, relaxations=None, varargs=False, aliased_buffer=False
+    a, b, out, *, tile_limit=None, cores_for_tiles=None, relaxations=None, array_args=False, aliased_buffer=False
 ):
     """(spec, run_args) for out = a * b. Tensor parameters a, b and out are bound to a, b and out.
 
-    The program runs on the cores for cores_for_tiles tiles (by default, the output's tile count).
+    The program runs on the cores for cores_for_tiles tiles (by default, the output's tile count). With array_args, the
+    reader and writer take each core's tile count and first tile as the array work instead of two named arguments.
     """
     num_tiles = out.volume() // (32 * 32)
     work = num_tiles if tile_limit is None else min(tile_limit, num_tiles)
@@ -80,10 +81,10 @@ def mul_program(
         buffers["in_a"] = E.DFBAdvancedOptions(alias_with=["in_a_view"])
         buffers["in_a_view"] = E.DFBAdvancedOptions(alias_with=["in_a"])
 
-    if varargs:
+    if array_args:
         dm_options = dict(
-            compiler_options=E.KernelSpec.CompilerOptions(defines={"USE_VARARGS": "1"}),
-            advanced_options=E.KernelAdvancedOptions(num_runtime_varargs=2),
+            compiler_options=E.KernelSpec.CompilerOptions(defines={"USE_ARRAY_ARGS": "1"}),
+            runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_array_args=[E.ArrayArgDecl(name="work", size=2)]),
         )
     else:
         dm_options = dict(runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles", "start_id"]))
@@ -135,9 +136,9 @@ def mul_program(
         work_units=[E.WorkUnitSpec(name="mul", kernels=["reader", "compute", "writer"], target_nodes=cores)],
     )
 
-    if varargs:
-        varargs_by_core = {core: [num_tiles_by_core[core], start_id_by_core[core]] for core in num_tiles_by_core}
-        dm_run_args = dict(advanced_options=E.AdvancedKernelRunArgs(runtime_varargs=varargs_by_core))
+    if array_args:
+        work = {core: [num_tiles_by_core[core], start_id_by_core[core]] for core in num_tiles_by_core}
+        dm_run_args = dict(runtime_array_arg_values={"work": work})
     else:
         dm_run_args = dict(runtime_arg_values={"num_tiles": num_tiles_by_core, "start_id": start_id_by_core})
     run_args = E.ProgramRunArgs(
@@ -516,19 +517,19 @@ def test_sharded_typecast_on_borrowed_buffers(device):
     assert torch.equal(result, torch_input2.float())
 
 
-def test_varargs_and_aliased_buffers(device):
+def test_array_args_and_aliased_buffers(device):
     shape = (1, 1, 96, 64)
     expected, a, b, out = inputs(device, shape)
-    spec, run_args = mul_program(a, b, out, varargs=True, aliased_buffer=True)
+    spec, run_args = mul_program(a, b, out, array_args=True, aliased_buffer=True)
     assert_with_pcc(expected, ttnn.to_torch(E.generic_op([a, b, out], spec, run_args)), 0.9999)
 
     # A cache hit with new tensors and one tile fewer for the same cores, as in
     # test_later_calls_reuse_the_program_with_new_tensors_and_values: the last tile keeps the output's starting value
-    # only if the new vararg values reached the device.
+    # only if the new array values reached the device.
     expected, a2, b2, _ = inputs(device, shape, seed=1)
     initial = torch.full(shape, 7.0, dtype=torch.bfloat16)
     out2 = ttnn.from_torch(initial, layout=ttnn.TILE_LAYOUT, device=device)
-    _, run_args2 = mul_program(a2, b2, out2, varargs=True, aliased_buffer=True, tile_limit=5)
+    _, run_args2 = mul_program(a2, b2, out2, array_args=True, aliased_buffer=True, tile_limit=5)
     entries = device.num_program_cache_entries()
     result = tile_order(ttnn.to_torch(E.generic_op([a2, b2, out2], spec, run_args2)))
     assert device.num_program_cache_entries() == entries
@@ -615,22 +616,22 @@ def test_custom_program_hash_replaces_the_spec_hash(device):
     assert device.num_program_cache_entries() == entries + 2
 
 
-def test_custom_program_hash_still_keys_on_vararg_counts(device):
+def test_custom_program_hash_still_keys_on_array_lengths(device):
     expected, a, b, out = inputs(device, seed=9)
-    spec, run_args = mul_program(a, b, out, varargs=True)
+    spec, run_args = mul_program(a, b, out, array_args=True)
     entries = device.num_program_cache_entries()
     E.generic_op([a, b, out], spec, run_args, custom_program_hash=777)
 
-    # Three varargs per core under the same custom hash. Metal writes varargs by position, so reusing the program
-    # compiled for two would write past its argument buffer: this call compiles a program of its own.
+    # Arrays of three values under the same custom hash. Metal places each array by the length it compiled, so the
+    # program compiled for two values would reject these: this call compiles a program of its own.
     kernels = spec.kernels
     for index in (0, 2):
-        kernels[index].advanced_options = E.KernelAdvancedOptions(num_runtime_varargs=3)
+        kernels[index].runtime_arg_schema.runtime_array_args = [E.ArrayArgDecl(name="work", size=3)]
     spec.kernels = kernels
     for kernel in ("reader", "writer"):
         args = kernel_run_args(run_args, kernel)
-        varargs = {core: values + [0] for core, values in args.advanced_options.runtime_varargs.items()}
-        args.advanced_options = E.AdvancedKernelRunArgs(runtime_varargs=varargs)
+        work = {core: values + [0] for core, values in args.runtime_array_arg_values["work"].items()}
+        args.runtime_array_arg_values = {"work": work}
         replace_kernel_run_args(run_args, kernel, args)
     result = E.generic_op([a, b, out], spec, run_args, custom_program_hash=777)
     assert device.num_program_cache_entries() == entries + 2
@@ -867,52 +868,55 @@ def test_run_args_must_match_the_kernels(device, cache_hit, expect_error):
 
 
 @pytest.mark.parametrize("cache_hit", [False, True], ids=["first_call", "later_call"])
-def test_vararg_counts_are_checked_on_every_call(device, cache_hit, expect_error):
+def test_arrays_are_checked_on_every_call(device, cache_hit, expect_error):
     _, a, b, out = inputs(device)
-    spec, run_args = mul_program(a, b, out, varargs=True)
+    spec, run_args = mul_program(a, b, out, array_args=True)
+    # The reader also declares a common array, which it does not read.
+    kernels = spec.kernels
+    kernels[0].runtime_arg_schema.common_runtime_array_args = [E.ArrayArgDecl(name="table", size=2)]
+    spec.kernels = kernels
+    reader = kernel_run_args(run_args, "reader")
+    reader.common_runtime_array_arg_values = {"table": [1, 2]}
+    replace_kernel_run_args(run_args, "reader", reader)
     if cache_hit:
         E.generic_op([a, b, out], spec, run_args)
-        # Metal writes later calls' varargs unchecked, so this check matters most without validate_program_args.
+        # Metal checks a later call's arrays only as it writes them, so these checks matter most without
+        # validate_program_args.
         ttnn.CONFIG.validate_program_args = False
 
-    reader = kernel_run_args(run_args, "reader")
-    varargs = reader.advanced_options.runtime_varargs
-    core = next(iter(varargs))
-    varargs[core] = list(varargs[core]) + [0]
-    reader.advanced_options = E.AdvancedKernelRunArgs(runtime_varargs=varargs)
-    replace_kernel_run_args(run_args, "reader", reader)
-    with expect_error(RuntimeError, "declares 2 runtime varargs on node .*, but its run args give 3"):
-        E.generic_op([a, b, out], spec, run_args)
+    work = reader.runtime_array_arg_values["work"]
+    core = next(iter(work))
 
-    reader.advanced_options = E.AdvancedKernelRunArgs(runtime_varargs=varargs, common_runtime_varargs=[1])
-    replace_kernel_run_args(run_args, "reader", reader)
-    with expect_error(RuntimeError, "declares 0 common runtime varargs, but its run args give 1"):
-        E.generic_op([a, b, out], spec, run_args)
-
-    if not cache_hit:
-        # A first call checks the cores too, so varargs for a core the kernel does not run on are reported as that,
-        # even with a count the kernel does not declare.
-        varargs[core] = varargs[core][:2]
-        varargs[ttnn.CoreCoord(0, 5)] = [0]
-        reader.advanced_options = E.AdvancedKernelRunArgs(runtime_varargs=varargs)
+    def run_with(arrays, common_arrays):
+        reader.runtime_array_arg_values = arrays
+        reader.common_runtime_array_arg_values = common_arrays
         replace_kernel_run_args(run_args, "reader", reader)
-        with expect_error(RuntimeError, "does not run on node .*, but its run args give runtime varargs for it"):
-            E.generic_op([a, b, out], spec, run_args)
+        E.generic_op([a, b, out], spec, run_args)
+
+    table = {"table": [1, 2]}
+    with expect_error(RuntimeError, r"declares the runtime arrays \[work\], but its run args give \[\]"):
+        run_with({}, table)
+    with expect_error(RuntimeError, r"declares the common runtime arrays \[table\], but its run args give \[other\]"):
+        run_with({"work": work}, {"other": [1, 2]})
+    with expect_error(RuntimeError, "declares common runtime array 'table' with 2 values, but its run args give 3"):
+        run_with({"work": work}, {"table": [1, 2, 3]})
+    with expect_error(RuntimeError, "declares runtime array 'work' with 2 values, but its run args give 3 on node"):
+        run_with({"work": {**work, core: work[core] + [0]}}, table)
 
 
 LEFT_OUT_CORE_ERRORS = {
     False: "runtime argument 'num_tiles' does not have exactly one value",
-    True: "declares runtime varargs, but its run args give none for node",
+    True: "runtime array 'work' does not have exactly one value",
 }
 
 
-def leave_out_a_core(run_args, varargs):
-    """Drops one core from the compute kernel's num_tiles, or with varargs, from the reader's varargs."""
-    if varargs:
+def leave_out_a_core(run_args, array_args):
+    """Drops one core from the compute kernel's num_tiles, or with array_args, from the reader's array work."""
+    if array_args:
         reader = kernel_run_args(run_args, "reader")
-        values = reader.advanced_options.runtime_varargs
-        values.pop(next(iter(values)))
-        reader.advanced_options = E.AdvancedKernelRunArgs(runtime_varargs=values)
+        work = reader.runtime_array_arg_values["work"]
+        work.pop(next(iter(work)))
+        reader.runtime_array_arg_values = {"work": work}
         replace_kernel_run_args(run_args, "reader", reader)
     else:
         compute = kernel_run_args(run_args, "compute")
@@ -922,28 +926,28 @@ def leave_out_a_core(run_args, varargs):
         replace_kernel_run_args(run_args, "compute", compute)
 
 
-@pytest.mark.parametrize("varargs", [False, True], ids=["named_args", "varargs"])
-def test_a_core_left_out_of_the_first_call(device, varargs, expect_error):
+@pytest.mark.parametrize("array_args", [False, True], ids=["named_args", "array_args"])
+def test_a_core_left_out_of_the_first_call(device, array_args, expect_error):
     # Checked before the kernels compile, with validate_program_args off too.
     ttnn.CONFIG.validate_program_args = False
     _, a, b, out = inputs(device)
-    spec, run_args = mul_program(a, b, out, varargs=varargs)
-    leave_out_a_core(run_args, varargs)
-    with expect_error(RuntimeError, LEFT_OUT_CORE_ERRORS[varargs]):
+    spec, run_args = mul_program(a, b, out, array_args=array_args)
+    leave_out_a_core(run_args, array_args)
+    with expect_error(RuntimeError, LEFT_OUT_CORE_ERRORS[array_args]):
         E.generic_op([a, b, out], spec, run_args)
 
 
-@pytest.mark.parametrize("varargs", [False, True], ids=["named_args", "varargs"])
+@pytest.mark.parametrize("array_args", [False, True], ids=["named_args", "array_args"])
 @pytest.mark.parametrize("validate", [True, False], ids=["validate_on", "validate_off"])
-def test_a_core_left_out_of_a_later_call(device, validate, varargs, expect_error):
+def test_a_core_left_out_of_a_later_call(device, validate, array_args, expect_error):
     expected, a, b, out = inputs(device)
-    spec, run_args = mul_program(a, b, out, varargs=varargs)
+    spec, run_args = mul_program(a, b, out, array_args=array_args)
     E.generic_op([a, b, out], spec, run_args)
 
     ttnn.CONFIG.validate_program_args = validate
-    leave_out_a_core(run_args, varargs)
+    leave_out_a_core(run_args, array_args)
     if validate:
-        with expect_error(RuntimeError, LEFT_OUT_CORE_ERRORS[varargs]):
+        with expect_error(RuntimeError, LEFT_OUT_CORE_ERRORS[array_args]):
             E.generic_op([a, b, out], spec, run_args)
     else:
         # The left-out core keeps the values from the first call.
@@ -1078,6 +1082,14 @@ SPEC = ttnn.TensorSpec((1, 1, 64, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT)
 NODES = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
 
 
+def hash_schema(arrays=(("z", 2),), common_arrays=()):
+    return E.KernelSpec.RuntimeArgSchema(
+        runtime_arg_names=["x", "y"],
+        runtime_array_args=[E.ArrayArgDecl(name=name, size=size) for name, size in arrays],
+        common_runtime_array_args=[E.ArrayArgDecl(name=name, size=size) for name, size in common_arrays],
+    )
+
+
 def hash_spec(**kernel_fields):
     """A host-only spec for hash tests; kernel_fields replace fields of its first kernel."""
     reader = dict(
@@ -1085,10 +1097,11 @@ def hash_spec(**kernel_fields):
         source="reader.cpp",
         hw_config=E.create_reader_datamovement_config(),
         compile_time_args={"block": 1, "count": 2},
+        compile_time_array_args={"sizes": [1, 2], "steps": [4]},
         compiler_options=E.KernelSpec.CompilerOptions(defines={"A": "1", "B": "2"}),
         dfb_bindings=[E.producer_of("in", "in")],
         tensor_bindings=[E.TensorBinding(tensor_parameter_name="input", accessor_name="src")],
-        runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["x", "y"]),
+        runtime_arg_schema=hash_schema(),
     )
     reader.update(kernel_fields)
     return E.ProgramSpec(
@@ -1131,14 +1144,17 @@ STRUCTURAL_EDITS = {
     "compile_time_arg_value": lambda: hash_spec(compile_time_args={"block": 1, "count": 3}),
     "compile_time_arg_name": lambda: hash_spec(compile_time_args={"block": 1, "other": 2}),
     "runtime_arg_names": lambda: hash_spec(runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["x"])),
+    "compile_time_array_value": lambda: hash_spec(compile_time_array_args={"sizes": [1, 3], "steps": [4]}),
+    "compile_time_array_name": lambda: hash_spec(compile_time_array_args={"sizes": [1, 2], "other": [4]}),
+    "runtime_array_length": lambda: hash_spec(runtime_arg_schema=hash_schema(arrays=[("z", 3)])),
+    "runtime_array_name": lambda: hash_spec(runtime_arg_schema=hash_schema(arrays=[("w", 2)])),
+    "common_runtime_array": lambda: hash_spec(runtime_arg_schema=hash_schema(arrays=[], common_arrays=[("z", 2)])),
     "dfb_accessor": lambda: hash_spec(dfb_bindings=[E.producer_of("in", "other")]),
     "dfb_access_pattern": lambda: hash_spec(dfb_bindings=[E.blocked_producer_of("in", "in", 2)]),
     "tensor_accessor": lambda: hash_spec(
         tensor_bindings=[E.TensorBinding(tensor_parameter_name="input", accessor_name="other")]
     ),
     "hw_config": lambda: hash_spec(hw_config=E.create_writer_datamovement_config()),
-    "varargs": lambda: hash_spec(advanced_options=E.KernelAdvancedOptions(num_runtime_varargs=1)),
-    "common_varargs": lambda: hash_spec(advanced_options=E.KernelAdvancedOptions(num_common_runtime_varargs=1)),
     "compute_config": lambda: with_field(
         hash_spec(), "kernels", 1, hw_config=E.ComputeHardwareConfig(fpu_math_fidelity=ttnn.MathFidelity.LoFi)
     ),
@@ -1172,6 +1188,7 @@ NON_STRUCTURAL_EDITS = {
     "work_unit_name": lambda: with_field(hash_spec(), "work_units", 0, name="renamed"),
     "define_order": lambda: hash_spec(compiler_options=E.KernelSpec.CompilerOptions(defines={"B": "2", "A": "1"})),
     "compile_time_arg_order": lambda: hash_spec(compile_time_args={"count": 2, "block": 1}),
+    "compile_time_array_order": lambda: hash_spec(compile_time_array_args={"steps": [4], "sizes": [1, 2]}),
 }
 
 
