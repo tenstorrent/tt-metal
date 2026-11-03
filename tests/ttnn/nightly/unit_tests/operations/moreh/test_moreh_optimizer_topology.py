@@ -66,6 +66,18 @@ def _sharded_nd(tensor, mesh_device, dim):
     )
 
 
+def _sharded_along_rows(tensor, mesh_device, dim):
+    """N-D label ``{1,N},[Shard(dim), Replicate]``: split along mesh axis 0, which holds one device on the 1xN mesh, so
+    every device holds the whole tensor."""
+    return ttnn.from_torch(
+        tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(dim, None)),
+    )
+
+
 GRAD_LABELS = {"collapsed": ["Shard(3)"], "nd": ["Replicate", "Shard(3)"]}
 
 
@@ -680,8 +692,11 @@ def test_clip_grad_norm_replicated_grads_keep_replicate(mesh_device, preallocate
 # --- dot_backward -----------------------------------------------------------------------------------------------
 
 
-def _dot_backward_inputs(mesh_device, *, want_other_grad, input_grad_label, other_label, other_grad_label="shard"):
-    """output_grad and input replicated; other sharded on dim 3 (collapsed or N-D label); the caller's input_grad
+def _dot_backward_inputs(
+    mesh_device, *, want_other_grad, input_grad_label, other_label, other_grad_label="shard", input_label="replicate"
+):
+    """output_grad replicated; input replicated or ``[Shard(3), Replicate]`` (``shard_rows``); other sharded on dim 3
+    (collapsed or N-D label); the caller's input_grad replicated, Shard(3) or ``[Shard(2), Replicate]`` (``stale``),
     and other_grad replicated or Shard(3); other_grad optional."""
     torch.manual_seed(3)
     num_devices = mesh_device.get_num_devices()
@@ -694,13 +709,17 @@ def _dot_backward_inputs(mesh_device, *, want_other_grad, input_grad_label, othe
     nan_wide = torch.full([1, 1, 1, n * num_devices], float("nan"), dtype=torch.bfloat16)
     tensors = {
         "output_grad": _replicated(output_grad, mesh_device),
-        "input": _replicated(input_, mesh_device),
-        "other": _place_grad(other, mesh_device, other_label),
-        "input_grad": (
-            _replicated(nan_local, mesh_device)
-            if input_grad_label == "replicate"
-            else _sharded(nan_wide, mesh_device, 3)
+        "input": (
+            _replicated(input_, mesh_device)
+            if input_label == "replicate"
+            else _sharded_along_rows(input_, mesh_device, 3)
         ),
+        "other": _place_grad(other, mesh_device, other_label),
+        "input_grad": {
+            "replicate": lambda: _replicated(nan_local, mesh_device),
+            "shard": lambda: _sharded(nan_wide, mesh_device, 3),
+            "stale": lambda: _sharded_along_rows(nan_local, mesh_device, 2),
+        }[input_grad_label](),
         "other_grad": (
             None
             if not want_other_grad
@@ -806,4 +825,40 @@ def test_dot_backward_replicated_other_grad_keeps_replicate(mesh_device):
     _assert_label(input_grad_out, ["Shard(3)"], "input_grad")
     _assert_label(other_grad_out, ["Replicate"], "other_grad")
     _assert_label(t["other_grad"], ["Replicate"], "caller's other_grad handle")
+    _check_dot_backward_numerics(mesh_device, output_grad, input_, t, input_grad_out, other_grad_out)
+
+
+@pytest.mark.parametrize(
+    "input_label, input_grad_label",
+    [("shard_rows", "replicate"), ("replicate", "stale")],
+    ids=["input_split_along_the_one_device_axis", "stale_input_grad_label"],
+)
+def test_dot_backward_rejected_input_grad_takes_its_factors_union(mesh_device, input_label, input_grad_label):
+    """input_grad = output_grad * other with other ``[Replicate, Shard(3)]``: the caller's input_grad is rejected and
+    takes the union of output_grad and other, other's ``[Replicate, Shard(3)]``, on both handles. A union over every
+    tensor of the op would let another label decide mesh axis 0: an input ``[Shard(3), Replicate]``, the same on every
+    device, comes first in tensor order and its Shard(3) also claims dim 3, so other's Shard(3) would be dropped; or
+    the caller's own old ``[Shard(2), Replicate]`` input_grad label."""
+    output_grad, input_, t = _dot_backward_inputs(
+        mesh_device,
+        want_other_grad=False,
+        input_grad_label=input_grad_label,
+        other_label="nd",
+        input_label=input_label,
+    )
+    input_slices = _device_slices(t["input"])
+    assert torch.equal(input_slices[0], input_slices[1]), "precondition: input is the same on every device"
+    input_grad_out, other_grad_out = ttnn.operations.moreh.dot_backward(
+        t["output_grad"],
+        t["input"],
+        t["other"],
+        input_grad=t["input_grad"],
+        other_grad=t["other_grad"],
+    )
+
+    _assert_label(input_grad_out, ["Replicate", "Shard(3)"], "input_grad")
+    _assert_label(t["input_grad"], ["Replicate", "Shard(3)"], "caller's input_grad handle")
+    assert input_grad_out.tensor_topology() == t["other"].tensor_topology()
+    assert input_grad_out.buffer_address() == t["input_grad"].buffer_address()
+    assert other_grad_out is None
     _check_dot_backward_numerics(mesh_device, output_grad, input_, t, input_grad_out, other_grad_out)
