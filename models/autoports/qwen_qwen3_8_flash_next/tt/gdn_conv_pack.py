@@ -17,9 +17,9 @@ WIDTHS = (512, 512, 1536)
 def flat_gdn_batches():
     """Row counts that use the packed history convolution (and the flat GDN decode path).
 
-    QWEN_FLASH_GDN_FLAT_B4=1 adds the 4-row view (one to four users).
+    The 4-row view (one to four users) is included unless QWEN_FLASH_GDN_FLAT_B4=0.
     """
-    return (4, 8, 16, 32) if os.environ.get("QWEN_FLASH_GDN_FLAT_B4", "0") == "1" else (8, 16, 32)
+    return (4, 8, 16, 32) if os.environ.get("QWEN_FLASH_GDN_FLAT_B4", "1") == "1" else (8, 16, 32)
 
 
 def history_convolution(model, projected, *, flat=False):
@@ -43,6 +43,10 @@ def history_convolution(model, projected, *, flat=False):
         current = ttnn.reshape(current, (batch, 1, width))
     joined = ttnn.concat([history, current], dim=1)
     sequence = ttnn.reshape(joined, (1, 4 * batch, width))
+    if 4 * batch % 32:
+        # The kernel needs tile-aligned rows; each selected row only sees its own four-row group, so
+        # zero groups after the real lanes do not change them.
+        sequence = ttnn.pad(sequence, [(0, 0), (0, 32 - 4 * batch % 32), (0, 0)], 0.0)
     outputs = ttnn.experimental.kda.qkv_causal_conv1d_silu(
         sequence,
         model.conv_decode_predecessor,
