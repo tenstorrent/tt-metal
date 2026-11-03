@@ -42,6 +42,53 @@ bool via_broadcast_has_contiguous_output_slice(const Tensor& input_tensor, int32
         page_extents.begin(), page_extents.begin() + gather_dim, [](const auto& extent) { return extent == 1; });
 }
 
+// The invariants the MINIMAL_DEFAULT row-free hash does not pin, checked on a miss and on every hit: the
+// buffers' storage and liveness (a tensor can be freed between calls) and the row-dependent shape rules.
+// Everything else the miss validator checks is fixed by the hashed specs and attributes.
+void validate_unhashed_invariants(const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_gather need to be allocated in buffers on device!");
+    const auto input_shape = input_tensor.padded_shape();
+    if (input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2) {
+        const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+        TT_FATAL(
+            input_shape[-2] % tile_height == 0,
+            "Input tensor height {} must be a multiple of the tile height {}",
+            input_shape[-2],
+            tile_height);
+    }
+    if (tensor_args.persistent_output_buffer.has_value()) {
+        const auto& output_tensor = tensor_args.persistent_output_buffer.value();
+        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
+        TT_FATAL(
+            output_tensor.is_allocated(),
+            "The persistent output buffer of all_gather needs to be allocated in a buffer on device!");
+        const auto output_shape = output_tensor.padded_shape();
+        TT_FATAL(
+            output_shape.size() == input_shape.size(),
+            "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
+            output_shape.size());
+        for (size_t i = 0; i < input_shape.size(); ++i) {
+            if (i == args.dim) {
+                TT_FATAL(
+                    output_shape[i] <= input_shape[i] * args.ring_size,
+                    "Error, Output tensor shape at dimension {} should be {} but has {}",
+                    i,
+                    input_shape[i] * args.ring_size,
+                    output_shape[i]);
+            } else {
+                TT_FATAL(
+                    output_shape[i] == input_shape[i],
+                    "Error, Output tensor shape at dimension {} should be {} but has {}",
+                    i,
+                    input_shape[i],
+                    output_shape[i]);
+            }
+        }
+    }
+}
+
 }  // namespace
 
 AllGatherAsyncVersion select_version(const AllGatherAsyncParams& operation_attributes) {
@@ -81,6 +128,7 @@ AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::
 
 void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+    validate_unhashed_invariants(args, tensor_args);
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& layout = input_tensor.layout();
     const auto& dtype = input_tensor.dtype();
@@ -93,8 +141,6 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
         "by the fabric api");
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
-    TT_FATAL(input_tensor.is_allocated(), "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(
         args.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
@@ -113,7 +159,6 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.persistent_output_buffer.has_value()) {
         const auto& output_tensor = tensor_args.persistent_output_buffer.value();
 
-        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
         TT_FATAL(
             output_tensor.layout() == layout,
             "Error, Output tensor layout should be same as input tensor layout but has {}",
@@ -139,30 +184,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
             "Unsupported output tensor memory layout {}.",
             output_tensor.memory_config().memory_layout());
 
-        // check the output tensor size
-        auto output_shape = output_tensor.padded_shape();
-        auto input_shape = input_tensor.padded_shape();
-        TT_FATAL(
-            output_shape.size() == input_shape.size(),
-            "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
-            output_shape.size());
-        for (size_t i = 0; i < input_shape.size(); ++i) {
-            if (i == args.dim) {
-                TT_FATAL(
-                    output_shape[i] <= input_shape[i] * args.ring_size,
-                    "Error, Output tensor shape at dimension {} should be {} but has {}",
-                    i,
-                    input_shape[i] * args.ring_size,
-                    output_shape[i]);
-            } else {
-                TT_FATAL(
-                    output_shape[i] == input_shape[i],
-                    "Error, Output tensor shape at dimension {} should be {} but has {}",
-                    i,
-                    input_shape[i],
-                    output_shape[i]);
-            }
-        }
+        // The output tensor size is checked in validate_unhashed_invariants (on hits too).
 
         if (version == AllGatherAsyncVersion::MINIMAL_DEFAULT) {
             // Checks specific to the MINIMAL_DEFAULT case
@@ -207,26 +229,15 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-// Only the row-dependent invariants: the row count is not in the MINIMAL_DEFAULT hash.
+// MINIMAL_DEFAULT hashes without the row count, so a hit re-checks what that hash does not pin; the other
+// versions hash the full specs and keep the full miss validation on hits, as before the custom hash.
 void AllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto input_shape = input_tensor.padded_shape();
-    if (input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2) {
-        TT_FATAL(
-            input_shape[-2] % tt::constants::TILE_HEIGHT == 0,
-            "Input tensor height {} must be tile-aligned",
-            input_shape[-2]);
+    if (select_version(args) != AllGatherAsyncVersion::MINIMAL_DEFAULT) {
+        validate_on_program_cache_miss(args, tensor_args);
+        return;
     }
-    if (tensor_args.persistent_output_buffer.has_value()) {
-        const auto output_shape = tensor_args.persistent_output_buffer->padded_shape();
-        TT_FATAL(output_shape.size() == input_shape.size(), "Output rank {} must match input", output_shape.size());
-        for (size_t i = 0; i < input_shape.size(); ++i) {
-            const bool ok = (i == args.dim) ? output_shape[i] <= input_shape[i] * args.ring_size
-                                            : output_shape[i] == input_shape[i];
-            TT_FATAL(ok, "Output shape {} does not fit the gather of input shape {}", output_shape, input_shape);
-        }
-    }
+    validate_unhashed_invariants(args, tensor_args);
 }
 
 ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
