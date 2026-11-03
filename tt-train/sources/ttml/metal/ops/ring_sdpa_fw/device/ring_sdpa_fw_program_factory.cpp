@@ -15,6 +15,11 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
+// Ring SDPA keeps the program main ran: one query tile-row per item, the largest of four, two or one K/V
+// tiles per step that divides the per-device sequence (a ring shard can be a tile or two long), and the
+// causal pairs on the cores as on main (causal_pairs; never cut). The kernels it runs are the shared
+// sdpa_fw ones, so sdpa_fw_op_test drives this config through the ring steps on one device (the Galaxy
+// ring test is the only multi-device coverage).
 SDPAForwardProgramConfig ring_program_config(uint32_t St) {
     uint32_t Sk_chunk_t = 4U;
     while (Sk_chunk_t > 1U && St % Sk_chunk_t != 0U) {
