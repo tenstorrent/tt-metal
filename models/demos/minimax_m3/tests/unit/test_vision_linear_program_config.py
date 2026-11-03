@@ -14,10 +14,10 @@ and checked on the host.
   At 16 patches, the smallest image, every linear keeps ttnn's own.
 - The helper takes its three limits as arguments: with other limits, linear_2 at 1024 patches gets the transposed split
   and fc1 at 2304 patches other K blocks.
-- For every patch count an image can have (multiples of 4 up to 2304), on the 11x10, 12x10 and 13x10 core grids that
-  Blackhole chips have depending on harvesting, every config passes the checks the matmul device op and its 2D
-  multicast factory make, the factory's circular buffers fit in LINEAR_L1_BYTES, and no config uses transpose_mcast
-  with fewer than LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core.
+- For every patch count the image processor gives by default (multiples of 4 from 16 to 2304), on the 11x10, 12x10
+  and 13x10 core grids that Blackhole chips have depending on harvesting, every config passes the checks the matmul
+  device op and its 2D multicast factory make, the factory's circular buffers fit in LINEAR_L1_BYTES, and no config
+  uses transpose_mcast with fewer than LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core.
 - linear() gives ttnn.linear the helper's config for the tiles of its operands' padded shapes and runs the activation,
   the accurate GELU in the MLPs, as an op of its own on the matmul's output.
 - M3VLMLP.fuse_gelu, off as built, runs the accurate GELU as that op; on, it puts the GELU into fc1's config where
@@ -227,9 +227,18 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
 
     # Each recorder returns its call, with the padded shape and device that linear() reads, so an op's x is the call
     # whose output it reads.
-    def record_linear(x, w, program_config, **kwargs):
+    def record_linear(x, w, program_config, compute_kernel_config, **kwargs):
         shape = (*x.padded_shape[:-1], w.padded_shape[-1])
-        calls.append(SimpleNamespace(op="linear", x=x, config=program_config, padded_shape=shape, device=x.device))
+        calls.append(
+            SimpleNamespace(
+                op="linear",
+                x=x,
+                config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                padded_shape=shape,
+                device=x.device,
+            )
+        )
         return calls[-1]
 
     def record_gelu(x, **kwargs):
@@ -262,6 +271,7 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
                 out = model(x)
                 fc1, *between, fc2 = calls
                 assert fc1.op == fc2.op == "linear" and fc1.x is x and out is fc2, (grid, patches, calls)
+                assert fc1.compute_kernel_config is fc2.compute_kernel_config is model.compute_kernel_config
                 assert fc2.config is None or fc2.config.fused_activation is None, (grid, patches)
                 if fuse_gelu and want is not None:
                     assert not between and fc2.x is fc1, (grid, patches, calls)

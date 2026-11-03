@@ -7,7 +7,7 @@ tt/vision/attention.py) vs the Torch reference, and of the model's RoPE tables p
 The device rotates q and k with ttnn.experimental.rotary_embedding_llama, which pairs lanes (2i, 2i+1) of a head, so
 the q and k rows of wqkv are packed in the head order of attention._rope_head_order, padded from 80 to 96, and
 rope.py lays out the reference's cos and sin in that order. The tests check, for square, non-square, two-frame and
-two-image grids:
+two-image grids and one with a side of 2 patches:
   - the op's rotation, run on host, of q and k in that order with the cos and sin of rope_cos_sin_padded equals
     the reference rotation bit for bit, keeps the 16 pad dims at zero and leaves q k^T as the reference's;
   - the attention computed on host from M3VLAttention's packed weights (q and k rows reordered) equals the
@@ -49,6 +49,7 @@ ROPE_GRIDS = {
     "h46w34": [(1, 46, 34)],
     "t2h16w16": [(2, 16, 16)],
     "two_images": [(1, 16, 16), (1, 34, 46)],
+    "h2w8": [(1, 2, 8)],  # 28x112, the thinnest image of the processor's smallest size: one row of 2x2 blocks
 }
 parametrize_rope_grids = pytest.mark.parametrize("grid_thw", list(ROPE_GRIDS.values()), ids=list(ROPE_GRIDS))
 
