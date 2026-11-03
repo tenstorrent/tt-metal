@@ -2,6 +2,7 @@
 """Execute setup/dispatch methods with meta host tensors and no TTNN import."""
 import ast
 import math
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -184,7 +185,7 @@ def test_parallel_qsa_propagates_serving_only_allocation_choices(batch, pool):
         "multichip_decoder.py",
         "ParallelQSA",
         ["build"],
-        {"ttnn": tt, "FusedQSA": Parent, "AttentionOutputProjection": projection},
+        {"ttnn": tt, "os": os, "FusedQSA": Parent, "AttentionOutputProjection": projection},
     )
     cls.cache_dtype = "fp8"
     with torch.device("meta"):
