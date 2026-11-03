@@ -87,8 +87,8 @@ _PATHS = [
     # Sliced segment map: 4 output tiles on a grid of 21 or more cores, each reading 32 source tiles, so every output
     # tile is cut into ranges written by different cores.
     ("tile_mapped_sliced", [1, 1, 4, 1000], [1, 1, 125, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    # LCM: a width change tile rows does not win, through the compute engine, which round-trips 32-bit data unchanged.
-    # 64 chunks of two input tiles, at most one per core against native's two output tiles each.
+    # LCM: a width change tile rows loses on, run through the compute engine, which round-trips 32-bit data unchanged.
+    # 64 two-tile chunks against 128 native output tiles: LCM wins by the 5x margin on any grid.
     ("lcm_fp32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32, ttnn.TILE_LAYOUT),
     ("lcm_int32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.int32, ttnn.TILE_LAYOUT),
     ("lcm_uint32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.uint32, ttnn.TILE_LAYOUT),
@@ -208,10 +208,10 @@ _ROUTES = [
     # Width change: tile rows saves only 2x the reads on far fewer cores, and bf16 cannot take the LCM kernel.
     ("tile_width_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
-    # The same width change in fp32: one core's LCM chunk of six input tiles is within the LCM margin of native's
-    # single round, so it stays native.
+    # The same width change in fp32: LCM runs its one six-tile chunk on one core while native spreads its six output
+    # tiles over six cores, and LCM is not 6x faster, so it stays native.
     ("tile_width_lcm_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT, "native"),
-    # A width split in fp32: a chunk of two input tiles per core against native's two output tiles per core.
+    # A width split in fp32: 64 two-tile chunks against 128 native output tiles, so LCM wins by the 5x margin.
     ("tile_split_lcm", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
     # A width that is not a multiple of 32 takes the segment map.
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
@@ -235,6 +235,28 @@ def _check_routing(device, in_shape, out_shape, dtype, layout, route):
     out = ttnn.reshape(x, out_shape, memory_config=_DRAM)
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
     assert device.num_program_cache_entries() == entries, f"auto did not take {route}"
+
+
+# LCM on shapes whose rank or outer dims differ from [1, 1, H, W]: the chunks run over the flattened tile rows, so they
+# cross batch boundaries. All win by the 5x margin and route to LCM.
+_LCM_EDGE = [
+    # 64 -> 32 splits: two-tile chunks against twice as many native output tiles.
+    ("batched", [2, 3, 64, 64], [2, 3, 128, 32]),
+    ("rank2", [2048, 64], [4096, 32]),
+    ("outer_change", [4, 32, 64], [2, 128, 32]),
+    # 64 -> 96: each six-tile chunk spans three one-tile-row batches; 48 chunks against 288 native output tiles.
+    ("chunk_spans_batches", [144, 32, 64], [3072, 96]),
+]
+_LCM_EDGE_CASES = [(*e, ttnn.float32) for e in _LCM_EDGE] + [
+    (*e, dtype) for e in _LCM_EDGE if e[0] == "batched" for dtype in (ttnn.int32, ttnn.uint32)
+]
+
+
+@pytest.mark.parametrize(
+    "case,in_shape,out_shape,dtype", _LCM_EDGE_CASES, ids=[f"{c[0]}-{c[3].name.lower()}" for c in _LCM_EDGE_CASES]
+)
+def test_reshape_codegen_lcm_edge_shapes(device, case, in_shape, out_shape, dtype):
+    _check_routing(device, in_shape, out_shape, dtype, ttnn.TILE_LAYOUT, "codegen")
 
 
 @pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
@@ -276,13 +298,18 @@ def test_reshape_codegen_new_shape_is_new_program(device):
 
 @pytest.mark.parametrize("entry", ["auto", "forced"])
 @pytest.mark.parametrize(
-    "big_shape,view_shape,out_shape",
-    [([1, 128, 1024], [1, 64, 1024], [1, 64, 8, 128]), ([2, 128, 1024], [2, 64, 1024], [2, 64, 8, 128])],
-    ids=["b1", "b2"],
+    "big_shape,view_shape,out_shape,dtype",
+    [
+        ([1, 128, 1024], [1, 64, 1024], [1, 64, 8, 128], ttnn.bfloat16),
+        ([2, 128, 1024], [2, 64, 1024], [2, 64, 8, 128], ttnn.bfloat16),
+        # The view routes to LCM, which checks the buffer against its own page count.
+        ([1, 1, 4096, 64], [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32),
+    ],
+    ids=["b1", "b2", "lcm_fp32"],
 )
-def test_reshape_codegen_view_on_larger_buffer(device, entry, big_shape, view_shape, out_shape):
-    source = _make(big_shape, ttnn.bfloat16)
-    x = _to_device(device, source, ttnn.bfloat16, ttnn.TILE_LAYOUT, _DRAM)
+def test_reshape_codegen_view_on_larger_buffer(device, entry, big_shape, view_shape, out_shape, dtype):
+    source = _make(big_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
     # Shrinking the volume with the last dim kept returns a view on x's whole buffer.
     view = ttnn.reshape(x, ttnn.Shape(view_shape))
     assert view.buffer_address() == x.buffer_address()
@@ -291,7 +318,7 @@ def test_reshape_codegen_view_on_larger_buffer(device, entry, big_shape, view_sh
     reshape = ttnn.reshape if entry == "auto" else _force_codegen
     out = reshape(view, out_shape, memory_config=_DRAM)
     expected = source.flatten()[: torch.Size(view_shape).numel()].reshape(out_shape)
-    _assert_bits(expected, ttnn.to_torch(out), ttnn.bfloat16)
+    _assert_bits(expected, ttnn.to_torch(out), dtype)
 
 
 def _l1_hog(device, bytes_per_core):
@@ -404,10 +431,21 @@ def test_reshape_codegen_bf16_never_takes_lcm(device):
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
 
 
-def test_reshape_codegen_lcm_multi_chunk_one_core(device):
-    # Three 96 -> 192 chunks on one core: compute tilizes 6 tiles at a time while the writer drains 8, so the output
-    # CB must wrap at a multiple of both and leave compute room while the writer holds a batch.
-    in_shape, out_shape, dtype = [1, 1, 3 * 64, 96], [1, 1, 3 * 32, 192], ttnn.float32
+# fp32 LCM cases on one core, so each runs several chunks through the same CBs.
+_LCM_ONE_CORE = [
+    # 96 -> 160: 15-tile chunks, compute tilizes 5 tiles at a time and the writer drains batches of 8. fit_lcm needs
+    # depth >= 2 * 8 + 5 - 1 = 20 and rounds it up to lcm(5, 8) = 40; 8 chunks put 120 tiles through it, three passes.
+    # Rounding to 8 (24) would split a tilize write and rounding to 5 (20) a writer batch at the wrap.
+    ("wrap", [1, 1, 1280, 96], [1, 1, 768, 160]),
+    # 256 -> 128: 8 input tiles per row exceed the 4 fp32 tiles DEST holds, so each row untilizes in two blocks; 4
+    # chunks of 8 tiles.
+    ("multi_block", [1, 1, 128, 256], [1, 1, 256, 128]),
+]
+
+
+@pytest.mark.parametrize("case,in_shape,out_shape", _LCM_ONE_CORE, ids=[c[0] for c in _LCM_ONE_CORE])
+def test_reshape_codegen_lcm_multi_chunk_one_core(device, case, in_shape, out_shape):
+    dtype = ttnn.float32
     one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
     source = _make(in_shape, dtype)
     expected = source.reshape(out_shape)
@@ -422,8 +460,8 @@ def test_reshape_codegen_lcm_multi_chunk_one_core(device):
 
 def test_reshape_codegen_lcm_falls_back_to_segment_map_when_no_plan_fits_l1(device):
     # A 96 -> 128 width change chunks lcm = 384 datums: 12 input and 12 output tiles, so the smallest LCM plan takes
-    # 28 fp32 tiles (112 KiB) per core, a 4-tile output CB written one tile at a time. 140 chunks give every core more
-    # than one round of native's tiles, so LCM wins with L1 free; with 96 KiB free the program factory builds the
+    # 28 fp32 tiles (112 KiB) per core, a 4-tile output CB written one tile at a time. 140 twelve-tile chunks against
+    # 1680 native output tiles, so LCM wins by the 5x margin with L1 free; with 96 KiB free the program factory builds the
     # segment map instead, a new program that auto takes as well.
     in_shape, out_shape, dtype = [1, 1, 140 * 128, 96], [1, 1, 140 * 96, 128], ttnn.float32
     source = _make(in_shape, dtype)

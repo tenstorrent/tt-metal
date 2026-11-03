@@ -7,8 +7,8 @@
 # (4) a small row-major call keeps its program key when the L1 frontier moves; (5) the row-major cases the merge
 # gate's test_reshape_codegen.py leaves out are bit-exact, route as fitted, and key the CB depth live L1 picks; (6) so
 # are the segment-map and LCM TILE cases it leaves out; (7) a routed call runs with the least free L1 native runs
-# with; (8) a segment map over its size caps runs native; (9) a plan chosen under L1 pressure traces when warmed up
-# under that pressure.
+# with; (8) a segment map over its size caps runs native, and so does an LCM call whose segment-map fallback is over
+# them; (9) a plan chosen under L1 pressure traces when warmed up under that pressure.
 
 import contextlib
 
@@ -418,7 +418,7 @@ def test_reshape_codegen_mapped_shrinks_input_depth_under_l1_pressure(device):
 
 # (id, in shape, out shape, dtype, layout, expected route), as in the gate's _ROUTES.
 _TILE_ROUTES = [
-    # One LCM chunk of two tiles against a native round.
+    # One two-tile LCM chunk against two native output tiles: LCM wins by the 5x margin.
     ("tile_lcm", [1, 1, 32, 64], [1, 1, 64, 32], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
     ("tile_split_lcm_int32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.int32, ttnn.TILE_LAYOUT, "codegen"),
     ("tile_unaligned_width_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
@@ -515,6 +515,25 @@ def test_reshape_codegen_mapped_over_caps_runs_native(device, expect_error):
     # Native compiled its program; auto taking codegen would compile a new one.
     entries = device.num_program_cache_entries()
     assert_equal(source.reshape(out_shape), ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)))
+    assert device.num_program_cache_entries() == entries, "auto did not run native"
+
+
+def test_reshape_codegen_lcm_over_map_caps_runs_native(device):
+    # LCM falls back to the segment map under L1 pressure, so auto takes it only while the map is within its caps. Each
+    # output tile of a 64 -> 32 split maps 64 segments, one per face row, 1 KiB at 16 B an entry, so the 16 MiB cap
+    # holds 16384 output tiles; 36864 (144 MiB of fp32) is well over it.
+    out_tiles = 36864
+    in_shape, out_shape, dtype = [1, 1, out_tiles * 16, 64], [1, 1, out_tiles * 32, 32], ttnn.float32
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)
+    # The forced entry has no fallback to lose, so it still runs LCM.
+    _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    # Only native's program stays cached; auto taking LCM would compile a new one.
+    device.clear_program_cache()
+    _assert_bits(expected, ttnn.to_torch(_force_native(x, out_shape, memory_config=_DRAM)), dtype)
+    entries = device.num_program_cache_entries()
+    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
     assert device.num_program_cache_entries() == entries, "auto did not run native"
 
 
