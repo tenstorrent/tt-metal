@@ -31,8 +31,9 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 # movement with chunked weights (tt/experts.py, tt/mlp.py), no trace, one command queue. The
 # unoptimized port measured 66.7, the matmul work alone 171.0, with #58503 294.1, before the router
 # 300.0, before the routed experts 312.8, with their w2 at HiFi2 609.1, before the large-input work
-# 626.7, before pirotski_matmul, streaming SDPA and the grouped_matmul rewrite 829.4.
-EXPECTED_SEQUENCES_PER_S = 1046.1
+# 626.7, before pirotski_matmul, streaming SDPA and the grouped_matmul rewrite 829.4, before
+# grouped_matmul_w1/w2, the small-M dense routing, the MoE glue rework and router_front_end 1046.1.
+EXPECTED_SEQUENCES_PER_S = 1127.3
 
 # Wide enough to absorb run-to-run kernel variation, tight enough to catch a real regression.
 MARGIN = 0.03
