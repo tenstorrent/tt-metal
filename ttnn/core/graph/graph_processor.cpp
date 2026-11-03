@@ -26,6 +26,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -953,15 +954,23 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 }
 
 node_id GraphProcessor::add_tensor(const Tensor& t) {
-    tt::tt_metal::Buffer* buffer = nullptr;
+    // Set only if the tensor's MeshBuffer owns its allocation.
+    const tt::tt_metal::distributed::MeshBuffer* buffer = nullptr;
+    // A lockstep allocation has one address on the whole MeshDevice. A per-node one is placed by each device.
+    bool lockstep = false;
+    // A device Buffer of the tensor local to this host. Its allocation is the one recorded for a per-node tensor.
+    const tt::tt_metal::Buffer* local_device_buffer = nullptr;
     nlohmann::json device_tensors_json = nlohmann::json::array();
     if (is_device_tensor(t) && t.is_allocated()) {
         const auto& mesh_buffer = t.mesh_buffer();
-        // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
-        // It has an ID different from the "backing" buffer that was used to perform the allocation.
-        // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
-        // buffer.
-        buffer = mesh_buffer.get_backing_buffer();
+        // `t.buffer()` returns a reference buffer allocated on first device in a mesh.
+        // It has an ID different from the allocation's, which was captured when the allocation was made.
+        // To deduplicate an entry for this buffer, use the allocation's ID.
+        if (mesh_buffer.unique_id().has_value()) {
+            buffer = &mesh_buffer;
+            lockstep = !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
+                mesh_buffer.device_local_config().sharding_args);
+        }
 
         // For multi-device tensors, capture per-device addresses and mesh device IDs.
         // In multi-host (SPMD) runs the tensor's coords span the full global mesh, but this
@@ -976,9 +985,12 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
             }
             auto* device_buffer = mesh_buffer.get_device_buffer(coord);
             if (device_buffer != nullptr) {
+                if (local_device_buffer == nullptr) {
+                    local_device_buffer = device_buffer;
+                }
                 device_tensors_json.push_back(
                     {{"device_id", device_buffer->device()->id()},
-                     {kMeshDeviceId, buffer != nullptr ? buffer->device()->id() : device_buffer->device()->id()},
+                     {kMeshDeviceId, lockstep ? buffer->device()->id() : device_buffer->device()->id()},
                      {"address", device_buffer->address()}});
             }
         }
@@ -1004,12 +1016,13 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     // declares where it lives. Record that, so a missing buffer type only ever means a host tensor.
     if (t.storage_type() == StorageType::DEVICE) {
         params[kMemoryConfig] = fmt::format("{}", t.memory_config());
-        const auto buffer_type = buffer != nullptr ? buffer->buffer_type() : t.memory_config().buffer_type();
+        const auto buffer_type =
+            buffer != nullptr ? buffer->device_local_config().buffer_type : t.memory_config().buffer_type();
         params[kBufferType] = std::to_string(static_cast<int>(buffer_type));
     }
 
     // Add buffer-related info (primary device for single-device tensors)
-    if (buffer != nullptr) {
+    if (lockstep) {
         params[kDeviceId] = std::to_string(buffer->device()->id());
         params[kAddress] = std::to_string(buffer->address());
     }
@@ -1033,8 +1046,13 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
                 break;
             case StorageType::HOST: log_debug(tt::LogAlways, "Tensor does not have buffer (on host)"); break;
         }
-    } else {
-        node_id buffer_node_id = add_buffer(buffer);
+    } else if (lockstep) {
+        node_id buffer_node_id = add_buffer(*buffer);
+        graph[buffer_node_id].connections.push_back(tensor_counter);
+    } else if (local_device_buffer != nullptr) {
+        // Each device Buffer of a per-node allocation shares the MeshBuffer's ID, and the allocation events carry the
+        // device's own ID. A host without a device Buffer of the tensor recorded no allocation for it.
+        node_id buffer_node_id = add_buffer(local_device_buffer);
         graph[buffer_node_id].connections.push_back(tensor_counter);
     }
 
@@ -1042,8 +1060,26 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
 }
 
 node_id GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
-    const auto buffer_unique_id = buffer->unique_id();
+    return add_buffer(
+        buffer->unique_id(), buffer->size(), buffer->buffer_type(), buffer->buffer_layout(), buffer->device()->id());
+}
 
+node_id GraphProcessor::add_buffer(const tt::tt_metal::distributed::MeshBuffer& mesh_buffer) {
+    const auto& config = mesh_buffer.device_local_config();
+    return add_buffer(
+        mesh_buffer.unique_id().value(),
+        mesh_buffer.device_local_size(),
+        config.buffer_type,
+        config.sharding_args.buffer_layout(),
+        mesh_buffer.device()->id());
+}
+
+node_id GraphProcessor::add_buffer(
+    std::size_t buffer_unique_id,
+    uint64_t size,
+    tt::tt_metal::BufferType buffer_type,
+    tt::tt_metal::TensorMemoryLayout layout,
+    int device_id) {
     if (const auto it = buffer_id_to_counter.find(buffer_unique_id); it != buffer_id_to_counter.end()) {
         return it->second;
     }
@@ -1051,11 +1087,13 @@ node_id GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
     const node_id counter = graph.size();
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
     std::unordered_map<std::string, std::string> params = {
-        {kSize, std::to_string(buffer->size())},
-        {kType, buffer->is_dram() ? "DRAM" : "L1"},
-        {kBufferType, std::to_string(static_cast<int>(buffer->buffer_type()))},
-        {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
-        {kDeviceId, std::to_string(buffer->device()->id())}};
+        {kSize, std::to_string(size)},
+        {kType,
+         buffer_type == tt::tt_metal::BufferType::DRAM || buffer_type == tt::tt_metal::BufferType::TRACE ? "DRAM"
+                                                                                                         : "L1"},
+        {kBufferType, std::to_string(static_cast<int>(buffer_type))},
+        {kLayout, tensorMemoryLayoutToString(layout)},
+        {kDeviceId, std::to_string(device_id)}};
 
     graph.push_back(Vertex{
         .counter = counter,

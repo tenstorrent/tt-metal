@@ -102,6 +102,10 @@ bool is_native_L1_sharding(
     if (!output_memory_config.is_sharded()) {
         return false;
     }
+    // The native path writes 2D shards; an ND-sharded output without a 2D shard spec goes through TensorAccessor.
+    if (!output_memory_config.shard_spec().has_value()) {
+        return false;
+    }
     // TST: predicate + false_spec
     if (!true_spec.has_value() && false_spec.has_value() && predicate_spec.memory_config().is_sharded()) {
         return is_native_L1_sharding(predicate_spec, *false_spec, output_memory_config);
@@ -969,6 +973,10 @@ tt::tt_metal::ShardSpec adjust_to_shape(
 
 tt::tt_metal::MemoryConfig compute_mem_config_actual(
     const Tensor& input_tensor, const ttnn::Shape& output_logical_shape) {
+    // An ND_SHARDED config has no 2D shard spec to adjust; its nd_shard_spec applies to any shape as is.
+    if (!input_tensor.memory_config().shard_spec().has_value()) {
+        return input_tensor.memory_config();
+    }
     const auto& padded_a_shape = input_tensor.padded_shape();
     const auto& padded_out_shape =
         input_tensor.tensor_spec().tensor_layout().compute_padded_shape(output_logical_shape);

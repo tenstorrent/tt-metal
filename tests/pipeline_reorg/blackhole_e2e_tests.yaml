@@ -235,12 +235,15 @@
   budget_type: e2e
 
 - id: bh-lb-disaggregated-prefill-kimi-k3-mla-perf
-  name: Disaggregated prefill Kimi-K3 MLA perf tests (LoudBox)
+  name: Disaggregated prefill Kimi-K3 MLA + AttnRes perf tests (LoudBox)
   model-name: disaggregated_prefill
+  # AttnRes perf runs on LoudBox and Galaxy only. QuietBox 2 cannot host it at Galaxy's TP of 4: its 2x2 wiring
+  # has no 2D torus-X 1x4 ring, attn_res_gather_softmax rejects 1D fabric, and TP2 overflows the read's L1.
   cmd: |
-    exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit_code=$?
-    exit $exit_code
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
+    pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit $?
+    ATTN_RES_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP2xTP4" -vvv --tb=short || exit $?
   skus:
     bh_loudbox:
       timeout: 10
@@ -269,6 +272,8 @@
   name: Disaggregated prefill Kimi-K3 MLA perf tests (QuietBox)
   model-name: disaggregated_prefill
   cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
     exit_code=0
     pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit_code=$?
     exit $exit_code
@@ -283,6 +288,8 @@
   name: Disaggregated prefill Kimi-K3 KDA perf tests (QuietBox)
   model-name: disaggregated_prefill
   cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
     KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP4xTP1" -vvv --tb=short || exit $?
     KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "ring" -vvv --tb=short || exit $?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_kimi_k3_perf -k quietbox -vvv --tb=short || exit $?
