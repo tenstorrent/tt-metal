@@ -55,6 +55,7 @@
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 #include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
+#include "impl/device/experimental/dram_core_kernels_internal.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
@@ -1223,6 +1224,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         }
         tensor_prefetcher_.reset();
     }
+
+    // Resident DRAM-core kernels still running: their owners' stop protocol, then wait for them.
+    ::tt::tt_metal::experimental::detail::StopDramCoreKernelsAtClose(dram_core_kernels_);
 
     // DRISC L1 arena is torn down after the prefetcher manager so any pipe-owned
     // allocation handles have already been released (pipes are user-owned and the
