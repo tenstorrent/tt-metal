@@ -445,16 +445,12 @@ def sliding_ring_prefill_attention(
         (gather_buffer_key, "ring_v"), num_local_kv_heads, gather_seq, head_dim, cache_v.dtype, cache_v.memory_config()
     )
 
-    out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+    out = ttnn.experimental.gemma4.sliding_ring_sdpa(
         tt_q,
         cache_k,
         cache_v,
-        None,
-        None,
-        None,
         persistent_output_buffer_k=buffer_k,
         persistent_output_buffer_v=buffer_v,
-        joint_strategy="rear",
         logical_n=logical_n,
         program_config=program_config,
         scale=scale,
@@ -467,8 +463,6 @@ def sliding_ring_prefill_attention(
         topology=ttnn.Topology.Linear,
         ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
         use_column_major_ccl=True,
-        is_causal=True,
-        is_balanced=False,
         slot_id=prefill_metadata.slot_idx,
         kv_actual_isl_tensor=prefill_metadata.kv_actual_global,
         kv_cache_num_layers=num_layers,
