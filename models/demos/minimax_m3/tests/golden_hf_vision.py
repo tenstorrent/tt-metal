@@ -3,7 +3,7 @@
 """
 Goldens for tests/test_vision_accuracy.py: Hugging Face's MiniMax-M3 vision tower and projector with the vision
 weights of the checkpoint in HF_MODEL, run on the CPU in fp32 (the goldens) and in bf16 (the error of a plain bf16
-run, which sets the test's tower bar).
+run, which sets the test's tower bar and which the test logs beside its own).
 
 Each image of IMAGES goes through the checkpoint's image processor, then MiniMaxM3VLModel.get_image_features. The
 model's vision weights are the checkpoint's, named by transformers' own rules for it (vision_weights), not through
@@ -17,7 +17,8 @@ otherwise reach the TT model and the goldens alike, and the test would pass.
     pre_layrnorm_rows  (64, 1280) bf16     the first rows of the pre_layrnorm output, which the test recomputes from
                                            HF_MODEL's weights to check that HF_MODEL is this checkpoint
 <out>/manifest.json names the checkpoint, the library versions, the CPU and the number of torch threads, and gives, per
-image, its file and the PCC of the bf16 run against the fp32 one; <out>/SHA256SUMS checks a copy
+image, its file and its sha256, which the test checks, and the error of the bf16 run against the fp32 one on each
+output: PCC, relative L2 error and the 1st percentile of the cosine between rows; <out>/SHA256SUMS checks a copy
 (sha256sum -c SHA256SUMS).
 
 Standalone (no test_ prefix, so pytest does not collect it). CPU only, no ttnn; needs transformers with
@@ -46,15 +47,22 @@ from safetensors.torch import save_file
 
 REPO = Path(__file__).resolve().parents[4]
 LLAMA_PROMPTS = "models/tt_transformers/demo/sample_prompts/llama_models"
-# The test's images: repo path, and the side of the top-left square kept (None: the whole image). Each makes 2304
-# patches (576 vision tokens). On the device, pasta and perf_report (48x48) had the lowest tower and the lowest final
-# PCC of six real images at 672x672; ocr_image (48x48) is a page of text and house (36x64) is not square.
+# The test's images, in the order it runs them: repo path, and the side of the top-left square kept (None: the whole
+# image), with their patch grids. The first four make 2304 patches (576 vision tokens, whole tiles): on the device,
+# pasta and perf_report (48x48) had the lowest tower and the lowest final PCC of six real images at 672x672, ocr_image
+# (48x48) is a page of text, and house (36x64) runs new RoPE tables on the programs the three before it built. cat
+# (34x46: 1564 patches, 391 tokens) takes the padded path most photos take: partial tiles of rows and of tokens and
+# masked keys in SDPA. cluster_cabling (42x54: 2268 patches, 567 tokens) is a 4:3 photo: on a 12x10 chip the per-patch
+# matmuls split their 71 tiles of rows 6 to a core, so the last core takes 5.
 IMAGES = {
     "pasta": (f"{LLAMA_PROMPTS}/pasta.jpeg", None),
     "perf_report": ("models/perf/images/example_perf_report.png", 1166),
     "ocr_image": (f"{LLAMA_PROMPTS}/ocr_image.jpeg", 941),
     "house": ("models/sample_data/house_in_field_1080p.jpg", None),
+    "cat": ("models/sample_data/huggingface_cat_image.jpg", None),
+    "cluster_cabling": ("tests/scale_out/4x_bh_quietbox/images/cluster_cabling.jpg", None),
 }
+GOLDEN_FORMAT = "minimax_m3 vision goldens 2"
 PRE_LAYRNORM_ROWS = 64
 # Name prefixes of MiniMaxM3VLModel's vision tower and projector weights.
 VISION_PREFIXES = ("vision_tower.", "multi_modal_projector.")
@@ -90,9 +98,9 @@ def save_manifest(out: str, manifest: dict) -> None:
     os.replace(path + ".tmp", path)
 
 
-def load_image(case: str) -> tuple:
-    """The image of IMAGES[case] in RGB, and where it came from. The crop must fit the image: PIL would pad it with
-    black."""
+def load_image(case: str, mode: str = "RGB") -> tuple:
+    """The image of IMAGES[case], converted from its decoded mode to mode (RGB for the processor), and where it came
+    from. The crop must fit the image: PIL would pad it with black."""
     path, side = IMAGES[case]
     with Image.open(REPO / path) as image:
         source = {
@@ -106,7 +114,7 @@ def load_image(case: str) -> tuple:
             if side > min(image.size):
                 raise ValueError(f"{case}: crop {side}x{side} does not fit the {image.size[0]}x{image.size[1]} image")
             image = image.crop((0, 0, side, side))
-        return image.convert("RGB"), source
+        return image.convert(mode), source
 
 
 def vision_weights(hf_model: str, model) -> dict:
@@ -175,6 +183,33 @@ def pcc(ref: torch.Tensor, out: torch.Tensor) -> float:
     return float(f"{torch.corrcoef(pair)[0, 1].item():.7g}")
 
 
+def rel_l2(ref: torch.Tensor, out: torch.Tensor) -> float:
+    """Relative L2 error, |out - ref| / |ref| over all values, in float64, to 7 significant digits."""
+    error = torch.linalg.vector_norm((out.double() - ref.double()).flatten()) / torch.linalg.vector_norm(ref.double())
+    return float(f"{error.item():.7g}")
+
+
+def gain(ref: torch.Tensor, out: torch.Tensor) -> float:
+    """The least-squares scale of out against ref, sum(out * ref) / sum(ref * ref), in float64, to 7 significant
+    digits: 1.0 when out has no scale error. PCC cannot see a scale. The goldens do not record it; the test logs it
+    for the encoder's outputs."""
+    ref, out = ref.double(), out.double()
+    return float(f"{((out * ref).sum() / (ref * ref).sum()).item():.7g}")
+
+
+def token_cosine_p01(ref: torch.Tensor, out: torch.Tensor) -> float:
+    """The 1st percentile of the cosine similarity between each row of out and the same row of ref (a vision token or a
+    patch), in float64, to 7 significant digits: the worst rows, which a PCC over all values averages away."""
+    ref, out = ref.double().flatten(1), out.double().flatten(1)
+    cosine = (ref * out).sum(1) / (torch.linalg.vector_norm(ref, dim=1) * torch.linalg.vector_norm(out, dim=1))
+    return float(f"{torch.quantile(cosine, 0.01).item():.7g}")
+
+
+def errors(ref: torch.Tensor, out: torch.Tensor) -> dict:
+    """The manifest's errors of out against ref: pcc, rel_l2 and cos_p01."""
+    return {"pcc": pcc(ref, out), "rel_l2": rel_l2(ref, out), "cos_p01": token_cosine_p01(ref, out)}
+
+
 def cpu_name() -> str | None:
     """The CPU's model name from /proc/cpuinfo, or None if there is none."""
     try:
@@ -219,10 +254,10 @@ def make_goldens(hf_model: str, out: str) -> dict:
     model.to(torch.bfloat16)
     for case, golden in goldens.items():
         tower, final = image_features(model, golden["pixel_values"].bfloat16(), golden["image_grid_thw"])
-        bf16_pcc = {"final": pcc(golden["final"], final), "tower": pcc(golden["tower_out"], tower)}
-        if not all(math.isfinite(value) for value in bf16_pcc.values()):
-            raise ValueError(f"{case}: the bf16 PCC of Hugging Face's model is not finite: {bf16_pcc}")
-        cases[case]["hf_bf16_pcc"] = bf16_pcc
+        bf16 = {"final": errors(golden["final"], final), "tower": errors(golden["tower_out"], tower)}
+        if not all(math.isfinite(value) for output in bf16.values() for value in output.values()):
+            raise ValueError(f"{case}: the bf16 errors of Hugging Face's model are not finite: {bf16}")
+        cases[case]["hf_bf16"] = bf16
 
     os.makedirs(out, exist_ok=True)
     checkpoint = os.path.basename(os.path.normpath(hf_model))
@@ -235,7 +270,7 @@ def make_goldens(hf_model: str, out: str) -> dict:
         }
         entry.update(save_case(out, case, goldens[case], metadata))
     manifest = {
-        "format": "minimax_m3 vision goldens 1",
+        "format": GOLDEN_FORMAT,
         "checkpoint": checkpoint,
         "checkpoint_path": os.path.abspath(hf_model),
         "reference": {
@@ -249,7 +284,8 @@ def make_goldens(hf_model: str, out: str) -> dict:
             "torch_threads": torch.get_num_threads(),
             "image_processor": type(processor).__name__,
         },
-        "hf_bf16_pcc": "the same Hugging Face modules cast to bf16 on the same CPU, against these fp32 goldens",
+        "hf_bf16": "the same Hugging Face modules cast to bf16 on the same CPU, against these fp32 goldens: PCC, "
+        "relative L2 error and 1st percentile of the per-row cosine",
         "pre_layrnorm_rows": PRE_LAYRNORM_ROWS,
         "made": {"by": str(Path(__file__).resolve().relative_to(REPO)), "date": datetime.date.today().isoformat()},
         "cases": cases,
@@ -267,8 +303,11 @@ def main() -> int:
         sys.exit("set HF_MODEL to the checkpoint directory")
     manifest = make_goldens(hf_model, out)
     for case, entry in manifest["cases"].items():
-        bf16 = entry["hf_bf16_pcc"]
-        print(f"{case}: grid {entry['grid_thw']}, Hugging Face bf16 PCC final {bf16['final']} tower {bf16['tower']}")
+        final, tower = entry["hf_bf16"]["final"], entry["hf_bf16"]["tower"]
+        print(
+            f"{case}: grid {entry['grid_thw']}, Hugging Face bf16 final PCC {final['pcc']} relL2 {final['rel_l2']},"
+            f" tower PCC {tower['pcc']} relL2 {tower['rel_l2']}"
+        )
     print(f"wrote {out}: {len(manifest['cases'])} images of {manifest['checkpoint']}, manifest.json and SHA256SUMS")
     return 0
 
