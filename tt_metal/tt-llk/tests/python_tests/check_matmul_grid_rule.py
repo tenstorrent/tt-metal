@@ -75,7 +75,10 @@ def check_pack() -> int:
     shapes = ((32, 32), (4, 32), (16, 32), (32, 16))
     cross = list(itertools.product(fm, fm, fm, "HF", fis, dims, dims, (1, 2, 8), (0, 2, 3, 4), shapes, (False, True), (False, True)))
     cross = [(a, b, o, sy, fi, rt, ct, kt, thr, sh[0], sh[1], d, l1) for a, b, o, sy, fi, rt, ct, kt, thr, sh, d, l1 in cross[::7]]
-    allrows = rows + cross
+    import gen_matmul_closed_off_cells as gen
+
+    cells = [(gen.SHORT[k[1]], gen.SHORT[k[2]], gen.SHORT[k[3]], "H", k[0], k[4], k[5], k[6], k[7], 32, 32, False, False) for k in gen.cells()[0]]
+    allrows = rows + cross + cells
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "llk_defs.h").write_text(STUB)
         (Path(d) / "llk_matmul_forms.h").write_text(HEADER.read_text())
@@ -217,7 +220,9 @@ def main() -> int:
         py += ("1" if grid_main_cell(*args) else "0") + ("1" if grid_unfused_post_cell(*args) else "0") + ("1" if grid_main_flip_cell(*args) else "0")
     bad = sum(x != y for x, y in zip(cpp, py))
     print(f"{len(rows)} grid rows, main's form: C++ {cpp[0::3].count('1')} python {py[0::3].count('1')}; separate post: C++ {cpp[1::3].count('1')} python {py[1::3].count('1')}; main flip: C++ {cpp[2::3].count('1')} python {py[2::3].count('1')}; {bad} differ")
-    return 1 if bad or len(cpp) != len(py) or check_tiny() or check_pack() or check_cell_table("main form table", "_GRID_MAIN_ROWS", "matmul_grid_main_form", "matmul_grid_main_cells") or check_cell_table("end fold off table", "_END_FOLD_OFF_ROWS", "matmul_end_fold_off", "matmul_end_fold_off_cells") or check_cell_table("keep flip off table", "_KEEP_FLIP_OFF_ROWS", "matmul_keep_flip_off", "matmul_keep_flip_off_cells") or check_forced() or check_dense_pack() else 0
+    import gen_matmul_closed_off_cells as gen
+
+    return 1 if bad or len(cpp) != len(py) or gen.main() or check_tiny() or check_pack() or check_cell_table("main form table", "_GRID_MAIN_ROWS", "matmul_grid_main_form", "matmul_grid_main_cells") or check_cell_table("end fold off table", "_END_FOLD_OFF_ROWS", "matmul_end_fold_off", "matmul_end_fold_off_cells") or check_cell_table("keep flip off table", "_KEEP_FLIP_OFF_ROWS", "matmul_keep_flip_off", "matmul_keep_flip_off_cells") or check_forced() or check_dense_pack() else 0
 
 
 if __name__ == "__main__":
