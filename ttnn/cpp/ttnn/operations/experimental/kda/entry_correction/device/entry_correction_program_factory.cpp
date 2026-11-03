@@ -54,8 +54,13 @@ tt::tt_metal::ProgramDescriptor build_program(
     const CoreRangeSet cores = kda_factory_detail::merged_core_set(attrs.cores);
     const auto& end = in.actual_end.value_or(in.actual_start);
 
-    // The F(0) (half 0) or F(I) (half 1) rows of the core's terms shard, in place.
+    // Sharded terms are read in place; interleaved ones stream a chunk row at a time.
+    const bool streamed = !in.terms.memory_config().is_sharded();
+    // The F(0) (half 0) or F(I) (half 1) rows of the core's terms shard, in place, or two chunk rows when streamed.
     const auto terms_cb = [&](uint32_t index, uint32_t half) {
+        if (streamed) {
+            return kda_factory_detail::cb_descriptor(index, 2 * kt, fp32_tile, tt::DataFormat::Float32, cores);
+        }
         auto cb = kda_factory_detail::cb_descriptor(index, per_core * kt, fp32_tile, tt::DataFormat::Float32, cores);
         cb.buffer = in.terms.buffer();
         cb.address_offset = half * per_core * kt * fp32_tile;
@@ -69,7 +74,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         kda_factory_detail::cb_descriptor(cb_tail, state_tiles, fp32_tile, tt::DataFormat::Float32, cores),
         terms_cb(cb_base, 0),
         terms_cb(cb_m, 1),
-        kda_factory_detail::cb_descriptor(cb_diff, per_core * kt, fp32_tile, tt::DataFormat::Float32, cores),
+        kda_factory_detail::cb_descriptor(
+            cb_diff, (streamed ? 2 : per_core) * kt, fp32_tile, tt::DataFormat::Float32, cores),
         kda_factory_detail::cb_descriptor(cb_out, 2 * kt, bf16_tile, tt::DataFormat::Float16_b, cores),
         kda_factory_detail::cb_descriptor(cb_a, kt, fp32_tile, tt::DataFormat::Float32, cores),
         kda_factory_detail::cb_descriptor(cb_b, kt, fp32_tile, tt::DataFormat::Float32, cores),
@@ -93,8 +99,10 @@ tt::tt_metal::ProgramDescriptor build_program(
         attrs.local_rows,
         kt,
         static_cast<uint32_t>(in.actual_end.has_value()),
-        cores_per_head};
-    for (const auto* tensor : {&in.final_a, &in.final_b, &in.entry, &in.tail_entry, &in.actual_start, &end}) {
+        cores_per_head,
+        static_cast<uint32_t>(streamed)};
+    for (const auto* tensor :
+         {&in.final_a, &in.final_b, &in.entry, &in.tail_entry, &in.actual_start, &end, &in.terms}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
     }
     std::vector<uint32_t> writer_ct = {cb_out, cb_final, cb_ctl_writer, num_chunks, kt};
@@ -117,7 +125,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     tt::tt_metal::KernelDescriptor compute{
         .kernel_source = std::string(kernel_dir) + "compute/entry_correction.cpp",
         .core_ranges = cores,
-        .compile_time_args = {cb_seed, cb_tail, cb_m, cb_base, cb_diff, cb_out, cb_a, cb_b, cb_final, cb_ctl, kt},
+        .compile_time_args =
+            {cb_seed, cb_tail, cb_m, cb_base, cb_diff, cb_out, cb_a, cb_b, cb_final, cb_ctl, kt, uint32_t(streamed)},
         .config = kda_factory_detail::compute_config_descriptor(mesh->arch(), attrs.compute_kernel_config),
     };
 
@@ -128,7 +137,8 @@ tt::tt_metal::ProgramDescriptor build_program(
          in.entry.buffer(),
          in.tail_entry.buffer(),
          in.actual_start.buffer(),
-         end.buffer()});
+         end.buffer(),
+         in.terms.buffer()});
     writer.emplace_common_runtime_args({output.buffer(), final_state.buffer()});
     for (uint32_t index = 0; index < attrs.cores.size(); ++index) {
         const uint32_t head = index / cores_per_head;

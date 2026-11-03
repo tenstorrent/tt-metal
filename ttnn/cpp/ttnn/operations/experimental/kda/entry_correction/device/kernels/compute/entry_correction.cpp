@@ -21,6 +21,8 @@ constexpr uint32_t cb_b = get_compile_time_arg_val(7);
 constexpr uint32_t cb_final = get_compile_time_arg_val(8);
 constexpr uint32_t cb_ctl = get_compile_time_arg_val(9);
 constexpr uint32_t kt = get_compile_time_arg_val(10);
+// Interleaved terms arrive a chunk row at a time: each chunk's difference is formed just before its product.
+constexpr bool streamed = get_compile_time_arg_val(11);
 constexpr uint32_t state_tiles = kt * kt;
 
 // output_c = F0_c + (FI_c - F0_c) @ seed per chunk, and this core's tile rows of final = A @ seed + B, accumulated in
@@ -39,7 +41,7 @@ void kernel_main() {
     cb_pop_front(cb_ctl, 1);
     // The differences first, for all of this core's chunks (they need no seed, so they run while the seeds arrive);
     // then per chunk F0's row is copied into DST and the K-sum accumulates on top of it.
-    if (chunks != 0) {
+    if (!streamed && chunks != 0) {
         cb_wait_front(cb_m, chunks * kt);
         cb_wait_front(cb_base, chunks * kt);
         cb_reserve_back(cb_diff, chunks * kt);
@@ -70,17 +72,40 @@ void kernel_main() {
     }
     for (uint32_t c = 0; c < chunks; ++c) {
         const uint32_t seed = c < group_chunks ? cb_seed : cb_tail;
+        // Tile index of this chunk's row in the base and difference buffers.
+        const uint32_t row = streamed ? 0 : c * kt;
+        if constexpr (streamed) {
+            cb_wait_front(cb_m, kt);
+            cb_wait_front(cb_base, kt);
+            cb_reserve_back(cb_diff, kt);
+            pack_reconfig_data_format(cb_diff);
+            reconfig_data_format(cb_m, cb_base);
+            sub_init(cb_m, cb_base);
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < kt; ++i) {
+                sub_tiles(cb_m, cb_base, i, i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < kt; ++i) {
+                pack_tile(i, cb_diff);
+            }
+            tile_regs_release();
+            cb_push_back(cb_diff, kt);
+            cb_wait_front(cb_diff, kt);
+            pack_reconfig_data_format(cb_out);
+        }
         cb_reserve_back(cb_out, kt);
         tile_regs_acquire();
         reconfig_data_format_srca(cb_base);
         copy_init(cb_base);
         for (uint32_t j = 0; j < kt; ++j) {
-            copy_tile(cb_base, c * kt + j, j);
+            copy_tile(cb_base, row + j, j);
         }
         reconfig_data_format<SrcOrder::Reverse>(cb_diff, seed);
         matmul_block_init(cb_diff, seed, false, kt, 1, kt);
         for (uint32_t k = 0; k < kt; ++k) {
-            matmul_block(cb_diff, seed, c * kt + k, k * kt, 0, false, kt, 1, kt);
+            matmul_block(cb_diff, seed, row + k, k * kt, 0, false, kt, 1, kt);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -89,8 +114,13 @@ void kernel_main() {
         }
         tile_regs_release();
         cb_push_back(cb_out, kt);
+        if constexpr (streamed) {
+            cb_pop_front(cb_m, kt);
+            cb_pop_front(cb_base, kt);
+            cb_pop_front(cb_diff, kt);
+        }
     }
-    if (chunks != 0) {
+    if (!streamed && chunks != 0) {
         cb_pop_front(cb_m, chunks * kt);
         cb_pop_front(cb_base, chunks * kt);
         cb_pop_front(cb_diff, chunks * kt);

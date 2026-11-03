@@ -7,8 +7,12 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.kda.utils import distributed_prefix, kda_device_params
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import AffineTransform, pack_transform
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    AffineTransform,
+    distributed_prefix,
+    kda_device_params,
+    pack_transform,
+)
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
