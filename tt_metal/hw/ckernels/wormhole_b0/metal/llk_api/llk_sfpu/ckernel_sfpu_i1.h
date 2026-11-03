@@ -82,8 +82,20 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+bool bf16_dest_i1();
+template <int ITERATIONS>
+void calculate_i1_bf16();
+// Whether BF16 DEST runs the generated i1 kernel as one call over the whole tile.
+inline constexpr bool i1_bf16_whole_tile = true;
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_i1() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_i1()) {
+            calculate_i1_bf16<ITERATIONS>();
+            return;
+        }
+    }
     constexpr float I1_MAX_INPUT = 88.5f;
     constexpr float I1_THRESHOLD = 10.0f;
 
@@ -142,10 +154,17 @@ inline void calculate_i1() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+void init_i1_bf16();
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void i1_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_i1_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_i1_bf16.h"
