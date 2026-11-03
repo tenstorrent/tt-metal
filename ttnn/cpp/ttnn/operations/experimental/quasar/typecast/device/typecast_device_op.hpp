@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -34,6 +35,9 @@ struct TypecastDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };

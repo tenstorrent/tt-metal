@@ -4,6 +4,7 @@
 
 #include "typecast_device_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/copy/source_output_topologies.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/hal.hpp>
@@ -131,6 +132,9 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
             input_tensor.layout(),
             preallocated_output_tensor.value().layout());
+        TT_FATAL(
+            preallocated_output_tensor.value().device() == input_tensor.device(),
+            "Typecast operation requires the preallocated output to be on the same device as the input.");
     }
 }
 
@@ -152,6 +156,12 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
         return *tensor_args.preallocated_output;
     }
     return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> TypecastDeviceOperation::compute_output_topologies(
+    const TypecastParams& /*args*/, const TypecastInputs& tensor_args) {
+    // A typecast is distributed like its source.
+    return source_output_topologies(tensor_args.input, tensor_args.preallocated_output);
 }
 
 bool TypecastDeviceOperation::skip_launch(

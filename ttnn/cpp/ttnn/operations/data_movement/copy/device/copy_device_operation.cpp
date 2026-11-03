@@ -5,6 +5,7 @@
 #include "copy_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
+#include "ttnn/operations/copy/source_output_topologies.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -196,6 +197,12 @@ CopyDeviceOperation::tensor_return_value_t CopyDeviceOperation::create_output_te
     const Tensor& input_tensor = tensor_args.input;
     const spec_return_value_t spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(spec, input_tensor.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> CopyDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // A copy is distributed like its source.
+    return source_output_topologies(tensor_args.input, tensor_args.preallocated_output);
 }
 
 CopyDeviceOperation::tensor_return_value_t copy(
