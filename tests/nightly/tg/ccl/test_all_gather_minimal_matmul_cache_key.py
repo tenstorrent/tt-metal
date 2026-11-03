@@ -29,8 +29,9 @@ DEVICE_PARAMS = {
     "trace_region_size": 90112,
 }
 
-# The three AGMM layers of MiniMax-H3 with TP=4 (N is per device); grid, blocking, workers and orientation
-# come from the model's pin table, one pin per length class.
+# The three AGMM layers of MiniMax-H3 with TP=4 (N is the per-device weight width; for ff1 that is the packed
+# [gate | up] width, half of it comes out); grid, blocking, workers and orientation come from the model's pin
+# table, one pin per length class.
 H3_LAYERS = {
     "to_qkv": dict(K=5376, N=5376),
     "to_out": dict(K=7168, N=1344, fuse_addcmul=True),
@@ -70,11 +71,13 @@ def _run_layer(mesh, layer, tile_rows, pin, pingpong=None, **overrides):
     }
     m_block, k_block, n_block = cfg["blocks"]
     sems, barrier, buffer = pingpong if pingpong is not None else (None, None, None)
+    fuse_swiglu = cfg.get("fuse_swiglu", False)
     results = run_test_linear(
         mesh,
         M=tile_rows * 32 * mesh.shape[1],
         K=cfg["K"],
-        N=cfg["N"],
+        # The helper's N is the output width and it packs a 2N-wide weight for fused SwiGLU.
+        N=cfg["N"] // 2 if fuse_swiglu else cfg["N"],
         M_block_size=m_block,
         K_block_size=k_block,
         N_block_size=n_block,
@@ -90,7 +93,7 @@ def _run_layer(mesh, layer, tile_rows, pin, pingpong=None, **overrides):
         fuse_addcmul=cfg.get("fuse_addcmul", False),
         addcmul_scalar=1.0,
         broadcast_gate=False,
-        fuse_swiglu=cfg.get("fuse_swiglu", False),
+        fuse_swiglu=fuse_swiglu,
         sp_axis=1,
         tp_axis=0,
         cluster_axis=0,
