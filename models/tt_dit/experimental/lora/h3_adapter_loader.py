@@ -9,7 +9,8 @@ The device weights are already permuted/fused, and ``register_lora`` does not tr
 ``to_qkv``) and ``prepare_for_fused_swiglu`` (``ff1``; mandatory, since the mixin's swiglu guard misses it).
 
 Scale is ``alpha / rank`` from a per-target ``.alpha`` tensor, else ``__metadata__`` (lightx2v Turbo),
-else 1 -- never assume ``alpha == rank``. Unmapped keys and ``.diff`` deltas raise.
+else 1 -- never assume ``alpha == rank``. Unmapped keys raise. Dense edits (``.diff``, ``.diff_b``,
+``.set_weight``) have no device form; the host merge reads them via :func:`iter_h3_dense_edits`.
 """
 from __future__ import annotations
 
@@ -30,6 +31,9 @@ _STRIP_PREFIXES = ("model.diffusion_model.", "diffusion_model.", "transformer.",
 # PEFT (``.lora_A.default.weight``) and kohya (``lora_down``/``lora_up``) spellings.
 _LOW_RANK_RE = re.compile(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$")
 _SLOT_MAP = {"A": "A", "down": "A", "B": "B", "up": "B"}
+
+# FastVideo dense edits: suffix -> (checkpoint parameter suffix, kind).
+_DENSE_SUFFIXES = {".diff": (".weight", "add"), ".diff_b": (".bias", "add"), ".set_weight": (".weight", "set")}
 
 _BLOCK_RE = re.compile(r"^(?P<stack>transformer_blocks|token_refiner\.refiner_blocks)\.(?P<idx>\d+)\.(?P<rest>.+)$")
 
@@ -150,11 +154,35 @@ def iter_h3_host_deltas(
     """`h3_host_deltas` one target at a time, so only one dense delta is alive."""
     with safe_open(path, framework="pt", device="cpu") as handle:
         metadata = dict(handle.metadata() or {})
-        raw = {key: handle.get_tensor(key) for key in handle.keys() if _strip_prefixes(key).startswith(prefixes)}
+        raw = {
+            key: handle.get_tensor(key)
+            for key in handle.keys()
+            if _strip_prefixes(key).startswith(prefixes) and _dense_target(_strip_prefixes(key)) is None
+        }
     pairs, alphas = _collect_pairs(raw)
     file_alpha = _file_alpha(metadata)
     for base, ab in sorted(pairs.items()):
         yield f"{base}.weight", scale * _scale_of(base, ab, alphas, file_alpha) * (ab["B"].float() @ ab["A"].float())
+
+
+def iter_h3_dense_edits(path: str, prefixes: tuple[str, ...]) -> Iterator[tuple[str, str, torch.Tensor]]:
+    """``(checkpoint_key, kind, tensor)`` per dense edit under ``prefixes``; ``kind`` is ``"add"`` or ``"set"``.
+
+    Unscaled: the file applies them after the LoRA delta at full weight.
+    """
+    with safe_open(path, framework="pt", device="cpu") as handle:
+        for key in handle.keys():
+            stripped = _strip_prefixes(key)
+            target = _dense_target(stripped)
+            if target is not None and stripped.startswith(prefixes):
+                yield *target, handle.get_tensor(key)
+
+
+def _dense_target(key: str) -> tuple[str, str] | None:
+    for suffix, (param, kind) in _DENSE_SUFFIXES.items():
+        if key.endswith(suffix):
+            return key[: -len(suffix)] + param, kind
+    return None
 
 
 def _read(path: str) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
