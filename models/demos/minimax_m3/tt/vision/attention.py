@@ -154,8 +154,6 @@ class M3VLAttention(LightweightModule):
     ) -> "M3VLAttention":
         """head_dim is ref_attn's, the head count follows from q_proj, and q, k and v heads are padded to
         padded_head_dim lanes (module docstring)."""
-        for n in ("q_proj", "k_proj", "v_proj", "out_proj"):
-            assert hasattr(ref_attn, n), f"expected {n} on {type(ref_attn).__name__}"
         head_dim = ref_attn.head_dim
         num_heads = ref_attn.q_proj.weight.shape[0] // head_dim
         wqkv = _pack_wqkv_weight(

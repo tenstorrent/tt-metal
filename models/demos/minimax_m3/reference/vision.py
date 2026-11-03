@@ -77,8 +77,14 @@ class MiniMaxM3VisionConfig:
     def from_hf_config(cls, config: dict, **overrides) -> "MiniMaxM3VisionConfig":
         """Build from a config dict: the checkpoint's config.json (transformers 4.52.4 layout, with the merge and
         temporal sizes under ``img_token_compression_config``) or ``MiniMaxM3VLConfig.to_dict()`` (transformers 5.12).
+
+        Raises ValueError for a vision ``hidden_act`` other than ``gelu``: Hugging Face's vision MLP reads it, and this
+        reference and the TT MLP run the exact (erf) GELU only.
         """
         vc = config["vision_config"]
+        activation = vc.get("hidden_act", "gelu")
+        if activation != "gelu":
+            raise ValueError(f"vision_config hidden_act must be 'gelu', the exact (erf) GELU, got {activation!r}")
         compression = vc.get("img_token_compression_config") or config.get("img_token_compression_config") or {}
         rope = vc.get("rope_parameters") or {}
         values = dict(

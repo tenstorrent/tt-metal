@@ -37,7 +37,7 @@ from models.common.tensor_utils import nearest_32
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.block import M3VLBlock
 from models.demos.minimax_m3.tt.vision.common import to_device
-from models.demos.minimax_m3.tt.vision.image_input import check_image_grid, check_image_input
+from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE, check_image_grid, check_image_input
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 from models.demos.minimax_m3.tt.vision.projector import M3VLProjector
@@ -67,6 +67,13 @@ class M3VLVisionModel(LightweightModule):
         projector: Optional[M3VLProjector] = None,
     ):
         super().__init__()
+        # The input checks and num_tokens count tokens with image_input.MERGE_SIZE; the RoPE positions and the projector's
+        # fold use the config's merge size.
+        if config.spatial_merge_size != MERGE_SIZE:
+            raise ValueError(
+                f"config spatial_merge_size must be {MERGE_SIZE}, as image_input counts tokens with it,"
+                f" got {config.spatial_merge_size}"
+            )
         self.device = mesh_device
         self.config = config
         self.padded_head_dim = padded_head_dim

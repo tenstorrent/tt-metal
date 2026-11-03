@@ -50,10 +50,6 @@ class M3VLBlock(LightweightModule):
         padded_head_dim: int,
         dtype=ttnn.bfloat16,
     ) -> "M3VLBlock":
-        for attr in ("layer_norm1", "layer_norm2", "self_attn", "mlp"):
-            assert hasattr(
-                ref_layer, attr
-            ), f"expected MiniMaxM3VLVisionEncoderLayer-like module with .{attr}, got {type(ref_layer).__name__}"
         return cls(
             layer_norm1=M3VLLayerNorm.from_torch(mesh_device, ref_layer.layer_norm1, dtype=dtype),
             attention=M3VLAttention.from_torch(mesh_device, ref_layer.self_attn, padded_head_dim, dtype=dtype),
