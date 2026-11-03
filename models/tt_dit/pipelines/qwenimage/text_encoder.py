@@ -20,7 +20,7 @@ from models.tt_dit.encoders.qwen25vl.vision_qwen25vl import Qwen25VlVisionModel
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
-from models.tt_dit.utils import tensor
+from models.tt_dit.utils import cache, tensor
 from models.tt_dit.utils.mesh import reshape_for_factor
 from models.tt_dit.utils.padding import torch_pad
 from models.tt_dit.utils.tracing import Tracer
@@ -102,6 +102,7 @@ class TextEncoder:
         With ``offload``, the device weights are loaded for each ``encode_cfg`` and freed after it,
         which leaves their memory to the transformer. Encoding is then never traced. With
         ``offload_vision``, only the vision tower's weights are, and only around encoding the images.
+        Both need ``TT_DIT_CACHE_DIR``, which the reloads read from.
 
         The vision tower pads its patches to one length per image count up to ``max_images``: that
         many images of the largest patch count among ``vision_image_sizes``, the (width, height) the
@@ -112,6 +113,9 @@ class TextEncoder:
         self._format = prompt_format
         self._offload = offload and not use_torch
         self._offload_vision = offload_vision and not use_torch
+        if (self._offload or self._offload_vision) and not cache.cache_dir_is_set():
+            msg = "offloading the text encoder needs the TT_DIT_CACHE_DIR cache"
+            raise ValueError(msg)
         self._tokenizer = transformers.Qwen2Tokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer")
         self._processor: transformers.Qwen2VLProcessor | None = None
         if prompt_format.image_prompt is not None:
