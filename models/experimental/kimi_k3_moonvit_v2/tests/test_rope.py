@@ -14,6 +14,7 @@ import ttnn
 from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import apply_rope
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    random_tensor,
     assert_pcc,
     device_config,
     row_grid,
@@ -58,7 +59,7 @@ def test_rope_apply(mesh_device, sp_axis, num_links, config, reference, size):
     grid = row_grid(size, sp_axis)
     grid_thws = torch.tensor(grid)
     h, w = check_grid(grid_thws, config)
-    q = torch.randn(h * w, config.num_attention_heads, config.head_dim, dtype=torch.bfloat16)
+    q = random_tensor(h * w, config.num_attention_heads, config.head_dim)
     _, _, rope_freqs_cis = reference_rope(reference, grid_thws)
     golden, _ = apply_rope(q, q, rope_freqs_cis)
 

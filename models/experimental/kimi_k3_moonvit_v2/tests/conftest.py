@@ -3,21 +3,55 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Fixtures. `reference` is the torch golden with random or checkpoint weights; the TT modules
-load its `state_dict()`."""
+load its `state_dict()`. `mesh_device` replaces the repo-wide fixture for this folder (see there)."""
 
 from __future__ import annotations
 
 import pytest
 import torch
 
+import ttnn
 from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import (
     CHECKPOINT_ENV,
     checkpoint_path,
     load_vision_state_dict,
 )
 from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import KimiK3VisionModel, load_vision_config
-from models.experimental.kimi_k3_moonvit_v2.tests.common import TEST_LAYERS
+from models.experimental.kimi_k3_moonvit_v2.tests.common import LOUDBOX_SHAPE, RING_SIZE, TEST_LAYERS
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
+from tests.scripts.common import get_updated_device_params
+
+
+@pytest.fixture
+def mesh_device(request, device_params):
+    """`(1, 1)`: one chip, opened on its own. `(1, RING_SIZE)`: the first row of the LoudBox's 2x4 mesh.
+
+    All 8 chips are opened for the ring because fabric setup on a chip waits for every one of its
+    ethernet links, including those to the other row, and times out if those chips are not opened
+    too. Replaces the repo-wide fixture rather than wrapping it: a wrapper would take the mesh
+    parameter, and the repo fixture would then open its default mesh."""
+    shape = tuple(request.param)
+    open_shape = LOUDBOX_SHAPE if shape == (1, RING_SIZE) else shape
+    num_chips = open_shape[0] * open_shape[1]
+    if ttnn.get_num_devices() < num_chips:
+        pytest.skip(f"needs {num_chips} chips, the machine has {ttnn.get_num_devices()}")
+
+    params = get_updated_device_params(device_params)
+    fabric_config = params.pop("fabric_config", None)
+    if fabric_config:
+        ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.STRICT_INIT)
+    parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*open_shape), **params)
+    mesh = parent
+    if open_shape != shape:
+        mesh = parent.create_submesh(ttnn.MeshShape(*shape), ttnn.MeshCoordinate(0, 0))
+
+    yield mesh
+
+    if mesh is not parent:
+        ttnn.close_mesh_device(mesh)
+    ttnn.close_mesh_device(parent)
+    if fabric_config:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 @pytest.fixture(scope="session")

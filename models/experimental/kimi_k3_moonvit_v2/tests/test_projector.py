@@ -9,6 +9,7 @@ from __future__ import annotations
 import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    random_tensor,
     assert_pcc,
     device_config,
     row_grid,
@@ -35,7 +36,7 @@ def test_projector(mesh_device, sp_axis, num_links, config, reference, size):
 
     _, h, w = grid[0]
     n = h * w // config.merge_area
-    x = torch.randn(n, config.merge_area, config.hidden_size, dtype=torch.bfloat16)
+    x = random_tensor(n, config.merge_area, config.hidden_size)
     with torch.no_grad():
         (golden,) = reference.mm_projector([x])
 

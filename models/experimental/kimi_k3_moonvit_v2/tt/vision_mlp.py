@@ -23,10 +23,12 @@ class TT_Vision_MLP(Module):
         super().__init__()
         kwargs = dict(bias=config.linear_bias, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config)
         self.fc0 = Linear(config.hidden_size, config.intermediate_size, activation_fn="gelu_tanh", **kwargs)
-        self.fc1 = Linear(config.intermediate_size, config.hidden_size, **kwargs)
+        # fp32 out: added to the fp32 residual stream (vision_block.py).
+        self.fc1 = Linear(config.intermediate_size, config.hidden_size, output_dtype=ttnn.float32, **kwargs)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """[1, 1, rows, hidden_size] -> the same shape; rows are this device's shard, padding included."""
+        """[1, 1, rows, hidden_size] bf16 -> the same shape, fp32; rows are this device's shard,
+        padding included."""
         h = self.fc0(x)
         out = self.fc1(h)
         ttnn.deallocate(h)

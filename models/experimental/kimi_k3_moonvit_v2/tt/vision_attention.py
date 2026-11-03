@@ -57,7 +57,8 @@ class TT_Vision_Attention(Module):
         self.scale = config.head_dim**-0.5
         kwargs = dict(bias=config.attn_bias, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config)
         self.wqkv = Linear(config.hidden_size, 3 * config.qkv_hidden_size, **kwargs)
-        self.wo = Linear(config.qkv_hidden_size, config.hidden_size, **kwargs)
+        # fp32 out: added to the fp32 residual stream (vision_block.py).
+        self.wo = Linear(config.qkv_hidden_size, config.hidden_size, output_dtype=ttnn.float32, **kwargs)
         self.compute_kernel_config = compute_kernel_config
         # Built on the first forward: they read the device's core grid, and construction stays
         # device-free (test_module.py builds the tree on a stand-in device).

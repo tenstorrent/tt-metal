@@ -18,7 +18,7 @@ from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import (
     apply_rope,
     tpool_patch_merger,
 )
-from models.experimental.kimi_k3_moonvit_v2.tests.common import GRIDS, random_patches
+from models.experimental.kimi_k3_moonvit_v2.tests.common import GRIDS, random_patches, random_tensor
 
 
 @pytest.fixture(scope="module")
@@ -50,8 +50,7 @@ def test_pos_embeds(config, tower, grid):
 @pytest.mark.parametrize("grid", GRIDS.values(), ids=GRIDS.keys())
 def test_rope_cos_sin_matches_complex_rope(config, grid):
     (_, h, w) = grid[0]
-    g = torch.Generator().manual_seed(0)
-    q = torch.randn(h * w, config.num_attention_heads, config.head_dim, generator=g)
+    q = random_tensor(h * w, config.num_attention_heads, config.head_dim, dtype=torch.float32)
     freqs_cis = Rope2DPosEmbRepeated(config.head_dim, config.max_side_patches, config.max_side_patches).get_freqs_cis(
         torch.tensor(grid), device=torch.device("cpu")
     )
@@ -64,7 +63,7 @@ def test_rope_cos_sin_matches_complex_rope(config, grid):
 
 def test_rotate_pairs_is_the_device_trans_mat(config):
     trans_mat = host_prep.rot_transformation_mat()[0, 0]  # one 32x32 tile, applied per tile of head_dim
-    x = torch.randn(5, config.head_dim)
+    x = random_tensor(5, config.head_dim, dtype=torch.float32)
     tiled = (x.unflatten(-1, (-1, 32)) @ trans_mat).flatten(-2)
     torch.testing.assert_close(host_prep.rotate_pairs(x), tiled)
 
@@ -73,7 +72,7 @@ def test_rotate_pairs_is_the_device_trans_mat(config):
 def test_window_order_merges_by_reshape(config, grid):
     """Window order makes the merger a reshape of consecutive rows into the reference's tokens."""
     (_, h, w) = grid[0]
-    x = torch.randn(h * w, config.hidden_size)
+    x = random_tensor(h * w, config.hidden_size, dtype=torch.float32)
     (expected,) = tpool_patch_merger(x, torch.tensor(grid), merge_kernel_size=config.merge_kernel_size)
     window = host_prep.to_window_order(x, h, w, config.merge_kernel_size)
     torch.testing.assert_close(window.reshape(-1, config.merge_area, config.hidden_size), expected)

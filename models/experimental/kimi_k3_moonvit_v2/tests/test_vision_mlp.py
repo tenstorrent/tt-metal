@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    random_tensor,
     assert_pcc,
     device_config,
     row_grid,
@@ -32,7 +33,7 @@ def check_vision_mlp(mesh_device, sp_axis, config, reference, layer, grid, rows)
     tt.load_torch_state_dict(reference.vision_tower.encoder.blocks[layer].mlp.state_dict())
 
     _, h, w = grid[0]
-    x = torch.randn(h * w, config.hidden_size, dtype=torch.bfloat16)
+    x = random_tensor(h * w, config.hidden_size)
     with torch.no_grad():
         golden = reference.vision_tower.encoder.blocks[layer].mlp(x)
 
