@@ -7,6 +7,8 @@ perf_pack and perf_pack_cov2 run the part of it that the other pack perf modules
 The block rows (pack_block True and 2) are the calls llk_pack_block makes with the W offset on, its default; the W offset rows (3) and the fast rows (4) are library forms on purpose."""
 
 import pytest
+
+pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes, get_valid_dest_indices
 from helpers.format_config import DataFormat

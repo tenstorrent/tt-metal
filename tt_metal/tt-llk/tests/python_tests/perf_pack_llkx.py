@@ -7,6 +7,8 @@ and Tf32 and Bfp8_b inputs, with the per-tile pack (pack_block False), the defau
 16 tiles from dest index 0 and the last tile that fits."""
 
 import pytest
+
+pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
 from conftest import skip_for_wormhole
 from helpers.llk_params import DestSync, PackerReluType
 from helpers.param_config import parametrize

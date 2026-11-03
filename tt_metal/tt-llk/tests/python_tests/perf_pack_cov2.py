@@ -11,6 +11,8 @@ for both the per-tile pack (_llk_pack_) and the block packs (pack_block=True): t
 fast block, replayed per tile, for the block-float outputs. Tiny tiles and partial faces are in perf_pack_tiny.py."""
 
 import pytest
+
+pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes, get_valid_dest_indices
 from helpers.format_config import DataFormat

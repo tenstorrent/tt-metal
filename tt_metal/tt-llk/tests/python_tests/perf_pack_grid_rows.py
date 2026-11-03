@@ -4,6 +4,8 @@
 """The row pack (_llk_pack_rows_) of one to 64 rows per tile, four tiles per half-sync DEST section (pack_rows_perf_test.cpp)."""
 
 import pytest
+
+pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat

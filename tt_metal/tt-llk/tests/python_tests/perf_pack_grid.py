@@ -10,6 +10,8 @@
 The block size is in num_tiles_in_block and no key repeats one of the other pack perf modules. perf_pack_grid_rows holds the row pack, perf_pack_grid_tiny the tiny tiles."""
 
 import pytest
+
+pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat

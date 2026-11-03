@@ -34,7 +34,9 @@
   "perf_unpack_a_bcast_eltwise": 9.1,
   "perf_unpack_tilize": 266.8,
   "perf_unpack_transpose": 5.4,
-  "perf_vif_targets": 6.4
+  "perf_vif_targets": 6.4,
+  "perf_matmul_row_mop": 1.0,
+  "perf_matmul_unpack_ttsync": 1.0
  },
  "blackhole": {
   "perf_eltwise_bcast_col_custom": 2.5,
@@ -47,18 +49,18 @@
   "perf_fast_tilize": 0.0,
   "perf_fast_tilize_full": 31.2,
   "perf_fast_untilize": 1713.0,
-  "perf_fast_untilize_baseline_compare": 388.7,
+  "perf_fast_untilize_baseline_compare": 1.0,
   "perf_fused": 0.0,
   "perf_math_matmul": 19132.8,
   "perf_matmul": 4257.8,
   "perf_pack": 543.9,
-  "perf_pack_cov2": 300.0,
-  "perf_pack_cov3": 300.0,
-  "perf_pack_grid": 300.0,
-  "perf_pack_grid_rows": 300.0,
-  "perf_pack_grid_tiny": 300.0,
-  "perf_pack_llkx": 300.0,
-  "perf_pack_tiny_tile_block": 300.0,
+  "perf_pack_cov2": 1.0,
+  "perf_pack_cov3": 5.6,
+  "perf_pack_grid": 1.9,
+  "perf_pack_grid_rows": 1.0,
+  "perf_pack_grid_tiny": 1.4,
+  "perf_pack_llkx": 1.7,
+  "perf_pack_tiny_tile_block": 1.0,
   "perf_pack_dest_bank": 4.4,
   "perf_pack_untilize": 385.8,
   "perf_reduce": 73.7,
@@ -71,6 +73,8 @@
   "perf_unpack_a_bcast_eltwise": 0.0,
   "perf_unpack_tilize": 531.6,
   "perf_unpack_transpose": 4.4,
-  "perf_vif_targets": 0.0
+  "perf_vif_targets": 0.0,
+  "perf_matmul_row_mop": 1.0,
+  "perf_matmul_unpack_ttsync": 1.0
  }
 }

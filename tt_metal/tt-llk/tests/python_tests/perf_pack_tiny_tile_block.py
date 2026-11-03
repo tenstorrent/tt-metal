@@ -12,6 +12,8 @@ last four are partial-face tiles) and the one-face 16x16 tile, two, four and eig
 Float16_b and Float32 (16-bit and 32-bit DEST), and Bfp8_b output for the 16-row faces, the only block-float tiles the packer writes correctly."""
 
 import pytest
+
+pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation

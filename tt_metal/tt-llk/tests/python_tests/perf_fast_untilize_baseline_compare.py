@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
+pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
 from conftest import skip_for_quasar, skip_for_wormhole
 from fast_untilize_common import (
     FAST_UNTILIZE_CT_DIMS,

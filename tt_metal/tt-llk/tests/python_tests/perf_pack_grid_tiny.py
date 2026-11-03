@@ -6,6 +6,8 @@ fits as the start, Float16 and UInt16 outputs, and Bfp4_b for the 16x32 tile; mo
 the old shapes and formats are rows of perf_pack_tiny_tile_block and are not repeated."""
 
 import pytest
+
+pytestmark = pytest.mark.llk_sweep  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat

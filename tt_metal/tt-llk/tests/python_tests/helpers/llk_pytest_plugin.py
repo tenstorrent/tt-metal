@@ -32,6 +32,7 @@ import atexit
 import collections
 import datetime
 import json
+import zlib
 import logging
 import os
 import re
@@ -740,6 +741,19 @@ def _select_tests_by_op(config, items):
     )
 
 
+def _thin_sweep(items):
+    """Keep one id in LLK_SWEEP_STRIDE (default 50, chosen by a hash of the node id) of the tests marked llk_sweep; LLK_SWEEP_ALL=1 keeps every id."""
+    if os.environ.get("LLK_SWEEP_ALL") == "1":
+        return
+    stride = int(os.environ.get("LLK_SWEEP_STRIDE", "50"))
+    items[:] = [
+        item
+        for item in items
+        if item.get_closest_marker("llk_sweep") is None
+        or zlib.crc32(item.nodeid.encode()) % stride == 0
+    ]
+
+
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
@@ -835,6 +849,7 @@ def pytest_collection_modifyitems(config, items):
     # Choose compile representatives only after other plugins apply selection filters.
     result = yield
     _select_tests_by_op(config, items)
+    _thin_sweep(items)
     _split_by_cost(config, items)
     _restore_test_order(config, items)
 
