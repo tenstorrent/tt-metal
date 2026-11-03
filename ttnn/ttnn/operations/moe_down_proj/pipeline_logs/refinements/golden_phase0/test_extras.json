@@ -1,0 +1,56 @@
+{
+  "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer0-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 179000,
+    "target_ns": 90800,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer1-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 174800,
+    "target_ns": 90800,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer2-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 191900,
+    "target_ns": 90800,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer3-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 187300,
+    "target_ns": 90800,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer4-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 188400,
+    "target_ns": 90800,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t4096_layer5-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 180200,
+    "target_ns": 90800,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t3072_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 158900,
+    "target_ns": 74600,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t2048_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 136500,
+    "target_ns": 74600,
+    "measured_on": "blackhole_p100a"
+  },
+  "eval/golden_tests/moe_down_proj/test_golden.py::test_op_loose[t1024_scaled-buffer_type=L1-dtype=BFLOAT8_B-fp32_dest_acc_en=True-layout=TILE-memory_layout=INTERLEAVED-out_buffer_type=L1]": {
+    "default_compute_config": true,
+    "achievable_ns": 127700,
+    "target_ns": 74600,
+    "measured_on": "blackhole_p100a"
+  }
+}

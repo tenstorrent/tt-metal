@@ -1,0 +1,22 @@
+{
+  "dtype": [
+    "BFLOAT8_B"
+  ],
+  "layout": [
+    "TILE"
+  ],
+  "fp32_dest_acc_en": [
+    true
+  ],
+  "memory_layout": [
+    "INTERLEAVED"
+  ],
+  "buffer_type": [
+    "L1",
+    "DRAM"
+  ],
+  "out_buffer_type": [
+    "L1",
+    "DRAM"
+  ]
+}
