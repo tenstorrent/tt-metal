@@ -483,6 +483,84 @@ def test_mtp_module_pcc(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, sp_axis", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"], indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_mtp_build_ttnn_cache(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    num_links,
+    sp_axis,
+    use_pretrained,
+    mtp_cfg,
+    mtp_state_dict,
+    mtp_layer_state_dict,
+):
+    """Build the MTP layer's TTNN cache at ``$TT_GLM53_MTP_TTNN_CACHE/<variant>_<arch>_<N>dev/<mesh key>``,
+    the path the runner's MTP predictor reads for this mesh (a 4x4 stage: ``glm_5_3_bh_16dev/4x4_sp1``).
+
+    ``test_mtp_transformer_chunks.py`` builds it behind the trunk on 8x4 only; this builds the module alone,
+    on any mesh in ``_MESH_PARAMS``, and runs no forward.
+    """
+    root = os.environ.get(MTP_CACHE_ENV)
+    if not root:
+        pytest.skip(f"set {MTP_CACHE_ENV} to the MTP cache root to build")
+    layer_idx = mtp_cfg.mtp_layer_idx
+    mesh_shape = list(mesh_device.shape)
+    path = (
+        Path(root)
+        / f"{variant.name}_{'bh' if is_blackhole() else 'wh'}_{ttnn.get_num_devices()}dev"
+        / mesh_cache_key(mesh_shape, sp_axis)
+    )
+    experts_per_chip = GLM53Config.NUM_ROUTED_EXPERTS // mesh_device.get_num_devices()
+
+    def _complete():
+        init_checker(path)
+        return TtMTPPredictor.check_cache_complete(
+            path,
+            layer_idx,
+            cache_name_prefix=MTP_CACHE_PREFIX,
+            experts_per_chip=experts_per_chip,
+            model_cfg=GLM53Config,
+        )
+
+    if path.is_dir() and _complete():
+        logger.info(f"MTP layer {layer_idx} cache already complete at {path}")
+        return
+    path.mkdir(parents=True, exist_ok=True)
+
+    seq_len = 5120
+    config = _glm53_config_for_mtp(config_only, seq_len, layer_idx)
+    *_, layer_state_dict = _glm_layer_weights(variant, config, mtp_layer_state_dict)
+    logger.info(f"Building the MTP layer {layer_idx} cache for mesh {mesh_shape} (sp_axis={sp_axis}) at {path}")
+    TtMTPModule(
+        mesh_device,
+        config,
+        GLM53Config,
+        {"mtp": mtp_state_dict, "layer": layer_state_dict},
+        mtp_cfg,
+        seq_len=seq_len,
+        layer_idx=layer_idx,
+        tp_axis=1 - sp_axis,
+        num_links=num_links,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        sp_axis=sp_axis,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        weight_cache_path=path,
+        cache_name_prefix=MTP_CACHE_PREFIX,
+        layer_num=1,
+    )
+    ttnn.synchronize_device(mesh_device)
+    assert _complete(), f"MTP layer {layer_idx} cache still incomplete at {path}"
+    logger.info(f"MTP layer {layer_idx} cache complete at {path}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, sp_axis", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.parametrize("num_levels", [1, 4], ids=["levels1", "levels4"])
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
