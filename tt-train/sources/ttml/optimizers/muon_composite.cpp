@@ -6,6 +6,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/debug.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/newton_schulz_op.hpp"
 #include "serialization/serializable.hpp"
@@ -19,9 +20,9 @@ namespace {
  * Check if a parameter is sharded on any mesh axis.
  */
 bool param_is_sharded(const autograd::Tensor& tensor) {
-    const auto& placements = tensor.get_value(autograd::PreferredPrecision::HALF).tensor_topology().placements();
-    for (const auto& p : placements) {
-        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(p)) {
+    const auto& value = tensor.get_value(autograd::PreferredPrecision::HALF);
+    for (uint32_t axis = 0; axis < value.device()->shape().dims(); ++axis) {
+        if (core::distributed::is_sharded_on_axis(value, axis)) {
             return true;
         }
     }

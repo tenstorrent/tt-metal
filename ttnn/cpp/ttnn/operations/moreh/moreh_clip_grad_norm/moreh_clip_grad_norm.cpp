@@ -4,36 +4,22 @@
 
 #include "moreh_clip_grad_norm.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <optional>
 
 #include <tt-metalium/base_types.hpp>
 #include "moreh_clip_grad_norm_step1/device/moreh_clip_grad_norm_step1_device_operation.hpp"
-#include "moreh_clip_grad_norm_step2/device/moreh_clip_grad_norm_step2_device_operation.hpp"
 #include "moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
-
-namespace {
-
-template <typename OutputDataType, typename InputDataType>
-std::vector<OutputDataType> cast_vec(ttsl::Span<const InputDataType> data_to_convert) {
-    std::vector<OutputDataType> converted_data;
-    converted_data.reserve(data_to_convert.size());
-    for (auto datum : data_to_convert) {
-        if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back(static_cast<float>(datum));
-        } else if constexpr (std::is_same_v<OutputDataType, uint32_t> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back((uint32_t)std::bit_cast<uint16_t>(datum));
-        } else {
-            converted_data.push_back(static_cast<OutputDataType>(datum));
-        }
-    }
-    return converted_data;
-}
-}  // namespace
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
@@ -41,6 +27,17 @@ inline uint32_t get_num_device_cores(const MeshDevice& device) {
     const auto num_cores_x = static_cast<uint32_t>(device.compute_with_storage_grid_size().x);
     const auto num_cores_y = static_cast<uint32_t>(device.compute_with_storage_grid_size().y);
     return num_cores_x * num_cores_y;
+}
+
+// Step 1 and step 3 assign one input per core, so they are launched on chunks of at most one input per core.
+template <typename Launch>
+void for_each_launch(const std::vector<Tensor>& inputs, Launch&& launch) {
+    const auto max_num_inputs = get_num_device_cores(*inputs.at(0).device());
+    const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
+    for (uint32_t offset = 0; offset < total_num_inputs; offset += max_num_inputs) {
+        const auto end = std::min(offset + max_num_inputs, total_num_inputs);
+        launch(std::vector<Tensor>(inputs.begin() + offset, inputs.begin() + end), offset);
+    }
 }
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm
@@ -64,68 +61,84 @@ Tensor moreh_clip_grad_norm(
             "`error_if_nonfinite=False`",
             norm_type);
     }
+
+    // The root writes into total_norm if given, which must then have the same shape as its input.
+    const auto pow_sum = ttnn::reshape(
+        moreh_clip_grad_norm_pow_sum(inputs, norm_type, memory_config, compute_kernel_config),
+        total_norm.has_value() ? total_norm->logical_shape() : Shape{1, 1});
+
+    // Sum[Sum[|e|^p]]^(1/p)
+    auto output_total_norm = norm_type == 2.0f
+                                 ? ttnn::sqrt(pow_sum, /* fast_and_approximate_mode */ false, memory_config, total_norm)
+                                 : ttnn::pow(pow_sum, 1.0f / norm_type, memory_config, total_norm);
+
+    moreh_clip_grad_norm_scale(
+        inputs, output_total_norm, max_norm, error_if_nonfinite, memory_config, compute_kernel_config);
+
+    return output_total_norm;
+}
+
+Tensor moreh_clip_grad_norm_pow_sum(
+    const std::vector<Tensor>& inputs,
+    float norm_type,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     auto* device = inputs.at(0).device();
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
 
-    // Loop variable
-    const auto max_num_inputs = operations::moreh::moreh_clip_grad_norm::get_num_device_cores(*device);
-    const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
-    const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
-    // Store intermediate reduction of Sum[|e|^p]
+    // Run Step 1
+    // Sum[|e|^p] of each input, one tile per input
     auto tmp_pow_sum = create_device_tensor(
         tt::tt_metal::TensorSpec(
-            Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
+            Shape{static_cast<uint32_t>(inputs.size()), 1, 1, 1},
             tt::tt_metal::TensorLayout(
                 inputs.at(0).dtype(),
                 tt::tt_metal::PageConfig(Layout::TILE),
                 memory_config.value_or(inputs.at(0).memory_config()))),
         device);
+    operations::moreh::moreh_clip_grad_norm::for_each_launch(
+        inputs, [&](const std::vector<Tensor>& launch_inputs, uint32_t tile_offset) {
+            ttnn::prim::moreh_clip_grad_norm_step1(
+                launch_inputs, norm_type, tile_offset, tmp_pow_sum, memory_config, compute_kernel_config_val);
+        });
 
-    // Run Step 1
-    // Sum[|e|^p]
-    uint32_t tile_offset{0};
-    auto num_inputs = total_num_inputs;
-    for (uint32_t i = 0; i < num_iter; i++) {
-        const auto num_inputs_at_this_iter = std::min(num_inputs, max_num_inputs);
-
-        ttnn::prim::moreh_clip_grad_norm_step1(
-            std::vector<Tensor>(inputs.begin() + tile_offset, inputs.begin() + tile_offset + num_inputs_at_this_iter),
-            norm_type,
-            tile_offset,
-            tmp_pow_sum,
-            memory_config,
-            compute_kernel_config_val);
-
-        if (i < (num_iter - 1)) {
-            tile_offset += num_inputs_at_this_iter;
-            num_inputs -= num_inputs_at_this_iter;
-        }
-    }
-
-    // Run Step 2
-    // Sum[Sum[|e|^p]]^(1/p)
-    auto output_total_norm = ttnn::prim::moreh_clip_grad_norm_step2(
+    // Sum[Sum[|e|^p]]
+    return ttnn::moreh_sum(
         tmp_pow_sum,
-        norm_type,
-        total_norm,
+        /* dim */ int64_t{0},
+        /* keepdim */ true,
+        /* output */ std::nullopt,
         memory_config,
-        init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4));
+        compute_kernel_config_val);
+}
+
+void moreh_clip_grad_norm_scale(
+    const std::vector<Tensor>& inputs,
+    const Tensor& total_norm,
+    float max_norm,
+    bool error_if_nonfinite,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    auto* device = inputs.at(0).device();
+    const auto compute_kernel_config_val =
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
 
     if (error_if_nonfinite) {
-        const auto fp32_total_norm =
-            cast_vec<float>(tt::tt_metal::host_buffer::get_as<bfloat16>(output_total_norm.cpu())).at(0);
-        TT_FATAL(
-            std::isfinite(fp32_total_norm),
-            "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "
-            "clipped. To disable this error and scale the gradients by the non-finite norm anyway, set "
-            "`error_if_nonfinite=False`",
-            norm_type);
+        // On a mesh, each device holds its own copy of the norm.
+        for (const auto& device_total_norm : ttnn::distributed::get_device_tensors(total_norm.cpu())) {
+            const auto fp32_total_norm =
+                static_cast<float>(tt::tt_metal::host_buffer::get_as<bfloat16>(device_total_norm)[0]);
+            TT_FATAL(
+                std::isfinite(fp32_total_norm),
+                "The total norm for gradients from `parameters` is non-finite, so it cannot be clipped. To disable "
+                "this error and scale the gradients by the non-finite norm anyway, set `error_if_nonfinite=False`");
+        }
     }
 
     // max_norm / (total_norm + 1e-6)
     Tensor max_norm_tensor = ttnn::full(Shape({1}), max_norm, inputs.at(0).dtype(), Layout::TILE, *device);
-    Tensor added = ttnn::add(output_total_norm, 1e-6f);
+    Tensor added = ttnn::add(total_norm, 1e-6f);
     auto clip_coef = ttnn::div(max_norm_tensor, added);
     // min(clip_coef, 1.0f)
     Tensor scalar = ttnn::full(Shape({1}), 1.0f, inputs.at(0).dtype(), Layout::TILE, *device);
@@ -135,24 +148,11 @@ Tensor moreh_clip_grad_norm(
 
     // Run Step 3
     // Inplace update inputs(inputs *= clip_coef_clamped)
-    uint32_t start_input_idx{0};
-    num_inputs = total_num_inputs;
-    for (uint32_t i = 0; i < num_iter; ++i) {
-        const auto num_inputs_at_this_iter = std::min(num_inputs, max_num_inputs);
-
-        auto input_tensors = std::vector<Tensor>(
-            inputs.begin() + start_input_idx, inputs.begin() + start_input_idx + num_inputs_at_this_iter);
-
-        ttnn::prim::moreh_clip_grad_norm_step3(
-            input_tensors, clip_coef_clamped, memory_config, compute_kernel_config_val);
-
-        if (i < (num_iter - 1)) {
-            start_input_idx += num_inputs_at_this_iter;
-            num_inputs -= num_inputs_at_this_iter;
-        }
-    }
-
-    return output_total_norm;
+    operations::moreh::moreh_clip_grad_norm::for_each_launch(
+        inputs, [&](const std::vector<Tensor>& launch_inputs, uint32_t /*tile_offset*/) {
+            ttnn::prim::moreh_clip_grad_norm_step3(
+                launch_inputs, clip_coef_clamped, memory_config, compute_kernel_config_val);
+        });
 }
 
 }  // namespace ttnn
