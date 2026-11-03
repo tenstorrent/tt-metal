@@ -162,7 +162,7 @@ constructor accepts either a full YAML dict (with a top-level
 `device_config:` block) or a path to a YAML file. In practice the
 BoolQ script loads a training YAML and passes the raw dict, i.e.
 `DeviceConfig(raw)` (see
-[`boolq_training_example.py`](../sources/examples/grpo/boolq_training_example.py)).
+[`boolq_training_example.py`](../sources/examples/grpo/boolq/boolq_training_example.py)).
 
 Unlike the Llama completer, `setup_device` opens a **named** mesh via
 `ttml.open_device_mesh` so an `"fsdp"` axis exists. By default
@@ -657,19 +657,19 @@ same `GRPOTrainer`; they differ in where token generation runs.
   `Qwen3GRPOCompleter` under
   [`utils/`](../sources/examples/grpo/utils/)) owns the ttml policy
   model and drives generation itself. Entry point:
-  [`boolq_training_example.py`](../sources/examples/grpo/boolq_training_example.py)
+  [`boolq_training_example.py`](../sources/examples/grpo/boolq/boolq_training_example.py)
   (`--model llama` or `--model qwen3`, optional `--config <yaml>`).
   Also ships an accuracy-eval sibling
-  ([`boolq_accuracy_example.py`](../sources/examples/grpo/boolq_accuracy_example.py))
+  ([`boolq_accuracy_example.py`](../sources/examples/grpo/boolq/boolq_accuracy_example.py))
   and a plotting helper
-  ([`boolq_plot_example.py`](../sources/examples/grpo/boolq_plot_example.py)).
+  ([`boolq_plot_example.py`](../sources/examples/grpo/boolq/boolq_plot_example.py)).
 
 Each task lives in its own subdirectory; the model-specific completers in
-[`utils/`](utils/) are shared between them.
+[`utils/`](../sources/examples/grpo/utils/) are shared between them.
 
 #### BoolQ Training
 
-[`boolq/boolq_training_example.py`](boolq/boolq_training_example.py) — trains
+[`boolq/boolq_training_example.py`](../sources/examples/grpo/boolq/boolq_training_example.py) — trains
 Llama-3.2-1B-Instruct on BoolQ using `GRPOTrainer` with a custom reward
 function, CSV logging via the framework's built-in `GRPOMonitor`, and DDP on 2 devices.
 
@@ -686,7 +686,7 @@ python3 boolq/boolq_training_example.py --model qwen3 \
 
 #### BoolQ Accuracy Evaluation
 
-[`boolq/boolq_accuracy_example.py`](boolq/boolq_accuracy_example.py) — evaluates a
+[`boolq/boolq_accuracy_example.py`](../sources/examples/grpo/boolq/boolq_accuracy_example.py) — evaluates a
 model on the BoolQ validation set with greedy decoding (`temperature=0`)
 and writes per-question results to a CSV. Runs on 1 device (p150) with
 `PROMPTS_TO_VALIDATE=20` by default.
@@ -700,7 +700,7 @@ containing `model.safetensors`.
 
 #### Reverse Text Training
 
-[`reverse_text/reverse_text_training_example.py`](reverse_text/reverse_text_training_example.py) —
+[`reverse_text/reverse_text_training_example.py`](../sources/examples/grpo/reverse_text/reverse_text_training_example.py) —
 trains Qwen3-0.6B to reverse text character-by-character on a single p150,
 ported from the prime-rl / verifiers TRL example. Rewards the similarity ratio
 between the text in the `<reversed_text>` tags and the true reversal, and runs a
@@ -712,13 +712,13 @@ python3 reverse_text/reverse_text_training_example.py
 
 #### Plotting
 
-[`boolq/boolq_plot_example.py`](boolq/boolq_plot_example.py) — plots any column of the `grpo_metrics.csv` written by the built-in `GRPOMonitor`.
+[`boolq/boolq_plot_example.py`](../sources/examples/grpo/boolq/boolq_plot_example.py) — plots any column of the `grpo_metrics.csv` written by the built-in `GRPOMonitor`.
 
 ```bash
 python3 boolq/boolq_plot_example.py <output_dir>/grpo_metrics.csv reward_mean
 ```
 
-[`reverse_text/reverse_text_plot_example.py`](reverse_text/reverse_text_plot_example.py) —
+[`reverse_text/reverse_text_plot_example.py`](../sources/examples/grpo/reverse_text/reverse_text_plot_example.py) —
 plots every reverse-text metric (reward, the three eval scores, completion
 length, and the step / generation times) as one grid. With no arguments it picks
 the newest run under `generated/tt-train/grpo_reverse_text_run/` and writes
