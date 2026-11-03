@@ -41,6 +41,7 @@ import os
 import re
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -104,6 +105,16 @@ MOE_DECODE_L1_MAX_BYTES = 256 * TILE * (2 * 512 + 2 * 2048) * 2
 # ttnn.sparse_matmul's zero_init_output (tenstorrent/tt-metal#63897): False skips the output zero fill, which Laguna's
 # routed MoE never reads. Without it the fill runs (same results, a little slower).
 _SPARSE_MATMUL_ZERO_INIT = "zero_init_output" in (getattr(ttnn.sparse_matmul, "__doc__", None) or "")
+
+
+# Laguna-S shards its routed experts over one-chip dispatch groups (64 of 256 per chip). ttnn's deepseek_prefill
+# dispatch accepts that from tenstorrent/tt-metal#64038 on; an older ttnn rejects the call with this message, and
+# Laguna then prefills with the sparse MoE path.
+_DISPATCH_SUBSET_ERROR = "Local prefill dispatch requires all routed experts on its only chip"
+_DISPATCH_SUBSET_REASON = (
+    "this ttnn's prefill dispatch requires every routed expert on a one-chip group's chip (tenstorrent/tt-metal#64038)"
+)
+_DISPATCH_SUBSET = {"rejected": False}
 
 
 def _parse_binary_env(name: str, default: bool = False) -> bool:
@@ -1742,8 +1753,19 @@ class MultichipDecoder(OptimizedDecoder):
                 partial = ttnn.reshape(partial, (1, 1, T, cfg.hidden))
             return self._reduce(partial)  # the decode all_gather reads a width-sharded partial directly
         use_token_dispatch, reason = self._token_dispatch_guard(T, sharded)
+        if use_token_dispatch and _DISPATCH_SUBSET["rejected"]:
+            use_token_dispatch, reason = False, _DISPATCH_SUBSET_REASON
         if use_token_dispatch:
-            return self._moe_token_dispatch(ln_flat, T)
+            try:
+                return self._moe_token_dispatch(ln_flat, T)
+            except RuntimeError as e:
+                if _DISPATCH_SUBSET_ERROR not in str(e):
+                    raise
+                # this ttnn's dispatch still requires every routed expert on a one-chip group's chip: the sparse MoE
+                # path from now on (every layer); the ops the failed attempt queued only wrote scratch outputs
+                _DISPATCH_SUBSET["rejected"] = True
+                logger.warning(f"token dispatch off: {_DISPATCH_SUBSET_REASON}")
+                reason = _DISPATCH_SUBSET_REASON
         if self._token_dispatch_requested:
             self._token_dispatch_fallback_reason = reason
         if T <= self.MOE_PREFILL_CHUNK:
