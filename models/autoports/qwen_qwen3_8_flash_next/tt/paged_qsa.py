@@ -90,7 +90,9 @@ def transfer(attention, source, output, positions, page_table, *, seq, lane=None
     dense = getattr(attention, "dense_keys", {}).get(lane) if gather and seq == 1 else None
     if dense is not None:
         # Decode view lane with its own dense keys: rebuild only rows its marker does not cover.
-        _dense_gather(attention, dense[0], positions, page_table, args, [*tensors[:1], dense[0], *tensors[2:]], dense[1], grid)
+        _dense_gather(
+            attention, dense[0], positions, page_table, args, [*tensors[:1], dense[0], *tensors[2:]], dense[1], grid
+        )
         return
     if gather and seq == 1 and os.environ.get("QWEN_FLASH_QSA_RECT_GATHER", "1") == "1":
         # Decode lane gather: one grid rectangle sharing one argument list; each worker takes
@@ -106,7 +108,8 @@ def transfer(attention, source, output, positions, page_table, *, seq, lane=None
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scratch)],
         )
         kernel = ttnn.KernelDescriptor(
-            kernel_source=defines + Path(__file__).with_name("kernels").joinpath("qsa_pooled_gather_rows.cpp").read_text(),
+            kernel_source=defines
+            + Path(__file__).with_name("kernels").joinpath("qsa_pooled_gather_rows.cpp").read_text(),
             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
             core_ranges=rect,
             compile_time_args=args,
@@ -335,11 +338,14 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
         if batched_selection and defer_rounding:
             selected_rows.append(scores)  # FP32 row; rounded once for all lanes below
             continue
-        scores = ttnn.to_layout(ttnn.typecast(scores, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
+        prefill_mask = seq > 1 and not batched_selection and prefill_mask_enabled()
+        # The indexer already returns ROW_MAJOR bf16; the prefill path skips the identity typecast copy.
+        if not (prefill_mask and scores.dtype == ttnn.bfloat16 and scores.layout == ttnn.ROW_MAJOR_LAYOUT):
+            scores = ttnn.to_layout(ttnn.typecast(scores, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
         if batched_selection:
             selected_rows.append(scores)
             continue
-        mask = prefill_mask_scores if seq > 1 and prefill_mask_enabled() else OptimizedQSA._mask_scores
+        mask = prefill_mask_scores if prefill_mask else OptimizedQSA._mask_scores
         bound = mask(mask_context, scores, positions[lane : lane + 1], seq)
         selected_rows.append(ttnn.experimental.topk_large_indices(scores, k=512, valid_length_tensor=bound))
         # Only small logical-ID selections survive the lane. Never concatenate

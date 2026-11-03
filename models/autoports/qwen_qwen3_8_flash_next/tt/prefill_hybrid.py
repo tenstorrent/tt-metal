@@ -34,13 +34,20 @@ COMPACT1024 = _expert_capacity_source(_EXPERT_COMPACT_PACKED, "ASSERT(packed<128
 COMPACT1024 = _expert_capacity_source(COMPACT1024, "(e%128)*4+packed/32", "(e%128)*32+packed/32")
 
 
+def _row_chunks(x, n, fn, rows=2048):
+    """Row-independent linears above 2048 rows run per 2048-row slice (a 4096-row program exceeds L1)."""
+    if n <= rows:
+        return fn(x)
+    return ttnn.concat([fn(x[:, :, start : start + rows, :]) for start in range(0, n, rows)], dim=2)
+
+
 def group1024(self, x):
     # 2048/4096-row groups (QWEN_PREFILL_MOE_GROUP) run only on the packed, pipelined kernels.
     if tuple(x.shape)[:2] != (1, 1) or x.shape[3] != 2560 or x.shape[2] not in moe_group_sizes():
         raise ValueError("Hybrid expert group requires exactly1024 serial rows")
     n = x.shape[2]
     padded = math.ceil(n / 32) * 32
-    router = self.ops.linear(x, self.router, compute_kernel_config=self.router_compute)
+    router = _row_chunks(x, n, lambda v: self.ops.linear(v, self.router, compute_kernel_config=self.router_compute))
     logits = router[..., :512]
     values, indices = ttnn.topk(
         ttnn.pad(logits, [(0, 0), (0, 0), (0, 0), (0, 512)], float("-inf")), k=32, dim=-1, sorted=True
@@ -164,12 +171,16 @@ def group1024(self, x):
     )
     weighted = ttnn.multiply(compact, ttnn.permute(scores, (0, 3, 2, 1)), output_tensor=compact)
     result = ttnn.sum(weighted, dim=1, keepdim=True)[:, :, :n, :]
-    shared = self.ops.linear(x, self.shared_gu, compute_kernel_config=self.shared_compute)
-    shared = self.ops.linear(
-        ttnn.multiply(shared[..., :160], shared[..., 160:], input_tensor_a_activations=[ttnn.UnaryOpType.SILU]),
-        self.shared_down,
-        compute_kernel_config=self.shared_compute,
-    )
+
+    def shared_expert(v):
+        shared = self.ops.linear(v, self.shared_gu, compute_kernel_config=self.shared_compute)
+        return self.ops.linear(
+            ttnn.multiply(shared[..., :160], shared[..., 160:], input_tensor_a_activations=[ttnn.UnaryOpType.SILU]),
+            self.shared_down,
+            compute_kernel_config=self.shared_compute,
+        )
+
+    shared = _row_chunks(x, n, shared_expert)
     return ttnn.add(
         result, ttnn.multiply(shared, router[..., 512:513], input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID])
     )

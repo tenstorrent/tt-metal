@@ -9,7 +9,7 @@ patched, written once) and a mode 1 job is one source tile (read once; the up to
 are built once and written to every query of the group behind one barrier). Page addressing, row
 placement and bytes are unchanged. Toggle: QWEN_PREFILL_QSA_TRANSFER=0 restores the bounded kernel (default on).
 Also the prefill score mask (prefill_mask_scores): -inf only below the top-k search bound.
-Toggle: QWEN_PREFILL_QSA_MASK=0 restores OptimizedQSA._mask_scores (default on).
+Toggle: QWEN_PREFILL_QSA_MASK=0 restores OptimizedQSA._mask_scores and the identity typecast (default on).
 """
 
 import os

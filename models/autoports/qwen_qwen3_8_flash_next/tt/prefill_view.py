@@ -109,6 +109,25 @@ class _PrefillDecoder(MultichipDecoder):
         raise RuntimeError("Serial prefill view cannot decode; use the fixed-batch owner")
 
 
+class _RowChunkTerminal:
+    """The owner's terminal mixer applied per 2048-row slice above 2048 rows (a 4096-row linear exceeds L1).
+
+    Every op of the mixer is row-independent and 2048/4096-row inputs both take the unpacked norm
+    path, so the result is identical; shorter inputs call the mixer unchanged.
+    """
+
+    def __init__(self, mixer, rows=2048):
+        self.mixer, self.rows = mixer, rows
+
+    def __call__(self, x):
+        s = tuple(x.shape)[2]
+        if s <= self.rows:
+            return self.mixer(x)
+        return ttnn.concat(
+            [self.mixer(x[:, :, start : start + self.rows, :]) for start in range(0, s, self.rows)], dim=2
+        )
+
+
 def _clone(owner, ops, cls=None):
     result = copy.copy(owner)
     if cls is not None:
@@ -225,7 +244,7 @@ def _model(owner, lengths):
         raise ValueError("Serial prefill view requires a multirow serving owner")
     result = _clone(owner, _ops(owner.ops))
     result.batch_size = 1
-    result.terminal = _clone(owner.terminal, result.ops)
+    result.terminal = _RowChunkTerminal(_clone(owner.terminal, result.ops))
     pool = {}
     result.layers = [_decoder(layer, pool, lengths) for layer in owner.layers]
     # Work shape differs from the owner, so bind an independent mapping whose
