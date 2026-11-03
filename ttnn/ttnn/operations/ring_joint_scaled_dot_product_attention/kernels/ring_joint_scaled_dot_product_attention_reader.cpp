@@ -90,13 +90,14 @@ void kernel_main() {
     constexpr uint32_t v_slot_pages = B * hk * n_kv_t * DVt;
     volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll_addr);
 
-    constexpr uint32_t U = total_units<Sq, n_q_t, Lq_t, BH, C>();
-    const uint32_t my_units = units_of_core(U, C, core_idx);
+    const uint32_t tail_idx = seg_idx + num_segments * 7;  // W, then has_tail, bh, row0, rows, joint
+    const uint32_t W = get_arg_val<uint32_t>(tail_idx);
+    const uint32_t my_units = W + get_arg_val<uint32_t>(tail_idx + 1);
 
     for (uint32_t i = 0; i < my_units; ++i) {
         MaybeDeviceZoneScope("reader_unit");
         uint32_t kb = 0;  // key blocks issued for this unit (zone sampling)
-        const AttnUnit unit = decode_unit<Sq, n_q_t, Lq_t>(core_idx + i * C);
+        const AttnUnit unit = i < W ? decode_unit<Sq, n_q_t, Lq_t>(core_idx + i * C) : tail_piece(tail_idx + 1);
         const uint32_t b = unit.bh / hq;
         const uint32_t h = unit.bh - b * hq;
         const uint32_t entry = b * hk + h / q_per_kv;

@@ -73,13 +73,16 @@ void kernel_main() {
     // ---- store_out_block ----
     const uint32_t tile_bytes = get_tile_size(cb_out);
     const auto out_acc = TensorAccessor(out_args, out_addr, tile_bytes);
-    constexpr uint32_t U = total_units<Sq, n_q_t, Lq_t, BH, C>();
-    const uint32_t my_units = units_of_core(U, C, core_idx);
+    const uint32_t W = get_arg_val<uint32_t>(3);
+    const uint32_t my_units = W + get_arg_val<uint32_t>(4);
+    const uint32_t tail_rows_c = get_arg_val<uint32_t>(9);  // compute rows (credit) of the tail piece
     for (uint32_t i = 0; i < my_units; ++i) {
-        const AttnUnit unit = decode_unit<Sq, n_q_t, Lq_t>(core_idx + i * C);
+        const bool is_tail = i >= W;
+        const AttnUnit unit = is_tail ? tail_piece(4) : decode_unit<Sq, n_q_t, Lq_t>(core_idx + i * C);
+        const uint32_t credit = (is_tail ? tail_rows_c : Sq) * DVt;
         {
             MaybeDeviceZoneScope("writer_out_wait");
-            cb_wait_front(cb_out, Sq * DVt);
+            cb_wait_front(cb_out, credit);
         }
         MaybeDeviceZoneScope("writer_out_write");
         uint32_t rptr = get_read_ptr(cb_out);
@@ -100,6 +103,6 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
-        cb_pop_front(cb_out, Sq * DVt);
+        cb_pop_front(cb_out, credit);
     }
 }

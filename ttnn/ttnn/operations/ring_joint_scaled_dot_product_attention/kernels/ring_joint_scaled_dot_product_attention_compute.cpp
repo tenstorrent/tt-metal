@@ -24,6 +24,7 @@
 //    extent: the matmul N, the reduce cols, the exp grid and the P.V inner steps).
 
 #include <cstdint>
+#include <type_traits>
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"
@@ -36,6 +37,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/minmax.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ring_joint_sdpa_common.hpp"
+#include "ring_joint_sdpa_scaled_exp.hpp"
 
 using namespace compute_kernel_lib;
 
@@ -43,14 +45,9 @@ using namespace compute_kernel_lib;
 constexpr uint32_t ZONE_SAMPLE_KB0 = 4;
 constexpr uint32_t ZONE_SAMPLE_NKB = 6;
 
-// exp(scale * x): the chain's Exp<> has no scale parameter; the SFPU exp folds the scale (SFPMULI) for free.
-template <uint32_t scale_bf16>
-struct ScaledExp : UnaryOp<ScaledExp<scale_bf16>, Dst::D0> {
-    static ALWI void init() { exp_tile_init<false>(); }
-    static ALWI void exec_impl(uint32_t slot_offset) {
-        exp_tile<false, true>(slot_offset, VectorMode::RC, static_cast<uint16_t>(scale_bf16));
-    }
-};
+// exp(scale * x): ScaledExp<scale_bf16> (ring_joint_sdpa_scaled_exp.hpp) — a raw-LLK SFPLOADMACRO exp_21f at bf16 DEST
+// (bit-identical to exp_tile<false, true>, 1.85x faster; justification at that file's head), stock exp_tile at fp32
+// DEST.
 
 // P.V inner steps: only the valid key tiles of a (possibly ragged) block.
 struct ValidKeyTiles {
@@ -111,12 +108,17 @@ void kernel_main() {
     CircularBuffer q_buf(cb_q), k_buf(cb_k), v_buf(cb_v), scores_buf(cb_scores);
     CircularBuffer out_acc_buf(cb_out_acc), out_blk_buf(cb_out_blk);
 
-    constexpr uint32_t U = total_units<Sq, n_q_t, Lq_t, BH, C>();
-    const uint32_t my_units = units_of_core(U, C, core_idx);
+    // Balanced tail split: W whole units (nominal Sq compute rows), then an optional tail piece computed on its
+    // R = tail_rows rows only (R | Sq, so every R-sized credit cycle stays contiguous in its CB; the piece is the
+    // core's last unit). cb_q keeps its nominal Sq*DHt credit (the matmul waits only R*DHt of it).
+    const uint32_t W = get_arg_val<uint32_t>(2 + 2 * num_segments);
+    const uint32_t my_units = W + get_arg_val<uint32_t>(3 + 2 * num_segments);
+    const uint32_t tail_rows = get_arg_val<uint32_t>(4 + 2 * num_segments);
     constexpr uint32_t pv_sbw_n = DVt;
     const uint32_t pv_sbw = subblock_w(pv_sbw_n);
 
-    for (uint32_t i = 0; i < my_units; ++i) {
+    // One unit's key walk + finalize on R compute rows (Sq for whole units, tail_rows for the tail piece).
+    auto run_unit = [&](uint32_t R, uint32_t i) {
         MaybeDeviceZoneScope("compute_unit");
         uint32_t kb = 0;  // processed key blocks of this unit
         for (uint32_t s = 0; s < num_segments; ++s) {
@@ -129,7 +131,7 @@ void kernel_main() {
                 // (~125 zone executions per RISC) cannot hold every block.
                 const bool zs = (i == 0) && (kb >= ZONE_SAMPLE_KB0) && (kb < ZONE_SAMPLE_KB0 + ZONE_SAMPLE_NKB);
 
-                // ---- score_block: S (Sq x skv, row stride Sk) = Q . K^T ----
+                // ---- score_block: S (R x skv, row stride Sk) = Q . K^T ----
                 {
                     MaybeDeviceZoneScopeIf("compute_k_wait", zs);
                     k_buf.wait_front(Sk * DHt);
@@ -149,20 +151,27 @@ void kernel_main() {
                         k_buf,
                         scores_buf,
                         scores_buf,
-                        MatmulBlockShape::of(Sq, skv / sbw, 1, sbw, DHt, 1),
+                        MatmulBlockShape::of(R, skv / sbw, 1, sbw, DHt, 1),
                         NoPostCompute{},
                         NoPreKBlock{},
                         Sk,
                         Sk);
                 }
                 k_buf.pop_front(Sk * DHt);
+                // cb_scores keeps the NOMINAL Sq*Sk credit per block even on an R-row tail piece: the in-place
+                // phases (mask, exp) rely on the CB holding exactly one block (pack write ptr == unpack read ptr);
+                // an R*Sk credit would make them ping-pong between CB halves. Pad the matmul's R*Sk push.
+                if (R < Sq) {
+                    cb_reserve_back(cb_scores, (Sq - R) * Sk);
+                    cb_push_back(cb_scores, (Sq - R) * Sk);
+                }
                 cb_wait_front(cb_scores, Sq * Sk);
 
                 // ---- mask_block: last valid key tile column of the boundary block ----
                 if (masked) {
                     MaybeDeviceZoneScopeIf("compute_mask", zs);
                     eltwise_chain(
-                        IterationShape::grid(Sq, 1),
+                        IterationShape::grid(R, 1),
                         BinaryFpu<
                             BinaryFpuOp::Add,
                             input(
@@ -193,13 +202,13 @@ void kernel_main() {
                         cb_max_scaler,
                         cb_max_blk,
                         ReduceInputPolicy::NoWaitNoPop>(
-                        ReduceInputBlockShape::of(Sq, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
+                        ReduceInputBlockShape::of(R, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
                     if (kb > 0) {
                         binary_sfpu<
                             BinaryMax<>,
                             input(cb_max_blk),
                             input(cb_max_acc, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
-                            output(cb_max_blk)>(IterationShape::tiles(Sq));
+                            output(cb_max_blk)>(IterationShape::tiles(R));
                     }
                 }
 
@@ -207,7 +216,7 @@ void kernel_main() {
                 {
                     MaybeDeviceZoneScopeIf("compute_sub_exp", zs);
                     eltwise_chain(
-                        IterationShape::grid(Sq, skv),
+                        IterationShape::grid(R, skv),
                         BinaryFpu<
                             BinaryFpuOp::Sub,
                             input(
@@ -244,7 +253,7 @@ void kernel_main() {
                             cb_sum_scaler,
                             cb_sum_acc,
                             ReduceInputPolicy::NoWaitNoPop>(
-                            ReduceInputBlockShape::of(Sq, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
+                            ReduceInputBlockShape::of(R, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
                     } else {
                         reduce<
                             PoolType::SUM,
@@ -253,7 +262,7 @@ void kernel_main() {
                             cb_sum_scaler,
                             cb_sum_blk,
                             ReduceInputPolicy::NoWaitNoPop>(
-                            ReduceInputBlockShape::of(Sq, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
+                            ReduceInputBlockShape::of(R, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
                     }
                 }
 
@@ -276,7 +285,7 @@ void kernel_main() {
                         v_buf,
                         kb == 0 ? out_acc_buf : out_blk_buf,
                         kb == 0 ? out_acc_buf : out_blk_buf,
-                        MatmulBlockShape::of(Sq, DVt / pv_sbw, 1, pv_sbw, Sk, 1),
+                        MatmulBlockShape::of(R, DVt / pv_sbw, 1, pv_sbw, Sk, 1),
                         NoPostCompute{},
                         NoPreKBlock{},
                         DVt,
@@ -285,64 +294,81 @@ void kernel_main() {
                         ValidKeyTiles{skv});
                 }
                 v_buf.pop_front(Sk * DVt);
-
-                // ---- rescale_block ----
-                if (kb > 0) {
-                    MaybeDeviceZoneScopeIf("compute_rescale", zs);
-                    // a = exp(s (m_acc - m_blk)); consumes m_acc
-                    eltwise_chain(
-                        IterationShape::tiles(Sq),
-                        BinaryFpu<
-                            BinaryFpuOp::Sub,
-                            input(cb_max_acc),
-                            input(cb_max_blk, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block)>{},
-                        ScaledExp<scale_bits>{},
-                        PackTile<output(cb_row_factor)>{});
-                    // l_acc = a l_acc + l_blk
-                    eltwise_chain(
-                        IterationShape::tiles(Sq),
-                        BinaryFpu<
-                            BinaryFpuOp::Mul,
-                            input(cb_sum_acc),
-                            input(
-                                cb_row_factor,
-                                BroadcastDim::Col,
-                                WaitPolicy::Upfront,
-                                PopPolicy::None,
-                                InputTileMapping::Block)>{},
-                        DestReuseBinary<BinaryFpuOp::Add, input(cb_sum_blk), DestReuseType::DEST_TO_SRCA>{},
-                        PackTile<output(cb_sum_acc)>{});
-                    // O_acc = a O_acc + O_blk; releases a
-                    eltwise_chain(
-                        IterationShape::grid(Sq, DVt),
-                        BinaryFpu<
-                            BinaryFpuOp::Mul,
-                            input(cb_out_acc),
-                            input(
-                                cb_row_factor,
-                                BroadcastDim::Col,
-                                WaitPolicy::Upfront,
-                                PopPolicy::AtEnd,
-                                InputTileMapping::Col)>{},
-                        DestReuseBinary<BinaryFpuOp::Add, input(cb_out_blk), DestReuseType::DEST_TO_SRCA>{},
-                        PackTile<output(cb_out_acc)>{});
+                if (R < Sq) {
+                    cb_pop_front(cb_scores, (Sq - R) * Sk);  // the pad credit (P.V popped the R*Sk valid rows)
                 }
-                // m_acc <- m_blk
-                MaybeDeviceZoneScopeIf("compute_copy_max", zs);
-                copy<input(cb_max_blk), output(cb_max_acc)>(IterationShape::tiles(Sq));
+
+                // ---- rescale_block + m_acc <- m_blk ----
+                // Instantiated twice: with the compile-time Sq for whole units (a runtime row count measured
+                // +2.2 us per key block in these chains on the focus shape) and with the runtime R for the tail.
+                auto rescale_copy = [&](auto rows_t) {
+                    const uint32_t RR = rows_t;
+                    if (kb > 0) {
+                        MaybeDeviceZoneScopeIf("compute_rescale", zs);
+                        // a = exp(s (m_acc - m_blk)); consumes m_acc
+                        eltwise_chain(
+                            IterationShape::tiles(RR),
+                            BinaryFpu<
+                                BinaryFpuOp::Sub,
+                                input(cb_max_acc),
+                                input(cb_max_blk, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block)>{},
+                            ScaledExp<scale_bits>{},
+                            PackTile<output(cb_row_factor)>{});
+                        // l_acc = a l_acc + l_blk
+                        eltwise_chain(
+                            IterationShape::tiles(RR),
+                            BinaryFpu<
+                                BinaryFpuOp::Mul,
+                                input(cb_sum_acc),
+                                input(
+                                    cb_row_factor,
+                                    BroadcastDim::Col,
+                                    WaitPolicy::Upfront,
+                                    PopPolicy::None,
+                                    InputTileMapping::Block)>{},
+                            DestReuseBinary<BinaryFpuOp::Add, input(cb_sum_blk), DestReuseType::DEST_TO_SRCA>{},
+                            PackTile<output(cb_sum_acc)>{});
+                        // O_acc = a O_acc + O_blk; releases a
+                        eltwise_chain(
+                            IterationShape::grid(RR, DVt),
+                            BinaryFpu<
+                                BinaryFpuOp::Mul,
+                                input(cb_out_acc),
+                                input(
+                                    cb_row_factor,
+                                    BroadcastDim::Col,
+                                    WaitPolicy::Upfront,
+                                    PopPolicy::AtEnd,
+                                    InputTileMapping::Col)>{},
+                            DestReuseBinary<BinaryFpuOp::Add, input(cb_out_blk), DestReuseType::DEST_TO_SRCA>{},
+                            PackTile<output(cb_out_acc)>{});
+                    }
+                    // m_acc <- m_blk
+                    MaybeDeviceZoneScopeIf("compute_copy_max", zs);
+                    copy<input(cb_max_blk), output(cb_max_acc)>(IterationShape::tiles(RR));
+                };
+                if (R == Sq) {
+                    rescale_copy(std::integral_constant<uint32_t, Sq>{});
+                } else {
+                    rescale_copy(R);
+                }
             }
         }
 
         // ---- finalize_block: out = O_acc / l_acc ----
         {
             MaybeDeviceZoneScope("compute_finalize");
-            unary<Recip<>, input(cb_sum_acc), output(cb_row_factor)>(IterationShape::tiles(Sq));
+            unary<Recip<>, input(cb_sum_acc), output(cb_row_factor)>(IterationShape::tiles(R));
             mul<input(cb_out_acc),
                 input(cb_row_factor, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
-                output(cb_out_tiles)>(IterationShape::grid(Sq, DVt));
+                output(cb_out_tiles)>(IterationShape::grid(R, DVt));
         }
-        cb_wait_front(cb_max_acc, Sq);
-        cb_pop_front(cb_max_acc, Sq);
+        cb_wait_front(cb_max_acc, R);
+        cb_pop_front(cb_max_acc, R);
         cb_pop_front(cb_q, Sq * DHt);
+    };
+
+    for (uint32_t i = 0; i < my_units; ++i) {
+        run_unit(i < W ? Sq : tail_rows, i);
     }
 }

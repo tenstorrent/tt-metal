@@ -28,6 +28,11 @@ H = int(os.environ.get("FOCUS_HEADS", "40"))
 N = int(os.environ.get("FOCUS_N", "8192"))
 LINKS = int(os.environ.get("FOCUS_LINKS", "2"))
 FP32 = os.environ.get("FOCUS_FP32", "0") == "1"
+D = int(os.environ.get("FOCUS_DH", "128"))
+JOINT_L = int(os.environ.get("FOCUS_JOINT_L", "0"))  # replicated joint tokens (0 = none)
+TOPO = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}[os.environ.get("FOCUS_TOPO", "ring")]
+PAD = int(os.environ.get("FOCUS_PAD", "8"))  # logical_n = G * N - PAD
+REPS = int(os.environ.get("FOCUS_REPS", "1"))  # measured calls (each read separately; see spans())
 FREQ_GHZ = 1.35
 LOG = "generated/profiler/.logs/profile_log_device.csv"
 
@@ -91,31 +96,45 @@ def _analyze(chips=None):
 def test_perf_breakdown(mesh_shape, fabric_config, mesh_device):
     G = 4
     mk = lambda: ttnn.from_torch(  # noqa: E731
-        torch.randn((1, H, G * N, 128), dtype=torch.bfloat16),
+        torch.randn((1, H, G * N, D), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=mesh_shape),
     )
     q, k, v = mk(), mk(), mk()
+    joint = [None, None, None]
+    if JOINT_L:
+        joint = [
+            ttnn.from_torch(
+                torch.randn((1, H, JOINT_L, D), dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(3)
+        ]
     cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=FP32)
     call = lambda: ring_joint_scaled_dot_product_attention(  # noqa: E731
         q,
         k,
         v,
-        logical_n=G * N - 8,
+        *joint,
+        logical_n=G * N - PAD,
         cluster_axis=1,
-        topology=ttnn.Topology.Ring,
+        topology=TOPO,
         num_links=LINKS,
         compute_kernel_config=cfg,
     )
     call()  # compile
     ttnn.synchronize_device(mesh_device)
     ttnn.ReadDeviceProfiler(mesh_device)
-    call()
-    ttnn.synchronize_device(mesh_device)
-    ttnn.ReadDeviceProfiler(mesh_device)
-    chips, ring, G_, nl = pdmod.plan(mesh_device, cluster_axis=1, topology=ttnn.Topology.Ring, num_links=LINKS)
+    for _ in range(REPS):
+        call()
+        ttnn.synchronize_device(mesh_device)
+        ttnn.ReadDeviceProfiler(mesh_device)
+    chips, ring, G_, nl = pdmod.plan(mesh_device, cluster_axis=1, topology=TOPO, num_links=LINKS)
     for coord, ch in chips.items():
         print("PORTS", coord, {k_: (c.x, c.y) for k_, c in ch["ports"].items()}, "compute", len(ch["compute"]))
 
@@ -135,9 +154,36 @@ def report(res):
             )
 
 
+def spans():
+    """Op span (first kernel start -> last kernel end, us) of every op call in the log, per chip: the runs whose
+    zones include compute_unit (the ethernet-probe programs and the compile call are dropped)."""
+    df = pd.read_csv(LOG, skiprows=1, skipinitialspace=True)
+    df.columns = [c.strip() for c in df.columns]
+    run_col = "run host ID" if "run host ID" in df.columns else "run ID"
+    tcol = "time[cycles since reset]"
+    out = {}
+    for dev, d in df.groupby("PCIe slot"):
+        runs = []
+        for r, g in d.groupby(run_col):
+            if not (g["zone name"] == "compute_unit").any():
+                continue
+            k = g[g["zone name"].astype(str).str.contains("KERNEL")]
+            runs.append((r, (k[tcol].max() - k[tcol].min()) / FREQ_GHZ / 1e3))
+        out[int(dev)] = [round(x, 1) for _, x in sorted(runs)[1:]]  # drop the compile call
+    return out
+
+
 if __name__ == "__main__":
     import sys
 
+    if os.environ.get("SPANS"):
+        sp = spans()
+        print("SPANS_US", json.dumps(sp))
+        allv = [x for v in sp.values() for x in v]
+        per_call_max = [max(v[i] for v in sp.values()) for i in range(min(len(v) for v in sp.values()))]
+        print("PER_CALL_SLOWEST_US", per_call_max, "median", sorted(per_call_max)[len(per_call_max) // 2])
+        print("PER_CALL_FASTEST_US", [min(v[i] for v in sp.values()) for i in range(len(per_call_max))])
+        sys.exit(0)
     res = _analyze({})
     report(res)
     if len(sys.argv) > 1:

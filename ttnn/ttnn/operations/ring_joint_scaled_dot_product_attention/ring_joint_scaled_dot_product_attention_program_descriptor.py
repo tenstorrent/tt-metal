@@ -136,6 +136,69 @@ def choose_block_extents(
     return 1, Sk
 
 
+# Tail-piece cost model (plan_work_split), in units of ONE q tile-row's compute per key block. Measured on the focus
+# shape (BH QB2, Sq 16, Sk 8, dh 128, bf16 K/V, bf16 DEST): a unit's key block costs F + r c with F ~ 3.5 us fixed
+# and c ~ 7.9 us per q tile-row; p concurrent tail pieces each reading a 128 KB K/V block share ~335 GB/s of DRAM,
+# 0.39 us per piece per block. Tail time ~ n_key_blocks * max(F + r c, p d): r=1 (64 pieces) 3.2 ms, DRAM-bound;
+# r=2 (32 pieces) 2.5 ms, r=4 (16) 4.5 ms, compute-bound — the model ranks them the same way.
+TAIL_FIXED_ROWS = 0.45  # F / c
+TAIL_READ_PER_PIECE = 0.05  # d / c for a 2 KB K/V tile (scaled by the K/V tile size)
+
+
+def plan_work_split(Sq, *, n_q_t, Lq_t, BH, C, kv_tile_bytes=2048, tail_rows=None):
+    """Balanced tail split. Units are Sq-row q blocks of one (batch, q head), head-major ([main blocks], [joint
+    blocks] per head) as in ring_joint_sdpa_common.hpp. The first W = U // C waves stay whole units round-robin
+    (core c owns units c, c + C, ..., c + (W-1) C); the remainder units (the last U - W*C) are re-blocked into
+    `tail pieces` of r q tile-rows (r a power of two dividing Sq, picked by the cost model below among the r whose
+    piece count fits C cores) and
+    piece c goes to core c AFTER its full units. A piece's compute runs on r rows (cb credits r-sized; r | Sq keeps
+    every block contiguous in its CB, and the piece is the core's last unit so nothing follows it).
+
+    Returns (W, pieces, r): pieces[c] = (bh, row0, rows, joint) for c < len(pieces) <= C."""
+    assert Sq & (Sq - 1) == 0, "Sq must be a power of two"
+    nqb_main = -(-n_q_t // Sq)
+    nqb_joint = -(-Lq_t // Sq)
+    Uq = nqb_main + nqb_joint
+    U = BH * Uq
+    W, rem = divmod(U, C)
+    if rem == 0:
+        return W, [], Sq
+    tail = []
+    for u in range(W * C, U):
+        bh, qb = divmod(u, Uq)
+        if qb < nqb_main:
+            row0 = qb * Sq
+            tail.append((bh, row0, min(Sq, n_q_t - row0), 0))
+        else:
+            row0 = (qb - nqb_main) * Sq
+            tail.append((bh, row0, min(Sq, Lq_t - row0), 1))
+
+    def split(r):
+        out = []
+        for bh, row0, rows, joint in tail:
+            for o in range(0, rows, r):
+                out.append((bh, row0 + o, min(r, rows - o), joint))
+        return out
+
+    if tail_rows is not None:
+        r = max(1, min(Sq, _pow2_floor(int(tail_rows))))
+        while r < Sq and len(split(r)) > C:
+            r *= 2
+    else:
+        d = TAIL_READ_PER_PIECE * kv_tile_bytes / 2048
+        cands = []
+        r_ = 1
+        while r_ <= Sq:
+            n = len(split(r_))
+            if n <= C:
+                cands.append((max(TAIL_FIXED_ROWS + r_, n * d), r_))
+            r_ *= 2
+        r = min(cands)[1]
+    pieces = split(r)
+    assert len(pieces) <= C
+    return W, pieces, r
+
+
 # ----------------------------------------------------------------------------------------------------------------
 # Transport plan (TRANSPORT) — adapted from examples/fabric_all_gather (groups, schedule, links, port placement)
 # ----------------------------------------------------------------------------------------------------------------
@@ -568,6 +631,9 @@ def run_ring_joint_sdpa(
     )
 
     cb_plan = compute_cb_plan(Sq, Sk, DHt=DHt, DVt=DVt, q_dtype=q.dtype, kv_dtype=k.dtype, acc_dtype=acc_dtype)
+    W_full, tail_pieces, tail_r = plan_work_split(
+        Sq, n_q_t=n_q_t, Lq_t=Lq_t, BH=b * hq, C=C, kv_tile_bytes=ttnn.tile_size(k.dtype)
+    )
     out_mem = memory_config or ttnn.DRAM_MEMORY_CONFIG
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([b, hq, n_q, dv]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, out_mem
@@ -765,6 +831,10 @@ def run_ring_joint_sdpa(
         )
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+
+        def tail_args(ci):  # has_tail, bh, row0, rows, joint
+            return [1] + list(tail_pieces[ci]) if ci < len(tail_pieces) else [0, 0, 0, 0, 0]
+
         for ci, core in enumerate(compute):
             reader_rt[core.x][core.y] = (
                 [
@@ -785,9 +855,13 @@ def run_ring_joint_sdpa(
                 + [c.y for c in pxy]
                 + [len(segments)]
                 + seg_flat
+                + [W_full]
+                + tail_args(ci)
             )
-            writer_rt[core.x][core.y] = [addr(out), addr(jout), ci]
-            compute_rt[core.x][core.y] = [ci, len(segments)] + seg_compute
+            writer_rt[core.x][core.y] = [addr(out), addr(jout), ci, W_full] + tail_args(ci) + [tail_r]
+            compute_rt[core.x][core.y] = (
+                [ci, len(segments)] + seg_compute + [W_full, int(ci < len(tail_pieces)), tail_r]
+            )
 
         prefix = "ring_joint_scaled_dot_product_attention"
         port_crs = _crs(port_cores)
@@ -855,6 +929,9 @@ def run_ring_joint_sdpa(
                 logical_n,
                 Sq,
                 Sk,
+                W_full,
+                tail_r,
+                len(tail_pieces),
                 q.dtype,
                 k.dtype,
                 fp32_acc,

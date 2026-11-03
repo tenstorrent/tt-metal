@@ -1,0 +1,206 @@
+{
+ "block/normal": {
+  "noexp_ns": 5183.0,
+  "base": {
+   "max_ulp": 1,
+   "mean_ulp": 0.18596467766066815,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11431,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 64249.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "fold2c": {
+   "max_ulp": 1,
+   "mean_ulp": 0.18596467766066815,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11431,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 42163.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "split2c": {
+   "max_ulp": 1,
+   "mean_ulp": 0.18596467766066815,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11431,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 45186.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "lm": {
+   "max_ulp": 1,
+   "mean_ulp": 0.18596467766066815,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11431,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 34657.0,
+   "bit_mismatch_vs_base": 0
+  }
+ },
+ "block/large": {
+  "noexp_ns": 5158.0,
+  "base": {
+   "max_ulp": 1,
+   "mean_ulp": 0.26266029124103457,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11446,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 64250.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "fold2c": {
+   "max_ulp": 1,
+   "mean_ulp": 0.26266029124103457,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11446,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 42163.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "split2c": {
+   "max_ulp": 1,
+   "mean_ulp": 0.26266029124103457,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11446,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 45187.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "lm": {
+   "max_ulp": 1,
+   "mean_ulp": 0.26266029124103457,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11446,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 34665.0,
+   "bit_mismatch_vs_base": 0
+  }
+ },
+ "block/sweep": {
+  "noexp_ns": 5173.0,
+  "base": {
+   "max_ulp": 1,
+   "mean_ulp": 0.21049506420247904,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11445,
+   "tiny_all0": true,
+   "n_tiny": 11843,
+   "finite": true,
+   "ns": 64310.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "fold2c": {
+   "max_ulp": 1,
+   "mean_ulp": 0.21049506420247904,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11445,
+   "tiny_all0": true,
+   "n_tiny": 11843,
+   "finite": true,
+   "ns": 42166.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "split2c": {
+   "max_ulp": 1,
+   "mean_ulp": 0.21049506420247904,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11445,
+   "tiny_all0": true,
+   "n_tiny": 11843,
+   "finite": true,
+   "ns": 45210.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "lm": {
+   "max_ulp": 1,
+   "mean_ulp": 0.21049506420247904,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": true,
+   "n_neginf": 11445,
+   "tiny_all0": true,
+   "n_tiny": 11843,
+   "finite": true,
+   "ns": 34662.0,
+   "bit_mismatch_vs_base": 0
+  }
+ },
+ "rescale/normal": {
+  "noexp_ns": 1250.0,
+  "base": {
+   "max_ulp": 1,
+   "mean_ulp": 0.2005615234375,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": null,
+   "n_neginf": 0,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 8236.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "fold2c": {
+   "max_ulp": 1,
+   "mean_ulp": 0.2005615234375,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": null,
+   "n_neginf": 0,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 5539.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "split2c": {
+   "max_ulp": 1,
+   "mean_ulp": 0.2005615234375,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": null,
+   "n_neginf": 0,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 5910.0,
+   "bit_mismatch_vs_base": 0
+  },
+  "lm": {
+   "max_ulp": 1,
+   "mean_ulp": 0.2005615234375,
+   "frac_gt1ulp": 0.0,
+   "neginf_exact0": null,
+   "n_neginf": 0,
+   "tiny_all0": null,
+   "n_tiny": 0,
+   "finite": true,
+   "ns": 4535.0,
+   "bit_mismatch_vs_base": 0
+  }
+ }
+}

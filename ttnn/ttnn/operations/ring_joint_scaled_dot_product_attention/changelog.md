@@ -81,3 +81,103 @@
 - Issues encountered: the regression was a harness-instrumentation gap, not an op defect.
 - Tests added: none. The unit directory runs as one session, 91/91 pass. `test_graph_trace_utils.py` 19/19 pass after the
   extraction change.
+
+## Perf 1
+- Date: 2026-11-03. Focus (mandatory, `LOOSE_CASES[0]`): Wan2.2 Q/K/V (1, 40, 8192, 128) per device, bf16 / bf16,
+  fp32_dest_acc_en=False, HiFi2, math_approx_mode=False, 1x4 ring (FABRIC_2D_TORUS_XY), cluster_axis 1, 2 links,
+  logical_n 32760. Every knob is in SUPPORTED, so the exact config was measured (no proxy). roofline 18076.5 us,
+  target 24101.9 us.
+- **Instrumentation (permanent):** new `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (`MaybeDeviceZoneScope` =
+  `DeviceZoneScopedN`; `MaybeDeviceZoneScopeIf(name, active)`, a sampled zone for per-key-block phases, needed because
+  the focus walks 128 key blocks x 6 units per core against a ~125-zone budget per RISC). Zones: compute `compute_unit`,
+  `compute_finalize`, and per sampled block (unit 0, kb 4..9) `compute_k_wait / qk / mask / rowmax / sub_exp / rowsum /
+  v_wait / pv / rescale / copy_max`; reader `reader_unit / q_reserve / q_read / landing_wait`, sampled
+  `reader_kv_reserve / kv_issue / kv_barrier`; writer `writer_out_wait / out_write`; port sender `port_ready_fence /
+  port_send / port_wait_consumers / port_wait_arrivals`. Max 138 markers per RISC (under the cap; zones cover the
+  kernel span). Probe: `tests/.../probes/perf_breakdown.py` (device run + host-side analysis; `SPANS=1` for per-call spans).
+
+### Measured breakdown (baseline, one fresh-cache call, all 4 chips within 0.01 %)
+- Op span 121.31 ms on every chip (6.7x roofline). 106 compute cores, 640 units of Sq = 16 rows: 102 cores ran 6 units
+  and ended at 103.9 ms, 4 cores ran 7 units and ended at 121.3 ms. That is a **14 % work-split tail**.
+- Per key block (TRISC_1, ns): sub+exp 64 000 | rescale 25 200 | rowmax 15 400 | QK 13 200 | PV 13 300 |
+  rowsum 3 200 | copy 900. That sums to ~135 us; x 128 blocks = 17.3 ms per unit. The QK/PV matmuls run at
+  ~35 cycles per tile-mult, ≈ the HiFi2 rate.
+- Ablation (the exp SFPU payload stubbed, sync kept): sub_exp 64.0 → 5.1 us, op 121.3 → 62.5 ms. So the
+  **exp is ~59 us per block = ~47 % of the op** (~620 cycles per tile).
+- Data movement and the cross-device part have no headroom:
+  - The reader sits in `kv cb_reserve_back` 131 us per 135 us block, so it is compute-bound.
+  - TRANSPORT: `port_send` takes 3.3–4.4 ms and is done long before compute.
+  - OVERLAP: landing waits are 154 ns mean and launch skew ≤ 0.3 us, so the exposed exchange is ≈ 0.
+  - No cross-device idea had headroom on the focus. The local compute dominates.
+- Ranked bottleneck: (1) the SFPU exp, (2) the work-split tail, (3) rescale / rowmax (FPU+SFPU chains),
+  (4) the matmuls (at their rate).
+
+### Portfolio floated (cap: 2 experiments)
+1. **[tested] sfpu_exp_bf16**: the same exp_21f math as an SFPLOADMACRO pipeline (local compute).
+2. **[tested] balanced_tail_split**: re-block the leftover units into small row pieces spread over all cores, with
+   compute honouring the valid rows (local work split).
+3. [not tested] Exp on the pack thread overlapped with the matmuls (production-SDPA style). Overlaps with 1.
+4. [not tested] Fuse sub+exp+rowsum, rowsum by packer L1 accumulation. Fuse the rescale chains, rowmax in DEST on the SFPU.
+5. [not tested] K/V row multicast (R2). DRAM is not on the critical path at the focus now, so this was deferred.
+6. Cross-device (TRANSPORT / OVERLAP): none floated, because the measured exposed exchange is ≈ 0 on the focus.
+
+### Per-idea verdicts
+- **sfpu_exp_bf16 — WIN.** Isolated bench, single core, the op's exact chain:
+  - 128-tile block 64.25 → 34.66 us (1.85x); 16-tile rescale exp 8.24 → 4.53 us.
+  - Output is bit-identical to `exp_tile<false, true>` on N(0,3) scores, large logits (std 36), the [−97, 0] sweep and
+    -inf lanes. Max 1 ULP, -inf → 0.
+  - Menu: "trim" 58.2 us (bit-identical); "split2c" 45.2 (bit-identical); "fold2c" 42.2 (no-loadmacro fallback);
+    split2 / fold2 without the clamp 36–39 us but **incorrect** (-inf → NaN), so rejected.
+  - Domain: bf16 DEST. fp32 DEST is inexpressible: it uses a different, more accurate algorithm, so the functor keeps
+    stock `exp_tile` there. Needs scale·x < 88.7, which always holds for softmax (≤ 0).
+- **balanced_tail_split — WIN.** Op copy on the 4-chip mesh: focus 121.31 → 103.26 ms (−14.9 %).
+  - Piece size r = 2 picked by the cost model. r = 1: 103.9 ms (DRAM-bound tail). r = 4: 105.3 ms.
+  - About 3 ms of the win is from compiling the rescale/copy chains with a compile-time Sq for whole units.
+  - Subagent domain sweep: 14/14 correct. (1,10,512,128) and (1,27,256,64) flat. fp32 (1,8,1024,128) about −10 %.
+    (1,6,1024,128) + joint L128 **+7 %**.
+
+### Graduated (both: they don't conflict — the exp changes only `ScaledExp`, the split changes the unit structure)
+- `kernels/ring_joint_sdpa_scaled_exp.hpp` (new): `ScaledExp` is now the SFPLOADMACRO exp at bf16 DEST. Both chain
+  sites (exp_block, rescale) use it; the old inline `ScaledExp` was deleted.
+  - Carve-out (correctness/feasibility): `if constexpr (DST_ACCUM_MODE)` keeps stock `exp_tile`, because the fp32
+    DEST exp is a different algorithm.
+  - `DISABLE_SFPLOADMACRO` falls back to the fold2c body.
+- Tail split, applied as the one path for every shape (no predicate):
+  - `plan_work_split()` in the descriptor (W whole units, then ≤ 1 tail piece per core, through RT args).
+  - `tail_piece()` in `ring_joint_sdpa_common.hpp`. The dead `total_units` / `units_of_core` were deleted.
+  - Reader, writer and compute run units of R rows.
+  - `cb_scores` keeps its nominal Sq·Sk credit, with a pad push/pop on R < Sq pieces. Without it the in-place
+    phases read stale slots; this was found and fixed in the bench.
+  - The bench-only env hooks (`RJSDPA_TAIL_ROWS`, `BTS_KERNEL_DIR`) were not graduated.
+- **Whole op, focus:** 121.31 → **76.48 ms on every chip** (76480.7 / 76483.6 / 76480.2 / 76478.3 us), **1.59x**.
+  - Per block: sub_exp 64.0 → 34.3 us, rescale 25.2 → 17.1 us.
+  - Core-end quantiles [74.54, 74.56, 74.62, 76.46, 76.48] ms. Landing waits are unchanged (166 ns mean).
+  - Now 4.2x the roofline (3.2x the target).
+
+### Guard set (one call compiles, then 7 measured calls each; per-call slowest / fastest chip, median, us)
+| case (1x4 ring unless noted) | base | graduated |
+|---|---|---|
+| (1,6,1024,128) + joint L128 replicated, bf16 DEST | 987.8 / ~845 | 1079.1 / ~917 (**+9 %, measured regression**) |
+| same, fp32 DEST | 1121.9 / 1072 | 960.0 / 899 (−14 %) |
+| (1,10,512,128) bf16 DEST | 705.7 / 630 | 676.4 / 609 (−4 %) |
+| (1,8,1024,128) fp32 DEST, Linear | 1469.1 / 1245 | 1508.9 / 1094 (slowest +2.7 %, within its ±40 us noise; fastest −12 %) |
+| (1,2,128,64) bf16 DEST, exact | 64.1 / 30.8 | 62.7 / 26.7 |
+- **The joint bf16-DEST regression was not carved out.** Zones on it (base → graduated):
+  - Every compute phase got faster: sub_exp 32.0 → 17.2 us, rescale 3.8 → 2.5 us per block.
+  - The shape is TRANSPORT-bound: `port_send` max went 679 → 849 us and `reader_landing_wait` max 690 → 848 us, with
+    the port kernels unchanged. The faster compute cores contend harder with the transport for DRAM/NoC.
+  - A compute carve-out would protect the transport by keeping compute slow, and would keep a second kernel path, so
+    the unified path stays. Recorded as the first Perf 2 target: OVERLAP/TRANSPORT on transport-bound small joint
+    shapes (e.g. port-read priority, or ordering local / joint work around the landing).
+- Golden: `scripts/run_safe_pytest.sh eval/golden_tests/ring_joint_scaled_dot_product_attention/`
+  **391 passed / 0 failed** (1424 xfailed, 5984 skipped), the same counts as Refinement 1b. `test_op_loose` (the focus)
+  passes. Unit dir 91/91 (precision baselines, all 7 dtype/DEST configs).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `exp_tile<false, true>` (LLK API; `_sfpu_exp_21f_bf16_tti_`), used via the chain because `compute_kernel_lib` `Exp<>` has no scale parameter | capability | The accurate bf16 exp has no SFPLOADMACRO-pipelined form: 17 issued SFPU instructions per row. A cheaper int/frac split (SFP_STOCH_RND + SFPCAST + one MAD with power-of-two-rescaled coefficients) and the scale folded into the 1/ln2 constant are not expressible through the API. `Exp<>` also lacks the `scale_en` / scale argument, which forced a custom functor even before this round. | 64 250 (128-tile block) / 8 240 (16-tile) | 34 660 / 4 530 | `kernels/ring_joint_sdpa_scaled_exp.hpp:221` (used at `ring_joint_scaled_dot_product_attention_compute.cpp:234`, `:314`) |
+
+Summary: 2 ideas measured, 2 graduated, 0 null. The focus is 1.59x faster on every chip (121.3 → 76.5 ms). One measured
+regression is recorded, not carved out: the small joint bf16-DEST shape (+9 %), which is transport-bound and taken up
+in Perf 2.
