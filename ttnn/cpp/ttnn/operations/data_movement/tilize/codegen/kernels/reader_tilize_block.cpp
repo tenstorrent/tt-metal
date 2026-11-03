@@ -13,10 +13,10 @@ void kernel_main() {
     uint32_t start_stick = get_arg_val<uint32_t>(1);
     uint32_t col_byte_offset = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t num_col_chunks = get_compile_time_arg_val(0);  // chunks per column block
-    constexpr uint32_t H_per_tile = get_compile_time_arg_val(1);      // tile height
-    constexpr uint32_t chunk_Wt = get_compile_time_arg_val(2);        // tiles per chunk
-    constexpr uint32_t elem_w_bytes = get_compile_time_arg_val(3);    // tile width * element size
+    constexpr uint32_t num_col_chunks = get_compile_time_arg_val(0);
+    constexpr uint32_t H_per_tile = get_compile_time_arg_val(1);
+    constexpr uint32_t chunk_Wt = get_compile_time_arg_val(2);
+    constexpr uint32_t elem_w_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t aligned_page_size = get_compile_time_arg_val(4);
     constexpr auto src_args = TensorAccessorArgs<5>();
 

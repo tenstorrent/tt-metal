@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Tile writer for tilize: destination address is a common runtime arg (patched on cache hit),
-// the per-core args carry only the work split.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -34,7 +32,7 @@ void kernel_main() {
     uint32_t tile_id = start_id;
 
     if constexpr (BATCH > 1) {
-        // Pipelined: the NOC drains batch N while compute delivers batch N+1; needs cb_out depth >= 2 * BATCH.
+        // Needs cb_out depth >= 2 * BATCH so batch N drains while N+1 is produced.
         uint32_t tiles_left = num_tiles;
 
         uint32_t batch = (tiles_left < BATCH) ? tiles_left : BATCH;
@@ -50,7 +48,6 @@ void kernel_main() {
 
         while (tiles_left > 0) {
             batch = (tiles_left < BATCH) ? tiles_left : BATCH;
-            // prev_batch is still counted as available: it is popped only after the flush.
             cb.wait_front(prev_batch + batch);
             noc.async_writes_flushed();
             cb.pop_front(prev_batch);

@@ -14,10 +14,10 @@
 struct Args {
     uint32_t num_tile_rows;
     uint32_t start_stick;
-    uint32_t H_per_tile;      // tile height
-    uint32_t chunk_Wt;        // tiles per column chunk
-    uint32_t num_col_chunks;  // chunks per tile row
-    uint32_t elem_w_bytes;    // tile width * element size
+    uint32_t H_per_tile;
+    uint32_t chunk_Wt;
+    uint32_t num_col_chunks;
+    uint32_t elem_w_bytes;
 };
 
 void kernel_main() {
@@ -48,10 +48,7 @@ void kernel_main() {
             cb.push_back(a->chunk_Wt);
         }
     } else {
-        // Each source stick is read once per column chunk at the same page, so its NoC address is resolved once
-        // per tile row instead of once per chunk; the page-to-bank division is the expensive part. This is exact:
-        // TensorAccessor adds the byte offset as the last term, so get_noc_addr(p, k) == get_noc_addr(p, 0) + k.
-        // base_noc holds H_per_tile entries, which the factory always sets to the 32-row tile height.
+        // Resolve each stick's NoC address once per tile row, not per chunk; base_noc[32] needs H_per_tile <= 32.
         const uint8_t noc_id = noc.get_noc_id();
         for (uint32_t tr = 0; tr < a->num_tile_rows; ++tr) {
             uint64_t base_noc[32];
@@ -61,8 +58,6 @@ void kernel_main() {
             uint32_t chunk_off = 0;
             for (uint32_t c = 0; c < a->num_col_chunks; ++c) {
                 cb.reserve_back(a->chunk_Wt);
-                // The write pointer is fixed between reserve_back and push_back, so read it once per chunk rather
-                // than on every transaction.
                 const CoreLocalMem<uint8_t> dst(cb.get_write_ptr());
                 uint32_t l1_offset = 0;
                 for (uint32_t h = 0; h < a->H_per_tile; ++h) {

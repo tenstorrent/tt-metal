@@ -56,8 +56,8 @@ constexpr uint32_t kMinFragmentBytes = 256;
 constexpr uint32_t kTargetCores = 24;
 // Few-row DRAM split: a cut onto fewer cores than this keeps the full grid split instead.
 constexpr uint32_t kMinSplitCores = 5;
-// Most tile rows a one-tile-wide input may have and still route to native; see is_demoted().
-constexpr uint32_t kDemoteMaxTileRows = 20;
+// Tile rows of the one-tile-wide DRAM-to-L1 case that routes to native; see is_demoted().
+constexpr uint32_t kDemotedTileRows = 2;
 
 std::optional<uint32_t> row_major_element_size(DataType dtype) {
     switch (dtype) {
@@ -292,13 +292,13 @@ bool supported_execution_controls(
     return !unsupported_execution_control(use_multicore, use_low_perf, tile, sub_core_grids).has_value();
 }
 
-// One-tile-wide, non-converting input of at most kDemoteMaxTileRows tile rows: the kernel is too short to amortize
-// codegen's fixed per-launch cost, so native wins. Threshold fitted on Blackhole (P150). A converting call is
-// kept on codegen: its extra typecast stage and CB_mid make the cost comparison with native not apply.
-bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& /*output_mem_config*/, DataType output_dtype) {
+// Non-converting, one-tile-wide, kDemotedTileRows-tile-row DRAM input written to L1: the only measured region where
+// native still wins (Blackhole P150); 1.5-2.4us kernels, so every neighbouring shape and placement stays on codegen.
+bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config, DataType output_dtype) {
     using namespace tt::constants;
 
-    if (output_dtype != input.dtype()) {
+    if (output_dtype != input.dtype() || input.memory_config().buffer_type() != tt::tt_metal::BufferType::DRAM ||
+        output_mem_config.buffer_type() != tt::tt_metal::BufferType::L1) {
         return false;
     }
     const auto& shape = input.padded_shape();
@@ -311,7 +311,7 @@ bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& /*output_
     }
     const uint32_t wt = width / TILE_WIDTH;
     const uint32_t tile_rows = input.logical_shape().volume() / width / TILE_HEIGHT;
-    return wt == 1 && tile_rows <= kDemoteMaxTileRows;
+    return wt == 1 && tile_rows == kDemotedTileRows;
 }
 
 }  // namespace ttnn::operations::data_movement::tilize_codegen
