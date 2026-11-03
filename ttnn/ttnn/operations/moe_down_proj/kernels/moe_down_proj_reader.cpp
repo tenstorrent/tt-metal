@@ -39,7 +39,8 @@ void kernel_main() {
     constexpr uint32_t core_n_tiles = get_compile_time_arg_val(16);
     constexpr uint32_t out_page_bytes = get_compile_time_arg_val(17);
     constexpr uint32_t x_depth = get_compile_time_arg_val(18);
-    constexpr auto x_args = TensorAccessorArgs<19>();
+    constexpr uint32_t store_blocks_per_round = get_compile_time_arg_val(19);
+    constexpr auto x_args = TensorAccessorArgs<20>();
     constexpr auto counts_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
     constexpr auto xa_mcast = dataflow_kernel_lib::
@@ -122,21 +123,27 @@ void kernel_main() {
         }
     };
 
-    // Wave p's store runs after wave p + 1's first x_store_round x rounds (the x slots compute can fill before it
-    // has untilized wave p), so compute starts wave p + 1 while the store drains.
+    // Wave p's store starts after wave p + 1's first x_store_round x rounds (the x slots compute can fill before it
+    // has untilized wave p), so compute starts wave p + 1 while the store drains, store_blocks_per_round per round.
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_page_bytes);
     constexpr uint32_t x_store_round = x_depth < num_k_rounds ? x_depth : num_k_rounds;
-    auto store_wave = [&](uint32_t wave) {
+    auto store_wave = [&](uint32_t wave, uint32_t first = 0, uint32_t max_blocks = UINT32_MAX) {
         if constexpr (store_on_reader) {
-            moe_store_wave<cb_output_rows, core_n_tiles>(plan, out_accessor, wave, group, line);
+            return moe_store_wave<cb_output_rows, core_n_tiles>(
+                plan, out_accessor, wave, group, line, first, max_blocks);
         }
+        return first;
     };
 
     start_prefetch(0);
+    uint32_t stored = 0;
     for (uint32_t step = 0; step < num_steps; ++step) {
         const uint32_t round = step % num_k_rounds;
-        if (step >= num_k_rounds && round == x_store_round) {
-            store_wave(step / num_k_rounds - 1);
+        if (round == 0) {
+            stored = 0;
+        }
+        if (step >= num_k_rounds && round >= x_store_round) {
+            stored = store_wave(step / num_k_rounds - 1, stored, store_blocks_per_round);
         }
         const uint32_t group_rows = plan.group_rows(step / num_k_rounds, group);
         const bool owned = on_xa && xa_mcast.should_send(step);
@@ -161,8 +168,8 @@ void kernel_main() {
             start_prefetch(step + 1);
         }
         cb_push_back(cb_x_round, x_round_tiles);
-        if (step >= num_k_rounds && round == num_k_rounds - 1 && num_k_rounds <= x_store_round) {
-            store_wave(step / num_k_rounds - 1);
+        if (step >= num_k_rounds && round == num_k_rounds - 1) {
+            store_wave(step / num_k_rounds - 1, stored);
         }
     }
     if (num_steps > 0) {

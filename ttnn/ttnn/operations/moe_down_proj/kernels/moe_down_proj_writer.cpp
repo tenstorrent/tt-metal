@@ -8,8 +8,9 @@
 //   transfer (wa: rect lines, wb: the L strip line). After a send the sender starts the DRAM reads of its next
 //   owned step into staging, a quota per step, so every line keeps several steps of w reads in flight. The whole
 //   NUM_EXPERTS-slot round is pushed at once.
-// Wave p's store runs after wave p + 1's first w_depth w rounds, so compute starts wave p + 1 while the store
-// drains (more would deadlock: those slots free only once compute has finished untilizing wave p).
+// Wave p's store starts after wave p + 1's first w_depth w rounds, so compute starts wave p + 1 while the store
+// drains, store_blocks_per_round blocks per round (the host sizes cb_output_rows to the whole wave block when it
+// paces, so compute's untilize never waits on the store; unpaced, the quota covers the whole wave).
 
 #include <cstdint>
 
@@ -38,7 +39,8 @@ void kernel_main() {
     constexpr uint32_t prefetch_issue_steps = get_compile_time_arg_val(15);
     // The reader RISC (the other NoC) owns store_wave instead.
     constexpr bool store_on_reader = get_compile_time_arg_val(16) != 0;
-    constexpr auto out_args = TensorAccessorArgs<17>();
+    constexpr uint32_t store_blocks_per_round = get_compile_time_arg_val(17);
+    constexpr auto out_args = TensorAccessorArgs<18>();
     constexpr auto w_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto wa_mcast = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("wa_ct_offset"), get_named_compile_time_arg_val("wa_rt_offset")>();
@@ -78,10 +80,12 @@ void kernel_main() {
     // Every core sits in exactly one n-line: a wa line (rect) or the wb strip line.
     const bool on_wa = wa_mcast.can_send() || wa_mcast.can_receive();
 
-    auto store_wave = [&](uint32_t wave) {
+    auto store_wave = [&](uint32_t wave, uint32_t first = 0, uint32_t max_blocks = UINT32_MAX) {
         if constexpr (!store_on_reader) {
-            moe_store_wave<cb_output_rows, core_n_tiles>(plan, out_accessor, wave, group, line);
+            return moe_store_wave<cb_output_rows, core_n_tiles>(
+                plan, out_accessor, wave, group, line, first, max_blocks);
         }
+        return first;
     };
 
     uint32_t num_waves_active = 0;
@@ -138,9 +142,10 @@ void kernel_main() {
         const uint32_t range_offset = first_expert * w_chunk_bytes;
         const uint32_t range_bytes = (last_expert - first_expert + 1) * w_chunk_bytes;
 
+        uint32_t stored = 0;
         for (uint32_t round = 0; round < num_k_rounds; ++round) {
-            if (wave > 0 && round == w_prefetch_rounds) {
-                store_wave(wave - 1);
+            if (wave > 0 && round >= w_prefetch_rounds) {
+                stored = store_wave(wave - 1, stored, store_blocks_per_round);
             }
             // deliver_w_round
             const uint32_t step = wave * num_k_rounds + round;
@@ -163,8 +168,8 @@ void kernel_main() {
             }
             cb_push_back(cb_w_round, w_round_tiles);
         }
-        if (wave > 0 && num_k_rounds <= w_prefetch_rounds) {
-            store_wave(wave - 1);
+        if (wave > 0) {
+            store_wave(wave - 1, stored);
         }
     }
     if (num_waves_active > 0) {

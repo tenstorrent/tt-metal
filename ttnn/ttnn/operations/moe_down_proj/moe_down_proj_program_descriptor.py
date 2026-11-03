@@ -31,12 +31,18 @@ MAX_WAVES = 4
 X_DEPTH = 2
 W_DEPTH = 2
 OUT_DEPTH = 2
+# With num_waves >= 2, cb_output_rows holds a whole wave block, so compute untilizes wave p without waiting on the
+# store, and the store drains over wave p + 1's rounds a quota per round instead of one burst that stalls compute and
+# the w channel on the storing RISC. 8x512 layers 0-5 (L1 / L1, 2 waves): 172-174 -> 161-164 us.
+STORE_PACED = True
 MAX_TOKENS = 4096
 MAX_ROWS = TILE * (-(-2 * MAX_TOKENS // TILE) + NUM_EXPERTS - 1)
 # CBs sit below the L1 buffers: at R = MAX_ROWS = 8416, x (about 250 KB per bank) and y (about 118 KB per bank) leave
-# about 1.1 MB above the unreserved base on p100a (y's lowest address measured at 1,204,352 B). This budget assumes
-# both in L1; cb_budget_bytes() adds back the per-bank share of whichever lives in DRAM.
-CB_BUDGET_BYTES = 960 * 1024
+# about 1.1 MB above the unreserved base on p100a (base 112,000 B, y's lowest address measured at 1,204,352 B). This
+# budget assumes both in L1 and keeps about 90 KB of that free; cb_budget_bytes() adds back the per-bank share of
+# whichever lives in DRAM. It must fit the paced store's whole-wave output CB at 2 waves (993,856 B at t = 4096): 3
+# waves measured 8x512 172 -> 179-188 us.
+CB_BUDGET_BYTES = 976 * 1024
 
 CB_X_ROUND = 0
 CB_W_ROUND = 1
@@ -169,7 +175,23 @@ def _tile_bytes():
     return ttnn.tile_size(ttnn.bfloat8_b), ttnn.tile_size(ttnn.float32), ttnn.tile_size(ttnn.bfloat16)
 
 
-def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes):
+def store_paced(num_waves):
+    return STORE_PACED and num_waves > 1
+
+
+def out_depth_blocks(core_row_tiles_max, num_waves):
+    """Untilized tile-row blocks cb_output_rows holds."""
+    return max(OUT_DEPTH, core_row_tiles_max) if store_paced(num_waves) else OUT_DEPTH
+
+
+def store_blocks_per_round(core_row_tiles_max, num_waves, num_k_rounds, store_start_round):
+    """Blocks of wave p one store call drains per round of wave p + 1, from round store_start_round on."""
+    if not store_paced(num_waves) or num_k_rounds <= store_start_round:
+        return core_row_tiles_max
+    return _div_up(core_row_tiles_max, num_k_rounds - store_start_round)
+
+
+def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves):
     """(index, pages, page bytes, format) per CB. Single source for both the budget solve and the allocation."""
     in_tile, acc_tile, out_tile = _tile_bytes()
     x_round_tiles = core_row_tiles_max * k_block_tiles
@@ -180,16 +202,18 @@ def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes):
         (CB_X_STAGE, x_round_tiles, in_tile, ttnn.bfloat8_b),
         (CB_W_STAGE, w_round_tiles, in_tile, ttnn.bfloat8_b),
         (CB_PARTIALS, core_row_tiles_max * core_n_tiles, acc_tile, ttnn.float32),
-        (CB_OUTPUT_ROWS, OUT_DEPTH * core_n_tiles, out_tile, ttnn.bfloat16),
+        (CB_OUTPUT_ROWS, out_depth_blocks(core_row_tiles_max, num_waves) * core_n_tiles, out_tile, ttnn.bfloat16),
         (CB_COUNTS_COMPUTE, 1, counts_page_bytes, ttnn.uint32),
         (CB_COUNTS_WRITER, 1, counts_page_bytes, ttnn.uint32),
     ]
 
 
-def footprint_bytes(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes):
+def footprint_bytes(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves):
     return sum(
         pages * page_bytes
-        for _, pages, page_bytes, _ in cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes)
+        for _, pages, page_bytes, _ in cb_plan(
+            core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, num_waves
+        )
     )
 
 
@@ -211,7 +235,7 @@ def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes=CB
         for num_waves in range(1, MAX_WAVES + 1):
             core_row_tiles_max = _div_up(_div_up(tensor_row_tiles, num_waves), layout.num_m_groups)
             if (
-                footprint_bytes(core_row_tiles_max, k_block_tiles, layout.core_n_tiles, counts_page_bytes)
+                footprint_bytes(core_row_tiles_max, k_block_tiles, layout.core_n_tiles, counts_page_bytes, num_waves)
                 <= budget_bytes
             ):
                 return Blocking(tensor_row_tiles, num_waves, k_block_tiles, core_row_tiles_max)
@@ -244,6 +268,13 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     cores = layout.cores
 
     store_on_reader = out_in_dram
+    # The store starts once the storing RISC has filled its channel's slots for wave p + 1 (X_DEPTH / W_DEPTH rounds).
+    store_quota = store_blocks_per_round(
+        blocking.core_row_tiles_max,
+        blocking.num_waves,
+        blocking.num_k_rounds,
+        X_DEPTH if store_on_reader else W_DEPTH,
+    )
     plan_ct = [tensor_row_tiles, blocking.num_waves, layout.num_m_groups]
     reader_ct = [
         CB_X_ROUND,
@@ -263,6 +294,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         core_n_tiles,
         output.buffer_page_size(),
         X_DEPTH,
+        store_quota,
     ]
     for tensor in (input_tensor, expert_counts, output):
         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
@@ -282,6 +314,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         CB_W_STAGE,
         PREFETCH_ISSUE_STEPS,
         int(store_on_reader),
+        store_quota,
     ]
     for tensor in (output, weight):
         writer_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
@@ -315,7 +348,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     cbs = [
         _cb(index, pages, page_bytes, dtype, cores)
         for index, pages, page_bytes, dtype in cb_plan(
-            blocking.core_row_tiles_max, blocking.k_block_tiles, core_n_tiles, counts_page_bytes
+            blocking.core_row_tiles_max, blocking.k_block_tiles, core_n_tiles, counts_page_bytes, blocking.num_waves
         )
     ]
 
