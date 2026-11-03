@@ -364,7 +364,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::softsign)
     {
-        init_softsign<APPROX>();
+        init_softsign<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::sigmoid_appx)
     {
@@ -1124,7 +1124,7 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::softsign)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_softsign, (APPROX, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_softsign, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::sigmoid_appx)
     {
