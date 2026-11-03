@@ -6,7 +6,7 @@ test_vision_module_guards.py checks on the host that from_torch takes only a Con
 
 The processor already flattens each patch, so pixel_values is (L, 1176). There is no class token and no
 learned position embedding, so the reference's embed, the Conv3d alone, is the whole patch embed. Random
-weights and pixel values (conftest.py), no checkpoint.
+weights and pixel values (tests/conftest.py), no checkpoint.
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_patch_embed_vs_ref.py

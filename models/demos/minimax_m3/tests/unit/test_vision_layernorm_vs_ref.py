@@ -4,7 +4,7 @@
 Accuracy test for M3VLLayerNorm vs the Torch reference.
 
 Runs layer 0's layer_norm1 on the input it gets inside the reference tower plus an offset per row. Random
-weights and pixel values (conftest.py), no checkpoint.
+weights and pixel values (tests/conftest.py), no checkpoint.
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_layernorm_vs_ref.py

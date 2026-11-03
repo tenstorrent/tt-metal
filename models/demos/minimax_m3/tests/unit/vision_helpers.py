@@ -3,7 +3,7 @@
 
 """Shared parts of the vision encoder unit tests: for the device tests (test_vision_*_vs_ref.py) the image grids, the
 host to device copies and the comparison with the reference, and for the host tests a stand-in for the mesh device
-(grid_device). The reference model and its activations are fixtures in conftest.py.
+(grid_device). The reference model and its activations are fixtures in tests/conftest.py.
 tests/perf/test_vision_encoder_timing.py also uses VISION_GRIDS and to_host."""
 
 from __future__ import annotations
@@ -30,25 +30,34 @@ VISION_GRIDS = {
     "h40w54": (1, 40, 54),  # 4:3 photos of 800x600 and larger, resized to 756x560: 2160 patches, not whole tiles
     "h36w36": (1, 36, 36),  # 504x504: 1296 patches, not whole tiles; 1 tile of rows on a transposed split's last core
     "h18w18": (1, 18, 18),  # 252x252: 324 patches, not whole tiles, where QKV and fc1 keep ttnn's own config
+    # 168x168: 144 patches, where only the patch embed, the out projection and fc2 get a program config, and SDPA
+    # masks 112 of its 256 keys
+    "h12w12": (1, 12, 12),
+    # 56x56, the smallest the processor makes: 16 patches and 4 tokens, every linear on ttnn's own config, and SDPA
+    # with one 128-key chunk, 112 of its keys masked
+    "h4w4": (1, 4, 4),
 }
 # The 1-card CI leg, which has a 5 minute timeout, runs h16w16 and h40w54. h40w54 runs what h16w16 does not: the RoPE
 # op's reload kernels, partial row tiles and, on 12x10, the transposed matmul split with a partial last block and
-# program configs for the merge linears. M3_VISION_ALL_GRIDS=1 adds the others. They are left out rather than skipped,
-# so the leg shows no skipped vision tests.
+# program configs for the merge linears. The P150 runners in main's CI logs have 11x10 grids, where h40w54 takes
+# neither: there the transposed split comes at h36w36 and h48w48, and the merge linears keep ttnn's own config at every
+# grid here. M3_VISION_ALL_GRIDS=1 adds the other grids. They are left out rather than skipped, so the leg shows no
+# skipped vision tests.
 CI_GRIDS = ("h16w16", "h40w54")
 # The attention test also runs h18w18 in CI. SDPA pads the keys to a multiple of its 128-key chunk and masks the padded
 # ones: 16 of 2176 at 2160 patches, too few for a broken mask to move the output past its bound, and 60 of 384 at 324.
 ATTENTION_CI_GRIDS = CI_GRIDS + ("h18w18",)
-# Twice the largest relative L2 error measured on one P150 at h16w16, h32w32, h48w48 and h34w46, per test.
+# Twice the largest relative L2 error per test, measured on one P150 with a 12x10 compute grid at the grids of
+# VISION_GRIDS from 256 patches up, each logged 4-place value taken at the top of its rounding (0.0059 as 0.00595).
 MAX_REL_L2 = {
-    "patch_embed": 0.0058,
-    "layernorm": 0.0136,
-    "attention": 0.0128,
-    "mlp": 0.0082,
-    "block": 0.0122,
-    "projector": 0.0108,
-    "tower": 0.0188,
-    "final": 0.0208,
+    "patch_embed": 0.0035,
+    "layernorm": 0.0039,
+    "attention": 0.0119,
+    "mlp": 0.0061,
+    "block": 0.0083,
+    "projector": 0.0081,
+    "tower": 0.0125,
+    "final": 0.0149,
 }
 
 
@@ -87,7 +96,11 @@ def check_close(name: str, ref: torch.Tensor, out: torch.Tensor, min_pcc: float,
     error>", and whether out passes: no NaN or Inf, a PCC of at least min_pcc and a relative L2 error of at most
     max_rel_l2. PCC alone passes NaN (comp_pcc zeroes it) and any scale. The line of a failure adds the bounds, the
     relative L2 error to 6 places, the NaN and Inf counts and the least-squares gain of out over ref, which shows a
-    scale error."""
+    scale error.
+
+    With the bounds of MAX_REL_L2 the relative L2 error decides. A NaN or Inf value makes it NaN or Inf, which fails,
+    and for the tests' outputs 1 - PCC is about relL2**2 / 2, so the PCC bars of 0.9999 and 0.9998 bind only at errors
+    past every bound."""
     pcc_ok, pcc = comp_pcc(ref, out, min_pcc)
     rel_l2, _ = comp_relative_frobenius(ref, out)
     line = f"[{name}] {comp_allclose(ref, out)} {pcc} relL2={rel_l2:.4f}"

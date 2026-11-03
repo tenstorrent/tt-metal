@@ -4,7 +4,7 @@
 Accuracy test for M3VLBlock (one full encoder layer) vs the Torch reference.
 
 Runs layer 0 on the input it gets inside the reference tower (the pre_layrnorm output), with the RoPE
-cos and sin computed on host from the image grid. Random weights and pixel values (conftest.py), no
+cos and sin computed on host from the image grid. Random weights and pixel values (tests/conftest.py), no
 checkpoint.
 
 Run:
