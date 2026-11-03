@@ -989,6 +989,9 @@ void Cluster::write_core(
 }
 
 bool Cluster::requires_snoop_for_dm_coherence() const {
+    if (this->arch_ != tt::ARCH::QUASAR) {
+        return false;
+    }
     switch (this->target_type_) {
         // ttsim and Emule hold no data in a DM L2, so a plain write is already coherent and their
         // UMD IoWindows don't take WindowFlags::Snoop.
