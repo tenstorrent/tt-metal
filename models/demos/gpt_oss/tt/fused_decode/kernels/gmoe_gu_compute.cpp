@@ -30,11 +30,12 @@ void kernel_main() {
     constexpr uint32_t E = 32;
     constexpr uint32_t GROUP = 4;  // slots per in0 block (gmoe_gu_reader.cpp)
 
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
+
     cb_wait_front(cb_meta, 1);
     volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_meta, 0));
     const uint32_t u0 = meta[0], u1 = meta[1];
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
     // slots [p0, p0 + gm) of the in0 block at the front (cb_x) x the unit's weights / bias at the front -> cb_out
     auto block = [&](uint32_t gm) {
         for (uint32_t p = 0; p < gm; p += 2) {

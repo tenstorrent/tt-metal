@@ -232,9 +232,9 @@ void kernel_main() {
 #endif
     const uint32_t n_groups = (nc + G - 1) / G;
 
+    compute_kernel_hw_startup(cb_q, cb_q, cb_qs);
     cb_wait_front(cb_q, 2 * Tt);
     // Qs = Q * scale
-    compute_kernel_hw_startup(cb_q, cb_q, cb_qs);
     cb_reserve_back(cb_qs, 2 * Tt);
     for (uint32_t t = 0; t < 2 * Tt; t += 2) {
         tile_regs_acquire();

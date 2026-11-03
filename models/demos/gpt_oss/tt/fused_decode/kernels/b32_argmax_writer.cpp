@@ -14,8 +14,14 @@
 #include "api/dataflow/dataflow_api.h"
 
 namespace {
-// FP32 bits -> an unsigned key in the same order as the floats
-inline uint32_t key(uint32_t b) { return (b & 0x80000000u) ? ~b : (b | 0x80000000u); }
+// FP32 bits -> an unsigned key in the same order as the floats; -0.0 keys as +0.0 (equal values tie, so the smaller
+// index wins), the returned value keeps its own bits
+inline uint32_t key(uint32_t b) {
+    if ((b & 0x7FFFFFFFu) == 0) {
+        b = 0;
+    }
+    return (b & 0x80000000u) ? ~b : (b | 0x80000000u);
+}
 }  // namespace
 
 void kernel_main() {

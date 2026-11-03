@@ -26,11 +26,12 @@ void kernel_main() {
     constexpr uint32_t E = 32;
     constexpr uint32_t RT = 4;  // slots per DST block (FP32: 4 tiles)
 
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_w, cb_out);
+
     cb_wait_front(cb_meta, 1);
     volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_meta, 0));
     const uint32_t u0 = meta[0], u1 = meta[1];
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_w, cb_out);
     uint32_t loaded = E;
     for (uint32_t u = u0; u < u1; ++u) {
         const uint32_t e = u / NU, m = meta[2 + e];
