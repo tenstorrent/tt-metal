@@ -12,9 +12,10 @@
 
 namespace ttnn::experimental::prim {
 
-// Per-core DFBs: initial, product, state and out each hold one FP32 [K, V] state block, and the BF16 A and B rows
-// are double-buffered so the next step's rows stream while compute applies this one.
-inline constexpr uint32_t chain_affine_transforms_state_blocks = 4;
+// Per-core DFBs: initial, initial_exact, product, state and out each hold one FP32 [K, V] state block and state_exact
+// two (it is read and rewritten in one step), and the E and B rows are double-buffered so the next step's rows stream
+// while compute applies this one.
+inline constexpr uint32_t chain_affine_transforms_state_blocks = 7;
 inline constexpr uint32_t chain_affine_transforms_transform_buffers = 2;
 
 inline uint64_t chain_affine_transforms_l1_bytes(uint64_t key_tiles, uint64_t value_tiles) {
