@@ -15,15 +15,42 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "moe_down_proj_plan.h"
 
-// One untilized block (tile row) -> its 32 y row segments.
+// One untilized block (tile row) -> its 32 y row segments, one packet each. The store is issue-bound (128 B writes),
+// so this is raw: the block's 32 y pages are consecutive, so (bank, page in bank) steps instead of a
+// TensorAccessor::get_noc_addr per row; the write command buffer's NOC_CTRL and length are programmed once per block
+// (noc_write_init_state) and each row is issued with noc_write_with_state (src, coordinate, dst, send); the write
+// counters are bumped once per block. No public stateful write varies the destination coordinate per issue
+// (noc_async_write_one_packet_with_state fixes it). Nothing else on this RISC uses write_cmd_buf's state, since every
+// other write reprograms NOC_CTRL and length. Interleaved y only (L1 or DRAM).
 template <uint32_t core_n_tiles, typename Accessor>
 FORCE_INLINE void moe_store_block(const Accessor& out_accessor, uint32_t block_l1, uint32_t first_row, uint32_t line) {
     constexpr uint32_t tile_rows = 32;
     constexpr uint32_t seg_bytes = core_n_tiles * tile_rows * sizeof(uint16_t);
-    const uint32_t seg_offset = line * seg_bytes;
+    static_assert(seg_bytes <= NOC_MAX_BURST_SIZE, "one packet per row segment");
+    static_assert(noc_mode == DM_DEDICATED_NOC, "the per-block counter update assumes dedicated NoCs");
+    constexpr bool dram = Accessor::is_dram;
+    constexpr uint32_t num_banks = dram ? NUM_DRAM_BANKS : NUM_L1_BANKS;
+    tt_buf_rw::note_read_write<tt_buf_rw::binding_of<Accessor>>();
+    const auto& pages = static_cast<const InterleavedAddrGen<dram>&>(out_accessor);
+    uint32_t page_in_bank = interleaved_addr_gen::get_bank_offset_index<dram>(first_row);
+    uint32_t bank = interleaved_addr_gen::get_bank_index<dram>(first_row, page_in_bank);
+    uint32_t local = pages.bank_base_address + page_in_bank * pages.aligned_page_size + line * seg_bytes;
+    const uint8_t noc = noc_index;
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    noc_write_init_state<write_cmd_buf>(noc, NOC_UNICAST_WRITE_VC);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, seg_bytes);
     for (uint32_t i = 0; i < tile_rows; ++i) {
-        noc_async_write(block_l1 + i * seg_bytes, out_accessor.get_noc_addr(first_row + i, seg_offset), seg_bytes);
+        const uint64_t dst = noc_address_backend::bank_address<dram>(
+            bank, local + interleaved_addr_gen::get_bank_offset<dram>(bank), noc);
+        noc_write_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT, false>(
+            noc, block_l1 + i * seg_bytes, dst);
+        if (++bank == num_banks) {
+            bank = 0;
+            local += pages.aligned_page_size;
+        }
     }
+    noc_nonposted_writes_num_issued[noc] += tile_rows;
+    noc_nonposted_writes_acked[noc] += tile_rows;
 }
 
 template <uint32_t cb_output_rows, uint32_t core_n_tiles, typename Accessor>
