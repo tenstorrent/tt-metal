@@ -5,7 +5,10 @@ Goldens for tests/test_vision_accuracy.py: Hugging Face's MiniMax-M3 vision towe
 weights of the checkpoint in HF_MODEL, run on the CPU in fp32 (the goldens) and in bf16 (the error of a plain bf16
 run, which sets the test's tower bar).
 
-Each image of IMAGES goes through the checkpoint's image processor, then MiniMaxM3VLModel.get_image_features.
+Each image of IMAGES goes through the checkpoint's image processor, then MiniMaxM3VLModel.get_image_features. The
+model's vision weights are the checkpoint's, named by transformers' own rules for it (vision_weights), not through
+tt/vision/loader.py, which the TT model loads with: a rename there that swapped two tensors of the same shape would
+otherwise reach the TT model and the goldens alike, and the test would pass.
 <out>/<image>.safetensors holds
     pixel_values       (L, 1176) fp32      the processor's output, the test's input
     image_grid_thw     (1, 3) int64        the (t, h, w) patch grid
@@ -35,9 +38,8 @@ from pathlib import Path
 
 import torch
 from PIL import Image
+from safetensors import safe_open
 from safetensors.torch import save_file
-
-from models.demos.minimax_m3.tt.vision.loader import load_vision_state_dict
 
 # transformers' minimax_m3_vl classes are imported where they are used: they take seconds to import, and
 # tests/test_vision_accuracy.py imports IMAGES from this module without needing them.
@@ -54,6 +56,8 @@ IMAGES = {
     "house": ("models/sample_data/house_in_field_1080p.jpg", None),
 }
 PRE_LAYRNORM_ROWS = 64
+# Name prefixes of MiniMaxM3VLModel's vision tower and projector weights.
+VISION_PREFIXES = ("vision_tower.", "multi_modal_projector.")
 
 
 def sha256(path) -> str:
@@ -105,15 +109,54 @@ def load_image(case: str) -> tuple:
         return image.convert("RGB"), source
 
 
+def vision_weights(hf_model: str, model) -> dict:
+    """The vision tower and projector weights of the checkpoint in hf_model, in fp32, under the names of model (a
+    MiniMaxM3VLModel): every key of the checkpoint's model.safetensors.index.json is renamed by transformers' rules
+    for the model, the conversion mapping and rename_source_key that from_pretrained applies, and the keys that land on
+    a vision weight of the model are read, from their shards only. Raises ValueError for a vision weight of the model
+    that no key lands on, two keys that land on one, or a key that transformers would convert rather than rename."""
+    from transformers.conversion_mapping import get_model_conversion_mapping
+    from transformers.core_model_loading import WeightConverter, WeightRenaming, rename_source_key
+
+    transforms = get_model_conversion_mapping(model)
+    renamings = [transform for transform in transforms if isinstance(transform, WeightRenaming)]
+    converters = [transform for transform in transforms if isinstance(transform, WeightConverter)]
+    params = model.state_dict()
+    vision = {name for name in params if name.startswith(VISION_PREFIXES)}
+    with open(os.path.join(hf_model, "model.safetensors.index.json")) as f:
+        weight_map = json.load(f)["weight_map"]
+    keys_by_shard, sources = {}, {}
+    for key, shard in weight_map.items():
+        name, converter = rename_source_key(key, renamings, converters, model.base_model_prefix, params)
+        if name not in vision:
+            continue
+        if converter is not None:
+            raise ValueError(f"{hf_model}: transformers converts {key} into {name} ({converter}), not only renames it")
+        if name in sources:
+            raise ValueError(f"{hf_model}: {sources[name]} and {key} are both named {name} by transformers")
+        sources[name] = key
+        keys_by_shard.setdefault(shard, []).append(key)
+    missing = sorted(vision - set(sources))
+    if missing:
+        raise ValueError(f"{hf_model}: no checkpoint weight for {len(missing)} vision weights, such as {missing[0]}")
+    names = {key: name for name, key in sources.items()}
+    weights = {}
+    for shard, keys in sorted(keys_by_shard.items()):
+        with safe_open(os.path.join(hf_model, shard), framework="pt") as f:
+            for key in keys:
+                weights[names[key]] = f.get_tensor(key).float()
+    return weights
+
+
 def load_hf_model(hf_model: str):
-    """MiniMaxM3VLModel with the checkpoint's vision tower and projector in fp32, read by tt/vision/loader.py as for
-    the TT model. The language model stays on the meta device: it takes no memory and never runs."""
+    """MiniMaxM3VLModel with the checkpoint's vision tower and projector in fp32 (vision_weights). The language model
+    stays on the meta device: it takes no memory and never runs."""
     from transformers import MiniMaxM3VLConfig, MiniMaxM3VLModel
 
     config = MiniMaxM3VLConfig.from_pretrained(hf_model)
     with torch.device("meta"):
         model = MiniMaxM3VLModel(config)
-    missing, unexpected = model.load_state_dict(load_vision_state_dict(hf_model), strict=False, assign=True)
+    missing, unexpected = model.load_state_dict(vision_weights(hf_model, model), strict=False, assign=True)
     missing = [key for key in missing if not key.startswith("language_model.")]
     if missing or unexpected:
         raise ValueError(f"{hf_model}: vision weights missing {missing}, unexpected {unexpected}")
