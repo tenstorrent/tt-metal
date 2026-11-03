@@ -131,8 +131,12 @@ assert MHC_KSUM in ("exact", "fast"), MHC_KSUM
 # A4 inside the fused pre-block: "llk" = the mhc_split_sinkhorn tile sequence (one LLK op + CB round trip per step, ~130
 # ops on the coordinator core, ~52 us per wrap); "fused" = one dest pass per normalisation (matmul, [+eps], recip,
 # m copied in, SFPU multiply: 2*iters + 3 passes, ~20 us expected). A bounded rounding change (fp32 SFPU products where
-# the LLK sequence multiplied through 19-bit FPU operands): logits gate required before it becomes the default.
-MHC_PRE_SINKHORN = os.environ.get("GLM53_MHC_PRE_SINKHORN", "fused")
+# the LLK sequence multiplied through 19-bit FPU operands). "dst" (the default since 2026-11-03): the whole Sinkhorn in
+# the dest registers on the live rows' bands only (custom_ops/mhc_pre_block/kernels/mhc_sfpu_sinkhorn.h), 46 us per
+# wrap at <= 4 users: the (8, 4) 45-layer gate at 4 users per row gave 44.36 -> 41.72 ms with the 128-token chain pcc
+# 0.9547 (fused: 0.9468). GLM53_MHC_PRE_XPARTS=1 (no 3-way bf16 split of the projection operands) was rejected there:
+# chain pcc 0.9147 for -0.8 ms.
+MHC_PRE_SINKHORN = os.environ.get("GLM53_MHC_PRE_SINKHORN", "dst")
 assert MHC_PRE_SINKHORN in ("llk", "fused", "dst"), MHC_PRE_SINKHORN  # dst: in dest registers, live rows only
 # the fused pre-block's work split: "cols" = 128 column tiles over the grid (two on each of the first 8 cores of a 12x10
 # grid: they bound the projection phase); "extras" = a two-column core projects only its first column, the second's 4
