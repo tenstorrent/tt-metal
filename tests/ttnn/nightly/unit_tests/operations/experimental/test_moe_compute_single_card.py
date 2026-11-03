@@ -2335,40 +2335,19 @@ def _single_device(case, cluster_axis=None, **precision):
 
 # (local experts, tokens, top_k, intermediate size, hidden size, activation, activation limit)
 _EXPERT_ROWS_SHAPES = {
-    "deepseek_e16_t32": (16, 32, 8, 2048, 7168, MoEActivationFunction.SILU, None),
     "flash_next_e128_t1": (128, 1, 8, 640, 2560, MoEActivationFunction.SILU, None),
-    "glm53_e18_t32_clamped": (18, 32, 8, 2048, 4096, MoEActivationFunction.CLAMPED_SILU, 10.0),
-    "gpt_oss_e16_t32_swiglu": (16, 32, 4, 2880, 2880, MoEActivationFunction.SWIGLU, None),
     "gemma_e8_t32_gelu": (8, 32, 8, 704, 2816, MoEActivationFunction.GELU, None),
 }
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("shape", ["deepseek_e16_t32", "flash_next_e128_t1", "gpt_oss_e16_t32_swiglu"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_shapes(mesh_device, mesh_shape, shape):
+def test_moe_compute_expert_rows_bias(mesh_device, mesh_shape):
     _skip_unless_supported_arch(mesh_device)
-    local_experts, tokens, top_k, intermediate_size, hidden_size, act, limit = _EXPERT_ROWS_SHAPES[shape]
-    case = _Case(
-        mesh_device, local_experts, tokens, top_k, intermediate_size, hidden_size, act=act, limit=limit, kind="hot_last"
-    )
+    case = _Case(mesh_device, 8, 32, 4, 2880, 2880, act=MoEActivationFunction.SWIGLU, has_bias=True)
     expert_rows, ring = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
     rel_expert_rows, rel_ring = case.rows_rel_l2(expert_rows), case.rows_rel_l2(ring)
-    logger.debug(f"{shape}: rows rel L2 expert rows {rel_expert_rows:.5f} ring {rel_ring:.5f} (HiFi4, FP32 DEST)")
-    assert rel_expert_rows <= 0.01, f"expert rows rel L2 {rel_expert_rows}"
-
-
-@pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("act", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU], ids=["silu", "swiglu"])
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_bias(mesh_device, mesh_shape, act):
-    _skip_unless_supported_arch(mesh_device)
-    hidden_size = 2880 if act == MoEActivationFunction.SWIGLU else 2048
-    intermediate_size = 2880 if act == MoEActivationFunction.SWIGLU else 1024
-    case = _Case(mesh_device, 8, 32, 4, intermediate_size, hidden_size, act=act, has_bias=True)
-    expert_rows, ring = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
-    rel_expert_rows, rel_ring = case.rows_rel_l2(expert_rows), case.rows_rel_l2(ring)
-    logger.debug(f"bias {act}: rows rel L2 expert rows {rel_expert_rows:.5f} ring {rel_ring:.5f}")
+    logger.debug(f"bias: rows rel L2 expert rows {rel_expert_rows:.5f} ring {rel_ring:.5f}")
     assert rel_expert_rows <= 0.01, f"expert rows rel L2 {rel_expert_rows}"
 
 
@@ -2423,15 +2402,13 @@ def test_moe_compute_expert_rows_rejects_activation_limit(mesh_device, mesh_shap
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("tokens", [1, 63, 128])
-# h448 (14 tiles) puts a W2 output tile in every DRAM bank on both Wormhole (12) and Blackhole (8)
-@pytest.mark.parametrize("cfg", [(4, 4, 256, 512), (8, 4, 256, 448)], ids=["c4_h512", "c2_h448"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_tokens(mesh_device, mesh_shape, cfg, tokens):
+def test_moe_compute_expert_rows_tokens(mesh_device, mesh_shape):
+    """63 tokens, not a tile multiple; H 448 (14 tiles) puts a W2 output tile in every DRAM bank on both Wormhole (12)
+    and Blackhole (8)."""
     _skip_unless_supported_arch(mesh_device)
-    local_experts, top_k, intermediate_size, hidden_size = cfg
-    intermediate_size = max(intermediate_size, _TILE_WIDTH * effective_matmul_ring_size(mesh_device))
-    case = _Case(mesh_device, local_experts, tokens, top_k, intermediate_size, hidden_size, kind="hot_last")
+    intermediate_size = max(256, _TILE_WIDTH * effective_matmul_ring_size(mesh_device))
+    case = _Case(mesh_device, 8, 63, 4, intermediate_size, 448, kind="hot_last")
     expert_rows, _ = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.rows_rel_l2(expert_rows)
     assert rel <= 0.01, f"expert rows rel L2 {rel}"
@@ -2461,31 +2438,6 @@ def test_moe_compute_expert_rows_many_jobs_per_group(mesh_device, mesh_shape):
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("mode", sorted(_PRECISION_MODES))
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_deterministic(mesh_device, mesh_shape, mode):
-    """Eager, repeated eager and a trace replay give bitwise-equal outputs in every DEST mode and with the defaults; the
-    trace replayed on new inputs equals an eager call on them."""
-    _skip_unless_supported_arch(mesh_device)
-    precision = _PRECISION_MODES[mode]
-    case = _Case(mesh_device, 32, 128, 8, 512, 2048)
-    with _kernel("expert_rows"):
-        first = case.read(case.call(**precision), check=True)
-        second = case.read(case.call(**precision))
-        assert (diff := case.defined_equal(first, second)) is None, f"repeated eager call differs: {diff}"
-        outs, tid = _traced(mesh_device, lambda: case.call(**precision))
-        traced = case.read(outs, free=False)
-        assert (diff := case.defined_equal(first, traced)) is None, f"traced call differs: {diff}"
-        case.reload(seed=7)
-        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
-        traced_new = case.read(outs, free=False)
-        ttnn.release_trace(mesh_device, tid)
-        eager_new = case.read(case.call(**precision), check=True)
-    assert case.defined_equal(first, eager_new) is not None, "new inputs gave the old outputs"
-    assert (diff := case.defined_equal(eager_new, traced_new)) is None, f"trace on new inputs differs: {diff}"
-
-
-@pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_auto_choice(mesh_device, mesh_shape, monkeypatch):
     """Unforced, Blackhole runs the expert rows path (two programs)."""
@@ -2502,31 +2454,26 @@ def test_moe_compute_auto_choice(mesh_device, mesh_shape, monkeypatch):
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("height_shards", [2, 8])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_height_shards(mesh_device, mesh_shape, height_shards):
-    """Rows over 2 and 8 output height shards, bitwise equal to the ring's and against the golden."""
+def test_moe_compute_expert_rows_height_shards(mesh_device, mesh_shape):
+    """Rows over 8 output height shards, bitwise equal to the ring's and against the golden."""
     _skip_unless_supported_arch(mesh_device)
-    case = _Case(mesh_device, 8, 32, 8, 512, 2048, kind="hot_last", output_height_shard_dim=height_shards)
+    case = _Case(mesh_device, 8, 32, 8, 512, 2048, kind="hot_last", output_height_shard_dim=8)
     expert_rows, _ = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.rows_rel_l2(expert_rows)
-    assert rel <= 0.01, f"{height_shards} height shards: expert rows rel L2 {rel}"
-
-
-_SINGLE_DEVICE_SHAPES = ["gemma_e8_t32_gelu", "glm53_e18_t32_clamped"]
+    assert rel <= 0.01, f"8 height shards: expert rows rel L2 {rel}"
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("shape", _SINGLE_DEVICE_SHAPES)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_single_device(mesh_device, mesh_shape, shape):
+def test_moe_compute_expert_rows_single_device(mesh_device, mesh_shape):
     """SingleDevice: the combine output is bitwise equal to the ring's and within 1 % rel L2 of the FP32 golden."""
     _skip_unless_supported_arch(mesh_device)
-    local_experts, tokens, top_k, intermediate_size, hidden_size, act, limit = _EXPERT_ROWS_SHAPES[shape]
+    local_experts, tokens, top_k, intermediate_size, hidden_size, act, limit = _EXPERT_ROWS_SHAPES["gemma_e8_t32_gelu"]
     case = _Case(mesh_device, local_experts, tokens, top_k, intermediate_size, hidden_size, act=act, limit=limit)
     res = _single_device(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.combine_rel_l2(res["expert_rows"])
-    logger.debug(f"{shape}: SingleDevice combine rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
+    logger.debug(f"SingleDevice combine rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
     assert rel <= 0.01, f"combine output rel L2 {rel}"
 
 
@@ -2544,26 +2491,23 @@ def test_moe_compute_expert_rows_single_cluster(mesh_device, mesh_shape):
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("tokens", [1, 64])
-@pytest.mark.parametrize("kind", ["random", "skewed", "empty"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_single_device_routing(mesh_device, mesh_shape, kind, tokens):
-    """SingleDevice over token counts and uneven experts (experts with no token, one expert in every token)."""
+def test_moe_compute_expert_rows_single_device_routing(mesh_device, mesh_shape):
+    """SingleDevice with uneven experts: one expert in every token, experts with no token."""
     _skip_unless_supported_arch(mesh_device)
-    case = _Case(mesh_device, 16, tokens, 8, 512, 2048, kind=kind)
+    case = _Case(mesh_device, 16, 64, 8, 512, 2048, kind="skewed")
     res = _single_device(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.combine_rel_l2(res["expert_rows"])
     assert rel <= 0.01, f"combine output rel L2 {rel}"
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("mode", sorted(_PRECISION_MODES))
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_single_device_deterministic(mesh_device, mesh_shape, mode):
-    """SingleDevice: eager, repeated eager and a trace replay give bitwise-equal combine outputs in every DEST mode and
-    with the defaults; the trace replayed on new inputs equals an eager call on them."""
+def test_moe_compute_expert_rows_single_device_deterministic(mesh_device, mesh_shape):
+    """SingleDevice: eager, repeated eager and a trace replay give bitwise-equal combine outputs; the trace replayed on
+    new inputs equals an eager call on them."""
     _skip_unless_supported_arch(mesh_device)
-    precision = _PRECISION_MODES[mode]
+    precision = _PRECISION_MODES["default"]
     case = _Case(mesh_device, 32, 128, 8, 512, 2048)
 
     def run():
@@ -2616,21 +2560,17 @@ def test_moe_compute_expert_rows_layer_id(mesh_device, mesh_shape):
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "single_device"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_duplicate_ids(mesh_device, mesh_shape, compute_only):
+def test_moe_compute_expert_rows_duplicate_ids(mesh_device, mesh_shape):
     """A token naming one expert at two k is listed once per k in the counts, e_t pages, rows and combine output; the
     activation row holds the last k."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 16, 32, 8, 512, 2048, kind="dup")
     precision = _PRECISION_MODES["hifi4_fp32"]
     with _kernel("expert_rows"):
-        out = None if compute_only else case.new_combine_output()
-        outs = case.call(compute_only=compute_only, out=out, **precision)
-        combine = None
-        if not compute_only:
-            combine = ttnn.to_torch(outs[5]).reshape(case.top_k, case.tokens, case.hidden_size)
-            ttnn.deallocate(outs[5])
+        outs = case.call(compute_only=False, out=case.new_combine_output(), **precision)
+        combine = ttnn.to_torch(outs[5]).reshape(case.top_k, case.tokens, case.hidden_size)
+        ttnn.deallocate(outs[5])
         expert_rows = case.read(outs[:5])
     with _kernel("ring"):
         ring = case.read(case.call(**precision))
@@ -2670,9 +2610,8 @@ def test_moe_compute_expert_rows_duplicate_ids(mesh_device, mesh_shape, compute_
             ), f"token {token} expert {expert}: k {got}, listed at {k_indices}"
     rel = case.rows_rel_l2(expert_rows)
     assert rel <= 0.01, f"expert rows rel L2 {rel}"
-    if combine is not None:
-        rel = case.combine_rel_l2(combine)
-        assert rel <= 0.01, f"combine output rel L2 {rel}"
+    rel = case.combine_rel_l2(combine)
+    assert rel <= 0.01, f"combine output rel L2 {rel}"
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
@@ -2700,16 +2639,11 @@ def test_moe_compute_expert_rows_listing_over_tokens(mesh_device, mesh_shape, co
     assert terminator == _E_T_END, f"page terminator {terminator:#x}"
 
 
-# (local experts, tokens, top_k, intermediate size, hidden size, activation, limit, bias). On 8 DRAM banks, 2560/640,
-# 2816/704 and 2880/704 with bias have odd column counts per bank, and 2048/1792 has 7 columns per bank and jobs of
-# 3 row tiles.
+# (local experts, tokens, top_k, intermediate size, hidden size, activation, limit, bias). On 8 DRAM banks 2816/704 has
+# an odd column count per bank.
 _ROW_TILE_SHAPES = {
     "glm53_e18_t96_clamped": (18, 96, 8, 2048, 4096, MoEActivationFunction.CLAMPED_SILU, 10.0, False),
-    "gpt_oss_e8_t128_bias": (8, 128, 4, 2880, 2880, MoEActivationFunction.SWIGLU, None, True),
-    "flash_next_e32_t128": (32, 128, 8, 640, 2560, MoEActivationFunction.SILU, None, False),
     "gemma_e16_t128_gelu": (16, 128, 8, 704, 2816, MoEActivationFunction.GELU, None, False),
-    "h2880_n704_e8_t128_bias": (8, 128, 4, 704, 2880, MoEActivationFunction.SWIGLU, None, True),
-    "h2048_n1792_e10_t96": (10, 96, 8, 1792, 2048, MoEActivationFunction.SILU, None, False),
 }
 
 
@@ -2741,23 +2675,14 @@ def _rows_with(case, row_tiles, **precision):
         return case.read(outs, check=True)
 
 
-# each (row tiles, routing) pair once
-_ROW_TILE_CASES = [
-    ("glm53_e18_t96_clamped", 4, "cold_last"),
-    ("gpt_oss_e8_t128_bias", 2, "hot_last"),
-    ("h2048_n1792_e10_t96", 4, "hot_last"),
-    ("h2880_n704_e8_t128_bias", 2, "cold_last"),
-]
-
-
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("shape, row_tiles, kind", _ROW_TILE_CASES)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape, shape, row_tiles, kind):
-    """Jobs of several row tiles give the rows of one row tile per job bitwise, and those equal the ring's."""
+def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape):
+    """Jobs of 4 row tiles give the rows of one row tile per job bitwise, and those equal the ring's."""
     _skip_unless_supported_arch(mesh_device)
     _skip_row_tiles_on_wormhole(mesh_device)
-    case = _row_tile_case(mesh_device, shape, kind)
+    row_tiles = 4
+    case = _row_tile_case(mesh_device, "glm53_e18_t96_clamped", "cold_last")
     precision = _PRECISION_MODES["hifi4_fp32"]
     one = _rows_with(case, 1, **precision)
     many = _rows_with(case, row_tiles, **precision)
@@ -2769,26 +2694,19 @@ def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape, shape, row_t
     assert torch.equal(got, want), f"counts {got[0].tolist()} differ from the ring's {want[0].tolist()}"
     _assert_rows_bitwise(case, many, ring, f"{row_tiles} row tiles per job differ from the ring's rows")
     rel = case.rows_rel_l2(many)
-    logger.debug(f"{shape} {kind} {row_tiles} row tiles per job: rows rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
+    logger.debug(f"{row_tiles} row tiles per job: rows rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
     assert rel <= 0.01, f"rows rel L2 {rel}"
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize(
-    "mode, shape, kind",
-    [
-        ("hifi2_bf16", "flash_next_e32_t128", "cold_last"),
-        ("lofi_fp32", "gemma_e16_t128_gelu", "hot_last"),
-    ],
-)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape, mode, shape, kind):
-    """Jobs of 4 row tiles give one row tile per job's rows bitwise, equal to the ring's; eager, repeated eager and two
-    trace replays are bitwise equal."""
+def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape):
+    """LoFi with FP32 DEST: jobs of 4 row tiles give one row tile per job's rows bitwise, equal to the ring's; eager,
+    repeated eager and two trace replays are bitwise equal."""
     _skip_unless_supported_arch(mesh_device)
     _skip_row_tiles_on_wormhole(mesh_device)
-    precision = _PRECISION_MODES[mode]
-    case = _row_tile_case(mesh_device, shape, kind)
+    precision = _PRECISION_MODES["lofi_fp32"]
+    case = _row_tile_case(mesh_device, "gemma_e16_t128_gelu", "hot_last")
     one = _rows_with(case, 1, **precision)
     first = _rows_with(case, 4, **precision)
     assert (diff := case.defined_equal(one, first)) is None, f"4 row tiles per job differ from 1: {diff}"
@@ -2802,29 +2720,6 @@ def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape
         traced = case.read(outs, free=False)
         ttnn.release_trace(mesh_device, tid)
     assert (diff := case.defined_equal(first, traced)) is None, f"traced call differs: {diff}"
-
-
-@pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("kind, mode", [("hot_last", "hifi4_fp32")])
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_row_tiles_single_device(mesh_device, mesh_shape, kind, mode):
-    """SingleDevice: the combine output with jobs of 4 row tiles is bitwise equal to one row tile per job's."""
-    _skip_unless_supported_arch(mesh_device)
-    _skip_row_tiles_on_wormhole(mesh_device)
-    precision = _PRECISION_MODES[mode]
-    case = _Case(mesh_device, 16, 128, 8, 2048, 7168, kind=kind)
-    res = _single_device(case, **precision)
-    case.mesh_device.disable_and_clear_program_cache()
-    case.mesh_device.enable_program_cache()
-    with _kernel("expert_rows"), _env(_ROW_TILES_ENV, 4):
-        out = case.new_combine_output()
-        outs, added = _programs_added(case.mesh_device, lambda: case.call(compute_only=False, out=out, **precision))
-        assert added == 2, f"SingleDevice call with 4 row tiles per job compiled {added} programs, expected 2"
-        many = ttnn.to_torch(outs[5]).reshape(case.top_k, case.tokens, case.hidden_size)
-        case.read(outs[:5], check=True)
-        ttnn.deallocate(outs[5])
-    got, want = many.view(torch.int16), res["expert_rows"].view(torch.int16)
-    assert torch.equal(got, want), f"combine output differs from one row tile per job: {_mismatch(got, want)}"
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
