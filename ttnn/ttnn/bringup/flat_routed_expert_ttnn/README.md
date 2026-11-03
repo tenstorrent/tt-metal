@@ -63,6 +63,7 @@ Realistic (use by default):
   program keys include it). For an appended combine's L1 hand-off (combine_rf `sparse_combine_rf.L1_MAX_WRITERS`, 32):
   a Galaxy chip with east DRAM readers in column 7 plans 40 down cores at V4.1-Flash, column 6 plans 32; capped at 32
   both get the 32 x 5-column down split and the same weight-layout cache key.
+- down weights bfp4 under bfp8 gate/up (fork addition, DeepSeek-V4.1 P.27, 2026-11-02): the op takes the down format from the down tensors' dtype (bfloat8_b gate/up with bfloat4_b down / reader-tail down; any other mix is refused); the plan's `down_weights_bf4=False` argument (flat_routed_expert_plan) sizes the down rings / regions in bfp4 tiles. `FlatRoutedExpert(wdtype="bf8d4")` lays them out (`flat_expert.weight_formats`). Off (default): the programs, keys and weight caches before it, unchanged.
 
 `flat_routed_expert_plan(device, hidden, intermediate, experts_per_chip, num_global_experts, max_tokens_per_expert, weights_bf8=False, pin=1, x_bf16=False, h_bf16=False, layout=FlatLayoutOptions(), max_y_writers=0)` -> dict.
 
@@ -80,7 +81,7 @@ runtime args copied from `extra` when `extra_addrs` (the caller's list of the ad
 cached program's (then `extra` must be given: TT_FATAL otherwise). Pass `extra` on every call in this mode. Its
 appended programs' globally allocated CBs must live in the arena (the op's contract).
 
-`FlatRoutedExpert(device, weights, *, m, H, I, gids, n_global, wdtype="bf4", act="silu", pin=1, cache_prefix=None, x_bf16=False, h_bf16=False, layout=None, weights_nk=False, check_exact=False, max_y_writers=0)` (passes its max_y_writers to the plan, every call and `.replanned`; `fe.max_y_writers` for flat_routed_expert_with_program); `weights="fake"` = uninitialised weights (perf only); `layout`: a preset dict, field overrides or a FlatLayoutOptions (None: the defaults); `.replanned(m, layout=None)`: another capacity on the same weights (asserts the same packing). `__call__(x, counts, regions, token_index=None, x_pages_per_row=1, y_row_major=False, down_fp32=False, pack_stochastic_rounding=False, y_bf16=False, math_fidelity=0, output=None, hidden=0)`.
+`FlatRoutedExpert(device, weights, *, m, H, I, gids, n_global, wdtype="bf4" (bf4 | bf8 | bf8d4: bfp8 gate/up, bfp4 down), act="silu", pin=1, cache_prefix=None, x_bf16=False, h_bf16=False, layout=None, weights_nk=False, check_exact=False, max_y_writers=0)` (passes its max_y_writers to the plan, every call and `.replanned`; `fe.max_y_writers` for flat_routed_expert_with_program); `weights="fake"` = uninitialised weights (perf only); `layout`: a preset dict, field overrides or a FlatLayoutOptions (None: the defaults); `.replanned(m, layout=None)`: another capacity on the same weights (asserts the same packing). `__call__(x, counts, regions, token_index=None, x_pages_per_row=1, y_row_major=False, down_fp32=False, pack_stochastic_rounding=False, y_bf16=False, math_fidelity=0, output=None, hidden=0)`.
 (FIX.9, 2026-10-22, removed P.3's DeepSeek-only h options `routing_weights` / `fp8_act_quant` and the plan's `routed`;
 no model used them. CHANGELOG.md.)
 

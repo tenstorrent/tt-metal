@@ -46,7 +46,8 @@ nb::dict plan_dict(
     bool x_bf16,
     bool h_bf16,
     const fre::FlatLayoutOptions& layout,
-    uint32_t max_y_writers) {
+    uint32_t max_y_writers,
+    bool down_weights_bf4) {
     const auto p = fre::flat_routed_expert_plan(
         device,
         fre::FlatRoutedExpertConfig{
@@ -61,7 +62,8 @@ nb::dict plan_dict(
             .x_bf16 = x_bf16,
             .h_bf16 = h_bf16,
             .layout = layout,
-            .max_y_writers = max_y_writers});
+            .max_y_writers = max_y_writers,
+            .down_weights_bf4 = down_weights_bf4});
     nb::dict d;
     d["nsg"] = p->nsg;
     d["n_rd"] = p->readers.size();
@@ -88,7 +90,7 @@ nb::dict plan_dict(
     d["rem_cols"] = p->rem_cols;
     d["banks"] = p->banks;
     d["dw_rot"] = p->dw_rot;
-    d["wd_rot_tiles"] = p->w_tile ? p->wd_rot_region / p->w_tile : 0;
+    d["wd_rot_tiles"] = p->wd_tile ? p->wd_rot_region / p->wd_tile : 0;
     d["x_slots"] = p->x_slots;
     d["hbuf"] = p->hbuf;
     d["hu"] = p->hu;
@@ -364,9 +366,11 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("h_bf16") = false,
         nb::arg("layout") = fre::FlatLayoutOptions{},
         nb::arg("max_y_writers") = 0,
+        nb::arg("down_weights_bf4") = false,
         "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words). "
         "max_y_writers (0: off): at most this many y writers (down cores + reader tails), the rest of the down cells "
-        "idle; the op's calls must pass the same value.");
+        "idle; the op's calls must pass the same value. down_weights_bf4 (with weights_bf8): bfp4 down weights under "
+        "bfp8 gate/up ones (the op takes it from the down weights' dtype).");
     mod.def(
         "flat_drisc_stop",
         [](tt::tt_metal::distributed::MeshDevice* device) {

@@ -1321,3 +1321,60 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   Stop hook present, overseer guard set by autoresume. Free RAM 507 GiB / available 516 GiB after build + box test.
 - Waiting for the owner's next order (P.27 EXPERTS_BFP8 queued, TODO; run_ds41_8x4.sh --until P.27). Note: build_ok
   now matches HEAD, so a reservation loss + autoresume would start the orchestrator, i.e. P.27.
+
+## 2026-11-02 20:09 UTC OWNER: routed-expert format ablation (after GPT-OSS PR #63374), queued P.27-P.29
+- Reviewed PR #63374 (GPT-OSS; the owner said #63376, an unrelated issue): bfp8 experts by default (fits), bfloat4_b
+  with a least-squared-error shared exponent (largest or one below) and K-grouped tiles (one MXFP4 scale per group), mixed
+  bfp8 gate/up + bfp4 down for long contexts, two-stage LM head. Ours is already K-grouped (weights_nk, transpose_b);
+  what we lack is the MSE exponent.
+- OWNER: "queue everything and show me accuracy/perf impact on 50k->55k". The framework's A/B has two sides, so:
+  P.27 (agent: bfp8 under MOE_IMPL=block + values bfp4_mse and bfp8_down4; A/B bfp4 vs bfp8 + contract tests + test_dram),
+  P.28 (A/B bfp4 vs bfp4_mse), P.29 (A/B bfp4 vs bfp8_down4 + test_dram). ab_positions [51200] only (owner: 50k->55k;
+  the 1M question is answered by test_dram's allocator numbers), ab_rungs [last]. Default stays bfp4 (F241). X.3 deps +=
+  P.28, P.29. run_ds41_8x4.sh --until P.29. Overseer accepts each switch-only pick (default unchanged) once its table is
+  in, so the next runs; the default choice goes to the owner with the three tables.
+- Framework gap (to fix, F242): an A/B with more than two sides; today the bfp4 baseline is measured three times.
+
+## 2026-11-03 09:38 UTC INFRA: Slurm job 168627 lost at 2026-11-02 ~21:18 UTC (no reboot), P.27 attempt 1 cut off
+- Cause: an automated ci-provisioner job "fabric-health-bh-glx-110-c10u02" (168091, 40 min limit) took the node at
+  21:18:34, most likely by preemption (partition PreemptMode=CANCEL; Slurm accounting off, unconfirmed). pam_slurm_adopt
+  killed every process of ours: the orchestrator, the P.27 perf agent (attempt 1, started 20:09:39) and its device job
+  (devjob p27dram8, the bfp8 DRAM measure, at expert load layer 8), and the overseer. The node then sat drained
+  (Kill task failed) until 09:38 UTC; no reboot (up 18:40 at 09:38). The guard reserved it again and ran autoresume:
+  orchestrator not started (build_ok 31f2f4004c3 != HEAD fb522fabb13, a records-only commit), overseer started.
+- Free RAM 09:40: MemTotal 566.1 GiB, MemFree 291.4, MemAvailable 515.8, Cached 218.6, Anon 4.0, Slab 9.0, Buffers 4.1;
+  unaccounted ~39 GiB vs ~38 at boot, so no host leak to speak of yet.
+- 09:42 box test PASS (test_box.py, 14 s, no recovery; the health job touched the fabric). Nobody else on the box: no
+  UMD in-use locks, no other users' device jobs, ps -u dlukic empty, no dirty file.
+- Build: build/ttnn/_ttnn*.so (2026-11-02 20:36) are newer than every C++ file attempt 1 edited; ninja -n wants only a
+  CMake glob re-check, nothing to compile. build_ok set to HEAD fb522fabb13 (the code under it is unchanged).
+- Attempt 1's tree (uncommitted, 23 files): EXPERTS_IMPL gains bfp4_mse / bfp8_down4 (default stays bfp4, F241),
+  bfp8 on MOE_IMPL=block, flat op fork option down_weights_bf4 (plan / factory / se9_rdown / nanobind, CHANGELOG),
+  shared moe_block.py (allowed for P.27, a469cda5897), test_dram.py, CPU emulation expert_weight_round. Kept: the
+  resume's next attempt is briefed that attempt 1 was cut off and its edits are in the tree.
+- Correction: the start prompt said P.27 was only queued; the owner had ordered P.27-P.29 at 20:09 (entry above) and the
+  orchestrator was on P.27. Action: resume (run_ds41_8x4.sh, --until P.29) in tmux ds41-8x4; watch, heartbeat, guard set.
+- 10:41 P.27 attempt 2 progressing: the bfp8 DRAM measure (test_dram.py via orchestrator measure) is loading experts,
+  layer 33 of 40, cache miss, ~150 s a layer (43 s host conversion). Host: the pytest holds ~260 GiB anon (~7.6 GiB per
+  loaded layer, growing: the bfp8 host copies stay alive until the end of the load?); MemAvailable 286 GiB, unaccounted
+  ~41 GiB (no driver leak). No OOM risk at 40 layers; worth a look after P.27 (a host-memory note for the agent if the
+  copies are kept needlessly).
+- 11:12 P.27 first measured side in (ab/P.27/new/test_dram/P.27_dram.json): bfp8 experts, 40 layers, 1 slot, chunk at
+  1039360 (1M): load 23.47 GiB a chip (routed experts 16.81, other weights 6.44, tables 0.88, state 0.79, served caches
+  1.41), peak 27.54 GiB at layer 36 (budget 27.2 = 85 % of 32; it ran without an allocation failure). Chunk 146 s at 1M
+  (cold, one-shot measure). Host memory back to normal after it (MemAvailable 504 GiB). Now the bfp4 side (cache hit).
+- 12:50 P.27 agent done 12:24; the orchestrator measures the off side. test_dram at 1M, 1 slot, per chip: bfp4 load 15.56
+  GiB (experts 8.90), peak 19.63; bfp8 load 23.47 (experts 16.81), peak 27.54 (budget 27.2). Off side now on the ladder.
+- OWNER discussion (no decision yet): a rough per-chip memory / slot calculator (computed, labelled estimates, calibrated
+  on test_dram). Window KV: Nikhil / Kartik's proposal (only global KV persists; decoder layers 21-39 run only on the
+  prompt's last tokens; windows handed to decode once) is DeepSeek's own recipe, arXiv 2609.19969 (V4.1-Flash: Causal
+  Encoder-Decoder, layers 0-19 / 20-39, decoder global KV from layer 20's hidden state, prefill ~halved; SWA Bounded
+  Replay = replay n_win = 128 tokens with truncated windows, approximate by design, exact would need L x n_win ~2.5k;
+  "negligible impact" claimed, no ablation seen; global KV FP4 e2m1 + e4m3 per 16, 890 B / token; SWA FP8). Proposed:
+  a held perf pick for the decoder skip after P.29, pending the contract with tt-d-gen.
+- 13:16 P.27 A/B table in (bfp8 on / bfp4 off, rung last, 50k): device +26.7 ms a chunk at 51200 (197.7 / 171.0; experts
+  +26.4), wall +15.9 (210.5 / 194.6); plain profile 184.9 / 160.6. Accuracy: err_final_hidden 0.101 / 0.190 (share
+  0.42 / 0.79), L09 0.081 / 0.126, L29 0.084 / 0.149, window KV L28 0.088 / 0.159; top-5 1.0 both. DRAM at 1M: peak
+  27.54 / 19.63 GiB. bfp8 passes tt-d-gen's 0.99 window-KV PCC at L35 / L38; the bfp4 side fails it (0.9891 / 0.9899,
+  the known waived values since P.26: not a regression). ACCEPTED by the overseer under the owner's order (switch-only,
+  default stays bfp4, F241); resumed 13:18 (gate, commit, then P.28).

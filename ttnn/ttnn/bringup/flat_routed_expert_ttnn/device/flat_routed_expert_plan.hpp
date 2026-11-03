@@ -76,6 +76,11 @@ struct FlatRoutedExpertConfig {
     // with its east DRAM readers in column 7 has 40 down cores at V4.1-Flash (4 columns each), column 6 has 32 (5
     // each): capped at 32, both get the same down split and weight layout.
     uint32_t max_y_writers = 0;
+    // DeepSeek-V4.1 option (false: the program above, unchanged). down_weights_bf4: with weights_bf8 (gate/up bfp8
+    // tiles), the down weights (and the reader tails' down weights) are bfp4 tiles: the down rings, regions and
+    // readers take the bfp4 tile size and data format (EXPERTS_IMPL=bfp8_down4, P.27). Taken from the down weight
+    // tensor's dtype by the op; the plan's own argument for flat_routed_expert_plan.
+    bool down_weights_bf4 = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "hidden",
@@ -99,7 +104,8 @@ struct FlatRoutedExpertConfig {
         "cmb_slot_order",
         "layout",
         "weights_nk",
-        "max_y_writers");
+        "max_y_writers",
+        "down_weights_bf4");
     auto attribute_values() const {
         return std::make_tuple(
             hidden,
@@ -123,7 +129,8 @@ struct FlatRoutedExpertConfig {
             cmb_slot_order,
             layout.key(),
             weights_nk,
-            max_y_writers);
+            max_y_writers,
+            down_weights_bf4);
     }
 };
 
@@ -135,7 +142,8 @@ struct FlatRoutedExpertPlan {
     using Core = tt::tt_metal::CoreCoord;
     // shapes
     uint32_t H = 0, I = 0, E = 0, NG = 0, m = 0, Ht = 0, It = 0;
-    uint32_t w_tile = 0;  // weight tile bytes
+    uint32_t w_tile = 0;   // weight tile bytes (gate/up; and down unless down_weights_bf4)
+    uint32_t wd_tile = 0;  // down weight tile bytes (= w_tile, or bfp4 with down_weights_bf4)
     uint32_t banks = 0;
     // subgrids, gate/up split, sub-blocks
     uint32_t nsg = 1, n_rd_sg = 16;

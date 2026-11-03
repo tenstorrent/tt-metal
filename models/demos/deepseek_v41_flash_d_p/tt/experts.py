@@ -34,6 +34,13 @@ bf16):
                   relative change are logged per layer at load (`bfp4_stats`). 0.5625 B per value.
   bfp8            bfloat8_b: exact for every e2m1 x e8m0 value in the [N, K] orientation (one exponent per 16 values
                   along K, inside one e8m0 block; asserted at load, `_bfp8_exact`); W^T would not be (DS41-35).
+  bfp4_mse        (P.27) bfloat4_b, each 16-value group's shared exponent chosen on the host by least squared error
+                  between the group's largest binary exponent and one below it (the large values then saturate at 7;
+                  ties: the largest), `_bfp4_mse_round`; ttnn then packs the rounded values losslessly (asserted at
+                  load: `_bfp4_round` of them is the identity). Logged like bfp4 (`bfp4_stats`).
+  bfp8_down4      (P.27) w1 / w3 bfloat8_b (exact), w2 bfloat4_b with the bfp4_mse rounding (the flat op's
+                  down_weights_bf4: gate/up bfp8 tiles, down bfp4 tiles; fork wdtype "bf8d4").
+`expert_weight_round(impl)` is each value's CPU emulation of the weights (devfmt diagnosis, FIX.21 attribution).
 No per-chunk weight work. The counts / plans / tables stay on the device (the column planner, combine_plan).
 """
 
@@ -63,7 +70,21 @@ NAMES = ("w1", "w3", "w2")
 BFP8_GROUP = 16  # bfloat8_b: one shared exponent per 16 values of a tile face row (along the last dim)
 BFP8_MANT = 7  # magnitude bits under the shared exponent (the leading one included)
 BFP4_MANT = 3  # bfloat4_b: the same 16-value groups, 3 magnitude bits
-BLOCK_DTYPES = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}  # EXPERTS_IMPL values (the weights' block format)
+# EXPERTS_IMPL value -> (the flat op's wdtype, each matrix's format: bf8 exact, bf4 ttnn's RNE packing, bf4_mse the
+# host's least-squares exponent then a lossless bf4 packing)
+IMPLS = {
+    "bfp8": ("bf8", {"w1": "bf8", "w3": "bf8", "w2": "bf8"}),
+    "bfp4": ("bf4", {"w1": "bf4", "w3": "bf4", "w2": "bf4"}),
+    "bfp4_mse": ("bf4", {"w1": "bf4_mse", "w3": "bf4_mse", "w2": "bf4_mse"}),
+    "bfp8_down4": ("bf8d4", {"w1": "bf8", "w3": "bf8", "w2": "bf4_mse"}),
+}
+BLOCK_DTYPES = {"bf8": ttnn.bfloat8_b, "bf4": ttnn.bfloat4_b, "bf4_mse": ttnn.bfloat4_b}  # matrix format -> ttnn dtype
+
+
+def impl_dtypes(impl: str) -> tuple:
+    """EXPERTS_IMPL -> (gate/up ttnn dtype, down ttnn dtype) of the laid-out weights (the MoE block's MoEDtypes)."""
+    f = IMPLS[impl][1]
+    return BLOCK_DTYPES[f["w1"]], BLOCK_DTYPES[f["w2"]]
 
 
 def _ceil(a: int, b: int) -> int:
@@ -97,11 +118,52 @@ def _bfp4_round(t: torch.Tensor) -> torch.Tensor:
     return (g * up).round_().clamp_(-lim, lim).mul_(down).reshape(t.shape)
 
 
-def _bfp4_change(w: torch.Tensor) -> tuple[int, torch.Tensor]:
+def _bfp4_mse_round(t: torch.Tensor, rows: int = 1 << 22) -> torch.Tensor:
+    """t (last dim a multiple of 16) as bfloat4_b with a least-squares shared exponent, fp32 (EXPERTS_IMPL bfp4_mse,
+    owner 2026-11-02): per 16 values along the last dim, E = the group's largest binary exponent; candidates the units
+    2^(E - 2) (ttnn's own choice, `_bfp4_round`) and 2^(E - 3) (one exponent below: the group's large values saturate
+    at +-7 units, the small ones keep a bit more); each value round to nearest even, clamped to +-7; the candidate with
+    the smaller sum of squared errors wins, ties the larger exponent. Either way the group's largest result has binary
+    exponent = the chosen one (a saturated 7 x 2^(E - 3) or a value >= 4 x 2^(E - 2)), so ttnn's packing of the result
+    (exponent from the group's largest value) holds it exactly (tests/test_experts_bfp4_mse.py)."""
+    g = t.float().reshape(-1, BFP8_GROUP)
+    out = torch.empty_like(g)
+    lim = 2**BFP4_MANT - 1
+    for a in range(0, g.shape[0], rows):
+        x = g[a : a + rows]
+        amax = torch.maximum(x.amax(dim=-1, keepdim=True), x.amin(dim=-1, keepdim=True).neg_())
+        _, e = torch.frexp(amax)
+        s = torch.ldexp(torch.ones_like(e, dtype=torch.float64), BFP4_MANT - e)  # 1 / unit, exact in fp64
+        up, down = s.float(), (1.0 / s).float()
+        q0 = (x * up).round_().clamp_(-lim, lim).mul_(down)
+        q1 = (x * (2 * up)).round_().clamp_(-lim, lim).mul_(down * 0.5)
+        e0 = (q0 - x).square_().sum(dim=-1, keepdim=True)
+        e1 = (q1 - x).square_().sum(dim=-1, keepdim=True)
+        out[a : a + rows] = torch.where(e1 < e0, q1, q0)
+    return out.reshape(t.shape)
+
+
+def _bf4_mse_lossless(r: torch.Tensor) -> bool:
+    """r = _bfp4_mse_round(w): ttnn's bfloat4_b packing (= _bfp4_round) returns it unchanged."""
+    return torch.equal(_bfp4_round(r), r)
+
+
+ROUND = {"bf8": None, "bf4": _bfp4_round, "bf4_mse": _bfp4_mse_round}  # matrix format -> its weight rounding
+
+
+def expert_weight_round(impl: str | None = None) -> dict:
+    """The CPU emulation of EXPERTS_IMPL's weights (devfmt diagnosis, reference format attribution): {"w1" / "w3" /
+    "w2": fn(stored [N, K] values) -> fp32 as the device holds them}; bfp8 is exact (the identity)."""
+    f = IMPLS[impl or settings.get("EXPERTS_IMPL")][1]
+    ident = lambda w: w.float()  # noqa: E731
+    return {nm: ROUND[f[nm]] or ident for nm in NAMES}
+
+
+def _bfp4_change(w: torch.Tensor, rnd=None) -> tuple[int, torch.Tensor]:
     """w [..., N, K]: (values bfloat4_b changes, per-matrix relative change ||q(w) - w|| / ||w|| over the last two
-    dims, fp32)."""
+    dims, fp32); rnd: the rounding (default `_bfp4_round`, ttnn's own)."""
     wf = w.float()
-    d = _bfp4_round(w).sub_(wf)
+    d = (rnd or _bfp4_round)(w).sub_(wf)
     rel = torch.linalg.vector_norm(d, dim=(-2, -1)) / torch.linalg.vector_norm(wf, dim=(-2, -1)).clamp_min(1e-30)
     return int(torch.count_nonzero(d)), rel
 
@@ -212,7 +274,8 @@ class TtExperts:
         E = int(num_experts)
         assert E % n == 0, f"{E} experts do not split over {n} chips"
         self.impl = impl or settings.get("EXPERTS_IMPL")
-        assert self.impl in BLOCK_DTYPES, self.impl
+        assert self.impl in IMPLS, self.impl
+        self.formats = IMPLS[self.impl][1]  # (w1 / w3 / w2: bf8, bf4 or bf4_mse)
         self.sum_mode = settings.get("EXPERTS_SUM")
         # EXPERTS_PRECISION (P.4): full = MATMUL_FIDELITY + bf16 x / h / y tiles; glm = GLM-5.3's flat expert (LoFi
         # expert matmuls, bfp8 x / h / y tiles, fp32 DEST down)
@@ -278,10 +341,11 @@ class TtExperts:
                 self.bfp4_stats = marker.stats
             else:
                 marker.write(self.bfp4_stats)
-        if self.impl == "bfp4" and self.bfp4_stats is not None:
+        if self.bfp4_stats is not None:
             st = self.bfp4_stats
             logger.info(
-                f"EXPERTS_BFP4 layer={self.layer} values_changed={st['changed']}/{st['total']} "
+                f"EXPERTS_BFP4 layer={self.layer} impl={self.impl} matrices={st.get('matrices', 'w1,w3,w2')} "
+                f"values_changed={st['changed']}/{st['total']} "
                 f"({100 * st['changed_frac']:.2f} %) worst_matrix_rel={st['worst_rel']:.4g} "
                 f"(expert, matrix)={st['worst_matrix']}{' (cached)' if hit else ''}"
             )
@@ -316,17 +380,28 @@ class TtExperts:
                 assert _bf16_exact(w[nm]), f"layer {layer} slot {le} {nm}: e2m1 x 2^e not bf16-exact"
             del parts
             assert w["w1"].shape[1:] == (I, H) and w["w2"].shape[1:] == (H, I), (w["w1"].shape, w["w2"].shape)
-            if self.impl == "bfp8":
-                for nm in NAMES:
+            for nm in NAMES:
+                f = self.formats[nm]
+                if f == "bf8":
                     assert _bfp8_exact(w[nm]), f"layer {layer} slot {le} {nm}: bfloat8_b would round a value (DS41-35)"
-            else:
-                for nm in NAMES:
+                    continue
+                if f == "bf4_mse":  # (rounded here; ttnn's bfloat4_b packing then holds it exactly)
+                    q = _bfp4_mse_round(w[nm])
+                    assert _bf4_mse_lossless(q), f"layer {layer} slot {le} {nm}: bfloat4_b would re-round bfp4_mse"
+                    d = q - w[nm]
+                    n_ch = int(torch.count_nonzero(d))
+                    rel = torch.linalg.vector_norm(d, dim=(-2, -1)) / torch.linalg.vector_norm(
+                        w[nm], dim=(-2, -1)
+                    ).clamp_min(1e-30)
+                    del d
+                    w[nm] = q
+                else:
                     n_ch, rel = _bfp4_change(w[nm])
-                    changed, total = changed + n_ch, total + w[nm].numel()
-                    v, i = rel.max(dim=0)
-                    if float(v) > worst[0]:
-                        c, r = divmod(int(i), rows)
-                        worst = (float(v), (int(gtab[c, r, le]), nm))
+                changed, total = changed + n_ch, total + w[nm].numel()
+                v, i = rel.max(dim=0)
+                if float(v) > worst[0]:
+                    c, r = divmod(int(i), rows)
+                    worst = (float(v), (int(gtab[c, r, le]), nm))
             w13 = torch.empty(n, 2 * I, H, dtype=torch.bfloat16)
             w13[:, :I] = w.pop("w1")
             w13[:, I:] = w.pop("w3")
@@ -334,9 +409,11 @@ class TtExperts:
             for k in range(n):
                 c, r = divmod(k, rows)
                 flat_w[r * cols + c][le] = (w13[k, :I], w13[k, I:], w2[k])
-        if self.impl == "bfp4":
+        if total:  # (every bfloat4_b matrix: bfp4 / bfp4_mse all three, bfp8_down4 w2)
             self.bfp4_stats = {
                 "layer": layer,
+                "impl": self.impl,
+                "matrices": ",".join(nm for nm in NAMES if self.formats[nm] != "bf8"),
                 "changed": changed,
                 "total": total,
                 "changed_frac": changed / total,
@@ -407,7 +484,7 @@ class TtExperts:
             I=self.I,
             gids=gids,
             n_global=self.Eg,
-            wdtype={"bfp8": "bf8", "bfp4": "bf4"}[self.impl],
+            wdtype=IMPLS[self.impl][0],
             act="clamped_silu",
             pin=1,
             # EXPERTS_PRECISION=glm: bfp8 x / h tiles, as GLM-5.3 runs the op (GLM_AG_XBF16 / _HBF16 default 0)

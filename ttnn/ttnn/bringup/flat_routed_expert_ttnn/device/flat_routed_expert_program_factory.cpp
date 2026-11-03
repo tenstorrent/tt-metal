@@ -116,7 +116,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         return static_cast<uint32_t>((q.x << 16) | q.y);
     };
     const uint32_t E = p.E, MT = p.mt, MTG = p.mtg, NP = p.np, G = p.g, S = p.s, V = p.v, It = p.It, Ht = p.Ht;
-    const uint32_t w_tile = p.w_tile, banks = p.banks, NR = p.rects.size();
+    const uint32_t w_tile = p.w_tile, wd_tile = p.wd_tile, banks = p.banks, NR = p.rects.size();
     const uint32_t n_rd = p.readers.size(), ngu = p.gu.size(), ND = p.down.size(), ngu_sg = ngu / p.nsg;
     const uint32_t x_blk = MT * KBLK, x_bytes = x_blk * p.x_tile;
     const uint32_t PIN = cfg.pin;
@@ -699,6 +699,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 Defines rdn_def =
                     yrm_def(with(dual_set ? drisc_dual_def : dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}}), p.pcd_r);
                 rdn_def.insert(cmb_def.begin(), cmb_def.end());
+                if (wd_tile != w_tile) {  // (down_weights_bf4: the down blocks' tile bytes)
+                    rdn_def["SE9_WD_TILE"] = std::to_string(wd_tile);
+                }
                 const auto k =
                     dm("se9_rdown.cpp",
                        cores,
@@ -1521,10 +1524,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                // (layout.dw_batch: down blocks per read barrier, default DW_BATCH)
                {1,
                 slot,
-                w_tile,
+                wd_tile,
                 E * nblk,
                 lo.dw_batch >= 0 ? static_cast<uint32_t>(lo.dw_batch) : DW_BATCH,
-                cfg.weights_bf8 ? 1u : 0u,
+                cfg.weights_bf8 && !cfg.down_weights_bf4 ? 1u : 0u,
                 E,
                 0,
                 0,
@@ -1619,6 +1622,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             static_bytes += (size + 63) / 64 * 64;
         };
     const auto wf = w_format(cfg.weights_bf8);
+    const auto wfd = w_format(cfg.weights_bf8 && !cfg.down_weights_bf4);  // (the down weights' format)
     // the down output CB in the arena's out region (bytes = the bfp8 double block): bfp8 tiles, or with row-major y
     // bf16 row tiles of PCD pages each (as many whole row tiles as the region holds: MT for MT <= 16)
     auto out_cb = [&](const std::vector<CoreCoord>& cores, uint32_t pw, uint32_t bytes) {
@@ -1666,11 +1670,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         for (uint32_t d : ds) {
             cores.push_back(p.down[d]);
         }
-        arena_cb(1, 0, ring * kd * pw * w_tile, cores, wf, w_tile);
+        arena_cb(1, 0, ring * kd * pw * wd_tile, cores, wfd, wd_tile);
         out_cb(cores, pw, 2 * MT * pw * BF8_TILE);
     }
     if (p.rdown) {
-        arena_cb(1, p.rd_off, p.ring_dr * p.slot_dr * w_tile, rdn_cores, wf, w_tile);
+        arena_cb(1, p.rd_off, p.ring_dr * p.slot_dr * wd_tile, rdn_cores, wfd, wd_tile);
         arena_cb(2, p.h_off, p.hbuf * p.h_tiles * p.h_tile, rdn_cores, h_fmt, p.h_tile);
         out_cb(rdn_cores, p.pcd_r, 2 * p.out_tiles_r * BF8_TILE);
     }

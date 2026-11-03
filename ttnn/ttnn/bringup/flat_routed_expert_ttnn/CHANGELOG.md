@@ -519,3 +519,26 @@ shapes, mesh, row-major y).
   device/flat_routed_expert_program_factory.cpp, flat_routed_expert.cpp, flat_routed_expert_nanobind.cpp,
   flat_expert.py, tests/test_flat_routed_expert_ttnn.py, tests/weighted_case.py, tests/unit/test_with_program_patch.py,
   tests/unit/test_hot_experts.py, tests/unit/test_max_y_writers.py, README.md
+
+### 2026-11-02 deepseek_v41_flash_d_p P.27: down weights bfp4 under bfp8 gate/up (down_weights_bf4, wdtype "bf8d4")
+- What: the down weights (and the reader tails' down weights) may be bfloat4_b while gate/up are bfloat8_b. The op
+  reads the down format from the down tensors' dtype (`down_weights_bf4_of`, validated: bf8 / bf4 only, bf4 down only
+  under bf8 gate/up, reader-tail down = down); the plan (`FlatRoutedExpertConfig::down_weights_bf4`, a plan-cache and
+  program-hash field; `flat_routed_expert_plan(down_weights_bf4=False)`) has `wd_tile` for the down rings (h_off), the
+  down / rotated / reader-tail regions; the program factory gives the down rings their own CB format and tile size,
+  se6_dw its tile bytes, se9_rdown its down block bytes (define SE9_WD_TILE, only when the two differ). Python:
+  `W_PAIRS` / `weight_formats(wdtype)`, `FlatRoutedExpert(wdtype="bf8d4")` packs w_gu bfp8 and w_d / w_rd bfp4 (fake,
+  check_exact and `.replanned` too); cache files carry "bf8d4". FlatExpert (the Python builder) refuses it.
+- Why: EXPERTS_IMPL=bfp8_down4 (owner 2026-11-02): w1 / w3 exact in bfp8, w2 bfp4 (with the model's least-squares
+  exponent rounding on the host), A/B-ed against bfp4 / bfp8 / bfp4_mse by P.28 / P.29.
+- Off (default, down tiles = gate/up tiles): the plan, kernels' compile args / defines, the plan-cache key and the
+  program keys of every existing caller unchanged (the new flat_key word only when on).
+- Test: tests/unit/test_down_bf4.py (bf8d4 bit-identical to bf8 on bfp4-exact down weights, vs float64; the plan's
+  packing / down cores equal to bf8's, bfp4 gate/up refused). No fork regression run (OV-25: the suites run in F.1).
+- Results (Galaxy 8x4, BRINGUP_TEST_MESH=8x4 FABRIC_2D): test_down_bf4 2 / 2 (bf8d4 == bf8 bit for bit on 32 chips,
+  worst rel vs float64 0.0204). Model: tests/test_experts_formats.py layer 0 through the MoE block, bfp8_down4 rel
+  0.0206 vs golden (bfp8 0.0152, bfp4 0.0350).
+- Needed by: deepseek_v41_flash_d_p (EXPERTS_IMPL=bfp8_down4, flat and MOE_IMPL=block)
+- Files: device/flat_routed_expert_plan.{hpp,cpp}, device/flat_routed_expert_program_factory.cpp,
+  device/kernels/se9_rdown.cpp, flat_routed_expert.cpp, flat_routed_expert_nanobind.cpp, flat_expert.py, README.md,
+  tests/unit/test_down_bf4.py

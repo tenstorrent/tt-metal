@@ -29,7 +29,8 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
         bool,
         bool,
         std::vector<uint32_t>,
-        uint32_t>;
+        uint32_t,
+        bool>;
     static std::mutex mu;
     static std::map<Key, std::shared_ptr<const FlatRoutedExpertPlan>> cache;
     const Key key{
@@ -44,7 +45,8 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
         c.x_bf16,
         c.h_bf16,
         c.layout.key(),
-        c.max_y_writers};
+        c.max_y_writers,
+        c.down_weights_bf4};
     std::lock_guard<std::mutex> lock(mu);
     auto it = cache.find(key);
     if (it == cache.end()) {
@@ -62,6 +64,32 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
 }
 
 namespace {
+
+// The down weights' tile format (DeepSeek-V4.1 option down_weights_bf4, P.27): bfp8 gate/up with bfp4 down (and reader
+// tails' down) weights; every other weight set is one block format (validated).
+bool down_weights_bf4_of(
+    const ttnn::Tensor& gate_up, const ttnn::Tensor& down, const std::optional<ttnn::Tensor>& reader_down) {
+    using tt::tt_metal::DataType;
+    const auto gu = gate_up.dtype(), d = down.dtype();
+    TT_FATAL(
+        (gu == DataType::BFLOAT8_B || gu == DataType::BFLOAT4_B) &&
+            (d == DataType::BFLOAT8_B || d == DataType::BFLOAT4_B),
+        "flat_routed_expert: weights must be bfloat8_b or bfloat4_b (gate/up {}, down {})",
+        gu,
+        d);
+    TT_FATAL(
+        d == gu || (gu == DataType::BFLOAT8_B && d == DataType::BFLOAT4_B),
+        "flat_routed_expert: down weights {} with gate/up {}: only bfp8 gate/up with bfp4 down mix",
+        d,
+        gu);
+    TT_FATAL(
+        !reader_down.has_value() || reader_down->dtype() == d,
+        "flat_routed_expert: reader_down_weights {} != down weights {}",
+        reader_down.has_value() ? reader_down->dtype() : d,
+        d);
+    return d != gu;
+}
+
 tt::tt_metal::TensorSpec l1_sharded_spec(const std::vector<CoreCoord>& cores, uint32_t rows) {
     using namespace tt::tt_metal;
     const MemoryConfig mc(
@@ -147,7 +175,8 @@ ttnn::Tensor flat_routed_expert(
         .math_fidelity = math_fidelity,
         .layout = layout,
         .weights_nk = weights_nk,
-        .max_y_writers = max_y_writers};
+        .max_y_writers = max_y_writers,
+        .down_weights_bf4 = down_weights_bf4_of(gate_up_weights, down_weights, reader_down_weights)};
     auto* device = x.device();
     const auto plan = flat_routed_expert_plan(device, cfg);
     TT_FATAL(
@@ -242,7 +271,8 @@ ttnn::Tensor flat_routed_expert_with_program(
         .math_fidelity = math_fidelity,
         .layout = layout,
         .weights_nk = weights_nk,
-        .max_y_writers = max_y_writers};
+        .max_y_writers = max_y_writers,
+        .down_weights_bf4 = down_weights_bf4_of(gate_up_weights, down_weights, reader_down_weights)};
     auto* device = x.device();
     // (planned before cmb_rt is set: the plan cache ignores it, and the standalone plan keeps the DRISC senders)
     const auto plan = flat_routed_expert_plan(device, cfg);
@@ -347,6 +377,9 @@ ttnn::Tensor flat_routed_expert_with_program(
     p.flat_key.push_back(cfg.math_fidelity);
     p.flat_key.push_back(static_cast<uint32_t>(cfg.weights_nk));
     p.flat_key.push_back(cfg.max_y_writers);
+    if (cfg.down_weights_bf4) {  // (DeepSeek-V4.1 option: keys unchanged without it)
+        p.flat_key.push_back(0xD4u);
+    }
     auto result = ttnn::prim::bringup::flat_with_program(
         p,
         FlatRoutedExpertInputs{
