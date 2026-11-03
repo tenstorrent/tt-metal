@@ -21,9 +21,7 @@ ttnn::Tensor post_combine_reduce(
     uint32_t expert_dim,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& combine_row_index,
-    uint32_t skip_row,
-    const std::optional<ttnn::Tensor>& residual,
-    uint32_t l1_end) {
+    uint32_t skip_row) {
     // Use default L1 memory config if not specified
     auto memory_config = output_memory_config.value_or(ttnn::L1_MEMORY_CONFIG);
 
@@ -35,9 +33,7 @@ ttnn::Tensor post_combine_reduce(
         expert_dim,
         memory_config,
         combine_row_index,
-        skip_row,
-        residual,
-        l1_end);
+        skip_row);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce

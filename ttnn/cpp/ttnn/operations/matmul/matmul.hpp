@@ -117,8 +117,7 @@ Tensor sparse_matmul(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
     const std::optional<Tensor>& indices = std::nullopt,
     const std::optional<Tensor>& bias = std::nullopt,
-    const PrefetcherPipeList& prefetcher_pipes = {},
-    bool zero_init_output = true);
+    const PrefetcherPipeList& prefetcher_pipes = {});
 
 }  // namespace operations::matmul
 

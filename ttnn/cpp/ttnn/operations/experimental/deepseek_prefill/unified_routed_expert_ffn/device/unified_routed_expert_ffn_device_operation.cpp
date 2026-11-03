@@ -46,22 +46,6 @@ bool is_dram_nd_sharded_by_tile_rows(const ttnn::Tensor& t) {
     return shard_shape[-2] >= tt::constants::TILE_HEIGHT && shard_shape[-2] % tt::constants::TILE_HEIGHT == 0 &&
            shard_shape[-1] % tt::constants::TILE_WIDTH == 0;
 }
-
-// Laguna stacked weights, DRAM ND-sharded as "column pages": one [1, 1, K, 32] shard per (expert, tile column) of a
-// stacked [1, E, K, N] weight, so tile (e, k, c) is accessor page (e * K/32 + k) * N/32 + c and expert e's slice is the
-// same column-sharded layout shifted by a whole number of pages on every bank (the program factory's
-// stacked_expert_bytes). Other ND shardings of a stacked weight do not shift that way.
-bool is_dram_column_sharded(const ttnn::Tensor& t) {
-    const auto& mem = t.memory_config();
-    if (mem.buffer_type() != tt::tt_metal::BufferType::DRAM ||
-        mem.memory_layout() != tt::tt_metal::TensorMemoryLayout::ND_SHARDED || !mem.nd_shard_spec().has_value()) {
-        return false;
-    }
-    const auto& shard = mem.nd_shard_spec()->shard_shape;
-    const auto& shp = t.padded_shape();
-    return shard.rank() == 4 && shard[0] == 1 && shard[1] == 1 && shard[2] == shp[-2] &&
-           shard[3] == tt::constants::TILE_WIDTH;
-}
 }  // namespace
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
@@ -128,21 +112,11 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         x_shape[-1],
         gate_shape[-2],
         up_shape[-2]);
-    // stacked: gate_up packs gate|up along N, so its last dim is twice down's K
-    const uint32_t gu_n = op.stacked_packed_weights ? gate_shape[-1] / 2 : gate_shape[-1];
     TT_FATAL(
-        gate_shape[-1] == up_shape[-1] && gu_n == down_shape[-2],
+        gate_shape[-1] == up_shape[-1] && gate_shape[-1] == down_shape[-2],
         "gate/up N ({}) must equal down K ({})",
-        gu_n,
+        gate_shape[-1],
         down_shape[-2]);
-    if (op.stacked_packed_weights) {
-        TT_FATAL(
-            gate_shape.rank() == 4 && gate_shape[-3] == op.experts_per_chip && down_shape[-3] == op.experts_per_chip,
-            "stacked gate_up/down must be [1, {}, K, N] (got {}, {})",
-            op.experts_per_chip,
-            gate_shape,
-            down_shape);
-    }
     TT_FATAL(down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
 
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
@@ -167,10 +141,8 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(w.storage_type() == ttnn::StorageType::DEVICE, "{}[{}] must be on device", name, e);
             TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{}[{}] must be TILE layout", name, e);
             TT_FATAL(
-                is_dram_interleaved(w) ||
-                    (op.stacked_packed_weights ? is_dram_column_sharded(w) : is_dram_nd_sharded_by_tile_rows(w)),
-                "{}[{}] must be DRAM-interleaved or DRAM ND-sharded with a tile-aligned shard (stacked weights: one "
-                "[1, 1, K, 32] shard per expert column), got {}",
+                is_dram_interleaved(w) || is_dram_nd_sharded_by_tile_rows(w),
+                "{}[{}] must be DRAM-interleaved or DRAM ND-sharded with a tile-aligned shard, got {}",
                 name,
                 e,
                 w.memory_config());
@@ -424,9 +396,7 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_biases,
     const std::vector<ttnn::Tensor>& down_biases,
     uint32_t min_active_tokens,
-    uint32_t max_active_tokens,
-    bool stacked_packed_weights,
-    uint32_t l1_end) {
+    uint32_t max_active_tokens) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -438,9 +408,7 @@ ttnn::Tensor unified_routed_expert_moe(
             .fuse_bias = !gate_biases.empty(),
             .compute_kernel_config = compute_kernel_config,
             .min_active_tokens = min_active_tokens,
-            .max_active_tokens = max_active_tokens,
-            .stacked_packed_weights = stacked_packed_weights,
-            .l1_end = l1_end},
+            .max_active_tokens = max_active_tokens},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

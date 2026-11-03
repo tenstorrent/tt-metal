@@ -651,8 +651,7 @@ Tensor sparse_matmul(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<Tensor>& indices,
     const std::optional<Tensor>& bias,
-    const PrefetcherPipeList& prefetcher_pipes,
-    bool zero_init_output) {
+    const PrefetcherPipeList& prefetcher_pipes) {
     std::optional<CoreCoord> user_core_coord =
         core_grid.has_value() ? std::make_optional(CoreCoord(core_grid->x, core_grid->y)) : std::nullopt;
 
@@ -674,8 +673,7 @@ Tensor sparse_matmul(
                sub_device_id,
                indices,
                bias,
-               prefetcher_pipes,
-               zero_init_output)
+               prefetcher_pipes)
         .at(0);
 }
 
