@@ -30,27 +30,6 @@ constexpr auto kComputeKernelPath =
 constexpr uint32_t kOutputBufferIdx = 0;
 constexpr uint32_t kIntermediateBufferIdx = 1U;
 
-constexpr auto kQueryCbIndex = tt::CBIndex::c_0;
-constexpr auto kKeyCbIndex = tt::CBIndex::c_1;
-constexpr auto kValueCbIndex = tt::CBIndex::c_2;
-constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_3;
-constexpr auto kIntermediateCbIndex = tt::CBIndex::c_4;
-constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
-constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // used for matmul reduction
-constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_7;
-
-// Online-softmax state, one tile per Q row; prev/cur swap roles every K step.
-constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // running row max, previous step
-constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;   // running row max, current step
-constexpr auto kExpMaxDiffCbIndex = tt::CBIndex::c_10;   // exp(scale * (prev max - cur max)), the rescale factor
-constexpr auto kPrevSumExpCbIndex = tt::CBIndex::c_11;   // running row sum of P, previous step
-constexpr auto kCurSumExpCbIndex = tt::CBIndex::c_12;    // running row sum of P, current step
-constexpr auto kPrevMmOutCbIndex = tt::CBIndex::c_13;    // running P @ V accumulator, previous step
-constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // running P @ V accumulator, current step
-
-constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
-constexpr auto kGateCbIndex = tt::CBIndex::c_16;
-
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
@@ -129,9 +108,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto* device = query.device();
 
     tt::tt_metal::Program program{};
-    const auto input_data_format = datatype_to_dataformat_converter(query.dtype());
-    const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     TT_FATAL(
         query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
@@ -192,91 +168,18 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto [pv_block_h, pv_block_w] = determine_largest_subblock_size(rows, shape.vWt, dst_size - 1U);
     const uint32_t sm_block_size = dst_size;
 
-    const auto data_format = input_data_format;
-    const auto precise_data_format = tt::DataFormat::Float32;
-
     // -------------------------------------------------------------------------
-    // 2) Create and configure circular buffers
+    // 2) Create the circular buffers
     // -------------------------------------------------------------------------
 
-    const SDPAForwardCbTiles cb = cb_tiles(shape, chunks);  // depths; the L1 budget was checked by resolve_chunks
-
-    [[maybe_unused]] auto cb_query = create_circular_buffer(
-        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.query);
-
-    [[maybe_unused]] auto cb_key =
-        create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.key);
-
-    [[maybe_unused]] auto cb_value = create_circular_buffer(
-        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.value);
-
-    // Mask CB: causal = two on-chip tiles ([0] diagonal pattern, [1] all -1e9); arbitrary = Sq x Sk tiles
-    // per step (shared by the stacked heads), double-buffered. None = no CB.
-    if (mask_type != AttentionMaskType::None) {
-        [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
-            program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.attn_mask);
+    // Depths and formats come from the CB plan in sdpa_fw_config.cpp, the same table l1_bytes summed when
+    // resolve_chunks checked the L1 budget. The mask, gate and intermediates CBs are only created when the
+    // config uses them (depth 0 otherwise).
+    for (const SDPAForwardCb& cb : cb_plan(cb_tiles(shape, chunks))) {
+        if (cb.tiles > 0U) {
+            create_circular_buffer(program, all_cores, cb.index, cb.format, tt::tile_size(cb.format), cb.tiles);
+        }
     }
-
-    // Create gate buffer if the model has a gating mechanism. Double-buffered to overlap DRAM reads with compute.
-    if (args.has_gate) {
-        [[maybe_unused]] auto cb_gate = create_circular_buffer(
-            program, all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.gate);
-    }
-
-    // create intermediate buffer only if we need to return intermediates
-    // Intermediate shape: (B, H, S, 32) = 1 FP32 tile wide (logsumexp = max + log(sum_exp)) per row
-    if (args.return_intermediates) {
-        [[maybe_unused]] auto cb_intermediate = create_circular_buffer(
-            program,
-            all_cores,
-            kIntermediateCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            cb.intermediate);
-    }
-
-    [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
-        program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.reduction_scaler);
-
-    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
-        program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.matmul_reduce);
-
-    // Scores of one step, row-major; single-buffered, softmax rewrites in place (see the TODO on the
-    // softmax helpers in sdpa_compute_utils.hpp).
-    [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
-        program,
-        all_cores,
-        kAttentionWeightsCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        cb.attention_weights);
-
-    [[maybe_unused]] auto cb_prev_max_value = create_circular_buffer(
-        program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.stat);
-
-    [[maybe_unused]] auto cb_cur_max_value = create_circular_buffer(
-        program, all_cores, kCurMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.stat);
-
-    // fp32 for the running sums and the rescale factors. The max can stay bf16 although the scores are fp32:
-    // P, the rescale factor alpha and the LSE all use the same rounded max, so its rounding cancels in O / sum
-    // and in the LSE.
-    [[maybe_unused]] auto cb_exp_max_diff = create_circular_buffer(
-        program, all_cores, kExpMaxDiffCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.stat);
-
-    [[maybe_unused]] auto cb_prev_exp_sum = create_circular_buffer(
-        program, all_cores, kPrevSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.stat);
-
-    [[maybe_unused]] auto cb_cur_exp_sum = create_circular_buffer(
-        program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.stat);
-
-    [[maybe_unused]] auto cb_prev_mm_out = create_circular_buffer(
-        program, all_cores, kPrevMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.mm_out);
-
-    [[maybe_unused]] auto cb_cur_mm_out = create_circular_buffer(
-        program, all_cores, kCurMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.mm_out);
-
-    [[maybe_unused]] auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.output);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
