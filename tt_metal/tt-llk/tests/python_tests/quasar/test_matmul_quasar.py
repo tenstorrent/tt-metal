@@ -33,6 +33,7 @@ from helpers.param_config import (
     input_output_formats,
     max_dest_tiles,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
 )
@@ -143,10 +144,6 @@ def matmul_stimuli_spec(data_format):
     if data_format.is_integer():
         return StimuliSpec.uniform(low=-127.0, high=127.0)
     return StimuliSpec.uniform(low=0.0, high=1.0)
-
-
-def matmul_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def matmul_dest_acc_modes(format):
@@ -273,7 +270,7 @@ _ARCH = get_chip_architecture()
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=MATMUL_FORMAT,
     math_fidelity=lambda format: get_valid_math_fidelities(format),
-    dest_sync_mode=lambda: matmul_dest_sync_modes(),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
         lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
@@ -613,7 +610,7 @@ def test_matmul_tiny(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=[InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
     math_fidelity=[MathFidelity.LoFi],
-    dest_sync_mode=lambda: matmul_dest_sync_modes(),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(),
     dest_acc=[DestAccumulation.Yes],
     matmul_tile_dims=runtime(
         lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
@@ -669,7 +666,7 @@ MATMUL_INT4_FORMAT = InputOutputFormat(
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    dest_sync_mode=lambda: matmul_dest_sync_modes(),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(),
     dest_acc=[DestAccumulation.Yes],
     matmul_tile_dims=runtime(
         lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(

@@ -69,6 +69,11 @@ def max_dest_tiles(
     return DEST_SYNC_TILE_LIMITS[dest_sync] // (2 if _dest_acc_flag(dest_acc) else 1)
 
 
+def quasar_dest_sync_modes(*, is_perf: bool = False) -> List[DestSync]:
+    """Dest sync modes a Quasar test sweeps: Half only for perf runs, else Half and Full."""
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
+
+
 def format_combination_sweep(
     formats: List[DataFormat],
     all_same: bool,

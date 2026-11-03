@@ -7,9 +7,9 @@ import pytest
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
     DestSync,
-    MathFidelity,
     PerfRunType,
     Transpose,
 )
@@ -114,12 +114,7 @@ def matmul_combos(
             else [DestAccumulation.No, DestAccumulation.Yes]
         ),
     ),
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_perf_matmul(
     perf_report,

@@ -21,7 +21,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
-    DestSync,
     PackerReluType,
     PerfRunType,
 )
@@ -31,6 +30,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     runtime,
     select_perf_tile_sizes,
 )
@@ -96,7 +96,7 @@ def generate_qsr_pack_combinations(
         PackerReluType.MaxThresholdRelu,
     ]
 
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
 
     combinations = []
     for fmt in formats_list:
