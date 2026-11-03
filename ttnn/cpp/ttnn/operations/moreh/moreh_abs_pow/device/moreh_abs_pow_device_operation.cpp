@@ -27,8 +27,8 @@ void validate_tensors(
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
 
-    check_tensor(input, "moreh_abs_pow", "input", {DataType::BFLOAT16, DataType::INT32});
-    check_tensor(output, "moreh_abs_pow", "output", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(input, "moreh_abs_pow", "input", {DataType::BFLOAT16});
+    check_tensor(output, "moreh_abs_pow", "output", {DataType::BFLOAT16});
 }
 
 void MorehAbsPowOperation::validate_on_program_cache_miss(
