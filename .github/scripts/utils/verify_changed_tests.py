@@ -33,14 +33,10 @@ Edits that cannot change how a test executes do not need hardware:
   * owner_id / team    Ownership metadata.
 
 Anything else -- cmd, timeout, arch, dispatch_mode, tier, shard layout, model fields --
-is entry-wide and behaviour-affecting: every SKU the entry currently declares is
-scoped, since all of them run that shared cmd.
+is entry-wide and scopes every SKU the entry currently declares.
 
-A change confined to `skus` is diffed one SKU at a time instead: adding a SKU,
-removing one, or reconfiguring one (its own timeout, tier, ...) only scopes that
-SKU. A sibling SKU in the same entry whose own config is untouched needs nothing
-re-proven just because the map around it changed -- removing a SKU in particular
-leaves nothing to prove for it, the same as a removed entry.
+A change confined to `skus` is diffed per SKU instead: only the SKU(s) added,
+removed or reconfigured are scoped -- an untouched sibling SKU is not.
 
 `timeout` counts: verify_time_budget.py only proves it fits the team's budget, not
 that the test still finishes inside it. Lowering one is how a leg starts timing out.
@@ -584,13 +580,7 @@ def behavioural_view(entry):
 
 
 def entry_fields_excluding_skus(entry):
-    """behavioural_view() minus `skus`: the fields shared by every SKU leg.
-
-    A change here (cmd, timeout outside skus, arch, dispatch_mode, tier, shard
-    layout, model fields, ...) is entry-wide, so scope_file scopes every SKU the
-    entry currently declares. A change confined to `skus` is diffed key by key
-    there instead, so a SKU added, removed or reconfigured only scopes itself.
-    """
+    """behavioural_view() minus `skus`: the fields shared by every SKU leg."""
     view = behavioural_view(entry)
     view.pop("skus", None)
     return view
@@ -748,10 +738,7 @@ def scope_file(
             raise
         return skip
 
-    # Each touched tuple carries a sku_filter: None means every SKU the entry
-    # currently declares (an entry-wide change, or an unresolvable one -- see
-    # below); a set means only those SKU keys were added, removed from, or
-    # reconfigured within `skus`.
+    # sku_filter: None = every SKU the entry currently declares; a set = just those keys.
     touched = []
     for key, entry in new_index.items():
         previous = old_index.get(key)
@@ -765,9 +752,7 @@ def scope_file(
 
         old_skus, new_skus = previous.get("skus"), entry.get("skus")
         if not isinstance(old_skus, dict) or not isinstance(new_skus, dict):
-            # Malformed on either side: scope the whole entry so the "has no skus
-            # mapping" check below fails the gate closed, same as before `skus` was
-            # diffed key by key.
+            # Malformed either side: scope the whole entry so the check below fails closed.
             if canonical(old_skus) != canonical(new_skus):
                 touched.append((key, entry, "changed", None))
             continue
@@ -776,10 +761,7 @@ def scope_file(
         changed_skus = {
             sku for sku in new_skus if sku in old_skus and canonical(new_skus[sku]) != canonical(old_skus[sku])
         }
-        # SKUs only in old_skus (removed) need nothing: same as a removed entry,
-        # there is no leg left to prove. A SKU whose own config is untouched needs
-        # nothing re-proven just because a sibling SKU in the same entry was
-        # added, removed or reconfigured.
+        # Removed SKUs need nothing proven; an untouched sibling SKU needs nothing either.
         if added_skus:
             touched.append((key, entry, "added", added_skus))
         if changed_skus:
