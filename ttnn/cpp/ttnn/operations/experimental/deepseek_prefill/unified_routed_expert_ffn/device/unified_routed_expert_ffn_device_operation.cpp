@@ -123,10 +123,18 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
     // m_tiles is this expert's M (grid/chunk/CB sizing). x may be a shared
     // buffer spanning many experts, so its allocated M only bounds m_tiles from
-    // above — the reader/writer index into x at the region offset.
+    // above — the reader/writer index into x at the region offset. With
+    // x_row_index, x is the token-ordered input and the expert rows live in the
+    // output's index space, so the output's M bounds m_tiles instead (an expert's
+    // capacity can exceed the token count).
     TT_FATAL(op.m_tiles > 0, "m_tiles must be > 0");
+    const uint32_t capacity_rows = op.x_indexed ? t.output.padded_shape()[-2] : x_shape[-2];
     TT_FATAL(
-        op.m_tiles <= x_shape[-2] / TILE, "m_tiles ({}) must be <= x M in tiles ({})", op.m_tiles, x_shape[-2] / TILE);
+        op.m_tiles <= capacity_rows / TILE,
+        "m_tiles ({}) must be <= the buffer capacity in tiles ({}, from {})",
+        op.m_tiles,
+        capacity_rows / TILE,
+        op.x_indexed ? "the output" : "x");
 
     // Every expert's gate/up/down tensor shares x's storage / layout / memory
     // contract AND must be identical in shape/dtype to expert 0 (the program is
@@ -312,7 +320,13 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         }
         constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
         TT_FATAL(out_shape[-2] % TILE_H == 0, "output M ({}) must be tile-aligned", out_shape[-2]);
-        TT_FATAL(out_shape[-2] >= x_shape[-2], "output M ({}) must be >= x M ({})", out_shape[-2], x_shape[-2]);
+        // Without x_row_index buffer row r reads x row r; with it, x is the token-ordered input and the output can
+        // have fewer rows than x (x_row_index covers every output row, checked below).
+        TT_FATAL(
+            op.x_indexed || out_shape[-2] >= x_shape[-2],
+            "output M ({}) must be >= x M ({}) when x is not indexed",
+            out_shape[-2],
+            x_shape[-2]);
     }
 
     TT_FATAL(
@@ -451,6 +465,12 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t zero_output_row) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
+    // Checked here, not in validate_on_program_cache_miss, so it also runs on cache hits: the reader uses
+    // x_row_index's DRAM address on x's chips, so an index tensor on another mesh device reads unrelated memory.
+    if (x_row_index.has_value()) {
+        TT_FATAL(x_row_index->storage_type() == ttnn::StorageType::DEVICE, "x_row_index must be on device");
+        TT_FATAL(x_row_index->device() == x.device(), "x_row_index must be on the same mesh device as x");
+    }
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .m_tiles = m_tiles,

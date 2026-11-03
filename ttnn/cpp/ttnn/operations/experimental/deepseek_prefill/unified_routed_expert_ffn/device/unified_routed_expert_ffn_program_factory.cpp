@@ -470,6 +470,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         if (has_zero_row) {
             total += rm_out_row_bytes;  // cb_zero_row
         }
+        if (op.x_indexed) {
+            total += static_cast<uint64_t>(M) * TILE * sizeof(uint32_t);  // cb_x_row_idx
+        }
         return total;
     };
 
@@ -989,6 +992,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // x_indexed: x row of buffer row r = x_row_index[r] (row-major x only); its scratch CB.
         static_cast<uint32_t>(op.x_indexed),  // 36
         CB_X_ROW_IDX,                         // 37
+        // x_indexed: x's row count; an index at or past it is not read (a bad index must not read past x).
+        op.x_indexed ? x_buffer->num_pages() : 0,  // 38
+        // x_indexed: entries in x_row_index; the reader clips its index-slice reads to them.
+        op.x_indexed ? static_cast<uint32_t>(t.x_row_index->logical_shape()[-1]) : 0,  // 39
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);

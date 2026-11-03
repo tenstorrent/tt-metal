@@ -38,12 +38,13 @@ from models.demos.gpt_oss.tests.perf.prefill_common import (
     random_prompt_tokens,
     run_prefill,
 )
-from models.demos.gpt_oss.tests.test_factory import parametrize_mesh_with_fabric
+from models.demos.gpt_oss.tests.test_factory import parametrize_mesh_with_fabric, skip_1x4_on_galaxy
 
 MAX_SEQ_LEN = max(PREFILL_LENGTHS)
 
 
 @pytest.mark.timeout(6 * 3600)
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_prefill_tracy(mesh_device, device_params, monkeypatch):
     # The routed path is the default on Blackhole 1xN, so the dense baseline needs the flag set explicitly.

@@ -463,6 +463,11 @@ void kernel_main() {
                         ASSERT(dst_row < dst_M_tiles);
                         if (dst_row < dst_M_tiles) {
                             for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
+                                // The zero row belongs to the zero-row write alone, even inside a region's padded
+                                // last tile-row (whose rows past the count are written here too).
+                                if (has_zero_row && dst_row * TILE_HEIGHT + r == zero_output_row) {
+                                    continue;
+                                }
                                 noc.async_write(
                                     cb_out_buf,
                                     out_acc,
