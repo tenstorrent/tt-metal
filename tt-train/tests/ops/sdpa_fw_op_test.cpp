@@ -3555,3 +3555,69 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitEdge_LargeScoresStayFini
         EXPECT_LT(mean_rel, 2e-2F);
     }
 }
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitNoProgramCache) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // With the program cache off every launch builds its program anew: a fresh scratch tensor and fresh
+    // semaphores, the previous launch's scratch freed with its program. Two split launches of the same inputs
+    // must agree bit for bit, with an uncut launch of other inputs between them so a reuse of the freed
+    // scratch address lands on a launch that still runs, and the split launch must match the uncut one.
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    device->disable_and_clear_program_cache();
+    const std::array<std::size_t, 4> shape{1U, 2U, 1024U, 64U};
+    auto make = [&](uint32_t seed, float lo, float hi) {
+        return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, lo, hi, seed), device);
+    };
+    // V in [0, 1] with the early keys near 0.1 and the late ones near 0.9: see expect_split_matches_unsplit.
+    auto make_value = [&](uint32_t seed) {
+        xt::xarray<float> value = test_utils::make_uniform_xarray<float>(shape, 0.0F, 0.25F, seed);
+        for (std::size_t s = 0; s < shape[2]; ++s) {
+            xt::view(value, xt::all(), xt::all(), s, xt::all()) += 0.75F * static_cast<float>(s) / shape[2];
+        }
+        return core::from_xtensor(value, device);
+    };
+    struct Inputs {
+        ttnn::Tensor query, key, value;
+    };
+    const Inputs first{make(11U, -1.0F, 1.0F), make(12U, -1.0F, 1.0F), make_value(13U)};
+    const Inputs second{make(14U, -1.0F, 1.0F), make(15U, -1.0F, 1.0F), make_value(16U)};
+    auto run = [&](const metal::SDPAForwardProgramConfig& cfg, const Inputs& in) {
+        return core::to_xtensor(metal::sdpa_fw(
+                                    in.query,
+                                    in.key,
+                                    in.value,
+                                    metal::AttentionMaskType::Causal,
+                                    std::nullopt,
+                                    0.0F,
+                                    false,
+                                    std::nullopt,
+                                    cfg)[0]
+                                    .value());
+    };
+    const metal::SDPAForwardProgramConfig split{.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 4U};
+    const metal::SDPAForwardProgramConfig unsplit{.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 1U};
+    const SDPATestConfig split_config{
+        .batch_size = 1U,
+        .sequence_length = 1024U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = metal::AttentionMaskType::Causal,
+        .program_config = split,
+        .return_intermediates = false};
+    const auto split_schedule = host_schedule(split_config);
+    ASSERT_GT(split_schedule.num_slots, 0U) << "the split config must cut";
+    const xt::xarray<float> out_first = run(split, first);
+    const xt::xarray<float> out_second_unsplit = run(unsplit, second);
+    const xt::xarray<float> out_first_again = run(split, first);
+    const xt::xarray<float> out_second = run(split, second);
+    EXPECT_EQ(device->num_program_cache_entries(), 0U) << "the program cache must stay off";
+    EXPECT_TRUE(xt::all(xt::equal(out_first, out_first_again)))
+        << "two uncached launches of the same inputs must agree bit for bit";
+    EXPECT_FALSE(xt::all(xt::equal(out_first, out_second))) << "a later launch must read its own inputs";
+    expect_split_matches_unsplit(
+        out_second, out_second_unsplit, fold_error_terms(split_config, split_schedule), "SplitNoProgramCache");
+    device->enable_program_cache();
+}
