@@ -2,11 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstdint>
-#include <cstdio>
-#include <type_traits>
-#include <utility>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -26,42 +22,8 @@ static_assert(
     PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE,
     "sfpu_reduce_sdpa supports only L1_TO_L1 and PACK_ISOLATE");
 
-// Perf schema v4 omits block runtimes and derives them from the compile-time block dimensions.
-template <typename T, typename = void>
-struct has_block_runtime : std::false_type
-{
-};
-
-template <typename T>
-struct has_block_runtime<T, std::void_t<decltype(std::declval<T>().NUM_BLOCKS), decltype(std::declval<T>().NUM_TILES_IN_BLOCK)>> : std::true_type
-{
-};
-
-template <typename T>
-std::uint32_t sdpa_num_tiles_in_block(const T& params)
-{
-    if constexpr (has_block_runtime<T>::value)
-    {
-        return params.NUM_TILES_IN_BLOCK;
-    }
-    else
-    {
-        return BLOCK_RT_DIM * BLOCK_CT_DIM;
-    }
-}
-
-template <typename T>
-std::uint32_t sdpa_num_blocks(const T& params, std::uint32_t tile_count)
-{
-    if constexpr (has_block_runtime<T>::value)
-    {
-        return params.NUM_BLOCKS;
-    }
-    else
-    {
-        return tile_count / sdpa_num_tiles_in_block(params);
-    }
-}
+// Functional and perf both derive the SDPA block from the compile-time block
+// dimensions. TILE_CNT is a multiple of that block.
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -134,8 +96,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
-    const std::uint32_t num_blocks         = sdpa_num_blocks(params, TILE_CNT);
-    const std::uint32_t num_tiles_in_block = sdpa_num_tiles_in_block(params);
+    const std::uint32_t num_tiles_in_block = BLOCK_RT_DIM * BLOCK_CT_DIM;
+    const std::uint32_t num_blocks         = TILE_CNT / num_tiles_in_block;
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -199,8 +161,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const std::uint32_t num_blocks         = sdpa_num_blocks(params, TILE_CNT);
-    const std::uint32_t num_tiles_in_block = sdpa_num_tiles_in_block(params);
+    const std::uint32_t num_tiles_in_block = BLOCK_RT_DIM * BLOCK_CT_DIM;
+    const std::uint32_t num_blocks         = TILE_CNT / num_tiles_in_block;
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(

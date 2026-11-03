@@ -7,21 +7,18 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
     DestAccumulation,
-    DestSync,
     MathOperation,
     PerfRunType,
     ReducePool,
     format_dict,
 )
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block, parametrize
+from helpers.param_config import parametrize
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
     REDUCE_POOL_TYPE,
     TILE_COUNT,
     generate_input_dim,
@@ -149,10 +146,6 @@ def _run_sfpu_reduce_sdpa(
             src_A_untilized[row : row + subblock_rows, :], dim=0
         ).values
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
-    )
-
     # *******************************************************
 
     functional_compile_params = [
@@ -167,8 +160,6 @@ def _run_sfpu_reduce_sdpa(
     functional_runtime_params = [
         TILE_COUNT(tile_cnt_A),
         LOOP_FACTOR(loop_factor),
-        NUM_BLOCKS(num_blocks),
-        NUM_TILES_IN_BLOCK(num_tiles_in_block),
     ]
     test_config_kwargs.update(
         {
