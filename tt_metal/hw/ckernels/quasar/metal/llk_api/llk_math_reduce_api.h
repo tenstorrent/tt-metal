@@ -6,7 +6,6 @@
 #include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_reduce.h"
-#include "llk_reduce_common_api.h"
 
 /*************************************************************************
  * LLK REDUCE
@@ -21,47 +20,38 @@
  * @tparam EN_32BIT_DEST: Set to true to use 32bit destination register mode
  * @tparam math_fidelity: Only works for AVG/SUM pool types,  0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls
  * precision of multiplication
- * @tparam is_int_fpu_en: When true for REDUCE_ROW, skip MOP programming (runtime int FPU path)
  * @param operandA: The input operand Data Flow Buffer identifier
  * @param operandB: The scaler input operand Data Flow Buffer identifier
  *
  */
-template <
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    const bool EN_32BIT_DEST,
-    ckernel::MathFidelity math_fidelity,
-    bool is_int_fpu_en = false>
+template <PoolType pool_type, ReduceDim reduce_dim, const bool EN_32BIT_DEST, ckernel::MathFidelity math_fidelity>
 inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
-    // A 2x column reduce (both operands MxFp4; see is_2x_column_reduce) runs both src registers on the
-    // 2x-packed format. Derive the effective SrcA/SrcB formats from that; the matching unpacker
-    // OUT_DATA_FORMAT overrides live in llk_unpack_AB_reduce_init, which uses the same predicate.
-    const bool src_2x = is_2x_column_reduce<pool_type, reduce_dim>(operandA_id, operandB_id);
-    const DataFormat srcA_format =
-        src_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandA_id]);
-    const DataFormat srcB_format =
-        src_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandB_id]);
+    constexpr bool swap_operands = reduce_swaps_operands<pool_type, reduce_dim>();
+    // Only column SUM and AVG with MxFp4 data and scaler run on MxFp4_2x_B, like matmul.
+    const bool src_2x = pool_type != PoolType::MAX && reduce_dim == ReduceDim::REDUCE_COL &&
+                        get_operand_src_format(operandA_id) == static_cast<std::uint32_t>(DataFormat::MxFp4) &&
+                        get_operand_src_format(operandB_id) == static_cast<std::uint32_t>(DataFormat::MxFp4);
+    const DataFormat data_format = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
+    const DataFormat scaler_format = static_cast<DataFormat>(unpack_dst_format[operandB_id]);
+    const DataFormat srcA_format = src_2x ? DataFormat::MxFp4_2x_B : (swap_operands ? scaler_format : data_format);
+    const DataFormat srcB_format = src_2x ? DataFormat::MxFp4_2x_B : (swap_operands ? data_format : scaler_format);
 
-    // When src_2x, srcA_format and srcB_format deviate from the op-agnostic unpack_dst_format[] table that kernel
-    // startup (llk_math_hw_configure) already programmed the ALU from and latched as
-    // DataFormatConfigSet::DEFAULT. That latch keys on which config set is active, not on the
-    // formats, so _configure_default_alu_data_format_state_ would early-return and leave the ALU
-    // decoding 2x-packed SrcA/SrcB as Float16_b. Program the ALU directly in that case; this is still the
-    // DEFAULT config shape (no dest-format override), so the latched
-    // DataFormatConfigSet::DEFAULT stays truthful and transpose-dest's restore contract holds.
-    if (src_2x) {
+    // The default path skips the ALU setup when already configured, so set the ALU formats directly when they change.
+    if (src_2x || swap_operands) {
         const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
                                           _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
         _configure_alu_formats_<EN_32BIT_DEST>(
             srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
+        if (swap_operands) {
+            data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
+        }
     } else {
         _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
     }
-    _llk_math_reduce_init_<pool_type, reduce_dim, EN_32BIT_DEST, math_fidelity, is_int_fpu_en>(
-        srcA_format, srcB_format, tensor_shape);
+    _llk_math_reduce_init_<pool_type, reduce_dim, EN_32BIT_DEST, math_fidelity>(srcA_format, srcB_format, tensor_shape);
 }
 
 /**
@@ -69,19 +59,14 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
  *
  * @param operandA: The srcA (data) operand circular buffer (same as reduce init)
  *
- * Undoes the MxFp4 -> MxFp4_2x_B deviation that @ref llk_math_reduce_init programmed into the ALU
- * format registers (column reduce only), restoring the op-agnostic unpack_dst_format[] values so a
- * following op decodes its src registers correctly. Gates on MxFp4 (only column reduce deviated;
- * others are a no-op). Uses _configure_alu_formats_ directly because the still-DEFAULT latch makes
- * _configure_default_alu_data_format_state_ early-return. Pair with @ref llk_unpack_AB_reduce_uninit.
+ * Both reduce operands of an MxFp4 reduce use operandA's table format, so both ALU sources are restored from it.
+ * Pair with @ref llk_unpack_AB_reduce_uninit.
  */
 inline void llk_math_reduce_uninit(const std::uint32_t operandA) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) != DataFormat::MxFp4) {
         return;
     }
-    // All reduce operands (MxFp4 data + scaler) map to Float16_b in unpack_dst_format[], so
-    // reprogramming both ALU srcs to operandA's table value is the correct restore.
     const DataFormat table_fmt = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
     const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(table_fmt) && DST_ACCUM_MODE;
     _configure_alu_formats_<DST_ACCUM_MODE>(
@@ -93,29 +78,20 @@ inline void llk_math_reduce_uninit(const std::uint32_t operandA) {
  *
  * @tparam type: Type of reduce pool op, values = [MAX, SUM, AVG]
  * @tparam dim: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
- * @tparam is_int_fpu_en: When true for REDUCE_ROW, runs the runtime int FPU path instead of the MOP
  * @param dst_index: Tile index into the destination register.
- * @param tensor_shape: Tile shape determining face count and dest stride. int FPU path requires default 32x32.
+ * @param tensor_shape: Tile shape determining face count and dest stride.
  */
-template <PoolType type, ReduceDim dim, bool is_int_fpu_en = false>
+template <PoolType type, ReduceDim dim>
 inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape) {
-    if constexpr (is_int_fpu_en) {
-        LLK_ASSERT(
-            tensor_shape.face_r_dim == DEFAULT_TENSOR_SHAPE.face_r_dim &&
-                tensor_shape.face_c_dim == DEFAULT_TENSOR_SHAPE.face_c_dim &&
-                tensor_shape.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim &&
-                tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
-            "Int reduce: only default 32x32 tensor_shape supported");
-    }
     LLK_ASSERT(
         (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
         "llk_math_reduce: dst_index exceeds dest capacity");
-    _llk_math_reduce_<type, dim, is_int_fpu_en>(dst_index, tensor_shape);
+    _llk_math_reduce_<type, dim>(dst_index, tensor_shape);
 }
 
-template <PoolType type, ReduceDim dim, bool is_int_fpu_en = false>
+template <PoolType type, ReduceDim dim>
 inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t dst_index) {
     const std::uint32_t operand_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    llk_math_reduce<type, dim, is_int_fpu_en>(dst_index, tensor_shape);
+    llk_math_reduce<type, dim>(dst_index, tensor_shape);
 }

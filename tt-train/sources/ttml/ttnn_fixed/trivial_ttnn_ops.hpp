@@ -11,6 +11,10 @@ namespace ttml::ttnn_fixed {
 
 ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim);
 ttnn::Tensor sum_over_batch(const ttnn::Tensor& t);
+// Sums over every dim but the last, keeping the dims: [..., S, C] -> [1, ..., 1, C], without the full-size copies
+// that ttnn::sum over {0, ..., rank - 2} writes for bf16 input. The result can round differently from that ttnn::sum
+// (for fp32 input only at fp32 rounding level). Returns t itself when every dim but the last is 1.
+ttnn::Tensor sum_over_leading_dims(const ttnn::Tensor& t);
 ttnn::Tensor log_softmax(const ttnn::Tensor& t, int dim);
 ttnn::Tensor softmax(const ttnn::Tensor& t, int dim);
 ttnn::Tensor divide(const ttnn::Tensor& a, const ttnn::Tensor& b);

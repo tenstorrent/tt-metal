@@ -194,9 +194,23 @@ class LayerCompletionDrain:
     """Runs a LayerCompletionRingReader on a background thread from start() to finish(), so the runner never
     blocks on a full ring while the caller is submitting or waiting on H2D input."""
 
-    def __init__(self, ring, *, num_layers: int, chunk_layers: int | None = None, poll_idle_s: float = 0.001):
+    def __init__(
+        self,
+        ring,
+        *,
+        num_layers: int,
+        chunk_layers: int | None = None,
+        on_completion=None,
+        on_chunk_complete=None,
+        poll_idle_s: float = 0.001,
+    ):
         self.reader = LayerCompletionRingReader(
-            ring, num_layers=num_layers, chunk_layers=chunk_layers, poll_idle_s=poll_idle_s
+            ring,
+            num_layers=num_layers,
+            chunk_layers=chunk_layers,
+            on_completion=on_completion,
+            on_chunk_complete=on_chunk_complete,
+            poll_idle_s=poll_idle_s,
         )
         self._poll_idle_s = poll_idle_s
         self._stop = threading.Event()
@@ -269,11 +283,19 @@ def connect_layer_completion_channel(timeout_s: int):
     return ring
 
 
-def start_layer_completion_drain(completion_channel, *, num_layers: int, chunk_layers: int):
+def start_layer_completion_drain(
+    completion_channel, *, num_layers: int, chunk_layers: int, on_completion=None, on_chunk_complete=None
+):
     """A started LayerCompletionDrain on the channel, or None when there is no channel."""
     if completion_channel is None:
         return None
-    return LayerCompletionDrain(completion_channel, num_layers=num_layers, chunk_layers=chunk_layers).start()
+    return LayerCompletionDrain(
+        completion_channel,
+        num_layers=num_layers,
+        chunk_layers=chunk_layers,
+        on_completion=on_completion,
+        on_chunk_complete=on_chunk_complete,
+    ).start()
 
 
 def wait_for_layer_completions(drain, expected_layers: int, *, timeout_s: float = 600.0) -> int:

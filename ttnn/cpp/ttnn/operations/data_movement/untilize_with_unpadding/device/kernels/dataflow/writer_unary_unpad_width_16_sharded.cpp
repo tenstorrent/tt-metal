@@ -7,20 +7,19 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 // Special case writer for unpad width 16 tensors
 // Skip untilize and just copy f0 and f2 from input tiles to output tiles
 void kernel_main() {
-    auto num_unpadded_output_rows = get_arg(args::num_unpadded_output_rows);
     auto num_padded_tiles_per_core = get_arg(args::num_padded_tiles_per_core);
 
     // Must stay a constant expression: it feeds a static_assert and the NOC_MAX_BURST_SIZE template
     // arguments below, so the free-function form with the binding token is used rather than the
     // DataflowBuffer member getter (which cannot yield a constant expression).
-    constexpr uint32_t tile_size_in_bytes = get_tile_size(dfb::out);
+    constexpr uint32_t tile_size_in_bytes = get_tile_size(dfb::untilize_out);
     constexpr uint32_t quarter_tile_size_in_bytes = tile_size_in_bytes / 4;
 
     const uint32_t batches_of_8 = num_padded_tiles_per_core / 8;
@@ -29,48 +28,45 @@ void kernel_main() {
     Noc noc;
     // The tiled block the copy compute kernel packs; drained here face by face.
     DataflowBuffer dfb_untilize_out(dfb::untilize_out);
-    // Borrowed onto the output shard itself: this kernel is its only toucher, filling it by write
-    // pointer, so nothing downstream drains it.
-    DataflowBuffer dfb_out(dfb::out);
+    // The output shard on this core, which this kernel writes in place; no other kernel accesses it.
+    LocalTensorAccessor<uint32_t> out_shard(tensor::out);
 
-    dfb_out.reserve_back(num_unpadded_output_rows);
-    uint32_t l1_write_addr = dfb_out.get_write_ptr();
+    // Byte offset of the next face write within the shard.
+    uint32_t write_offset = 0;
 
     static_assert(quarter_tile_size_in_bytes <= NOC_MAX_BURST_SIZE);
     // set_state uses just x/y from the noc addr, addr is ignored
     noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
         UnicastEndpoint{},
         quarter_tile_size_in_bytes,
-        {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = l1_write_addr});
+        {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = 0});
 
     for (uint32_t i = 0; i < batches_of_8; i++) {
         dfb_untilize_out.wait_front(8);
         uint32_t src_addr = dfb_untilize_out.get_read_ptr();
 
         for (uint32_t j = 0; j < 8; j++) {
-            CoreLocalMem<uint32_t> dst0(l1_write_addr);
             noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                 UnicastEndpoint{},
-                dst0,
+                out_shard,
                 quarter_tile_size_in_bytes,
                 {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
                  .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                  .addr = src_addr},
-                {.offset_bytes = 0});
+                {.offset_bytes = write_offset});
             src_addr += 2 * quarter_tile_size_in_bytes;
-            l1_write_addr += quarter_tile_size_in_bytes;
+            write_offset += quarter_tile_size_in_bytes;
 
-            CoreLocalMem<uint32_t> dst1(l1_write_addr);
             noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                 UnicastEndpoint{},
-                dst1,
+                out_shard,
                 quarter_tile_size_in_bytes,
                 {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
                  .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                  .addr = src_addr},
-                {.offset_bytes = 0});
+                {.offset_bytes = write_offset});
             src_addr += 2 * quarter_tile_size_in_bytes;
-            l1_write_addr += quarter_tile_size_in_bytes;
+            write_offset += quarter_tile_size_in_bytes;
         }
 
         noc.async_read_barrier();
@@ -80,25 +76,23 @@ void kernel_main() {
     dfb_untilize_out.wait_front(remaining_tiles);
     uint32_t src_addr = dfb_untilize_out.get_read_ptr();
     for (uint32_t i = 0; i < remaining_tiles; i++) {
-        CoreLocalMem<uint32_t> dst0(l1_write_addr);
         noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             UnicastEndpoint{},
-            dst0,
+            out_shard,
             quarter_tile_size_in_bytes,
             {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = src_addr},
-            {.offset_bytes = 0});
+            {.offset_bytes = write_offset});
         src_addr += 2 * quarter_tile_size_in_bytes;
-        l1_write_addr += quarter_tile_size_in_bytes;
+        write_offset += quarter_tile_size_in_bytes;
 
-        CoreLocalMem<uint32_t> dst1(l1_write_addr);
         noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             UnicastEndpoint{},
-            dst1,
+            out_shard,
             quarter_tile_size_in_bytes,
             {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = src_addr},
-            {.offset_bytes = 0});
+            {.offset_bytes = write_offset});
         src_addr += 2 * quarter_tile_size_in_bytes;
-        l1_write_addr += quarter_tile_size_in_bytes;
+        write_offset += quarter_tile_size_in_bytes;
     }
     noc.async_read_barrier();
     dfb_untilize_out.pop_front(remaining_tiles);
