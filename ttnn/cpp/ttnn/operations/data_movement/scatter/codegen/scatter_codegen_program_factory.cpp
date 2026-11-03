@@ -66,6 +66,13 @@ constexpr uint32_t kRmMinChunkElems = 32;
 constexpr uint32_t kFp32Bytes = sizeof(float);
 constexpr uint32_t kBf16Bytes = sizeof(uint16_t);
 
+// TILE streaming CB depths: none scales with the row width, so their sum is the least L1 a TILE
+// call needs, and what the live-L1 routing gate asks for.
+constexpr uint32_t kStreamingOutputPages = 2;
+constexpr uint32_t kStreamingInputPages = 2;
+constexpr uint32_t kStreamingIndexPages = 1;
+constexpr uint32_t kStreamingSrcPages = 1;
+
 std::vector<uint32_t> scatter_page_dims(const ttnn::Shape& shape, bool tiled) {
     const int64_t rank = static_cast<int64_t>(shape.rank());
     if (rank == 0) {
@@ -291,6 +298,12 @@ bool scatter_interleaved_fits_l1(
     return footprint <= l1_budget;
 }
 
+uint64_t scatter_tile_streaming_bytes(
+    uint64_t output_page_bytes, uint64_t input_page_bytes, uint64_t index_page_bytes, uint64_t src_page_bytes) {
+    return kStreamingOutputPages * output_page_bytes + kStreamingInputPages * input_page_bytes +
+           kStreamingIndexPages * index_page_bytes + kStreamingSrcPages * src_page_bytes;
+}
+
 uint64_t scatter_rm_fixed_bytes(uint64_t input_page_bytes, uint64_t output_page_bytes, bool bf16_reduce) {
     return input_page_bytes + output_page_bytes + (bf16_reduce ? input_page_bytes * kFp32Bytes / kBf16Bytes : 0);
 }
@@ -311,8 +324,14 @@ uint32_t scatter_rm_chunk_elems(
     uint32_t index_elem_size,
     uint32_t src_elem_size) {
     const uint64_t per_elem_bytes = static_cast<uint64_t>(index_elem_size) + static_cast<uint64_t>(src_elem_size);
+    // What make_rm_cb() allocates for a chunk: each page rounded up to the CB word, which only
+    // differs from the raw bytes when the chunk is the unscaled stick width.
+    const auto chunk_cb_bytes = [&](uint32_t elems) {
+        return tt::align(static_cast<uint64_t>(elems) * index_elem_size, kCbWordBytes) +
+               tt::align(static_cast<uint64_t>(elems) * src_elem_size, kCbWordBytes);
+    };
     uint32_t chunk = std::min(index_stick_elems, kRmDefaultChunkElems);
-    if (fixed_bytes + static_cast<uint64_t>(chunk) * per_elem_bytes > usable_l1) {
+    if (fixed_bytes + chunk_cb_bytes(chunk) > usable_l1) {
         const uint64_t budget = usable_l1 > fixed_bytes ? usable_l1 - fixed_bytes : 0;
         const uint64_t affordable = budget / per_elem_bytes;
         chunk = static_cast<uint32_t>(std::min<uint64_t>(affordable, chunk));
@@ -421,10 +440,10 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryStreaming::create_de
     const auto split = split_scatter_work(*device, attributes.sub_core_grids, attributes.Wt_output);
 
     ProgramDescriptor desc;
-    desc.cbs.push_back(make_tile_cb(kCbOutput, output_tensor, 2, split.core_range));
-    desc.cbs.push_back(make_tile_cb(kCbIndex, index_t, 1, split.core_range));
-    desc.cbs.push_back(make_tile_cb(kCbSrc, src_t, 1, split.core_range));
-    desc.cbs.push_back(make_tile_cb(kCbInput, in_t, 2, split.core_range));
+    desc.cbs.push_back(make_tile_cb(kCbOutput, output_tensor, kStreamingOutputPages, split.core_range));
+    desc.cbs.push_back(make_tile_cb(kCbIndex, index_t, kStreamingIndexPages, split.core_range));
+    desc.cbs.push_back(make_tile_cb(kCbSrc, src_t, kStreamingSrcPages, split.core_range));
+    desc.cbs.push_back(make_tile_cb(kCbInput, in_t, kStreamingInputPages, split.core_range));
 
     KernelDescriptor::CompileTimeArgs reader_ct = {
         kCbInput,

@@ -176,6 +176,47 @@ TEST_F(ScatterCodegenPrimFixture, RejectsTransposedTilesOnAProgramCacheHit) {
     device_->disable_and_clear_program_cache();
 }
 
+TEST_F(ScatterCodegenPrimFixture, TileRouteNeedsItsStreamingPagesInLiveL1) {
+    // The streaming plan's six tile pages are the least a TILE call seats, so an L1 that cannot hold
+    // them must send the call native rather than fail the program's CB allocation. A 72-wide stick
+    // keeps its raw bytes off a 32 B boundary, so the row-major detour, which would otherwise answer
+    // for the call, declines it.
+    const Operands ops = make_operands_of(device_, ttnn::Shape({1, 1, 32, 72}), ttnn::Shape({1, 1, 32, 32}), 72);
+    const auto fits = [&]() {
+        return codegen_plan_fits_live_l1(ops.input, -1, ops.index, ops.src, kReductionNone, ops.input.memory_config());
+    };
+    EXPECT_TRUE(fits());
+    const uint64_t streaming_bytes = ttnn::prim::scatter_tile_streaming_bytes(
+        ops.input.buffer()->aligned_page_size(),
+        ops.input.buffer()->aligned_page_size(),
+        ops.index.buffer()->aligned_page_size(),
+        ops.src.buffer()->aligned_page_size());
+    // One ROW_MAJOR stick per L1 bank, leaving every bank short of those pages.
+    const uint32_t banks = device_->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+    const uint64_t stick_bytes = ttnn::prim::scatter_usable_l1(ops.input) - streaming_bytes / 2;
+    const tt::tt_metal::MemoryConfig l1{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+    Tensor blocker = ttnn::zeros(
+        ttnn::Shape({banks, static_cast<uint32_t>(stick_bytes / sizeof(uint16_t))}),
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        *device_,
+        l1);
+    ASSERT_LT(ttnn::prim::scatter_usable_l1(ops.input), streaming_bytes);
+    EXPECT_FALSE(fits());
+    blocker.deallocate();
+    EXPECT_TRUE(fits());
+}
+
+TEST(ScatterCodegenRmChunkPlanner, BudgetsTheRoundedCbPagesOfAnUnalignedChunk) {
+    // An index stick of 42 int32 elements with bf16 sources: 252 raw bytes, but the two CB pages are
+    // rounded to 16 B each (176 + 96 = 272). A budget between the two must scale the chunk down to
+    // the 32-element floor rather than hand the factory pages it cannot allocate.
+    constexpr uint32_t kIndexElems = 42, kIndexBytes = 4, kSrcBytes = 2;
+    constexpr uint64_t kFixed = 1024;
+    EXPECT_EQ(ttnn::prim::scatter_rm_chunk_elems(kFixed + 272, kFixed, kIndexElems, kIndexBytes, kSrcBytes), 42u);
+    EXPECT_EQ(ttnn::prim::scatter_rm_chunk_elems(kFixed + 260, kFixed, kIndexElems, kIndexBytes, kSrcBytes), 32u);
+}
+
 // A device opened with an L1_SMALL region: the allocator's L1 bank stops below that region, and the
 // occupancy query the live budget reads never reports the buffers living in it.
 class ScatterCodegenL1SmallFixture : public TTNNFixtureBase {
