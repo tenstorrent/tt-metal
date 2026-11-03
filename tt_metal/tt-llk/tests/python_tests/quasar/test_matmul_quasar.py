@@ -658,9 +658,14 @@ def matmul_dest_depth_tile_dimensions(dest_acc, dest_sync_mode):
     The kernel splits rt into blocks that each fill one section (matmul_rows_per_dest_section).
     """
     max_tiles = max_dest_tiles(dest_acc, dest_sync_mode)
+    # The non-reuse branch needs rt_block > ct; a 4-tile section only fits that at ct=1.
+    non_reuse_ct = 2 if max_tiles > 4 else 1
     return [
         (ct, blocks * rows, kt)
-        for ct, rows, kt in ((max_tiles, 1, 2), (2, max_tiles // 2, 1))
+        for ct, rows, kt in (
+            (max_tiles, 1, 2),
+            (non_reuse_ct, max_tiles // non_reuse_ct, 1),
+        )
         for blocks in DEST_DEPTH_BLOCK_COUNTS
     ]
 

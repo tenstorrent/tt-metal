@@ -57,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_TILE_IDX    = params.DST_TILE_IDX;
 #endif
     const std::uint32_t tiles_per_block = binary_sfpu_tiles_per_block(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX);
-    const std::uint32_t num_blocks      = TILE_CNT / tiles_per_block;
+    const std::uint32_t num_blocks      = dest_section_count(TILE_CNT, tiles_per_block);
     const std::uint32_t num_passes      = LOOP_FACTOR * num_blocks;
 
     {
@@ -296,7 +296,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t SRC0_TILE_IDX   = params.SRC0_TILE_IDX;
     const std::uint32_t SRC1_TILE_IDX   = params.SRC1_TILE_IDX;
 #endif
-    const std::uint32_t num_blocks = TILE_CNT / binary_sfpu_tiles_per_block(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX);
+    const std::uint32_t num_blocks = dest_section_count(TILE_CNT, binary_sfpu_tiles_per_block(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX));
 
     {
         START_PERF_MEASURE("INIT")

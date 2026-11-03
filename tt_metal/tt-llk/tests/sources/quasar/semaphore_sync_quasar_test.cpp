@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 #include "tensor_shape.h"
 
@@ -35,7 +36,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
     // One DEST section per block of NUM_TILES_IN_BLOCK tiles.
-    const std::uint32_t num_blocks = TILE_CNT / NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_blocks = dest_section_count(TILE_CNT, NUM_TILES_IN_BLOCK);
     // allocate srcA (order matters: A before B)
     const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
@@ -106,7 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT           = params.TILE_CNT;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
-    const std::uint32_t num_blocks = TILE_CNT / NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_blocks = dest_section_count(TILE_CNT, NUM_TILES_IN_BLOCK);
 
     if constexpr (unpack_to_dest)
     {
@@ -171,7 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT           = params.TILE_CNT;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
-    const std::uint32_t num_blocks = TILE_CNT / NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_blocks = dest_section_count(TILE_CNT, NUM_TILES_IN_BLOCK);
     const auto bfd_pack            = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 

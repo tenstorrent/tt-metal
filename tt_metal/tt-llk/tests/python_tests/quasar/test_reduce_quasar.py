@@ -22,6 +22,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -32,6 +33,7 @@ from helpers.llk_params import (
 from helpers.param_config import (
     DEST_DEPTH_BLOCK_COUNTS,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
     quasar_dest_sync_modes,
     quasar_mx_smoke,
@@ -323,10 +325,6 @@ def test_reduce_quasar_multi_tile_to_one(
     )
 
 
-# reduce_quasar_test.cpp sizes its Dest sections at the SyncHalf capacity in both sync modes.
-REDUCE_SECTION_TILES = {DestAccumulation.No: 8, DestAccumulation.Yes: 4}
-
-
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
@@ -344,7 +342,11 @@ def test_reduce_quasar_dest_depth(
     dest_sync_mode,
     blocks,
 ):
-    """Per-tile reduce over 4 and 8 full Dest sections."""
+    """Per-tile reduce over 4 and 8 Dest sections of SyncHalf size.
+
+    reduce_quasar_test.cpp sizes sections at the SyncHalf capacity in both sync modes, so the
+    DestSync.Full variants repeat the Full dvalid/section-done handshake at Half depth.
+    """
     test_reduce_quasar(
         formats,
         (32, 32),
@@ -356,7 +358,7 @@ def test_reduce_quasar_dest_depth(
         dest_sync_mode,
         [PerfRunType.L1_TO_L1],
         1,
-        input_dimensions=[32 * blocks * REDUCE_SECTION_TILES[dest_acc], 32],
+        input_dimensions=[32 * blocks * max_dest_tiles(dest_acc, DestSync.Half), 32],
     )
 
 
