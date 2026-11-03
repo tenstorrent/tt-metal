@@ -380,6 +380,20 @@ def test_a_flip_pick_measures_existing_switches_with_no_code_change(mk, sandbox)
     assert rec["note"].startswith("no code change") and rec["quick"]["new"]["chunk_wall_ms"] == 250.0
 
 
+def test_a_keep_default_pick_with_no_code_change_is_measured(mk, sandbox):
+    """F245 (DeepSeek-V4.1 P.29): a keep_default pick is switch-only; an earlier pick built the value, the agent
+    changes nothing, and both sides are still measured (as ab.flip)."""
+    (sandbox.repo / "src/sw.py").write_text("import os\nF = os.environ.get('TOY_FIDELITY', 'hifi2')\n")
+    sandbox.git("add", "src")
+    sandbox.git("commit", "-q", "-m", "switch")
+    ab = {"env": {"TOY_FIDELITY": "hifi4"}, "change": {"TOY_FIDELITY": "hifi2"}, "keep_default": True}
+    o = mk([pick(ab=ab, ab_mode="quick")], {})
+    assert o.run() == HUMAN, mk.lines
+    rec = o.led.state()["P.1"]["ab"]
+    assert sorted(c["on"] for c in mk.calls) == [False, True], mk.calls
+    assert rec["note"].startswith("no code change")
+
+
 def test_without_flip_an_unchanged_tree_is_not_measured(mk):
     o = mk([pick(ab_mode="quick")], {})
     assert o.run() == HUMAN and mk.calls == []

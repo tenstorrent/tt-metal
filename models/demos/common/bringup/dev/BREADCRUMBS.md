@@ -2526,3 +2526,10 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 - Selftest: test_perf_ab.py::test_a_switch_only_accept_keeps_the_shipped_default.
 - keep_default is not part of the A/B key (ab_key): set after the A/B ran (P.28), the report still matches.
   Selftest test_perf_ab.py::test_adding_keep_default_after_the_ab_keeps_its_report.
+
+## F245: a keep_default pick with no code change is measured (DeepSeek-V4.1 P.29, 2026-11-03)
+- Problem: P.27 built the bfp8_down4 value; P.29's agent (correctly) changed nothing, so the A/B skipped both sides
+  ("the agent changed nothing under the task's paths") and the gate failed on missing metrics, although the agent
+  had measured the 'new' side through `orchestrator measure`.
+- Fix: ab.keep_default counts as switch-only, like ab.flip (F233): an unchanged tree is measured on both sides.
+  Selftest test_perf_ab.py::test_a_keep_default_pick_with_no_code_change_is_measured.
