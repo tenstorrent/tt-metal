@@ -315,6 +315,68 @@ def test_batched_rows_step_as_each_request_would_alone(device, frame_tail):
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_a_traced_prefill_joins_live_steps_as_its_request_would_alone(device, frame_tail):
+    """A second request prefilled by trace replay while the first steps under its live trace:
+    both rows get the hidden states their requests get on their own, and nothing compiles
+    or allocates after the capture."""
+    tables, tail = frame_tail
+    embeddings, positions = talker_prompt()
+    parameters = preprocess_cached_talker_parameters(device)
+    max_seq = embeddings.shape[1] + STEPS + 8
+    alone = TtTalkerCachedDecoder(device, parameters, max_seq=max_seq)
+    per_request = alone.max_blocks
+    lengths = [embeddings.shape[1], embeddings.shape[1] - 5]
+    codes = [int(code) for code in code_predictor_prompt()[2][:STEPS]]
+    inputs = [talker_step_inputs(tables, tail, code) for code in codes]
+
+    expected_last, expected = [], []
+    for length in lengths:
+        hidden = alone.prefill(embeddings[:, :length], positions[..., :length])
+        expected_last.append(ttnn.to_torch(hidden).float()[0, length - 1])
+        ttnn.deallocate(hidden)
+        expected.append([ttnn.to_torch(alone.step(nxt, length + step)).float() for step, nxt in enumerate(inputs)])
+
+    prefill_lengths = [length for length in (32, 64, 128) if length <= alone.max_seq]
+    batched = TtTalkerCachedDecoder(
+        device,
+        parameters,
+        max_seq=max_seq,
+        kv_cache=_external_cache(device, alone, 2 * per_request + 1),
+        batch=2,
+        prefill_lengths=prefill_lengths,
+    )
+    for row in range(2):
+        batched.set_page_table(torch.arange(1 + row * per_request, 1 + (row + 1) * per_request), row)
+    batched.capture()
+
+    def check_last(row):
+        score = pcc(batched.traced_prefill(embeddings[:, : lengths[row]], row), expected_last[row])
+        print(f"  row {row} prefill: PCC {score:.6f}")
+        assert score >= BATCHED_STEP_PCC, f"row {row} prefill: PCC {score} < {BATCHED_STEP_PCC}"
+
+    def step(steps):
+        rows = torch.cat([inputs[steps[row]].reshape(1, 1, -1) for row in range(2)], dim=1)
+        got = ttnn.to_torch(batched.step(rows, [lengths[row] + steps[row] for row in range(2)])).float()
+        return got
+
+    check_last(0)
+    joined = 3
+    for index in range(joined):
+        # Row 1 steps on its own blocks before its prefill, which overwrites what it wrote.
+        got = step([index, 0])
+        score = pcc(got[:, 0], expected[0][index])
+        assert score >= BATCHED_STEP_PCC, f"step {index} row 0: PCC {score} < {BATCHED_STEP_PCC}"
+    check_last(1)
+    for index in range(STEPS - joined):
+        got = step([joined + index, index])
+        for row, at in ((0, joined + index), (1, index)):
+            score = pcc(got[:, row], expected[row][at])
+            print(f"  step {at} row {row}: PCC {score:.6f}")
+            assert score >= BATCHED_STEP_PCC, f"step {at} row {row}: PCC {score} < {BATCHED_STEP_PCC}"
+    batched.release()
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_a_long_prefill_seeds_every_position(device, frame_tail):
     """A prompt whose cache fill spans more head-runs than there are cores. An unseeded or
     misplaced position shows up as the first step disagreeing with the uncached graph."""

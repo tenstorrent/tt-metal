@@ -624,12 +624,14 @@ class Qwen3TTSPipeline:
         codec=True,
         predictor_on_device=True,
         batch=1,
+        prefill_lengths=(),
     ):
         """`kv_cache` hands the talker a paged cache the caller owns (see
         `TtTalkerCachedDecoder`). `codec=False` skips the codec decoder, for a caller that only
         wants frames: the `generate*` methods need it, `codes` and the frame steps do not.
         `batch` sizes the row steps (`start_row` and after) for that many requests at once;
-        everything else runs one request."""
+        everything else runs one request. `prefill_lengths` traces `start_row`'s prefill at
+        those prompt lengths, captured with the step traces."""
         self.device = device
         self.max_frames = max_frames
         # Charges each block of the frame loop separately, and syncs the device between them
@@ -647,7 +649,12 @@ class Qwen3TTSPipeline:
         room = min(self.prompt_room, 512) + max_frames + 8
         self.batch = batch
         self.talker = TtTalkerCachedDecoder(
-            device, preprocess_cached_talker_parameters(device), max_seq=room, kv_cache=kv_cache, batch=batch
+            device,
+            preprocess_cached_talker_parameters(device),
+            max_seq=room,
+            kv_cache=kv_cache,
+            batch=batch,
+            prefill_lengths=prefill_lengths,
         )
         self.predictor = TtCodePredictorCachedDecoder(
             device, preprocess_cached_predictor_parameters(device), batch=batch
@@ -877,13 +884,22 @@ class Qwen3TTSPipeline:
         """Prefill a prompt [1, P, hidden] into talker row `row`, whose page table the caller
         has set, and keep its last hidden state. Returns P.
 
-        Eager, so it releases both traces; `capture` again before the next row step. The
-        other rows' state survives: their caches are theirs and their hidden states are kept.
+        With `prefill_lengths`, the prefill replays its trace beside the live step traces.
+        Otherwise it is eager, so it releases both traces; `capture` again before the next row
+        step. The other rows' state survives: their caches are theirs and their hidden states
+        are kept.
         """
         prompt = embeddings.shape[1]
         padded = -(-prompt // PROMPT_BUCKET) * PROMPT_BUCKET
         if padded + limit + 1 > self.talker.max_seq:
             raise ValueError(f"prompt of {prompt} plus {limit} frames exceeds the cache's {self.talker.max_seq}")
+        if self.talker.prefill_lengths:
+            self.capture()
+            last = self.talker.traced_prefill(embeddings, row)
+            rows = ttnn.to_torch(self._last_rows)
+            rows[0, row] = last
+            self._write_last_rows(rows)
+            return prompt
         if padded > prompt:
             embeddings = torch.cat([embeddings, self.tables.tts_pad.expand(1, padded - prompt, -1)], dim=1)
         self.release()
@@ -896,8 +912,9 @@ class Qwen3TTSPipeline:
         return prompt
 
     def capture(self):
-        """Capture both step traces, after the row prefills."""
-        self._capture()
+        """Capture both step traces, and the talker's prefill traces, unless they are live."""
+        if self.talker.trace_id is None:
+            self._capture()
 
     def move_rows(self, order):
         """Row `i` takes what row `order[i]` held."""
