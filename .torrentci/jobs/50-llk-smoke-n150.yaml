@@ -1,0 +1,56 @@
+---
+# torrentci#1821 S6: the first real-card test job. PR Gate's llk-smoke-tests
+# (pr-gate.yaml llk-smoke-tests, llk-smoke-impl.yaml) on one n150 through the
+# VM path. It needs no .deb packages and no source build: pytest drives the
+# in-tree tt_metal/tt-llk tests, and setup_testing_env.sh fetches SFPI itself.
+#
+# Differences from the GitHub job, all forced by the platform:
+# - The image is the ci-build chain image, not llk-ci; the Python
+#   requirements go into a venv at job time (llk-ci bakes them in).
+# - nofile is raised in the step (GitHub passes --ulimit nofile=4096).
+# Run it by hand.
+jobs:
+  - id: llk-smoke-n150
+    description: "Run the PR Gate LLK smoke tests on one n150 (VM path, vfio-vm)"
+    timeout: 45m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 20Gi}
+          limits: {cpu: '8', memory: 16Gi, ephemeral-storage: 20Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: CHIP_ARCH, value: wormhole}
+      - {name: PYTEST_MARKERS, value: "not perf and not nightly and not quasar and not accuracy"}
+    steps:
+      - id: setup
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME"
+            - ls -l /dev/tenstorrent/
+            - python3 -m venv /tmp/venv && /tmp/venv/bin/pip install -q uv
+            - >-
+              /tmp/venv/bin/uv pip install -q --python /tmp/venv/bin/python
+              --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt
+            - . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
+      - id: group-1
+        kind: shell
+        shell:
+          run:
+            - >-
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests/python_tests &&
+              timeout 20m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
+              -m "$PYTEST_MARKERS" --splits 2 --group 1 --timeout=60 --junitxml=pytest-report-wormhole-1.xml .
+      - id: group-2
+        kind: shell
+        shell:
+          run:
+            - >-
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests/python_tests &&
+              timeout 20m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
+              -m "$PYTEST_MARKERS" --splits 2 --group 2 --timeout=60 --junitxml=pytest-report-wormhole-2.xml .
