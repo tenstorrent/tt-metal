@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import torch
 
@@ -929,8 +930,9 @@ class Attention(LightweightModule):
             # bfloat16 is required by nlp_create_qkv_heads_decode
             # Phi-3.5-mini: the QKV matmul already writes bfloat16 width-sharded, which the op's
             # sharded factory takes directly; the L1-interleaved copy left it on one core.
+            # TT_QKV_KEEP_SHARDED=1 tries it on other models (Llama-3.2-3B S09 experiment).
             keep_sharded = (
-                self.args.base_model_name == "Phi-3.5-mini-instruct"
+                (self.args.base_model_name == "Phi-3.5-mini-instruct" or os.environ.get("TT_QKV_KEEP_SHARDED") == "1")
                 and xqkv_fused_sharded.dtype == ttnn.bfloat16
                 and xqkv_fused_sharded.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
             )

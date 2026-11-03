@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <thread>
+#include <cstdlib>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -151,11 +154,18 @@ void EventSynchronize(const MeshEvent& event) {
         return;
     }
 #endif
+    // TT_METAL_SPIN_SLEEP_US > 0 sleeps between polls instead of spinning, so many processes per host can share it.
+    static const int spin_sleep_us = [] {
+        const char* v = std::getenv("TT_METAL_SPIN_SLEEP_US");
+        return v ? std::atoi(v) : 0;
+    }();
     for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
         while (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
                event.impl().id()) {
-            ;
+            if (spin_sleep_us > 0) {
+                std::this_thread::sleep_for(std::chrono::microseconds(spin_sleep_us));
+            }
         }
     }
 }

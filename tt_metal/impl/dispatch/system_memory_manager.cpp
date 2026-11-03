@@ -102,8 +102,17 @@ void loop_and_wait_with_timeout(
                 break;
             }
 
-            // Sleep briefly to avoid busy-waiting
-            std::this_thread::yield();
+            // Sleep briefly to avoid busy-waiting. With many processes per host (one vLLM server per chip on a
+            // Galaxy) a yield still keeps the core busy; TT_METAL_SPIN_SLEEP_US > 0 sleeps that long instead.
+            static const int spin_sleep_us = [] {
+                const char* v = std::getenv("TT_METAL_SPIN_SLEEP_US");
+                return v ? std::atoi(v) : 0;
+            }();
+            if (spin_sleep_us > 0) {
+                std::this_thread::sleep_for(std::chrono::microseconds(spin_sleep_us));
+            } else {
+                std::this_thread::yield();
+            }
         }
     } else {
         do {
