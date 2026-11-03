@@ -24,7 +24,7 @@ RUN chmod +x /usr/local/bin/nemotron-rerank-entrypoint.sh
 ENV PATH=/opt/venv/bin:$PATH \
     ARCH_NAME=blackhole \
     TT_METAL_HOME=/work \
-    PYTHONPATH=/opt/nemotron-rerank:/work \
+    PYTHONPATH=/opt/nemotron-rerank:/work/ttnn:/work:/work/tools \
     LD_LIBRARY_PATH=/work/build/lib \
     TT_CACHE_PATH=/cache/weights \
     TT_METAL_CACHE=/cache/tt-metal \
