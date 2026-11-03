@@ -1104,19 +1104,24 @@ class Attention(LightweightModule):
             return dense_out_sharded
 
         else:
-            attn_output = tt_all_gather(
-                attn_output_cat,
-                self.mesh_device,
-                self.tt_ccl,
-                dim=2,
-                cluster_axis=1,
-                memory_config=self.args.get_attn_gather_users_mem_config(
-                    Mode.DECODE, list(self.mesh_device.shape)[1], self.prefetcher
-                ),
-                sharded=True,
-                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-                # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
-            )
+            # Gather users over mesh axis 1 on a 2D mesh. On a 1xN mesh each device already holds every user
+            # for its local heads (the wo partial sums are all-reduced below), so there is nothing to gather.
+            if list(self.mesh_device.shape)[0] == 1:
+                attn_output = attn_output_cat
+            else:
+                attn_output = tt_all_gather(
+                    attn_output_cat,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    dim=2,
+                    cluster_axis=1,
+                    memory_config=self.args.get_attn_gather_users_mem_config(
+                        Mode.DECODE, list(self.mesh_device.shape)[1], self.prefetcher
+                    ),
+                    sharded=True,
+                    subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+                    # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
+                )
             if self.TG:
                 attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
                 # user_selection_matrix = [1, 1, 32, 128]

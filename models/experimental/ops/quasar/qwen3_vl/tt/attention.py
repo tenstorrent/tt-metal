@@ -552,17 +552,22 @@ class Attention(LightweightModule):
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
         else:
-            attn_output = tt_all_gather(
-                attn_output_cat,
-                self.mesh_device,
-                self.tt_ccl,
-                dim=2,
-                cluster_axis=1,
-                num_links=2,
-                memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
-                sharded=True,
-                # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
-            )
+            # Gather users over mesh axis 1 on a 2D mesh. On a 1xN mesh each device already holds every user
+            # for its local heads (the wo partial sums are all-reduced below), so there is nothing to gather.
+            if list(self.mesh_device.shape)[0] == 1:
+                attn_output = attn_output_cat
+            else:
+                attn_output = tt_all_gather(
+                    attn_output_cat,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    dim=2,
+                    cluster_axis=1,
+                    num_links=2,
+                    memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
+                    sharded=True,
+                    # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
+                )
 
             dense_out_sharded = ttnn.matmul(
                 attn_output,

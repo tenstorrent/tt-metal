@@ -313,7 +313,7 @@ def tt_all_gather(
     """
     # Skip CCL if single device or only 1 device on the target axis
     mesh_shape = list(mesh_device.shape)
-    if mesh_shape == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
+    if mesh_shape == [1, 1] or (cluster_axis is not None and mesh_shape[cluster_axis] == 1):
         return input_tensor
 
     # Auto-detect num_links if not provided
