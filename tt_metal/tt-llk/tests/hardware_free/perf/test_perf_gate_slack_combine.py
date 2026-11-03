@@ -11,6 +11,7 @@ import sys
 _PERF = pathlib.Path(__file__).parents[3] / "perf"
 sys.path.insert(0, str(_PERF))
 from gate_slack_combine import build_text, main, threshold_for
+from gate_slack_notify import main as notify_main
 
 _ROW = {
     "marker": "TILE_LOOP",
@@ -128,24 +129,29 @@ def test_no_part_at_all_still_posts_a_skip(tmp_path, monkeypatch):
     assert "*Blackhole*" in json.loads(out.read_text())["text"]
 
 
-def test_each_arch_shows_its_own_threshold():
-    parts = [
-        {"status": "clean", "rows": [], "ctx": _ctx("blackhole", min_cycles="30")},
-        {"status": "clean", "rows": [], "ctx": _ctx("wormhole", min_cycles="30")},
-    ]
-    text = build_text(parts, {})
-    assert "more than 2% and by more than 30 cycles" in text
-    assert "more than 13% and by more than 30 cycles, except perf_matmul 25%" in text
-
-
-def test_a_skipped_arch_claims_no_threshold():
-    parts = [
-        {
-            "status": "skipped",
-            "rows": [],
-            "ctx": _ctx("blackhole", min_cycles="30", reason="A leg failed."),
-        },
-        {"status": "clean", "rows": [], "ctx": _ctx("wormhole", min_cycles="30")},
-    ]
-    text = build_text(parts, {})
+def test_the_merge_gate_post_states_the_rule_of_a_regressed_arch(tmp_path, monkeypatch):
+    regressions = tmp_path / "regressions.csv"
+    with open(regressions, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(_ROW))
+        writer.writeheader()
+        writer.writerow(_ROW)
+    flag = tmp_path / "have_baseline.txt"
+    flag.write_text("true")
+    part = tmp_path / "part.json"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "notify.txt"))
+    notify_main(
+        [
+            *("--have-baseline", str(flag), "--report", str(flag)),
+            *("--exit-code", "1", "--regressions", str(regressions)),
+            *("--arch", "wormhole", "--threshold", "0.025", "--min-cycles", "30"),
+            *("--module-thresholds", "perf_matmul=0.25", "--part-out", str(part)),
+            *("--channel", "C0TEST", "--out", str(tmp_path / "notify.json")),
+        ]
+    )
+    parts = [json.loads(part.read_text())]
+    text, _ = _run(tmp_path, monkeypatch, parts, "--expect", "blackhole,wormhole")
     assert text.count("Threshold:") == 1
+    assert (
+        ": :rotating_light: regression\n_Threshold: a point regresses when it is "
+        "slower by more than 2.5% and by more than 30 cycles, except perf_matmul 25%._"
+    ) in text

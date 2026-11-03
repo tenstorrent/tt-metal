@@ -23,8 +23,6 @@ from gate_slack_notify import (
     _pct,
     _subject,
     regression_body,
-    threshold_for,
-    threshold_line,
 )
 
 # A regression first, then a skip, then a pass: the post leads with what needs action.
@@ -54,6 +52,42 @@ def find_points(path, rows):
     return found
 
 
+def threshold_for(ctx, module):
+    """The relative threshold the arch's gate applied to ``module``, or None."""
+    for pair in (ctx.get("module_thresholds") or "").split(","):
+        name, _, value = pair.partition("=")
+        if name.strip() and name.strip() == module.split("+")[0]:
+            try:
+                return float(value)
+            except ValueError:
+                break
+    try:
+        return float(ctx.get("threshold") or "")
+    except ValueError:
+        return None
+
+
+def _pct_short(value):
+    return f"{value * 100:g}%"
+
+
+def _rule(ctx):
+    """The threshold line of an arch's section; empty when no threshold was given."""
+    base = threshold_for(ctx, "")
+    if base is None:
+        return []
+    rule = f"slower by more than {_pct_short(base)}"
+    if ctx.get("min_cycles"):
+        rule += f" and by more than {_escape(ctx['min_cycles'])} cycles"
+    pairs = (ctx.get("module_thresholds") or "").split(",")
+    names = sorted({p.partition("=")[0].strip() for p in pairs} - {""})
+    if names:
+        rule += ", except " + ", ".join(
+            f"{_escape(m)} {_pct_short(threshold_for(ctx, m))}" for m in names
+        )
+    return [f"_Threshold: a point regresses when it is {rule}._"]
+
+
 def _elsewhere(row, others):
     """How the same point moved on the other arches, as one line."""
     bits = []
@@ -68,7 +102,9 @@ def _elsewhere(row, others):
             bits.append(f"{arch}: {what}")
             continue
         limit = threshold_for(ctx, row.get(MODULE_KEY) or "")
-        under = f", under its {limit:.0%} threshold" if limit is not None else ""
+        under = (
+            f", under its {_pct_short(limit)} threshold" if limit is not None else ""
+        )
         bits.append(f"{arch}: {what}{under}")
     return "same point on " + "; ".join(bits) if bits else ""
 
@@ -78,9 +114,7 @@ def _section(part, others):
     arch = (ctx.get("arch") or "?").capitalize()
     head = f"*{_escape(arch)}* · {_escape(ctx.get('run_types') or '?')}"
     note = [f":hourglass: {_escape(ctx['note'])}"] if ctx.get("note") else []
-    # Each architecture carries its own thresholds, and they differ, so the rule
-    # belongs to the section and not to the post.
-    rule = [x for x in (threshold_line(ctx),) if x]
+    rule = _rule(ctx)
     status = part["status"]
     if status == "clean":
         return [f"{head}: :white_check_mark: no point regressed.", *rule, *note]

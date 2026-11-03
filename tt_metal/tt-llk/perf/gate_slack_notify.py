@@ -74,61 +74,6 @@ def _cycles(value):
         return "? cy"
 
 
-def _pct_short(value):
-    """``0.13`` -> ``13%``; ``0.025`` -> ``2.5%``."""
-    return f"{value * 100:g}%"
-
-
-def module_overrides(ctx):
-    """``[(module, threshold)]`` from ``perf_matmul=0.25,...``, in name order."""
-    out = []
-    for pair in (ctx.get("module_thresholds") or "").split(","):
-        name, _, value = pair.partition("=")
-        name = name.strip()
-        if not name:
-            continue
-        try:
-            out.append((name, float(value)))
-        except ValueError:
-            continue
-    return sorted(out)
-
-
-def threshold_for(ctx, module):
-    """The relative threshold the arch's gate applied to ``module``, or None."""
-    for name, value in module_overrides(ctx):
-        if name == module.split("+")[0]:
-            return value
-    try:
-        return float(ctx.get("threshold") or "")
-    except ValueError:
-        return None
-
-
-def threshold_line(ctx):
-    """The rule this gate applied, spelled out.
-
-    The thresholds differ by architecture, by gate and by module, and they live
-    in three workflow files. A reader who has to look them up reads the post as
-    a bare verdict, so the post carries the rule it used.
-    """
-    try:
-        base = float(ctx.get("threshold") or "")
-    except ValueError:
-        return ""
-    rule = f"slower by more than {_pct_short(base)}"
-    try:
-        rule += f" and by more than {float(ctx['min_cycles']):,.0f} cycles"
-    except (KeyError, TypeError, ValueError):
-        pass
-    overrides = module_overrides(ctx)
-    if overrides:
-        rule += ", except " + ", ".join(
-            f"{_escape(m)} {_pct_short(v)}" for m, v in overrides
-        )
-    return f"_Threshold: a point regresses when it is {rule}._"
-
-
 def _describe(row, varying=()):
     """One bullet: what moved, by how much, and on which configuration."""
     config = _config_of(row)
@@ -275,14 +220,11 @@ def build_text(status, rows, ctx):
             ]
         )
 
-    rule = [x for x in (threshold_line(ctx),) if x]
-
     if status == "clean":
         return "\n".join(
             [
                 f":white_check_mark: *{gate} passed* {subject}",
                 f"{byline}  ·  {where}",
-                *rule,
                 *note,
                 "",
                 f"No point regressed. {run_link}",
@@ -292,7 +234,6 @@ def build_text(status, rows, ctx):
     lines = [
         f":rotating_light: *{gate}: regression* {subject}",
         f"{byline}  ·  {where}",
-        *rule,
         *note,
         "",
     ]
@@ -375,11 +316,9 @@ def main(argv=None):
         default="true",
         help="false: post nothing when the gate passes; regressions and skips still post",
     )
-    ap.add_argument("--threshold", default="", help="the gate's relative threshold")
-    ap.add_argument("--min-cycles", default="", help="the gate's absolute threshold")
-    ap.add_argument(
-        "--module-thresholds", default="", help="per-module relative thresholds"
-    )
+    ap.add_argument("--threshold", default="", help="for the combined post")
+    ap.add_argument("--min-cycles", default="", help="for the combined post")
+    ap.add_argument("--module-thresholds", default="", help="for the combined post")
     ap.add_argument(
         "--part-out",
         help="also write the verdict as JSON, for gate_slack_combine.py",
