@@ -191,7 +191,7 @@ V41_CHAT_FORMAT = ChatFormat(
 # _render_ids` expands into the image's span of token ids past the vocabulary (see :mod:`..tt.vision`).
 # Every cached ``all_reduce`` program keeps 4 global semaphores (16 B a bank each) in L1_SMALL, and the vision tower
 # compiles one per ViT and aligner bucket on its stage (~1.2 KB), beside decode's and prefill's: 4096 B overflows.
-# The prefill's semaphores also land in the holes the released prefetch GCBs leave, so at 8192 their restore finds
+# The prefill's semaphores also land in the holes the released prefetch pipes leave, so at 8192 their restore finds
 # no contiguous 432 B. Every byte comes out of L1 too, where 12288 leaves the decode fused_experts CBs 256 B short.
 _L1_SMALL_SIZE = 10240
 _PREPARED_IMAGES = 64  # decoded images (their ViT patches, ~11 MB at most each) kept for admission
@@ -1260,7 +1260,7 @@ def parse_args(argv: list[str] | None = None):
         elif action.dest == "l1_small_size":
             action.default = None
             action.help = (
-                "bytes of L1_SMALL reserved for the CCL semaphores and the decode prefetcher's GCB config pages "
+                "bytes of L1_SMALL reserved for the CCL semaphores and the decode prefetcher's pipe config pages "
                 f"when the prefill model is on (must not be 0; default: DEEPSEEK_V4_L1_SMALL_SIZE, else "
                 f"{_L1_SMALL_SIZE})"
             )

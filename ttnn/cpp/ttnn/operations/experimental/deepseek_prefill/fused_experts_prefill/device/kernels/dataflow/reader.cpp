@@ -55,7 +55,9 @@
 //   32 rm_group (row-major segments gathered per barrier = cb_rm capacity in segments)
 //   33 resident (1: the whole gate_up run is one slot kept across the M-blocks)
 //   34 dpp (down shards per slot)  35 dn_resident (1: all the down shards are one slot)
-//   36+ TensorAccessorArgs: x, ids, scores, ranking, gate_up[0], down[0]
+//   36 gu_k_shards (row pieces per gate_up column: piece p of column c is ND shard p * gu_col_shards + c)
+//   37 gu_col_shards (gate_up columns, I/32)
+//   38+ TensorAccessorArgs: x, ids, scores, ranking, gate_up[0], down[0]
 // Runtime args:
 //   0 x  1 ids  2 scores  3 ranking  (buffer addresses)
 //   4 dn_first (this core's first down shard)  5 g (group)  6 n (experts owned by this group)  7 flat core index
@@ -128,8 +130,10 @@ void kernel_main() {
     constexpr bool resident = get_compile_time_arg_val(33) == 1;
     constexpr uint32_t dpp = get_compile_time_arg_val(34);
     constexpr bool dn_resident = get_compile_time_arg_val(35) == 1;
+    constexpr uint32_t gu_k_shards = get_compile_time_arg_val(36);
+    constexpr uint32_t gu_col_shards = get_compile_time_arg_val(37);
 
-    constexpr auto x_args = TensorAccessorArgs<36>();
+    constexpr auto x_args = TensorAccessorArgs<38>();
     constexpr auto ids_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto scores_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
     constexpr auto rank_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
@@ -172,9 +176,12 @@ void kernel_main() {
     }
 
     constexpr uint32_t gu_shard_bytes = gu_shard_tiles * w_tile_bytes;
+    constexpr uint32_t gu_piece_bytes = gu_shard_bytes / gu_k_shards;
     constexpr uint32_t dn_shard_bytes = dn_shard_tiles * w_tile_bytes;
+    static_assert(gu_shard_tiles % gu_k_shards == 0, "gate_up row pieces must be whole tile rows");
 
-    // Slot `slot` of the gate_up run of expert jl: its (up to spp) shards, at the front of the ring slot.
+    // Slot `slot` of the gate_up run of expert jl: its (up to spp) columns, at the front of the ring slot. A
+    // column's row pieces land one after the other, which is the tile order of the whole [H, 64] column.
     const uint32_t gu_slots = (gu_cnt + spp - 1) / spp;
     auto read_gate_up = [&](uint32_t jl, uint32_t slot) {
         const auto gu = TensorAccessor(gu_args, get_arg_val<uint32_t>(kAddrRt + jl));
@@ -182,12 +189,14 @@ void kernel_main() {
         const uint32_t first = slot * spp;
         const uint32_t cnt = (gu_cnt - first) < spp ? (gu_cnt - first) : spp;
         for (uint32_t s = 0; s < cnt; ++s) {
-            noc.async_read(
-                gu_shard,
-                cb_w,
-                gu_shard_bytes,
-                {.shard_id = gu_first + first + s},
-                {.offset_bytes = s * gu_shard_bytes});
+            for (uint32_t p = 0; p < gu_k_shards; ++p) {
+                noc.async_read(
+                    gu_shard,
+                    cb_w,
+                    gu_piece_bytes,
+                    {.shard_id = p * gu_col_shards + gu_first + first + s},
+                    {.offset_bytes = s * gu_shard_bytes + p * gu_piece_bytes});
+            }
         }
     };
 

@@ -16,7 +16,9 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -168,6 +170,9 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     // first multi-thread receiver bind. WH/BH stay single-lane.
     credit_lane_capacity_(device.arch() == tt::ARCH::QUASAR ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u) {
     TT_FATAL(config_.buffer_type == BufferType::L1, "PrefetcherPipeSpace: buffer_type must be BufferType::L1");
+    TT_FATAL(
+        config_.config_buffer_type == BufferType::L1 || config_.config_buffer_type == BufferType::L1_SMALL,
+        "PrefetcherPipeSpace: config pages live in L1 or L1_SMALL");
     TT_FATAL(config_.ring_size > 0, "PrefetcherPipeSpace: ring_size must be > 0");
     const uint32_t l1_alignment = l1_alignment_for(device_);
     TT_FATAL(
@@ -213,10 +218,19 @@ void PrefetcherPipeSpaceImpl::attach_l1(std::shared_ptr<PrefetcherPipeSpaceL1> l
     l1_ = std::move(l1);
     // Domain template: every reservation core holds a zeroed page at config_address(), so a page
     // exists (and is harmless) on cores no pipe ever claims. Carving overwrites the real pages. An
-    // Allocator space's config buffer was zeroed when it was allocated.
+    // Allocator space's config buffer was zeroed when it was allocated, as is an L1_SMALL one.
     if (config_.l1_source == PrefetcherPipeL1Source::PersistentArena) {
-        const std::vector<uint32_t> zero_page(layout_.page_size / sizeof(uint32_t), 0);
-        write_page(reservation_cores_, zero_page);
+        if (config_.config_buffer_type == BufferType::L1_SMALL) {
+            std::vector<uint32_t> zero_page(layout_.page_size / sizeof(uint32_t), 0);
+            PrefetcherPipeConfigPages zeros;
+            for (const CoreCoord& core : corerange_to_cores(reservation_cores_)) {
+                zeros.emplace(core, zero_page);
+            }
+            write_pages(zeros);
+        } else {
+            const std::vector<uint32_t> zero_page(layout_.page_size / sizeof(uint32_t), 0);
+            write_page(reservation_cores_, zero_page);
+        }
     }
 }
 
@@ -250,8 +264,12 @@ PrefetcherPipeSpaceL1::PrefetcherPipeSpaceL1(
     PrefetcherPipeL1Source source,
     const CoreRangeSet& cores,
     uint32_t ring_size,
-    uint32_t config_page_size) :
-    device_(&device) {
+    uint32_t config_page_size,
+    BufferType config_buffer_type,
+    bool overlap_program_l1) :
+    device_(&device),
+    config_buffer_type_(config_buffer_type),
+    overlap_program_l1_(overlap_program_l1) {
     TT_FATAL(
         source != PrefetcherPipeL1Source::Default,
         "PrefetcherPipeSpaceL1 requires a resolved L1 source (internal error)");
@@ -276,17 +294,40 @@ void PrefetcherPipeSpaceL1::allocate_from_arena(
 
     // One ring allocation and one page allocation over the whole domain: every domain core gets
     // the same two addresses, which is the lockstep contract every carved pipe relies on.
-    auto data_allocation = arena.allocate(cores, ring_size, l1_alignment);
+    auto data_allocation = arena.allocate(cores, ring_size, l1_alignment, overlap_program_l1_);
     data_allocation_id_ = data_allocation.id;
     data_address_ = checked_l1_address(data_allocation.address, "ring");
 
-    auto config_allocation = arena.allocate(cores, config_page_size, config_page_alignment_for(device_));
-    config_allocation_id_ = config_allocation.id;
-    config_address_ = checked_l1_address(config_allocation.address, "config");
+    // Page-relative block offsets are only line-aligned if the page itself is.
+    const uint32_t config_alignment = config_page_alignment_for(device_);
+    DeviceAddr persistent_begin = data_allocation.address;
+    DeviceAddr persistent_end = data_allocation.address + data_allocation.size;
+    if (config_buffer_type_ == BufferType::L1_SMALL) {
+        // Config pages out of the arena: they go to L1_SMALL, which no Program's circular buffers
+        // reach, so the read pointers and credit counters survive a Program that reuses the ring's
+        // L1. One page per core, at one address on all of them; L1_SMALL only guarantees L1
+        // alignment, so each shard is padded far enough to start the page on a block boundary.
+        const uint32_t num_cores = cores.num_cores();
+        const uint32_t shard_bytes = tt::align(config_page_size, l1_alignment) + (config_alignment - l1_alignment);
+        config_buffer_ = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = static_cast<DeviceAddr>(shard_bytes) * num_cores},
+            distributed::DeviceLocalBufferConfig{
+                .page_size = shard_bytes,
+                .buffer_type = BufferType::L1_SMALL,
+                .sharding_args = BufferShardingArgs(
+                    ShardSpecBuffer(cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1}),
+                    TensorMemoryLayout::HEIGHT_SHARDED),
+            },
+            device_);
+        config_address_ = checked_l1_address(tt::align(config_buffer_->address(), config_alignment), "config");
+    } else {
+        auto config_allocation = arena.allocate(cores, config_page_size, config_alignment, overlap_program_l1_);
+        config_allocation_id_ = config_allocation.id;
+        config_address_ = checked_l1_address(config_allocation.address, "config");
+        persistent_begin = std::min(persistent_begin, config_allocation.address);
+        persistent_end = std::max(persistent_end, config_allocation.address + config_allocation.size);
+    }
 
-    const DeviceAddr persistent_begin = std::min(data_allocation.address, config_allocation.address);
-    const DeviceAddr persistent_end =
-        std::max(data_allocation.address + data_allocation.size, config_allocation.address + config_allocation.size);
     for (const CoreCoord& core : corerange_to_cores(cores)) {
         const auto& bank_ids = device_->allocator_impl()->get_bank_ids_from_logical_core(BufferType::L1, core);
         TT_FATAL(bank_ids.size() == 1, "Expected one L1 bank for PrefetcherPipeSpace core {}", core.str());
@@ -307,26 +348,26 @@ void PrefetcherPipeSpaceL1::allocate_from_allocator(
     const uint32_t l1_alignment = l1_alignment_for(device_);
     const uint32_t num_cores = cores.num_cores();
     // One page per core, so every core holds its slice at the buffer's single lockstep address.
-    auto allocate_per_core = [&](uint32_t bytes_per_core) {
+    auto allocate_per_core = [&](uint32_t bytes_per_core, BufferType buffer_type) {
         ShardSpecBuffer shard_parameters(cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
         return distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = static_cast<DeviceAddr>(bytes_per_core) * num_cores},
             distributed::DeviceLocalBufferConfig{
                 .page_size = bytes_per_core,
-                .buffer_type = BufferType::L1,
+                .buffer_type = buffer_type,
                 .sharding_args = BufferShardingArgs(std::move(shard_parameters), TensorMemoryLayout::HEIGHT_SHARDED),
             },
             device_);
     };
 
-    data_buffer_ = allocate_per_core(ring_size);
+    data_buffer_ = allocate_per_core(ring_size, BufferType::L1);
     data_address_ = checked_l1_address(data_buffer_->address(), "ring");
 
     // The allocator only guarantees L1 alignment, so each core's slot carries the slack to move the
     // page up to config_page_alignment_for().
     const uint32_t config_alignment = config_page_alignment_for(device_);
     const uint32_t config_slot_size = tt::align(config_page_size, l1_alignment) + (config_alignment - l1_alignment);
-    config_buffer_ = allocate_per_core(config_slot_size);
+    config_buffer_ = allocate_per_core(config_slot_size, config_buffer_type_);
     config_address_ = checked_l1_address(tt::align(config_buffer_->address(), config_alignment), "config");
 
     // Zero every core's page, which is the template a core no pipe has claimed holds. Through the
@@ -378,6 +419,7 @@ void PrefetcherPipeSpaceL1::release() noexcept {
     // The MeshBuffers release themselves, and handle a device that is already closed.
     const std::array allocation_ids = {std::exchange(config_allocation_id_, 0), std::exchange(data_allocation_id_, 0)};
     if (!device_->is_initialized()) {
+        config_buffer_.reset();
         return;
     }
     try {
@@ -392,6 +434,7 @@ void PrefetcherPipeSpaceL1::release() noexcept {
         // lifetime error and will be caught by focused arena tests.
         log_warning(LogMetal, "PrefetcherPipeSpace: persistent L1 release failed with unknown exception");
     }
+    config_buffer_.reset();
 }
 
 CoreRangeSet PrefetcherPipeSpaceImpl::unclaimed_cores() const {
@@ -495,7 +538,11 @@ void PrefetcherPipeSpaceImpl::write_page(const CoreRangeSet& cores, const std::v
 }
 
 void PrefetcherPipeSpaceImpl::write_pages(const PrefetcherPipeConfigPages& pages) const {
-    if (config_.l1_source == PrefetcherPipeL1Source::Allocator) {
+    // An Allocator space, and a PersistentArena space whose pages live in an L1_SMALL MeshBuffer,
+    // both write through the command queue: the buffer is a MeshBuffer, whose only writer is the
+    // queue, and earlier work may still be using that L1.
+    if (config_.l1_source == PrefetcherPipeL1Source::Allocator ||
+        config_.config_buffer_type == BufferType::L1_SMALL) {
         l1().enqueue_config_pages(
             cores_of(pages),
             [&](const distributed::MeshCoordinate&) -> const PrefetcherPipeConfigPages& { return pages; });
@@ -1056,6 +1103,8 @@ std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
 
     // The spaces share one address per allocation, so they need one source and no core in common.
     const PrefetcherPipeL1Source source = impls.front()->l1_source();
+    const BufferType config_buffer_type = impls.front()->config_buffer_type();
+    const bool overlap_program_l1 = impls.front()->overlap_program_l1();
     CoreRangeSet cores;
     uint32_t ring_size = 0;
     uint32_t config_page_size = 0;
@@ -1065,6 +1114,11 @@ std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
             impl.l1_source() == source,
             "CreatePrefetcherPipeSpaces: config {} resolves to a different PrefetcherPipeL1Source than config 0; "
             "spaces that share L1 must take it from the same source",
+            i);
+        TT_FATAL(
+            impl.config_buffer_type() == config_buffer_type && impl.overlap_program_l1() == overlap_program_l1,
+            "CreatePrefetcherPipeSpaces: config {} picks a different config_buffer_type or overlap_program_l1 than "
+            "config 0; spaces that share one config buffer and one reservation must agree on both",
             i);
         TT_FATAL(
             !cores.intersects(impl.reservation_cores()),
@@ -1077,7 +1131,8 @@ std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
         config_page_size = std::max(config_page_size, impl.config_page_size());
     }
 
-    auto l1 = std::make_shared<PrefetcherPipeSpaceL1>(device, source, cores, ring_size, config_page_size);
+    auto l1 = std::make_shared<PrefetcherPipeSpaceL1>(
+        device, source, cores, ring_size, config_page_size, config_buffer_type, overlap_program_l1);
     std::vector<PrefetcherPipeSpace> spaces;
     spaces.reserve(impls.size());
     for (auto& impl : impls) {

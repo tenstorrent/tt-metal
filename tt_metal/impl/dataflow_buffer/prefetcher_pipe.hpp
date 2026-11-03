@@ -41,12 +41,17 @@ using PrefetcherPipeConfigPages = std::unordered_map<CoreCoord, std::vector<uint
 class PrefetcherPipeSpaceL1 {
 public:
     // `source` is resolved (never Default). `config_page_size` is the largest page of the spaces.
+    // `config_buffer_type` picks where the pages live: L1 (the arena, beside the ring) or L1_SMALL
+    // (a lockstep buffer no Program's circular buffers reach). `overlap_program_l1` lets an arena
+    // allocation land on cores a cached Program already placed program-local L1 on.
     PrefetcherPipeSpaceL1(
         distributed::MeshDevice& device,
         PrefetcherPipeL1Source source,
         const CoreRangeSet& cores,
         uint32_t ring_size,
-        uint32_t config_page_size);
+        uint32_t config_page_size,
+        BufferType config_buffer_type,
+        bool overlap_program_l1);
 
     PrefetcherPipeSpaceL1(const PrefetcherPipeSpaceL1&) = delete;
     PrefetcherPipeSpaceL1& operator=(const PrefetcherPipeSpaceL1&) = delete;
@@ -75,9 +80,12 @@ private:
     uint64_t config_allocation_id_ = 0;
     // Allocator source.
     std::shared_ptr<distributed::MeshBuffer> data_buffer_;
+    // An Allocator space's pages, or a PersistentArena space's L1_SMALL pages.
     std::shared_ptr<distributed::MeshBuffer> config_buffer_;
     uint32_t data_address_ = 0;
     uint32_t config_address_ = 0;
+    BufferType config_buffer_type_ = BufferType::L1;
+    bool overlap_program_l1_ = false;
 };
 
 // Byte layout of one config page in a space. Every page in a space is sized for the space's
@@ -116,6 +124,8 @@ public:
     uint32_t buffer_address() const { return l1().data_address(); }
     uint32_t config_address() const { return l1().config_address(); }
     PrefetcherPipeL1Source l1_source() const { return config_.l1_source; }
+    BufferType config_buffer_type() const { return config_.config_buffer_type; }
+    bool overlap_program_l1() const { return config_.overlap_program_l1; }
     uint32_t ring_size() const { return config_.ring_size; }
     uint32_t config_page_size() const { return layout_.page_size; }
     uint32_t max_receivers_per_pipe() const { return config_.max_receivers_per_pipe; }

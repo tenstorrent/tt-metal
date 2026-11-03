@@ -13,6 +13,7 @@ rank under TP); ``Bc``/``Nc`` :class:`BatchedLinearDecode`'s per-core batch and 
 tensor is TILE unless its docstring says otherwise.
 """
 
+import itertools
 import math
 from typing import Callable, Optional
 
@@ -23,17 +24,39 @@ from .system_config import active_system_config
 from .weight_cache import _CachePath, _load_weight, _materialize
 import torch
 
+# How every pipe list built here was made, keyed by ``id(pipes)``, so a model can drop its pipes (freeing their
+# L1) and build identical ones later (see :meth:`~.model.DeepSeekV4Model.release_prefetch_buffers`).
+_PIPE_RECIPES: dict[int, tuple] = {}
+_PIPE_SERIAL = itertools.count(1)  # next() is atomic: stages build their pipes on parallel threads
 
-def _reserve_prefetch_pipes(device, bank_to_receivers, ring_size: int) -> list:
+
+def pipe_config_buffer_type(device) -> ttnn.BufferType:
+    """Where a pipe space built here keeps its config pages: L1_SMALL when ``device`` reserves any, else L1.
+
+    The pages hold the rings' read pointers and credit counters, which carry from one decode step to the next.
+    L1_SMALL lies above every statically allocated circular buffer, so a prefill program whose circular buffers
+    alias the (empty) ring data between decode steps cannot overwrite them.
+    """
+    if ttnn.get_memory_view(device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0:
+        return ttnn.BufferType.L1_SMALL
+    return ttnn.BufferType.L1
+
+
+def _reserve_prefetch_pipes(device, bank_to_receivers, ring_size: int, overlap_program_l1: bool = False) -> list:
     """DRAM-sender PrefetcherPipes feeding ``bank_to_receivers``, each ring ``ring_size`` bytes per receiver.
 
     A pipe space is persistent L1, which the arena gives out only on cores no live Program holds -- and every
     cached Program holds the cores it ran on. By the time a ring is built, construction has already run some
     (the weights' DRAM reshards), so the program cache is dropped first. Rings are only built while the model
     is being constructed, before anything is traced, so all that costs is a recompile.
+
+    ``overlap_program_l1`` instead keeps the program cache and reserves under the cached programs' circular
+    buffers: for :func:`rebuild_prefetch_pipes`, whose rings come back at the addresses the decode programs were
+    laid out around, under a prefill that only runs while they are empty.
     """
-    ttnn.synchronize_device(device)
-    device.clear_program_cache()
+    if not overlap_program_l1:
+        ttnn.synchronize_device(device)
+        device.clear_program_cache()
     space = ttnn.experimental.create_prefetcher_pipe_space(
         device,
         sender_cores=ttnn.CoreRangeSet(set()),
@@ -45,8 +68,41 @@ def _reserve_prefetch_pipes(device, bank_to_receivers, ring_size: int) -> list:
         # config page grows with this, and every sender core holds one page per ring in a 2 KB zone.
         max_receivers_per_pipe=max((receivers.num_cores() + 1) // 2 for _, receivers in bank_to_receivers),
         num_dram_senders=2 * len(bank_to_receivers),
+        config_buffer_type=pipe_config_buffer_type(device),
+        overlap_program_l1=overlap_program_l1,
     )
-    return ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(space, bank_to_receivers)
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(space, bank_to_receivers)
+    _PIPE_RECIPES[id(pipes)] = (next(_PIPE_SERIAL), (device, bank_to_receivers, ring_size, pipes[0].buffer_address()))
+    return pipes
+
+
+def is_prefetch_pipes(value) -> bool:
+    """Whether ``value`` is a pipe list built here (and not yet taken by :func:`take_prefetch_pipes_recipe`)."""
+    return isinstance(value, list) and id(value) in _PIPE_RECIPES
+
+
+def take_prefetch_pipes_recipe(pipes) -> tuple:
+    """``(serial, recipe)`` for ``pipes``, forgotten here: the caller is about to drop them."""
+    entry = _PIPE_RECIPES.pop(id(pipes), None)
+    if entry is None:
+        raise RuntimeError("these pipes were not built through layers.py, so they cannot be rebuilt after a release")
+    return entry
+
+
+def rebuild_prefetch_pipes(recipe: tuple) -> list:
+    """Fresh pipes identical to the ones ``recipe`` (from :func:`take_prefetch_pipes_recipe`) described.
+
+    Built over the program cache (see :func:`_reserve_prefetch_pipes`), so the ring must come back where it
+    was: the cached decode programs placed their circular buffers just above it.
+    """
+    device, bank_to_receivers, ring_size, ring_address = recipe
+    pipes = _reserve_prefetch_pipes(device, bank_to_receivers, ring_size, overlap_program_l1=True)
+    if pipes[0].buffer_address() != ring_address:
+        raise RuntimeError(
+            f"a rebuilt prefetch ring landed at {pipes[0].buffer_address():#x}, not at {ring_address:#x}: rebuild "
+            "every released ring, in the order they were first built"
+        )
+    return pipes
 
 
 def prefetch_pipe_receiver_cores(pipes) -> ttnn.CoreRangeSet:

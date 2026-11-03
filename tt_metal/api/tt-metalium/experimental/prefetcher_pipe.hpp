@@ -185,6 +185,13 @@ struct PrefetcherPipeSpaceConfig {
     BufferType buffer_type = BufferType::L1;
     // A space with DRAM senders must use PrefetcherPipeL1Source::Allocator (Default resolves to it).
     PrefetcherPipeL1Source l1_source = PrefetcherPipeL1Source::Default;
+    // Where the config pages (read pointers, credit counters) live: L1 takes them from the
+    // persistent arena beside the ring; L1_SMALL keeps them in a lockstep L1_SMALL buffer, which no
+    // Program's circular buffers reach, so they survive a Program that reuses the ring's L1.
+    BufferType config_buffer_type = BufferType::L1;
+    // Reserve even on cores a cached Program already placed program-local L1 on. That L1 may alias
+    // the ring, so the caller must never run such a Program while the pipes hold data.
+    bool overlap_program_l1 = false;
 };
 
 /**

@@ -108,8 +108,9 @@ void FusedExpertsPrefillDeviceOperation::validate_on_program_cache_miss(
             ids.logical_shape());
     }
 
-    // gate_up: [H, 2I], DRAM ND-sharded [H, 64] (one [gate_32 | up_32] pair per shard, I/32 shards).
-    // Each core of a group covers a run of consecutive shards.
+    // gate_up: [H, 2I], DRAM ND-sharded [H / k, 64] (one [gate_32 | up_32] pair per column, I/32 columns, each
+    // stored as k row pieces; k > 1 is the decode op's bank-balanced layout). Each core of a group covers a run
+    // of consecutive columns.
     const uint32_t two_i = static_cast<uint32_t>(tensor_args.gate_up_weights[0].logical_shape()[-1]);
     const uint32_t inter = two_i / 2;
     TT_FATAL(
@@ -126,6 +127,14 @@ void FusedExpertsPrefillDeviceOperation::validate_on_program_cache_miss(
         kTile,
         kTile * kMaxCoresPerGroup,
         kMaxCoresPerGroup);
+    const auto& gate_up_nd0 = tensor_args.gate_up_weights[0].memory_config().nd_shard_spec();
+    TT_FATAL(gate_up_nd0.has_value(), "fused_experts_prefill: gate_up_weights[0] must be ND-sharded");
+    const uint32_t gate_up_shard_rows = static_cast<uint32_t>(gate_up_nd0->shard_shape[-2]);
+    TT_FATAL(
+        gate_up_shard_rows % kTile == 0 && hidden % gate_up_shard_rows == 0,
+        "fused_experts_prefill: gate_up shard height ({}) must be a whole number of tile rows dividing H ({})",
+        gate_up_shard_rows,
+        hidden);
     for (size_t e = 0; e < num_experts; ++e) {
         const auto& w = tensor_args.gate_up_weights[e];
         TT_FATAL(w.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "gate_up_weights[{}] must be in DRAM", e);
@@ -141,10 +150,10 @@ void FusedExpertsPrefillDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(nd.has_value(), "fused_experts_prefill: gate_up_weights[{}] must be ND-sharded", e);
         TT_FATAL(
             static_cast<uint32_t>(nd->shard_shape[-1]) == 2 * kTile &&
-                static_cast<uint32_t>(nd->shard_shape[-2]) == hidden,
-            "fused_experts_prefill: gate_up_weights[{}] shard must be [{}, {}] (decode layout), got [{}, {}]",
+                static_cast<uint32_t>(nd->shard_shape[-2]) == gate_up_shard_rows,
+            "fused_experts_prefill: gate_up_weights[{}] shard must be [{}, {}] like gate_up_weights[0], got [{}, {}]",
             e,
-            hidden,
+            gate_up_shard_rows,
             2 * kTile,
             nd->shard_shape[-2],
             nd->shard_shape[-1]);

@@ -35,8 +35,8 @@ ragged tail is replayed through decode. A follow-up turn feeds only the tokens i
 through decode, unless rewinding and prefilling the whole conversation is estimated to
 be faster (a long new turn); short prompts skip the prefill model for the same reason.
 Decode keeps the DRISC prefetcher on this path: a prefill replay overwrites decode's L1
-tensors, which are snapshot and written back, and the GCB ring data, which is empty
-between decode steps; the GCB config pages sit in L1_SMALL, out of prefill's reach.
+tensors, which are snapshot and written back, and the ring data, which is empty
+between decode steps; the pipe config pages sit in L1_SMALL, out of prefill's reach.
 ``--no-prefill`` replays every prompt token through decode instead, on the profile's
 own decode layout.
 
@@ -1055,10 +1055,10 @@ class _Prefiller:
     through decode as before.
 
     Construction is the test's steps 2-4 up to the decode capture (decode compile, then the
-    prefill build, compile and capture with decode's GCBs and L1 tensors released, then
+    prefill build, compile and capture with decode's pipes and L1 tensors released, then
     those restored); :meth:`snapshot` is the rest of step 4, after :meth:`ChatEngine.warmup`
     has captured the decode traces. With the prefetcher on, the device needs an
-    ``l1_small_size`` for the GCB config pages.
+    ``l1_small_size`` for the pipe config pages.
     """
 
     def __init__(self, engine: ChatEngine, args, prefetcher: contextlib.ExitStack):
@@ -1090,7 +1090,7 @@ class _Prefiller:
         t0 = time.perf_counter()
         model.compile_traces(pad_id, 0)
         logger.info(f"decode compile: {time.perf_counter() - t0:.1f}s")
-        # Stops the prefetcher and frees the GCBs; allowed because no decode trace exists yet.
+        # Stops the prefetcher and frees the pipes; allowed because no decode trace exists yet.
         model.release_prefetch_buffers()
         t0 = time.perf_counter()
         self.model = self._build_model(engine)
@@ -1110,11 +1110,11 @@ class _Prefiller:
         t0 = time.perf_counter()
         self.model.capture_traced_prefill()
         logger.info(f"traced prefill captured in {time.perf_counter() - t0:.1f}s")
-        # The GCBs and L1 tensors come back under prefill's buffers; the prefetcher then runs until teardown.
+        # The pipes and L1 tensors come back under prefill's buffers; the prefetcher then runs until teardown.
         model.restore_prefetch_buffers()
 
     def _build_model(self, engine: ChatEngine):
-        """The prefill model on the decode stages (decode's GCBs and L1 tensors already released)."""
+        """The prefill model on the decode stages (decode's pipes and L1 tensors already released)."""
         indexer = os.environ.get("DEEPSEEK_V4_PREFILL_INDEXER", "1") == "1"
         logger.info(f"prefill lightning indexer {'on' if indexer else 'off'}")
         return engine.model.build_prefill(
@@ -3394,7 +3394,7 @@ def build_parser(argv: list[str] | None = None, description: str = __doc__):
         "--l1-small-size",
         type=int,
         default=int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "8192")),
-        help="bytes of L1_SMALL reserved for the CCL semaphores and the decode prefetcher's GCB config "
+        help="bytes of L1_SMALL reserved for the CCL semaphores and the decode prefetcher's pipe config "
         "pages when the prefill model is on (must not be 0)",
     )
     p.add_argument(
@@ -3562,7 +3562,7 @@ def serve(
             # MTP disabled (read by DeepSeekV4Model.__init__): every row is a pipeline stage. Its
             # prefetches could also outlive a step, which a prefill between steps does not allow.
             os.environ["DEEPSEEK_V4_DSPARK"] = "0"
-            # Room above the GCB rings for decode's own buffers, so releasing the rings frees one block of L1 for prefill.
+            # Room above the prefetch rings for decode's own buffers, so releasing the rings frees one block of L1 for prefill.
             os.environ.setdefault("DEEPSEEK_V4_GCB_HEADROOM", "16384")
             logger.info(
                 f"traced prefill on: {args.num_stages} x TP{_TP_SIZE} stages "
@@ -3585,7 +3585,7 @@ def serve(
         # this stack, and the senders are stopped before the mesh device is closed.
         with contextlib.ExitStack() as prefetcher:
             engine = engine_cls(mesh_device, args, prefetcher)
-            # Decode compile, then prefill build, compile and capture (decode's GCBs and L1 released).
+            # Decode compile, then prefill build, compile and capture (decode's pipes and L1 released).
             # The warmup then captures decode, and the snapshot copies decode's resident tensors.
             prefiller = prefiller_cls(engine, args, prefetcher) if args.prefill else None
             engine.warmup()

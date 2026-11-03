@@ -199,9 +199,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
     ``verify_rows > 1`` builds every layer for DSpark's parallel verify (:meth:`decode_verify`), one step
     over ``verify_rows`` consecutive positions.
 
-    ``balance_dram_banks`` builds the routed experts with K-split gate_up shards that cover every DRAM bank (see
-    :class:`~.decode.moe.DeepSeekV41PreloadedExperts`). The prefill op cannot read them, so :meth:`build_prefill`
-    refuses such a model.
+    ``balance_dram_banks`` (on by default) builds the routed experts with K-split gate_up shards that cover every
+    DRAM bank (see :class:`~.decode.moe.DeepSeekV41PreloadedExperts`); the decode and prefill expert ops both read
+    that layout.
 
     Do not call :meth:`DeepSeekV4Model.__init__`. It builds V4 layers, reads ``compress_rates`` and
     ``mlp_layer_types``, and constructs ``hc_head``, none of which exist on this checkpoint.
@@ -228,7 +228,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         layer_submesh_ids: Optional[Sequence[int]] = None,
         image_rows: int = 0,
         verify_rows: int = 1,
-        balance_dram_banks: bool = False,
+        balance_dram_banks: bool = True,
     ):
         self.config = config
         self.image_rows = image_rows
@@ -258,6 +258,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._prefetch_buffers_by_device: dict[int, tuple] = {}
         self._gcb_headroom: dict[int, ttnn.Tensor] = {}
         self._prefetch_released = False
+        self._released_pipes: list = []
         self._evicted_l1: list = []
         self._l1_holders: list = []
         self._pre_release = None
@@ -1662,8 +1663,6 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """
         if self._decode_max_seq is None:
             raise RuntimeError("call prepare_static_decode() before build_prefill()")
-        if self.balance_dram_banks:
-            raise NotImplementedError("fused_experts_prefill reads whole-K gate_up shards, not balance_dram_banks'")
         n = self.num_layers
         if kv_only:
             n = max(i for i in self.config.kv_source_layer_ids if i < self.num_layers) + 1
