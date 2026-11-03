@@ -33,6 +33,7 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
+    DEST_DEPTH_BLOCK_COUNTS,
     generate_quasar_srcs_format_dest_acc_combinations,
     max_dest_tiles,
     parametrize,
@@ -71,6 +72,15 @@ DIMENSION_PROFILES = (
 PERF_DIMENSION_PROFILE = DIMENSION_PROFILES[1]
 
 
+def dest_depth_dimension_profiles(dest_acc, dest_sync):
+    """Matmul outputs of 4 and 8 full Dest sections (ct=2, kt=1) beside an 8-tile exp."""
+    rt_per_block = max_dest_tiles(dest_acc, dest_sync) // 2
+    return [
+        ([32, 256], [32 * blocks * rt_per_block, 32], [32, 64])
+        for blocks in DEST_DEPTH_BLOCK_COUNTS
+    ]
+
+
 # ttsim has no SFPLOADMACRO, so under --disable-sfploadmacro only the SFPI implementation is built.
 LOADMACRO_AVAILABLE = os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") != "1"
 ALL_SFPU_IMPLS = tuple(SfpuImpl) if LOADMACRO_AVAILABLE else (SfpuImpl.Sfpi,)
@@ -102,18 +112,18 @@ def generate_parallel_matmul_exp_combinations(
             (PERF_DIMENSION_PROFILE,) if is_perf else DIMENSION_PROFILES
         )
         for dest_sync in dest_sync_modes:
+            profiles = [
+                profile
+                for profile in dimension_profiles
+                if _matmul_output_fits_dest(profile[1], profile[2], dest_acc, dest_sync)
+            ]
+            if not is_perf:
+                profiles += dest_depth_dimension_profiles(dest_acc, dest_sync)
             for (
                 exp_input_dimensions,
                 input_A_dimensions,
                 input_B_dimensions,
-            ) in dimension_profiles:
-                if not _matmul_output_fits_dest(
-                    input_A_dimensions,
-                    input_B_dimensions,
-                    dest_acc,
-                    dest_sync,
-                ):
-                    continue
+            ) in profiles:
                 for sfpu_impl in impls:
                     # Accurate exp only differs for a Float32 SrcS layout with Sfpi; LoadMacro is LUT-only.
                     approx_modes = (

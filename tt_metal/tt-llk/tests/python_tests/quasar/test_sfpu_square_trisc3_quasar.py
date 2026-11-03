@@ -18,6 +18,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
+    generate_dest_depth_input_dimensions,
     generate_quasar_sfpu_format_variants,
     parametrize,
     runtime,
@@ -60,7 +61,13 @@ def generate_sfpu_square_combinations(formats_list):
         MathOperation.Square, formats_list
     ):
         for dest_sync in dest_sync_modes:
-            for input_dimensions in input_dimension_options:
+            # Plus runs of 4 and 8 full Dest sections.
+            for input_dimensions in [
+                *input_dimension_options,
+                *generate_dest_depth_input_dimensions(
+                    format_variant.dest_acc, dest_sync
+                ),
+            ]:
                 combinations.append(
                     (
                         format_variant,

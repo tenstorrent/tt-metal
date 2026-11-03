@@ -942,6 +942,40 @@ def generate_reduced_input_dimensions(
     ]
 
 
+# Dest sections a dest-depth sweep refills: 4 and 8 blocks walk both Half-sync banks several times.
+DEST_DEPTH_BLOCK_COUNTS = (4, 8)
+
+
+def generate_dest_depth_input_dimensions(
+    dest_acc,
+    dest_sync=DestSync.Half,
+    tile_shape=None,
+    block_counts=DEST_DEPTH_BLOCK_COUNTS,
+):
+    """Tall matrices that fill one Dest section per block, ``block_counts`` blocks each.
+
+    Args:
+        dest_acc: Dest 16/32 bit mode
+        dest_sync: DestSync mode. Defaults to DestSync.Half
+        tile_shape: Tile shape the dimensions are expressed in. Defaults to 32x32.
+        block_counts: Number of full Dest sections each matrix spans.
+
+    Returns:
+        List of input dimensions, one per block count
+    """
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
+    return [
+        [
+            blocks * max_tiles_in_dest * tile_shape.total_row_dim(),
+            tile_shape.total_col_dim(),
+        ]
+        for blocks in block_counts
+    ]
+
+
 PERF_INPUT_DIMENSIONS = (
     [256, 32],
     [32, 256],

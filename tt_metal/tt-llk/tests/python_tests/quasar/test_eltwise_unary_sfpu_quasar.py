@@ -28,6 +28,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
+    generate_dest_depth_input_dimensions,
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
@@ -1337,6 +1338,40 @@ def run_eltwise_unary_sfpu_quasar(
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=[MathOperation.Abs, MathOperation.Square],
+    formats=lambda mathop: [
+        fmt
+        for fmt in _float_formats_for_mathop(mathop)
+        if fmt.input_format == fmt.output_format
+    ],
+    dest_acc=_dest_acc_for_mathop_formats,
+    dest_sync=list(DEST_SYNC_MODES),
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync: generate_dest_depth_input_dimensions(
+            dest_acc, dest_sync
+        )
+    ),
+)
+def test_eltwise_unary_sfpu_dest_depth_quasar(
+    mathop,
+    formats,
+    dest_acc,
+    dest_sync,
+    input_dimensions,
+):
+    """4 and 8 full Dest sections per run through the FPU and unpack-to-Dest paths."""
+    run_eltwise_unary_sfpu_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        ApproximationMode.No,
+        input_dimensions,
+        dest_sync,
+    )
 
 
 @pytest.mark.quasar

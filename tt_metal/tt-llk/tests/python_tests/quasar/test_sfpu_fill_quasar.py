@@ -15,11 +15,17 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
+    DestSync,
     MathOperation,
     UnpackerEngine,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize, runtime
+from helpers.param_config import (
+    generate_dest_depth_input_dimensions,
+    input_output_formats,
+    parametrize,
+    runtime,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -35,6 +41,13 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.utils import passed_test, result_tensor
+
+
+def fill_input_dimensions(dest_acc):
+    """One and four tiles, plus runs of 4 and 8 full Dest sections (DEST_SYNC() is SyncHalf)."""
+    return [[32, 32], [64, 64]] + generate_dest_depth_input_dimensions(
+        dest_acc, DestSync.Half
+    )
 
 
 def generate_sfpu_fill_combinations(
@@ -70,7 +83,7 @@ def generate_sfpu_fill_combinations(
         ):
             continue
 
-        for input_dimensions in [[32, 32], [64, 64]]:
+        for input_dimensions in fill_input_dimensions(dest_acc):
             combinations.append((fmt, dest_acc, runtime(input_dimensions)))
 
     # Int fill: _calculate_fill_int_ with FILL_INT_FORMAT-selected SFPMEM store mode.
@@ -78,7 +91,7 @@ def generate_sfpu_fill_combinations(
     for fmt in int_formats:
         in_fmt = fmt.input_format
         dest_acc = dest_acc_for(in_fmt)
-        for input_dimensions in [[32, 32], [64, 64]]:
+        for input_dimensions in fill_input_dimensions(dest_acc):
             combinations.append((fmt, dest_acc, runtime(input_dimensions)))
 
     return combinations

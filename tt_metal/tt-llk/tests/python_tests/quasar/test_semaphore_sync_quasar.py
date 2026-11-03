@@ -23,6 +23,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     quasar_mx_smoke,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -32,12 +33,17 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATH_OP,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test, result_tensor
+
+# (DEST sections, tiles per section): every section is one semaphore handoff. Four tiles per section
+# fits the smallest section (32-bit DEST, SyncHalf).
+SEMAPHORE_SECTION_SHAPES = [(4, 1), (1, 4), (4, 4), (8, 1), (8, 2)]
 
 
 # Two flows under the semaphore scheme. 16-bit and MX inputs run a reduce through SrcA / SrcB with the math-pack
@@ -59,20 +65,23 @@ from helpers.utils import passed_test, result_tensor
     zero_tiles=lambda formats: (
         [False, True] if formats.input_format.is_32_bit() else [False]
     ),
+    sections=runtime(SEMAPHORE_SECTION_SHAPES),
 )
 def test_semaphore_sync_quasar(
     formats,
     dest_acc,
     dest_sync,
     zero_tiles,
+    sections,
 ):
+    num_sections, tiles_per_section = sections
 
     pool_type = ReducePool.Sum
     reduce_dim = ReduceDimension.Row
     mathop = MathOperation.ReduceRow
     math_fidelity = MathFidelity.LoFi
 
-    input_dimensions = [64, 64]
+    input_dimensions = [32 * num_sections * tiles_per_section, 32]
 
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -121,6 +130,7 @@ def test_semaphore_sync_quasar(
         ],
         runtimes=[
             TILE_COUNT(0 if zero_tiles else tile_cnt),
+            NUM_TILES_IN_BLOCK(tiles_per_section),
             TEST_FACE_DIMS(),
             NUM_FACES(),
         ],

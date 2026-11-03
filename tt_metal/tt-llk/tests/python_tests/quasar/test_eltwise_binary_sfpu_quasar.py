@@ -24,6 +24,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    DEST_DEPTH_BLOCK_COUNTS,
     InputOutputFormat,
     generate_quasar_sfpu_format_variants,
     input_output_formats,
@@ -98,38 +99,18 @@ def _stage_binary_operands(op0_flat, op1_flat, tile_indices, dtype):
     return torch.cat(tiles), tile_cnt
 
 
-def _run_sfpu_binary_llk_golden(
+def _sfpu_binary_block_golden(
     formats,
-    dest_acc,
+    input_dimensions,
     tile_indices,
     mathop,
-    binary_op,
     prepare_stimuli,
-    post_check=None,
-    *,
-    approx_mode=ApproximationMode.No,
-    run_types=(PerfRunType.L1_TO_L1,),
-    loop_factor=1,
-    is_perf=False,
-    perf_report=None,
-    dst_rounding_mode=DstRoundingMode.Default,
-    format_variant=None,
-    max_ulp=None,
-    sign_magnitude=False,
-    broadcast_type=BroadcastType.None_,
+    torch_format_out,
+    sign_magnitude,
+    broadcast_type,
 ):
-    """Shared driver for the LLK-golden binary SFPU ops.
-
-    ``prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)``
-    returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
-    tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
-    extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
-    broadcasts the ``src1_idx`` tile in the golden.
-    """
+    """One operand set's stimuli and its result-tile golden: (src_A, tile_cnt_A, src_B, golden)."""
     src0_idx, src1_idx, dst_idx = tile_indices
-    input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
-    num_faces = MAX_NUM_FACES
-
     src_A, tile_cnt_A, src_B = prepare_stimuli(
         formats, input_dimensions, src0_idx, src1_idx, mathop
     )
@@ -156,7 +137,6 @@ def _run_sfpu_binary_llk_golden(
         formats.input_format,
     ).flatten()
     dst_start = dst_idx * MAX_TILE_ELEMENTS
-    torch_format_out = format_dict[formats.output_format]
     golden_tensor = golden_full[dst_start : dst_start + MAX_TILE_ELEMENTS].to(
         torch_format_out
     )
@@ -164,6 +144,63 @@ def _run_sfpu_binary_llk_golden(
         # SIGN_MAGNITUDE_FORMAT reads and writes Dest as SMAG32.
         src_A = int32_to_smag32(src_A)
         golden_tensor = int32_to_smag32(golden_tensor)
+    return src_A, tile_cnt_A, src_B, golden_tensor
+
+
+def _run_sfpu_binary_llk_golden(
+    formats,
+    dest_acc,
+    tile_indices,
+    mathop,
+    binary_op,
+    prepare_stimuli,
+    post_check=None,
+    *,
+    approx_mode=ApproximationMode.No,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+    dst_rounding_mode=DstRoundingMode.Default,
+    format_variant=None,
+    max_ulp=None,
+    sign_magnitude=False,
+    broadcast_type=BroadcastType.None_,
+    num_blocks=1,
+):
+    """Shared driver for the LLK-golden binary SFPU ops.
+
+    ``prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)``
+    returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
+    tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
+    extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
+    broadcasts the ``src1_idx`` tile in the golden. ``num_blocks`` runs that many independent
+    operand sets, each in its own Dest section with its own result tile.
+    """
+    src0_idx, src1_idx, dst_idx = tile_indices
+    input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
+    num_faces = MAX_NUM_FACES
+    torch_format_out = format_dict[formats.output_format]
+
+    block_src_A, block_src_B, block_golden = [], [], []
+    for _ in range(num_blocks):
+        src_A, tile_cnt_A, src_B, golden_tensor = _sfpu_binary_block_golden(
+            formats,
+            input_dimensions,
+            tile_indices,
+            mathop,
+            prepare_stimuli,
+            torch_format_out,
+            sign_magnitude,
+            broadcast_type,
+        )
+        block_src_A.append(torch.as_tensor(src_A).flatten())
+        block_src_B.append(torch.as_tensor(src_B).flatten())
+        block_golden.append(golden_tensor)
+    if num_blocks > 1:
+        src_A = torch.cat(block_src_A)
+        src_B = torch.cat(block_src_B)
+        golden_tensor = torch.cat(block_golden)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -191,7 +228,7 @@ def _run_sfpu_binary_llk_golden(
             BROADCAST_TYPE(broadcast_type),
         ],
         "runtimes": [
-            TILE_COUNT(tile_cnt_A),
+            TILE_COUNT(tile_cnt_A * num_blocks),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
@@ -205,9 +242,9 @@ def _run_sfpu_binary_llk_golden(
             src_B,
             formats.input_format,
             formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_A,
-            tile_count_res=1,
+            tile_count_A=tile_cnt_A * num_blocks,
+            tile_count_B=tile_cnt_A * num_blocks,
+            tile_count_res=num_blocks,
             num_faces=num_faces,
             twos_complement=formats.input_format.is_integer(),
         ),
@@ -531,6 +568,29 @@ def test_eltwise_binary_sfpu_float_quasar(
         perf_report=perf_report,
         format_variant=format_variant,
         max_ulp=max_ulp,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=[variant.formats for variant in _FLOAT_VARIANTS],
+    dest_acc=_dest_acc_for_float_formats,
+    mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwmul],
+    num_blocks=runtime(list(DEST_DEPTH_BLOCK_COUNTS)),
+)
+def test_eltwise_binary_sfpu_dest_depth_quasar(formats, dest_acc, mathop, num_blocks):
+    """4 and 8 operand sets, each staged, combined and packed in its own Dest section."""
+    _run_sfpu_binary_llk_golden(
+        formats,
+        dest_acc,
+        DEFAULT_SFPU_BINARY_TILE_INDICES,
+        mathop,
+        mathop.cpp_enum_value,
+        prepare_stimuli=_prepare_float_stimuli,
+        format_variant=resolve_quasar_sfpu_variant(
+            MathOperation.SfpuElwadd, formats, dest_acc
+        ),
+        num_blocks=num_blocks,
     )
 
 

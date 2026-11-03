@@ -11,6 +11,41 @@
 #include "perf.h"
 #include "tensor_shape.h"
 
+/**
+ * @brief Tiles per Dest section when a run of tile_cnt 32x32 tiles is split into full sections.
+ *
+ * @tparam DST_SYNC: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
+ * @param tile_cnt: Tiles in the run; a run longer than one section must be a multiple of it.
+ */
+template <ckernel::DstSync DST_SYNC, bool EN_32BIT_DEST>
+inline std::uint32_t tiles_per_dest_section(const std::uint32_t tile_cnt)
+{
+    constexpr std::uint32_t section_tiles = ckernel::trisc::get_dest_max_tiles<DST_SYNC, EN_32BIT_DEST, ckernel::trisc::DstTileShape::Tile32x32>();
+    return tile_cnt < section_tiles ? tile_cnt : section_tiles;
+}
+
+/**
+ * @brief Matmul output rows per Dest section: the tallest divisor of rt_dim whose rows x ct_dim fit one section.
+ *
+ * @tparam DST_SYNC: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
+ * @param rt_dim: Output row tiles.
+ * @param ct_dim: Output column tiles.
+ */
+template <ckernel::DstSync DST_SYNC, bool EN_32BIT_DEST>
+inline std::uint32_t matmul_rows_per_dest_section(const std::uint32_t rt_dim, const std::uint32_t ct_dim)
+{
+    constexpr std::uint32_t section_tiles = ckernel::trisc::get_dest_max_tiles<DST_SYNC, EN_32BIT_DEST, ckernel::trisc::DstTileShape::Tile32x32>();
+    std::uint32_t rows                    = ct_dim == 0 ? rt_dim : section_tiles / ct_dim;
+    rows                                  = rows < rt_dim ? rows : rt_dim;
+    while (rows > 1 && rt_dim % rows != 0)
+    {
+        rows--;
+    }
+    return rows == 0 ? rt_dim : rows;
+}
+
 inline void perf_unpack_set_srcb_once_then_srca_per_face(std::uint32_t srcb_once_count, std::uint32_t srca_per_face_count)
 {
     _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(srcb_once_count);

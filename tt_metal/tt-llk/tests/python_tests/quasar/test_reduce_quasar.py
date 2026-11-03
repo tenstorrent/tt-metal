@@ -30,6 +30,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    DEST_DEPTH_BLOCK_COUNTS,
     input_output_formats,
     parametrize,
     quasar_dest_sync_modes,
@@ -283,6 +284,108 @@ def test_reduce_quasar(
         tile_shape=tile_shape,
         print_errors=True,
     ), "Assert against golden failed"
+
+
+# Tiles folded into the single output tile: N >= 8 per the multi-tile reduce contract.
+REDUCE_TO_ONE_TILE_COUNTS = [8, 16]
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
+    pool_type=POOL_TYPES,
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    tile_count=runtime(REDUCE_TO_ONE_TILE_COUNTS),
+)
+def test_reduce_quasar_multi_tile_to_one(
+    formats,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    dest_sync_mode,
+    tile_count,
+):
+    """Reduce N > 1 tiles into one DEST tile for every pool type and reduce dimension."""
+    test_reduce_quasar(
+        formats,
+        (32, 32),
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        MathFidelity.LoFi,
+        True,
+        dest_sync_mode,
+        [PerfRunType.L1_TO_L1],
+        1,
+        input_dimensions=[32 * tile_count, 32],
+    )
+
+
+# reduce_quasar_test.cpp sizes its Dest sections at the SyncHalf capacity in both sync modes.
+REDUCE_SECTION_TILES = {DestAccumulation.No: 8, DestAccumulation.Yes: 4}
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column],
+    pool_type=[ReducePool.Max, ReducePool.Sum],
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    blocks=runtime(list(DEST_DEPTH_BLOCK_COUNTS)),
+)
+def test_reduce_quasar_dest_depth(
+    formats,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    dest_sync_mode,
+    blocks,
+):
+    """Per-tile reduce over 4 and 8 full Dest sections."""
+    test_reduce_quasar(
+        formats,
+        (32, 32),
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        MathFidelity.LoFi,
+        False,
+        dest_sync_mode,
+        [PerfRunType.L1_TO_L1],
+        1,
+        input_dimensions=[32 * blocks * REDUCE_SECTION_TILES[dest_acc], 32],
+    )
+
+
+# Integer MAX reduce: Int8 sources into an Int32 Dest; the integer FPU path is LoFi only.
+@pytest.mark.quasar
+@parametrize(
+    formats=[InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
+    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
+    is_reduce_to_one=lambda reduce_dim: reduce_to_one_modes(reduce_dim, ReducePool.Max),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+)
+def test_reduce_quasar_int_max(
+    formats,
+    reduce_dim,
+    is_reduce_to_one,
+    dest_sync_mode,
+):
+    test_reduce_quasar(
+        formats,
+        (32, 32),
+        DestAccumulation.Yes,
+        reduce_dim,
+        ReducePool.Max,
+        MathFidelity.LoFi,
+        is_reduce_to_one,
+        dest_sync_mode,
+        [PerfRunType.L1_TO_L1],
+        1,
+    )
 
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
