@@ -549,7 +549,11 @@ void kernel_main() {
                 add_tiles(dfb_ex2_local_id, dfb_eps, i, 0, dst0);
                 tile_regs_wait();
                 rsqrt_tile_init();
+#ifdef ARCH_WORMHOLE
+                rsqrt_tile(dst0, VectorMode::C);
+#else
                 rsqrt_tile(dst0);
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, dfb_ex2pe_id);
