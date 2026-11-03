@@ -746,6 +746,15 @@ constexpr bool matmul_pack_exact_per_tile(const MathFidelity fidelity, const std
     return false;
 }
 
+// Full sync blocks of 12 Float32 tiles with the packer L1 accumulate where the plain block through llk_pack_block reads behind main's per-tile pack (a 2x6 block of one K tile at
+// HiFi2 from Float32 and Bfp8_b: +148 cycles; a 6x2 block of 8 K tiles at LoFi from Float32: +62); the other 12 tile blocks of the family read 33 to 219 cycles ahead.
+constexpr bool matmul_pack_full_l1_per_tile(const MathFidelity fidelity, const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t rt, const std::uint32_t ct,
+                                            const std::uint32_t kt)
+{
+    return out == DataFormat::Float32 && ((fidelity == MathFidelity::HiFi2 && in_a == DataFormat::Float32 && in_b == DataFormat::Bfp8_b && rt == 6 && ct == 2 && kt == 1) ||
+                                          (fidelity == MathFidelity::LoFi && in_a == DataFormat::Float32 && in_b == DataFormat::Float32 && rt == 2 && ct == 6 && kt == 8));
+}
+
 constexpr bool matmul_format_block_float(const DataFormat f)
 {
     return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2_b;
@@ -1442,6 +1451,10 @@ constexpr int matmul_pack_form_k(const MathFidelity fidelity, const bool half_sy
                                  const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, const bool dense_pages = false,
                                  const bool l1_acc = false)
 {
+    if (!half_sync && l1_acc && r0 == 32 && c1 == 32 && matmul_pack_full_l1_per_tile(fidelity, in_a, in_b, out, rt, ct, kt))
+    {
+        return 0;
+    }
     if (half_sync && r0 == 32 && c1 == 32 && !l1_acc &&
         (matmul_pack_exact_per_tile(fidelity, throttle, in_a, in_b, out, rt, ct, kt) || matmul_pack_two_tile_per_tile(fidelity, out, rt, ct, kt)))
     {

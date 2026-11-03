@@ -13,6 +13,7 @@
 
 namespace matmul_pack_production
 {
+using namespace ckernel;
 constexpr std::uint32_t W_MAX_TILES = 127; // LLK_PACK_W_MAX_TILES
 
 struct State
@@ -44,6 +45,7 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
     if (!state.seen)
     {
         state.seen = true;
+        _llk_pack_close_fast_untilize_<sync>();
         if ((num_tiles <= 8 && wide_format(out_format)) || (num_tiles == 4 && bfp_format(out_format)))
         {
             for (std::uint32_t i = 0; i < num_tiles; i++)
@@ -64,7 +66,14 @@ inline void block(std::uint32_t tile_index, std::uint32_t address, std::uint32_t
     const bool cont = state.valid && state.page == page && state.next == address && state.tiles + num_tiles <= W_MAX_TILES;
     if (!cont)
     {
-        _llk_pack_block_w_init_(address, tile_stride);
+        // llk_pack_w_take: the output base is programmed again, the stride only when it changed
+        _llk_pack_close_fast_untilize_<sync>();
+        program_packer_destination<false>(address);
+        if (tile_stride != pack_ch1_w_stride)
+        {
+            cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+            pack_ch1_w_stride = tile_stride;
+        }
         state.valid = true;
         state.page  = page;
         state.next  = address;

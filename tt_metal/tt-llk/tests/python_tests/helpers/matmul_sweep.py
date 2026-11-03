@@ -757,6 +757,10 @@ class MatmulPackForm(int):
         return obj
 
 
+# (fidelity, A, B, output, rt, ct, kt): Full sync blocks of 12 Float32 tiles with the packer L1 accumulate that keep the per-tile pack (matmul_pack_full_l1_per_tile in llk_matmul_forms.h)
+_PACK_FULL_L1_PER_TILE = frozenset({("HiFi2", "F32", "B8", "F32", 6, 2, 1), ("LoFi", "F32", "F32", "F32", 2, 6, 8)})
+
+
 def _two_tile_per_tile(formats, math_fidelity, rt_dim, ct_dim, kt_dim):
     """Two tile blocks of one K tile to a block float output at LoFi and HiFi2: the per-tile pack (matmul_pack_two_tile_per_tile in llk_matmul_forms.h)."""
     return (
@@ -816,6 +820,8 @@ def matmul_pack_form(
     value = _matmul_pack_form_value(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim, in0_tile_r_dim, in1_tile_c_dim, throttle, dense_pages, l1_acc)
     value = _matmul_pack_form_ext(value, formats, dest_sync, math_fidelity, rt_dim, ct_dim, throttle, in0_tile_r_dim, in1_tile_c_dim, l1_acc)
     if dest_sync == DestSync.Half and in0_tile_r_dim == 32 and in1_tile_c_dim == 32 and not l1_acc and ((math_fidelity.name, throttle, _PACK_SHORT.get(formats.input_format), _PACK_SHORT.get(formats.input_format_B), _PACK_SHORT.get(formats.output_format), rt_dim, ct_dim, kt_dim) in _PACK_EXACT_PER_TILE or _two_tile_per_tile(formats, math_fidelity, rt_dim, ct_dim, kt_dim)):
+        value = 0
+    if dest_sync == DestSync.Full and l1_acc and in0_tile_r_dim == 32 and in1_tile_c_dim == 32 and (math_fidelity.name, _PACK_SHORT.get(formats.input_format), _PACK_SHORT.get(formats.input_format_B), _PACK_SHORT.get(formats.output_format), rt_dim, ct_dim, kt_dim) in _PACK_FULL_L1_PER_TILE:
         value = 0
     if dense_pages and dest_sync == DestSync.Half and in0_tile_r_dim == 32 and in1_tile_c_dim == 32 and not l1_acc and throttle == 0:
         dense = _PACK_DENSE_CELLS.get((math_fidelity.name, _PACK_SHORT.get(formats.output_format), _PACK_SHORT.get(formats.input_format), _PACK_SHORT.get(formats.input_format_B), rt_dim, ct_dim, kt_dim))
