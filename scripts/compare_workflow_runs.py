@@ -13,16 +13,15 @@ How it works:
     2. Fetches the latest completed workflow run for the same workflow on main
     3. Compares job-level results between the two runs
     4. Categorizes each job as: new failure, fixed, same failure, or passing
-    5. A failed branch job with no same-named job in main's latest run (job names carry the SKU,
-       and workflow_dispatch/schedule runs enable jobs that push runs skip) is looked up in older
-       completed main runs (latest few of any event, plus schedule and workflow_dispatch) and
-       classified against the newest main run that actually ran that job
+    5. A failed branch job with no verdict in main's latest run is looked up in older completed
+       main runs (latest few of any event, plus schedule and workflow_dispatch) and classified
+       against the newest main run that produced a verdict for that job
 
 Job categories:
     - NEW FAILURES: Failed on branch, passed on main (regression - needs attention!)
     - FIXED: Passed on branch, failed on main (your changes fixed something)
     - SAME FAILURES: Failed on both (pre-existing issue, not your fault)
-    - NOT FOUND ON MAIN: Failed on branch, and no recent completed main run ran a job with that name
+    - NO MAIN VERDICT: Failed on branch, and no recent completed main run produced a verdict
       (cannot be classified; counts as "review needed")
     - PASSING: Passed on both branches
 
@@ -69,8 +68,8 @@ import sys
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-# How many completed main runs to list per query when a failed branch job has no counterpart in
-# main's latest run. Jobs are fetched lazily, newest run first, until every such job is resolved.
+# How many completed main runs to list per query when a failed branch job has no verdict in main's
+# latest run. Jobs are fetched lazily, newest run first, until every such job is resolved.
 MAIN_HISTORY_LIMIT_PER_QUERY = 10
 MAIN_HISTORY_EVENTS = ("schedule", "workflow_dispatch")
 
@@ -231,8 +230,8 @@ def job_failed(job: JobResult) -> bool:
 def compare_runs(branch_run: WorkflowRun, main_run: Optional[WorkflowRun]) -> dict:
     """Compare two workflow runs and categorize differences.
 
-    Failed branch jobs with no same-named job in main_run land in "unmatched_failures"; call
-    resolve_unmatched_failures() with older main runs to classify them.
+    Failed branch jobs with no verdict in main_run (absent, skipped, or cancelled) land in
+    "unmatched_failures"; call resolve_unmatched_failures() with older main runs to classify them.
     """
     result = {
         "workflow": branch_run.workflow_name,
@@ -249,7 +248,7 @@ def compare_runs(branch_run: WorkflowRun, main_run: Optional[WorkflowRun]) -> di
         "branch_only": [],  # Jobs only on branch (not in main's latest run)
         "main_only": [],  # Jobs only on main
         "in_progress": [],  # Still running
-        "unmatched_failures": [],  # Failed on branch, no same-named job on main (yet) - see resolve_unmatched_failures
+        "unmatched_failures": [],  # Failed on branch, no verdict on main (absent/skipped/cancelled) - see resolve_unmatched_failures
         "history_baseline": {},  # job name -> older main run used as its baseline (filled by resolve_unmatched_failures)
         "main_history_scanned": 0,  # Older main runs whose jobs were fetched
     }
@@ -285,8 +284,18 @@ def compare_runs(branch_run: WorkflowRun, main_run: Optional[WorkflowRun]) -> di
         else:
             main_passed = main_job.conclusion == "success"
 
-        # Handle skipped as "neutral" - not a failure
-        if branch_job.conclusion == "skipped" or main_job.conclusion == "skipped":
+        # A job skipped on the branch is "neutral" - not a failure
+        if branch_job.conclusion == "skipped":
+            result["same_success"].append(name)
+            continue
+
+        # Main has no verdict for this job (skipped or cancelled), so a branch failure has no baseline
+        # here: older main runs decide it, as for a job missing from main's latest run.
+        if main_job.conclusion in ("skipped", "cancelled") and job_failed(branch_job):
+            result["unmatched_failures"].append(name)
+            continue
+
+        if main_job.conclusion == "skipped":
             result["same_success"].append(name)
             continue
 
@@ -347,7 +356,7 @@ def describe_baseline(comparison: dict, job: str) -> str:
     if not baseline:
         return ""
     return (
-        f"\n        (not in main's latest run; {baseline['main_conclusion']} on main {baseline['main_event']} run"
+        f"\n        (no verdict in main's latest run; {baseline['main_conclusion']} on main {baseline['main_event']} run"
         f" {baseline['main_url']} from {baseline['main_created_at']})"
     )
 
@@ -380,7 +389,7 @@ def print_comparison(comparison: dict):
     if comparison["main_history_scanned"]:
         print(
             f"  Note:   {len(comparison['history_baseline']) + len(comparison['unmatched_failures'])} failed branch"
-            f" job(s) have no same-named job in main's latest run; scanned {comparison['main_history_scanned']}"
+            f" job(s) have no verdict in main's latest run; scanned {comparison['main_history_scanned']}"
             " older completed main run(s) for them"
         )
 
@@ -400,7 +409,7 @@ def print_comparison(comparison: dict):
             print(f"     ❌ {job}{describe_baseline(comparison, job)}")
 
     if comparison["unmatched_failures"]:
-        print("\n  ❓ FAILED ON BRANCH, NOT FOUND ON MAIN (no recent completed main run ran this job):")
+        print("\n  ❓ FAILED ON BRANCH, NO MAIN VERDICT (no recent completed main run produced a verdict):")
         for job in comparison["unmatched_failures"]:
             print(f"     ❌ {job}")
 
@@ -414,7 +423,7 @@ def print_comparison(comparison: dict):
         f"\n  Summary: {len(comparison['same_success'])} passing, "
         f"{len(comparison['same_failures'])} pre-existing failures, "
         f"{len(comparison['new_failures'])} new failures, "
-        f"{len(comparison['unmatched_failures'])} failures not found on main, "
+        f"{len(comparison['unmatched_failures'])} failures without a main verdict, "
         f"{len(comparison['in_progress'])} in progress"
     )
 
@@ -465,7 +474,7 @@ def main():
 def compute_exit_code(comparisons: list[dict]) -> int:
     """Exit status for a set of comparisons; independent of the output format (text or --json).
 
-    1 = new failures, or failed branch jobs not found on main; 0 otherwise (including "still running").
+    1 = new failures, or failed branch jobs without a main verdict; 0 otherwise (including "still running").
     """
     if any(c["new_failures"] or c["unmatched_failures"] for c in comparisons):
         return 1
@@ -623,7 +632,8 @@ def run():
         comparison = compare_runs(branch_run, main_run)
         if comparison["unmatched_failures"]:
             print(
-                f"{len(comparison['unmatched_failures'])} failed job(s) not in main's latest run, scanning older main runs...",
+                f"{len(comparison['unmatched_failures'])} failed job(s) have no verdict "
+                "in main's latest run, scanning older main runs...",
                 end=" ",
                 flush=True,
                 file=progress_out,
@@ -649,7 +659,7 @@ def run():
         if total_new_failures > 0:
             print(f"🚨 {total_new_failures} NEW FAILURES - These need investigation!")
         elif total_unmatched > 0:
-            print(f"❓ {total_unmatched} failed jobs not found on main - check them by hand")
+            print(f"❓ {total_unmatched} failed jobs have no recent main verdict - check them by hand")
         elif total_in_progress > 0:
             print(f"🔄 {total_in_progress} jobs still running - check back later")
         elif total_same_failures > 0:
@@ -670,7 +680,7 @@ def run():
         if total_new_failures > 0:
             print("❌ VERDICT: New failures detected - review needed")
         elif total_unmatched > 0:
-            print("❌ VERDICT: Failed jobs on branch not found in recent main runs - review needed")
+            print("❌ VERDICT: Failed jobs on branch have no verdict in recent main runs - review needed")
         elif total_in_progress > 0:
             print("⏳ VERDICT: Workflows still running - run again later")
         else:
