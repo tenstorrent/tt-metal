@@ -129,17 +129,22 @@ from ..reference.config import MiMoConfig
 from ..reference.sample_verify import commit_pass, pass_inputs
 from ..reference.spec_chain import chain_row, chained_draft
 from ..reference.spec_decode import (
+    ADAPTIVE,
+    ADAPTIVE_WIDE_ROWS,
     DRAFT_GROUPS,
     GROUP_SLOTS,
     MAX_DRAFTS,
+    WIDTHS,
     SPEC_SLOTS,
     DraftSource,
     draft_sources,
     plan_mtp,
+    pass_width,
     plan_verify_passes,
     planned_drafts,
 )
-from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped
+from .common import fabric_config
+from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_variant, verify_variants
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import PREFILL_CHUNK_TRACE, prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
@@ -214,6 +219,11 @@ ASYNC_SPEC = os.environ.get("MIMO_ASYNC_SPEC", "1") == "1"
 # chains onto it; by default it returns a handle and is read a step later (VerifyHandle), and the plugin may chain the
 # next verify onto it.
 SPEC_DEFER = os.environ.get("MIMO_SPEC_DEFER", "1") == "1"
+# A verify the host built (not relayed from the lane's last pass: after a prefill, a width change) replays only on an
+# empty queue, as the sampled decode step does (TtMiMoModel._decode_replay): replayed behind the commands still in
+# flight, its first layer now and then computed garbage (non-finite or 1e37 logits for every slot), which the next
+# replay of the same trace on the same inputs did not. MIMO_VERIFY_DRAIN=0 replays it at once.
+VERIFY_DRAIN = os.environ.get("MIMO_VERIFY_DRAIN", "1") == "1"
 
 
 def _untraced_decode(vllm_config):
@@ -280,6 +290,19 @@ def _cache_dir(model_path):
     """The converted TTNN weights, as the tests keep them (tests/common.py cache_dir("model_bfp4experts"))."""
     root = os.environ.get("MIMO_TT_CACHE", "/home/zni/models/mimo-tt-cache")
     return os.path.join(root, os.path.basename(os.path.normpath(model_path)), "model_bfp4experts")
+
+
+# A verify's global SDPA runs one launch per group (attention.verify_variants' sequential variants) when the longest
+# context is at least this long and twice the others' mean: tests/perf/sdpa_balance_bench.py.
+SEQUENTIAL_MIN_CONTEXT = int(os.environ.get("MIMO_VERIFY_SEQUENTIAL_MIN", "131072"))
+
+
+def _imbalanced(contexts):
+    """Whether a pass's groups' contexts (their last positions) are better attended one group at a time."""
+    live = sorted(c for c in contexts if c > 0)
+    if len(live) < 2 or live[-1] < SEQUENTIAL_MIN_CONTEXT:
+        return False
+    return live[-1] >= 2 * sum(live[:-1]) / (len(live) - 1)
 
 
 class VerifyHandle:
@@ -391,7 +414,7 @@ class MiMoV2ForCausalLM:
         "supports_chunked_prefill": True,
         "supports_prefix_caching": True,
         "folds_dp_into_lanes": True,
-        "fabric_config": {"config": ttnn.FabricConfig.FABRIC_1D_RING},
+        "fabric_config": fabric_config(),
         # Device sampling: the decode trace's greedy token or DeviceSampler's draw (module docstring). Its candidates
         # are each chip's CANDIDATES_PER_CHIP largest logits, which bound top_k and stand in for the vocabulary when
         # a top_p < 1 row sets no top_k; a row with neither (pure temperature sampling) samples on host.
@@ -489,9 +512,13 @@ class MiMoV2ForCausalLM:
         self.dflash_ring = [[None] * DRAFT_GROUPS for _ in range(self.dp)]
         # Per lane: each draft group's request (its lane slot; ``_draft_groups``), and the step each slot last ran in.
         self.group_owners = [[None] * DRAFT_GROUPS for _ in range(self.dp)]
+        # Per lane: the width of its draft groups (reference.spec_decode.pass_width; ``_set_width``).
+        self.lane_width = [WIDTHS[-1]] * self.dp
         self.slot_seen = [{} for _ in range(self.dp)]
         self._steps = 0
         self.chain_stats["dflash_resets"] = 0
+        self.chain_stats["width_changes"] = 0
+        self.chain_stats["width_holds"] = 0
         # Per lane and slot: where the slot's last prefill chunk ended (a chunk starting there continues its request).
         self.prefill_ends = [{} for _ in range(self.dp)]
 
@@ -594,6 +621,11 @@ class MiMoV2ForCausalLM:
             accept_modes=("argmax_ids", "logits", "fused_sample"),
             drafter_state="internal",
             supports_narrow_decode=True,
+            # Adaptive draft groups: 3 drafts per request in groups of 4 slots for up to ADAPTIVE_WIDE_ROWS requests,
+            # 1 in groups of 2 for more (reference.spec_decode.pass_width).
+            k_by_rows=((ADAPTIVE_WIDE_ROWS, k), (max(max_num_seqs, ADAPTIVE_WIDE_ROWS + 1), 1))
+            if ADAPTIVE and k > 1
+            else (),
         )
 
     @classmethod
@@ -1081,9 +1113,13 @@ class MiMoV2ForCausalLM:
             handles.append((lane, last - first, handle))
             live = [s for s in range(last - first) if active[s]]
             self._seen(lane, live)
-            groups = self._draft_groups(lane, live) if len(live) <= DRAFT_GROUPS else {}
+            width = self._set_width(lane, len(live))
+            fits = len(live) <= SPEC_SLOTS // width
+            groups = self._draft_groups(lane, live, compact=True, width=width) if fits else {}
             if live and all(groups.get(s) is not None for s in live):
-                self.spec_sources[lane] = [DraftSource(row=first + s, slots=[s], group=groups[s]) for s in live]
+                self.spec_sources[lane] = [
+                    DraftSource(row=first + s, slots=[s], group=groups[s], width=width) for s in live
+                ]
                 self.source_positions[lane] = {first + s: int(pos[s]) + 1 for s in live}
         out = {"rows": rows, "handles": handles, "tokens": on_device}
         if TIMING:
@@ -1206,13 +1242,31 @@ class MiMoV2ForCausalLM:
             ]
             live = [r - first for r, *_ in active]
             self._seen(lane, live)
+            # The pass's group width (adaptive draft groups: from its request count); a row whose drafts came from a
+            # wider step verifies the first width - 1 of them (the rest count as rejected).
+            width = self._set_width(lane, len(live), hold=any(first <= r < last for r in relayed))
+            if not fused and any(n > width - 1 for *_, n in active):
+                # The plugin walks every draft it sent through the argmax ids / logits: a cell the verify does not
+                # answer would commit garbage. Only the device's accept walk (fused_sample) counts them as rejected.
+                over = {r: n for r, *_, n in active if n > width - 1}
+                raise RuntimeError(f"lane {lane}: drafts {over} past a width-{width} verify ({spec_mode})")
+            active = [(r, tok, pos, min(n, width - 1)) for r, tok, pos, n in active]
             groups = None
             if DRAFT_GROUPS > 1:  # each row in its request's draft group
-                groups = {first + s: g for s, g in self._draft_groups(lane, live).items() if g is not None}
+                # A pass the host builds may move its requests into the lowest groups (the narrowest verify
+                # variant); a relayed row keeps its group, whose result page the relay step reads.
+                compact = not any(first <= r < last for r in relayed)
+                groups = {
+                    first + s: g
+                    for s, g in self._draft_groups(lane, live, compact=compact, width=width).items()
+                    if g is not None
+                }
             # The grouped verify attention scans each group's KV once: one request per group (verify_grouped).
-            passes = plan_verify_passes(active, groups=groups, aligned=KV_PAIR_SPLIT and verify_grouped())
+            passes = plan_verify_passes(
+                active, groups=groups, group_slots=width, aligned=KV_PAIR_SPLIT and verify_grouped()
+            )
             lanes.append(passes)
-            lane_sources = sources[lane] = draft_sources(passes)
+            lane_sources = sources[lane] = draft_sources(passes, group_slots=width)
             # The draft sources run one pass: its chain row goes with it, a block per source.
             chained = accept and SPEC_CHAIN and bool(lane_sources) and self._drafter(lane) is not None
             chained = chained and model.rope_tables is not None
@@ -1484,6 +1538,7 @@ class MiMoV2ForCausalLM:
         slot (the verify trace writes the slots' final norm rows into their requests' rings). ``accept``: its accept
         step's (slots, groups), staged before the verify (TtMiMoModel.verify_enqueue)."""
         model = self.models[lane]
+        relay = chain is not None and bool(chain[2])
         hslots = None
         if model.mtp is not None and model.mtp.history is not None:
             first = lane * self.per_lane
@@ -1503,7 +1558,15 @@ class MiMoV2ForCausalLM:
         model.set_vllm_page_tables({s: by_row[row] for s, row in enumerate(vp.table_rows) if row is not None})
         self._verify_tables_s += time.perf_counter() - t
         chain = None if chain is None else torch.tensor(chain, dtype=torch.int32)
-        return model.verify_enqueue(tok, pos, chain, accept=accept)
+        # The narrowest verify variant that attends every group the pass uses (the widest is the default replay), one
+        # SDPA per group when one request's context dwarfs the others' (the grouped SDPA splits its cores evenly).
+        used = 1 + max((s // vp.width for s, p in enumerate(vp.positions) if p >= 0), default=0)
+        contexts = [
+            max([p for p in vp.positions[g * vp.width : (g + 1) * vp.width] if p >= 0], default=0) for g in range(used)
+        ]
+        variant = verify_variant(used, vp.width, sequential=_imbalanced(contexts))
+        narrow = {"groups": variant} if variant is not None and variant != verify_variants()[-1] else {}
+        return model.verify_enqueue(tok, pos, chain, accept=accept, drain=VERIFY_DRAIN and not relay, **narrow)
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         """Drafts for the next step: the drafter drafts for the requests of each lane whose last step ran one pass (one
@@ -1547,14 +1610,14 @@ class MiMoV2ForCausalLM:
                     kept.add(lane)
                     if stale:
                         drafts[r] = committed_tokens[r, m - 1].to(torch.int32)
-                        valid[r] = num_drafts
+                        valid[r] = min(num_drafts, source.width - 1)
                     continue
                 chained = self.chained[lane].get(r)
                 hit = chained is not None
                 hit = hit and chained.matches(committed_tokens[r].tolist(), committed_positions[r].tolist(), m)
                 if hit:
                     drafts[r] = torch.tensor(chained.drafts[:num_drafts], dtype=torch.int32)
-                    valid[r] = num_drafts
+                    valid[r] = min(num_drafts, source.width - 1)
                     hits += 1
                     if not self.chain_check:
                         continue
@@ -1573,7 +1636,7 @@ class MiMoV2ForCausalLM:
                 self._check_chained(lane, drafts[r], host)
                 continue
             drafts[r] = host
-            valid[r] = num_drafts
+            valid[r] = min(num_drafts, source.width - 1)
         planned = sum(not hit for *_, hit in jobs)
         self.chain_stats["chained"] += hits
         self.chain_stats["host"] += planned
@@ -1614,7 +1677,7 @@ class MiMoV2ForCausalLM:
             self.mtp_ring[lane][source.group] = (slot, int(positions[m - 1]) - 1)
         if mtp.multi:
             mtp.enqueue_layers(commits)
-            return [(source.group + 1) * GROUP_SLOTS - 1 for source, *_ in commits]
+            return [source.anchor for source, *_ in commits]
         assert len(commits) == 1, "one MTP layer drafts for one request"
         ((source, tokens, positions, m),) = commits
         plan = plan_mtp(source, positions, m)
@@ -1624,28 +1687,71 @@ class MiMoV2ForCausalLM:
         mtp.enqueue(slot_tokens, plan)
         return [plan.anchor]
 
-    def _draft_groups(self, lane, slots, prompt=False):
+    def _set_width(self, lane, live, hold=False):
+        """The draft-group width of the lane's next pass, for ``live`` requests (reference.spec_decode.pass_width). A
+        change on a pass the host builds empties every group (the requests take groups again; their MTP rings and
+        stash backfill before their next draft) and points the MTP drafter's page table at the new groups.
+
+        ``hold``: the pass relays chain rows, whose relay step reads the commit of the group each row held in the pass
+        it chains onto (the same group index), and whose drafts continue that group's ring without a backfill. A
+        narrower width there (more requests: more, smaller groups) keeps every group's owner and ring: each group
+        index of the wider width exists at the narrower one, and ring g's blocks do not depend on the width; the new
+        requests take the free groups. A wider one (fewer requests) may not have a relayed row's group, so the width
+        stays until the next pass the host builds."""
+        width, current = pass_width(live), self.lane_width[lane]
+        if width == current:
+            return width
+        if hold and width > current:
+            self.chain_stats["width_holds"] += 1
+            return current
+        self.lane_width[lane] = width
+        if not hold:
+            self.group_owners[lane] = [None] * DRAFT_GROUPS
+            self.mtp_ring[lane] = [None] * DRAFT_GROUPS
+            self.dflash_ring[lane] = [None] * DRAFT_GROUPS
+        mtp = self.models[lane].mtp
+        if mtp is not None and hasattr(mtp, "set_width"):
+            mtp.set_width(width)
+        self.chain_stats["width_changes"] += 1
+        return width
+
+    def _draft_groups(self, lane, slots, prompt=False, compact=False, width=None):
         """{slot: draft group} of the requests in lane ``slots`` (a step's live slots, or a prompt's slot): a request
         keeps its group while it runs, so its drafter state (rings, stash) stays its own. A slot without one takes a
-        group no live slot owns, the one whose request ran least recently; None when every group belongs to another
-        live slot (more requests than groups: the step drafts for none). A prompt's slot always takes one (the request
-        that owned it is gone or will be found without one). One draft group: always 0."""
+        group no live slot owns: the lowest unowned one, else the one whose request ran least recently; None when
+        every group belongs to another live slot (more requests than groups: the step drafts for none). A prompt's
+        slot always takes one (the request that owned it is gone or will be found without one). ``compact`` (a step
+        the host lays out): requests in groups past the narrowest verify variant that holds them all
+        (attention.verify_variant) move into the lowest free groups, whose rings the next draft backfills. One draft
+        group: always 0."""
         if DRAFT_GROUPS == 1:
             return {s: 0 for s in slots}
+        width = self.lane_width[lane] if width is None else width
+        count = SPEC_SLOTS // width  # the pass's groups at this width
         owners, seen = self.group_owners[lane], self.slot_seen[lane]
         out = {}
         for s in slots:
-            if s in owners:
+            if s in owners[:count]:
                 out[s] = owners.index(s)
                 continue
             taken = set(slots) if not prompt else {s}
-            free = [g for g in range(DRAFT_GROUPS) if owners[g] is None or owners[g] not in taken]
+            free = [g for g in range(count) if owners[g] is None or owners[g] not in taken]
             if not free:
                 out[s] = None
                 continue
-            g = min(free, key=lambda g: (owners[g] is not None, seen.get(owners[g], -1)))
+            g = min(free, key=lambda g: (owners[g] is not None, g if owners[g] is None else seen.get(owners[g], -1)))
             owners[g], out[s] = s, g
             self.mtp_ring[lane][g] = self.dflash_ring[lane][g] = None  # another request's rows
+        variant = verify_variant(len(slots), width) if compact and not prompt and 0 < len(slots) <= count else None
+        if variant is not None and None not in out.values():
+            attended = variant[1]
+            while max(out.values()) >= attended:
+                s = max(out, key=out.get)
+                g = min(g for g in range(attended) if owners[g] is None or owners[g] not in slots)
+                owners[out[s]] = None
+                owners[g], out[s] = s, g
+                self.mtp_ring[lane][g] = self.dflash_ring[lane][g] = None
+                self.group_moves = getattr(self, "group_moves", 0) + 1
         return out
 
     def _seen(self, lane, slots):
@@ -1743,7 +1849,7 @@ class MiMoV2ForCausalLM:
                     continue
                 if chained.matches(committed_tokens[r].tolist(), committed_positions[r].tolist(), int(counts[r])):
                     drafts[r] = torch.tensor(chained.drafts[:num_drafts], dtype=torch.int32)
-                    valid[r] = num_drafts
+                    valid[r] = min(num_drafts, source.width - 1)
                     hits += 1
         self.chain_stats["chained"] += hits
         if TIMING:
@@ -2136,6 +2242,14 @@ class MiMoV2ForCausalLM:
                 if any(t["id"] is None for t in model.chunk_traces.values()):
                     if model.capture_prefill_chunk_traces():
                         logger.info(f"MiMo vLLM: replica {lane} later-chunk prefill traces {list(model.chunk_traces)}")
+                trace = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.TRACE)
+                dram = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.DRAM)
+                logger.info(
+                    f"MiMo vLLM: replica {lane} trace region {trace.total_bytes_allocated_per_bank * trace.num_banks / 1e6:.0f}"
+                    f" of {trace.total_bytes_per_bank * trace.num_banks / 1e6:.0f} MB used; DRAM free "
+                    f"{dram.total_bytes_free_per_bank * dram.num_banks / 1e6:.0f} MB, largest block "
+                    f"{dram.largest_contiguous_bytes_free_per_bank * dram.num_banks / 1e6:.0f} MB"
+                )
             else:
                 idle = torch.full((model.max_batch,), -1, dtype=torch.int32)
                 model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))

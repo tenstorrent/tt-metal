@@ -198,10 +198,11 @@ def pass_rows(vp):
     appear, or with draft groups (GROUP_SLOTS < SPEC_SLOTS) each at its draft group's index, so that the chain step
     finds draft group g's commit in accept group g."""
     rows = list(dict.fromkeys(row for _, row, _ in vp.answers))
-    if GROUP_SLOTS == SPEC_SLOTS:
+    width = getattr(vp, "width", GROUP_SLOTS)
+    if width == SPEC_SLOTS:
         return list(enumerate(rows))
     first = {row: min(s for s, r, _ in vp.answers if r == row) for row in rows}
-    return [(first[row] // GROUP_SLOTS, row) for row in rows]
+    return [(first[row] // width, row) for row in rows]
 
 
 def pass_inputs(vp, spec_sampling):

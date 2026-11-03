@@ -9,6 +9,7 @@
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/pack.h"
+#include "moe_stream_common.hpp"
 
 using namespace ckernel;
 
@@ -23,12 +24,14 @@ void kernel_main() {
     constexpr uint32_t cb_cnt = get_compile_time_arg_val(7);
     constexpr uint32_t block_tiles = kt * ct;
 
+    MOE_MARK(60);
     constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
     custom_mm_block_init<false, dest_layout>(cb_h, cb_w, cb_out, ct);
     cb_wait_front(cb_cnt, 1);
     const uint32_t n = read_tile_value(cb_cnt, 0, 0);
     cb_pop_front(cb_cnt, 1);
     cb_wait_front(cb_h, n * kt);
+    MOE_MARK(61);
 
     for (uint32_t g = 0; g < groups; g++) {
         tile_regs_acquire();
@@ -52,4 +55,5 @@ void kernel_main() {
     }
 
     cb_pop_front(cb_h, n * kt);
+    MOE_MARK(62);
 }

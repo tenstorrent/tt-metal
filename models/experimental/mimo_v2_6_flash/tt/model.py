@@ -29,10 +29,16 @@ import ttnn
 from ..reference import kv_pair_split
 from ..reference.model import load_layer_weights
 from ..reference.mtp_backfill import HISTORY_ROWS
-from ..reference.spec_decode import SPEC_SLOTS, serial_positions
+from ..reference.spec_decode import SERIAL_WRITES, SPEC_SLOTS, serial_positions
 from . import kv as kv_lib
 from . import attention as attention_lib
-from .attention import GLOBAL_SDPA_MIN_START, TtMiMoAttention, later_chunk_split, page_table_width
+from .attention import (
+    GLOBAL_SDPA_MIN_START,
+    TtMiMoAttention,
+    later_chunk_split,
+    page_table_width,
+    verify_variants,
+)
 from .common import TILE, MeshPlan, as_weight, cache_fill, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .device_sampler import DeviceSampler
@@ -275,7 +281,12 @@ class TtMiMoModel:
         self.page_table_host = None
         self.table_scratch = None
         self.decode_trace = None
-        self.verify_trace = None  # speculative verify step (capture_verify_trace)
+        self.verify_trace = None  # speculative verify step (capture_verify_trace): the one over every group
+        # The verify captured per attended-group count (attention.verify_variants; {None: the trace} ungrouped), the
+        # count the next capture attends, and the variant the last verify_enqueue replayed (its accept trace follows).
+        self.verify_traces = {}
+        self._verify_groups = None
+        self._verify_active = None
         self.mtp = None  # the MTP drafter (setup_mtp)
         self.dflash = None  # the DFlash drafter (setup_dflash, tt/dflash.py)
         self.spec_inputs = None  # the packed verify / draft uploads (setup_mtp / setup_dflash, tt/spec_inputs.py)
@@ -417,7 +428,7 @@ class TtMiMoModel:
         assert self.block_size == kv_pair_split.SUB, self.block_size
         assert self.max_prefill_chunk % (2 * self.block_size) == 0, self.max_prefill_chunk
         spec = self.mtp is not None or self.dflash is not None
-        self.pair = PairSplit(self.plan, self.max_batch, serial_slots=SPEC_SLOTS if spec else 0)
+        self.pair = PairSplit(self.plan, self.max_batch, serial_slots=SERIAL_WRITES if spec else 0)
         self.pair_groups = set(keys)
         for layer in self.layers:
             if not layer.is_swa:
@@ -1403,8 +1414,8 @@ class TtMiMoModel:
         """Host tensors for one step: tokens [1, B] u32, cur_pos [B] i32, cos/sin [1, 1, B, 192] for the SWA and
         the global theta, MoE token mask,
         and the global layers' per-chip view: owned positions [B] i32 and owner mask [1, 1, B, 1].
-        ``serial``: also SPEC_SLOTS position tensors [B] i32, each keeping one slot's position (a verify step writes
-        K / V slot by slot, reference/spec_decode.py)."""
+        ``serial``: also SERIAL_WRITES position tensors [B] i32, each keeping the positions of one column of the draft
+        groups (a verify step writes K / V one column at a time, reference/spec_decode.py serial_positions)."""
         assert tokens.numel() == self.max_batch and positions.numel() == self.max_batch
         rep = self.plan.replicate()
         tp, kv_rep = self.plan.tp, kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
@@ -1501,13 +1512,18 @@ class TtMiMoModel:
             out.append(row)
         return out
 
-    def _decode_inputs(self, inputs, greedy_only=False, sample=False, serial=0):
+    def _decode_inputs(self, inputs, greedy_only=False, sample=False, serial=0, verify_groups=None):
         """decode_forward_device's arguments from the trace's input list (with a ``rope_pos`` input after the nine
         when the decode RoPE tables are set up, then ``serial`` per-slot position inputs)."""
         base, slots = inputs[: len(inputs) - serial], list(inputs[len(inputs) - serial :])
         rope = {"rope_pos_tt": base[9]} if len(base) > 9 else {}
         return self.decode_forward_device(
-            *base[:9], greedy_only=greedy_only, sample=sample, serial_pos=slots or None, **rope
+            *base[:9],
+            greedy_only=greedy_only,
+            sample=sample,
+            serial_pos=slots or None,
+            verify_groups=verify_groups,
+            **rope,
         )
 
     def decode_forward_device(
@@ -1525,6 +1541,7 @@ class TtMiMoModel:
         greedy_only=False,
         sample=False,
         serial_pos=None,
+        verify_groups=None,
     ):
         """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp].
 
@@ -1533,7 +1550,8 @@ class TtMiMoModel:
         from the device tables at these positions, not from the cos / sin inputs. ``sample`` (vLLM mode): the
         DeviceSampler draws each row's token with its temperature / top-k / top-p (greedy rows take the argmax, as
         GreedyHead). ``serial_pos``: per-slot position tensors; every layer writes K / V one slot at a time (a
-        speculative verify, reference/spec_decode.py)."""
+        speculative verify, reference/spec_decode.py). ``verify_groups``: the grouped verify attends groups 0 ..
+        verify_groups - 1 only (attention.verify_variants)."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
         made = []
@@ -1558,6 +1576,8 @@ class TtMiMoModel:
             positions["pos_update"] = cur_pos_tt  # both chips of a pair keep every slot's K / V
         if serial_pos:
             positions["serial"] = serial_pos
+        if verify_groups is not None:
+            positions["verify_groups"] = verify_groups
         # Global layers' SDPA over the decode users' rows only (see attention._forward_decode_split): with fewer
         # users than table rows the kernel would spread its cores over 32 rows of mostly idle slots.
         compact_sdpa = self.decode_users < self.max_batch and os.environ.get("MIMO_COMPACT_SDPA", "1") == "1"
@@ -1573,6 +1593,11 @@ class TtMiMoModel:
                     table = self.page_table_tt[key]
                     sdpa_tables[key] = ttnn.slice(table, (0, 0), (self.decode_users, table.shape[-1]))
                 layer_positions = dict(positions, page_table_sdpa=sdpa_tables[key])
+            nxt = self.layers[i + 1] if i + 1 < len(self.layers) else None
+            # The next layer's compact qkv stream rides in this layer's MoE launch (moe.QKV_PREFETCH).
+            next_attn = None
+            if nxt is not None and nxt.is_swa and nxt._compact_decode() and nxt.attn.qkv_stream is not None:
+                next_attn = nxt.attn
             y, h = layer.forward_decode(
                 x,
                 rot_mats,
@@ -1582,6 +1607,7 @@ class TtMiMoModel:
                 mask_tt,
                 h=h,
                 return_norm=True,
+                next_attn=next_attn,
             )
             x.deallocate(True)
             x = y
@@ -1795,6 +1821,19 @@ class TtMiMoModel:
         empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty, serial=True)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
+        # One capture per attended-group count (attention.verify_variants), every one on the same inputs; the widest
+        # last, which is self.verify_trace.
+        for variant in verify_variants():
+            self._verify_groups = variant
+            self._capture_verify_variant(inputs)
+            self.verify_traces[variant] = self.verify_trace
+            self.verify_trace = None
+        self._verify_groups = None
+        self.verify_trace = self.verify_traces[verify_variants()[-1]]
+        self._verify_active = verify_variants()[-1]
+
+    def _capture_verify_variant(self, inputs):
+        """capture_verify_trace for one verify variant (``_verify_groups``) on the trace inputs ``inputs``."""
         rope = self.rope_tables is not None
         # The packed uploads still hold the last served step (a recapture): idle them, so the runs below write no K / V.
         self.spec_inputs.reset()
@@ -1846,7 +1885,7 @@ class TtMiMoModel:
     def _verify_step(self, inputs):
         """The verify trace's step: with the MTP history, its slots' final norm rows written into their requests'
         rings (the verify upload's chain row names them) at the end."""
-        output = self._decode_inputs(inputs, serial=SPEC_SLOTS)
+        output = self._decode_inputs(inputs, serial=SERIAL_WRITES, verify_groups=self._verify_groups)
         hist = self._history()
         if hist is not None:
             hist.verify(self.spec_inputs.verify_packed, output["hidden"])
@@ -1862,24 +1901,30 @@ class TtMiMoModel:
             self.dflash.capture_trace()
 
     def release_spec_traces(self):
-        if self.verify_trace is not None:
-            ttnn.release_trace(self.mesh_device, self.verify_trace["id"])
-            if self.verify_trace["accept"] is not None:
-                ttnn.release_trace(self.mesh_device, self.verify_trace["accept"])
-            self.verify_trace = None
+        for trace in self.verify_traces.values():
+            ttnn.release_trace(self.mesh_device, trace["id"])
+            if trace["accept"] is not None:
+                ttnn.release_trace(self.mesh_device, trace["accept"])
+        self.verify_traces = {}
+        self.verify_trace = None
         if self.mtp is not None:
             self.mtp.release_trace()
         if self.dflash is not None:
             self.dflash.release_trace()
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, groups=None, drain=False):
         """A verify step (tokens, positions: torch [max_batch], -1 an idle slot). Non-blocking; returns the verify
         trace's output (its ``next_tokens`` are the slots' greedy tokens). Copies the packed tokens and positions
         (the trace derives its other inputs from them) with the chain row ``chain`` (reference.spec_chain.chain_row;
         None: no draft chains behind the pass), and the RoPE cos / sin unless the trace reads them from the device
         tables. ``accept``: the pass's (slots, groups) for the accept trace (``verify_accept_enqueue``), staged first:
-        the verify trace's relay step writes a chained pass's drafts into the control page."""
+        the verify trace's relay step writes a chained pass's drafts into the control page. ``groups``: the verify
+        variant to replay (attention.verify_variant of the pass's highest used group; None: every group).
+        ``drain``: replay only on an empty queue (``_decode_replay``'s sampled step): the uploads land first."""
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
+        variant = verify_variants()[-1] if groups is None else groups
+        trace = self.verify_traces[variant]
+        self._verify_active = variant
         if accept is not None:
             self.verify_sampler.stage(*accept)
         spec = self.spec_inputs
@@ -1889,20 +1934,23 @@ class TtMiMoModel:
                 *self.rope_setups["swa"].decode_host_inputs(positions),
                 *self.rope_setups["full"].decode_host_inputs(positions),
             )
-            for h, d in zip(host, self.verify_trace["inputs"][2:6]):
+            for h, d in zip(host, trace["inputs"][2:6]):
                 ttnn.copy_host_to_device_tensor(h, d)
-        ttnn.execute_trace(self.mesh_device, self.verify_trace["id"], cq_id=0, blocking=False)
-        return self.verify_trace["output"]
+        if drain:
+            ttnn.synchronize_device(self.mesh_device)
+        ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
+        return trace["output"]
 
     def verify_accept_enqueue(self, slots=None, groups=None):
         """After ``verify_enqueue``: the pass's acceptance on device (VerifySampler) with its sampled slots' parameters
         and its requests (reference.sample_verify.pass_inputs; staged here unless ``verify_enqueue`` staged them),
         then the chain step. Non-blocking; ``spec_chain.read`` returns the pass's result page (after
         ``mtp.enqueue_chained``, with the drafts chained behind it)."""
-        assert self.verify_trace is not None and self.verify_trace["accept"] is not None, "no accept trace captured"
+        trace = self.verify_traces.get(self._verify_active)
+        assert trace is not None and trace["accept"] is not None, "no accept trace captured"
         if groups is not None:
             self.verify_sampler.stage(slots, groups)
-        ttnn.execute_trace(self.mesh_device, self.verify_trace["accept"], cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh_device, trace["accept"], cq_id=0, blocking=False)
 
     def read_next_tokens(self, handle):
         """The greedy token of every slot of a decode or verify step, int64 [max_batch] (blocks)."""
@@ -1950,7 +1998,7 @@ class TtMiMoModel:
 
     def _release(self, handle):
         trace = self.decode_trace
-        traced = (trace, trace["sampled"] if trace is not None else None, self.verify_trace)
+        traced = (trace, trace["sampled"] if trace is not None else None, *self.verify_traces.values())
         if not any(t is not None and handle is t["output"] for t in traced):
             persistent = [h.next_tokens for h in (self.greedy_head, self.sampler) if h is not None]
             persistent += list(self.norm_buffers or ())

@@ -21,6 +21,9 @@ from .common import TILE, pad_to
 KERNEL_DIR = "models/experimental/mimo_v2_6_flash/tt/kernels"
 # MIMO_MOE_DEDUP=0: stream every (user, top-k) pair's expert, as before the deduplicated stream (GateUpStream).
 DEDUP = os.environ.get("MIMO_MOE_DEDUP", "1") == "1"
+FUSED = os.environ.get("MIMO_MOE_FUSED", "1") == "1"
+# Timing experiments on FusedStream only, results wrong: 1 = no weight reads, 2 = no matmuls.
+STREAM_DEBUG = int(os.environ.get("MIMO_MOE_STREAM_DEBUG", "0"))
 
 
 _BANK_CORES = {}  # device ids of a (sub)mesh -> bank cores registered by set_dram_bank_cores
@@ -600,6 +603,201 @@ class DownStream:
         return out
 
 
+class FusedStream:
+    """A deduplicated GateUpStream and DownStream in one launch on the bank cores (MIMO_MOE_FUSED=0 turns it off).
+
+    Routing is spread over the bank cores: core b selects user b's top-k and weights (one user, ~6 us, instead of the
+    streams' four per RISC) and writes them into every bank core's routing table, so the stream starts ~10 us into the
+    launch instead of ~30-40. Each bank core then streams, back to back from its DRAM bank, the gate|up slice and then the down slice of every
+    distinct expert. Its h tile (h column ``bank``) of each expert goes straight into every bank core's L1 (cb_hall),
+    so the down matmul starts once the last expert's h lands everywhere, without a second launch or the activation's
+    DRAM round trip, and with its weights already prefetched. Down accumulates all of a core's output tiles in fp32
+    dest at once (the Compact layout), so its blocks are each expert's contiguous slice, two K rows of ``cols``
+    tiles: the gate|up block's tile count, so one weight ring serves both. Routing, the expert list, the h values and
+    the compact output are the two streams' (same order, same arithmetic)."""
+
+    DOWN_ROWS = 2  # K rows of w_down per block
+    CB_HALL, CB_OUT, CB_TABLE = 10, 11, 12
+    READY_SEM, DONE_SEM, ROUTE_SEM = 0, 1, 2
+    ENTRY_BYTES = 128  # a routing-table entry: [active, ids[topk], weight bits[topk]], 16-byte aligned
+
+    def __init__(self, plan, gate_up, down):
+        assert gate_up.dedup and down.dedup and gate_up.rows == down.rows
+        assert gate_up.cores == down.cores and gate_up.num_pairs == down.num_pairs
+        self.gu, self.dn = gate_up, down
+        self.cols = down.cols
+        assert self.DOWN_ROWS * self.cols == gate_up.block_tiles, (self.cols, gate_up.block_tiles)
+        assert down.kt % self.DOWN_ROWS == 0
+        self.down_blocks = down.kt // self.DOWN_ROWS
+        assert self.down_blocks * gate_up.block_bytes == down.expert_bytes
+        self.peers = noc_coords(plan.mesh_device, gate_up.cores)
+        assert self.peers is not None, "the h exchange needs the bank cores' NoC coordinates"
+        tiny = ttnn.Tile([gate_up.rows, TILE])
+        page = tiny.get_tile_size(ttnn.bfloat16)
+
+        def cb(index, pages):
+            fmt = ttnn.CBFormatDescriptor(
+                buffer_index=index, data_format=ttnn.bfloat16, page_size=page, tile=ttnn.TileDescriptor(tiny)
+            )
+            return ttnn.CBDescriptor(total_size=pages * page, core_ranges=gate_up.core_ranges, format_descriptors=[fmt])
+
+        assert gate_up.users <= len(gate_up.cores) and (2 * gate_up.topk + 1) * 4 <= self.ENTRY_BYTES
+        table_bytes = len(gate_up.cores) * self.ENTRY_BYTES
+        table = ttnn.CBDescriptor(
+            total_size=table_bytes,
+            core_ranges=gate_up.core_ranges,
+            format_descriptors=[ttnn.CBFormatDescriptor(self.CB_TABLE, ttnn.uint32, table_bytes)],
+        )
+        self.cbs = list(gate_up.cbs) + [
+            cb(self.CB_HALL, gate_up.num_pairs * down.kt),
+            cb(self.CB_OUT, self.cols),
+            table,
+        ]
+        self.semaphores = [
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=gate_up.core_ranges, initial_value=0)
+            for i in (self.READY_SEM, self.DONE_SEM, self.ROUTE_SEM)
+        ]
+
+    def __call__(self, x, scores, biased, token_mask, w_gate_up, w_down, out, signal=None, launch=True):
+        """GateUpStream's inputs plus w_down [1, E, I, H] BFP4 and ``out`` from DownStream.compact_output; fills
+        ``out`` and returns it. ``signal`` / ``launch=False``: as DownStream (a section for a merged program)."""
+        gu, dn = self.gu, self.dn
+        for t in (x, scores, biased, w_gate_up, w_down, out):
+            assert t.layout == ttnn.TILE_LAYOUT and is_dram_interleaved(t)
+        assert x.dtype == ttnn.bfloat16 and w_gate_up.dtype == ttnn.bfloat4_b and w_down.dtype == ttnn.bfloat4_b
+        assert scores.dtype == ttnn.float32 and biased.dtype == ttnn.float32
+        assert w_down.shape[-2] == dn.inter_local and w_down.shape[-1] == dn.hidden
+        assert out.dtype == ttnn.bfloat16 and out.shape[-2] == TILE and out.shape[-1] == dn.compact_width
+        has_mask = token_mask is not None
+        if has_mask:
+            assert token_mask.layout == ttnn.TILE_LAYOUT and token_mask.dtype == ttnn.bfloat16
+            assert is_dram_interleaved(token_mask)
+        mask_addr = token_mask.buffer_address() if has_mask else 0
+
+        route_ct = [gu.expert_tiles, gu.norm, gu.has_scale, gu.scale_bits, 1 if has_mask else 0]
+        banks = len(gu.cores)
+        reader_ct = [
+            gu.cb_w,
+            gu.cb_rstage,
+            self.CB_TABLE,
+            gu.num_pairs,
+            gu.topk,
+            gu.block_bytes,
+            gu.block_tiles,
+            gu.blocks_per_pair,
+            gu.packet_bytes,
+            gu.packets_per_block,
+            gu.expert_bytes,
+            gu.NUM_BUFFERS,
+            gu.IN_FLIGHT,
+            gu.stage_pages,
+            *route_ct,
+            gu.rows,
+            self.down_blocks,
+            dn.expert_bytes,
+            banks,
+            self.ROUTE_SEM,
+            self.ENTRY_BYTES,
+            STREAM_DEBUG,
+        ]
+        writer_ct = [
+            gu.cb_x,
+            gu.cb_h,
+            gu.kt,
+            gu.num_pairs,
+            gu.topk,
+            self.CB_TABLE,
+            gu.users,
+            self.ROUTE_SEM,
+            self.ENTRY_BYTES,
+            gu.cb_cnt,
+            gu.cb_wt,
+            gu.rows,
+            self.CB_HALL,
+            dn.kt,
+            banks,
+            self.READY_SEM,
+            self.DONE_SEM,
+            self.CB_OUT,
+            self.cols,
+            dn.compact_tiles,
+            3 + 2 * banks if signal else 0,  # signal args follow the writer's other runtime args
+            0,
+            gu.expert_tiles * TILE,
+        ]
+        compute_ct = [
+            gu.cb_x,
+            gu.cb_w,
+            gu.cb_h,
+            gu.cb_cnt,
+            gu.cb_wt,
+            gu.blocks_per_pair,
+            gu.BLOCK_K,
+            gu.rows,
+            self.CB_HALL,
+            self.CB_OUT,
+            dn.kt,
+            self.down_blocks,
+            self.DOWN_ROWS,
+            self.cols,
+            STREAM_DEBUG,
+        ]
+        peers = [v for c in self.peers for v in (c.x, c.y)]
+        reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for bank, core in enumerate(gu.cores):
+            reader_rt[core.x][core.y] = [
+                bank,
+                gu.vcs[bank],
+                w_gate_up.buffer_address(),
+                biased.buffer_address(),
+                scores.buffer_address(),
+                mask_addr,
+                w_down.buffer_address(),
+            ] + peers
+            args = [x.buffer_address(), out.buffer_address(), bank] + peers
+            if signal:
+                args += [len(signal)] + [v for c in signal for v in (c.x, c.y)]
+            writer_rt[core.x][core.y] = args
+            compute_rt[core.x][core.y] = []
+
+        def kernel(name, ct, rt, config):
+            return ttnn.KernelDescriptor(
+                kernel_source=f"{KERNEL_DIR}/{name}",
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=gu.core_ranges,
+                compile_time_args=ct,
+                runtime_args=rt,
+                config=config,
+            )
+
+        kernels = [
+            kernel(
+                "moe_fused_uniq_reader.cpp",
+                reader_ct,
+                reader_rt,
+                ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default
+                ),
+            ),
+            kernel(
+                "moe_fused_uniq_writer.cpp",
+                writer_ct,
+                writer_rt,
+                ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default
+                ),
+            ),
+            kernel("moe_fused_uniq_compute.cpp", compute_ct, compute_rt, gu.compute_config),
+        ]
+        tensors = [x, scores, biased] + ([token_mask] if has_mask else []) + [w_gate_up, w_down]
+        section = dict(kernels=kernels, cbs=list(self.cbs), semaphores=list(self.semaphores), tensors=tensors)
+        if not launch:
+            return section
+        program = ttnn.ProgramDescriptor(kernels=kernels, cbs=section["cbs"], semaphores=section["semaphores"])
+        ttnn.generic_op(tensors + [out], program)
+        return out
+
+
 class ReduceExpand:
     """Row all-gather of DownStream's compact output ([1, 1, 32, chips * hidden / 8]: chip c's compact tile tc is tile
     column c * compact_tiles + tc) -> the sum over the chips (chip order 0, 1, ..., fp32 accumulation, one bf16
@@ -792,34 +990,44 @@ class ReduceExpand:
         ttnn.generic_op(io, program)
         return out
 
-    def call_fabric(self, compact, out, residual, norm, fabric):
+    def call_fabric(self, compact, out, residual, norm, fabric, consumer=None):
         if isinstance(compact, PendingCompact):  # the producer runs in the same launch
-            return self._call_fabric(compact.rows, out, residual, norm, fabric, producer=compact)
-        return self._call_fabric(compact, out, residual, norm, fabric)
+            return self._call_fabric(compact.rows, out, residual, norm, fabric, producer=compact, consumer=consumer)
+        return self._call_fabric(compact, out, residual, norm, fabric, consumer=consumer)
 
-    def _call_fabric(self, compact, out, residual, norm, fabric, producer=None):
+    def _call_fabric(self, compact, out, residual, norm, fabric, producer=None, consumer=None):
         """The row all-gather and the fused reduce + residual + RMSNorm in one launch per chip: ``compact`` is this
         chip's [1, 1, 32, hidden / 8] compact rows (DRAM tiles), sent over the fabric to every chip of the row
         (``fabric``: the row's FabricRowGather); returns (out, norm_out) as ``__call__`` with ``norm``. ``producer``
-        (a PendingCompact): the launch that writes ``compact`` runs in this one, on other cores."""
+        (a PendingCompact): the launch that writes ``compact`` runs in this one, on other cores. ``consumer`` (a
+        PendingConsumer): a program reading ``norm_out`` runs in this one too, on other cores; each reduce core
+        signals it once its rows of ``norm_out`` landed."""
         gamma, norm_out, eps = norm
         for t in (compact, out, residual, gamma, norm_out):
             assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
         assert compact.shape[-1] == self.compact_width
         phase = fabric.next_phase()
         kernels, cbs, semaphores = self._norm_kernels(
-            out, residual, gamma, norm_out, eps, gather_sem=fabric.sem_addr(phase)
+            out,
+            residual,
+            gamma,
+            norm_out,
+            eps,
+            gather_sem=fabric.sem_addr(phase),
+            fabric=fabric,
+            signal=(consumer.sem, consumer.cores) if consumer is not None else None,
         )
         # cb_in is the gather buffer of this phase (every chip's copies of this core's tiles land there)
         cbs[self.cb_in] = ttnn.cb_descriptor_from_sharded_tensor(
             self.cb_in, fabric.gather, address_offset=phase * fabric.phase_bytes, total_size=fabric.phase_bytes
         )
         extra_tensors = []
-        if producer is not None:
-            kernels = kernels + producer.section["kernels"]
-            cbs = cbs + producer.section["cbs"]
-            semaphores = semaphores + producer.section["semaphores"]
-            extra_tensors = producer.section["tensors"]
+        for part in (producer, consumer):
+            if part is not None:
+                kernels = kernels + part.section["kernels"]
+                cbs = cbs + part.section["cbs"]
+                semaphores = semaphores + part.section["semaphores"]
+                extra_tensors = extra_tensors + part.section["tensors"]
         waits = producer.signals if producer is not None else 0
         mesh_program = fabric.programs(kernels, cbs, semaphores, compact, phase, wait_count=waits)
         io = [compact, residual, gamma, self.norm_consts, fabric.gather] + list(extra_tensors) + [out, norm_out]
@@ -837,9 +1045,13 @@ class ReduceExpand:
         ttnn.generic_op([gathered, residual, gamma, self.norm_consts, out, norm_out], program)
         return out, norm_out
 
-    def _norm_kernels(self, out, residual, gamma, norm_out, eps, gathered=None, gather_sem=None):
+    def _norm_kernels(
+        self, out, residual, gamma, norm_out, eps, gathered=None, gather_sem=None, fabric=None, signal=None
+    ):
         """Kernels, CBs and semaphores of the fused reduce + residual + RMSNorm on the bank cores. The chips' copies
-        come from ``gathered`` (a row all-gather in DRAM) or, with ``gather_sem``, from the fabric gather buffer."""
+        come from ``gathered`` (a row all-gather in DRAM) or, with ``gather_sem``, from the gather buffer of
+        ``fabric`` (its FabricRowGather). ``signal`` = (semaphore id, NoC cores): each core raises that semaphore of
+        every one of those cores once its rows of ``norm_out`` landed."""
         assert out.shape[-1] == self.hidden and residual.shape[-1] == self.hidden and norm_out.shape[-1] == self.hidden
         assert gamma.shape[-1] == self.compact_width
         cores = len(self.cores)
@@ -858,13 +1070,20 @@ class ReduceExpand:
                 gamma.buffer_address(),
                 self.norm_consts.buffer_address(),
             ]
-            writer_rt[core.x][core.y] = [
-                out.buffer_address(),
-                first,
-                residual.buffer_address(),
-                norm_out.buffer_address(),
-                i,
-            ] + noc
+            sig = [0, 0]
+            if signal is not None:
+                sig = [len(signal[1]), signal[0]] + [v for c in signal[1] for v in (c.x, c.y)]
+            writer_rt[core.x][core.y] = (
+                [
+                    out.buffer_address(),
+                    first,
+                    residual.buffer_address(),
+                    norm_out.buffer_address(),
+                    i,
+                ]
+                + noc
+                + sig
+            )
             compute_rt[core.x][core.y] = []
         sem_id = 0
         reader_ct = [
@@ -881,6 +1100,7 @@ class ReduceExpand:
             sem_id,
             self.rows,
             self.gather_tiles,
+            fabric.chip_packets if fabric is not None else 0,
         ]
         writer_ct = [
             self.cb_sum,
@@ -913,6 +1133,7 @@ class ReduceExpand:
             fp32_bits(1.0 / self.hidden),
             fp32_bits(eps),
             self.gather_tiles,
+            int(fabric is not None and fabric.whole),
         ]
         reader = ttnn.KernelDescriptor(
             kernel_source=f"{KERNEL_DIR}/moe_reduce_norm_reader{'' if gathered is not None else '_fabric'}.cpp",
@@ -970,6 +1191,14 @@ class FabricRowGather:
         assert self.tiles_per_core in (2, 4) and len(self.cores) * self.tiles_per_core == self.compact_tiles
         self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores])
         tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
+        # One packet per (core, chip) when the fabric's packets hold a core's tiles (fabric_config's router_config,
+        # generator_vllm), the gather buffer then chip-major; else a packet per two tiles, tile-major.
+        max_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+        assert (
+            max_payload >= 2 * tile_bytes
+        ), f"fabric packets of {max_payload} B: the row gather sends two tiles at least"
+        self.whole = max_payload >= self.tiles_per_core * tile_bytes
+        self.chip_packets = 1 if self.whole else self.tiles_per_core // 2
         self.phase_tiles = self.tiles_per_core * self.chips
         self.phase_bytes = self.phase_tiles * tile_bytes
         rows = self.PHASES * self.phase_tiles * TILE
@@ -1043,7 +1272,18 @@ class FabricRowGather:
                         kernel_source=f"{KERNEL_DIR}/fabric_gather_send.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=transport,
-                        compile_time_args=[cb, rng, per_link, self.tiles_per_core, self.chips, local, 1, 0, wait_count],
+                        compile_time_args=[
+                            cb,
+                            rng,
+                            per_link,
+                            self.tiles_per_core,
+                            self.chips,
+                            local,
+                            1,
+                            0,
+                            wait_count,
+                            int(self.whole),
+                        ],
                         runtime_args=rt,
                         config=config,
                     )
@@ -1072,6 +1312,15 @@ class FabricRowGather:
 def fabric_transport_noc(device):
     """NoC coordinates of FabricRowGather's transport cores (what a producer signals)."""
     return [device.worker_core_from_logical_core(ttnn.CoreCoord(*c)) for c in FabricRowGather.TRANSPORT_CORES]
+
+
+class PendingConsumer:
+    """A program that reads the reduce's ``norm_out`` and has not launched yet: ``section`` (kernels, cbs,
+    semaphores, tensors) waits until semaphore ``sem`` of each of its ``cores`` (NoC coordinates) counts one increment
+    per reduce core. ReduceExpand.call_fabric runs it in the same launch as the reduce."""
+
+    def __init__(self, section, sem, cores):
+        self.section, self.sem, self.cores = section, sem, cores
 
 
 class PendingCompact:

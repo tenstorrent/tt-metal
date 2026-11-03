@@ -61,6 +61,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     DRAFT_GROUPS,
+    GROUP_SLOTS,
     MAX_DRAFTS,
     SPEC_SLOTS,
     DraftSource,
@@ -153,10 +154,13 @@ def committed_positions(vp, m):
 def test_chain_row():
     assert chain_row(B) == [0] * B
     vp = one_row_pass(40, 2, SeededRng(0))
-    row = chain_row(B, draft_source([vp]), 1000)
-    assert row[:CHAIN_WORDS] == [1, 3, 1000, 0, 1, 2, -1, 0] and row[CHAIN_WORDS:] == [0] * (B - CHAIN_WORDS)
-    relayed = chain_row(B, draft_source([vp]), 1000, relay=True)
-    assert relayed[:CHAIN_WORDS] == [1, 3, 1000, 0, 1, 2, -1, 1]
+    src = draft_source([vp])
+    row = chain_row(B, src, 1000)
+    # The source word holds the group's width (adaptive draft groups); a pass of one group has the widest.
+    assert src.width == GROUP_SLOTS
+    assert row[:CHAIN_WORDS] == [GROUP_SLOTS, 3, 1000, 0, 1, 2, -1, 0] and row[CHAIN_WORDS:] == [0] * (B - CHAIN_WORDS)
+    relayed = chain_row(B, src, 1000, relay=True)
+    assert relayed[:CHAIN_WORDS] == [GROUP_SLOTS, 3, 1000, 0, 1, 2, -1, 1]
     # The MTP history's request slots follow the relay word (kernels/mtp_history.cpp reads them there).
     both = chain_row(B, draft_source([vp]), 1000, relay=True, hslots=[2, 2, 2, None])
     assert CHAIN_HSLOTS == CHAIN_RELAY + 1 == CHAIN_WORDS

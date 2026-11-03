@@ -54,6 +54,7 @@ final norm feeds the target's LM head. Each layer's KV cache is a small ring add
 RoPE at the true position t (reference/spec_decode.py).
 """
 
+import os
 import time
 from dataclasses import dataclass
 
@@ -64,11 +65,22 @@ import ttnn
 from ..reference.mtp import load_mtp_weights
 from ..reference.mtp_backfill import MTP_WINDOW
 from ..reference.spec_chain import stash_page
-from ..reference.spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS, mtp_table_row, planned_drafts
+from ..reference.spec_decode import (
+    ADAPTIVE,
+    DRAFT_GROUPS,
+    GROUP_SLOTS,
+    MAX_DRAFTS,
+    SERIAL_WRITES,
+    SPEC_SLOTS,
+    WIDTHS,
+    mtp_table_row,
+    planned_drafts,
+)
 from ..reference.spec_inputs import pack_mtp_commits
 from .common import TILE, as_weight, cache_fill, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
+from .proj_stream import BankStreamMatmul
 from .mtp_backfill import MtpHistory
 from .spec_chain import SpecChain
 
@@ -109,7 +121,7 @@ class TtMtpLayer:
 @dataclass
 class LayerInputs:
     """The every-layer draft program's persistent inputs, written by the plan and tokens steps on every replay
-    (reference/spec_chain.py ``plan_step``): ring cache positions ``pos`` int32 [B], ``serial`` SPEC_SLOTS int32 [B]
+    (reference/spec_chain.py ``plan_step``): ring cache positions ``pos`` int32 [B], ``serial`` SERIAL_WRITES int32 [B]
     (slot j's alone), ``rope`` RoPE indices uint32 [1, B], ``hidden`` the hidden table's rows uint32 [1, B], ``tokens``
     each pass's tokens uint32 [1, B]; and the stash: its page int32 [B] (positions, layer-0 tokens) and its hidden rows
     ``stash_hidden`` bf16 row-major [1, 1, table_rows, hidden] (slot k's at row k), the table's second part."""
@@ -144,7 +156,7 @@ def make_layer_inputs(plan, max_batch, hidden_size):
     b = max_batch
     return LayerInputs(
         pos=rows(-1, ttnn.int32, (b,)),
-        serial=[rows(-1, ttnn.int32, (b,)) for _ in range(SPEC_SLOTS)],
+        serial=[rows(-1, ttnn.int32, (b,)) for _ in range(SERIAL_WRITES)],
         rope=rows(0, ttnn.uint32, (1, b)),
         hidden=rows(0, ttnn.uint32, (1, b)),
         tokens=[rows(0, ttnn.uint32, (1, b)) for _ in range(MAX_DRAFTS)],
@@ -170,12 +182,15 @@ class TtMiMoMTP:
         self.layers = [TtMtpLayer(model, ckpt, cache_dir, i, weight_dtype) for i in layers]
         self.multi = planned  # the planned program (plan step, hidden gather, a pass per layer)
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
+        # The decode eh_proj as a bank-local stream (_eh_bank_stream), made at the first pass.
+        self.eh_stream, self._eh_stream_made = None, False
         self.page_table = None
         self.heads = None  # one GreedyHead per draft: their persistent token rows are the drafts
         self.inputs = None  # every layer: LayerInputs
         self.backfill = backfill
         self.history = None  # MtpHistory (setup_cache, with ``backfill`` and the decode RoPE tables)
         self.trace = None
+        self.trace_one = None  # adaptive groups: the draft program with layer 0 alone (groups of 2 slots)
         self.backfill_trace = None
         self._inputs = None  # the one-layer draft program's inputs (``_trace_inputs``)
 
@@ -188,12 +203,18 @@ class TtMiMoMTP:
         row, blocks = mtp_table_row(m.block_size)
         for layer in self.layers:
             layer.kv_cache = layer.block.attn.allocate_kv_cache(DRAFT_GROUPS * blocks, m.block_size, m.kv_dtype)
-        table = torch.zeros(m.max_batch, len(row), dtype=torch.int32)
-        for g in range(DRAFT_GROUPS):  # draft group g's slots read and write its own ring
-            group_row = mtp_table_row(m.block_size, group=g)[0]
-            table[g * GROUP_SLOTS : (g + 1) * GROUP_SLOTS] = torch.tensor(group_row, dtype=torch.int32)
+        # Per group width (reference.spec_decode.WIDTHS): draft group g's slots g * width .. read and write its own
+        # ring. The page table holds one width's (set_width).
+        self.tables = {}
+        for width in WIDTHS:
+            table = torch.zeros(m.max_batch, len(row), dtype=torch.int32)
+            for g in range(SPEC_SLOTS // width):
+                group_row = mtp_table_row(m.block_size, group=g)[0]
+                table[g * width : (g + 1) * width] = torch.tensor(group_row, dtype=torch.int32)
+            self.tables[width] = table
+        self.width = WIDTHS[-1]
         self.page_table = ttnn.from_torch(
-            table,
+            self.tables[self.width],
             device=m.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -236,6 +257,24 @@ class TtMiMoMTP:
             )
 
     # ------------------------------------------------------------------ device
+    def _eh_bank_stream(self):
+        """The decode eh_proj ([2 * hidden, hidden / tp] per chip, 2 tile columns per bank) as a BankStreamMatmul, or
+        None (MIMO_MTP_EH_STREAM=0, or its layout constraints fail): the default matmul program reads its 4.5 MB on 24
+        cores in ~110 us, three times a step. Made once the decode users are known (host-side only)."""
+        if not self._eh_stream_made and self.model.decode_users is not None:
+            self._eh_stream_made = True
+            if os.environ.get("MIMO_MTP_EH_STREAM", "1") == "1":
+                hidden = self.cfg.hidden_size
+                for group in (4, 2, 1):
+                    try:
+                        self.eh_stream = BankStreamMatmul(
+                            self.plan, 2 * hidden, hidden // self.plan.tp, self.mm_config, group=group
+                        )
+                        break
+                    except AssertionError:
+                        continue
+        return self.eh_stream
+
     def _pass(self, tokens_tt, hidden, pos_tt, serial, cos, sin, head, layer=None):
         """One MTP layer step over the slots (``layer``, default the only one): tokens [1, B] u32, hidden [1, 1, B,
         hidden] (final normed), cache positions [B] i32 (-1 skips a slot), cos / sin [1, 1, B, D] of the true
@@ -250,13 +289,17 @@ class TtMiMoMTP:
         cat = ttnn.concat([en, hn], dim=-1)
         en.deallocate(True)
         hn.deallocate(True)
-        xs = ttnn.linear(
-            cat,
-            layer.eh_proj,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
+        stream = self._eh_bank_stream()
+        if stream is not None:
+            xs = stream(cat, layer.eh_proj, rows=4 if m.decode_users <= 4 else 8)
+        else:
+            xs = ttnn.linear(
+                cat,
+                layer.eh_proj,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.mm_config,
+            )
         cat.deallocate(True)
         x = self.plan.all_gather(xs, dim=-1)
         xs.deallocate(True)
@@ -290,11 +333,11 @@ class TtMiMoMTP:
 
     def _body(self, inputs):
         """The one-layer draft program: its inputs written from the packed upload, the three passes, then the drafts
-        step (the anchor's drafts into the result page). ``inputs``: tokens, fill, SPEC_SLOTS serial fill positions,
+        step (the anchor's drafts into the result page). ``inputs``: tokens, fill, SERIAL_WRITES serial fill positions,
         step2, step3, then the RoPE inputs (three table indices, or the three passes' host cos / sin)."""
         tokens, fill, *rest = inputs
-        serial = list(rest[:SPEC_SLOTS])
-        step2, step3, *rope = rest[SPEC_SLOTS:]
+        serial = list(rest[:SERIAL_WRITES])
+        step2, step3, *rope = rest[SERIAL_WRITES:]
         tables = self.model.rope_tables is not None
         self.model.spec_inputs.derive_mtp(tokens, fill, serial, step2, step3, rope if tables else None)
         (cs1, cs2, cs3), made = self._rope(rope)
@@ -325,14 +368,16 @@ class TtMiMoMTP:
         rows.deallocate(True)
         return hidden
 
-    def _body_layers(self):
+    def _body_layers(self, count=None):
         """The every-layer draft program: the plan step, the hidden gather, then pass i on MTP layer i with its tokens
-        (written by the tokens step for i >= 1), and the drafts step. Reads the decode RoPE tables once."""
+        (written by the tokens step for i >= 1), and the drafts step. Reads the decode RoPE tables once. ``count``: run
+        the first ``count`` layers only (groups of 2 slots draft one token; the drafts step's later drafts are stale
+        and never offered)."""
         m, li, chain = self.model, self.inputs, self.model.spec_chain
         chain.plan_layers()
         cos, sin = m.rope_table_rows(li.rope, m.rope_tables[:2])
         hidden = self._gather_hidden()
-        for i, layer in enumerate(self.layers):
+        for i, layer in enumerate(self.layers[:count]):
             if i:
                 chain.tokens(i)
             h = self._pass(li.tokens[i], hidden, li.pos, li.serial, cos, sin, self.heads[i], layer)
@@ -398,7 +443,7 @@ class TtMiMoMTP:
             return ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
 
         tokens = host(torch.zeros(1, m.max_batch, dtype=torch.int32), ttnn.uint32)
-        idle = [host(torch.full((m.max_batch,), -1, dtype=torch.int32), ttnn.int32) for _ in range(SPEC_SLOTS + 3)]
+        idle = [host(torch.full((m.max_batch,), -1, dtype=torch.int32), ttnn.int32) for _ in range(SERIAL_WRITES + 3)]
         if m.rope_tables is None:
             rope = self._rope_host()
         else:
@@ -417,9 +462,9 @@ class TtMiMoMTP:
             ]
         return self._inputs
 
-    def _run_body(self, inputs):
+    def _run_body(self, inputs, count=None):
         if self.multi:
-            self._body_layers()
+            self._body_layers(count)
         else:
             self._body(inputs)
 
@@ -453,6 +498,16 @@ class TtMiMoMTP:
         ttnn.end_trace_capture(m.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(m.mesh_device)
         self.trace = {"id": trace_id, "inputs": inputs}
+        if ADAPTIVE and self.multi and len(self.layers) > 1:
+            # Adaptive draft groups: passes in groups of 2 slots draft one token, from layer 0 alone (set_width).
+            m.spec_inputs.reset()
+            self._body_layers(count=1)
+            ttnn.synchronize_device(m.mesh_device)
+            one_id = ttnn.begin_trace_capture(m.mesh_device, cq_id=0)
+            self._body_layers(count=1)
+            ttnn.end_trace_capture(m.mesh_device, one_id, cq_id=0)
+            ttnn.synchronize_device(m.mesh_device)
+            self.trace_one = {"id": one_id, "inputs": inputs}
         if self.history is not None:
             # The backfill program: compiled by an idle run (an idle upload fills the rings' scratch blocks and leaves
             # the stash), then captured.
@@ -469,6 +524,9 @@ class TtMiMoMTP:
         if self.trace is not None:
             ttnn.release_trace(self.model.mesh_device, self.trace["id"])
             self.trace = None
+        if self.trace_one is not None:
+            ttnn.release_trace(self.model.mesh_device, self.trace_one["id"])
+            self.trace_one = None
         if self.backfill_trace is not None:
             ttnn.release_trace(self.model.mesh_device, self.backfill_trace)
             self.backfill_trace = None
@@ -481,14 +539,30 @@ class TtMiMoMTP:
                 "the plugin's trace_mode 'all' or 'decode_only', with enable_model_warmup)"
             )
 
+    def _draft_trace(self):
+        """The draft trace for the current group width: layer 0 alone for groups of 2 slots (one draft each)."""
+        return self.trace_one if self.width == 2 and self.trace_one is not None else self.trace
+
+    def set_width(self, width):
+        """Draft groups of ``width`` slots from the next draft on: the page table maps group g's slots g * width ..
+        to ring g (copied in queue order when the width changes)."""
+        assert width in self.tables, f"group width {width} not in {sorted(self.tables)}"
+        if width == self.width:
+            return
+        host = ttnn.from_torch(
+            self.tables[width], dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.plan.replicate()
+        )
+        ttnn.copy_host_to_device_tensor(host, self.page_table)
+        self.width = width
+
     def enqueue_backfill(self, slot, a, group=0):
         """Fill every layer's ring of draft group ``group`` from the history of the request in lane ``slot`` before a
         draft whose first row is at ``a`` (non-blocking; enqueue the draft right after it): the window
         a - MTP_WINDOW + 1 .. a - 1, and with every layer the stash rows a - 2, a - 1 the draft then re-runs (those of
         them its commit leaves stale), in the group's stash slots."""
         self._require_trace()  # captured with the draft trace (capture_trace)
-        assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS and 0 <= group < DRAFT_GROUPS
-        self.history.upload_backfill(slot, a, group)
+        assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS and 0 <= group < SPEC_SLOTS // self.width
+        self.history.upload_backfill(slot, a, group, self.width)
         ttnn.execute_trace(self.model.mesh_device, self.backfill_trace, cq_id=0, blocking=False)
 
     def enqueue(self, tokens, plan):
@@ -526,7 +600,7 @@ class TtMiMoMTP:
         )
         self.last_inputs_s = time.perf_counter() - t
         ttnn.copy_host_to_device_tensor(host, m.spec_inputs.mtp_packed)
-        ttnn.execute_trace(m.mesh_device, self.trace["id"], cq_id=0, blocking=False)
+        ttnn.execute_trace(m.mesh_device, self._draft_trace()["id"], cq_id=0, blocking=False)
 
     def enqueue_chained(self):
         """Draft right behind a verify pass and its accept trace (non-blocking): the accept trace's chain step wrote
@@ -534,7 +608,7 @@ class TtMiMoMTP:
         decode RoPE tables (without them the host copies the draft's cos / sin: ``enqueue``)."""
         self._require_trace()
         assert self.model.rope_tables is not None, "a chained draft reads its cos / sin from the decode RoPE tables"
-        ttnn.execute_trace(self.model.mesh_device, self.trace["id"], cq_id=0, blocking=False)
+        ttnn.execute_trace(self.model.mesh_device, self._draft_trace()["id"], cq_id=0, blocking=False)
 
     def read_drafts(self, anchor, group=0):
         """Draft group ``group``'s drafts of the anchor slot, from the result page the drafts step wrote (blocks until

@@ -10,6 +10,10 @@
 //
 // Only the user rows of x carry users and an output row depends only on the same x row, so the unread rows of cb_x
 // reach only output rows that are never written.
+//
+// ``wait_count`` > 0 (the router in the launch of the reduce that writes x: ReduceExpand with a consumer): x is read
+// only once semaphore ``wait_sem`` counts that many increments (one per reduce core, after its x rows landed); the
+// weights stream in meanwhile.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -30,6 +34,8 @@ void kernel_main() {
     constexpr uint32_t group = get_compile_time_arg_val(7);
     constexpr uint32_t sem_id = get_compile_time_arg_val(8);
     constexpr uint32_t rows = get_compile_time_arg_val(9);  // the user rows: 4 or 8
+    constexpr uint32_t wait_sem = get_compile_time_arg_val(10);
+    constexpr uint32_t wait_count = get_compile_time_arg_val(11);
     constexpr uint32_t x_tile_bytes = 2048;                 // bf16 32x32
     constexpr uint32_t x_face_bytes = 512;                  // bf16 16x16
     constexpr uint32_t x_user_bytes = rows * 32;            // the user rows of a bf16 face
@@ -52,6 +58,9 @@ void kernel_main() {
         cb_reserve_back(cb_bias, 1);
         noc_async_read(
             page_noc_addr<true>(bias_addr, out_page, out_tile_bytes), get_write_ptr(cb_bias), out_tile_bytes);
+    }
+    if constexpr (wait_count > 0) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(wait_sem)), wait_count);
     }
     cb_reserve_back(cb_x, kq);
     uint32_t x_l1 = get_write_ptr(cb_x);

@@ -56,7 +56,8 @@ import torch
 
 import ttnn
 
-from ..reference.spec_decode import GROUP_SLOTS, SPEC_SLOTS
+from ..reference.kv_pair_split import NO_KEY_LSE
+from ..reference.spec_decode import ADAPTIVE, GROUP_SLOTS, SPEC_SLOTS, WIDTHS
 from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import BatchFillTables, kv_replication, per_chip, slot_owner_masks
@@ -92,7 +93,7 @@ PAIR_SPLIT_OPS = all(
 # On by default for groups of 2 slots, off for 4 (MIMO_VERIFY_GROUPED=1 / 0 overrides; packed, groups of 4 win from
 # ~32K and lose 0.2 ms a step at 8K); the adapter then packs a verify's requests one per group of GROUP_SLOTS slots
 # (verify_grouped()).
-VERIFY_GROUPED = os.environ.get("MIMO_VERIFY_GROUPED", "1" if GROUP_SLOTS == 2 else "0") == "1"
+VERIFY_GROUPED = os.environ.get("MIMO_VERIFY_GROUPED", "1" if GROUP_SLOTS == 2 or ADAPTIVE else "0") == "1"
 GROUPED_VERIFY_OPS = "spec_multi_pos_tiles" in (
     ttnn.transformer.paged_flash_multi_latent_attention_decode.__doc__ or ""
 )
@@ -106,6 +107,74 @@ def verify_grouped():
     candidates, and a ttnn build with spec_multi_pos_tiles on paged MLA decode). 8 candidates (DFlash's one group)
     need 128-token K chunks and at most 32 cores per request to fit L1 beside decode's buffers: not wired."""
     return VERIFY_GROUPED and GROUPED_VERIFY_OPS and GROUP_SLOTS in (2, 4)
+
+
+# The grouped SDPA splits its cores evenly over the groups it is given, used or not: with 4 groups of 2 slots a lone
+# request scans its keys on 16 of the 64 cores, a quarter of the bandwidth (at 256K, 0.58 ms per global layer for one
+# request as for four). So the verify is captured once per count of leading groups it attends (verify_variants), and
+# the adapter packs a step's requests into the lowest groups and replays the narrowest trace that holds them: one
+# request scans on 64 cores, two on 32 each. MIMO_VERIFY_VARIANTS=0: one trace over every group.
+VERIFY_VARIANTS = os.environ.get("MIMO_VERIFY_VARIANTS", "1") == "1"
+# The cores still split evenly over the attended groups, so the longest context sets the time when the requests'
+# contexts differ (AgentX: tens of K beside hundreds of K). A sequential variant runs one SDPA per group, each on the
+# whole grid, back to back: the time is then the sum of the contexts' scans plus a launch per group. One chip, local
+# keys (tests/perf/sdpa_balance_bench.py, ms per global layer): 400K + 3 x 25K grouped 1.29, sequential 0.80; 4 x 100K
+# grouped 0.46, sequential 0.62. The adapter picks it per step (verify_variant ``sequential``) when one request's
+# context dwarfs the others'. MIMO_VERIFY_SEQUENTIAL: 0 never, 1 always (with two or more groups), auto (default).
+VERIFY_SEQUENTIAL = os.environ.get("MIMO_VERIFY_SEQUENTIAL", "auto")
+# A variant attending fewer than all groups returns its slots only: the pair merge (PairSplit.merge_heads) writes the
+# rows past them as zeros, what padding them with idle slots (output 0, NO_KEY_LSE) gave, without the nine small ops.
+# MIMO_VERIFY_PAD_IDLE=1 pads.
+PAD_IDLE_SLOTS = os.environ.get("MIMO_VERIFY_PAD_IDLE", "0") == "1"
+# Every K / V row the cache stores is finite and within +-KV_LIMIT (MIMO_KV_SANITIZE=0: written as computed). The
+# decode SDPA masks the rows a query must not see (past its position, before its sliding window, a table's null
+# block) by adding -inf to their scores, which leaves a NaN or infinite key's score NaN, and a masked NaN value row
+# still enters the weighted sum as 0 * NaN: one non-finite row anywhere in a page the SWA decode reads poisons every
+# query that reads that page, including other requests' (a freed block keeps its rows; the null block 0 is every SWA
+# table's out-of-window entry and shares its page with the global layers). Finite masked rows contribute nothing.
+# Real K / V stay well inside the limit (|x| < 50).
+KV_SANITIZE = os.environ.get("MIMO_KV_SANITIZE", "1") == "1"
+KV_LIMIT = 65280.0
+
+
+def finite_kv(t, keep=False):
+    """``t`` as the cache stores it (KV_SANITIZE): clamped to +-KV_LIMIT, in ``t``'s memory config; ``t`` is
+    deallocated unless ``keep``. Unchanged without KV_SANITIZE. One op: the SFPU clamp also maps NaN to one of the
+    bounds (its compares are not IEEE: tests/test_kv_sanitize.py checks it), a third of isfinite + where + clamp."""
+    if not KV_SANITIZE:
+        return t
+    out = ttnn.clamp(t, min=-KV_LIMIT, max=KV_LIMIT, memory_config=t.memory_config())
+    if not keep:
+        t.deallocate(True)
+    return out
+
+
+def verify_variants():
+    """The verifies captured, (group width, leading groups attended) each (the widest last: every group of
+    GROUP_SLOTS slots); [None] without grouping. A pass's group width is GROUP_SLOTS, or with adaptive draft groups
+    (reference/spec_decode.py ADAPTIVE) 2 or 4."""
+    if not verify_grouped():
+        return [None]
+    out = []
+    for width in WIDTHS:
+        groups = SPEC_SLOTS // width
+        counts = [n for n in (1, 2, 4, 8) if n < groups] if VERIFY_VARIANTS else []
+        for n in counts + [groups]:
+            if n > 1 and VERIFY_SEQUENTIAL == "auto":
+                out.append((width, n, True))
+            out.append((width, n, n > 1 and VERIFY_SEQUENTIAL == "1"))
+    return out
+
+
+def verify_variant(used_groups, width=GROUP_SLOTS, sequential=False):
+    """The narrowest captured verify (verify_variants) in groups of ``width`` slots attending groups 0 ..
+    ``used_groups`` - 1, with one SDPA per group when ``sequential`` and such a variant was captured."""
+    variants = verify_variants()
+    if variants == [None]:
+        return None
+    fits = [v for v in variants if v[0] == width and v[1] >= max(1, used_groups)]
+    n = fits[0][1]
+    return next((v for v in fits if v[1] == n and v[2] == sequential), next(v for v in fits if v[1] == n))
 
 
 # A global layer's later prefill chunks stream the whole cached context once per (head group, Q chunk) unit. With
@@ -345,6 +414,7 @@ class SwaDecodeQkv:
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=ranges,
                         compile_time_args=ct,
+                        defines=[("SWA_KV_SANITIZE", "1" if KV_SANITIZE else "0")],
                         runtime_args=rt,
                         config=config,
                     )
@@ -642,7 +712,9 @@ class TtMiMoAttention:
             fp32_acc=os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1",
             packer_l1_acc=False,
         )
-        self.decode_sdpa_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=False, packer_l1_acc=False)
+        # MIMO_DECODE_SDPA_FIDELITY (HiFi4 default) for the decode / verify SDPA, as MIMO_PREFILL_SDPA_FIDELITY.
+        fidelity = getattr(ttnn.MathFidelity, os.environ.get("MIMO_DECODE_SDPA_FIDELITY", "HiFi4"))
+        self.decode_sdpa_config = compute_config(fidelity, fp32_acc=False, packer_l1_acc=False)
         self.decode_sdpa_program = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             q_chunk_size=0,
@@ -780,9 +852,22 @@ class TtMiMoAttention:
         self.rows = rows
         self.compact_buf = zero_output(self.plan, self.cfg.hidden_size // (TILE // rows))
 
+    def qkv_prefetch(self, x, start, x_wait):
+        """The compact decode's qkv stream on ``x`` (the reduce output this layer's decode reads next) as a section
+        for the previous block's launch: its weights stream into L1 once ``start`` increments of semaphore
+        BankStreamMatmul.START_SEM say DRAM is free, x is read once its loaders count ``x_wait`` increments of
+        X_READY_SEM. Returns (section, the NoC cores to start, the x loaders); the next compact _decode_qkv on ``x``
+        takes the section's output."""
+        section = self.qkv_stream.section(x, self.wqkv_stream, rows=self.rows, start=start, x_wait=x_wait)
+        self.pending_qkv = (x, section["out"])
+        return section, self.qkv_stream.noc_cores, section["loaders"]
+
     def _decode_qkv(self, x, weight, program_config, compact=False):
         # Keep the fused qkv row in L1: the decode head split reads it with many small per-user row reads. The bank
         # stream computes the user rows only, so it serves the compact (users in rows 0-3 or 0-7) decode.
+        pending, self.pending_qkv = getattr(self, "pending_qkv", None), None
+        if compact and weight is self.wqkv and pending is not None and pending[0] is x:
+            return pending[1]  # computed in the previous block's launch (qkv_prefetch)
         if compact and weight is self.wqkv and self.qkv_stream is not None:
             return self.qkv_stream(x, self.wqkv_stream, rows=self.rows)
         return ttnn.linear(
@@ -837,13 +922,20 @@ class TtMiMoAttention:
         batch = {"batch_idx": batch_idx}
         if isinstance(tables, BatchFillTables):  # input batch entry r writes through row r of tables.fill
             batch = {"batch_idx_tensor": tables.rows}
-        k_fill = ttnn.typecast(k_rot, k_cache.dtype)
+        k_src = finite_kv(k_rot, keep=True)  # the chunk's attention still reads k_rot and v
+        k_fill = ttnn.typecast(k_src, k_cache.dtype)
+        if k_src is not k_rot:
+            k_src.deallocate(True)
         if v_cache.shape[-1] < v.shape[-1]:
             v_real = ttnn.slice(v, (0, 0, 0, 0), (v.shape[0], v.shape[1], seq_len, v_cache.shape[-1]))
-            v_fill = ttnn.typecast(v_real, v_cache.dtype)
-            v_real.deallocate(True)
+            v_src = finite_kv(v_real)
+            v_fill = ttnn.typecast(v_src, v_cache.dtype)
+            v_src.deallocate(True)
         else:
-            v_fill = ttnn.typecast(v, v_cache.dtype)
+            v_src = finite_kv(v, keep=True)
+            v_fill = ttnn.typecast(v_src, v_cache.dtype)
+            if v_src is not v:
+                v_src.deallocate(True)
         ttnn.experimental.paged_fill_cache(k_cache, k_fill, table, **batch)
         ttnn.experimental.paged_fill_cache(v_cache, v_fill, table, **batch)
         k_fill.deallocate(True)
@@ -1192,7 +1284,7 @@ class TtMiMoAttention:
         )
         return attn, lse
 
-    def _verify_grouped(self, q, kv_cache, table, cur_pos):
+    def _verify_grouped(self, q, kv_cache, table, cur_pos, used=None):
         """A verify's global SDPA with its LSE, one KV scan per request (paged MLA decode's spec_multi_pos_tiles): the
         pass's SPEC_SLOTS slots are SPEC_SLOTS / GROUP_SLOTS groups, each one request's candidates (the adapter packs
         them so: reference.spec_decode.plan_verify_passes with ``aligned``), candidate j of group g in slot
@@ -1200,12 +1292,16 @@ class TtMiMoAttention:
         [1, groups, GROUP_SLOTS * 32, 192], the table ``table`` (a row per slot) as each group's first row, and every
         candidate keeps its SDPA position ``cur_pos`` [SPEC_SLOTS] (-1: no local key or a gap, output 0 and lse
         NO_KEY_LSE). Returns what _paged_mla_decode_lse returns for the slots: output [1, SPEC_SLOTS, 16, 128] in L1,
-        lse [1, SPEC_SLOTS, 16, 1] fp32, views of the grouped outputs (the padding rows of each tile are not heads).
+        lse [1, SPEC_SLOTS, 16, 1] fp32, views of the grouped outputs (the padding rows of each tile are not heads);
+        a variant attending fewer groups returns only its slots (PAD_IDLE_SLOTS).
         With GROUPED_PACKED_OPS the op computes two candidates per tile (spec_multi_pos_packed, half the compute) on
-        the same views."""
+        the same views. ``used`` (a verify variant, verify_variants): attend only groups 0 .. used - 1, on all the
+        cores; the other slots' output is 0 and their lse NO_KEY_LSE, as for an idle group."""
         k_cache, v_cache = kv_cache
-        slots, cands = SPEC_SLOTS, GROUP_SLOTS
-        groups = slots // cands
+        cands = GROUP_SLOTS if used is None else used[0]
+        all_slots = SPEC_SLOTS
+        groups = all_slots // cands if used is None else used[1]
+        slots = groups * cands
         nh, dk, width = q.shape[-2], q.shape[-1], table.shape[-1]
         packed = GROUPED_PACKED_OPS and cands % 2 == 0 and 2 * nh == TILE
         q_dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
@@ -1218,27 +1314,79 @@ class TtMiMoAttention:
         if groups > 1:
             for t in rows:
                 t.deallocate(True)
-        attn, lse = ttnn.transformer.paged_flash_multi_latent_attention_decode(
-            q_grouped,
-            k_cache,
-            v_cache,
+        if slots < all_slots:
+            cur_pos = ttnn.slice(cur_pos, (0,), (slots,))
+        sdpa = dict(
             head_dim_v=self.v_head_dim,
-            page_table_tensor=group_table,
-            cur_pos_tensor=cur_pos,
             scale=self.scale,
-            program_config=self._split_sdpa_program(groups, width * k_cache.shape[-2]),
             compute_kernel_config=self.decode_sdpa_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             return_lse=True,
             spec_multi_pos_tiles=cands,
             **({"spec_multi_pos_packed": True} if packed else {}),
-        )  # [1, groups, cands * 32, 128], [.., 1]
+        )
+        mla = ttnn.transformer.paged_flash_multi_latent_attention_decode
+        sequential = used[2] if used is not None else VERIFY_SEQUENTIAL == "1"
+        if sequential and groups > 1:
+            parts = []
+            for g in range(groups):
+                q_g = ttnn.slice(q_grouped, (0, g, 0, 0), (1, g + 1, cands * TILE, dk))
+                t_g = ttnn.slice(group_table, (g, 0), (g + 1, width))
+                p_g = ttnn.slice(cur_pos, (g * cands,), ((g + 1) * cands,))
+                program = self._split_sdpa_program(1, width * k_cache.shape[-2])
+                parts.append(
+                    mla(
+                        q_g, k_cache, v_cache, page_table_tensor=t_g, cur_pos_tensor=p_g, program_config=program, **sdpa
+                    )
+                )
+                for t in (q_g, t_g, p_g):
+                    t.deallocate(True)
+            attn = ttnn.concat([o for o, _ in parts], dim=1, memory_config=parts[0][0].memory_config())
+            lse = ttnn.concat([l for _, l in parts], dim=1, memory_config=parts[0][1].memory_config())
+            for o, l in parts:
+                o.deallocate(True)
+                l.deallocate(True)
+        else:
+            attn, lse = mla(
+                q_grouped,
+                k_cache,
+                v_cache,
+                page_table_tensor=group_table,
+                cur_pos_tensor=cur_pos,
+                program_config=self._split_sdpa_program(groups, width * k_cache.shape[-2]),
+                **sdpa,
+            )  # [1, groups, cands * 32, 128], [.., 1]
         q_slots.deallocate(True)
         group_table.deallocate(True)
+        if slots < all_slots:
+            cur_pos.deallocate(True)
         dv = attn.shape[-1]
         out = ttnn.reshape(attn, ttnn.Shape([1, slots, nh, dv]), ttnn.Shape([1, slots, TILE, dv]))
         lse = ttnn.reshape(lse, ttnn.Shape([1, slots, nh, 1]), ttnn.Shape([1, slots, TILE, TILE]))
+        if slots < all_slots and PAD_IDLE_SLOTS:
+            out, lse = self._pad_idle_slots(out, lse, all_slots - slots)
         return out, lse
+
+    def _pad_idle_slots(self, out, lse, idle):
+        """``out`` [1, s, 16, 128] and ``lse`` [1, s, 16, 1] followed by ``idle`` idle slots (output 0, lse
+        NO_KEY_LSE), in ``out``'s memory config: what the grouped SDPA leaves for a group with no candidate."""
+        zero = ttnn.slice(out, (0, 0, 0, 0), (1, 1, out.shape[2], out.shape[3]))
+        zero = ttnn.multiply(zero, 0.0)
+        pad = ttnn.repeat(zero, ttnn.Shape([1, idle, 1, 1])) if idle > 1 else zero
+        out_all = ttnn.concat([out, pad], dim=1, memory_config=out.memory_config())
+        if pad is not zero:
+            pad.deallocate(True)
+        zero.deallocate(True)
+        no_key = ttnn.slice(lse, (0, 0, 0, 0), (1, 1, lse.shape[2], 1))
+        no_key = ttnn.add(ttnn.multiply(no_key, 0.0), NO_KEY_LSE)
+        pad = ttnn.repeat(no_key, ttnn.Shape([1, idle, 1, 1])) if idle > 1 else no_key
+        lse_all = ttnn.concat([lse, pad], dim=1, memory_config=lse.memory_config())
+        if pad is not no_key:
+            pad.deallocate(True)
+        no_key.deallocate(True)
+        out.deallocate(True)
+        lse.deallocate(True)
+        return out_all, lse_all
 
     def _paged_mla_decode_lse(self, q, kv_cache, page_table, cur_pos):
         """Global decode SDPA with its LSE (the ops' interface in runs/kvsplit/SPEC.md): q (height-sharded, 16 heads)
@@ -1362,7 +1510,8 @@ class TtMiMoAttention:
             q.deallocate(True)
             k.deallocate(True)
 
-            v_cached = self._cache_width_v(v, x.shape[-2], v_cache.shape[-1])
+            v_cached = finite_kv(self._cache_width_v(v, x.shape[-2], v_cache.shape[-1]))
+            k_rot = finite_kv(k_rot)
             for pos in writes:
                 update = dict(update_idxs_tensor=pos, page_table=page_table)
                 ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
@@ -1430,7 +1579,8 @@ class TtMiMoAttention:
         q.deallocate(True)
         k.deallocate(True)
 
-        v_shard = self._cache_width_v(v, batch, self.v_head_dim)
+        v_shard = finite_kv(self._cache_width_v(v, batch, self.v_head_dim))
+        k_rot = finite_kv(k_rot)
 
         k_cache, v_cache = kv_cache
         for pos in serial or [pos_owned if pos_update is None else pos_update]:
@@ -1482,7 +1632,8 @@ class TtMiMoAttention:
         k_rot = ttnn.experimental.rotary_embedding_llama(k, rot_mats[0], rot_mats[1], trans, is_decode_mode=True)
         q.deallocate(True)
         k.deallocate(True)
-        v_shard = self._cache_width_v(v, batch, self.v_head_dim)
+        v_shard = finite_kv(self._cache_width_v(v, batch, self.v_head_dim))
+        k_rot = finite_kv(k_rot)
 
         k_cache, v_cache = kv_cache
         for pos in positions.get("pair_serial") or [positions["pair_write"]]:
@@ -1498,7 +1649,8 @@ class TtMiMoAttention:
         # A verify over exactly its pass's slots (the compact rows): one KV scan per request.
         grouped = positions.get("pair_serial") and verify_grouped() and pos is not positions["pair_sdpa"]
         if grouped and pos.shape[0] == SPEC_SLOTS:
-            attn, lse = self._verify_grouped(q_rot, kv_cache, table, pos)  # [1, SPEC_SLOTS, 16, 128], [.., 16, 1]
+            # [1, SPEC_SLOTS, 16, 128], [.., 16, 1]
+            attn, lse = self._verify_grouped(q_rot, kv_cache, table, pos, positions.get("verify_groups"))
         else:
             attn, lse = self._paged_mla_decode_lse(q_rot, kv_cache, table, pos)  # [1, B or n, 16, 128], [.., 16, 1]
         q_rot.deallocate(True)

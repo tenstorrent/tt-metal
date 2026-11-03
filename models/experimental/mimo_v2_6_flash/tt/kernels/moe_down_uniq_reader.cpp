@@ -10,6 +10,7 @@
 // kt reads of ct tiles, landing as [kt][ct] for custom_mm.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "moe_stream_common.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_w = get_compile_time_arg_val(0);
@@ -32,6 +33,7 @@ void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(2);
     const uint32_t ids_addr = get_arg_val<uint32_t>(3);
 
+    MOE_MARK(40);
     // Experts: row-major uint16 [1, 1, 1, >= pairs + 1] = [count, ids...], one page in bank 0.
     const uint32_t ids_l1 = get_write_ptr(cb_ids);
     noc_async_read(get_noc_addr_from_bank_id<true>(0, ids_addr), ids_l1, ids_bytes);
@@ -45,6 +47,7 @@ void kernel_main() {
     cb_reserve_back(cb_cnt, 1);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_cnt)) = n;
     cb_push_back(cb_cnt, 1);
+    MOE_MARK(41);
 
     // Stream: block i goes to CB slot i % num_buffers with trid (i % num_buffers) + 1; at most in_flight blocks
     // are issued but not pushed, and each reserve covers them plus the new block.
@@ -83,4 +86,5 @@ void kernel_main() {
         oldest++;
         issued--;
     }
+    MOE_MARK(42);
 }
