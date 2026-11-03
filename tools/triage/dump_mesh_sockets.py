@@ -22,9 +22,9 @@ Description:
     Counter columns, by source:
 
       sent@snd    sender bytes_sent                                    kernel frame
-      acked@snd   sender_socket_md.bytes_acked_array[i]                L1, written by the receiver
+      acked@snd   sender_socket_md.bytes_acked_array[i]                L1, written by the receiver (the host for D2H)
       wr_off      sender write_ptr, offset from downstream_fifo_addr   kernel frame
-      sent@rcv    receiver_socket_md.bytes_sent                        L1, written by the sender
+      sent@rcv    receiver_socket_md.bytes_sent                        L1, written by the sender (the host for H2D)
       acked@rcv   receiver bytes_acked                                 kernel frame
       rd_addr     receiver read_ptr, absolute L1 address               kernel frame
 
@@ -73,7 +73,7 @@ class Peer:
     core_x: int
     core_y: int
     device_id: int | None = None
-    is_host: bool = False  # D2H and H2D sockets: the other side is the host, not a core
+    is_host: bool = False
 
     def label(self) -> str:
         if self.is_host:
@@ -250,7 +250,7 @@ def sender_row(core: SocketCore, md: SenderMd, index: int) -> SocketRow:
         location=core.location,
         node=core.node,
         config_addr=core.config_addr,
-        downstream_config_addr=None if md.is_d2h else md.downstream_config_addr,  # a host address for D2H
+        downstream_config_addr=None if core.peers[index].is_host else md.downstream_config_addr,
         downstream=index,
         sent_at_sender=core.interface.get("bytes_sent"),
         acked_at_sender=md.bytes_acked[index],

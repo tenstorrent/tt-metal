@@ -925,7 +925,8 @@ class TestTriage:
     indirect=True,
 )
 @pytest.mark.skipif(
-    bool(os.environ.get("TT_METAL_SIMULATOR")), reason="The app's host sockets are untested on a simulator"
+    bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="Not supported on a simulator yet: the fixture cannot wait for a spinning kernel",
 )
 @pytest.mark.usefixtures("cause_hang_with_app")
 class TestMeshSocketTriage:

@@ -456,10 +456,9 @@ void Inspector::host_socket_created(
     }
     try {
         auto* mesh_device = config_buffer->device();
-        auto* device =
-            mesh_device->is_local(core.device_coord) ? internal::get_device(*mesh_device, core.device_coord) : nullptr;
+        auto* device = internal::get_device(*mesh_device, core.device_coord);
         if (device == nullptr) {
-            return;  // Another rank owns this core and reports it itself.
+            return;
         }
         const distributed::SocketSenderSize sender_size(
             mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));

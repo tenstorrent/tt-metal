@@ -96,7 +96,7 @@ struct MeshSocketRecord {
     # One mesh id per side, so these are per socket, not per core.
     localMeshId @7 :UInt32;       # cross-rank stitch key for this side
     peerMeshId @8 :UInt32;        # matches the peer rank's localMeshId
-    # D2H/H2D: the peer is the host, so localCores have no peers and peerMeshId is unset.
+    # D2H/H2D: the peer is the host, so localCores have no peers and peerMeshId is left at 0.
     peerIsHost @9 :Bool;
 }
 
