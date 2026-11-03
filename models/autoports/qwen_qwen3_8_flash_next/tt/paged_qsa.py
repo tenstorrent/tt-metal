@@ -8,6 +8,7 @@ import ttnn
 
 from .indexer_prefix import prepare_indexer_prefix
 from .optimized_decoder import OptimizedQSA
+from .prefill_qsa_transfer import prefill_mask_enabled, prefill_mask_scores
 
 
 def mask_scores_per_row(attention, scores, positions, seq):
@@ -251,7 +252,8 @@ def select_groups(attention, pooled, iq, positions, page_table, seq):
         if batched_selection:
             selected_rows.append(scores)
             continue
-        bound = OptimizedQSA._mask_scores(mask_context, scores, positions[lane : lane + 1], seq)
+        mask = prefill_mask_scores if seq > 1 and prefill_mask_enabled() else OptimizedQSA._mask_scores
+        bound = mask(mask_context, scores, positions[lane : lane + 1], seq)
         selected_rows.append(ttnn.experimental.topk_large_indices(scores, k=512, valid_length_tensor=bound))
         # Only small logical-ID selections survive the lane. Never concatenate
         # B dense score matrices or return physical pooled row IDs to expansion.
