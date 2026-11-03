@@ -152,11 +152,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // DST is the register file the math unit computes in: 4 tiles per half in fp32 mode (8 in bf16);
     // the kernels run half-sync, so one pass gets one half.
     // Everything below is "how many tiles go through DST per pass":
-    //   block_size     output tiles per pass in the element-wise loops (one slot stays free for the
-    //                  broadcast factor they multiply by)
+    //   block_size     output tiles per pass in the element-wise loops, the accumulator rescale and the
+    //                  finalize (one slot stays free for the broadcast factor they multiply by)
     //   qk_block_*     Q rows x K tiles per QK^T matmul_block call
-    //   pv_block_*     Q rows x V feature tiles per PV matmul_block call (one slot stays free for the
-    //                  broadcast rescale factor the previous accumulator is multiplied by)
+    //   pv_block_*     Q rows x V feature tiles per PV matmul_block call
     //   sm_block_size  score tiles per pass of the exp step
     constexpr bool fp32_dest_acc_en = true;
     const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
@@ -165,7 +164,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // tiles the rows x cols output.
     using ttnn::prim::detail::determine_largest_subblock_size;
     const auto [qk_block_h, qk_block_w] = determine_largest_subblock_size(rows, Sk_chunk_t, dst_size);
-    const auto [pv_block_h, pv_block_w] = determine_largest_subblock_size(rows, shape.vWt, dst_size - 1U);
+    const auto [pv_block_h, pv_block_w] = determine_largest_subblock_size(rows, shape.vWt, dst_size);
     const uint32_t sm_block_size = dst_size;
 
     // -------------------------------------------------------------------------

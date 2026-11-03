@@ -189,16 +189,19 @@ void init_unary_bcast_col(uint32_t cb_col_vec) {
         cb_col_vec)));
 }
 
-// O_cur = O_prev * alpha + P @ V for the whole item, one block_h x block_w rectangle of output tiles per
-// DST pass. P is rows x Sk_chunk_t tiles (row-major), V is Sk_chunk_t x Wt tiles (row-major, as read
-// from DRAM). With `rescale`, the previous accumulator block is loaded into DST first (UnpackToDestFp32),
-// multiplied by its row's alpha (broadcast into the spare DST slot block_h * block_w), and the matmul
-// accumulates on top of it; so block_h * block_w must leave one DST tile free.
+// O_cur = P @ V (+ O_prev * alpha) for the whole item. P is rows x Sk_chunk_t tiles (row-major), V is
+// Sk_chunk_t x Wt tiles (row-major, as read from DRAM). P @ V goes first, one block_h x block_w rectangle of
+// output tiles per DST pass (the whole DST), packed to cb_cur_mm_out. With `rescale`, O_prev * alpha is then
+// added onto it by the packer with L1-accumulate, as on main: rescale_block tiles of one row per DST pass,
+// the previous accumulator loaded at full fp32 (UnpackToDestFp32), its row's alpha broadcast into the spare
+// slot rescale_block, and the product formed on the SFPU. The packs of the two loops go through the same
+// packer in order, so the accumulate always finds the matmul result in L1.
 template <uint32_t Sk_chunk_t, uint32_t rows>
 void matmul_qk_by_v(
     uint32_t Wt,
     uint32_t block_h,
     uint32_t block_w,
+    uint32_t rescale_block,
     uint32_t cb_attention_weights,
     uint32_t cb_value,
     uint32_t cb_prev_mm_out,
@@ -207,13 +210,7 @@ void matmul_qk_by_v(
     bool rescale) {
     cb_wait_front(cb_attention_weights, rows * Sk_chunk_t);
     cb_wait_front(cb_value, Sk_chunk_t * Wt);
-    if (rescale) {
-        cb_wait_front(cb_prev_mm_out, rows * Wt);
-        cb_wait_front(cb_exp_max_diff, rows);
-    }
     cb_reserve_back(cb_cur_mm_out, rows * Wt);
-
-    const uint32_t alpha_dst = block_h * block_w;  // spare slot for the broadcast factor
 
     // matmul maps: in0(attention_weights)->SrcB, in1(value)->SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
@@ -225,37 +222,9 @@ void matmul_qk_by_v(
         /* ct_dim */ block_w,
         /* rt_dim */ block_h,
         /* kt_dim */ Sk_chunk_t);
-
     for (uint32_t row0 = 0; row0 < rows; row0 += block_h) {
         for (uint32_t col0 = 0; col0 < Wt; col0 += block_w) {
             tile_regs_acquire();
-            if (rescale) {
-                // DST[i*block_w + j] = O_prev[row0+i][col0+j] * alpha[row0+i]
-                reconfig_data_format(cb_prev_mm_out, cb_prev_mm_out);
-                copy_init(cb_prev_mm_out);
-                for (uint32_t i = 0; i < block_h; ++i) {
-                    for (uint32_t j = 0; j < block_w; ++j) {
-                        copy_tile(cb_prev_mm_out, (row0 + i) * Wt + col0 + j, i * block_w + j);
-                    }
-                }
-                init_unary_bcast_col(cb_exp_max_diff);
-                mul_binary_tile_init();
-                for (uint32_t i = 0; i < block_h; ++i) {
-                    unary_bcast<BroadcastType::COL>(cb_exp_max_diff, row0 + i, alpha_dst);
-                    for (uint32_t j = 0; j < block_w; ++j) {
-                        mul_binary_tile(i * block_w + j, alpha_dst, i * block_w + j);
-                    }
-                }
-                // The B2D broadcast and SFPU multiply leave the FPU in a different state: full re-init.
-                reconfig_data_format(cb_value, cb_attention_weights);
-                matmul_block_init(
-                    cb_attention_weights,
-                    cb_value,
-                    /* transpose */ 0,
-                    /* ct_dim */ block_w,
-                    /* rt_dim */ block_h,
-                    /* kt_dim */ Sk_chunk_t);
-            }
             for (uint32_t k = 0; k < Sk_chunk_t; ++k) {
                 matmul_block(
                     cb_attention_weights,
@@ -278,6 +247,37 @@ void matmul_qk_by_v(
             }
             tile_regs_release();
         }
+    }
+
+    if (rescale) {
+        cb_wait_front(cb_prev_mm_out, rows * Wt);
+        cb_wait_front(cb_exp_max_diff, rows);
+        reconfig_data_format(cb_prev_mm_out, cb_prev_mm_out);
+        pack_reconfig_l1_acc(1);
+        for (uint32_t r = 0; r < rows; ++r) {
+            for (uint32_t col0 = 0; col0 < Wt; col0 += rescale_block) {
+                tile_regs_acquire();
+                // DST[j] = O_prev[r][col0 + j] * alpha[r]; the copy and the broadcast reprogram the same
+                // unpacker MOP, so each pass sets both up again.
+                copy_init(cb_prev_mm_out);
+                for (uint32_t j = 0; j < rescale_block; ++j) {
+                    copy_tile(cb_prev_mm_out, r * Wt + col0 + j, j);
+                }
+                init_unary_bcast_col(cb_exp_max_diff);
+                unary_bcast<BroadcastType::COL>(cb_exp_max_diff, r, rescale_block);
+                mul_binary_tile_init();
+                for (uint32_t j = 0; j < rescale_block; ++j) {
+                    mul_binary_tile(j, rescale_block, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < rescale_block; ++j) {
+                    pack_tile</* out_of_order */ true>(j, cb_cur_mm_out, /* offset */ r * Wt + col0 + j);
+                }
+                tile_regs_release();
+            }
+        }
+        pack_reconfig_l1_acc(0);
     }
     cb_push_back(cb_cur_mm_out, rows * Wt);
 }

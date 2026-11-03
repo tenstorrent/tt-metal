@@ -32,7 +32,8 @@
 // tile-rows. The item walks K/V in steps of Sk_chunk_t tiles; per step it does QK^T, online softmax and
 // P@V for all its rows.
 
-constexpr uint32_t block_size = get_compile_time_arg_val(0);        // output tiles per DST pass, element-wise loops
+constexpr uint32_t block_size =
+    get_compile_time_arg_val(0);  // output tiles per DST pass, element-wise loops (rescale, finalize)
 constexpr uint32_t qWt = get_compile_time_arg_val(1);               // num tile in inner dim in query/key (d_qk/TILE_W)
 constexpr uint32_t vWt = get_compile_time_arg_val(2);               // num tile in inner dim in value (d_v/TILE_W)
 constexpr uint32_t Ht = get_compile_time_arg_val(3);                // num_seq_len / TILE_H
@@ -58,14 +59,15 @@ constexpr uint32_t out_tiles = rows * vWt;                // output / accumulato
 constexpr uint32_t k_tiles = Sk_chunk_t * qWt;            // K tiles of one step
 constexpr uint32_t v_tiles = Sk_chunk_t * vWt;            // V tiles of one step
 
-// DST holds sm_block_size tiles per pass. The QK^T block fills it; the PV block and the finalize block
-// each leave one slot for the broadcast factor (alpha, 1/sum) they multiply by, or it would land on a
-// live tile without any error.
+// DST holds sm_block_size tiles per pass. The matmul blocks fill it; the element-wise blocks (the rescale
+// of the accumulator, the finalize) leave one slot for the broadcast factor (alpha, 1/sum) they multiply
+// by, or it would land on a live tile without any error.
 static_assert(rows % qk_block_h == 0U && Sk_chunk_t % qk_block_w == 0U, "QK^T block must tile the scores");
 static_assert(qk_block_h * qk_block_w <= sm_block_size, "QK^T block must fit DST");
 static_assert(rows % pv_block_h == 0U && vWt % pv_block_w == 0U, "PV block must tile the output");
-static_assert(pv_block_h * pv_block_w < sm_block_size, "PV block must leave the alpha slot free");
-static_assert(vWt % block_size == 0U && block_size < sm_block_size, "finalize block must leave the 1/sum slot free");
+static_assert(pv_block_h * pv_block_w <= sm_block_size, "PV block must fit DST");
+static_assert(
+    vWt % block_size == 0U && block_size < sm_block_size, "element-wise block must leave the factor slot free");
 
 // Per-row state passes (max, alpha, sums, finalize) batch up to a DST's worth of rows into one pass.
 constexpr uint32_t kRowsPerPass = sm_block_size;
@@ -366,11 +368,12 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
         cb_push_back(cb_attention_weights, score_tiles);
         cb_push_back(alias_cb_cur_sum_exp, rows);
 
-        // (4) O = O_prev * alpha + P @ V, in one DST pass per output block
+        // (4) O = P @ V, then O_prev * alpha accumulated onto it in L1
         matmul_qk_by_v<Sk_chunk_t, rows>(
             vWt,
             pv_block_h,
             pv_block_w,
+            block_size,
             cb_attention_weights,
             cb_value,
             alias_cb_prev_mm_out,
