@@ -16,6 +16,24 @@ four significant bits, so every product in the BF16/FP32 normal range is exact.
 > datacopy plus one SFPU pass per output tile. `UINT8` input requires
 > `fp32_dest_acc_en=True`, because its datacopy produces Integer-32 in DEST.
 
+## Performance (reference SFPU decoder)
+
+Measured 2026-11-03 with `scripts/quant_harness.py --format mxfp8 evaluate
+--math-isolate --perf-repeats 4` on Blackhole p150b at 1350 MHz, 120 cores, in
+the primary configuration: `UINT16` input, BF16 DEST and output, tiled,
+interleaved L1. The workload is 26880x2048 values (224 packed tiles = 448
+output tiles per core), with 24 retained samples.
+
+| Metric | Value |
+|---|---|
+| L1-to-L1 pipeline | 1477 cycles per output tile (MAD 0.09) |
+| Isolated SFPU decode sweep (×128) | 1422 cycles per output tile |
+| One call, 55.05 M values | ≈ 490 µs ≈ 112 G values/s ≈ 225 GB/s of BF16 output |
+
+The decode sweep is about 96% of the pipeline, so the kernel is compute-bound
+in the SFPU. For comparison, the optimized NVFP4 kernel runs at about 530
+cycles per output tile on the same device.
+
 ## Usage
 
 ```python
