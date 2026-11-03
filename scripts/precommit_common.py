@@ -49,6 +49,21 @@ _RAW_START = re.compile(r'(?:u8|[uUL])?R"([^ ()\\\t\n]{0,16})\(')
 _NUMBER_BEFORE = re.compile(r"(?<![\w.])\d[\w.']*$")
 
 
+def _line_continuation_end(src, i):
+    """End offset of a line starting at ``i``, following trailing ``\\`` continuations."""
+    j = i
+    n = len(src)
+    while j < n:
+        k = src.find("\n", j)
+        if k < 0:
+            return n
+        if src[k - 1] == "\\":
+            j = k + 1
+            continue
+        return k
+    return n
+
+
 def blank_noncode(src, *, blank_directives=True):
     """Blank comments, string and character literals, and optionally preprocessor lines.
 
@@ -65,24 +80,13 @@ def blank_noncode(src, *, blank_directives=True):
             i += 1
             continue
         if blank_directives and at_line_start and c == "#":
-            j = i
-            while j < n:
-                k = src.find("\n", j)
-                if k < 0:
-                    j = n
-                    break
-                if src[k - 1] == "\\":
-                    j = k + 1
-                    continue
-                j = k
-                break
+            j = _line_continuation_end(src, i)
             out.append("".join(ch if ch == "\n" else " " for ch in src[i:j]))
             i = j
             continue
         at_line_start = c == "\n"
         if src.startswith("//", i):
-            j = src.find("\n", i)
-            j = n if j < 0 else j
+            j = _line_continuation_end(src, i)
         elif src.startswith("/*", i):
             j = src.find("*/", i + 2)
             j = n if j < 0 else j + 2

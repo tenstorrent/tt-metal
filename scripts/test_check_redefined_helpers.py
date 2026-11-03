@@ -54,9 +54,11 @@ def test_device_round_up_is_flagged_and_div_up_is_not():
         "ttnn/cpp/ttnn/operations/example/device/kernels/reader.cpp",
         """
         FORCE_INLINE uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+        FORCE_INLINE uint32_t align_down(uint32_t a, uint32_t b) { return a & ~(b - 1); }
         FORCE_INLINE uint32_t round_up(uint32_t a, uint32_t b) { return b * div_up(a, b); }
         constexpr uint32_t TILE_HEIGHT = 32;
         constexpr uint32_t TILE_WIDTH = get_arg(args::tile_width);
+        constexpr uint32_t TILE_HW = TILE_HEIGHT * TILE_WIDTH;
         """,
     )
     assert found == ["round_up", "TILE_HEIGHT"]
@@ -94,6 +96,8 @@ def test_l1_budget_formula_is_flagged_and_the_canonical_call_is_not():
         "ttnn/cpp/ttnn/operations/example/device/factory.cpp",
         """
         uint32_t max_l1_size =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        uint32_t half_l1_budget =
             (device->l1_size_per_core() / 2) - device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t other = operations::data_movement::get_max_l1_space(input_tensor);
         """,
@@ -126,11 +130,13 @@ def test_escape_hatch_inside_a_string_does_not_apply():
 def test_define_is_visible_and_a_commented_define_is_not():
     found = names(
         "ttnn/cpp/ttnn/operations/example/host.hpp",
-        """
+        r"""
         #define TILE_HEIGHT 32
         /*
         #define TILE_WIDTH 32
         */
+        // escaped-newline comment \
+        constexpr uint32_t FACE_HEIGHT = 16;
         """,
     )
     assert found == ["TILE_HEIGHT"]
@@ -211,7 +217,7 @@ def test_multiline_declarations_are_detected():
     body = textwrap.dedent(
         """\
         inline constexpr uint32_t
-        round_up(uint32_t a, uint32_t b) {
+        round_up(uint32_t a, uint32_t b = {}) {
             return a;
         }
         constexpr uint32_t TILE_HEIGHT =
@@ -225,9 +231,38 @@ def test_multiline_declarations_are_detected():
     assert [item[2] for item in chk.find_violations("ttnn/cpp/ttnn/operations/example/host.cpp", body, {1})] == [
         "round_up"
     ]
+    assert [item[2] for item in chk.find_violations("ttnn/cpp/ttnn/operations/example/host.cpp", body, {3})] == [
+        "round_up"
+    ]
     assert [item[2] for item in chk.find_violations("ttnn/cpp/ttnn/operations/example/host.cpp", body, {6})] == [
         "TILE_HEIGHT"
     ]
+
+
+def test_attributed_and_template_return_declarations_are_detected():
+    assert (
+        names(
+            "ttnn/cpp/ttnn/operations/example/device/kernels/reader.cpp",
+            """
+        __attribute__((always_inline)) constexpr uint32_t align(uint32_t addr, uint32_t alignment) {
+            return addr;
+        }
+        """,
+        )
+        == ["align"]
+    )
+    assert (
+        names(
+            "ttnn/cpp/ttnn/operations/example/host.hpp",
+            """
+        template <typename T1, typename T2>
+        constexpr std::common_type_t<T1, T2> align(T1 addr, T2 alignment) {
+            return addr;
+        }
+        """,
+        )
+        == ["align"]
+    )
 
 
 def test_constant_values_are_verified():
@@ -237,6 +272,7 @@ def test_constant_values_are_verified():
         #define TILE_WIDTH get_compile_time_arg_val(3)
         #define TILE_HEIGHT 32
         constexpr uint32_t TILE_HW = 32;
+        constexpr uint32_t TILE_HW = TILE_HEIGHT * TILE_WIDTH;
         constexpr uint32_t FACE_HEIGHT = 8;
         constexpr uint32_t FACE_HW = 16 * 16;
         """,
@@ -246,7 +282,7 @@ def test_constant_values_are_verified():
         names(
             "ttnn/cpp/ttnn/operations/example/host.cpp",
             """
-        constexpr uint32_t TILE_HW = 1024;
+        constexpr uint32_t TILE_HW = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
         """,
         )
         == ["TILE_HW"]
@@ -272,7 +308,7 @@ def test_l1_check_ignores_raw_limit_and_detects_first_statement_in_function():
         """\
         void build_program(IDevice* device) {
             uint32_t max_l1_size =
-                (device->l1_size_per_core() / 2) - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+                device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
         }
         """
     )
@@ -319,7 +355,7 @@ diff --git a/old b/ttnn/b.cpp
     assert found["ttnn/b.cpp"] == {4}
 
 
-def test_diff_parser_counts_only_additions():
+def test_diff_parser_counts_only_additions(monkeypatch):
     diff = """\
 @@ -10,2 +10,3 @@
  kept
@@ -329,6 +365,15 @@ def test_diff_parser_counts_only_additions():
  kept-too
 """
     assert chk.parse_added_lines(diff) == {11, 12}
+
+    head_diff = (
+        "diff --git a/ttnn/a.cpp b/ttnn/a.cpp\n--- a/ttnn/a.cpp\n+++ b/ttnn/a.cpp\n@@ -1,0 +1,1 @@\n+int x;\n"
+        "diff --git a/ttnn/b.cpp b/ttnn/b.cpp\n--- a/ttnn/b.cpp\n+++ b/ttnn/b.cpp\n@@ -1,0 +3,1 @@\n+int y;\n"
+    )
+    monkeypatch.delenv("PRE_COMMIT_FROM_REF", raising=False)
+    monkeypatch.delenv("PRE_COMMIT_TO_REF", raising=False)
+    monkeypatch.setattr(chk, "_git_diff", lambda args: head_diff if args == ["HEAD"] else None)
+    assert chk.commit_added_lines() == {"ttnn/a.cpp": {1}, "ttnn/b.cpp": {3}}
 
 
 def test_list_mentions_both_sides(capsys):

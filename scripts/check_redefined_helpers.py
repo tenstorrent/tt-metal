@@ -275,9 +275,9 @@ def _eval_atom(token):
             break
         token = inner
     if token.startswith("tt::constants::"):
-        token = token[len("tt::constants::") :]
-    if token in CANONICAL_CONST_VALUES:
-        return CANONICAL_CONST_VALUES[token]
+        name = token[len("tt::constants::") :]
+        if name in CANONICAL_CONST_VALUES:
+            return CANONICAL_CONST_VALUES[name]
     if not INT_LITERAL.match(token):
         return None
     cleaned = re.sub(r"[uUlL'\s()]", "", token)
@@ -326,11 +326,13 @@ def const_value_matches(name, rhs):
 
 
 def is_l1_budget_calc(rhs):
-    """True when ``rhs`` computes an L1 budget rather than reading a single raw property."""
+    """True when ``rhs`` computes an unscaled L1 budget rather than a single property or scaled cap."""
     if not L1_RAW.search(rhs) or L1_CANON_CALL.search(rhs):
         return False
     without_arrows = rhs.replace("->", ".")
-    if re.search(r"[\w)\]]\s*[-/*]", without_arrows):
+    if re.search(r"[\w)\]]\s*[/*]", without_arrows):
+        return False
+    if re.search(r"[\w)\]]\s*-", without_arrows):
         return True
     raw_calls = {match.group(1) for match in L1_RAW.finditer(rhs)}
     return len(raw_calls) >= 2
@@ -348,6 +350,24 @@ def _strip_templates(text):
         elif depth == 0:
             out.append(ch)
     return "".join(out)
+
+
+def _strip_attributes(text):
+    """Remove __attribute__((...)) and [[...]] blocks from a declaration prefix."""
+    text = re.sub(r"\[\[[^\]]*\]\]", " ", text)
+    while True:
+        match = re.search(r"\b__attribute__\s*\(", text)
+        if not match:
+            return text
+        depth = 1
+        idx = match.end()
+        while idx < len(text) and depth > 0:
+            if text[idx] == "(":
+                depth += 1
+            elif text[idx] == ")":
+                depth -= 1
+            idx += 1
+        text = text[: match.start()] + " " + text[idx:]
 
 
 def _type_token(prefix):
@@ -376,7 +396,7 @@ def _type_is_declarator(prefix, type_token):
 
 
 def _func_declarator_span(cxx_code, match):
-    """Return (decl_start_offset, sig_end_offset) when ``match`` is a function declaration, else None."""
+    """Return (decl_start_offset, sig_end_offset, full_end_offset) for a function declaration, else None."""
     stmt_pos = (
         max(
             cxx_code.rfind(";", 0, match.start()),
@@ -392,15 +412,16 @@ def _func_declarator_span(cxx_code, match):
         raw_prefix = raw_prefix[access.end() :]
     if re.search(r"(?:\.|->)\s*$", raw_prefix):
         return None
-    stripped_prefix = _strip_templates(raw_prefix)
+    stripped_prefix = _strip_templates(_strip_attributes(raw_prefix))
     if "=" in stripped_prefix or "(" in stripped_prefix or ")" in stripped_prefix:
         return None
-    type_token = _type_token(raw_prefix)
-    if type_token is None or not _type_is_declarator(raw_prefix, type_token):
+    type_token = _type_token(stripped_prefix)
+    if type_token is None or not _type_is_declarator(stripped_prefix, type_token):
         return None
     lead_ws = len(raw_prefix) - len(raw_prefix.lstrip())
     decl_start = stmt_pos + lead_ws
     depth = 1
+    bdepth = 0
     idx = match.end()
     while idx < len(cxx_code) and depth > 0:
         ch = cxx_code[idx]
@@ -408,11 +429,31 @@ def _func_declarator_span(cxx_code, match):
             depth += 1
         elif ch == ")":
             depth -= 1
-        elif ch in ";{}":
+        elif ch == "{":
+            bdepth += 1
+        elif ch == "}":
+            if bdepth == 0:
+                break
+            bdepth -= 1
+        elif ch == ";" and bdepth == 0:
             break
         idx += 1
     sig_end = max(match.start(), idx - 1)
-    return decl_start, sig_end
+    while idx < len(cxx_code) and cxx_code[idx] not in ";{}":
+        idx += 1
+    if idx < len(cxx_code) and cxx_code[idx] == "{":
+        bdepth = 1
+        idx += 1
+        while idx < len(cxx_code) and bdepth > 0:
+            if cxx_code[idx] == "{":
+                bdepth += 1
+            elif cxx_code[idx] == "}":
+                bdepth -= 1
+            idx += 1
+        return decl_start, sig_end, max(sig_end, idx - 1)
+    if idx < len(cxx_code) and cxx_code[idx] == ";":
+        return decl_start, sig_end, idx
+    return decl_start, sig_end, sig_end
 
 
 def is_function_declarator(line, match):
@@ -474,9 +515,9 @@ def applies(kind, name, side, path):
         return side == "host" and (path.startswith("ttnn/") or path.startswith("tt-train/"))
     if kind == "const":
         return True
-    if side == "device" and base in {"div_up", "round_down"}:
+    if side == "device" and base in {"div_up", "round_down", "align_down"}:
         return False
-    if side == "both" and base in {"div_up", "round_down"}:
+    if side == "both" and base in {"div_up", "round_down", "align_down"}:
         return False
     return True
 
@@ -509,11 +550,10 @@ def find_violations(path, text, only_lines=None):
     }
     found = []
 
-    def span_active(start_line, end_line):
-        span = range(start_line, end_line + 1)
-        if any(ln in opted_out for ln in span):
+    def span_active(start_line, end_line, opt_end_line=None):
+        if any(ln in opted_out for ln in range(start_line, (opt_end_line or end_line) + 1)):
             return False
-        return only_lines is None or any(ln in only_lines for ln in span)
+        return only_lines is None or any(ln in only_lines for ln in range(start_line, end_line + 1))
 
     cxx_lines = list(masked_lines)
     idx = 0
@@ -522,7 +562,7 @@ def find_violations(path, text, only_lines=None):
             idx += 1
             continue
         start_idx = idx
-        while idx + 1 < len(raw_lines) and raw_lines[idx].rstrip().endswith("\\"):
+        while idx + 1 < len(masked_lines) and masked_lines[idx].rstrip().endswith("\\"):
             idx += 1
         end_idx = idx
         idx += 1
@@ -579,8 +619,9 @@ def find_violations(path, text, only_lines=None):
             continue
         start_line = line_of(span[0])
         name_line = line_of(match.start("name"))
-        end_line = line_of(span[1])
-        if not span_active(start_line, end_line):
+        sig_end_line = line_of(span[1])
+        end_line = line_of(span[2])
+        if not span_active(start_line, end_line, sig_end_line):
             continue
         name = match.group("name")
         kind = "power" if base_of(name) in {"is_power_of_two", "is_power_of_2"} else "func"
@@ -592,8 +633,9 @@ def find_violations(path, text, only_lines=None):
             continue
         start_line = line_of(span[0])
         name_line = line_of(match.start("name"))
-        end_line = line_of(span[1])
-        if span_active(start_line, end_line):
+        sig_end_line = line_of(span[1])
+        end_line = line_of(span[2])
+        if span_active(start_line, end_line, sig_end_line):
             _emit(found, path, name_line, "l1", match.group("name"), side)
 
     # A reinvented L1 budget is often split over the initializer's next line.
@@ -716,12 +758,10 @@ def commit_added_lines():
             return None
         diff = _git_diff([safe_from, safe_to])
     else:
-        diff = _git_diff(["--cached"])
-        if diff is not None and not diff.strip():
-            diff = _git_diff([])
-    if diff is None:
-        return None
-    return added_lines_by_path(diff)
+        diff = _git_diff(["HEAD"])
+        if diff is None:
+            diff = _git_diff(["--cached"])
+    return None if diff is None else added_lines_by_path(diff)
 
 
 def main(argv=None):
