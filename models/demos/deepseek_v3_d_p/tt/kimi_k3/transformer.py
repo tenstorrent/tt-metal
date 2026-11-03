@@ -43,6 +43,13 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 
+# The most MoE rows per chip one packed forward can carry. The MoE's shared-expert down projection (TtSharedExpert's
+# get_program_configs: in0_block_w 16, per_core_N 19 on Kimi-K3's 224-tile width, a 9-row sub-device grid) grows its
+# static circular buffers by 104,448 B per per_core_M: per_core_M 9 (2,560 rows) measured 1,714,112 B of the
+# 1,572,864 B of L1 (job 168840), so 8 fails and 7 fits -- 63 M-tiles, 2,016 rows. A shared-MoE program-config change
+# (an L1-aware in0_block_w, or a row-blocked shared expert) would lift it.
+MAX_PACKED_ROWS_PER_CHIP = 2016
+
 
 class TtKimiK3Transformer(LightweightModule):
     """A slice of Kimi-K3's layers, plus the tail when this rank holds it."""
@@ -126,6 +133,15 @@ class TtKimiK3Transformer(LightweightModule):
         if mtp_predictor is not None:
             raise ValueError("Kimi-K3 has no MTP predictor; got a non-None mtp_predictor")
         assert forward_chunks >= 1, f"forward_chunks must be positive, got {forward_chunks}"
+        packed_rows = seq_len * forward_chunks // tuple(mesh_device.shape)[sp_axis]
+        if forward_chunks > 1 and packed_rows > MAX_PACKED_ROWS_PER_CHIP:
+            raise ValueError(
+                f"Kimi-K3 packs at most {MAX_PACKED_ROWS_PER_CHIP} MoE rows per chip per forward; {forward_chunks} chunks "
+                f"of {seq_len} tokens are {packed_rows}. The MoE's shared-expert down projection (TtSharedExpert, "
+                f"get_program_configs) would need more static circular buffers than L1 holds on Kimi-K3's widths. Lower "
+                f"PREFILL_FORWARD_TOKENS_BUDGET to at most {MAX_PACKED_ROWS_PER_CHIP * tuple(mesh_device.shape)[sp_axis]} "
+                f"tokens ({MAX_PACKED_ROWS_PER_CHIP * tuple(mesh_device.shape)[sp_axis] // seq_len} chunks)."
+            )
         # Chunks per packed forward; seq_len stays the per-chunk size.
         self.forward_chunks = forward_chunks
         # Kimi-K3's MLA cache is dense: `zero_padded_kv_cache` asserts TILE layout, which a sparse
@@ -583,7 +599,11 @@ class TtKimiK3Transformer(LightweightModule):
         KDA: its slot's carry in the engine's slabs), then its FFN once over every chunk's rows
         (TtKimiK3Block.forward_packed). One AttnRes walk covers all rows: its state is per token.
 
-        Single-rank only: a pipeline handoff would carry several chunks' rows, which nothing downstream expects.
+        Any pipeline rank. The handoff is forward()'s with every chunk's rows: a first rank embeds the forward's
+        tokens, a later rank takes the upstream packed activation (``[1, planes, n * chunk_local, emb/tp]``: the live
+        stream and the sealed AttnRes snapshots, each over all n chunks' rows back to back per SP chip), and a
+        non-last rank returns its own the same way. AttnRes state is per token, so the planes need nothing per chunk;
+        the KDA carries live per slot in this rank's own slabs.
 
         on_layer_complete: ``(global layer index, chunk)`` once per non-empty chunk per layer.
         layer_tap: ``(local_idx, hidden)`` after each layer with the live residual over every chunk's rows, as in
@@ -604,8 +624,6 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError(f"{n} chunks for a model built for {self.forward_chunks}")
         if index_kv_cache is not None or seed_indexer_indices is not None:
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache and seed_indexer_indices must be None")
-        if not (self.is_first_rank and self.is_last_rank):
-            raise NotImplementedError("a Kimi-K3 packed forward is single-rank")
         if traced and (padding_config is None or on_layer_complete is not None):
             raise ValueError("a traced packed forward takes the persistent padding_config and no host acks")
 
@@ -616,8 +634,15 @@ class TtKimiK3Transformer(LightweightModule):
             def attn_input_tap(local_idx, hidden):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
-        hidden = ttnn.unsqueeze_to_4D(self.embed(token_ids))  # [1, 1, n * chunk_local, emb/tp]
-        residual = self._residual_factory(hidden, None)
+        if self.is_first_rank:
+            hidden, inherited = ttnn.unsqueeze_to_4D(self.embed(token_ids)), None  # [1, 1, n * chunk_local, emb/tp]
+        else:
+            hidden, inherited = self._unpack_handoff(token_ids)
+        residual = self._residual_factory(hidden, inherited)
+        assert residual.num_sealed == self.inbound_planes - 1, (
+            f"rank starting at layer {self.first_layer_idx} opened with {residual.num_sealed} sealed snapshots, "
+            f"expected {self.inbound_planes - 1}"
+        )
         rows = hidden.shape[2] // n
         sp_factor = tuple(self.mesh_device.shape)[self.sp_axis]
         empty = [False] * n if traced else [c.is_empty for c in chunks]
@@ -680,5 +705,7 @@ class TtKimiK3Transformer(LightweightModule):
         if self.kv_only_last_layer:
             residual.discard()
             return None
+        if not self.is_last_rank:
+            return self._pack_handoff(*residual.handoff())
         hidden = residual.finish()
         return self.norm(hidden) if self.norm is not None else hidden

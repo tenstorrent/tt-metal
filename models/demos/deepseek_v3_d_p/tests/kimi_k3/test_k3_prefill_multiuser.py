@@ -113,15 +113,15 @@ def _common(fn):
     return fn
 
 
-def _cache_path(mesh_device, weight_cache_path):
+def _cache_path(mesh_device, weight_cache_path, num_layers=NUM_LAYERS):
     sp, tp = tuple(mesh_device.shape)
     path = weight_cache_path / f"{sp}x{tp}"
     assert TtKimiK3Transformer.check_cache_complete(
         path,
-        NUM_LAYERS,
+        num_layers,
         experts_per_chip=KimiK3Config.NUM_ROUTED_EXPERTS // (sp * tp),
         first_k_dense=KimiK3Config.NUM_DENSE_LAYERS,
-    ), f"TTNN cache incomplete for {NUM_LAYERS} layers at {path}"
+    ), f"TTNN cache incomplete for {num_layers} layers at {path}"
     return path
 
 
@@ -560,3 +560,239 @@ def test_k3_packed_traced_matches_eager(variant, config_only, mesh_device, devic
         assert not failures, f"[traced] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
         runtime.release_trace()
+
+
+# A pipeline split must land on an AttnRes block edge (a multiple of 12), so the smallest is rank 0 = layers 0..11 and
+# rank 1 = layers 12..15: every K3 layer kind on both sides of the boundary, the last layer MLA (KV-only), and a sealed
+# AttnRes snapshot crossing it.
+PIPELINE_LAYERS = 16
+PIPELINE_SPLIT = 12
+D2H_READ_TIMEOUT_S = 120
+
+
+def _read_d2h_records(service, count):
+    """``count`` 12 B (slot, start, end) records off the D2H FIFO, failing (not hanging) if fewer arrive."""
+    import struct
+    import threading
+
+    records, errors = [], []
+
+    def read():
+        try:
+            for _ in range(count):
+                records.append(struct.unpack("<3I", service.read_metadata()[:12]))
+        except Exception as e:  # surfaced below
+            errors.append(e)
+
+    t = threading.Thread(target=read, daemon=True)
+    t.start()
+    t.join(D2H_READ_TIMEOUT_S)
+    assert not errors, errors
+    assert not t.is_alive(), f"only {len(records)} of {count} D2H ack records arrived in {D2H_READ_TIMEOUT_S}s"
+    return records
+
+
+def _pipeline_rt_config(mesh_device, device_params, num_links, cache_path, first, n, num_slots, use_trace):
+    return TtPrefillRuntimeConfig(
+        num_layers=n,
+        max_seq_len=N_CHUNKS * CHUNK,
+        mesh_shape=tuple(mesh_device.shape),
+        chunk_size=CHUNK,
+        forward_tokens_budget=FORWARD_CHUNKS * CHUNK,
+        num_users=num_slots,
+        num_links=num_links,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        capacity_factor=8,
+        gate_fallback_mode=GATE_MODE,
+        model_cfg=KimiK3Config,
+        routing_use_l1_small_for_semaphores=True,
+        weight_cache_path=cache_path,
+        kv_only_last_layer=first + n == PIPELINE_LAYERS,
+        use_trace=use_trace,
+        tp_shard_kv=True,
+        sparse_kv_cache_format=None,
+        first_layer_idx=first,
+        is_first_rank=first == 0,
+        is_last_rank=first + n == PIPELINE_LAYERS,
+    )
+
+
+def _pipeline_caches(mesh_device, config, runtime):
+    """A rank's caches: its MLA layers' KV at cache_num_users slots (the traced scratch slot included), its KDA
+    layers' slabs at num_users."""
+    model = runtime.model
+    return KimiK3KvCaches(
+        kvpe=allocate_mla_kvpe_cache(
+            mesh_device=mesh_device,
+            hf_config=config,
+            max_seq_len=N_CHUNKS * CHUNK,
+            mesh_shape=tuple(mesh_device.shape),
+            sp_axis=SP_AXIS,
+            num_layers=model.schedule.num_mla_layers,
+            num_users=runtime.config.cache_num_users,
+            tp_axis=TP_AXIS,
+            bank_aligned=False,  # 15,360 tokens is not a multiple of 8,192
+        ),
+        kda_states=KdaStates.allocate(
+            mesh_device,
+            kimi_k3_kda_geometry(tuple(mesh_device.shape), SP_AXIS, TP_AXIS),
+            layer_ids=model.schedule.rank_kda_layer_ids(),
+            num_slots=runtime.config.num_users,
+        ),
+    )
+
+
+def _rank_state(mesh_device, runtime, caches, slots):
+    """{(global layer, kind): [per-slot host tensor]} for every KDA carry and MLA KV slab this rank holds."""
+    model = runtime.model
+    state = {}
+    for layer in model.schedule.rank_kda_layer_ids():
+        per = [_kda_slot(mesh_device, caches.kda_states, s, layer) for s in slots]
+        state[(layer, "kda_recurrent")] = [p[0] for p in per]
+        state[(layer, "kda_convolution")] = [p[1] for p in per]
+    kv = _kv_slots(caches.kvpe, mesh_device, model.schedule.num_mla_layers)
+    first = model.first_layer_idx
+    mla = [l for l in model.schedule.mla_layer_ids if first <= l < first + model.num_layers]
+    for rank, layer in enumerate(mla):
+        state[(layer, "kvpe")] = [kv[s][rank] for s in slots]
+    return state
+
+
+def _release(runtimes):
+    """Every runtime's traces before any sub-device manager (the models share one mesh here; in the runner each rank is
+    its own process), then each model's managers."""
+    for r in runtimes:
+        if r._controller is not None:
+            r._controller.release()
+    for r in runtimes:
+        r.release_trace()  # also the model's sub-device managers
+
+
+@pytest.mark.parametrize("traced", [False, True], ids=["eager", "traced"])
+@_common
+def test_k3_packed_pipeline_matches_one_rank(
+    variant, config_only, mesh_device, device_params, num_links, weight_cache_path, traced
+):
+    """Packed forwards split over two pipeline ranks (layers 0..11 and 12..15) must leave the same KDA carries and KV as
+    one rank holding all 16 layers, with rank 0's packed activation -- the live AttnRes stream and its sealed snapshot,
+    over both chunks' rows -- handed to rank 1 the way the runner's D2D socket hands it over.
+
+    Rank 0 acks through a real D2H service: one 12 B (slot, start, end) record per non-empty chunk per layer, each
+    chunk's records contiguous and in pack order (#63438's packed contract), after the forward's writes.
+
+    Eager: bit-exact against one rank. Packing puts every chunk at the same position on both sides, so AttnRes rounds
+    them identically, and the split changes no program. The one-rank reference runs first and is released before the
+    ranks are built, so the mesh never holds both. (The plain residual stream cannot cross a block boundary: its handoff
+    has no sealed snapshot.) Traced: the ranks replay their captures into slots 0..3 against the same two ranks' models
+    run eagerly into slots 4..7, at TRACED_PCC."""
+    assert_gate_mode_matches_adapter(variant, GATE_MODE)
+    lengths, forwards = _packed_schedule()
+    num_users = len(lengths)
+    num_slots = num_users * (2 if traced else 1)
+    config = _config(config_only)
+    cache_path = _cache_path(mesh_device, weight_cache_path, PIPELINE_LAYERS)
+    mesh_device.enable_program_cache()
+    ids = _token_ids(config, num_users, max(lengths))
+
+    def tokens(runtime, chunks):
+        toks = []
+        for c in chunks:
+            real = [] if c.is_empty else ids[c.slot_id % num_users][c.actual_start : c.actual_end].tolist()
+            toks.append(real + [0] * (CHUNK - len(real)))
+        return runtime.make_forward_input(toks, [c.actual_start for c in chunks])
+
+    def rt(first, n, use_trace):
+        return TtKimiK3Runtime(
+            mesh_device,
+            config,
+            {},
+            _pipeline_rt_config(mesh_device, device_params, num_links, cache_path, first, n, num_slots, use_trace),
+        )
+
+    ref_state = None
+    if not traced:
+        ref = rt(0, PIPELINE_LAYERS, False)
+        try:
+            ref_caches = _pipeline_caches(mesh_device, config, ref)
+            ref.compile(ref_caches)
+            for chunks in forwards:
+                ref.prefill_forward(tokens(ref, chunks), ref_caches, chunks)
+            ttnn.synchronize_device(mesh_device)
+            ref_state = _rank_state(mesh_device, ref, ref_caches, range(num_users))
+        finally:
+            _release([ref])
+        del ref, ref_caches
+
+    split = [(0, PIPELINE_SPLIT), (PIPELINE_SPLIT, PIPELINE_LAYERS - PIPELINE_SPLIT)]
+    ranks = [rt(first, n, traced) for first, n in split]
+    rank_caches = [_pipeline_caches(mesh_device, config, r) for r in ranks]
+    d2h = ttnn.D2HStreamService(
+        mesh_device,
+        global_spec=None,
+        fifo_size_bytes=16 * 1024,
+        worker_cores=ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        metadata_size_bytes=12,
+        metadata_ring=True,
+    )
+    try:
+        assert ranks[1].activation_planes == 2, "rank 1 should receive the live stream and one sealed snapshot"
+        for r, caches in zip(ranks, rank_caches):
+            r.compile(caches)
+        acks_per_chunk = ranks[0]._packed_ack_count()
+        if traced:
+            ranks[0].set_d2h_ack_service(d2h)
+            for r, caches in zip(ranks, rank_caches):
+                r.capture_trace(caches)
+            warm = _read_d2h_records(d2h, ranks[0].warmup_ack_count())
+            logger.info(f"[pipeline] drained {len(warm)} warm-up D2H records")
+
+        for f, chunks in enumerate(forwards):
+            logger.info(f"[pipeline {'traced' if traced else 'eager'}] forward {f}: {chunks}")
+            out = ranks[0].prefill_forward(tokens(ranks[0], chunks), rank_caches[0], chunks, d2h_service=d2h)
+            act = ttnn.clone(out)  # what the D2D socket delivers: a copy of rank 0's per-chip activation
+            if not traced:
+                ttnn.deallocate(out)
+            assert ranks[1].prefill_forward(act, rank_caches[1], chunks) is None
+            want = [
+                (c.slot_id, c.actual_start, c.actual_end)
+                for c in chunks
+                if not c.is_empty
+                for _ in range(acks_per_chunk)
+            ]
+            got = _read_d2h_records(d2h, len(want))
+            assert got == want, f"forward {f}: D2H records {got} != {want}"
+
+        if traced:
+            # Eager reference on the same two models (their host-scalar programs), slots 4..7.
+            for chunks in forwards:
+                shifted = [
+                    c if c.is_empty else PrefillChunk(c.slot_id + num_users, c.actual_start, c.actual_end)
+                    for c in chunks
+                ]
+                for r in ranks:
+                    for c in shifted:
+                        if not c.is_empty and c.actual_start == 0:
+                            r.model.reset_streams(c.slot_id)
+                inp = tokens(ranks[0], shifted)
+                h = ranks[0].model.forward_packed(inp, rank_caches[0].kvpe, shifted)
+                ttnn.deallocate(inp)
+                ranks[1].model.forward_packed(h, rank_caches[1].kvpe, shifted)
+                ttnn.deallocate(h)
+        ttnn.synchronize_device(mesh_device)
+
+        failures = []
+        for r, caches in zip(ranks, rank_caches):
+            state = _rank_state(mesh_device, r, caches, range(num_slots))
+            for (layer, kind), per_slot in sorted(state.items()):
+                for u in range(num_users):
+                    want = per_slot[u + num_users] if traced else ref_state[(layer, kind)][u]
+                    got = per_slot[u]
+                    diff = (got - want).abs().max().item()
+                    pcc = _pcc(want, got)
+                    logger.info(f"[pipeline] slot {u} {kind} layer {layer} max|diff| {diff:.3e} PCC {pcc:.6f}")
+                    if (pcc < TRACED_PCC) if traced else (diff != 0):
+                        failures.append(f"slot {u} {kind} layer {layer}: max|diff| {diff:.3e} PCC {pcc:.6f}")
+        assert not failures, f"[pipeline] {len(failures)} mismatch(es):\n" + "\n".join(failures)
+    finally:
+        _release(ranks)
+        d2h = None
