@@ -108,7 +108,10 @@ class MeshOps:
                 dtype=dtype,
                 memory_config=prefill_memory,
             )
-        if x.shape[-2] != 1 or math.prod(tuple(x.shape)[:-2]) != 1:
+        # Decode views with a few rows (decode_view sets rows_1d_linear) reuse the tuned singleton
+        # program for their one-tile-row activations instead of the default program.
+        one_tile_row = 1 < x.shape[-2] <= 32 and getattr(self, "rows_1d_linear", False)
+        if (x.shape[-2] != 1 and not one_tile_row) or math.prod(tuple(x.shape)[:-2]) != 1:
             return ttnn.linear(
                 x, weight, compute_kernel_config=compute_kernel_config, dtype=dtype, memory_config=prefill_memory
             )

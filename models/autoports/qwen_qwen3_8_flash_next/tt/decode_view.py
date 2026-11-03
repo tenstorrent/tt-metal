@@ -67,8 +67,14 @@ def _dense_keys(pool, owner, lanes):
     return result
 
 
+def _rows_linear(ops, batch):
+    # Few-row views: one-tile-row linears use MeshOps' tuned 1D program (QWEN_FLASH_DECODE_ROWS_LINEAR=0: default program).
+    ops.rows_1d_linear = 1 < batch <= MAX_ROWS and os.environ.get("QWEN_FLASH_DECODE_ROWS_LINEAR", "1") != "0"
+    return ops
+
+
 def _decoder(owner, batch, pool):
-    ops = _ops(owner.ops)
+    ops = _rows_linear(_ops(owner.ops), batch)
     result = _clone(owner, ops)
     result.batch_size = batch
     result.lengths = {}
@@ -120,7 +126,7 @@ def _decoder(owner, batch, pool):
 def _model(owner, batch, pool):
     if not owner.serving_pool or owner.batch_size != 32 or batch not in DECODE_BUCKETS:
         raise ValueError("Compact decode requires a fixed32 serving owner and B4/B8/B16")
-    result = _clone(owner, _ops(owner.ops))
+    result = _clone(owner, _rows_linear(_ops(owner.ops), batch))
     result.batch_size = batch
     result.terminal = _clone(owner.terminal, result.ops)
     result.layers = [_decoder(layer, batch, pool) for layer in owner.layers]
