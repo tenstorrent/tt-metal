@@ -26,7 +26,7 @@ void bind_reduction_ema_operation(nb::module_& mod) {
         .. math::
             \mathrm{{output}}_t = \alpha \times \mathrm{{output}}_{t-1} + (1 - \alpha) \times \mathrm{{input}}_t
 
-        with \mathrm{{output}}_0 = \mathrm{{input}}_0
+        starting from :math:`\mathrm{{output}}_{-1} = 0`, so :math:`\mathrm{{output}}_0 = (1 - \alpha) \times \mathrm{{input}}_0`.
 
         Args:
             input (ttnn.Tensor): input tensor of shape [1, B, C, T]. Must be on the device.

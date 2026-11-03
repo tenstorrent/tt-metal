@@ -614,7 +614,8 @@ def test_ema_golden_matches_recurrence():
 
     output = ttnn.get_golden_function(ttnn.ema)(input_tensor, 0.5)
 
-    torch.testing.assert_close(output, torch.tensor([[1.0, 1.5, 2.25, 3.125]]))
+    # The device op starts from a zero previous output, so out[0] = (1 - alpha) * in[0].
+    torch.testing.assert_close(output, torch.tensor([[0.5, 1.25, 2.125, 3.0625]]))
 
 
 def test_var_hw_and_std_hw_goldens_use_biased_correction():
