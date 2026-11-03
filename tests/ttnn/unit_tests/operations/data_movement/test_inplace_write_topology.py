@@ -7,12 +7,13 @@
 ``sharded_to_interleaved_partial`` and ``slice_write`` write a slice into the caller's cache / output, which keeps
 its label unless the input is sharded along a mesh axis on which that label is replicated; the result then takes the
 union of the two labels, on the caller's handle too. ``copy`` / ``assign`` / ``typecast`` overwrite a preallocated
-output on every device, so it takes the source's label. Running an op a second time with other labels must hit the
-program cache: the label is not part of the program hash.
+output stored on the same mesh coordinates as the source on every device, so it takes the source's label. Running an
+op a second time with other labels must hit the program cache: the label is not part of the program hash.
 
-Only full coverage of a preallocated output can be built from Python: every mesh mapper lists its coordinates in
-row-major order, and a tensor restricted to some coordinates keeps its parent's label. A source spanning fewer mesh
-coordinates than the output, which is labelled by the caller-owned rule, is not covered here.
+A preallocated output stored on more mesh coordinates than the source, such as a source taken from one device of a
+mesh tensor, is overwritten on the source's devices only and labelled by the framework default: by the caller-owned
+rule against a source labelled over the same mesh coordinates, with the union of the two labels against one labelled
+over fewer.
 """
 
 import pytest
