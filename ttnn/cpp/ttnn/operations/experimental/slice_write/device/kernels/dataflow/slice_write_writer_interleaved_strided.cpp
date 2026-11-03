@@ -34,9 +34,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim_args = num_padded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* rev_stride = id_per_dim_args + num_dims;
-    // id_per_dim is this core's running position; keep it in a local copy rather than mutating the runtime-arg
-    // region. Sized to ttnn::MAX_NUM_DIMENSIONS; the program factories reject higher ranks.
-    constexpr uint32_t max_num_dims = 8;
+    // Copied out of the RTA block: Metal 2.0 runtime args are read-only (get_vararg is by value).
+    constexpr uint32_t max_num_dims = 8;  // ttnn::MAX_NUM_DIMENSIONS
     ASSERT(num_dims <= max_num_dims);
     uint32_t id_per_dim[max_num_dims];
     for (uint32_t j = 0; j < num_dims; j++) {
