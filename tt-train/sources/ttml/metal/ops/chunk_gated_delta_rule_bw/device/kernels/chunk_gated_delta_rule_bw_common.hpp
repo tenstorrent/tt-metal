@@ -166,8 +166,6 @@ constexpr uint32_t VB_DGGAM = 7 * Ct;  // LT_ones @ (dGamma * Gamma), as a colum
 constexpr uint32_t VB_UTE = 8 * Ct;    // UT_ones @ (rowsum(R - R^T) + dgg)
 static_assert(VECB_BLOCKS == 9, "cb_vecb slot layout above assumes nine column slots");
 
-using chunk_gated_delta_rule_common::tile_elem_off;
-
 // Page index of tile (token-tile tt, head h, d-tile j) of a token-major [N,1,T,Hx*D] grid whose
 // tile row holds hx_dt tiles (Hx * D/32).  `n` is the outermost index (batch, or plane*B + batch).
 FORCE_INLINE uint32_t flat_page(uint32_t n, uint32_t tt, uint32_t hx_dt, uint32_t h, uint32_t dt, uint32_t j) {

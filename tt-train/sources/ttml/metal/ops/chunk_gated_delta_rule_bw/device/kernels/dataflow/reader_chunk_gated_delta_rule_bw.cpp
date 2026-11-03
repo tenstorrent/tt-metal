@@ -15,6 +15,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_bw/device/kernels/chunk_gated_delta_rule_bw_common.hpp"
+#include "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_common/chunk_gated_delta_rule_dataflow.hpp"
 
 // The three kernels share one kernel-config ring buffer and the compute binaries dominate it; these
 // loops are NoC-issue bound, not instruction bound.
@@ -25,82 +26,35 @@ static __attribute__((noipa)) void store_f32(uint32_t addr, uint32_t elem, float
     p[elem] = value;
 }
 
-// L1 address of the resident all-zeros constant tile (set once at boot).
-static uint32_t g_zero_tile_addr = 0;
-static constexpr uint32_t ZTILE_BYTES = 32 * 32 * 4;
-
-// Zero an L1 range by NoC-copying the resident zero tile over it, so the RISC stays free.
-static __attribute__((noipa)) void zero_l1(uint32_t dst, uint32_t nbytes) {
-    while (nbytes) {
-        const uint32_t chunk = nbytes > ZTILE_BYTES ? ZTILE_BYTES : nbytes;
-        noc_async_write(g_zero_tile_addr, get_noc_addr(my_x[noc_index], my_y[noc_index], dst), chunk);
-        dst += chunk;
-        nbytes -= chunk;
-    }
-    noc_async_write_barrier();
-}
-
-// Six [C,C] mask blocks, a scale tile and a zero tile (the last tile), built with raw L1 stores once
-// per core.  Zero-filled over the NoC first; only the non-zero lanes are then written.
+// Six [C,C] mask blocks, a scale tile and a zero tile (the last tile), built once per core.  The whole
+// block is zero-filled over the NoC first (which also makes the zero tile); only the non-zero lanes are
+// then written.
 void build_constant_tiles(uint32_t scale_bits) {
+    using chunk_gated_delta_rule_common::build_cc;
+    using chunk_gated_delta_rule_common::FP32_NEG_ONE_BITS;
     constexpr uint32_t f32_tile = 32 * 32 * 4;
     constexpr uint32_t nconst = NCONST;
+    static_assert(CST_ZERO + 1 == nconst, "the zero tile is the last cb_const tile");
 
     cb_reserve_back(cb_const, nconst);
     const uint32_t cbase = get_write_ptr(cb_const);
-    // Bootstrap: the zero tile itself is the only region written by the RISC.
-    g_zero_tile_addr = cbase + CST_ZERO * f32_tile;
-    {
-        volatile tt_l1_ptr uint32_t* z = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_zero_tile_addr);
-        for (uint32_t i = 0; i < 32 * 32; ++i) {
-            z[i] = 0;
-        }
-    }
-    static_assert(CST_ZERO + 1 == nconst, "the zero tile is the last cb_const tile");
-    zero_l1(cbase, CST_ZERO * f32_tile);
+    fill_tile_zeros(cbase, nconst * f32_tile);
+    noc_async_read_barrier();
 
-    for (uint32_t ti = 0; ti < Ct; ++ti) {
-        for (uint32_t si = 0; si < Ct; ++si) {
-            const uint32_t t = ti * Ct + si;
-            const uint32_t lt = cbase + (CST_LT + t) * f32_tile;
-            const uint32_t st = cbase + (CST_NSTRICT + t) * f32_tile;
-            const uint32_t ut = cbase + (CST_UT + t) * f32_tile;
-            const uint32_t ey = cbase + (CST_EYE + t) * f32_tile;
-            const uint32_t sl = cbase + (CST_SLT + t) * f32_tile;
-            const uint32_t su = cbase + (CST_SUT + t) * f32_tile;
-            for (uint32_t r = 0; r < 32; ++r) {
-                const uint32_t gr = ti * 32 + r;
-                for (uint32_t c = 0; c < 32; ++c) {
-                    const uint32_t gc = si * 32 + c;
-                    const uint32_t e = tile_elem_off(r, c);
-                    if (gc <= gr) {
-                        store_f32(lt, e, 1.0f);
-                    }
-                    if (gc < gr) {
-                        // NSTRICT carries -1 so both consumers of the strict mask (A and dA) come
-                        // out already negated.
-                        store_f32(st, e, -1.0f);
-                        store_f32(sl, e, 1.0f);
-                    }
-                    if (gc >= gr) {
-                        store_f32(ut, e, 1.0f);
-                    }
-                    if (gc > gr) {
-                        store_f32(su, e, 1.0f);
-                    }
-                    if (gc == gr) {
-                        store_f32(ey, e, 1.0f);
-                    }
-                }
-            }
-        }
-    }
+    build_cc(cb_const, CST_LT, Ct, [](uint32_t r, uint32_t c) { return c <= r; });
+    // NSTRICT carries -1 so both consumers of the strict mask (A and dA) come out already negated.
+    build_cc(cb_const, CST_NSTRICT, Ct, [](uint32_t r, uint32_t c) { return c < r; }, FP32_NEG_ONE_BITS);
+    build_cc(cb_const, CST_UT, Ct, [](uint32_t r, uint32_t c) { return c >= r; });
+    build_cc(cb_const, CST_EYE, Ct, [](uint32_t r, uint32_t c) { return c == r; });
+    build_cc(cb_const, CST_SLT, Ct, [](uint32_t r, uint32_t c) { return c < r; });
+    build_cc(cb_const, CST_SUT, Ct, [](uint32_t r, uint32_t c) { return c > r; });
+
     // Scale tile: column 0 only, consumed as a stride-0 COL-broadcast vector so the compute kernel
     // instantiates a single broadcast flavour.
     {
         volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbase + CST_SCALE * f32_tile);
         for (uint32_t r = 0; r < 32; ++r) {
-            p[tile_elem_off(r, 0)] = scale_bits;
+            p[get_tilized_idx(r, 0)] = scale_bits;
         }
     }
     cb_push_back(cb_const, nconst);
@@ -109,11 +63,12 @@ void build_constant_tiles(uint32_t scale_bits) {
     constexpr uint32_t ncol = NCOL;
     cb_reserve_back(cb_colones, ncol);
     const uint32_t colbase = get_write_ptr(cb_colones);
-    zero_l1(colbase, ncol * f32_tile);
+    fill_tile_zeros(colbase, ncol * f32_tile);
+    noc_async_read_barrier();
     for (uint32_t t = 0; t < ncol; ++t) {
         const uint32_t base = colbase + t * f32_tile;
         for (uint32_t r = 0; r < 32; ++r) {
-            store_f32(base, tile_elem_off(r, 0), 1.0f);
+            store_f32(base, get_tilized_idx(r, 0), 1.0f);
         }
     }
     cb_push_back(cb_colones, ncol);
@@ -132,8 +87,8 @@ void gather_gate(
         noc_async_read_barrier();
         const uint32_t tile_addr = dst_base + (slot + ct) * tile_bytes;
         for (uint32_t r = 0; r < 32; ++r) {
-            const uint32_t se = tile_elem_off(r, h);
-            const uint32_t de = tile_elem_off(r, 0);
+            const uint32_t se = get_tilized_idx(r, h);
+            const uint32_t de = get_tilized_idx(r, 0);
             if constexpr (GATE_ESZ == 4) {
                 volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage64);
                 volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
@@ -299,7 +254,8 @@ void kernel_main() {
         cb_reserve_back(cb_gatein, 2 * Ct);
         {
             const uint32_t gbase = get_write_ptr(cb_gatein);
-            zero_l1(gbase, 2 * Ct * gate_tile);
+            fill_tile_zeros(gbase, 2 * Ct * gate_tile);
+            noc_async_read_barrier();
             gather_gate(g_acc, gate_tile, 0, gbase, b, t0, h);
             gather_gate(b_acc, gate_tile, Ct, gbase, b, t0, h);
         }

@@ -15,10 +15,10 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
-#include "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_common/chunk_gated_delta_rule_common.hpp"
+#include "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_common/chunk_gated_delta_rule_dataflow.hpp"
 #include "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_fw/device/kernels/chunk_gated_delta_rule_fw_common.hpp"
 
-using chunk_gated_delta_rule_common::tile_elem_off;
+using chunk_gated_delta_rule_common::build_cc;
 using namespace chunk_gated_delta_rule_fw;
 using namespace chunk_gated_delta_rule_fw::prep;
 
@@ -36,58 +36,23 @@ constexpr uint32_t kTileElems = 32U * 32U;
 
 namespace {
 
-void zero_tile(uint32_t addr) {
-    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
-    for (uint32_t i = 0; i < kTileElems; ++i) {
-        p[i] = 0U;
-    }
-}
-
-void set_one(uint32_t tile_addr, uint32_t r, uint32_t c) {
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr)[tile_elem_off(r, c)] = FP32_ONE_BITS;
-}
-
-// [C, C] fp32 constant from a predicate on the global (row, col); tiles in row-major order.
-template <typename Pred>
-void build_cc(uint32_t cb_id, Pred one_at) {
-    CircularBuffer cb(cb_id);
-    cb.reserve_back(Ct * Ct);
-    const uint32_t tile_bytes = cb.get_tile_size();
-    for (uint32_t ti = 0; ti < Ct; ++ti) {
-        for (uint32_t si = 0; si < Ct; ++si) {
-            const uint32_t addr = cb.get_write_ptr() + (ti * Ct + si) * tile_bytes;
-            zero_tile(addr);
-            for (uint32_t r = 0; r < 32U; ++r) {
-                for (uint32_t c = 0; c < 32U; ++c) {
-                    if (one_at(ti * 32U + r, si * 32U + c)) {
-                        set_one(addr, r, c);
-                    }
-                }
-            }
-        }
-    }
-    cb.push_back(Ct * Ct);
-}
-
+// The three WY-inverse quadrant masks (one tile each): top-left, bottom-right and bottom-left 16x16 ones.
 void build_masks() {
     CircularBuffer cb(cb_mask);
     cb.reserve_back(kNumMasks);
-    const uint32_t tile_bytes = cb.get_tile_size();
-    for (uint32_t m = 0; m < kNumMasks; ++m) {
-        const uint32_t addr = cb.get_write_ptr() + m * tile_bytes;
-        zero_tile(addr);
-        for (uint32_t r = 0; r < 32U; ++r) {
-            for (uint32_t c = 0; c < 32U; ++c) {
-                const bool lo_r = r < 16U;
-                const bool lo_c = c < 16U;
-                const bool one = (m == 0U) ? (lo_r && lo_c) : (m == 1U) ? (!lo_r && !lo_c) : (!lo_r && lo_c);
-                if (one) {
-                    set_one(addr, r, c);
-                }
-            }
-        }
-    }
+    build_cc(cb_mask, 0U, 1U, [](uint32_t r, uint32_t c) { return r < 16U && c < 16U; });
+    build_cc(cb_mask, 1U, 1U, [](uint32_t r, uint32_t c) { return r >= 16U && c >= 16U; });
+    build_cc(cb_mask, 2U, 1U, [](uint32_t r, uint32_t c) { return r >= 16U && c < 16U; });
     cb.push_back(kNumMasks);
+}
+
+// [C, C] fp32 constant from a predicate on the global (row, col).
+template <typename Pred>
+void build_cc_cb(uint32_t cb_id, Pred one_at) {
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(Ct * Ct);
+    build_cc(cb_id, 0U, Ct, one_at);
+    cb.push_back(Ct * Ct);
 }
 
 }  // namespace
@@ -115,9 +80,9 @@ void kernel_main() {
     const auto g_acc = TensorAccessor(g_args, g_addr, tb_gate);
     const auto b_acc = TensorAccessor(b_args, b_addr, tb_gate);
 
-    build_cc(cb_eye, [](uint32_t r, uint32_t c) { return r == c; });
-    build_cc(cb_tril, [](uint32_t r, uint32_t c) { return c <= r; });
-    build_cc(cb_sut, [](uint32_t r, uint32_t c) { return c > r; });
+    build_cc_cb(cb_eye, [](uint32_t r, uint32_t c) { return r == c; });
+    build_cc_cb(cb_tril, [](uint32_t r, uint32_t c) { return c <= r; });
+    build_cc_cb(cb_sut, [](uint32_t r, uint32_t c) { return c > r; });
     build_masks();
 
     Noc noc;
@@ -151,17 +116,18 @@ void kernel_main() {
             uint32_t vals[32];
             for (uint32_t r = 0; r < 32U; ++r) {
                 if constexpr (GATE_ESZ == 4U) {
-                    vals[r] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[tile_elem_off(r, h)];
+                    vals[r] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[get_tilized_idx(r, h)];
                 } else {
-                    vals[r] =
-                        static_cast<uint32_t>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr)[tile_elem_off(r, h)])
-                        << 16;
+                    vals[r] = static_cast<uint32_t>(
+                                  reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr)[get_tilized_idx(r, h)])
+                              << 16;
                 }
             }
-            zero_tile(addr);
+            fill_tile_zeros(addr, tile_bytes);
+            noc.async_read_barrier();
             volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
             for (uint32_t r = 0; r < 32U; ++r) {
-                d[tile_elem_off(r, 0)] = vals[r];
+                d[get_tilized_idx(r, 0)] = vals[r];
             }
         }
         cb.push_back(Ct);

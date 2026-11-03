@@ -17,6 +17,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_bw/device/kernels/chunk_gated_delta_rule_bw_common.hpp"
 
 #pragma GCC optimize("Os")
@@ -116,15 +117,15 @@ static __attribute__((noipa)) void scatter_scalars(
         const uint32_t tile_addr = src_base + ct * f32_tile;
         uint32_t issued = 0;
         for (uint32_t r = 0; r < 32; ++r) {
-            const uint32_t doff = tile_elem_off(r, h) * GATE_ESZ;
+            const uint32_t doff = get_tilized_idx(r, h) * GATE_ESZ;
             const uint32_t slot = wstage + r * 16u + (doff & 15u);
             volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
             if constexpr (GATE_ESZ == 4) {
                 volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
-                d[0] = s[tile_elem_off(r, 0)];
+                d[0] = s[get_tilized_idx(r, 0)];
             } else {
                 volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(slot);
-                d[0] = f32_bits_to_bf16(s[tile_elem_off(r, 0)]);
+                d[0] = f32_bits_to_bf16(s[get_tilized_idx(r, 0)]);
             }
             noc_async_write(slot, acc.get_noc_addr(b * Tt + tt, doff), GATE_ESZ);
             ++issued;
@@ -146,7 +147,7 @@ static __attribute__((noipa)) void zero_pad_columns(const ACC& acc, uint32_t zbu
         for (uint32_t r = 0; r < 32; ++r) {
             for (uint32_t c0 = gH; c0 < 32;) {
                 const uint32_t c1 = (c0 < 16) ? 16 : 32;
-                const uint32_t doff = tile_elem_off(r, c0) * GATE_ESZ;
+                const uint32_t doff = get_tilized_idx(r, c0) * GATE_ESZ;
                 noc_async_write(zbuf + (doff & 15u), acc.get_noc_addr(b * Tt + tt, doff), (c1 - c0) * GATE_ESZ);
                 c0 = c1;
             }
