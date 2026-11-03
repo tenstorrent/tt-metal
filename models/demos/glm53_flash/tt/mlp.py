@@ -104,5 +104,5 @@ class TtClampedSwiGLU(LightweightModule):
         y = self.lin2(h, dtype=self.activation_dtype, compute_kernel_config=self.compute)
         ttnn.deallocate(h)
         if reduce:
-            y = self.mesh.all_reduce_cols(y)
+            y = self.mesh.all_reduce_cols(y, tag="mlp")
         return y

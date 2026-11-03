@@ -102,7 +102,9 @@ def _allocated(t) -> bool:
 
 
 def _runtime_state(device) -> dict:
-    return _RUNTIME.setdefault(_runtime_key(device), {"frozen": [False], "transients": [], "memo": {}, "logged": set()})
+    return _RUNTIME.setdefault(
+        _runtime_key(device), {"frozen": [False], "transients": [], "memo": {}, "logged": set(), "fabric_ar": {}}
+    )
 
 
 def lazy_const(mesh: "GLMMesh | None", cache: dict, key, make: Callable[[], object]):
@@ -543,14 +545,21 @@ class GLMMesh:
             cluster_axis=DP_AXIS,
         )
 
-    def all_reduce_cols(self, x: ttnn.Tensor, *, memory_config=None, num_links=None) -> ttnn.Tensor:
+    def all_reduce_cols(self, x: ttnn.Tensor, *, memory_config=None, num_links=None, tag: str = "tp") -> ttnn.Tensor:
         """Sum the TP partials of a row; result replicated over the row's columns (same shape, dtype and memory
         config as ``x`` unless ``memory_config`` is given). ``GLM53_TP_ALLREDUCE=gather`` (``tp_allreduce_gather``)
         takes ``_all_reduce_cols_gather`` for the inputs it covers (``_gather_reduce_dim``); ``num_links`` then is
-        the gather's own link count (``TT_CCL``)."""
+        the gather's own link count (``TT_CCL``). ``GLM53_TP_ALLREDUCE=fabric`` (``tp_allreduce_fabric``) takes
+        ``_all_reduce_cols_fabric`` for the decode shapes it covers (``_fabric_ar_shape``); ``tag`` names the call
+        site (one fabric op instance per (tag, shape): its receive staging may only be reused once every peer has
+        consumed the previous call of the same site, which the layer's own exchanges order)."""
         if self.cols == 1:
             return x
         memory_config = memory_config or x.memory_config()
+        if self.tp_allreduce_fabric:
+            shape = self._fabric_ar_shape(x)
+            if shape is not None:
+                return self._all_reduce_cols_fabric(x, tag, shape, memory_config)
         if self.tp_allreduce_gather:
             dim = self._gather_reduce_dim(x)
             if dim is not None:
@@ -562,6 +571,43 @@ class GLMMesh:
             ttnn.deallocate(x_l1)
             return y
         return ttnn.all_reduce(x, cluster_axis=TP_AXIS, memory_config=memory_config, **self._ccl_kwargs(num_links))
+
+    @property
+    def tp_allreduce_fabric(self) -> bool:
+        """``GLM53_TP_ALLREDUCE=fabric``: the decode TP all-reduce as ONE program per call with in-program fabric
+        unicasts between the row's columns (``custom_ops/row_exchange`` mode ``allreduce``: every column owns a
+        quarter of the hidden columns, sums the partials there in fp32 DST and fans the sums out). Read per call
+        like ``tp_allreduce_gather``: a function of the env and the static shape (trace-safe)."""
+        return not self.in_prefill and os.environ.get("GLM53_TP_ALLREDUCE", "ccl") == "fabric"
+
+    def _fabric_ar_shape(self, x: ttnn.Tensor) -> tuple[int, int] | None:
+        """``(T, W)`` of a decode activation the fabric all-reduce covers: a 4-D ``[1, 1, T, W]`` bf16 TILE
+        interleaved tensor with ``cols * T <= 32`` (the owner assembles the columns' rows in one tile row) and
+        ``W`` a multiple of 32; ``None`` otherwise (the caller keeps the composite)."""
+        shape = x.shape
+        if len(shape) != 4 or x.layout != ttnn.TILE_LAYOUT or x.is_sharded() or x.dtype != ttnn.bfloat16:
+            return None
+        if shape[0] != 1 or shape[1] != 1 or shape[2] * self.cols > ttnn.TILE_SIZE or shape[3] % ttnn.TILE_SIZE:
+            return None
+        return int(shape[2]), int(shape[3])
+
+    def _all_reduce_cols_fabric(self, x: ttnn.Tensor, tag: str, shape: tuple[int, int], memory_config) -> ttnn.Tensor:
+        """The fabric all-reduce of ``x`` (``_fabric_ar_shape``): the op instance of ``(tag, T, W)`` is shared by every
+        GLMMesh over the device and built on its first (eager) use, before any trace capture (persistent receive
+        staging + arrival semaphore). The result has ``x``'s logical shape (rows past T zero) in ``memory_config``."""
+        from models.demos.glm53_flash.custom_ops.row_exchange.op import RowExchange
+
+        ops = _runtime_state(self.device)["fabric_ar"]
+        key = (tag, shape)
+        op = ops.get(key)
+        if op is None:
+            assert not self.allocations_frozen[0], f"fabric all-reduce {key} first used under live traces"
+            op = ops[key] = RowExchange(self, "allreduce", [shape[1]], shape[0])
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(list(x.shape)), x.dtype, ttnn.TILE_LAYOUT, self.device, memory_config
+        )
+        op([x], [out])
+        return out
 
     @property
     def tp_allreduce_input_l1(self) -> bool:

@@ -2661,4 +2661,4 @@ class TtMoE(LightweightModule):
         shared = self.shared(x, reduce=False)
         y = ttnn.add(routed, shared, output_tensor=routed)
         ttnn.deallocate(shared)
-        return self.mesh.all_reduce_cols(y)
+        return self.mesh.all_reduce_cols(y, tag="moe")

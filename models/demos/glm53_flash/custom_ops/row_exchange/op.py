@@ -36,7 +36,7 @@ TILE = 32
 TILE_BYTES = 2048
 CT_MAX = 16  # tiles per chunk: the DST-sized untilize / tilize block
 PKT_MAX = 12 * 1024  # fabric payload per packet (the router buffers carry 14 KB on Blackhole)
-MODES = {"gather": 0, "reduce": 1}
+MODES = {"gather": 0, "reduce": 1, "allreduce": 2}  # 2: over the mesh columns (the TP all-reduce)
 
 
 def _ceil(a: int, b: int) -> int:
@@ -48,7 +48,7 @@ class RowExchange:
     streams exchanged together (gather: x and the routing matrix; reduce: the expert output), ``T`` users per row.
     ``__call__(inputs)`` returns the outputs ([1, 1, 32, W] bf16 TILE each, allocated on ``out_memory_config``)."""
 
-    CB_SEND, CB_TIN, CB_RM, CB_RM2, CB_T, CB_OUT, CB_SEL, CB_ZERO = range(8)
+    CB_SEND, CB_TIN, CB_RM, CB_RM2, CB_T, CB_OUT, CB_SEL, CB_ZERO, CB_OUT2, CB_RM3 = range(10)
     SEM_STAGED, SEM_GO = 0, 1
 
     def __init__(self, mesh, mode: str, widths: list[int], T: int, *, xchg_core=(0, 0), link: int = 0):
@@ -59,8 +59,10 @@ class RowExchange:
         self.T = int(T)
         self.widths = [int(w) for w in widths]
         self.link = link
-        assert self.rows > 1, "the row exchange needs several mesh rows"
-        assert self.rows * self.T <= TILE, (self.rows, self.T, "the exchange assembles one tile row")
+        # the participants: the rows of a column (gather / reduce) or the columns of a row (all-reduce)
+        self.nsrc = self.rows if self.mode < 2 else self.cols
+        assert self.nsrc > 1, (mode, self.rows, self.cols, "the exchange needs several participants")
+        assert self.nsrc * self.T <= TILE, (self.nsrc, self.T, "the exchange assembles one tile row")
         assert all(w % TILE == 0 for w in self.widths), self.widths
         # chunks: (stream, first column tile, tiles)
         self.chunks: list[tuple[int, int, int]] = []
@@ -71,7 +73,8 @@ class RowExchange:
         self.nchunks = len(self.chunks)
         self.ps = _ceil(max(self.T * ct * 64 for _, _, ct in self.chunks), 64) * 64  # piece slot bytes
         self.cpp = max(1, PKT_MAX // self.ps)  # pieces per packet
-        self.np = _ceil(self.nchunks, self.cpp)  # packets per peer
+        self.cpo = _ceil(self.nchunks, self.nsrc)  # all-reduce: chunks per owner (owner of chunk k = k // cpo)
+        self.np = _ceil(self.nchunks if self.mode < 2 else self.cpo, self.cpp)  # packets per peer (per phase)
         self.pkt = self.cpp * self.ps
         grid = self.device.compute_with_storage_grid_size()
         assert 1 + self.nchunks <= grid.x, (self.nchunks, grid.x, "one exchange core + the workers on grid row 0")
@@ -84,7 +87,7 @@ class RowExchange:
         self.worker_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.workers])
         # persistent per instance: the receive staging (one page per (source row, packet)) and the arrival semaphore
         self.recv = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([self.rows * self.np, self.pkt // 2]),
+            ttnn.Shape([(2 if self.mode == 2 else 1) * self.nsrc * self.np, self.pkt // 2]),
             ttnn.bfloat16,
             ttnn.ROW_MAJOR_LAYOUT,
             self.device,
@@ -92,7 +95,7 @@ class RowExchange:
         )
         self.arrived = ttnn.create_global_semaphore(self.device, self.xchg_set, 0)
         self.arrived_addr = int(ttnn.get_global_semaphore_address(self.arrived))
-        self.send_bytes = (self.nchunks if self.mode == 0 else self.rows * self.nchunks) * self.ps
+        self.send_bytes = {0: 1, 1: self.nsrc, 2: self.nsrc + 1}[self.mode] * self.nchunks * self.ps
         # per device: the fabric peers (row, chip id, mesh id, direction group) and the groups' representative peers
         self.peers: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {}
         self.groups: dict[tuple[int, int], list[ttnn.MeshCoordinate]] = {}
@@ -102,17 +105,18 @@ class RowExchange:
                 dirs: dict[int, int] = {}
                 reps: list[ttnn.MeshCoordinate] = []
                 peers = []
-                for r2 in range(self.rows):
-                    if r2 == r:
+                me = r if self.mode < 2 else c
+                for i2 in range(self.nsrc):
+                    if i2 == me:
                         continue
-                    coord = ttnn.MeshCoordinate(r2, c)
+                    coord = ttnn.MeshCoordinate(i2, c) if self.mode < 2 else ttnn.MeshCoordinate(r, i2)
                     dst = self.device.get_fabric_node_id(coord)
                     d = ttnn.get_eth_forwarding_direction(src, dst)
-                    assert d is not None, (r, c, r2, "no fabric route")
+                    assert d is not None, (r, c, i2, "no fabric route")
                     if d not in dirs:
                         dirs[d] = len(reps)
                         reps.append(coord)
-                    peers.append((r2, int(dst.chip_id), int(dst.mesh_id), dirs[d]))
+                    peers.append((i2, int(dst.chip_id), int(dst.mesh_id), dirs[d]))
                 assert len(reps) <= 4, reps
                 self.peers[(r, c)] = peers
                 self.groups[(r, c)] = reps
@@ -142,11 +146,14 @@ class RowExchange:
             cb(self.CB_OUT, self.worker_set, block, TILE_BYTES),
             cb(self.CB_SEL, self.worker_set, TILE_BYTES, TILE_BYTES),
             cb(self.CB_ZERO, self.worker_set, self.ps, self.ps),
+            cb(self.CB_OUT2, self.worker_set, block, TILE_BYTES),
+            cb(self.CB_RM3, self.worker_set, block, TILE_BYTES),
         ]
 
     def _program(self, coord: tuple[int, int], inputs, outputs) -> ttnn.ProgramDescriptor:
         r, c = coord
-        T, rows = self.T, self.rows
+        T, nsrc = self.T, self.nsrc
+        me = r if self.mode < 2 else c
         recv_ct = ttnn.TensorAccessorArgs(self.recv).get_compile_time_args()
         in_ct = ttnn.TensorAccessorArgs(inputs[0]).get_compile_time_args()
         out_ct = ttnn.TensorAccessorArgs(outputs[0]).get_compile_time_args()
@@ -156,10 +163,11 @@ class RowExchange:
             assert ttnn.TensorAccessorArgs(t).get_compile_time_args() == out_ct, "the outputs share one placement"
         xchg_noc = self._noc(self.device, self.xchg_core)
         kernels = []
-        by_ct: dict[int, list[int]] = {}
+        by_ct: dict[tuple[int, int], list[int]] = {}  # (tiles, owner?) -> chunks
         for k, (_, _, ct) in enumerate(self.chunks):
-            by_ct.setdefault(ct, []).append(k)
-        for ct, ks in by_ct.items():
+            owner = int(self.mode == 2 and k // self.cpo == me)
+            by_ct.setdefault((ct, owner), []).append(k)
+        for (ct, owner), ks in by_ct.items():
             cores = ttnn.CoreRangeSet([ttnn.CoreRange(self.workers[k], self.workers[k]) for k in ks])
             reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for k in ks:
@@ -170,18 +178,18 @@ class RowExchange:
                     outputs[s].buffer_address(),
                     c0,
                     k,
-                    r,
+                    me,
                     xchg_noc,
                     self.recv.buffer_address(),
                     self._noc(self.device, core),
                 ]
                 compute_rt[core.x][core.y] = []
-            cb_src = self.CB_OUT if self.mode == 1 else self.CB_T
+            cb_src = self.CB_OUT if (self.mode == 1 or owner) else self.CB_T
             kernels += [
                 ttnn.KernelDescriptor(
                     kernel_source=str(KERNEL_DIR / "reader_row_exchange.cpp"),
                     core_ranges=cores,
-                    compile_time_args=[self.mode, self.CB_TIN, self.CB_SEL, self.CB_ZERO, ct, T, rows, self.ps] + in_ct,
+                    compile_time_args=[self.mode, self.CB_TIN, self.CB_SEL, self.CB_ZERO, ct, T, nsrc, self.ps] + in_ct,
                     runtime_args=reader_rt,
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
@@ -197,13 +205,15 @@ class RowExchange:
                         self.CB_ZERO,
                         ct,
                         T,
-                        rows,
+                        nsrc,
                         self.nchunks,
                         self.ps,
                         self.cpp,
                         self.np,
                         self.SEM_GO,
                         self.SEM_STAGED,
+                        owner,
+                        self.CB_RM3,
                     ]
                     + out_ct
                     + recv_ct,
@@ -222,6 +232,9 @@ class RowExchange:
                         self.CB_SEL,
                         self.CB_OUT,
                         ct,
+                        owner,
+                        self.CB_OUT2,
+                        self.CB_RM3,
                     ],
                     runtime_args=compute_rt,
                     config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
@@ -230,7 +243,7 @@ class RowExchange:
         # the exchange core: per-device runtime args (its peers' node ids, then the connection args appended below)
         peers = self.peers[coord]
         xchg_rt = ttnn.RuntimeArgs()
-        args = [r, xchg_noc, self.recv.buffer_address(), self.arrived_addr]
+        args = [me, xchg_noc, self.recv.buffer_address(), self.arrived_addr]
         args += [self._noc(self.device, w) for w in self.workers]
         args += [len(peers)]
         for row2, dev, mesh_id, grp in peers:
@@ -250,7 +263,7 @@ class RowExchange:
                 self.ps,
                 self.cpp,
                 self.np,
-                rows,
+                nsrc,
             ]
             + recv_ct,
             runtime_args=xchg_rt,

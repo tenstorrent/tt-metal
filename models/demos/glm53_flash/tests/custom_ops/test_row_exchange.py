@@ -119,3 +119,38 @@ def test_reduce(mesh_device):
     for i, (a, b) in enumerate(zip(chips, chips2)):
         assert torch.equal(a, b), f"chip {i}: differs after the trace replays"
     logger.info(f"ROWX reduce {ROWS}x{COLS} T={T}: eager {eager:.0f} us, traced {traced:.0f} us per call")
+
+
+@pytest.mark.parametrize("device_params", MESH_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [(ROWS, COLS)], indirect=True)
+def test_allreduce(mesh_device):
+    """The TP all-reduce over the columns of every mesh row: per chip the sum of its row's COLS partials."""
+    mesh = GLMMesh.from_device(mesh_device)
+    if COLS < 2 or COLS * T > TILE:
+        pytest.skip(f"the all-reduce needs 2..{TILE // T} columns at T={T}")
+    g = torch.Generator().manual_seed(2)
+    y = torch.zeros(ROWS, COLS, TILE, H)
+    y[:, :, :T] = torch.randn(ROWS, COLS, T, H, generator=g)
+    y = y.bfloat16().float()
+    yd = mesh.upload(y, ttnn.bfloat16, rows=0, cols=1)  # chip (r, c) holds y[r, c]
+    op = RowExchange(mesh, "allreduce", [H], T)
+    logger.info(
+        f"allreduce on {ROWS}x{COLS}, T={T}: {op.nchunks} chunks, {op.cpo} per owner, {op.np} packets per peer per phase"
+    )
+    (out,) = op([yd])
+    chips = _chips(out)
+    for r in range(ROWS):
+        exp = torch.zeros(TILE, H)
+        exp[:T] = y[r, :, :T].sum(dim=0)
+        exp = exp.bfloat16().float()
+        for c in range(COLS):
+            got = chips[r * COLS + c]
+            err = (got - exp).abs()
+            tol = exp.abs() * (1 / 128) + 1e-3
+            assert bool((err <= tol).all()), f"chip ({r},{c}): max err {err.max().item():.4f}"
+            assert bool((got[T:] == 0).all()), f"chip ({r},{c}): padding rows not zero"
+    eager, traced = _timed(mesh_device, op, [yd], [out])
+    chips2 = _chips(out)
+    for i, (a, b) in enumerate(zip(chips, chips2)):
+        assert torch.equal(a, b), f"chip {i}: differs after the trace replays"
+    logger.info(f"ROWX allreduce {ROWS}x{COLS} T={T}: eager {eager:.0f} us, traced {traced:.0f} us per call")

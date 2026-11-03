@@ -1291,7 +1291,7 @@ class TtDSA(LightweightModule):
 
     def _o_proj(self, o_heads: ttnn.Tensor) -> ttnn.Tensor:
         y = self.lin_o(o_heads, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
-        return self.mesh.all_reduce_cols(y)  # TP partial -> replicated over the row's columns
+        return self.mesh.all_reduce_cols(y, tag="attn")  # TP partial -> replicated over the row's columns
 
     def _cu_window(self, n_keys: int) -> ttnn.Tensor:
         """``cu_window_seqlens`` = [0, n_keys] for the windowed (prefix-aware) causal SDPA: one window
@@ -2373,7 +2373,7 @@ class TtDSA(LightweightModule):
             o_p = ttnn.experimental.view(oh, [1, 1, B, H * L]) if B <= TILE else self._heads_packed(oh, B)
             y = self.lin_o2(o_p, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden] (TP partial)
             ttnn.deallocate(oh)
-            y = self.mesh.all_reduce_cols(y)
+            y = self.mesh.all_reduce_cols(y, tag="attn")
         else:
             y = self._o_proj(self._o_lat_to_heads(oh))  # composite absorb_o + o_proj
         self._mark("out_proj")
@@ -2520,7 +2520,7 @@ class TtDSA(LightweightModule):
             if B > TILE:
                 ttnn.deallocate(o_p)
             ttnn.deallocate(oh)
-            y = self.mesh.all_reduce_cols(y)
+            y = self.mesh.all_reduce_cols(y, tag="attn")
         else:
             o_heads = self._o_lat_to_heads(oh)  # composite absorb_o
             ttnn.deallocate(oh)

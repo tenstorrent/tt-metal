@@ -823,7 +823,7 @@ class TtKDA(LightweightModule):
         ttnn.deallocate(g2)
         y = self.lin_o(o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden]
         ttnn.deallocate(o)
-        y = self.mesh.all_reduce_cols(y)
+        y = self.mesh.all_reduce_cols(y, tag="attn")
         if inplace:
             return y, state
         return y, KdaState(recurrent=rec, convolution=conv)
@@ -846,7 +846,7 @@ class TtKDA(LightweightModule):
         oh = ttnn.multiply(oh, gate, output_tensor=oh)
         o_flat = ttnn.typecast(ttnn.reshape(oh, [1, 1, B, H * V]), ttnn.bfloat16)
         y = self.lin_o(o_flat, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden]
-        y = self.mesh.all_reduce_cols(y)  # TP partial -> replicated over the row's columns
+        y = self.mesh.all_reduce_cols(y, tag="attn")  # TP partial -> replicated over the row's columns
         if inplace:
             # write the new carries back into the caller's persistent tensors so a captured decode
             # trace reads the updated state on the next replay (device-owned autoregressive state);
