@@ -167,3 +167,19 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   decides), or a (2, 8) instance of 16 chips at bfp8 (DP2 on the Galaxy, descriptor `bh_galaxy_2x8_torus.textproto`
   prepared). Running meanwhile on column 0: the first 32 layers on (1, 8) bfp8 (the converted prefix fits), base vs
   the pre-block v3 knobs, for the per-layer TP8 step cost and a 32-layer decode-id gate of the knobs.
+* 22:40 **lever 1 measured** (`tp8_l32_1x8_B4_base`): the first 32 layers (24 KDA + 8 DSA) on a (1, 8) column ring
+  at 4 users, bfp8: traced step **34.47 ms = 1.08 ms per layer**, the same per-layer cost as the (8, 4) hybrid at
+  4 users per row (the 958 / 1360 us rows give 33.9 ms for the same prefix). The single-row TP8 instance saves
+  nothing by itself: the 8-row collectives (188 us per layer) vanish, but the two 8-ring all-reduces and the
+  full-expert streaming op (36 full experts per chip instead of 72 eighth-slices) cost as much; the per-op profile
+  on column 0 (`tracy_l4_b4_1x8`, `tracy_l3_b4_1x8`) attributes it. The ladder row "(1, 8) instance -11 ms" is
+  withdrawn: at 4 users the step is per-op fixed latency on either layout, so the program-count levers (3, 4) carry
+  the target, and the layout choice follows the fused design (one collective domain of 8 chips as the reference, or
+  the hybrid with in-program row exchange). Warm TTFT 493 ms for 128 tokens on the prefix.
+* 22:40 **pre-block v3 on the TP8 prefix** (`tp8_l32_1x8_B4_mhcv3`, `GLM53_MHC_PRE_XPARTS=1 GLM53_MHC_PRE_SINKHORN=dst`):
+  34.47 -> **31.92 ms** (-2.55 ms over 64 wraps = -40 us per wrap; the unit measured -35), chain pcc 0.807 vs 0.782
+  (both a 32-layer prefix against HF's rows: not the gate), host-argmax agreement unchanged (19 % of 32 positions).
+  The 45-layer gate runs on (8, 4) at 4 users per row once the bfp4 run frees column 1 (`gate84_B4_base` /
+  `gate84_B4_mhcv3`): the base ids must equal the frozen tip's line (10:58 `e2e_8x4_B4_postmcast`, S = 16: the KDA
+  reader prologue change moves no rounding), the knobs are judged by the chain pcc against 0.86 at S = 16, the
+  first-token match and the step (44.23 ms - ~3 ms expected).
