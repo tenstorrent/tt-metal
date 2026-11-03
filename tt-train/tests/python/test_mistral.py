@@ -632,6 +632,29 @@ def test_fused_residual_norm_model_matches_the_block_path():
     rep.done()
 
 
+def test_add_rmsnorm_wide_output_matches_the_plain_one():
+    """Iteration 49: `add_rmsnorm_fw_allcore(out_tail_cols=64)` writes out as [.., C + 64] with the tail zeroed and the
+    first C columns bit-identical to the plain output; the backward reads a wide dL_dout at its own stride and returns
+    the plain gradient bit for bit (its tail ignored)."""
+    rng = seeded(49)
+    shape = (1, 1, 256, HIDDEN)  # the sequence-parallel shard: 13 slices x 8 rows
+    r_np, d_np = bf16(rng.normal(0.0, 1.0, shape)), bf16(rng.normal(0.0, 0.5, shape))
+    g_np = bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN)))
+    dout_np = bf16(rng.normal(0.0, 0.01, shape))
+    r, d, g = to_device(r_np).get_value(), to_device(d_np).get_value(), to_device(g_np).get_value()
+    s_plain, out_plain, rms_plain = ttml.ops.metal.add_rmsnorm_fw_allcore(r, d, g, EPS)
+    s_wide, out_wide, rms_wide = ttml.ops.metal.add_rmsnorm_fw_allcore(r, d, g, EPS, out_tail_cols=64)
+    assert tuple(out_wide.shape) == (1, 1, 256, HIDDEN + 64)
+    ow, op = to_host(out_wide), to_host(out_plain)
+    assert np.array_equal(ow[..., :HIDDEN], op) and np.array_equal(ow[..., HIDDEN:], np.zeros_like(ow[..., HIDDEN:]))
+    assert np.array_equal(to_host(s_wide), to_host(s_plain)) and np.array_equal(to_host(rms_wide), to_host(rms_plain))
+    dy_wide_np = np.concatenate([dout_np, bf16(rng.normal(0.0, 1.0, (1, 1, 256, 64)))], axis=-1)  # a garbage tail
+    dy_plain, dy_wide = to_device(dout_np).get_value(), to_device(dy_wide_np).get_value()
+    dx_plain = ttml.ops.metal.rmsnorm_bw_allcore(s_plain, g, rms_plain, dy_plain, False)[0]
+    dx_wide = ttml.ops.metal.rmsnorm_bw_allcore(s_wide, g, rms_wide, dy_wide, False)[0]
+    assert tuple(dx_wide.shape) == shape and np.array_equal(to_host(dx_wide), to_host(dx_plain))
+
+
 def test_rmsnorm_allcore_path_builds_no_node_for_a_no_grad_input():
     """A no-grad input (the frozen embedding output) through the all-core norm wrapper takes the C++ op and gets
     no backward node, so the first block does not compute a gradient it would discard (review round 3)."""

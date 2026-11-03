@@ -15,6 +15,8 @@ struct Params {
     uint32_t slice_tiles = 1;  // column tiles per core (the last slice may be shorter)
     float epsilon = 1e-6F;
     bool delta_transposed = false;  // iteration 37: delta arrives as [B, N, C, S] (the transposed w2 output)
+    uint32_t out_tail_tiles = 0;    // iteration 49: out is [B, N, S, C + 32 * tail] with the tail tile columns zeroed
+                                  // (the LoRA h lands there: the gathered activation takes the wide path, no K-concat)
 };
 
 struct Inputs {

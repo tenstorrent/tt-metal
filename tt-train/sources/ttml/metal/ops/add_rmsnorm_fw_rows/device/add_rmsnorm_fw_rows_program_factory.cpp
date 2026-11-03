@@ -99,7 +99,7 @@ AddRMSNormForwardRowsProgramFactory::cached_program_t AddRMSNormForwardRowsProgr
     tt::tt_metal::TensorAccessorArgs(tensor_args.gamma.buffer()).append_to(reader_ct_args);
     auto reader = create_reader_kernel(program, all_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    std::vector<uint32_t> writer_ct_args{Wt, S, St, block, exchange_sem};
+    std::vector<uint32_t> writer_ct_args{Wt, S, St, block, exchange_sem, Wt + args.out_tail_tiles, args.out_tail_tiles};
     tt::tt_metal::TensorAccessorArgs(sum.buffer()).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(out.buffer()).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(rms.buffer()).append_to(writer_ct_args);

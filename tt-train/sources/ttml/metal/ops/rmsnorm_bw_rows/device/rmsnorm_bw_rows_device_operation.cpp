@@ -26,8 +26,10 @@ void RMSNormBackwardRowsDeviceOperation::validate_on_program_cache_miss(
     }
     const auto& xs = tensor_args.input.logical_shape();
     TT_FATAL(xs.rank() == 4, "RMSNormBackwardRows: input must be 4D, got {}", xs);
+    const ttnn::Shape dy_shape({xs[0], xs[1], xs[2], tensor_args.dL_dout.logical_shape()[3]});
     TT_FATAL(
-        tensor_args.dL_dout.logical_shape() == xs,
+        tensor_args.dL_dout.logical_shape() == dy_shape && tensor_args.dL_dout.logical_shape()[3] >= xs[3] &&
+            (tensor_args.dL_dout.logical_shape()[3] - xs[3]) % tt::constants::TILE_WIDTH == 0,
         "RMSNormBackwardRows: dL_dout {} must match input {}",
         tensor_args.dL_dout.logical_shape(),
         xs);
@@ -84,7 +86,8 @@ ttsl::hash::hash_t RMSNormBackwardRowsDeviceOperation::compute_program_hash(
         args.transposed_grad,
         tensor_args.residual_grad.has_value(),
         tensor_args.input.dtype(),
-        tensor_args.input.logical_shape());
+        tensor_args.input.logical_shape(),
+        tensor_args.dL_dout.logical_shape());
 }
 
 }  // namespace ttml::metal::ops::rmsnorm_bw_rows::device

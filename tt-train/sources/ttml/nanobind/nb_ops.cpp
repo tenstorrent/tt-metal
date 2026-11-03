@@ -806,6 +806,7 @@ void py_module(nb::module_& m) {
             nb::arg("gamma"),
             nb::arg("epsilon") = 1e-6F,
             nb::arg("delta_transposed") = false,
+            nb::arg("out_tail_cols") = 0U,
             "Residual add fused with RMSNorm, every tile-row split over several cores: sum = residual + delta, "
             "out = sum / sqrt(mean(sum^2) + eps) * gamma -> [sum, out, rms]. `delta_transposed`: delta is the "
             "[1, 1, C, S] transpose of the residual (single-phase path only).");
@@ -819,6 +820,7 @@ void py_module(nb::module_& m) {
             nb::arg("slice_tiles"),
             nb::arg("epsilon") = 1e-6F,
             nb::arg("delta_transposed") = false,
+            nb::arg("out_tail_tiles") = 0U,
             "Single-phase add_rmsnorm_fw_allcore: one (tile-row, slice) item per core, slices resident, the row's "
             "sums of squares exchanged over the NoC -> [sum, out, rms]. Needs rows * num_slices <= cores.");
         py_metal.def(

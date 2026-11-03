@@ -36,13 +36,18 @@ class AddRMSNormFrozenGamma(Function):
     not an output and ``grad_sum`` is zero."""
 
     @staticmethod
-    def forward(ctx, residual, delta, gamma, epsilon, return_sum):
+    def forward(ctx, residual, delta, gamma, epsilon, return_sum, out_tail_cols=0):
         r, d, g = residual.get_value(), delta.get_value(), gamma.get_value()
         # Iteration 37: a delta that is the [C, T] transpose of the residual (the fused w2's transposed-orientation
         # output) is read transposed by the kernel; its gradient comes back transposed too.
         rs, ds = tuple(int(v) for v in r.shape), tuple(int(v) for v in d.shape)
         transposed = ds != rs and ds[:2] == rs[:2] and ds[2] == rs[3] and ds[3] == rs[2]
-        s, out, rms = ttml.ops.metal.add_rmsnorm_fw_allcore(r, d, g, epsilon, delta_transposed=transposed)
+        # Iteration 49: ``out_tail_cols`` (the LoRA tail width) makes out wide, [.., C + tail] with the tail zeroed, so
+        # the consumer's fused LoRA layer writes its h into the tail (the wide path: no K-concat, no pad); the
+        # gradient comes back wide and the backward kernel reads it at its own stride.
+        s, out, rms = ttml.ops.metal.add_rmsnorm_fw_allcore(
+            r, d, g, epsilon, delta_transposed=transposed, out_tail_cols=out_tail_cols
+        )
         ctx.save_for_backward(s, g, rms)
         ctx.return_sum = return_sum
         ctx.delta_transposed = transposed
@@ -64,10 +69,11 @@ class AddRMSNormFrozenGamma(Function):
         return dsum, (res[2] if ctx.delta_transposed else dsum), None
 
 
-def add_rmsnorm(residual, delta, norm: RMSNormLayer, return_sum: bool = True):
-    """``norm(residual + delta)`` through the fused kernels (frozen gamma); returns ``(sum, out)`` or ``out``."""
+def add_rmsnorm(residual, delta, norm: RMSNormLayer, return_sum: bool = True, out_tail_cols: int = 0):
+    """``norm(residual + delta)`` through the fused kernels (frozen gamma); returns ``(sum, out)`` or ``out``.
+    ``out_tail_cols``: a wide output for a fused LoRA consumer (iteration 49)."""
     assert not norm.gamma.tensor.get_requires_grad(), "the fused residual norm needs a frozen gamma"
-    return AddRMSNormFrozenGamma.apply(residual, delta, norm.gamma.tensor, norm.epsilon, return_sum)
+    return AddRMSNormFrozenGamma.apply(residual, delta, norm.gamma.tensor, norm.epsilon, return_sum, out_tail_cols)
 
 
 def fused_forward(model, input, mask):
@@ -97,6 +103,9 @@ def fused_forward(model, input, mask):
     sp_axis = getattr(model, "sequence_parallel_axis", None)
     sp = sp_axis is not None
     overlap = getattr(model, "collective_overlap", None)  # iteration 47
+    # Iteration 49: the fused norms feeding a fused LoRA layer (qkv, gate_up) write a wide output whose tail takes the
+    # layer's LoRA h (no K-concat, no pad); the first norm (the plain op) and the final norm (the LM head) stay plain.
+    tail = getattr(model, "norm_out_tail_cols", 0)
 
     def gather(t, replicated_grad=False):
         # SHARDED: the consumer is a LoRA column-parallel layer without its broadcast node, so the gather's backward
@@ -121,12 +130,12 @@ def fused_forward(model, input, mask):
     h = h if qkv_overlapped else gather(h)
     for i, block in enumerate(blocks):
         delta = block.attention(h, mask)
-        residual, h = add_rmsnorm(residual, delta, block.mlp_norm)
+        residual, h = add_rmsnorm(residual, delta, block.mlp_norm, out_tail_cols=tail)
         # Iteration 47: with the collective overlap the fused gate_up takes the shard, gathers it itself and
         # reduce-scatters its input gradient inside its backward, overlapped with its adapter products.
         delta = block.mlp(h if overlap is not None else gather(h))
         if i + 1 < len(blocks):
-            residual, h = add_rmsnorm(residual, delta, blocks[i + 1].attention_norm)
+            residual, h = add_rmsnorm(residual, delta, blocks[i + 1].attention_norm, out_tail_cols=tail)
             h = h if qkv_overlapped else gather(h)
         else:
             h = gather(add_rmsnorm(residual, delta, model.ln_fc, return_sum=False), replicated_grad=True)
@@ -159,7 +168,7 @@ def use_fused_residual_norm(
     ``collective_overlap`` holds the manager. Correct with persistent buffers (iteration 48), but slower: +2.4 ms per
     step over 32 alternating pairs (`doc/optimization/evidence/iter48b_alternate_summary.txt`)."""
     from ttml.models.mistral import Mistral
-    from ttml.modules.lora import LoraColumnParallelLinear, LoraRowParallelLinear
+    from ttml.modules.lora import LoraColumnParallelLinear, LoraLinear, LoraRowParallelLinear
 
     targets = [m for _, m in model.named_modules() if isinstance(m, Mistral)]
     if isinstance(model, Mistral):
@@ -170,6 +179,17 @@ def use_fused_residual_norm(
     frozen = [m for m in norms if not m.gamma.tensor.get_requires_grad()]
     assert len(frozen) == len(norms), "the fused residual norm needs every RMSNorm gamma frozen (LoRA)"
     llama.fused_residual_norm = True
+    # Iteration 49: the wide norm output for the fused LoRA consumers (the wide path's skinny_matmul writes h into the
+    # tail); a composite consumer would see a wider input, so the tail is set only when every qkv and gate_up is a
+    # fused LoRA layer.
+    from ttml.modules.fused_lora import TAIL_ROWS
+
+    consumers = [
+        m
+        for name, m in llama.named_modules()
+        if name.endswith(("qkv_linear", "w_gate_up")) and isinstance(m, (LoraLinear, LoraColumnParallelLinear))
+    ]
+    llama.norm_out_tail_cols = TAIL_ROWS if consumers and all(getattr(m, "lora_fused", False) for m in consumers) else 0
     # Iteration 37: a fused w2 with a transposed-orientation forward copy hands its output transposed to the
     # residual norm (no transpose op); only valid under this forward, whose norms read it transposed. (A fused
     # gate_up with such a copy hands its output transposed to the SwiGLU instead, iteration 39, set at fusion.)

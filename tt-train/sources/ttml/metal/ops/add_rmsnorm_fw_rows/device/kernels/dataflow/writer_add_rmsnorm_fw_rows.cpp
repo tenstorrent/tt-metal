@@ -17,7 +17,9 @@ constexpr uint32_t S = get_compile_time_arg_val(1);
 constexpr uint32_t St = get_compile_time_arg_val(2);
 constexpr uint32_t block = get_compile_time_arg_val(3);
 constexpr uint32_t exchange_sem_id = get_compile_time_arg_val(4);
-constexpr auto sum_args = TensorAccessorArgs<5>();
+constexpr uint32_t Wt_out = get_compile_time_arg_val(5);      // iteration 49: out's row stride (Wt + tail tiles)
+constexpr uint32_t tail_tiles = get_compile_time_arg_val(6);  // zeroed tail tile columns of out (slice 0 writes them)
+constexpr auto sum_args = TensorAccessorArgs<7>();
 constexpr auto out_args = TensorAccessorArgs<sum_args.next_compile_time_args_offset()>();
 constexpr auto rms_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
@@ -79,16 +81,27 @@ void kernel_main() {
         cb_pop_front(cb::rms_out, 1);
     }
 
+    const uint32_t out_page = r * Wt_out + col0;
     for (uint32_t c = 0; c < ncols; c += block) {
         const uint32_t n = (c + block <= ncols) ? block : (ncols - c);
         cb_wait_front(cb::out, block);
         uint32_t l1 = get_read_ptr(cb::out);
         for (uint32_t j = 0; j < n; ++j) {
-            noc_async_write_page(page + c + j, out_acc, l1);
+            noc_async_write_page(out_page + c + j, out_acc, l1);
             l1 += tile_bytes;
         }
         noc_async_write_barrier();
         cb_pop_front(cb::out, block);
+    }
+    if constexpr (tail_tiles > 0U) {
+        // the wide output's tail tile columns zeroed by slice 0 (cb::zero: the reader's zero tile, never reserved by
+        // this RISC, so its pointer is the buffer start)
+        if (s == 0) {
+            const uint32_t zero_l1 = get_write_ptr(cb::zero);
+            for (uint32_t t = 0; t < tail_tiles; ++t) {
+                noc_async_write_page(r * Wt_out + Wt + t, out_acc, zero_l1);
+            }
+        }
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

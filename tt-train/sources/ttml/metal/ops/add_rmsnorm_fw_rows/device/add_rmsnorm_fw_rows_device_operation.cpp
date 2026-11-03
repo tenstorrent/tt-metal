@@ -51,14 +51,16 @@ void AddRMSNormForwardRowsDeviceOperation::validate_on_program_cache_miss(
 }
 
 spec_return_value_t AddRMSNormForwardRowsDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& in = tensor_args.residual;
     const auto& shape = in.logical_shape();
     const tt::tt_metal::TensorLayout layout(
         in.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), in.memory_config());
+    const ttnn::Shape out_shape{
+        shape[0], shape[1], shape[2], shape[3] + args.out_tail_tiles * tt::constants::TILE_WIDTH};
     return {
         tt::tt_metal::TensorSpec(shape, layout),
-        tt::tt_metal::TensorSpec(shape, layout),
+        tt::tt_metal::TensorSpec(out_shape, layout),
         tt::tt_metal::TensorSpec(ttnn::Shape{shape[0], shape[1], shape[2], 1}, layout)};
 }
 
@@ -78,6 +80,7 @@ ttsl::hash::hash_t AddRMSNormForwardRowsDeviceOperation::compute_program_hash(
         args.slice_tiles,
         args.epsilon,
         args.delta_transposed,
+        args.out_tail_tiles,
         tensor_args.residual.dtype(),
         tensor_args.residual.logical_shape());
 }
@@ -93,10 +96,15 @@ std::vector<ttnn::Tensor> ttml_add_rmsnorm_fw_rows(
     uint32_t num_slices,
     uint32_t slice_tiles,
     float epsilon,
-    bool delta_transposed) {
+    bool delta_transposed,
+    uint32_t out_tail_tiles) {
     using OperationType = ttml::metal::ops::add_rmsnorm_fw_rows::device::AddRMSNormForwardRowsDeviceOperation;
     auto attributes = OperationType::operation_attributes_t{
-        .num_slices = num_slices, .slice_tiles = slice_tiles, .epsilon = epsilon, .delta_transposed = delta_transposed};
+        .num_slices = num_slices,
+        .slice_tiles = slice_tiles,
+        .epsilon = epsilon,
+        .delta_transposed = delta_transposed,
+        .out_tail_tiles = out_tail_tiles};
     auto tensor_args = OperationType::tensor_args_t{.residual = residual, .delta = delta, .gamma = gamma};
     return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }

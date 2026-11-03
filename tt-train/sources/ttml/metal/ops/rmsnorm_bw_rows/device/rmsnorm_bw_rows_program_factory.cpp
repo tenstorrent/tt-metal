@@ -96,7 +96,9 @@ RMSNormBackwardRowsProgramFactory::cached_program_t RMSNormBackwardRowsProgramFa
     }
     const uint32_t Ht = padded[2] / tt::constants::TILE_HEIGHT;  // tile rows: dL_da^T's tile-row stride
 
-    std::vector<uint32_t> reader_ct_args{Wt, S, St, block, exchange_sem};
+    // iteration 49: dL_dout may be wide ([.., C + tail]: the norm's wide output's gradient); read at its own row stride
+    const uint32_t Wt_dy = tensor_args.dL_dout.padded_shape()[3] / tt::constants::TILE_WIDTH;
+    std::vector<uint32_t> reader_ct_args{Wt, S, St, block, exchange_sem, Wt_dy};
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(tensor_args.gamma.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(tensor_args.dL_dout.buffer()).append_to(reader_ct_args);

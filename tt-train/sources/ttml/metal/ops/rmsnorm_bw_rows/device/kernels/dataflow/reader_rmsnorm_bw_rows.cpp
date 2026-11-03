@@ -18,7 +18,8 @@ constexpr uint32_t S = get_compile_time_arg_val(1);
 constexpr uint32_t St = get_compile_time_arg_val(2);
 constexpr uint32_t block = get_compile_time_arg_val(3);
 constexpr uint32_t exchange_sem_id = get_compile_time_arg_val(4);
-constexpr auto a_args = TensorAccessorArgs<5>();
+constexpr uint32_t Wt_dy = get_compile_time_arg_val(5);  // iteration 49: dL_dout's row stride (a wide gradient)
+constexpr auto a_args = TensorAccessorArgs<6>();
 constexpr auto gamma_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
 constexpr auto dy_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 constexpr auto rms_args = TensorAccessorArgs<dy_args.next_compile_time_args_offset()>();
@@ -65,6 +66,7 @@ void kernel_main() {
     const uint32_t col0 = s * St;
     const uint32_t ncols = (col0 + St <= Wt) ? St : (Wt - col0);
     const uint32_t page = r * Wt + col0;
+    const uint32_t dy_page = r * Wt_dy + col0;  // iteration 49: dL_dout at its own stride, its tail ignored
 
     // Resident slices (a full St reservation each, ncols tiles pushed in groups of `block`: the CBs never wrap, the
     // compute waits cumulatively and pops ncols at the end); the rms tile with the first group.
@@ -81,7 +83,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < n; ++j) {
             noc_async_read_page(page + c + j, a_acc, l1_a);
             noc_async_read_page(col0 + c + j, gamma_acc, l1_g);
-            noc_async_read_page(page + c + j, dy_acc, l1_d);
+            noc_async_read_page(dy_page + c + j, dy_acc, l1_d);
             l1_a += tile_bytes;
             l1_g += tile_bytes;
             l1_d += tile_bytes;
