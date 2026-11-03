@@ -616,7 +616,9 @@ class KDARecurrence:
             )
         # With sequence parallelism the SP prefix is a relay along the SP axis: each rank forwards its successor the
         # entry state (the last rank hands the final state to the first), and the final carry runs as its own program.
-        # With one group per head an entry correction forms the chunk outputs; with several a scan over the groups.
+        # With one group per head (Kimi-K3's T=5120 on SP8) an entry correction forms the chunk outputs; with several a
+        # scan over the groups and the second chunk scan do. The correction itself works per group, but its emitted
+        # F(0)/F(I) terms are height-sharded in L1 with no DRAM path, and they grow with the groups.
         self._affine_relay = None
         self._relay_final_carry = None
         self._entry_correction = None
