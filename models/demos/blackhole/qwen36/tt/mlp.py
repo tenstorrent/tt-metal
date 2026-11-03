@@ -217,7 +217,7 @@ class Qwen36MLP:
             and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
         ):
             down_pc = self.args.prefill_progcfg(T, hidden.shape[-1], w.w2.shape[-1])
-        elif T <= 1 and hidden.shape[-2] == 32 and hidden.shape[-1] == 17408 and w.w2.shape[-1] == 5120:
+        elif hidden.shape[-2] == 32 and hidden.shape[-1] == 17408 and w.w2.shape[-1] == 5120:
             # decode (one 32-row tile): sweep on Blackhole measured in0_block_w=4 at 243.7 vs 349.6 us/call for the
             # default (in0_block_w=2) on the same 13x10 1D-mcast geometry
             down_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
