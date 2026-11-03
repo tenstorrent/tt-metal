@@ -815,10 +815,10 @@ def matmul_pack_form(
     """Output pack form of the Blackhole matmul kernels: the python mirror of matmul_pack_form_k in llk_matmul_forms.h (0 per tile, 1 one block run, 2 the closed block, 4 the dense run)."""
     value = _matmul_pack_form_value(formats, dest_sync, math_fidelity, rt_dim, ct_dim, kt_dim, in0_tile_r_dim, in1_tile_c_dim, throttle, dense_pages, l1_acc)
     value = _matmul_pack_form_ext(value, formats, dest_sync, math_fidelity, rt_dim, ct_dim, throttle, in0_tile_r_dim, in1_tile_c_dim, l1_acc)
-    if dest_sync == DestSync.Half and in0_tile_r_dim == 32 and in1_tile_c_dim == 32 and not l1_acc and ((math_fidelity.name, throttle, _PACK_SHORT[formats.input_format], _PACK_SHORT[formats.input_format_B], _PACK_SHORT[formats.output_format], rt_dim, ct_dim, kt_dim) in _PACK_EXACT_PER_TILE or _two_tile_per_tile(formats, math_fidelity, rt_dim, ct_dim, kt_dim)):
+    if dest_sync == DestSync.Half and in0_tile_r_dim == 32 and in1_tile_c_dim == 32 and not l1_acc and ((math_fidelity.name, throttle, _PACK_SHORT.get(formats.input_format), _PACK_SHORT.get(formats.input_format_B), _PACK_SHORT.get(formats.output_format), rt_dim, ct_dim, kt_dim) in _PACK_EXACT_PER_TILE or _two_tile_per_tile(formats, math_fidelity, rt_dim, ct_dim, kt_dim)):
         value = 0
     if dense_pages and dest_sync == DestSync.Half and in0_tile_r_dim == 32 and in1_tile_c_dim == 32 and not l1_acc and throttle == 0:
-        dense = _PACK_DENSE_CELLS.get((math_fidelity.name, _PACK_SHORT[formats.output_format], _PACK_SHORT[formats.input_format], _PACK_SHORT[formats.input_format_B], rt_dim, ct_dim, kt_dim))
+        dense = _PACK_DENSE_CELLS.get((math_fidelity.name, _PACK_SHORT.get(formats.output_format), _PACK_SHORT.get(formats.input_format), _PACK_SHORT.get(formats.input_format_B), rt_dim, ct_dim, kt_dim))
         if dense is not None:
             value = dense
     return MatmulPackForm(
