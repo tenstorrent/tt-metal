@@ -30,6 +30,8 @@ TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 TtCombine2dModule, below, does the same job with the combine_fabric2d op.
 """
 
+from typing import Optional
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import check_axis_wired_into_ring, check_fabric2d_setup
@@ -181,7 +183,7 @@ class TtCombine2dModule(LightweightModule):
         experts_per_chip: int,
         num_experts_per_tok: int,
         seq_len_per_chip: int,
-        fwd_vc_pages: int,
+        fwd_vc_pages: Optional[int] = None,
         emb_dim: int = 7 * 1024,
         cluster_axis: int = 0,
         num_links: int = 1,
@@ -199,7 +201,8 @@ class TtCombine2dModule(LightweightModule):
                 MOE_FWD_VC_PAGES. No depth can deadlock the ring, so this trades DRAM against
                 throughput and nothing else; where that curve bends is what differs per model, which
                 is why it is passed in rather than fixed in the op. A channel is a pipeline buffer,
-                so this is a page count and does not scale with the sequence length.
+                so this is a page count and does not scale with the sequence length. None takes the
+                op's default.
             emb_dim: Width of each token (the output's last dim). Used to check that half a token
                 fits in one fabric packet with its 64 B routing tail.
             cluster_axis: Mesh axis the ring runs along (0 = SP/dispatch axis).
@@ -275,7 +278,7 @@ class TtCombine2dModule(LightweightModule):
             seq_len_per_chip=self.seq_len_per_chip,
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
-            fwd_vc_pages=self.fwd_vc_pages,
+            **({} if self.fwd_vc_pages is None else {"fwd_vc_pages": self.fwd_vc_pages}),
             topology=ttnn.Topology.Ring,
             memory_config=self.memory_config,
         )

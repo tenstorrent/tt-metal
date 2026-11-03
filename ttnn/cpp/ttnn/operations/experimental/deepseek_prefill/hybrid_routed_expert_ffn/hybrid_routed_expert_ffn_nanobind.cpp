@@ -41,7 +41,9 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         combine is built. Everything else it places in L1 is freed when
         the call returns. forwarding_buffer is combine's DRAM staging buffer from
         hybrid_routed_expert_moe_forwarding_buffer; omitted, combine allocates its own at the first
-        call and keeps it for the program's lifetime.
+        call and keeps it for the program's lifetime. combine_fwd_vc_pages is the pages one of
+        combine's forwarding channels holds, the model's MOE_FWD_VC_PAGES; a forwarding_buffer must
+        be allocated for the same value.
 
         weight_address_table is every expert's weight base address as one uint32 ROW_MAJOR DRAM
         page, [gate[0..E), up[0..E), down[0..E)], read by the kernels in place of per-expert runtime
@@ -77,7 +79,8 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("expert_go_semaphore") = nb::none(),
         nb::arg("forwarding_buffer") = nb::none(),
         nb::arg("channel_semaphores") = std::vector<GlobalSemaphore>{},
-        nb::arg("weight_address_table") = nb::none());
+        nb::arg("weight_address_table") = nb::none(),
+        nb::arg("combine_fwd_vc_pages") = 64);
 
     ttnn::bind_function<
         "hybrid_routed_expert_moe_channel_semaphore_count",
@@ -111,7 +114,8 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("num_experts_per_tok"),
         nb::arg("seq_len_per_chip"),
         nb::arg("combine_axis") = 0,
-        nb::arg("combine_num_links") = 2);
+        nb::arg("combine_num_links") = 2,
+        nb::arg("combine_fwd_vc_pages") = 64);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::detail

@@ -61,12 +61,13 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("expert_token_counts"),
         nb::arg("expert_region_offsets"),
         nb::arg("expert_offsets"),
+        nb::kw_only(),
         nb::arg("experts_per_chip"),
         nb::arg("num_experts_per_tok"),
         nb::arg("seq_len_per_chip"),
         nb::arg("cluster_axis"),
         nb::arg("num_links"),
-        nb::arg("fwd_vc_pages"),
+        nb::arg("fwd_vc_pages") = 64,
         nb::arg("topology"),
         nb::arg("memory_config"));
 }

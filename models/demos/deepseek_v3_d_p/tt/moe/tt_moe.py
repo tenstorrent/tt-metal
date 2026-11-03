@@ -246,8 +246,7 @@ class TtMoe(LightweightModule):
         max_gate_seq_len_per_chip: Optional[int] = None,
         overlap_routed_expert_with_combine: Optional[bool] = False,
         moe_transport: Optional[str] = "direct",
-        dispatch_fwd_vc_pages: Optional[int] = None,
-        combine_fwd_vc_pages: Optional[int] = None,
+        fwd_vc_pages: Optional[int] = None,
         gate_bias_centered: bool = False,
     ):
         """
@@ -361,10 +360,10 @@ class TtMoe(LightweightModule):
                 num_experts_per_tok <= DISPATCH_FABRIC2D_MAX_TOPK, and a fabric max payload that fits
                 a whole routed_emb_dim bf16 token padded to 64 B plus a 64 B routing tail: open the
                 mesh with init_helpers.moe_fabric_payload_size for a model that opts in.
-            combine_fwd_vc_pages: combine_fabric2d's fwd_vc_pages, the model's MOE_FWD_VC_PAGES.
-                Needed only when the transport resolves to "fabric2d".
-            dispatch_fwd_vc_pages: dispatch_fabric2d's fwd_vc_pages, the model's MOE_FWD_VC_PAGES.
-                None takes the op's default.
+            fwd_vc_pages: Pages one forwarding channel holds, the model's MOE_FWD_VC_PAGES. One value for
+                dispatch_fabric2d, combine_fabric2d and the routed expert overlapped with combine: their
+                forwarding buffers are live at different times and come out of the same free DRAM, so a
+                smaller one for either op saves nothing. None takes the ops' default.
             gate_bias_centered: cache and use the gate's correction bias mean-centred (the model config's
                 MOE_GATE_BIAS_CENTERED, see tt_moe_gate_prefill.centre_gate_bias).
         """
@@ -379,6 +378,8 @@ class TtMoe(LightweightModule):
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
+        # Passed only when set, so None leaves every op at its own default.
+        self.fwd_vc_pages_kwargs = {} if fwd_vc_pages is None else {"fwd_vc_pages": fwd_vc_pages}
         self.layer_idx = layer_idx  # GLOBAL index; only consumed by the env-gated routing dump
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
@@ -406,8 +407,6 @@ class TtMoe(LightweightModule):
                 fabric2d_error = f"fabric2d runs a ring on axis 0, but the axis-0 topology is {self.row_topology}"
             elif metadata_len != 3:
                 fabric2d_error = f"the fabric2d ops write 3 metadata fields per token, got {metadata_len=}"
-            elif combine_fwd_vc_pages is None:
-                fabric2d_error = "combine_fabric2d needs combine_fwd_vc_pages"
             else:
                 fabric2d_error = fabric2d_setup_error(
                     mesh_device,
@@ -579,9 +578,9 @@ class TtMoe(LightweightModule):
                 # Fetched here, at init, so the buffers are placed before any forward's tensors, and every layer
                 # shares one pair.
                 buffers=self.tt_ccl.get_dispatch_fabric2d_buffers(
-                    self.routed_emb_dim, seq_len_per_chip, self.row_num_links, fwd_vc_pages=dispatch_fwd_vc_pages
+                    self.routed_emb_dim, seq_len_per_chip, self.row_num_links, **self.fwd_vc_pages_kwargs
                 ),
-                fwd_vc_pages=dispatch_fwd_vc_pages,
+                **self.fwd_vc_pages_kwargs,
             )
         else:
             self.dispatch_module = TtDispatchModule(
@@ -607,10 +606,10 @@ class TtMoe(LightweightModule):
                 experts_per_chip=experts_per_chip,
                 num_experts_per_tok=num_experts_per_tok,
                 seq_len_per_chip=seq_len_per_chip,
-                fwd_vc_pages=combine_fwd_vc_pages,
                 emb_dim=self.routed_emb_dim,
                 cluster_axis=0,
                 num_links=self.row_num_links,
+                **self.fwd_vc_pages_kwargs,
             )
         else:
             self.combine_module = TtCombineModule(
@@ -687,6 +686,7 @@ class TtMoe(LightweightModule):
                 num_experts_per_tok,
                 self.seq_len_per_chip,
                 self.row_num_links,
+                **self.fwd_vc_pages_kwargs,
             )
             if overlap_routed_expert_with_combine
             else None
@@ -900,6 +900,7 @@ class TtMoe(LightweightModule):
             seq_len_per_chip=self.seq_len_per_chip,
             combine_semaphores=self.combine_overlap_semaphores,
             forwarding_buffer=self.combine_forwarding_buffer,
+            **self.fwd_vc_pages_kwargs,
         )
 
     def forward(
