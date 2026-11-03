@@ -492,8 +492,8 @@ void append_reduce_scatter_common_args(
 
 // Cache-hit counterpart of append_reduce_scatter_common_args: re-writes every ReduceScatterCommonArgs slot of the
 // reader and writer by role. The caller-owned semaphores are not in the program hash, so their slots are stale on a
-// hit. The tensor slots are re-written too: the input or the output may alias the persistent intermediate on the call
-// that built the program, and the bindings resolved on that call cannot tell them apart.
+// hit. The tensor slots are re-written too: the adapter's bindings map each Buffer* to its first tensor, so a buffer
+// filling two roles on the miss (e.g. input as the persistent intermediate) binds both slots to one tensor on a hit.
 void apply_reduce_scatter_common_args(
     tt::tt_metal::Program& program,
     const ReduceScatterDescriptorArtifacts& artifacts,
