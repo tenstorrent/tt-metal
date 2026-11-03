@@ -149,6 +149,9 @@ struct matmul_main_form_cell
 };
 
 inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
+    // the HiFi2 two tile blocks of half sync from Float16_b to Float16_b or Bfp4_b: the opt-in row MOP initialises 6 to 10 cycles slower per call than main's form and gains 1.8 to 4.7 per block
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, false, 2, 2, 0},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, false, 2, 2, 0},
     {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
     {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float16_b, false},
     {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float16_b, false},
@@ -703,9 +706,21 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::HiFi2, true, true, DataFormat::UInt8, DataFormat::UInt8, DataFormat::Int32, 1, 1, 1, 0, false, 1},
 };
 
+constexpr bool matmul_reinit_main_block(const MathFidelity fidelity, const bool half_sync, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle,
+                                        const bool l1_acc, const std::uint32_t nb)
+{
+    return !half_sync && throttle == 0 && !l1_acc && nb == 1 && kt == 1 && rt * ct == 2 && (fidelity == MathFidelity::LoFi || (fidelity == MathFidelity::HiFi2 && rt == 2));
+}
+
 constexpr bool matmul_grid_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
                                      const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false, const std::uint32_t nb = 1)
 {
+    // Blocks of two tiles at full sync the keyed row form re-initialises slower than main's tile form (up to 25 cycles per init
+    // before every call) without reading faster: LoFi is bound by the unpack and the pack, which the row form does not relieve
+    if (matmul_reinit_main_block(fidelity, half_sync, rt, ct, kt, throttle, l1_acc, nb))
+    {
+        return true;
+    }
     for (const matmul_grid_main_cell& c : matmul_grid_main_cells)
     {
         if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt &&

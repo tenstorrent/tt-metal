@@ -669,8 +669,15 @@ _GRID_MAIN = frozenset(_GRID_MAIN_ROWS)
 _SHORT = {DataFormat.Float16_b: "F16b", DataFormat.Bfp8_b: "B8", DataFormat.Bfp4_b: "B4", DataFormat.Float32: "F32", DataFormat.Float16: "F16", DataFormat.Bfp8: "B8x", DataFormat.Bfp2_b: "B2", DataFormat.Int8: "I8", DataFormat.UInt8: "U8", DataFormat.Int32: "I32"}
 
 
+def reinit_main_block(fidelity, half_sync, rt, ct, kb, throttle, l1_acc, nb) -> bool:
+    """Full sync blocks of two tiles whose keyed row form re-initialises slower than main's tile form without reading faster (llk_matmul_forms.h matmul_reinit_main_block)."""
+    return (not half_sync and throttle == 0 and not l1_acc and nb == 1 and kb == 1 and rt * ct == 2 and (fidelity.name == "LoFi" or (fidelity.name == "HiFi2" and rt == 2)))
+
+
 def grid_main_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kb, throttle=0, l1_acc=False, nb=1) -> bool:
     """Cells of the perf_matmul_grid sweep (every subblock) where the keyed forms read slower than main's: they keep main's form."""
+    if reinit_main_block(fidelity, half_sync, rt, ct, kb, throttle, l1_acc, nb):
+        return True
     try:
         key = (fidelity.name, half_sync, fp32_acc, _SHORT[in1], _SHORT[in0], _SHORT[out], rt, ct, kb, throttle, bool(l1_acc), nb)
     except KeyError:

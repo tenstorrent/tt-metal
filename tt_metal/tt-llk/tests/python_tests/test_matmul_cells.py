@@ -74,6 +74,18 @@ def _cases():
                 add(_case(table, a, b, o, "Y" if acc else "N", "H" if half else "F", fid, rt, ct, kt))
 
     row("main", sorted(_pk._GRID_MAIN_ROWS))
+    # blocks that take main's form for the re-init cost (matmul_reinit_main_block): every format triple of the dyn re-init coverage
+    for a, b, o in (("F16b", "F16b", "F16b"), ("B8", "B8", "B8"), ("F16b", "F16b", "B4"), ("F32", "F32", "F32")):
+        for acc in ("N", "Y"):
+            for sy in ("H", "F"):
+                for fid in ("LoFi", "HiFi2"):
+                    for rt, ct in ((1, 2), (2, 1), (3, 1)):
+                        if _pk.reinit_main_block(getattr(MathFidelity, fid), sy == "H", rt, ct, 1, 0, False, 1):
+                            add(_case("main", a, b, o, acc, sy, fid, rt, ct, 1))
+    # the Float16_b to Float16_b and Bfp4_b HiFi2 two tile blocks of half sync that matmul_main_form_cells keeps on main's form
+    for o in ("F16b", "B4"):
+        for rt, ct in ((1, 2), (2, 1)):
+            add(_case("main", "F16b", "F16b", o, "N", "H", "HiFi2", rt, ct, 1))
     row("post", sorted(_pk._UNFUSED_POST_ROWS))
     row("flip", sorted(_pk._MAIN_FLIP_ROWS))
     row("endfold", sorted(_pk._END_FOLD_OFF_ROWS))
