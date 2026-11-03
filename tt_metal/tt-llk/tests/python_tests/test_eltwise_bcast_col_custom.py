@@ -88,6 +88,8 @@ class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 # Row height of the srcA operand. 32 -> full 32x32 tiles (num_faces=4);
 # 16 -> 16x32 "tiny tiles" (one face-row, num_faces=2).
 _TILE_ROWS = [32, 16]
+# Each column tile is tile_rows x 32; srcA is one row of ct_dim tiles.
+_BCST_COL_RT_DIM = 1
 _CPP_SOURCE = "sources/eltwise_bcast_col_custom_test.cpp"
 
 
@@ -104,7 +106,6 @@ def create_eltwise_bcast_col_custom_config(
     loop_factor=1,
     is_perf=False,
     run_types=None,
-    input_dimensions=None,
     preserve_src_zero_flag=False,
     num_faces=None,
     face_r_dim=None,
@@ -114,6 +115,17 @@ def create_eltwise_bcast_col_custom_config(
     """Build the shared functional/performance bcast-column configuration."""
     if run_types is None:
         run_types = [PerfRunType.L1_TO_L1]
+    if not is_perf and run_types != [PerfRunType.L1_TO_L1]:
+        raise ValueError("Functional bcast-column runs only support L1_TO_L1")
+    if not is_perf and loop_factor != 1:
+        raise ValueError("Functional bcast-column runs require loop_factor=1")
+    if is_perf and preserve_src_zero_flag:
+        raise ValueError("preserve_src_zero_flag is functional-only")
+    geometry = (num_faces, face_r_dim, num_blocks, num_tiles_in_block)
+    if is_perf and any(value is not None for value in geometry):
+        raise ValueError("Face and block geometry is functional-only")
+    if not is_perf and None in geometry:
+        raise ValueError("Functional bcast-column geometry is incomplete")
 
     templates = [
         MATH_FIDELITY(math_fidelity),
@@ -127,21 +139,13 @@ def create_eltwise_bcast_col_custom_config(
     ]
 
     if not is_perf:
-        if None in (
-            input_dimensions,
-            num_faces,
-            face_r_dim,
-            num_blocks,
-            num_tiles_in_block,
-        ):
-            raise ValueError("Functional bcast-column configuration is incomplete")
         templates.extend(
             [
                 INPUT_DIMENSIONS(
-                    full_rt_dim=1,
+                    full_rt_dim=_BCST_COL_RT_DIM,
                     full_ct_dim=ct_dim,
                     block_ct_dim=ct_dim,
-                    block_rt_dim=1,
+                    block_rt_dim=_BCST_COL_RT_DIM,
                 ),
                 PRESERVE_SRC_ZERO_FLAG(preserve_src_zero_flag),
             ]
@@ -281,7 +285,6 @@ def test_eltwise_bcast_col_custom(
     num_faces = num_faces_r_dim * num_faces_c_dim
 
     ct_dim = input_dimensions_A[1] // 32
-    # Each column tile is tile_rows x 32; the operand is a single row of ct_dim tiles.
     logger.info(
         "Running ct_dim=%d  srcA=%s  srcB=%s  num_faces=%d  face_r_dim=%d",
         ct_dim,
@@ -370,7 +373,6 @@ def test_eltwise_bcast_col_custom(
             tile_dimensions=tile_dims,
             use_dense_tile_dimensions=True,
         ),
-        input_dimensions=input_dimensions_A,
         preserve_src_zero_flag=False,
         num_faces=num_faces,
         face_r_dim=face_r_dim,
@@ -549,7 +551,6 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
             tile_dimensions=tile_dims,
             use_dense_tile_dimensions=True,
         ),
-        input_dimensions=input_dimensions_A,
         preserve_src_zero_flag=True,
         num_faces=num_faces,
         face_r_dim=face_r_dim,
