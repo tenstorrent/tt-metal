@@ -1533,7 +1533,11 @@ def _local_recurrence(self, q, k, v, g, beta, *, flat_scalars=False, slots=None,
             ],
         ),
         ttnn.KernelDescriptor(
-            kernel_source=_BROADCAST_DECODE_COMPUTE if broadcast else _LOCAL_DECODE_COMPUTE,
+            kernel_source=(
+                (_BROADCAST_DECODE_COMPUTE_FUSED if broadcast else _LOCAL_DECODE_COMPUTE_FUSED)
+                if os.environ.get("QWEN_FLASH_GDN_FUSED_COMPUTE", "0") == "1"
+                else (_BROADCAST_DECODE_COMPUTE if broadcast else _LOCAL_DECODE_COMPUTE)
+            ),
             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
             core_ranges=cores,
             config=config,
@@ -1635,6 +1639,72 @@ void kernel_main() {
 }
 """
 
+_LOCAL_DECODE_COMPUTE_FUSED = r"""
+#include "api/compute/common.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/sfpu_binary_bcast.h"
+#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+
+// Same arithmetic as _LOCAL_DECODE_COMPUTE (FP32 unpack-to-dest and FP32 packs are lossless, products are
+// commutative), with each intermediate kept in dest for its next use instead of a pack/unpack round trip.
+void load(uint32_t cb,uint32_t tile,uint32_t dst) {
+    reconfig_data_format_srca(cb);
+    copy_init(cb);
+    copy_tile(cb,tile,dst);
+}
+template<uint32_t Out> void reduce_product() {
+    cb_wait_front(8,4);
+    compute_kernel_lib::reduce<PoolType::SUM,ReduceDim::REDUCE_COL,8,6,Out,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+        ReduceFp32Mode::Accurate>(compute_kernel_lib::ReduceInputBlockShape::of(4,1));
+    cb_pop_front(8,4);
+}
+void kernel_main() {
+    compute_kernel_hw_startup(0,4,7);
+    const uint32_t count=get_arg_val<uint32_t>(0);
+    for(uint32_t job=0;job<count;++job) {
+        // Decayed state (CB7) and its product with k (CB8), one dest pass per tile.
+        cb_wait_front(0,4); cb_wait_front(4,1); cb_wait_front(2,4);
+        cb_reserve_back(7,4); cb_reserve_back(8,4);
+        pack_reconfig_data_format(7);
+        for(uint32_t i=0;i<4;++i) {
+            tile_regs_acquire(); load(0,i,0); load(4,0,1);
+            mul_binary_tile_init(); mul_binary_tile(0,1,0);
+            load(2,i,2);
+            mul_binary_tile_init(); mul_binary_tile(0,2,2);
+            tile_regs_commit(); tile_regs_wait(); pack_tile(0,7,i); pack_tile(2,8,i); tile_regs_release();
+        }
+        cb_push_back(7,4); cb_push_back(8,4); cb_pop_front(0,4); cb_pop_front(4,1);
+        reduce_product<9>();
+        cb_wait_front(9,1); cb_wait_front(3,1); cb_wait_front(5,1);
+        cb_reserve_back(11,1); pack_reconfig_data_format(11);
+        tile_regs_acquire(); load(3,0,0); load(9,0,1); load(5,0,2);
+        sub_binary_tile_init(); sub_binary_tile(0,1,0);
+        mul_binary_tile_init(); mul_binary_tile(0,2,0);
+        tile_regs_commit(); tile_regs_wait(); pack_tile(0,11,0); tile_regs_release();
+        cb_push_back(11,1); cb_pop_front(9,1); cb_pop_front(3,1); cb_pop_front(5,1);
+        // New state (CB12) and its product with q (CB8), one dest pass per tile.
+        cb_wait_front(11,1); cb_wait_front(7,4); cb_wait_front(1,4);
+        cb_reserve_back(12,4); cb_reserve_back(8,4); pack_reconfig_data_format(12);
+        for(uint32_t i=0;i<4;++i) {
+            tile_regs_acquire(); load(2,i,0); load(11,0,1); load(7,i,2);
+            sfpu_mul_bcast_row_init(); sfpu_mul_bcast_row(0,1);
+            add_binary_tile_init(); add_binary_tile(0,2,0);
+            load(1,i,3);
+            mul_binary_tile_init(); mul_binary_tile(0,3,3);
+            tile_regs_commit(); tile_regs_wait(); pack_tile(0,12,i); pack_tile(3,8,i); tile_regs_release();
+        }
+        cb_push_back(12,4); cb_push_back(8,4); cb_pop_front(11,1); cb_pop_front(7,4); cb_pop_front(2,4);
+        reduce_product<13>(); cb_pop_front(1,4);
+    }
+    cb_pop_front(6,1);
+}
+"""
+
 _LOCAL_GDN_READER = r"""
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -1681,6 +1751,24 @@ void kernel_main() {
     for (uint32_t job = first; job < first + count; ++job) {
         const uint32_t head=job/4, column=job%4;
         const uint32_t b = head/12, h = head%12;
+        // Row segments only (64 B each, issued together): q/k row h/3 of the lane's 4 tiles, v row h%32,
+        // one decay and one beta value. Words: q 0..127, k 128..255, v 256..287, decay 288.., beta 304..
+        const uint32_t qrow = h/3;
+        for (uint32_t t=0;t<4;++t) for (uint32_t f=0;f<2;++f) {
+            noc.async_read(q,CoreLocalMem<uint32_t>(scratch+4*(t*32+f*16)),64,
+                {.page_id=b*4+t,.offset_bytes=4*off(qrow,f*16)},{});
+            noc.async_read(k,CoreLocalMem<uint32_t>(scratch+4*(128+t*32+f*16)),64,
+                {.page_id=b*4+t,.offset_bytes=4*off(qrow,f*16)},{});
+        }
+        for (uint32_t f=0;f<2;++f)
+            noc.async_read(v,CoreLocalMem<uint32_t>(scratch+4*(256+f*16)),64,
+                {.page_id=(b+h/32)*4+column,.offset_bytes=4*off(h%32,f*16)},{});
+        const uint32_t sr = flat_scalars ? b%32 : 0, sc = flat_scalars ? h : h%32;
+        const uint32_t scalar_page = flat_scalars ? b/32 : b+h/32;
+        noc.async_read(decay,CoreLocalMem<uint32_t>(scratch+4*288),64,
+            {.page_id=scalar_page,.offset_bytes=4*off(sr,sc-sc%16)},{});
+        noc.async_read(beta,CoreLocalMem<uint32_t>(scratch+4*304),64,
+            {.page_id=scalar_page,.offset_bytes=4*off(sr,sc-sc%16)},{});
         // State tiles: the lane's work buffer, or directly its request slot in the bank.
         uint32_t spage = head*16;
         bool fresh = false;
@@ -1699,40 +1787,31 @@ void kernel_main() {
             for (uint32_t i=0;i<4;++i)
                 noc.async_read(state, CoreLocalMem<uint32_t>(get_write_ptr(0)+i*4096),4096,
                     {.page_id=spage+i*4+column},{});
-            noc.async_read_barrier();
         }
+        noc.async_read_barrier();
         cb_push_back(0,4);
         // Raw 32-bit replication: no floating point conversion on dataflow RISCs.
         for (uint32_t which=1;which<=3;++which) {
             cb_reserve_back(which,which==3?1:4);
             auto dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(which));
-            for (uint32_t tile=0;tile<(which==3?1:4);++tile) {
-                uint32_t page = which==3 ? (b+h/32)*4+column : b*4+tile;
-                if (which==1) noc.async_read(q,CoreLocalMem<uint32_t>(scratch),4096,{.page_id=page},{});
-                if (which==2) noc.async_read(k,CoreLocalMem<uint32_t>(scratch),4096,{.page_id=page},{});
-                if (which==3) noc.async_read(v,CoreLocalMem<uint32_t>(scratch),4096,{.page_id=page},{});
-                noc.async_read_barrier();
-                if (which==3) {
-                    for(uint32_t c=0;c<32;++c) dst[tile*1024+off(0,c)]=src[off(h%32,c)];
-                } else {
+            if (which==3) {
+                for(uint32_t c=0;c<32;++c) dst[off(0,c)]=src[256+c];
+            } else {
+                const uint32_t base = which==1 ? 0 : 128;
+                for (uint32_t tile=0;tile<4;++tile)
                     for(uint32_t r=0;r<32;++r) {
-                        const uint32_t value=src[off(h/3,r)];
+                        const uint32_t value=src[base+tile*32+r];
                         for(uint32_t c=0;c<16;++c) {
                             dst[tile*1024+off(r,c)]=value;
                             dst[tile*1024+off(r,c+16)]=value;
                         }
                     }
-                }
             }
             cb_push_back(which,which==3?1:4);
         }
         for(uint32_t which=4;which<=5;++which) {
             cb_reserve_back(which,1);
-            const uint32_t spage = flat_scalars ? b/32 : b+h/32;
-            if(which==4) noc.async_read(decay,CoreLocalMem<uint32_t>(scratch),4096,{.page_id=spage},{});
-            else noc.async_read(beta,CoreLocalMem<uint32_t>(scratch),4096,{.page_id=spage},{});
-            noc.async_read_barrier();
-            const uint32_t value=flat_scalars ? src[off(b%32,h)] : src[off(0,h%32)];
+            const uint32_t value=src[(which==4 ? 288 : 304)+sc%16];
             auto dst=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(which));
             for(uint32_t i=0;i<1024;++i) dst[i]=value;
             cb_push_back(which,1);
@@ -1922,6 +2001,7 @@ def _broadcast_recurrence_compute(source):
 _BROADCAST_GDN_READER = _broadcast_recurrence_reader(_LOCAL_GDN_READER)
 _BROADCAST_PREFILL_READER = _broadcast_recurrence_reader(_LOCAL_PREFILL_READER)
 _BROADCAST_DECODE_COMPUTE = _broadcast_recurrence_compute(_LOCAL_DECODE_COMPUTE)
+_BROADCAST_DECODE_COMPUTE_FUSED = _broadcast_recurrence_compute(_LOCAL_DECODE_COMPUTE_FUSED)
 
 
 _LOCAL_ROLL_SOURCE = r"""
