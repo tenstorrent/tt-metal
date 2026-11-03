@@ -7,8 +7,8 @@ caches, the PLE cache, the owner's sampler and output buffers. Only the extra
 B1 weight representations and private B1 scratch are allocated here.
 
 QWEN_FLASH_DECODE_B1=0 disables the view (base behaviour: the B4 view).
-QWEN_FLASH_DECODE_MOE=0 keeps the prefill expert op for the view's routed experts
-(default: moe_decode.SingleTokenExperts, all selected experts in two programs).
+QWEN_FLASH_DECODE_MOE=0 keeps the prefill expert op for the routed experts of
+this view and the B4 view (default: moe_decode.SingleTokenExperts).
 QWEN_FLASH_DECODE_B1_BF4=1 adds the standalone B1 BF4 QSA decode projection
 (no measured gain at one QSA layer, ~10x larger logit KL), so BF8 is default.
 """
@@ -18,7 +18,6 @@ import os
 import ttnn
 
 from .decode_view import CompactDecodeView, _decoder, _ops
-from .moe_decode import SingleTokenExperts
 from .prefill_view import _clone
 
 
@@ -39,7 +38,6 @@ def _model(owner, pool):
     if not owner.serving_pool or owner.batch_size != 32:
         raise ValueError("The one-row decode view requires a fixed32 serving owner")
     bf4 = os.environ.get("QWEN_FLASH_DECODE_B1_BF4", "0") == "1"
-    single_token_moe = os.environ.get("QWEN_FLASH_DECODE_MOE", "1") != "0"
     result = _clone(owner, _ops(owner.ops))
     result.batch_size = 1
     result.terminal = _clone(owner.terminal, result.ops)
@@ -48,8 +46,6 @@ def _model(owner, pool):
         view = _decoder(layer, 1, pool)
         attention = view.attention
         attention.output_projection.column_weight = _column_weight(attention.output_projection, view.ops)
-        if single_token_moe:
-            view.mlp.single_token = SingleTokenExperts(view.mlp)
         if layer.kind != "linear_attention":
             attention.decode_projection = (
                 ttnn.typecast(layer.attention.packed_projection, ttnn.bfloat4_b)
@@ -92,3 +88,4 @@ class SingleRowDecodeView(CompactDecodeView):
                 device=generator.mesh,
             )
         self.rows = pool["logit_rows"]
+        self.row_mask = None  # the single row is always active

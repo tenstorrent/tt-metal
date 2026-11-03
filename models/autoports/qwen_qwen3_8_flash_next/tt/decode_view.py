@@ -7,11 +7,13 @@ the original owner's sampler and output buffer remain the only token producer.
 """
 
 import copy
+import os
 
 import torch
 
 import ttnn
 
+from .moe_decode import MAX_ROWS, SingleTokenExperts
 from .prefill_view import _clone, _shared_zero
 from .state_ops import advance_positions
 
@@ -47,6 +49,10 @@ def _decoder(owner, batch, pool):
     result.attn_hyper = _clone(owner.attn_hyper, ops)
     result.mlp_hyper = _clone(owner.mlp_hyper, ops)
     result.mlp = _clone(owner.mlp, ops)
+    if batch <= MAX_ROWS and os.environ.get("QWEN_FLASH_DECODE_MOE", "1") != "0":
+        # All selected experts of the view's rows at once (moe_decode); the
+        # prefill expert op otherwise walks them one at a time.
+        result.mlp.single_token = SingleTokenExperts(result.mlp)
     # Packed multirow MoE does not use capacity; retain the owner allocation.
     attention = _clone(owner.attention, ops)
     result.attention = attention
@@ -121,6 +127,14 @@ class CompactDecodeView:
                 device=generator.mesh,
             )
         self.rows = pool["logit_rows"]
+        # Inactive rows inside the bucket must not add experts to the routed union.
+        self.row_mask = None
+        if any(getattr(layer.mlp, "single_token", None) is not None for layer in self.model.layers):
+            self.row_mask = ttnn.zeros(
+                (1, 1, batch, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=generator.mesh
+            )
+            for layer in self.model.layers:
+                layer.mlp.row_mask = self.row_mask
 
     def forward(self):
         g, batch = self.generator, self.batch_size
@@ -130,6 +144,8 @@ class CompactDecodeView:
         positions = g.tt_pos[:batch, :]
         slots = g.tt_slots[:batch, :]
         pages = g.tt_page[:batch, :]
+        if self.row_mask is not None:
+            ttnn.copy(g.tt_logit_mask[:, :, :batch, :], self.row_mask)
         logits = self.model.forward(
             tokens, positions=positions, slots=slots, page_table=pages, kv_cache=self.model.cache, decode=True
         )
