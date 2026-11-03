@@ -14,7 +14,6 @@ KDA_CHUNK_SIZE = ttnn.TILE_SIZE
 KDA_QKV_DTYPE = ttnn.bfloat16
 KDA_GATE_DTYPE = ttnn.bfloat16
 KDA_RECURRENT_STATE_DTYPE = ttnn.float32
-KDA_AFFINE_SUMMARY_DTYPE = ttnn.bfloat16
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 # The L1 budgets below are static: they are sized on Galaxy SP8xTP4 against what is live next to these tensors
@@ -52,8 +51,6 @@ KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
 # share fits this budget (64 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
 KDA_DECAY_LOGITS_L1_BYTES_PER_CORE = 64 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
-KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
-KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 
@@ -192,9 +189,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
     """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
     # Fixed production/proxy geometries; native worker capacity is validated by
     # the recurrence constructor for the actual TP-local head count and device.
-    # Up to 1280 rows one group per head takes the SP relay's entry correction instead of a second chunk scan; beyond
-    # that its emitted terms outgrow L1.
-    group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 40, 2560: 20, 5120: 20}
+    group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 20, 2560: 20, 5120: 20}
     if active_seq_len_local not in group_chunks:
         raise ValueError(f"no tuned Kimi-K3 recurrence configuration for local T={active_seq_len_local}")
     return KDAProgramConfig(

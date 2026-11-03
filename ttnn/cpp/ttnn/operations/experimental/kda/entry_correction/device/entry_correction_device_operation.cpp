@@ -108,13 +108,30 @@ void EntryCorrectionOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_dtype(in.terms, tt::tt_metal::DataType::FLOAT32, operation_name, "terms");
     kda_factory_detail::check_same_device(in.final_b, in.terms, operation_name, "terms");
     const uint32_t core_rows = chunks / cores_per_head * tt::constants::TILE_HEIGHT;
+    const auto& memory = in.terms.memory_config();
+    if (!memory.is_sharded()) {
+        // Streamed: each core reads its chunk rows of F(0) and F(I) from the interleaved terms.
+        TT_FATAL(
+            in.terms.logical_shape() == Shape({heads, 2, chunks * tt::constants::TILE_HEIGHT, key_dim}),
+            "{}: interleaved terms must be [B*H, 2, {}, K]",
+            operation_name,
+            chunks * tt::constants::TILE_HEIGHT);
+        kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
+        kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
+        TT_FATAL(
+            key_dim / tt::constants::TILE_WIDTH <= ttnn::get_dest_reg_count(attrs.compute_kernel_config),
+            "{}: K exceeds the DST tiles a row packs from",
+            operation_name);
+        TT_FATAL(
+            attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
+        return;
+    }
     TT_FATAL(
         in.terms.logical_shape() == Shape({heads * cores_per_head, 2, core_rows, key_dim}),
         "{}: terms must be [B*H * {}, 2, {}, K]",
         operation_name,
         cores_per_head,
         core_rows);
-    const auto& memory = in.terms.memory_config();
     TT_FATAL(
         memory.buffer_type() == tt::tt_metal::BufferType::L1 &&
             memory.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,

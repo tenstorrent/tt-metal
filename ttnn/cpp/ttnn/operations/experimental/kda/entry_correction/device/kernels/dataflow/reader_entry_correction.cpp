@@ -22,12 +22,15 @@ constexpr uint32_t kt = get_compile_time_arg_val(12);
 constexpr bool has_actual_end = get_compile_time_arg_val(13);
 // A head's cores each form every final_stride-th tile row of the final state.
 constexpr uint32_t final_stride = get_compile_time_arg_val(14);
-constexpr auto a_args = TensorAccessorArgs<15>();
+// Interleaved terms: this core reads its chunk rows of F(0) and F(I) one chunk at a time.
+constexpr bool streamed = get_compile_time_arg_val(15);
+constexpr auto a_args = TensorAccessorArgs<16>();
 constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
 constexpr auto entry_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
 constexpr auto tail_args = TensorAccessorArgs<entry_args.next_compile_time_args_offset()>();
 constexpr auto start_args = TensorAccessorArgs<tail_args.next_compile_time_args_offset()>();
 constexpr auto end_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
+constexpr auto terms_args = TensorAccessorArgs<end_args.next_compile_time_args_offset()>();
 constexpr uint32_t state_tiles = kt * kt;
 
 // Entry correction reader: the chronology (this core's valid chunks and the reset chunk), the head's seeds (read by the
@@ -40,6 +43,7 @@ void kernel_main() {
     const uint32_t tail_address = get_common_arg_val<uint32_t>(3);
     const uint32_t start_address = get_common_arg_val<uint32_t>(4);
     const uint32_t end_address = get_common_arg_val<uint32_t>(5);
+    const uint32_t terms_address = get_common_arg_val<uint32_t>(6);
     const uint32_t head = get_arg_val<uint32_t>(arg++);
     const uint32_t first_chunk = get_arg_val<uint32_t>(arg++);
     const uint32_t last_chunk = get_arg_val<uint32_t>(arg++);
@@ -144,8 +148,25 @@ void kernel_main() {
             cb_push_back(cb_tail, state_tiles);
         }
     }
-    // This core's chunk rows are in place in its shard of the emitted terms.
-    if (chunks != 0) {
+    if constexpr (streamed) {
+        // Head h's F(0) rows are tile rows h * 2 * num_chunks + chunk of the terms, its F(I) rows num_chunks further.
+        constexpr uint32_t num_chunks = local_rows / 32;
+        const auto terms = TensorAccessor(terms_args, terms_address);
+        const uint32_t tile = get_tile_size(cb_base);
+        for (uint32_t c = 0; c < chunks; ++c) {
+            const uint32_t zero_page = (head * 2 * num_chunks + first_chunk + c) * kt;
+            cb_reserve_back(cb_base, kt);
+            cb_reserve_back(cb_m, kt);
+            for (uint32_t j = 0; j < kt; ++j) {
+                noc_async_read_page(zero_page + j, terms, get_write_ptr(cb_base) + j * tile);
+                noc_async_read_page(zero_page + num_chunks * kt + j, terms, get_write_ptr(cb_m) + j * tile);
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_base, kt);
+            cb_push_back(cb_m, kt);
+        }
+    } else if (chunks != 0) {
+        // This core's chunk rows are in place in its shard of the emitted terms.
         cb_reserve_back(cb_m, chunks * kt);
         cb_reserve_back(cb_base, chunks * kt);
         cb_push_back(cb_m, chunks * kt);
