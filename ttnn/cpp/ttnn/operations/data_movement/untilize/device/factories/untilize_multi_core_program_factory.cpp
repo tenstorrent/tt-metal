@@ -58,6 +58,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     constexpr const char* READER_INTERLEAVED_RUNTIME_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "reader_unary_start_id_runtime_rows.cpp";
+    constexpr const char* READER_INTERLEAVED_BATCHED_SRC =
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/reader_unary_start_id_batched.cpp";
     constexpr const char* WRITER_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_multi_core.cpp";
@@ -226,9 +228,18 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
             {"tiles_per_row", num_tiles_per_input_block}, {"num_cores", num_compute_cores}};
         reader_spec.runtime_arg_schema = split_runtime_arg_schema;
     } else {
-        reader_spec.source = std::filesystem::path{READER_INTERLEAVED_SRC};
+        // On Quasar the reader syncs the input DFB once per tile-row block rather than once per tile: the
+        // block is the compute's wait unit and the input ring is sized in whole blocks, so a block never
+        // straddles the ring wrap. Explicit sync needs implicit sync off. WH/BH keep the per-tile reader.
+        const bool batched_reader = device->arch() == tt::ARCH::QUASAR;
+        reader_spec.source =
+            std::filesystem::path{batched_reader ? READER_INTERLEAVED_BATCHED_SRC : READER_INTERLEAVED_SRC};
         reader_spec.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}};
         reader_spec.runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}};
+        if (batched_reader) {
+            reader_spec.compile_time_args = {{"tiles_per_batch", num_tiles_per_input_block}};
+            reader_spec.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
+        }
     }
 
     // Writer kernel.
