@@ -6,15 +6,14 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <map>
 #include <memory>
-#include <string>
 #include <vector>
 
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -33,30 +32,8 @@ namespace {
 //     grid is the logical Tensix worker grid (it already excludes harvested rows and
 //     dispatch columns), so an in-grid logical core is by construction a valid worker.
 //
-// Parameterised over the dispatch axes supported on the current arch. Slow- vs
-// fast-dispatch coverage is provided by CI invoking this binary twice (with/without
-// TT_METAL_SLOW_DISPATCH_MODE).
+// Instantiate both axes and skip unsupported configurations after detecting the device.
 class OptimalDramWorkers : public ::testing::TestWithParam<DispatchCoreAxis> {};
-
-// Resolved at static-init from the ARCH_NAME env var (set by build/test scripts), so
-// gtest enumeration only lists axes that the platform actually supports — no runtime
-// skips appear in the test output.
-//
-// Blackhole rejects ROW dispatch (the Device guard emits
-// "ROW dispatch core axis is not supported for blackhole arch"), so we omit ROW on BH.
-// Quasar core descriptors only define a row axis.
-std::vector<DispatchCoreAxis> supported_dispatch_axes() {
-    const char* arch_env = std::getenv("ARCH_NAME");
-    const std::string arch = arch_env == nullptr ? "" : arch_env;
-    if (arch == "quasar") {
-        return {DispatchCoreAxis::ROW};
-    }
-    std::vector<DispatchCoreAxis> axes = {DispatchCoreAxis::COL};
-    if (arch != "blackhole") {
-        axes.push_back(DispatchCoreAxis::ROW);
-    }
-    return axes;
-}
 
 TEST_P(OptimalDramWorkers, ReturnsOneValidWorkerPerDramBank) {
     const DispatchCoreAxis axis = GetParam();
@@ -65,6 +42,13 @@ TEST_P(OptimalDramWorkers, ReturnsOneValidWorkerPerDramBank) {
     const auto& ids_set = MetalContext::instance().get_cluster().user_exposed_chip_ids();
     if (ids_set.empty()) {
         GTEST_SKIP() << "No user-exposed chips available";
+    }
+    const auto arch = hal::get_arch();
+    if (arch == tt::ARCH::BLACKHOLE && axis == DispatchCoreAxis::ROW) {
+        GTEST_SKIP() << "Row dispatch is not supported on the default Blackhole configuration";
+    }
+    if (arch == tt::ARCH::QUASAR && axis == DispatchCoreAxis::COL) {
+        GTEST_SKIP() << "Col dispatch is not supported on Quasar";
     }
     std::vector<int> ids(ids_set.begin(), ids_set.end());
 
@@ -104,7 +88,7 @@ TEST_P(OptimalDramWorkers, ReturnsOneValidWorkerPerDramBank) {
 INSTANTIATE_TEST_SUITE_P(
     DispatchAxes,
     OptimalDramWorkers,
-    ::testing::ValuesIn(supported_dispatch_axes()),
+    ::testing::Values(DispatchCoreAxis::COL, DispatchCoreAxis::ROW),
     [](const ::testing::TestParamInfo<DispatchCoreAxis>& info) {
         return info.param == DispatchCoreAxis::ROW ? "Row" : "Col";
     });

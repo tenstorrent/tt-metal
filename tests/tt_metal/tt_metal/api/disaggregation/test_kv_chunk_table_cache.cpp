@@ -11,8 +11,10 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "llrt/get_platform_architecture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "internal/disaggregation/kv_chunk_table_cache.hpp"
 
@@ -31,8 +33,20 @@ std::string read_file(const fs::path& path) {
 class KvChunkTableCache : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (const char* arch = std::getenv("ARCH_NAME"); arch == nullptr || std::string_view(arch) != "blackhole") {
-            GTEST_SKIP() << "Blackhole-only";
+        const bool virtual_target = std::getenv("TT_METAL_SIMULATOR") ||
+                                    std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") ||
+                                    std::getenv("TT_METAL_EMULE_MODE");
+        tt::ARCH arch;
+        if (MetalContext::instance_exists()) {
+            arch = hal::get_arch();
+        } else if (virtual_target) {
+            arch = tt::arch_from_str(tt::tt_metal::detail::get_platform_architecture_name());
+        } else {
+            arch = get_physical_architecture();
+        }
+        // Run the CPU tests on hardware-free hosts when no architecture is detected.
+        if (arch != tt::ARCH::BLACKHOLE && arch != tt::ARCH::Invalid) {
+            GTEST_SKIP() << "Blackhole or hardware-free host required; detected " << tt::arch_to_str(arch);
         }
         const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
         root_ = fs::temp_directory_path() / "kv-chunk-table-cache-test" / info->name();
