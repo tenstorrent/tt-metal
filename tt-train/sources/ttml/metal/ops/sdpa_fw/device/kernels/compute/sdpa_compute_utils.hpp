@@ -58,7 +58,7 @@ void sdpa_fw_recip_tile_first_column(uint32_t idst) {
 // The causal mask stamp already comes from there (sdpa_mask_lightweight.hpp). Including the rest needs
 // template flags for the training-only differences (accurate exp, fp32 stats, out-of-order packing for
 // stacked heads, the sdpa_fw first-column reciprocal) and that header's REDUCE_OP / EXP_APPROX_MODE
-// defines; tracked as a follow-up.
+// defines; tracked in https://github.com/tenstorrent/tt-metal/issues/63774.
 
 // TODO: replace FPU reduce_tile(MAX) + sub_tiles_bcast_cols with SFPU equivalents once LLK
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
