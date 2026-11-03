@@ -533,8 +533,23 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(
         for (const auto& c : gu_all) {
             worker_noc0.push_back(flat_worker_noc0(mesh_device, c));
         }
+        // gate/up cores reading their own weights: hops from the bank's NoC endpoint DRAM_TILE the reads go through
+        // (their responses' injection point), on that NoC
+        auto reader_src = [&](uint32_t r) -> std::pair<Core, uint32_t> {
+            if (p.gu_source == FlatGuSource::drisc) {
+                const auto [sp, snoc] = drisc.sender(r);
+                return {Core(sp), snoc};
+            }
+            const uint32_t nsel = p.gu_source == FlatGuSource::tensix_split && r < p.banks ? 1u : 0u;
+            for (const auto& c : drisc.cores.at(r % p.banks)) {
+                if (c.endpoint_noc_mask & (1u << nsel)) {
+                    return {Core(c.noc0_core), nsel};
+                }
+            }
+            TT_THROW("flat_routed_expert: bank {} has no NOC{} endpoint DRAM_TILE", r % p.banks, nsel);
+        };
         for (uint32_t r = 0; r < n_rd; ++r) {
-            const auto [sp, snoc] = drisc.sender(r);
+            const auto [sp, snoc] = reader_src(r);
             for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
                 pairs.emplace_back(noc_hops(Core(sp), worker_noc0[ci], int(snoc)), r, ci);
             }
