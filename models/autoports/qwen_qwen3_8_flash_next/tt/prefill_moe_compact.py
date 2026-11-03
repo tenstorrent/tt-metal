@@ -265,11 +265,11 @@ def compact_packed_cb_bytes(n):
 
 
 def moe_group_sizes():
-    """Serial prefill MoE group sizes: 1024, plus 2048 when QWEN_PREFILL_MOE_GROUP=2048 (packed path only).
+    """Serial prefill MoE group sizes: 1024 and 2048 (default; QWEN_PREFILL_MOE_GROUP=1024 drops 2048).
 
     4096 is not supported yet: the router/shared-expert linears at 4096 rows exceed L1 (CB 1.78 MB).
     """
-    largest = int(os.environ.get("QWEN_PREFILL_MOE_GROUP", "1024"))
+    largest = int(os.environ.get("QWEN_PREFILL_MOE_GROUP", "2048"))
     if largest not in (1024, 2048):
         raise ValueError("QWEN_PREFILL_MOE_GROUP must be 1024 or 2048")
     if largest > 1024 and not (moe_packed_enabled() and dispatch_pipe_enabled() and compact_pipe_enabled()):
