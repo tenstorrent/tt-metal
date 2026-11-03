@@ -215,6 +215,17 @@ class LlamaForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)
 
 
+# KV-cache tokens per user that one lane (mesh column) of the Galaxy Qwen3-32B server holds resident. Without a
+# get_max_tokens_all_users the plugin falls back to 131072 tokens per lane: 8 users of 16k do not fit (each needs
+# one block beyond 16384 for its output) and 40k users fit only 3 per lane, so a batch of 32 preempts or queues.
+# 20480 + 1024 output headroom (172032 tokens per lane): 8 users of 16k and 4 of 40k stay resident while they generate
+# up to 1k tokens. With exactly 4 x (40960 + 128) tokens the 40k users ran out of blocks while decoding and were
+# preempted; their recompute (prompt + output > QWEN_OPT_MAX_SEQ_LEN) takes the 64k main path, ~6x slower. Bounded by
+# DRAM: the KV cache shares each device with the 128k (max_model_len) prefill's activations; 40960 per user (+3.4 GB
+# per device) OOMs the 64k prefill warmup.
+QWEN_KV_TOKENS_PER_USER = 20480 + 1024
+
+
 # @INPUT_REGISTRY.register_input_processor(input_processor_for_qwen_text)
 class QwenForCausalLM(Generator):
     decode_input_update_contract = 1
@@ -230,6 +241,25 @@ class QwenForCausalLM(Generator):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        max_model_len: int | None = None,
+        max_num_seqs: int | None = None,
+        **kwargs,
+    ) -> int:
+        """KV-cache token capacity of one lane (mesh column): its max_num_seqs users at
+        QWEN_KV_TOKENS_PER_USER each, and at least one max_model_len user."""
+        if max_model_len is None or max_num_seqs is None:
+            raise ValueError(
+                f"Qwen KV-cache sizing needs max_model_len and max_num_seqs; got "
+                f"max_model_len={max_model_len}, max_num_seqs={max_num_seqs}"
+            )
+        return max(int(max_model_len), int(max_num_seqs) * min(int(max_model_len), QWEN_KV_TOKENS_PER_USER))
 
     @classmethod
     def initialize_vllm_model(
