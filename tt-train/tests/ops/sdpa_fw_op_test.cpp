@@ -3621,3 +3621,99 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitNoProgramCache) {
         out_second, out_second_unsplit, fold_error_terms(split_config, split_schedule), "SplitNoProgramCache");
     device->enable_program_cache();
 }
+
+// Two chips: the op runs as one mesh workload, so each chip gets the program, its own copy of the DRAM
+// scratch (one mesh buffer) and its own semaphores, and the batch is sharded across the chips so each one cuts
+// and merges its own rows. Skipped on a single chip; the nightly multi-chip legs run it.
+class SDPAForwardTwoChipTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (tt::tt_metal::GetNumAvailableDevices() < 2U) {
+            GTEST_SKIP() << "needs two chips";
+        }
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::autograd::ctx().set_seed(42);
+        m_opened = true;
+    }
+
+    void TearDown() override {
+        if (m_opened) {
+            ttml::autograd::ctx().close_device();
+        }
+    }
+
+private:
+    bool m_opened = false;
+};
+
+TEST_F(SDPAForwardTwoChipTest, SDPAForwardTest_ChunkKnobs_SplitOnTwoChips) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    ASSERT_EQ(device->num_devices(), 2U);
+    constexpr uint32_t kBatch = 2U, kHeads = 2U, kS = 1024U, kD = 64U;
+    const std::array<std::size_t, 4> shape{kBatch, kHeads, kS, kD};
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /* dim */ 0);
+    const auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, /* dim */ 0);
+    const xt::xarray<float> query_host = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 31U));
+    const xt::xarray<float> key_host = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 32U));
+    // V in [0, 1] with the early keys near 0.1 and the late ones near 0.9: see expect_split_matches_unsplit.
+    xt::xarray<float> value_host = test_utils::make_uniform_xarray<float>(shape, 0.0F, 0.25F, 33U);
+    for (std::size_t s = 0; s < kS; ++s) {
+        xt::view(value_host, xt::all(), xt::all(), s, xt::all()) += 0.75F * static_cast<float>(s) / kS;
+    }
+    value_host = round_to_bf16(value_host);
+    const ttnn::Tensor query = core::from_xtensor(query_host, device, ttnn::Layout::TILE, mapper.get());
+    const ttnn::Tensor key = core::from_xtensor(key_host, device, ttnn::Layout::TILE, mapper.get());
+    const ttnn::Tensor value = core::from_xtensor(value_host, device, ttnn::Layout::TILE, mapper.get());
+    ASSERT_EQ(query.logical_shape()[0], 1U) << "each chip must hold one batch";
+    auto run = [&](const metal::SDPAForwardProgramConfig& cfg) {
+        return core::to_xtensor(
+            metal::sdpa_fw(
+                query, key, value, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, false, std::nullopt, cfg)[0]
+                .value(),
+            *composer);
+    };
+    // What each chip schedules: one batch of the shape.
+    SDPATestConfig per_chip{
+        .batch_size = 1U,
+        .sequence_length = kS,
+        .query_dim = kHeads * kD,
+        .key_value_dim = kHeads * kD,
+        .num_query_heads = kHeads,
+        .num_key_heads = kHeads,
+        .mask_type = metal::AttentionMaskType::Causal,
+        .return_intermediates = false};
+    const auto [reference, reference_lse] =
+        sdpa_split_heads_naive_with_intermediates(query_host, key_host, value_host, generate_mask(query_host));
+    // Rows: a pinned chunking that cuts on any grid, and the production pick where it cuts on this one.
+    struct Row {
+        const char* name;
+        metal::SDPAForwardProgramConfig split;
+        metal::SDPAForwardProgramConfig unsplit;
+    };
+    for (const Row& row : {
+             Row{"TwoChips_pinned",
+                 {.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 4U},
+                 {.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 1U}},
+             Row{"TwoChips_default", {}, {.max_pieces = 1U}},
+         }) {
+        SCOPED_TRACE(row.name);
+        per_chip.program_config = row.split;
+        const auto split_schedule = host_schedule(per_chip);
+        if (split_schedule.num_slots == 0U) {
+            fmt::print("{}: does not cut on this grid, skipped\n", row.name);
+            continue;
+        }
+        per_chip.program_config = row.unsplit;
+        ASSERT_EQ(host_schedule(per_chip).num_slots, 0U) << "the uncut row cuts";
+        per_chip.program_config = row.split;
+        const xt::xarray<float> out_split = run(row.split);
+        const xt::xarray<float> out_unsplit = run(row.unsplit);
+        ASSERT_EQ(out_split.shape()[0], kBatch) << "the composed output must hold both chips' batches";
+        EXPECT_FALSE(xt::all(xt::equal(xt::view(out_split, 0), xt::view(out_split, 1))))
+            << "the chips must have computed different batches";
+        expect_split_matches_unsplit(out_split, out_unsplit, fold_error_terms(per_chip, split_schedule), row.name);
+        EXPECT_TRUE(xt::allclose(out_split, reference, 2e-2F, 2e-2F)) << row.name << " is off the float reference";
+    }
+}
