@@ -197,13 +197,13 @@ class ttMLA:
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
         has_host_weights = bool(state_dict) and "q_a_layernorm.weight" in state_dict
 
-        def _wkv_b1_as(mapper, name):
+        def _wkv_b1_as(mapper, name, on_device=True):
             return ttnn.as_tensor(
                 wkv_b1,
-                device=device,
+                device=device if on_device else None,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=mem,
+                memory_config=mem if on_device else None,
                 mesh_mapper=mapper,
                 cache_file_name=name,
             )
@@ -216,9 +216,10 @@ class ttMLA:
                 f"{repl_name}_dtype_{ttnn.bfloat8_b.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
             )
             if device is None or has_host_weights or (repl_file and repl_file.exists()):
-                if device is None:
-                    # A cache build keeps the TP-sharded file too: check_cache_complete looks for it.
-                    _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
+                if device is None or (has_host_weights and cache_path):
+                    # Any write of the cache keeps the TP-sharded file too: check_cache_complete looks for
+                    # it. Written host-side only, so a load from host weights uploads just the replica.
+                    _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"), on_device=False)
                 return _wkv_b1_as(ttnn.ReplicateTensorToMesh(mesh_device), repl_name)
             # A cache holding only the TP-sharded file: gather the TP shards once, at load. Loading
             # the placeholder through as_tensor would write it to the cache as the weights.
