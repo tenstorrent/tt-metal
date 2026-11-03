@@ -964,7 +964,7 @@ extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsign
 // which needs no codegen support, so leave the legacy macros in place there.
 // Without this guard the declarations below turn every call into an ordinary
 // extern function and the failure surfaces as an undefined reference at link.
-#if defined(__riscv_xtttensixwh)
+#if defined(__riscv_xtttensixwh) && __has_builtin(__builtin_rvtt_wh_setc16)
 
 // The instruction-issue macros below expand to compiler builtins.  Many of
 // those expansions land inside templates, where a non-dependent name must be

@@ -1054,7 +1054,7 @@ extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsign
 #define TT_ZEROSRC(zero_val, write_mode, bank_mask, src_mask)  TT_INSN(TT_OP_ZEROSRC(zero_val, write_mode, bank_mask, src_mask))
 #define TTI_ZEROSRC(zero_val, write_mode, bank_mask, src_mask) TTI_INSN(TT_OP_ZEROSRC(zero_val, write_mode, bank_mask, src_mask))
 
-#if defined(__riscv_xtttensixbh) && !defined(TT_LLK_NO_INTRINSIC_REDIRECT)
+#if defined(__riscv_xtttensixbh) && __has_builtin(__builtin_rvtt_bh_setc16) && !defined(TT_LLK_NO_INTRINSIC_REDIRECT)
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wredundant-decls"
