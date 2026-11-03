@@ -212,6 +212,61 @@ void multiply_by_half(DFB0& in, DFB1& o, uint32_t n) {
     o.push_back(n);
 }
 
+// INVESTIGATION: the base's copy-through exponentials. The input is read through SrcA (copy_tile), as at 6cc47cc9742.
+template <VectorMode Mode = VectorMode::RC, int Iterations = 8, typename DFB0, typename DFB1>
+void exponential_tiles(DFB0& in, DFB1& o, uint32_t n) {
+    const uint32_t in_id = in.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(n);
+    reconfig_data_format_srca(in_id);
+    copy_init(in_id);
+    exp_tile_init();
+    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
+        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            copy_tile(in_id, block_start + tile, tile);
+            exp_tile<false, false, InputClamping::ClampToNegative, Iterations>(tile, Mode);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+#pragma GCC unroll 1
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, o_id, block_start + tile);
+        }
+        tile_regs_release();
+    }
+    o.push_back(n);
+}
+
+template <VectorMode Mode, int Iterations, typename DFB0, typename DFB1>
+void expm1_tiles(DFB0& in, DFB1& o, uint32_t n) {
+    const uint32_t in_id = in.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(n);
+    reconfig_data_format_srca(in_id);
+    copy_init(in_id);
+    expm1_tile_init<false>();
+    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
+        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            copy_tile(in_id, block_start + tile, tile);
+            expm1_tile<false, DST_ACCUM_MODE, Iterations>(tile, Mode);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+#pragma GCC unroll 1
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, o_id, block_start + tile);
+        }
+        tile_regs_release();
+    }
+    o.push_back(n);
+}
+
 enum class MaskProductEpilogue { Exp, Expm1 };
 
 // o[Ct,Kt] = f(mask @ g) for f = exp or expm1, with the product kept in DST (FP32) through f, so the exponent never
@@ -522,14 +577,16 @@ template <
     typename DFB2,
     typename DFB3,
     typename DFB4,
-    typename DFB5>
+    typename DFB5,
+    typename DFB6>
 void prepare_gate_factors(
     DFB0& g,
     DFB1& centered_mask,
     DFB2& half_mask,
     DFB3& centered_decay,
     DFB4& centered_inverse_decay,
-    DFB5& anchor_decay) {
+    DFB5& anchor_decay,
+    DFB6& anchor_exponent) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
     // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
@@ -541,9 +598,12 @@ void prepare_gate_factors(
     reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
     centered_inverse_decay.wait_front(chunk_key_tiles);
 
-    // exp(G_last/2) is row-replicated and the broadcasts read only row 0.
-    exponential_of_mask_products<Ct, Kt, MaskProductEpilogue::Exp, VectorMode::R, 2>(half_mask, g, anchor_decay);
+    // INVESTIGATION A1: the anchor exponent G_last/2 is packed, then read through SrcA, as at the base.
+    matmul_blocks<Ct, Ct, Kt, false>(half_mask, g, anchor_exponent);
+    anchor_exponent.wait_front(chunk_key_tiles);
+    exponential_tiles<VectorMode::R, 2>(anchor_exponent, anchor_decay, chunk_key_tiles);
     anchor_decay.wait_front(chunk_key_tiles);
+    anchor_exponent.pop_front(chunk_key_tiles);
 }
 
 template <
@@ -823,7 +883,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         pack_reconfig_data_format(v_beta.get_id(), workspace_0.get_id());
 
         auto& centered_decay = workspace_0;
-        prepare_gate_factors<Ct, Kt>(g, gate_centered, gate_half, centered_decay, centered_inverse_decay, anchor_decay);
+        prepare_gate_factors<Ct, Kt>(
+            g, gate_centered, gate_half, centered_decay, centered_inverse_decay, anchor_decay, workspace_3);
 
         auto& k_beta_pairwise = workspace_1;
         auto& q_pairwise = workspace_2;
