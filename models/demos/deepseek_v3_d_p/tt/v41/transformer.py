@@ -720,8 +720,7 @@ class TtV41Transformer(LightweightModule):
         for k, v in host.cost.items():
             t[k] = t.get(k, 0.0) + v
         t0 = time.perf_counter()
-        token_ids, engram_inputs = self._stage(host, buffers)
-        state.tables.prepare_chunk(0, host.length, None, segments=host.segments)
+        token_ids, engram_inputs = self._stage(host, buffers, state.tables)  # the pack's fills ride the same upload
         t["stage"] = t.get("stage", 0.0) + time.perf_counter() - t0
         t0 = time.perf_counter()
         forward = lambda: self._chunk_forward(state, host, token_ids, engram_inputs, None, None, 0, on_block)
