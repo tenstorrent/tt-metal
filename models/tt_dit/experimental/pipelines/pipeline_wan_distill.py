@@ -10,7 +10,8 @@ A thin subclass of :class:`WanPipelineI2V` that:
    and scheduler — the lightx2v repo ships only the DiT.
 2. Replaces both expert transformer state dicts with lightx2v's flat
    ``.safetensors`` files (4-step distill, high-noise + low-noise pair).
-3. Defaults ``boundary_ratio=0.5`` (2 high-noise + 2 low-noise steps).
+3. Defaults ``boundary_ratio=0.875`` (2 high-noise + 2 low-noise steps on the
+   4-step flow_shift=5 schedule, timesteps ~[1000, 938, 834, 626]).
 
 Test/caller passes ``num_inference_steps=4`` and ``guidance_scale=1.0`` for both
 stages since CFG is baked into the distill.
@@ -98,11 +99,13 @@ class WanDistillPipelineI2V(WanPipelineI2V):
     LOW_NOISE_FILE = "wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors"
     CACHE_NAMESPACE = "Wan2.2-Distill-lightx2v-4step"
     RANDOM_CACHE_NAMESPACE = "Wan2.2-Distill-random"
-    DISTILL_BOUNDARY_RATIO = 0.5
+    DISTILL_BOUNDARY_RATIO = 0.875
 
     @classmethod
     def _config_overrides(cls) -> dict[str, object]:
-        # The 4-step distill splits 2 high-noise + 2 low-noise steps.
+        # The 4-step distill splits 2 high-noise + 2 low-noise steps. With the inherited UniPC
+        # flow_shift=5 schedule the timesteps are ~[1000, 938, 834, 626], so the boundary must lie
+        # between 834 and 938 (0.5 would route all four steps to the high-noise expert).
         return {**super()._config_overrides(), "boundary_ratio": cls.DISTILL_BOUNDARY_RATIO}
 
     def __init__(

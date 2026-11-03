@@ -18,7 +18,8 @@ tokenizer, UMT5 text encoder, VAE, and scheduler are loaded from the base
 
 The two-stage MoE structure is preserved: a high-noise expert handles the first
 half of the denoising trajectory and a low-noise expert handles the rest. With
-4 inference steps and `boundary_ratio=0.5`, that's 2 steps per expert.
+4 inference steps on the default `flow_shift=5` schedule (timesteps ~1000, 938, 834, 626) and
+`boundary_ratio=0.875`, that's 2 steps per expert.
 
 ## Files used
 
@@ -35,7 +36,7 @@ tokenizer, text encoder, VAE, scheduler config.
 | Parameter | Value | Note |
 |---|---|---|
 | `num_inference_steps` | 4 | Distill target |
-| `boundary_ratio` | 0.5 | 2 high-noise + 2 low-noise |
+| `boundary_ratio` | 0.875 | 2 high-noise + 2 low-noise |
 | `guidance_scale` | 1.0 | CFG baked in — disables negative-prompt path |
 | `guidance_scale_2` | 1.0 | Same as above for the low-noise stage |
 
