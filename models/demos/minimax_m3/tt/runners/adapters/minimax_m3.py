@@ -37,7 +37,7 @@ Env the operator sets (mirrors the rest of the M3 ecosystem):
   TT_CACHE_PATH                 tilized weight-cache root (default: the variant's weka cache root for its default
                                 checkpoint when present, else the checkpoint dir)
   PREFILL_TRACE_DIR             golden trace dir (metadata.json + kv_cache/) for KV-PCC validation
-  PREFILL_MEDIA_STORE_*         image embedding store on the first rank's host (models/common/media_store/
+  PREFILL_MEDIA_STORE_*         image embedding store on the first rank's host (models/common/multimedia_store/
                                 mooncake_store.py); on when PREFILL_MEDIA_STORE_MASTER is set
 """
 
@@ -192,7 +192,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         # embedding store. Start it before the weights load, so a bad store config fails in seconds, not minutes.
         media_store = None
         if params.is_first_rank:
-            from models.common.media_store.mooncake_store import open_media_store_from_env
+            from models.common.multimedia_store.mooncake_store import open_media_store_from_env
 
             media_store = open_media_store_from_env()
 
@@ -250,12 +250,10 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             use_trace=params.use_trace,
             overlap_shared_expert=params.overlap_shared_expert_with_dispatch,
         )
-        runtime = TtPrefillRuntime(
+        return TtPrefillRuntime(
             mesh_device=mesh_device,
             hf_config=hf_config,
             state_dict=state_dict,
             config=runtime_config,
+            media_reader=media_store,
         )
-        if media_store is not None:
-            runtime.media_reader = media_store  # the EmbeddingReader the first rank's media injection reads (#62157)
-        return runtime

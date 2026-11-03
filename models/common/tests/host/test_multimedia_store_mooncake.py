@@ -21,12 +21,13 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 
 import numpy as np
 import pytest
 
-from models.common.media_store.mooncake_store import MediaStoreConfig, MooncakeEmbeddingStore, store_key
-from models.common.media_store.reader import Missing
+from models.common.multimedia_store.mooncake_store import MediaStoreConfig, MooncakeEmbeddingStore, store_key
+from models.common.multimedia_store.reader import Missing
 
 if sys.platform.startswith("linux"):
     # Pinned in tt_metal/python_env/requirements-dev.txt: an ImportError here is a broken env, so it fails, not skips.
@@ -54,9 +55,27 @@ def _master_binary() -> str:
     return bundled
 
 
+def _wait_until_healthy(master: subprocess.Popen, metrics_port: int, log) -> None:
+    """Mooncake has no readiness callback; its master serves GET /health on the metrics port once it is up. Wait for
+    that, failing at once if the master exits; the deadline only turns a master that never starts into a failure."""
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{metrics_port}/health", timeout=1) as r:
+                if r.status == 200:
+                    return
+        except OSError:
+            pass
+        if master.poll() is not None:
+            pytest.fail(f"mooncake_master exited with {master.returncode}; see {log}")
+        if time.monotonic() > deadline:
+            pytest.fail(f"mooncake_master is not healthy after 60 s; see {log}")
+        time.sleep(0.1)
+
+
 @pytest.fixture(scope="module")
 def cluster(tmp_path_factory):
-    rpc, http = _free_port(), _free_port()
+    rpc, http, metrics = _free_port(), _free_port(), _free_port()
     log = tmp_path_factory.mktemp("mooncake") / "master.log"
     master = subprocess.Popen(
         [
@@ -65,20 +84,12 @@ def cluster(tmp_path_factory):
             "--enable_http_metadata_server=true",
             f"--http_metadata_server_port={http}",
             "--allow_evict_soft_pinned_objects=false",
-            f"--metrics_port={_free_port()}",
+            f"--metrics_port={metrics}",
         ],
         stdout=open(log, "w"),
         stderr=subprocess.STDOUT,
     )
-    deadline = time.monotonic() + 30
-    while True:  # wait for the master's RPC port
-        try:
-            socket.create_connection(("127.0.0.1", rpc), timeout=1).close()
-            break
-        except OSError:
-            if master.poll() is not None or time.monotonic() > deadline:
-                pytest.fail(f"mooncake_master did not start; see {log}")
-            time.sleep(0.2)
+    _wait_until_healthy(master, metrics, log)
 
     def config(host: str, segment_bytes: int) -> MediaStoreConfig:
         return MediaStoreConfig(
@@ -111,7 +122,7 @@ class SimpleCluster:
         self._buffers = []
         self._n = 0
 
-    def put(self, segment: str, nbytes: int = IMAGE_BYTES) -> tuple[bytes, np.ndarray]:
+    def put(self, segment: str, nbytes: int = IMAGE_BYTES, pin: bool = True) -> tuple[bytes, np.ndarray]:
         """The encoder service's write: put_from a registered buffer into segment, soft-pinned. Returns (key, value)."""
         self._n += 1
         media_key = self._n.to_bytes(32, "big")
@@ -120,8 +131,9 @@ class SimpleCluster:
         self._buffers.append(value)
         config = mooncake_store.ReplicateConfig()
         config.preferred_segment = segment
-        config.soft_pin_action = mooncake_store.SoftPinAction.ENABLE
-        config.soft_pin_ttl_ms = 60_000
+        if pin:
+            config.soft_pin_action = mooncake_store.SoftPinAction.ENABLE
+            config.soft_pin_ttl_ms = 60_000
         assert self.writer.put_from(store_key(media_key), value.ctypes.data, nbytes, config) == 0
         return media_key, value
 
@@ -189,3 +201,13 @@ def test_many_values_from_both_stores(cluster):
     views = [cluster.store.fetch(k) for k, _ in written]
     for view, (_, value) in zip(views, written):
         assert bytes(view) == value.tobytes()
+
+
+def test_value_read_in_place_is_leased(cluster):
+    """fetch's lookup leases the object, so the master refuses to remove it while the caller reads it in place."""
+    unread, _ = cluster.put(cluster.store.segment, 1 << 20, pin=False)
+    read, value = cluster.put(cluster.store.segment, 1 << 20, pin=False)
+    view = cluster.store.fetch(read)
+    assert cluster.writer.remove(store_key(read)) != 0
+    assert bytes(view) == value.tobytes()
+    assert cluster.writer.remove(store_key(unread)) == 0  # nothing looked it up, so nothing holds it
