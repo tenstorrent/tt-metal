@@ -308,3 +308,84 @@ def test_traced_fill_then_sdpa_reads_the_fresh_tail(mesh):
         pcc = torch.corrcoef(torch.stack([outputs[name].flatten(), reference.flatten()]))[0, 1].item()
         assert pcc > 0.99
     assert not torch.equal(outputs["a"], outputs["b"])
+
+
+@_needs_device
+@pytest.mark.parametrize("batch_size", [1, 32])
+def test_commit_per_layer_input_tanh_gelu(device, monkeypatch, batch_size):
+    """Isolate the optional PLI branch with zero attention/MLP contributions."""
+    from types import SimpleNamespace
+
+    from models.experimental.diffusion_gemma.tt import commit_decode
+
+    torch.manual_seed(63673)
+    hidden_size, pli_size = 1536, 256  # Gemma4 E2B per-layer-input dimensions
+    hidden = torch.randn(1, 1, batch_size, hidden_size).bfloat16()
+    per_layer_input = torch.randn(1, 1, batch_size, pli_size).bfloat16()
+    gate_weight = (torch.randn(hidden_size, pli_size) * (1.5 / hidden_size**0.5)).bfloat16()
+    out_weight = (torch.randn(pli_size, hidden_size) / pli_size**0.5).bfloat16()
+
+    class IdentityNorm:
+        _sharded_cfg = None
+        _sharded_dim = None
+
+        def _build_sharded_cfg(self, dim):
+            return None
+
+        def forward(self, value):
+            return ttnn.clone(value)
+
+    norm = IdentityNorm()
+    layer = SimpleNamespace(
+        input_layernorm=norm,
+        post_attention_layernorm=norm,
+        pre_feedforward_layernorm=norm,
+        post_feedforward_layernorm=norm,
+        post_per_layer_input_norm=norm,
+        enable_moe_block=False,
+        shared_mlp=None,
+        hidden_size_per_layer_input=pli_size,
+        hidden_size=hidden_size,
+        layer_scalar=1.0,
+        per_layer_input_gate=_to_device(device, gate_weight),
+        per_layer_projection=_to_device(device, out_weight),
+        self_attn=SimpleNamespace(
+            weights=None, kv_cache=None, config=None, mesh_config=None, mesh_device=device, ccl_manager=None
+        ),
+    )
+    monkeypatch.setattr(
+        commit_decode, "_commit_attention_decode_forward", lambda **kwargs: _to_device(device, torch.zeros_like(hidden))
+    )
+    monkeypatch.setattr(commit_decode, "shared_mlp_forward", lambda *args: _to_device(device, torch.zeros_like(hidden)))
+    activation_errors = []
+    gelu = ttnn.gelu
+
+    def capture_gelu(value, **kwargs):
+        expected = torch.nn.functional.gelu(ttnn.to_torch(value), approximate="tanh").float()
+        result = gelu(value, **kwargs)
+        activation_errors.append((ttnn.to_torch(result).float() - expected).abs().mean().item())
+        return result
+
+    monkeypatch.setattr(ttnn, "gelu", capture_gelu)
+    result = commit_decode._commit_layer_forward(
+        layer,
+        _to_device(device, hidden),
+        (None, None),
+        None,
+        None,
+        None,
+        per_layer_input=_to_device(device, per_layer_input),
+    )
+    expected = (
+        hidden + (torch.nn.functional.gelu(hidden @ gate_weight, approximate="tanh") * per_layer_input) @ out_weight
+    )
+    actual = ttnn.to_torch(result).float()
+    correlation = torch.corrcoef(torch.stack((actual.flatten(), expected.float().flatten())))[0, 1]
+    assert correlation > 0.999
+    print(
+        f"Commit PLI mean_abs={(actual - expected.float()).abs().mean().item():.8f}, "
+        f"max_abs={(actual - expected.float()).abs().max().item():.8f}, "
+        f"PCC={correlation.item()}, GELU mean_abs={activation_errors}"
+    )
+    assert len(activation_errors) == 1
+    assert activation_errors[0] < 0.002
