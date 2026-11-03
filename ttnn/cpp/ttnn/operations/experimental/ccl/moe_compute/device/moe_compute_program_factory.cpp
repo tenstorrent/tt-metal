@@ -51,7 +51,6 @@ constexpr uint32_t kMatmulComputeKernelIdx = 5;
 constexpr uint32_t kCombineKernelBase = 6;
 // Combine reader, then writer. Fabric Mux V2 kernels (FullCcl only) are appended after the writer.
 constexpr uint32_t kCombineWriterKernelIdx = kCombineKernelBase + 1;
-constexpr uint32_t kCombineWriterCrossDeviceSemaphoreArgIdx = 4;
 
 void push_cb(
     tt::tt_metal::ProgramDescriptor& desc,
@@ -242,23 +241,8 @@ tt::tt_metal::WorkloadDescriptor MoEComputeMeshWorkloadFactory::create_workload_
 
         const auto& combine_core_range_set = std::get<combine_core_range_set_return_index>(core_ret);
 
-        // The barrier semaphores live as long as this cached program. Keep them in L1_SMALL, above every L1 tensor and
-        // circular buffer, where the device has one (as selective_reduce_combine does): created in general L1 while
-        // this call's outputs are alive, they would stay in the middle of L1 after those are freed and refuse later
-        // calls their outputs (#59738).
-        const auto semaphore_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
-        init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
-            mesh_device, combine_core_range_set, 0, semaphore_buffer_type);
-        // only when the caller passes none (value_or would create one either way)
-        final_barrier_semaphore = args.combine_params->optional_cross_device_semaphore.has_value()
-                                      ? *args.combine_params->optional_cross_device_semaphore
-                                      : ttnn::global_semaphore::create_global_semaphore(
-                                            mesh_device, combine_core_range_set, 0, semaphore_buffer_type);
-
-        workload.semaphores.push_back(*init_barrier_semaphore);
-        workload.semaphores.push_back(*final_barrier_semaphore);
-
-        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
+        std::tie(init_barrier_semaphore, final_barrier_semaphore) = add_selective_reduce_combine_barrier_semaphores(
+            workload, mesh_device, combine_core_range_set, args.combine_params->optional_cross_device_semaphore);
     }
 
     for (const auto& coord : tensor_coords.coords()) {
@@ -1670,7 +1654,7 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
             w2_offset_tiles,
             hidden_tiles);
         // Writer is the kernel after the combine reader. Mux kernels, on FullCcl, follow it.
-        append_selective_reduce_combine_to_descriptor(
+        const uint32_t combine_writer_kernel_idx = append_selective_reduce_combine_to_descriptor(
             desc,
             combine_params,
             mesh_coordinate,
@@ -1682,14 +1666,11 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
             tilize_combine_sync_semaphore_id,
             matmul_combine_sync_semaphore_id,
             compute_cores_by_combine_column);
-        const uint32_t combine_writer_kernel_idx = kCombineWriterKernelIdx;
         TT_FATAL(
-            desc.kernels.size() > combine_writer_kernel_idx &&
-                desc.kernels[combine_writer_kernel_idx].kernel_source.find("selective_reduce_combine/device/kernels/dataflow/writer.cpp") !=
-                    std::string::npos,
-            "combine writer kernel index drifted: size {} writer {}",
-            desc.kernels.size(),
-            combine_writer_kernel_idx);
+            combine_writer_kernel_idx == kCombineWriterKernelIdx,
+            "combine writer kernel index drifted: writer {}, expected {}",
+            combine_writer_kernel_idx,
+            kCombineWriterKernelIdx);
         if (args.path == MoEComputePath::SingleDevice) {
             TT_FATAL(
                 desc.kernels.size() == combine_writer_kernel_idx + 1,
@@ -1713,17 +1694,11 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
         !args.combine_params->optional_cross_device_semaphore.has_value()) {
         return;
     }
-    const uint32_t cross_device_semaphore_addr =
-        static_cast<uint32_t>(args.combine_params->optional_cross_device_semaphore->address());
-    auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kCombineWriterKernelIdx);
-    for (auto& writer_args_column : writer_args_by_core) {
-        for (auto& writer_args : writer_args_column) {
-            if (writer_args.size() == 0) {
-                continue;
-            }
-            writer_args[kCombineWriterCrossDeviceSemaphoreArgIdx] = cross_device_semaphore_addr;
-        }
-    }
+    override_cross_device_semaphore_arg(
+        program,
+        kCombineWriterKernelIdx,
+        kCombineWriterCrossDeviceSemaphoreArgIdx,
+        *args.combine_params->optional_cross_device_semaphore);
 }
 
 }  // namespace ttnn::experimental::prim
