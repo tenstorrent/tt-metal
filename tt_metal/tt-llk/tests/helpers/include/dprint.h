@@ -45,10 +45,17 @@ inline __attribute__((always_inline)) void invalidate_l1_cache()
 #endif
 
 // On Quasar the LLK buffer base is handed to the build in the uncached L1 alias region
-// (the upper 4 MB at MEM_L1_UNCACHED_BASE; see kernel_buffer_base in test_config.py),
+// (at MEM_L1_UNCACHED_BASE; see kernel_buffer_base in test_config.py),
 // so its numeric value carries that offset. Strip it to get the physical L1 address
 // for the RUNTIME_ARGS overlap check below.
 #if defined(ARCH_QUASAR)
+#if __has_include("registers/overlay_reg.h")
+#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+#else
+// Saturn has no register headers yet, so its uncached base is hardcoded here. Once they are added, drop
+// this fallback and include overlay_addresses.h unconditionally.
+#define MEM_L1_UNCACHED_BASE 0x400000
+#endif
 constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BASE - MEM_L1_UNCACHED_BASE;
 #else
 constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BASE;

@@ -12,6 +12,9 @@
 #include "internal/tensix_functions.h"
 #include "internal/risc_attribs.h"
 #include "dev_mem_map.h"
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+#endif
 #include "hostdevcommon/kernel_structs.h"
 #include "hostdev/rta_constants.h"
 #include "hostdev/dev_msgs.h"

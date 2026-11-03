@@ -8,6 +8,13 @@
 
 #include "core_config.h"
 #include "dev_mem_map.h"
+#if __has_include("registers/overlay_reg.h")
+#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+#else
+// Saturn has no register headers yet, so its L1 size is hardcoded here. Once they are added, drop this
+// fallback and include overlay_addresses.h unconditionally.
+#define MEM_L1_SIZE (3 * 1024 * 1024)
+#endif
 
 /**
  * @brief Transform L1 address to the format used by LLK functions
