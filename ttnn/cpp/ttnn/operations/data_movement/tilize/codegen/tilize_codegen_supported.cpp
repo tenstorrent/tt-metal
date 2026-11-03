@@ -40,7 +40,8 @@ constexpr uint32_t kDoubleBuffered = 2;
 constexpr uint32_t kSingleBuffered = 1;
 constexpr uint32_t kMinColumnBlocks = 2;
 
-// Route and split tunings below are performance choices, not correctness limits.
+// Route and split tunings below are empirical, measured on Blackhole (P150); performance choices, not hardware or
+// correctness limits.
 // Widest tile row, in tiles, that the compact reader takes; wider rows use the chunked reader.
 constexpr uint32_t kCompactReaderMaxWt = 8;
 // Tiles per writer batch on a core that holds at most one tile row.
@@ -126,11 +127,6 @@ std::optional<Geometry> analyze(
     using namespace tt::constants;
 
     if (input.storage_type() != ttnn::StorageType::DEVICE || !input.is_allocated() || input.device() == nullptr) {
-        return std::nullopt;
-    }
-    // Shared by routing, the forced entry and the primitive's validate, so none of them runs the kernels on an
-    // architecture they were not validated on.
-    if (!codegen_supported_on_arch(input)) {
         return std::nullopt;
     }
     if (input.layout() != Layout::ROW_MAJOR || input.is_sharded() || output_mem_config.is_sharded()) {
@@ -296,19 +292,26 @@ bool supported_execution_controls(
     return !unsupported_execution_control(use_multicore, use_low_perf, tile, sub_core_grids).has_value();
 }
 
-// Entries must come from device kernel durations, never end-to-end timing.
-//
-// Demoted: a one-tile-wide input (Wt == 1) with at most kDemoteMaxTileRows tile rows. One tile per row leaves
-// no width to split, and these kernels run for 1.5-2.4 us, too short to amortize the port's fixed per-launch
-// cost. Over the 80 such sweep cases, native/ported device time measured a median of 0.95 on P150 (73 slower),
-// 1.01 on N300 and 0.99 on p100a, with losses up to 7%. A dtype-converting call stays on codegen: native's
-// int32 conversion is not bit-correct, so it is no baseline there.
+// One-tile-wide, non-converting input of at most kDemoteMaxTileRows tile rows: the kernel is too short to amortize
+// codegen's fixed per-launch cost, so native wins. Threshold fitted on Blackhole (P150). A converting call is
+// kept on codegen: its extra typecast stage and CB_mid make the cost comparison with native not apply.
 bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& /*output_mem_config*/, DataType output_dtype) {
+    using namespace tt::constants;
+
     if (output_dtype != input.dtype()) {
         return false;
     }
-    const TilizeGeometry g = tilize_geometry(input, output_dtype);
-    return g.wt == 1 && g.tile_rows <= kDemoteMaxTileRows;
+    const auto& shape = input.padded_shape();
+    if (shape.rank() < kMinRank) {
+        return false;
+    }
+    const uint32_t width = shape[kWidthAxis];
+    if (width == 0) {
+        return false;
+    }
+    const uint32_t wt = width / TILE_WIDTH;
+    const uint32_t tile_rows = input.logical_shape().volume() / width / TILE_HEIGHT;
+    return wt == 1 && tile_rows <= kDemoteMaxTileRows;
 }
 
 }  // namespace ttnn::operations::data_movement::tilize_codegen

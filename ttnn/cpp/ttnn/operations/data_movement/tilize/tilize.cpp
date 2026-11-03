@@ -175,10 +175,6 @@ ttnn::Tensor tilize_force_codegen(
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
         const DataType dtype = output_dtype.value_or(normalized_input.dtype());
         TT_FATAL(
-            codegen_supported_on_arch(normalized_input),
-            "tilize_force_codegen is only supported on Wormhole B0 and Blackhole. This entry never falls back to "
-            "native. Use ttnn::tilize if you want the case routed.");
-        TT_FATAL(
             supported_by_codegen(normalized_input, output_mem_config, dtype),
             "tilize_force_codegen invoked for a case the codegen implementation does not support. This entry never "
             "falls back to native. Use ttnn::tilize if you want the case routed.");

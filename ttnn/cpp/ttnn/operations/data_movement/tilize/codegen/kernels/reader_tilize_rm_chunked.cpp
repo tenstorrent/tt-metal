@@ -12,7 +12,6 @@
 #include "api/tensor/page.h"
 
 struct Args {
-    uint32_t src_addr;
     uint32_t num_tile_rows;
     uint32_t start_stick;
     uint32_t H_per_tile;      // tile height
@@ -27,7 +26,8 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2>();
 
     const auto* a = reinterpret_cast<const Args*>(get_arg_addr(0));
-    const auto s = TensorAccessor(src_args, a->src_addr, aligned_page_size);
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
+    const auto s = TensorAccessor(src_args, src_addr, aligned_page_size);
     const uint32_t chunk_read_bytes = a->chunk_Wt * a->elem_w_bytes;
     uint32_t i_stick = a->start_stick;
 

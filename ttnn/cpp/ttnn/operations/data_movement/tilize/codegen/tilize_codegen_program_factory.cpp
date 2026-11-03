@@ -33,7 +33,7 @@ constexpr const char* kCompactReaderPath =
     "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/reader_tilize_rm_specialized.cpp";
 constexpr const char* kComputePath = "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/compute_tilize.cpp";
 constexpr const char* kTileWriterPath =
-    "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved.cpp";
+    "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/writer_tilize_tiles.cpp";
 
 constexpr const char* kReaderBlockPath =
     "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/reader_tilize_block.cpp";
@@ -136,6 +136,7 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
         chunked.config = ReaderConfigDescriptor{};
         chunked.compile_time_args = {kCbIn, in_page_size};
         TensorAccessorArgs(*in_buf).append_to(chunked.compile_time_args);
+        chunked.emplace_common_runtime_args({in_buf});
     }
 
     KernelDescriptor writer;
@@ -145,6 +146,7 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
     writer.compile_time_args = {kCbOut, out_page_size, plan.write_batch};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
     writer.config = WriterConfigDescriptor{};
+    writer.emplace_common_runtime_args({out_buf});
 
     const bool wide_dtype = elem_size == k32BitElemSize || tensor_return_value.element_size() == k32BitElemSize;
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
@@ -187,7 +189,7 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
             const uint32_t block_tiles = geometry.block_wt;
             const uint32_t first_tile = tile_row * geometry.wt + col_block * geometry.block_wt;
             reader.emplace_runtime_args(cores[i], {one_row, first_stick, col_byte_offset});
-            writer.emplace_runtime_args(cores[i], {out_buf, block_tiles, first_tile});
+            writer.emplace_runtime_args(cores[i], {block_tiles, first_tile});
             compute.emplace_runtime_args(cores[i], {one_row});
         }
         desc.kernels.push_back(std::move(reader));
@@ -208,16 +210,9 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
                 reader.emplace_runtime_args(core, {rows, first_stick});
             } else {
                 chunked.emplace_runtime_args(
-                    core,
-                    {in_buf,
-                     rows,
-                     first_stick,
-                     TILE_HEIGHT,
-                     plan.chunk_wt,
-                     plan.num_col_chunks,
-                     TILE_WIDTH * elem_size});
+                    core, {rows, first_stick, TILE_HEIGHT, plan.chunk_wt, plan.num_col_chunks, TILE_WIDTH * elem_size});
             }
-            writer.emplace_runtime_args(core, {out_buf, rows * geometry.wt, assigned * geometry.wt});
+            writer.emplace_runtime_args(core, {rows * geometry.wt, assigned * geometry.wt});
             compute.emplace_runtime_args(core, {rows});
             assigned += rows;
         }
