@@ -91,12 +91,14 @@ ttsl::hash::hash_t ScatterCodegenDeviceOperation::compute_program_hash(
         const uint64_t input_page_bytes = scatter_rm_aligned_stick_bytes(in_t, attributes.input_stick_elems);
         const uint64_t output_page_bytes =
             scatter_output_aligned_page_size(in_t, attributes.output_mem_config, tensor_args.output_tensor);
+        const uint32_t cb_align = scatter_cb_alignment(in_t);
         chunk_elems = scatter_rm_chunk_elems(
             scatter_usable_l1(in_t),
-            scatter_rm_fixed_bytes(input_page_bytes, output_page_bytes, is_bf16_reduce_row_major),
+            scatter_rm_fixed_bytes(input_page_bytes, output_page_bytes, is_bf16_reduce_row_major, cb_align),
             attributes.index_stick_elems,
             tensor_args.index_tensor.element_size(),
-            tensor_args.src_tensor.element_size());
+            tensor_args.src_tensor.element_size(),
+            cb_align);
     }
     // Mirrors the default key and appends to it, rather than naming fields explicitly, so no
     // discrimination the default traversal makes is dropped here by omission.
@@ -252,11 +254,6 @@ ScatterCodegenDeviceOperation::create_op_performance_model(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
 }
 
-namespace {
-
-// Fills either the TILE or the ROW_MAJOR geometry fields (the other side's are zero) plus the page
-// map every factory shares. The only constructor of a ScatterCodegenParams, so the page map the
-// readers fold ordinals through is always the one the tensors describe.
 ScatterCodegenParams build_scatter_codegen_params(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
@@ -312,8 +309,6 @@ ScatterCodegenParams build_scatter_codegen_params(
         output_mem_config,
         sub_core_grids};
 }
-
-}  // namespace
 
 Tensor scatter_codegen(
     const Tensor& input_tensor,

@@ -72,6 +72,17 @@ struct ScatterCodegenDeviceOperation {
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 };
 
+// Fills either the TILE or the ROW_MAJOR geometry fields (the other side's are zero) plus the page
+// map every factory shares. The only constructor of a ScatterCodegenParams, so the page map the
+// readers fold ordinals through is always the one the tensors describe.
+ScatterCodegenParams build_scatter_codegen_params(
+    const Tensor& input_tensor,
+    const Tensor& index_tensor,
+    const Tensor& src_tensor,
+    uint32_t reduction_mode,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids);
+
 // `reduction_mode` is one of scatter_codegen_supported.hpp's kReduction* modes; the prim derives
 // every other attribute from the tensors itself. The operands arrive normalized: scatter axis last,
 // rank padded up to 4 (a higher rank passes through, up to kScatterMaxPageRank + 1 dims), and src

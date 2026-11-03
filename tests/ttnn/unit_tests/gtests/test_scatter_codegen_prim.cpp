@@ -13,9 +13,12 @@
 #include <cstdint>
 #include <exception>
 #include <optional>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/device.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -103,10 +106,76 @@ TEST_F(ScatterCodegenPrimFixture, RejectsAnIndexWiderThanTheInputOnALeadingAxis)
 }
 
 TEST_F(ScatterCodegenPrimFixture, AcceptsTheDestinationItWouldCreateItself) {
+    // The writers bind the destination's buffer as a common runtime arg; a wrong binding would still
+    // return the destination, so its values are checked against the op's own output.
     const Operands ops = make_operands(device_, 64);
+    const std::vector<::bfloat16> expected = run(ops, std::nullopt).to_vector<::bfloat16>();
     Tensor destination = ttnn::create_device_tensor(ops.input.tensor_spec(), device_);
     const Tensor out = run(ops, destination);
     EXPECT_EQ(out.buffer(), destination.buffer());
+    EXPECT_TRUE(out.to_vector<::bfloat16>() == expected);
+}
+
+TEST_F(ScatterCodegenPrimFixture, AcceptsADestinationThatAliasesTheInput) {
+    // Every factory reads an input page before any core writes it and cores own disjoint pages, so
+    // scattering in place is sound; no public entry exercises it, so the contract is pinned here.
+    const Operands ops = make_operands(device_, 64);
+    const std::vector<::bfloat16> expected = run(ops, std::nullopt).to_vector<::bfloat16>();
+    const Tensor out = run(ops, ops.input);
+    EXPECT_EQ(out.buffer(), ops.input.buffer());
+    EXPECT_TRUE(out.to_vector<::bfloat16>() == expected);
+}
+
+TEST_F(ScatterCodegenPrimFixture, SelectsTheFactoryEachMergeGateCaseIsNamedFor) {
+    // The merge-gate unit cases carry their factory in the id, but a forced call cannot observe which
+    // one ran: on the default grid more output columns than the two tile rows selects the
+    // column-split streaming factory; a two-core grid keeps the row resident.
+    const Operands ops = make_operands_of(device_, ttnn::Shape({1, 1, 64, 200}), ttnn::Shape({1, 1, 64, 100}), 200);
+    const ttnn::prim::ScatterCodegenInputs inputs{ops.input, ops.index, ops.src, std::nullopt};
+    const auto factory_on = [&](const std::optional<CoreRangeSet>& grid) {
+        return ttnn::prim::ScatterCodegenDeviceOperation::select_program_factory(
+            ttnn::prim::build_scatter_codegen_params(
+                ops.input, ops.index, ops.src, kReductionNone, ops.input.memory_config(), grid),
+            inputs);
+    };
+    const CoreRangeSet two_cores(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
+    EXPECT_TRUE(std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryInterleaved>(factory_on(two_cores)));
+    EXPECT_TRUE(std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryStreaming>(factory_on(std::nullopt)));
+    // The same pair's 400 B stick is not 32 B aligned, which is what keeps it off the row-major
+    // detour; a 128 B stick with one tile row is served by it.
+    const auto detour = [&](const Operands& o) {
+        return prefers_row_major_strategy(
+            o.input,
+            o.index,
+            o.src,
+            o.input.logical_shape(),
+            o.index.logical_shape(),
+            o.input.memory_config(),
+            /*pending_tile_bytes=*/0);
+    };
+    EXPECT_FALSE(detour(ops));
+    EXPECT_TRUE(detour(make_operands(device_, 64)));
+}
+
+TEST_F(ScatterCodegenPrimFixture, DemotesAUnitRowWhenTheDetourCannotFitLiveL1) {
+    // 32768-element sticks are 32 B aligned, so only the live budget decides the detour: its two
+    // resident 64 KiB sticks need more than an L1 with 100 KiB left, and the unit row is then
+    // demoted rather than sent through the TILE factories' padded rows.
+    const Operands ops = make_operands_of(device_, ttnn::Shape({1, 1, 1, 32768}), ttnn::Shape({1, 1, 1, 32768}), 32768);
+    const auto demoted = [&]() { return is_demoted(ops.input, -1, ops.index, ops.src, ops.input.memory_config()); };
+    EXPECT_FALSE(demoted());
+    const uint32_t banks = device_->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+    const uint64_t stick_bytes = ttnn::prim::scatter_usable_l1(ops.input) - 100 * 1024;
+    const tt::tt_metal::MemoryConfig l1{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+    Tensor blocker = ttnn::zeros(
+        ttnn::Shape({banks, static_cast<uint32_t>(stick_bytes / sizeof(uint16_t))}),
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        *device_,
+        l1);
+    EXPECT_TRUE(demoted());
+    blocker.deallocate();
+    EXPECT_FALSE(demoted());
 }
 
 TEST_F(ScatterCodegenPrimFixture, RejectsADestinationPaddedPastTheStandardGeometry) {
@@ -170,6 +239,10 @@ TEST_F(ScatterCodegenPrimFixture, RejectsTransposedTilesOnAProgramCacheHit) {
         return ttnn::create_device_tensor(spec, device_);
     };
     const Operands transposed_ops{with_tile(plain.input), with_tile(plain.index), with_tile(plain.src)};
+    // The premise: a key that told the two specs apart would make the hit, and this test, vacuous.
+    EXPECT_EQ(
+        ttsl::hash::hash_objects_with_default_seed(plain.input.tensor_spec()),
+        ttsl::hash::hash_objects_with_default_seed(transposed_ops.input.tensor_spec()));
     EXPECT_FALSE(
         supported_by_codegen(transposed_ops.input, -1, transposed_ops.index, transposed_ops.src, kReductionNone));
     EXPECT_THROW(run(transposed_ops, std::nullopt), std::exception);
@@ -207,14 +280,17 @@ TEST_F(ScatterCodegenPrimFixture, TileRouteNeedsItsStreamingPagesInLiveL1) {
     EXPECT_TRUE(fits());
 }
 
-TEST(ScatterCodegenRmChunkPlanner, BudgetsTheRoundedCbPagesOfAnUnalignedChunk) {
-    // An index stick of 42 int32 elements with bf16 sources: 252 raw bytes, but the two CB pages are
-    // rounded to 16 B each (176 + 96 = 272). A budget between the two must scale the chunk down to
-    // the 32-element floor rather than hand the factory pages it cannot allocate.
-    constexpr uint32_t kIndexElems = 42, kIndexBytes = 4, kSrcBytes = 2;
+TEST(ScatterCodegenRmChunkPlanner, BudgetsTheSeatedCbsOfAnUnalignedChunk) {
+    // An index stick of 42 int32 elements with bf16 sources: 252 raw bytes, but the program
+    // allocator seats each CB on the placement alignment, 64 B on Blackhole (192 + 128 = 320). A
+    // budget between the two must scale the chunk down to the 32-element floor rather than hand the
+    // factory CBs it cannot seat.
+    constexpr uint32_t kIndexElems = 42, kIndexBytes = 4, kSrcBytes = 2, kCbAlign = 64;
     constexpr uint64_t kFixed = 1024;
-    EXPECT_EQ(ttnn::prim::scatter_rm_chunk_elems(kFixed + 272, kFixed, kIndexElems, kIndexBytes, kSrcBytes), 42u);
-    EXPECT_EQ(ttnn::prim::scatter_rm_chunk_elems(kFixed + 260, kFixed, kIndexElems, kIndexBytes, kSrcBytes), 32u);
+    EXPECT_EQ(
+        ttnn::prim::scatter_rm_chunk_elems(kFixed + 320, kFixed, kIndexElems, kIndexBytes, kSrcBytes, kCbAlign), 42u);
+    EXPECT_EQ(
+        ttnn::prim::scatter_rm_chunk_elems(kFixed + 319, kFixed, kIndexElems, kIndexBytes, kSrcBytes, kCbAlign), 32u);
 }
 
 // A device opened with an L1_SMALL region: the allocator's L1 bank stops below that region, and the
