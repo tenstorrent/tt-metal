@@ -26,6 +26,13 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_hit(
 
 void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        !operation_attributes.matmul.transpose_a && !operation_attributes.matmul.transpose_b,
+        "AllGatherMatmulAsync does not support transpose_a or transpose_b.");
+    TT_FATAL(
+        !operation_attributes.matmul.user_fused_activation.has_value(),
+        "AllGatherMatmulAsync does not support activation; use program_config.fused_activation instead.");
+
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
 
