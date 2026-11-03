@@ -87,17 +87,17 @@ class DeepSeekV4MLP(DeepSeekV4Module):
     full-width (hub mode) on q_a's 32-core ring and consume a ROW_MAJOR HEIGHT_SHARDED replica of
     the tokens (the decode all-gather); they emit ROW_MAJOR WIDTH_SHARDED ``[T, I]`` (64 columns
     per core), which is the K-sharding down wants of its activation. Down stays on the shared
-    64-core decode GCB.
+    64-core decode ring.
 
     Under TP, gate and up cannot join that 32-core ring (``N = I/TP`` is only 8 cores) and a
-    private GCB on those cores collides with ``fused_hyperconnection`` static CBs, so they take a
+    private ring on those cores collides with ``fused_hyperconnection`` static CBs, so they take a
     transient DRAM->L1 copy instead -- that cut is live at TP4. The copy path is decode shaped: it
     width-shards the token rows over one tile row, which caps it at the 32 rows a tile holds, so a
     wider input cannot use it. ``config`` is needed either way, to check the fixed weight layouts
     against the shapes this model wants.
 
     Subclasses for other checkpoints override ``decode_layouts`` (the gate/up/down cuts),
-    ``prefetch_rings`` (``tp_size -> {name: PrefetchRing}``, the GCB each streams through) and
+    ``prefetch_rings`` (``tp_size -> {name: PrefetchRing}``, the ring each streams through) and
     ``clamp_swiglu`` (whether the activation takes the routed experts' ``swiglu_limit`` clamp).
     """
 
@@ -128,7 +128,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         ``[D, I/TP]`` per rank under TP). ``matmul_decode`` (default: ``use_prefetcher``) selects
         :class:`LinearDecode` over plain :class:`Linear` weights. The ``LinearDecode`` weights
         stream through ``prefetch_buffers`` when ``use_prefetcher`` is set -- the mapping shared by
-        every layer on the device, since a fresh dict per layer would build a GCB per layer and
+        every layer on the device, since a fresh dict per layer would build a ring per layer and
         overflow the DRISC senders' state zone -- and are copied DRAM -> L1 per call otherwise.
         """
         cache = _as_cache(cache)
@@ -183,7 +183,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         decode_down_mapper = ttnn.ShardTensorToMesh(device, dim=-2) if tp_size > 1 else None
         if tp_size > 1:
             # Per-rank gate/up is N=I/TP (8 cores at I=2048, TP=4) and cannot join
-            # q_a's 32-receiver ring. A private GCB on those cores also collides with
+            # q_a's 32-receiver ring. A private ring on those cores also collides with
             # fused_hyperconnection static CBs on (0,0), so they stay off the ring.
             # V4 then copies the weight DRAM -> L1; ``dram_sharded_weight`` (V4.1) has the
             # matmul read the DRAM slab itself. Down only cuts K and stays on 64 cores.
@@ -241,7 +241,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         :meth:`forward` that uses them.
 
         Queued gate, up, then down: gate/up stream through q_a's 32-receiver FIFO (queued after
-        q_a, CSA and the FFN hyper-connection's ``fn``), down through the shared 64-core GCB. Under TP, gate/up are off the ring: V4 copies them DRAM -> L1 here, and ``dram_sharded_weight`` makes ``fetch_weights`` a no-op so the matmul reads DRAM itself.
+        q_a, CSA and the FFN hyper-connection's ``fn``), down through the shared 64-core ring. Under TP, gate/up are off the ring: V4 copies them DRAM -> L1 here, and ``dram_sharded_weight`` makes ``fetch_weights`` a no-op so the matmul reads DRAM itself.
         Queue order on each ring has to match consume order, here and against the attention block
         (whose weights precede down on the shared buffer, because attention runs first in the
         decoder layer).
@@ -320,9 +320,9 @@ def _make_router_gate(
     output tile per core), so it consumes the decode all-gather replica (ROW_MAJOR HEIGHT_SHARDED
     A) where it sits instead of unreplicating it through DRAM and re-sharding it -- that round
     trip was four extra device ops per step. The 8-receiver cut cannot join the shared 64-receiver
-    ring or q_a's 32-receiver one, so it streams through :data:`ROUTER_GATE_GCB`. ``layouts`` is
+    ring or q_a's 32-receiver one, so it streams through :data:`ROUTER_GATE_RING`. ``layouts`` is
     the table holding the ``router_gate`` cut and ``rings`` (default
-    :func:`~.decode_prefetch.decode_prefetch_rings`) the GCB it streams through, if any.
+    :func:`~.decode_prefetch.decode_prefetch_rings`) the ring it streams through, if any.
     """
     if not (use_prefetcher if matmul_decode is None else matmul_decode):
         return Linear(weights["gate.weight"], device, cache.file("gate"))
@@ -371,7 +371,7 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
     values per token it already reads, rather than here across a dense E-wide row.
 
     ``decode_layouts`` is the table holding the gate's ``router_gate`` cut and
-    ``prefetch_rings`` the ring table naming the GCB it streams through.
+    ``prefetch_rings`` the ring table naming the ring it streams through.
     """
 
     decode_layouts = DECODE_LAYOUTS
@@ -440,7 +440,7 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
     def prefetch_weights(self):
         """Stage the ``[D, E]`` gate weight ahead of the decode that reads it.
 
-        The gate streams through :data:`ROUTER_GATE_GCB` (hub mode needs a full-width cut on 8
+        The gate streams through :data:`ROUTER_GATE_RING` (hub mode needs a full-width cut on 8
         receivers), so this queues that ring rather than copying DRAM->L1.
         """
         if isinstance(self.gate, LinearDecode):
@@ -558,7 +558,7 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
     def prefetch_weights(self):
         """Stage the ``[D, E]`` gate weight ahead of the decode that reads it.
 
-        The gate streams through :data:`ROUTER_GATE_GCB` (hub mode needs a full-width cut on 8
+        The gate streams through :data:`ROUTER_GATE_RING` (hub mode needs a full-width cut on 8
         receivers), so this queues that ring rather than copying DRAM->L1.
         """
         if isinstance(self.gate, LinearDecode):
@@ -1385,9 +1385,9 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         """Stage the ``[D, E]`` router gate, then the shared expert's ``[D, I]`` gate/up and
         ``[I, D]`` down, ahead of the decode that uses them.
 
-        The gate goes first: it queues on its private 8-receiver ring (:data:`ROUTER_GATE_GCB`).
+        The gate goes first: it queues on its private 8-receiver ring (:data:`ROUTER_GATE_RING`).
         Shared-expert gate/up then queue on q_a's 32-receiver FIFO (after q_a / CSA) and down on
-        the shared decode GCB after o_b. Queue order on each ring has to match consume order.
+        the shared decode ring after o_b. Queue order on each ring has to match consume order.
         """
         self.gate.prefetch_weights()
         if self.shared_experts is not None:

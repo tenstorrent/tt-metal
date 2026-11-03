@@ -9,7 +9,6 @@
 
 #include "matmul_decode_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 // Descriptor-facing (nanobind-friendly) mirror of MatmulDecodeDeviceOperation, matching the
@@ -32,10 +31,10 @@ struct MatmulDecodeParams {
     int batch = 1;
     int b_blocks = 1;
     int n_blocks = 1;
-    std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
-    uint32_t global_cb_k_blocks = 1;
+    // No prefetcher_pipes: pipe delivery runs only on the Metal 2.0 full width-sharded factory,
+    // which has no ProgramDescriptor to fuse.
     // Fused-weight path: where this op's weight lives inside a larger height-sharded weight
-    // tensor (see packed_weight_spec.hpp). Mutually exclusive with global_cb.
+    // tensor (see packed_weight_spec.hpp).
     std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec> packed_weight = std::nullopt;
     bool all_gather = false;
     uint32_t ring_size = 1;
@@ -91,17 +90,19 @@ matmul_decode_select_program_factory(
     const MatmulDecodeParams& operation_attributes, const MatmulDecodeInputs& tensor_args);
 
 // Per-factory create_descriptor adapters (by-value params/inputs -> the real device
-// operation's create_descriptor, which wants the internal reference-holding types).
-tt::tt_metal::ProgramDescriptor matmul_decode_full_width_sharded_create_descriptor(
+// operation's create_descriptor, which wants the internal reference-holding types). The two-hub
+// full and partial width-sharded factories and the batched one are Metal 2.0 ProgramSpecs and
+// cannot be fused; only the ring-gather variants have a descriptor.
+tt::tt_metal::ProgramDescriptor matmul_decode_full_width_ring_gather_create_descriptor(
     const MatmulDecodeParams& operation_attributes,
     const MatmulDecodeInputs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 
-tt::tt_metal::ProgramDescriptor matmul_decode_partial_width_sharded_create_descriptor(
-    const MatmulDecodeParams& operation_attributes, const MatmulDecodeInputs& tensor_args, Tensor& tensor_return_value);
-
-tt::tt_metal::ProgramDescriptor matmul_decode_batched_width_sharded_create_descriptor(
-    const MatmulDecodeParams& operation_attributes, const MatmulDecodeInputs& tensor_args, Tensor& tensor_return_value);
+tt::tt_metal::ProgramDescriptor matmul_decode_partial_width_ring_gather_create_descriptor(
+    const MatmulDecodeParams& operation_attributes,
+    const MatmulDecodeInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 
 }  // namespace ttnn::prim

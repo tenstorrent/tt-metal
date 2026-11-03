@@ -6,7 +6,7 @@
 
 The weight lives in DRAM as an ND-sharded (receiver-contiguous) tensor -- one
 slab per B core -- and the prefetcher pushes each slab into the matmul's in1
-circular buffer through a DRAM-sender GlobalCircularBuffer.
+dataflow buffer through DRAM-sender PrefetcherPipes.
 
 All three program factories are covered. They differ only in the per-receiver
 slab and the order the slabs must be delivered in:
@@ -28,6 +28,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bank_receivers_strided,
     make_recv_contig_weight,
+    make_tensor_prefetcher_pipes,
     tensor_prefetcher_session,
 )
 from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_decode import get_tile_height
@@ -62,8 +63,8 @@ def _require_tensor_prefetcher(device):
         )
 
 
-def test_matmul_decode_accepts_global_cb_kwarg(device):
-    """The global_cb keyword exists and defaults to None (no behavior change)."""
+def test_matmul_decode_accepts_prefetcher_pipes_kwarg(device):
+    """The prefetcher_pipes keyword exists and an empty list means no prefetching."""
     m, k, n = 32, 1024, 2048
     num_a_cores = 32
     num_b_cores = n // 64
@@ -100,7 +101,7 @@ def test_matmul_decode_accepts_global_cb_kwarg(device):
         ),
     )
 
-    out = ttnn.experimental.matmul_decode(a, b, global_cb=None)
+    out = ttnn.experimental.matmul_decode(a, b, prefetcher_pipes=[])
     assert_with_pcc(ref, ttnn.to_torch(out).float(), 0.99)
 
 
@@ -108,26 +109,26 @@ def _weight_tile_bytes(weight):
     """Bytes of one 32x32 tile of ``weight``, from its own tile and dtype.
 
     Block-float dtypes pack a tile smaller than the bfloat16 2048 (1088 for bfloat8_b,
-    576 for bfloat4_b), so a hardcoded 2048 oversizes the GCB for them -- harmless for
-    the passing tests but it makes the undersized-GCB test stop being undersized.
+    576 for bfloat4_b), so a hardcoded 2048 oversizes the ring for them -- harmless for
+    the passing tests but it makes the undersized-ring test stop being undersized.
     """
     return weight.tile.get_tile_size(weight.dtype)
 
 
-def _make_gcb_and_operands(
+def _make_pipes_and_operands(
     device,
     m,
     k,
     n,
     num_a_cores,
     num_slabs=2,
-    build_gcb=True,
+    build_pipes=True,
     seed=0,
-    gcb_k_blocks=1,
+    pipe_k_blocks=1,
     num_pages=None,
     row_major_a=False,
 ):
-    """Build the activation, the DRAM receiver-contiguous weight, and the GCB.
+    """Build the activation, the DRAM receiver-contiguous weight, and the pipes.
 
     The B/receiver grid is the rectangle `_num_cores_to_rectangle_core_range_set`
     picks for `num_b_cores`, anchored at (0, 0). `bank_receivers_strided` maps ring
@@ -137,20 +138,20 @@ def _make_gcb_and_operands(
     ND shards are laid out in. Passing `num_b_cores` instead is only correct when the
     rectangle happens to be a single row, and silently produces wrong results otherwise.
 
-    When `build_gcb` is False, the GCB is not constructed here (skipping the inline
-    size arithmetic entirely); the 5th element of the returned tuple is instead the
-    `bank_to_receivers` list, for callers that want to build the GCB themselves (e.g.
-    via `make_matmul_decode_gcb`) without duplicating this function's setup.
+    When `build_pipes` is False, the pipes are not constructed here; the 5th element of
+    the returned tuple is instead the `bank_to_receivers` list, for callers that want to
+    build the pipes themselves (e.g. via `make_matmul_decode_pipes`) without duplicating
+    this function's setup.
 
     `seed` seeds the torch RNG, so operands are reproducible per call. Callers that
     need two *different* operand sets in one test (e.g. to tell aliasing apart from
     correctness) must pass distinct seeds -- two calls with the same seed produce
     bit-identical tensors.
 
-    `gcb_k_blocks` is how many pages a slab is cut into, and `num_pages` sizes the ring in
-    those pages instead of in slabs -- together they build a GCB *smaller* than a slab,
-    which is the point of streaming. The caller must pass the same `gcb_k_blocks` to the
-    prefetch request's block_count and to matmul_decode's `global_cb_k_blocks`.
+    `pipe_k_blocks` is how many entries a slab is cut into, and `num_pages` sizes the ring in
+    those entries instead of in slabs -- together they build a ring *smaller* than a slab,
+    which is the point of streaming. The caller must pass the same `pipe_k_blocks` to the
+    prefetch request's block_count and to matmul_decode's `prefetch_k_blocks`.
     """
     torch.manual_seed(seed)
     num_dram_banks = device.dram_grid_size().x
@@ -212,33 +213,33 @@ def _make_gcb_and_operands(
         (b, bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
         for b in range(num_dram_banks)
     ]
-    if not build_gcb:
+    if not build_pipes:
         return pt_a, pt_b, a, weight, bank_to_receivers, num_b_cores
 
-    # A GCB page is a `gcb_k_blocks`-th of a receiver's [K, N/num_b_cores] slab (the whole
+    # A pipe entry is a `pipe_k_blocks`-th of a receiver's [K, N/num_b_cores] slab (the whole
     # slab at the default of 1).
     slab_bytes = (k // 32) * ((n // num_b_cores) // 32) * _weight_tile_bytes(weight)
-    page_bytes = slab_bytes // gcb_k_blocks
-    gcb_size = num_pages * page_bytes if num_pages is not None else num_slabs * slab_bytes
-    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, gcb_size)
-    return pt_a, pt_b, a, weight, gcb, num_b_cores
+    entry_bytes = slab_bytes // pipe_k_blocks
+    ring_size = num_pages * entry_bytes if num_pages is not None else num_slabs * slab_bytes
+    _, pipes = make_tensor_prefetcher_pipes(device, bank_to_receivers, ring_size)
+    return pt_a, pt_b, a, weight, pipes, num_b_cores
 
 
-def test_matmul_decode_gcb_output_spec(device):
-    """With a GCB, the output grid/shard come from the GCB receivers, not from a
+def test_matmul_decode_pipes_output_spec(device):
+    """With pipes, the output grid/shard come from the pipe receivers, not from a
     legacy shard spec on the DRAM weight (which has none).
 
     The prefetcher must run even though this test only checks the output spec: once
-    the in1 CB is GCB-backed the reader blocks until its page arrives, and a matmul
+    in1 is pipe-fed the reader blocks until its entry arrives, and a matmul
     launched without a prefetch request would wedge the device for every later test.
     """
     m, k, n = 32, 1024, 2048
-    _, _, a, weight, gcb, num_b_cores = _make_gcb_and_operands(device, m, k, n, num_a_cores=32)
+    _, _, a, weight, pipes, num_b_cores = _make_pipes_and_operands(device, m, k, n, num_a_cores=32)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], global_cb=gcb)
-        out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], prefetcher_pipes=pipes)
+        out = ttnn.experimental.matmul_decode(a, weight, prefetcher_pipes=pipes)
         ttnn.synchronize_device(device)
 
     assert tuple(out.shape) == (m, n)
@@ -247,33 +248,33 @@ def test_matmul_decode_gcb_output_spec(device):
 
 
 def test_matmul_decode_prefetched_weights_pcc(device):
-    """Full end-to-end: prefetcher pushes each receiver's weight slab into the GCB,
+    """Full end-to-end: prefetcher pushes each receiver's weight slab into the pipes,
     matmul_decode consumes it, result matches torch."""
     m, k, n = 32, 1024, 2048
-    pt_a, pt_b, a, weight, gcb, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32)
+    pt_a, pt_b, a, weight, pipes, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32)
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], global_cb=gcb)
-        out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], prefetcher_pipes=pipes)
+        out = ttnn.experimental.matmul_decode(a, weight, prefetcher_pipes=pipes)
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result, 0.99)
 
 
 @pytest.mark.parametrize(
-    "gcb_k_blocks, num_pages",
+    "pipe_k_blocks, num_pages",
     [
-        pytest.param(4, 2, id="k_blocks=4-gcb=half-a-slab"),
-        pytest.param(32, 2, id="k_blocks=32-gcb=one-sixteenth-of-a-slab"),
-        pytest.param(2, 6, id="k_blocks=2-gcb=three-slabs"),
+        pytest.param(4, 2, id="k_blocks=4-pipes=half-a-slab"),
+        pytest.param(32, 2, id="k_blocks=32-pipes=one-sixteenth-of-a-slab"),
+        pytest.param(2, 6, id="k_blocks=2-pipes=three-slabs"),
     ],
 )
-def test_matmul_decode_prefetched_streamed_slab_pcc(device, gcb_k_blocks, num_pages):
-    """Full width-sharded with the slab streamed in as several GCB pages.
+def test_matmul_decode_prefetched_streamed_slab_pcc(device, pipe_k_blocks, num_pages):
+    """Full width-sharded with the slab streamed in as several pipe entries.
 
-    The GCB is deliberately smaller than a weight slab in the first two cases, which is the
+    The ring is deliberately smaller than a weight slab in the first two cases, which is the
     whole point of streaming: the ring is sized in pages, so the prefetcher can run ahead into
     the next weight instead of stalling at slab granularity. Each output tile is now finished
     across several pages with the packer accumulating into the output CB, so a dropped or
@@ -283,29 +284,29 @@ def test_matmul_decode_prefetched_streamed_slab_pcc(device, gcb_k_blocks, num_pa
     and the reader's credit return is exercised with pages already waiting.
     """
     m, k, n = 32, 1024, 2048
-    pt_a, pt_b, a, weight, gcb, _ = _make_gcb_and_operands(
-        device, m, k, n, num_a_cores=32, gcb_k_blocks=gcb_k_blocks, num_pages=num_pages
+    pt_a, pt_b, a, weight, pipes, _ = _make_pipes_and_operands(
+        device, m, k, n, num_a_cores=32, pipe_k_blocks=pipe_k_blocks, num_pages=num_pages
     )
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
-        out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, pipe_k_blocks)], prefetcher_pipes=pipes)
+        out = ttnn.experimental.matmul_decode(a, weight, prefetcher_pipes=pipes, prefetch_k_blocks=pipe_k_blocks)
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result, 0.99)
 
 
 @pytest.mark.parametrize(
-    "gcb_k_blocks, expect_custom_mm",
+    "pipe_k_blocks, expect_custom_mm",
     [
         pytest.param(2, True, id="k_blocks=2-page-kt=16"),
         pytest.param(4, True, id="k_blocks=4-page-kt=8"),
         pytest.param(32, False, id="k_blocks=32-page-kt=1-falls-back"),
     ],
 )
-def test_matmul_decode_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_blocks, expect_custom_mm):
+def test_matmul_decode_streamed_slab_custom_mm_pcc(device, capfd, pipe_k_blocks, expect_custom_mm):
     """Streamed full width-sharded on the custom_mm LLKs rather than the block matmul ones.
 
     custom_mm reduces K inside the LLK, so streaming issues one call per page into the same DST
@@ -315,15 +316,15 @@ def test_matmul_decode_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_blocks, 
     produce the same answer.
     """
     m, k, n = 1, 1024, 2048
-    pt_a, pt_b, a, weight, gcb, _ = _make_gcb_and_operands(
-        device, m, k, n, num_a_cores=32, gcb_k_blocks=gcb_k_blocks, num_pages=2, row_major_a=True
+    pt_a, pt_b, a, weight, pipes, _ = _make_pipes_and_operands(
+        device, m, k, n, num_a_cores=32, pipe_k_blocks=pipe_k_blocks, num_pages=2, row_major_a=True
     )
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
-        out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, pipe_k_blocks)], prefetcher_pipes=pipes)
+        out = ttnn.experimental.matmul_decode(a, weight, prefetcher_pipes=pipes, prefetch_k_blocks=pipe_k_blocks)
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result, 0.99)
@@ -341,11 +342,11 @@ def test_matmul_decode_streamed_repeated_invocations(device):
     re-reading identical data.
     """
     m, k, n = 32, 1024, 2048
-    gcb_k_blocks = 4
-    pt_a0, pt_b0, a0, w0, gcb, _ = _make_gcb_and_operands(
-        device, m, k, n, num_a_cores=32, seed=0, gcb_k_blocks=gcb_k_blocks, num_pages=2
+    pipe_k_blocks = 4
+    pt_a0, pt_b0, a0, w0, pipes, _ = _make_pipes_and_operands(
+        device, m, k, n, num_a_cores=32, seed=0, pipe_k_blocks=pipe_k_blocks, num_pages=2
     )
-    pt_a1, pt_b1, a1, w1, _, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32, seed=1, build_gcb=False)
+    pt_a1, pt_b1, a1, w1, _, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32, seed=1, build_pipes=False)
     assert not torch.equal(pt_b0, pt_b1), "the two weights must differ or a stale page read would go unnoticed"
 
     operands = [
@@ -357,43 +358,43 @@ def test_matmul_decode_streamed_repeated_invocations(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
         for i in range(4):
             act, w, ref = operands[i % 2]
-            ttnn.experimental.queue_tensor_prefetcher_request(device, [(w, gcb_k_blocks)], global_cb=gcb)
-            out = ttnn.experimental.matmul_decode(act, w, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks)
+            ttnn.experimental.queue_tensor_prefetcher_request(device, [(w, pipe_k_blocks)], prefetcher_pipes=pipes)
+            out = ttnn.experimental.matmul_decode(act, w, prefetcher_pipes=pipes, prefetch_k_blocks=pipe_k_blocks)
             assert_with_pcc(ref, ttnn.to_torch(out).float(), 0.99)
 
 
 def test_prefetch_and_matmul_decode_helper(device):
-    """The paired helper issues the prefetch and the matmul against the same GCB."""
+    """The paired helper issues the prefetch and the matmul against the same pipes."""
     from ttnn._experimental.tensor_prefetcher_matmul_decode import prefetch_and_matmul_decode
 
     m, k, n = 32, 1024, 2048
-    pt_a, pt_b, a, weight, gcb, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32)
+    pt_a, pt_b, a, weight, pipes, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32)
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        out = prefetch_and_matmul_decode(a, weight, global_cb=gcb)
+        out = prefetch_and_matmul_decode(a, weight, prefetcher_pipes=pipes)
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result, 0.99)
 
 
-def test_make_matmul_decode_gcb_helper(device):
-    """`make_matmul_decode_gcb` sizes a working GCB from the weight and receivers alone,
+def test_make_matmul_decode_pipes_helper(device):
+    """`make_matmul_decode_pipes` sizes working pipes from the weight and receivers alone,
     with no inline size arithmetic at the call site."""
-    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb, prefetch_and_matmul_decode
+    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_pipes, prefetch_and_matmul_decode
 
     m, k, n = 32, 1024, 2048
-    pt_a, pt_b, a, weight, bank_to_receivers, _ = _make_gcb_and_operands(
-        device, m, k, n, num_a_cores=32, build_gcb=False
+    pt_a, pt_b, a, weight, bank_to_receivers, _ = _make_pipes_and_operands(
+        device, m, k, n, num_a_cores=32, build_pipes=False
     )
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
-    gcb = make_matmul_decode_gcb(device, weight, bank_to_receivers)
+    pipes = make_matmul_decode_pipes(device, weight, bank_to_receivers)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        out = prefetch_and_matmul_decode(a, weight, global_cb=gcb)
+        out = prefetch_and_matmul_decode(a, weight, prefetcher_pipes=pipes)
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result, 0.99)
@@ -408,9 +409,8 @@ def test_make_matmul_decode_gcb_helper(device):
         (32, 2048, 2048),
         (32, 1024, 4096),
         # Fewer receivers (16) than A cores (32), so the reader's core set is a strict
-        # superset of the GCB receiver set and the non-receiver cores take the
-        # `is_in1_receiver == 0` branch -- the one that must skip the remote-CB wait and
-        # the sync handshake entirely. Every other shape here has receivers >= A cores,
+        # superset of the pipe receiver set and the non-receiver cores only relay the
+        # gather -- they must not wait on a pipe. Every other shape here has receivers >= A cores,
         # which never exercises it; getting it wrong hangs those cores rather than
         # failing, so this case is the only guard against that.
         (32, 1024, 1024),
@@ -423,25 +423,25 @@ def test_matmul_decode_prefetched_shapes(device, m, k, n):
     """PCC across the decode M range and a couple of K/N shapes."""
     from ttnn._experimental.tensor_prefetcher_matmul_decode import prefetch_and_matmul_decode
 
-    pt_a, pt_b, a, weight, gcb, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32)
+    pt_a, pt_b, a, weight, pipes, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32)
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        out = prefetch_and_matmul_decode(a, weight, global_cb=gcb)
+        out = prefetch_and_matmul_decode(a, weight, prefetcher_pipes=pipes)
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result, 0.99)
 
 
 def test_matmul_decode_prefetched_repeated_invocations(device):
-    """Back-to-back prefetch+matmul pairs against one GCB, alternating two weights.
+    """Back-to-back prefetch+matmul pairs against one set of pipes, alternating two weights.
 
-    Each pair consumes exactly one page per receiver, so the GCB read and write
+    Each pair consumes exactly one entry per receiver, so the ring read and write
     pointers must stay in lockstep across invocations. Drift shows up either as a
     hang or as iteration N returning iteration N-1's data.
 
-    The two operand sets must differ. The default GCB is two slabs deep, so a
+    The two operand sets must differ. The default ring is two slabs deep, so a
     receiver that failed to advance its read pointer would re-read the previous
     slab -- and with a single repeated weight that slab holds bit-identical data,
     so PCC would pass and the test would prove nothing. Alternating distinct
@@ -451,8 +451,8 @@ def test_matmul_decode_prefetched_repeated_invocations(device):
     from ttnn._experimental.tensor_prefetcher_matmul_decode import prefetch_and_matmul_decode
 
     m, k, n = 32, 1024, 2048
-    pt_a0, pt_b0, a0, w0, gcb, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32, seed=0)
-    pt_a1, pt_b1, a1, w1, _, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32, seed=1, build_gcb=False)
+    pt_a0, pt_b0, a0, w0, pipes, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32, seed=0)
+    pt_a1, pt_b1, a1, w1, _, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32, seed=1, build_pipes=False)
     assert not torch.equal(pt_b0, pt_b1), "the two weights must differ or a stale slab read would go unnoticed"
 
     operands = [
@@ -464,7 +464,7 @@ def test_matmul_decode_prefetched_repeated_invocations(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
         for i in range(4):
             a, weight, ref = operands[i % 2]
-            out = prefetch_and_matmul_decode(a, weight, global_cb=gcb)
+            out = prefetch_and_matmul_decode(a, weight, prefetcher_pipes=pipes)
             result = ttnn.to_torch(out).float()
             assert_with_pcc(ref, result, 0.99)
 
@@ -497,7 +497,7 @@ def _dram_nd_sharded(device, pt, slab_shape, num_dram_banks):
     )
 
 
-def _make_partial_gcb_and_operands(
+def _make_partial_pipes_and_operands(
     device,
     m,
     k,
@@ -506,20 +506,20 @@ def _make_partial_gcb_and_operands(
     n_blocks,
     *,
     num_a_cores=32,
-    build_gcb=True,
+    build_pipes=True,
     seed=0,
     swap_slab_order=False,
-    gcb_k_blocks=1,
+    pipe_k_blocks=1,
     num_pages=2,
 ):
-    """Operands, DRAM weight and GCB for the partial width-sharded mode.
+    """Operands, DRAM weight and pipe ring for the partial width-sharded mode.
 
     A [Kc, Nc] ND shard of the plain [K, N] weight enumerates slabs row-major over the
     (K_blocks x N_blocks) block grid, which is exactly the order the factory assigns blocks to
     receivers (idx -> k_idx = idx // N_blocks, n_idx = idx % N_blocks). Unlike the
     non-prefetcher partial path the weight is not K-block-folded. The receiver rectangle is
     n_blocks wide and k_blocks tall so a core's row-major index within it is that same
-    k_idx * n_blocks + n_idx. No output memory config is needed: on the GCB path
+    k_idx * n_blocks + n_idx. No output memory config is needed: on the pipe ring path
     `compute_output_specs` shards the output over the first n_blocks receivers, which are
     exactly the base cores the K-partials reduce onto.
 
@@ -529,7 +529,7 @@ def _make_partial_gcb_and_operands(
     `seed` seeds the torch RNG, so operands are reproducible per call and callers needing two
     *different* operand sets in one test must pass distinct seeds.
     """
-    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb
+    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_pipes
 
     torch.manual_seed(seed)
     kc, nc = k // k_blocks, n // n_blocks
@@ -565,12 +565,12 @@ def _make_partial_gcb_and_operands(
         (b, bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=n_blocks)) for b in range(num_dram_banks)
     ]
 
-    if not build_gcb:
+    if not build_pipes:
         return pt_a, pt_b, a, weight, bank_to_receivers
-    gcb = make_matmul_decode_gcb(
-        device, weight, bank_to_receivers, slab_shape=(kc, nc), k_blocks=gcb_k_blocks, num_pages=num_pages
+    pipes = make_matmul_decode_pipes(
+        device, weight, bank_to_receivers, slab_shape=(kc, nc), k_blocks=pipe_k_blocks, num_pages=num_pages
     )
-    return pt_a, pt_b, a, weight, gcb
+    return pt_a, pt_b, a, weight, pipes
 
 
 @pytest.mark.parametrize(
@@ -581,7 +581,7 @@ def _make_partial_gcb_and_operands(
     ],
 )
 def test_matmul_decode_partial_prefetched_weights_pcc(device, m, k, n, k_blocks, n_blocks):
-    """Partial width-sharded end-to-end: the weight is cut into [Kc, Nc] slabs, one per GCB
+    """Partial width-sharded end-to-end: the weight is cut into [Kc, Nc] slabs, one per pipe
     receiver, and the K-partials reduce onto the base cores.
 
     k_blocks and n_blocks are both > 1 so the receiver-order contract (N fast-varying) is
@@ -589,47 +589,47 @@ def test_matmul_decode_partial_prefetched_weights_pcc(device, m, k, n, k_blocks,
     and a wrong ordering would still produce the right answer.
 
     There are also fewer receivers (16) than A cores (32), so the reader's core set is a
-    strict superset of the GCB receiver set and the extra cores take the
-    `is_in1_receiver == 0` branch -- the one that must skip the remote-CB wait and the sync
-    handshake entirely. Getting that wrong hangs those cores rather than failing.
+    strict superset of the pipe receiver set and the extra cores only relay the gather -- they
+    must not wait on a pipe they are not a receiver of. Getting that wrong hangs those cores
+    rather than failing.
     """
-    pt_a, pt_b, a, weight, gcb = _make_partial_gcb_and_operands(device, m, k, n, k_blocks, n_blocks)
+    pt_a, pt_b, a, weight, pipes = _make_partial_pipes_and_operands(device, m, k, n, k_blocks, n_blocks)
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], global_cb=gcb)
-        out = ttnn.experimental.matmul_decode(a, weight, partial_width_sharded=True, global_cb=gcb)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], prefetcher_pipes=pipes)
+        out = ttnn.experimental.matmul_decode(a, weight, partial_width_sharded=True, prefetcher_pipes=pipes)
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result, 0.99)
 
 
 @pytest.mark.parametrize(
-    "gcb_k_blocks, num_pages",
+    "pipe_k_blocks, num_pages",
     [
-        pytest.param(4, 2, id="k_blocks=4-gcb=half-a-slab"),
-        pytest.param(16, 3, id="k_blocks=16-gcb=three-sixteenths-of-a-slab"),
+        pytest.param(4, 2, id="k_blocks=4-pipes=half-a-slab"),
+        pytest.param(16, 3, id="k_blocks=16-pipes=three-sixteenths-of-a-slab"),
     ],
 )
-def test_matmul_decode_partial_prefetched_streamed_slab_pcc(device, gcb_k_blocks, num_pages):
-    """Partial width-sharded with each [Kc, Nc] slab streamed in as several GCB pages.
+def test_matmul_decode_partial_prefetched_streamed_slab_pcc(device, pipe_k_blocks, num_pages):
+    """Partial width-sharded with each [Kc, Nc] slab streamed in as several pipe ring pages.
 
-    Here the streamed partial sums land in the partial CB that the cross-core K-reduction then
+    Here the streamed partial sums land in the partial buffer that the cross-core K-reduction then
     consumes, so this covers the one mode where the packer accumulates into something other
     than the final output.
     """
     m, k, n, k_blocks, n_blocks = 32, 1024, 1024, 2, 8
-    pt_a, pt_b, a, weight, gcb = _make_partial_gcb_and_operands(
-        device, m, k, n, k_blocks, n_blocks, gcb_k_blocks=gcb_k_blocks, num_pages=num_pages
+    pt_a, pt_b, a, weight, pipes = _make_partial_pipes_and_operands(
+        device, m, k, n, k_blocks, n_blocks, pipe_k_blocks=pipe_k_blocks, num_pages=num_pages
     )
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, pipe_k_blocks)], prefetcher_pipes=pipes)
         out = ttnn.experimental.matmul_decode(
-            a, weight, partial_width_sharded=True, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks
+            a, weight, partial_width_sharded=True, prefetcher_pipes=pipes, prefetch_k_blocks=pipe_k_blocks
         )
         result = ttnn.to_torch(out).float()
 
@@ -637,14 +637,14 @@ def test_matmul_decode_partial_prefetched_streamed_slab_pcc(device, gcb_k_blocks
 
 
 @pytest.mark.parametrize(
-    "gcb_k_blocks, expect_custom_mm",
+    "pipe_k_blocks, expect_custom_mm",
     [
         pytest.param(4, True, id="k_blocks=4-page-kt=4"),
         pytest.param(8, True, id="k_blocks=8-page-kt=2"),
         pytest.param(16, False, id="k_blocks=16-page-kt=1-falls-back"),
     ],
 )
-def test_matmul_decode_partial_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_blocks, expect_custom_mm):
+def test_matmul_decode_partial_streamed_slab_custom_mm_pcc(device, capfd, pipe_k_blocks, expect_custom_mm):
     """Streamed partial width-sharded on the custom_mm LLKs rather than the block matmul ones.
 
     Each page is one custom_mm call accumulating into the same DST tiles, so the partial CB is
@@ -653,16 +653,16 @@ def test_matmul_decode_partial_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_
     and must agree.
     """
     m, k, n, k_blocks, n_blocks = 1, 1024, 1024, 2, 8
-    pt_a, pt_b, a, weight, gcb = _make_partial_gcb_and_operands(
-        device, m, k, n, k_blocks, n_blocks, gcb_k_blocks=gcb_k_blocks, num_pages=2
+    pt_a, pt_b, a, weight, pipes = _make_partial_pipes_and_operands(
+        device, m, k, n, k_blocks, n_blocks, pipe_k_blocks=pipe_k_blocks, num_pages=2
     )
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, pipe_k_blocks)], prefetcher_pipes=pipes)
         out = ttnn.experimental.matmul_decode(
-            a, weight, partial_width_sharded=True, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks
+            a, weight, partial_width_sharded=True, prefetcher_pipes=pipes, prefetch_k_blocks=pipe_k_blocks
         )
         result = ttnn.to_torch(out).float()
 
@@ -673,18 +673,18 @@ def test_matmul_decode_partial_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_
 
 
 def test_matmul_decode_partial_prefetched_repeated_invocations(device):
-    """Back-to-back prefetch+matmul pairs against one partial-mode GCB, alternating two weights.
+    """Back-to-back prefetch+matmul pairs against one partial-mode pipe ring, alternating two weights.
 
-    The two operand sets must differ. The GCB is two slabs deep, so a receiver that failed to
+    The two operand sets must differ. The pipe ring is two slabs deep, so a receiver that failed to
     advance its read pointer would re-read the previous slab -- and with a single repeated
     weight that slab holds bit-identical data, so PCC would pass and the test would prove
     nothing. Alternating distinct weights and checking each result against its own reference is
     what makes a stale read observable.
     """
     m, k, n, k_blocks, n_blocks = 32, 1024, 1024, 2, 8
-    pt_a0, pt_b0, a0, w0, gcb = _make_partial_gcb_and_operands(device, m, k, n, k_blocks, n_blocks, seed=0)
-    pt_a1, pt_b1, a1, w1, _ = _make_partial_gcb_and_operands(
-        device, m, k, n, k_blocks, n_blocks, seed=1, build_gcb=False
+    pt_a0, pt_b0, a0, w0, pipes = _make_partial_pipes_and_operands(device, m, k, n, k_blocks, n_blocks, seed=0)
+    pt_a1, pt_b1, a1, w1, _ = _make_partial_pipes_and_operands(
+        device, m, k, n, k_blocks, n_blocks, seed=1, build_pipes=False
     )
     assert not torch.equal(pt_b0, pt_b1), "the two weights must differ or a stale slab read would go unnoticed"
 
@@ -697,8 +697,8 @@ def test_matmul_decode_partial_prefetched_repeated_invocations(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
         for i in range(4):
             a, weight, ref = operands[i % 2]
-            ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], global_cb=gcb)
-            out = ttnn.experimental.matmul_decode(a, weight, partial_width_sharded=True, global_cb=gcb)
+            ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], prefetcher_pipes=pipes)
+            out = ttnn.experimental.matmul_decode(a, weight, partial_width_sharded=True, prefetcher_pipes=pipes)
             assert_with_pcc(ref, ttnn.to_torch(out).float(), 0.99)
 
 
@@ -711,22 +711,22 @@ def test_matmul_decode_partial_prefetched_wrong_slab_order_is_wrong(device):
     K-fast instead of N-fast and requires the result to collapse.
     """
     m, k, n, k_blocks, n_blocks = 32, 1024, 1024, 2, 8
-    pt_a, pt_b, a, weight, gcb = _make_partial_gcb_and_operands(
+    pt_a, pt_b, a, weight, pipes = _make_partial_pipes_and_operands(
         device, m, k, n, k_blocks, n_blocks, swap_slab_order=True
     )
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], global_cb=gcb)
-        out = ttnn.experimental.matmul_decode(a, weight, partial_width_sharded=True, global_cb=gcb)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], prefetcher_pipes=pipes)
+        out = ttnn.experimental.matmul_decode(a, weight, partial_width_sharded=True, prefetcher_pipes=pipes)
         result = ttnn.to_torch(out).float()
 
     passed, message = check_with_pcc_without_tensor_printout(ref, result, 0.99)
     assert not passed, f"a transposed slab order still matched the reference: {message}"
 
 
-def _make_batched_gcb_and_operands(
+def _make_batched_pipes_and_operands(
     device,
     d0,
     d1,
@@ -737,13 +737,13 @@ def _make_batched_gcb_and_operands(
     n_blocks,
     *,
     num_a_cores=16,
-    build_gcb=True,
+    build_pipes=True,
     seed=0,
     swap_slab_order=False,
-    gcb_k_blocks=1,
+    pipe_k_blocks=1,
     num_pages=2,
 ):
-    """Operands, DRAM weight and GCB for the batched width-sharded mode.
+    """Operands, DRAM weight and pipe ring for the batched width-sharded mode.
 
     The weight fold is the one the non-prefetcher batched test uses:
     [batch, K, N] -> reshape(b_blocks, Bc, K, N) -> permute(1, 2, 0, 3) -> [1, 1, Bc*K, b_blocks*N].
@@ -756,7 +756,7 @@ def _make_batched_gcb_and_operands(
     `swap_slab_order` transposes the column-block enumeration to batch-fast-varying, for the
     wrong-order guard. `seed` seeds the torch RNG; distinct seeds give distinct operands.
     """
-    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb
+    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_pipes
 
     torch.manual_seed(seed)
     batch = d0 * d1
@@ -798,17 +798,17 @@ def _make_batched_gcb_and_operands(
     bank_to_receivers = [
         (b, bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=n_blocks)) for b in range(num_dram_banks)
     ]
-    if not build_gcb:
+    if not build_pipes:
         return pt_a, pt_b, a, weight, bank_to_receivers
-    gcb = make_matmul_decode_gcb(
-        device, weight, bank_to_receivers, slab_shape=(bc * k, nc), k_blocks=gcb_k_blocks, num_pages=num_pages
+    pipes = make_matmul_decode_pipes(
+        device, weight, bank_to_receivers, slab_shape=(bc * k, nc), k_blocks=pipe_k_blocks, num_pages=num_pages
     )
-    return pt_a, pt_b, a, weight, gcb
+    return pt_a, pt_b, a, weight, pipes
 
 
-def _run_batched_prefetched(device, a, weight, gcb):
-    ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], global_cb=gcb)
-    out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb)
+def _run_batched_prefetched(device, a, weight, pipes):
+    ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, 1)], prefetcher_pipes=pipes)
+    out = ttnn.experimental.matmul_decode(a, weight, prefetcher_pipes=pipes)
     return ttnn.to_torch(out).float()
 
 
@@ -826,25 +826,25 @@ def test_matmul_decode_batched_prefetched_weights_pcc(device, d0, d1, m, k, n, b
     genuinely exercised.
     """
     batch = d0 * d1
-    pt_a, pt_b, a, weight, gcb = _make_batched_gcb_and_operands(device, d0, d1, m, k, n, b_blocks, n_blocks)
+    pt_a, pt_b, a, weight, pipes = _make_batched_pipes_and_operands(device, d0, d1, m, k, n, b_blocks, n_blocks)
     ref = torch.matmul(pt_a.to(torch.float32), pt_b.to(torch.float32))
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        result = _run_batched_prefetched(device, a, weight, gcb)
+        result = _run_batched_prefetched(device, a, weight, pipes)
 
     assert_with_pcc(ref, result.reshape(batch, m, n), 0.99)
 
 
 @pytest.mark.parametrize(
-    "gcb_k_blocks, num_pages",
+    "pipe_k_blocks, num_pages",
     [
         pytest.param(2, 2, id="k_blocks=2-page=one-whole-batch"),
         pytest.param(8, 2, id="k_blocks=8-page=quarter-of-a-batch"),
     ],
 )
-def test_matmul_decode_batched_prefetched_streamed_slab_pcc(device, gcb_k_blocks, num_pages):
-    """Batched width-sharded with each [Bc*K, Nc] slab streamed in as several GCB pages.
+def test_matmul_decode_batched_prefetched_streamed_slab_pcc(device, pipe_k_blocks, num_pages):
+    """Batched width-sharded with each [Bc*K, Nc] slab streamed in as several pipe ring pages.
 
     A batched slab is Bc batches stacked along its rows, so where a page boundary falls
     relative to a batch boundary decides whether the compute kernel accumulates or starts a
@@ -854,28 +854,28 @@ def test_matmul_decode_batched_prefetched_streamed_slab_pcc(device, gcb_k_blocks
     """
     d0, d1, m, k, n, b_blocks, n_blocks = 1, 4, 32, 512, 1024, 2, 8
     batch = d0 * d1
-    pt_a, pt_b, a, weight, gcb = _make_batched_gcb_and_operands(
-        device, d0, d1, m, k, n, b_blocks, n_blocks, gcb_k_blocks=gcb_k_blocks, num_pages=num_pages
+    pt_a, pt_b, a, weight, pipes = _make_batched_pipes_and_operands(
+        device, d0, d1, m, k, n, b_blocks, n_blocks, pipe_k_blocks=pipe_k_blocks, num_pages=num_pages
     )
     ref = torch.matmul(pt_a.to(torch.float32), pt_b.to(torch.float32))
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
-        out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, pipe_k_blocks)], prefetcher_pipes=pipes)
+        out = ttnn.experimental.matmul_decode(a, weight, prefetcher_pipes=pipes, prefetch_k_blocks=pipe_k_blocks)
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result.reshape(batch, m, n), 0.99)
 
 
 @pytest.mark.parametrize(
-    "gcb_k_blocks, expect_custom_mm",
+    "pipe_k_blocks, expect_custom_mm",
     [
         pytest.param(2, True, id="k_blocks=2-page=one-whole-batch"),
         pytest.param(8, False, id="k_blocks=8-page=quarter-of-a-batch-falls-back"),
     ],
 )
-def test_matmul_decode_batched_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_blocks, expect_custom_mm):
+def test_matmul_decode_batched_streamed_slab_custom_mm_pcc(device, capfd, pipe_k_blocks, expect_custom_mm):
     """Streamed batched width-sharded on the custom_mm LLKs rather than the block matmul ones.
 
     custom_mm reduces a whole batch in one call and needs an even kt_dim, so it can only be used
@@ -885,15 +885,15 @@ def test_matmul_decode_batched_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_
     """
     d0, d1, m, k, n, b_blocks, n_blocks = 1, 4, 1, 512, 1024, 2, 8
     batch = d0 * d1
-    pt_a, pt_b, a, weight, gcb = _make_batched_gcb_and_operands(
-        device, d0, d1, m, k, n, b_blocks, n_blocks, gcb_k_blocks=gcb_k_blocks, num_pages=2
+    pt_a, pt_b, a, weight, pipes = _make_batched_pipes_and_operands(
+        device, d0, d1, m, k, n, b_blocks, n_blocks, pipe_k_blocks=pipe_k_blocks, num_pages=2
     )
     ref = torch.matmul(pt_a.to(torch.float32), pt_b.to(torch.float32))
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, gcb_k_blocks)], global_cb=gcb)
-        out = ttnn.experimental.matmul_decode(a, weight, global_cb=gcb, global_cb_k_blocks=gcb_k_blocks)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight, pipe_k_blocks)], prefetcher_pipes=pipes)
+        out = ttnn.experimental.matmul_decode(a, weight, prefetcher_pipes=pipes, prefetch_k_blocks=pipe_k_blocks)
         result = ttnn.to_torch(out).float()
 
     assert_with_pcc(ref, result.reshape(batch, m, n), 0.99)
@@ -903,9 +903,9 @@ def test_matmul_decode_batched_streamed_slab_custom_mm_pcc(device, capfd, gcb_k_
 
 
 def test_matmul_decode_batched_prefetched_repeated_invocations(device):
-    """Back-to-back prefetch+matmul pairs against one batched-mode GCB, alternating two weights.
+    """Back-to-back prefetch+matmul pairs against one batched-mode pipe ring, alternating two weights.
 
-    The two operand sets must differ. The GCB is two slabs deep, so a receiver that failed to
+    The two operand sets must differ. The pipe ring is two slabs deep, so a receiver that failed to
     advance its read pointer would re-read the previous slab -- and with a single repeated
     weight that slab holds bit-identical data, so PCC would pass and the test would prove
     nothing. Alternating distinct weights and checking each result against its own reference is
@@ -913,9 +913,9 @@ def test_matmul_decode_batched_prefetched_repeated_invocations(device):
     """
     d0, d1, m, k, n, b_blocks, n_blocks = 1, 4, 32, 512, 1024, 2, 8
     batch = d0 * d1
-    pt_a0, pt_b0, a0, w0, gcb = _make_batched_gcb_and_operands(device, d0, d1, m, k, n, b_blocks, n_blocks, seed=0)
-    pt_a1, pt_b1, a1, w1 = _make_batched_gcb_and_operands(
-        device, d0, d1, m, k, n, b_blocks, n_blocks, seed=1, build_gcb=False
+    pt_a0, pt_b0, a0, w0, pipes = _make_batched_pipes_and_operands(device, d0, d1, m, k, n, b_blocks, n_blocks, seed=0)
+    pt_a1, pt_b1, a1, w1 = _make_batched_pipes_and_operands(
+        device, d0, d1, m, k, n, b_blocks, n_blocks, seed=1, build_pipes=False
     )[:4]
     assert not torch.equal(pt_b0, pt_b1), "the two weights must differ or a stale slab read would go unnoticed"
 
@@ -928,7 +928,7 @@ def test_matmul_decode_batched_prefetched_repeated_invocations(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
         for i in range(4):
             a, weight, ref = operands[i % 2]
-            result = _run_batched_prefetched(device, a, weight, gcb)
+            result = _run_batched_prefetched(device, a, weight, pipes)
             assert_with_pcc(ref, result.reshape(batch, m, n), 0.99)
 
 
@@ -941,14 +941,14 @@ def test_matmul_decode_batched_prefetched_wrong_slab_order_is_wrong(device):
     """
     d0, d1, m, k, n, b_blocks, n_blocks = 1, 4, 32, 512, 1024, 2, 8
     batch = d0 * d1
-    pt_a, pt_b, a, weight, gcb = _make_batched_gcb_and_operands(
+    pt_a, pt_b, a, weight, pipes = _make_batched_pipes_and_operands(
         device, d0, d1, m, k, n, b_blocks, n_blocks, swap_slab_order=True
     )
     ref = torch.matmul(pt_a.to(torch.float32), pt_b.to(torch.float32))
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        result = _run_batched_prefetched(device, a, weight, gcb)
+        result = _run_batched_prefetched(device, a, weight, pipes)
 
     passed, message = check_with_pcc_without_tensor_printout(ref, result.reshape(batch, m, n), 0.99)
     assert not passed, f"a transposed slab order still matched the reference: {message}"
@@ -970,7 +970,7 @@ def _l1_width_sharded_weight(device, pt_b, k, n, num_b_cores):
     )
 
 
-def test_matmul_decode_partial_global_cb_rejects_indivisible_slab(device, expect_error):
+def test_matmul_decode_partial_pipes_rejects_indivisible_slab(device, expect_error):
     """Partial mode: the [Kc, Nc] slab must tile the [K, N] weight exactly.
 
     Kc=768 against K=1024 leaves a ragged last K-block. The shard count still comes out at
@@ -978,7 +978,7 @@ def test_matmul_decode_partial_global_cb_rejects_indivisible_slab(device, expect
     satisfied and only the partial mode's own divisibility check can catch it. It has to: the
     factory derives K_blocks by dividing, so a ragged block silently drops weight rows.
     """
-    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb
+    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_pipes
 
     m, k, n, kc, nc = 32, 1024, 1024, 768, 128
     num_dram_banks = device.dram_grid_size().x
@@ -1006,42 +1006,42 @@ def test_matmul_decode_partial_global_cb_rejects_indivisible_slab(device, expect
         (b, bank_receivers_strided(b, num_b_cores // num_dram_banks, num_dram_banks, ring_cols=n // nc))
         for b in range(num_dram_banks)
     ]
-    gcb = make_matmul_decode_gcb(device, weight, bank_to_receivers, slab_shape=(kc, nc))
+    pipes = make_matmul_decode_pipes(device, weight, bank_to_receivers, slab_shape=(kc, nc))
 
     with expect_error(RuntimeError, "Kc dividing K"):
-        ttnn.experimental.matmul_decode(a, weight, partial_width_sharded=True, global_cb=gcb)
+        ttnn.experimental.matmul_decode(a, weight, partial_width_sharded=True, prefetcher_pipes=pipes)
 
 
-def test_make_matmul_decode_gcb_rejects_receiver_count_mismatch(device, expect_error):
-    """The GCB builder rejects a receiver set the slab shape does not cut the weight into.
+def test_make_matmul_decode_pipes_rejects_receiver_count_mismatch(device, expect_error):
+    """The pipe ring builder rejects a receiver set the slab shape does not cut the weight into.
 
     This is the one host-side check that runs before anything is enqueued; without it a short
     receiver set only shows up as blocks nobody has a receiver for, i.e. a hang.
     """
-    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb
+    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_pipes
 
     m, k, n, k_blocks, n_blocks = 32, 1024, 1024, 2, 8
-    _, _, _, weight, _ = _make_partial_gcb_and_operands(device, m, k, n, k_blocks, n_blocks, build_gcb=False)
+    _, _, _, weight, _ = _make_partial_pipes_and_operands(device, m, k, n, k_blocks, n_blocks, build_pipes=False)
 
     num_dram_banks = device.dram_grid_size().x
     too_few = [(b, bank_receivers_strided(b, 1, num_dram_banks, ring_cols=n_blocks)) for b in range(num_dram_banks)]
 
-    with expect_error(ValueError, r"into 16 shards, but the GCB has 8 receivers"):
-        make_matmul_decode_gcb(device, weight, too_few, slab_shape=(k // k_blocks, n // n_blocks))
+    with expect_error(ValueError, r"into 16 shards, but the pipes have 8 receivers"):
+        make_matmul_decode_pipes(device, weight, too_few, slab_shape=(k // k_blocks, n // n_blocks))
 
 
-def test_matmul_decode_batched_global_cb_rejects_wrong_slab_shape(device, expect_error):
+def test_matmul_decode_batched_pipes_rejects_wrong_slab_shape(device, expect_error):
     """Batched mode: each weight shard must be the whole [Bc*K, Nc] slab.
 
     Halving the shard height still yields one shard per receiver, so only the mode-aware
     geometry check catches it. It has to: the compute kernel indexes in1 across the full
     [Bc, K_tiles, Nc_tiles] slab, so a half-height page leaves it reading past its data.
     """
-    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_gcb
+    from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decode_pipes
 
     d0, d1, m, k, n, b_blocks, n_blocks = 1, 4, 32, 512, 1024, 2, 8
     bc, nc = (d0 * d1) // b_blocks, n // n_blocks
-    _, _, a, _, _ = _make_batched_gcb_and_operands(device, d0, d1, m, k, n, b_blocks, n_blocks, build_gcb=False)
+    _, _, a, _, _ = _make_batched_pipes_and_operands(device, d0, d1, m, k, n, b_blocks, n_blocks, build_pipes=False)
 
     torch.manual_seed(0)
     num_dram_banks = device.dram_grid_size().x
@@ -1053,106 +1053,105 @@ def test_matmul_decode_batched_global_cb_rejects_wrong_slab_shape(device, expect
     bank_to_receivers = [
         (b, bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=n_blocks)) for b in range(num_dram_banks)
     ]
-    gcb = make_matmul_decode_gcb(device, short_slab_weight, bank_to_receivers, slab_shape=(bc * k // 2, nc))
+    pipes = make_matmul_decode_pipes(device, short_slab_weight, bank_to_receivers, slab_shape=(bc * k // 2, nc))
 
     with expect_error(RuntimeError, r"each weight shard to be \[Bc\*K, Nc\]"):
-        ttnn.experimental.matmul_decode(a, short_slab_weight, global_cb=gcb)
+        ttnn.experimental.matmul_decode(a, short_slab_weight, prefetcher_pipes=pipes)
 
 
 @pytest.mark.parametrize("partial_width_sharded", [False, True])
-def test_matmul_decode_global_cb_rejects_l1_weight(device, partial_width_sharded, expect_error):
-    """With a global_cb the weight must be the DRAM ND-sharded tensor the prefetcher reads."""
+def test_matmul_decode_pipes_rejects_l1_weight(device, partial_width_sharded, expect_error):
+    """With prefetcher_pipes the weight must be the DRAM ND-sharded tensor the prefetcher reads."""
     m, k, n = 32, 1024, 2048
-    _, pt_b, a, _, gcb, num_b_cores = _make_gcb_and_operands(device, m, k, n, num_a_cores=32)
+    _, pt_b, a, _, pipes, num_b_cores = _make_pipes_and_operands(device, m, k, n, num_a_cores=32)
     l1_weight = _l1_width_sharded_weight(device, pt_b, k, n, num_b_cores)
 
     with expect_error(RuntimeError, "input tensor B to live in DRAM"):
-        ttnn.experimental.matmul_decode(a, l1_weight, partial_width_sharded=partial_width_sharded, global_cb=gcb)
+        ttnn.experimental.matmul_decode(
+            a, l1_weight, partial_width_sharded=partial_width_sharded, prefetcher_pipes=pipes
+        )
 
 
 @pytest.mark.parametrize("partial_width_sharded", [False, True])
-def test_matmul_decode_global_cb_rejects_weight_without_nd_shard_spec(device, partial_width_sharded, expect_error):
+def test_matmul_decode_pipes_rejects_weight_without_nd_shard_spec(device, partial_width_sharded, expect_error):
     """A weight with no NdShardSpec at all must be rejected before any spec is computed.
 
     A legacy-sharded weight still carries a derived NdShardSpec, so it reaches the layout check
     in `validate_on_program_cache_miss` intact. An interleaved one does not -- and
-    `compute_output_specs` runs first and dereferences that spec on the partial GCB path, so
+    `compute_output_specs` runs first and dereferences that spec on the partial pipe path, so
     without a precondition ahead of it the caller gets a bare bad_optional_access.
     """
     m, k, n = 32, 1024, 2048
-    _, pt_b, a, _, gcb, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32)
+    _, pt_b, a, _, pipes, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32)
     interleaved_weight = ttnn.from_torch(
         pt_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
     with expect_error(RuntimeError, "carries no NdShardSpec"):
         ttnn.experimental.matmul_decode(
-            a, interleaved_weight, partial_width_sharded=partial_width_sharded, global_cb=gcb
+            a, interleaved_weight, partial_width_sharded=partial_width_sharded, prefetcher_pipes=pipes
         )
 
 
 @pytest.mark.parametrize(
-    "global_cb_k_blocks, gcb_pages_of_slab",
+    "prefetch_k_blocks, ring_pages_of_slab",
     [
-        # A page is the whole slab, so half a slab is not even one page.
-        pytest.param(1, 0.5, id="k_blocks=1-half-a-page"),
-        # A page is a quarter slab and the GCB holds exactly one, but streaming needs two.
-        pytest.param(4, 0.25, id="k_blocks=4-one-page"),
+        # An entry is the whole slab, so half a slab is not even one entry.
+        pytest.param(1, 0.5, id="k_blocks=1-half-an-entry"),
+        # An entry is a quarter slab and the ring holds exactly one, but streaming needs two.
+        pytest.param(4, 0.25, id="k_blocks=4-one-entry"),
     ],
 )
-def test_matmul_decode_global_cb_rejects_undersized_gcb(device, expect_error, global_cb_k_blocks, gcb_pages_of_slab):
-    """A GCB too small for the page count the reader needs is rejected on the host.
+def test_matmul_decode_pipes_rejects_undersized_ring(device, expect_error, prefetch_k_blocks, ring_pages_of_slab):
+    """A ring too small for the entry count the reader needs is rejected on the host.
 
-    The floor is one page when the slab arrives whole and two once it is streamed, because
-    the reader holds the page compute is working on while the next one lands; a one-page ring
+    The floor is one entry when the slab arrives whole and two once it is streamed, because
+    the reader holds the entry compute is working on while the next one lands; a one-entry ring
     would deadlock waiting for a credit it is itself holding. The check lives in the program
     factory and fires before anything is enqueued, so no prefetcher session is needed.
     """
     m, k, n = 32, 1024, 2048
-    _, _, a, weight, bank_to_receivers, num_b_cores = _make_gcb_and_operands(
-        device, m, k, n, num_a_cores=32, build_gcb=False
+    _, _, a, weight, bank_to_receivers, num_b_cores = _make_pipes_and_operands(
+        device, m, k, n, num_a_cores=32, build_pipes=False
     )
 
     slab_bytes = (k // 32) * ((n // num_b_cores) // 32) * _weight_tile_bytes(weight)
-    small_gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
-        device, bank_to_receivers, int(slab_bytes * gcb_pages_of_slab)
-    )
+    _, small_pipes = make_tensor_prefetcher_pipes(device, bank_to_receivers, int(slab_bytes * ring_pages_of_slab))
 
-    with expect_error(RuntimeError, "needs a GCB of at least"):
-        ttnn.experimental.matmul_decode(a, weight, global_cb=small_gcb, global_cb_k_blocks=global_cb_k_blocks)
+    with expect_error(RuntimeError, "needs a pipe ring of at least"):
+        ttnn.experimental.matmul_decode(a, weight, prefetcher_pipes=small_pipes, prefetch_k_blocks=prefetch_k_blocks)
 
 
 def test_matmul_decode_rejects_k_blocks_not_dividing_k(device, expect_error):
     """A page has to be a whole number of K-rows of the slab, so k_blocks must divide K in tiles."""
     m, k, n = 32, 1024, 2048  # K is 32 tiles, so 5 pages cannot be cut from it.
-    _, _, a, weight, gcb, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32)
+    _, _, a, weight, pipes, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32)
 
     with expect_error(RuntimeError, "divisible"):
-        ttnn.experimental.matmul_decode(a, weight, global_cb=gcb, global_cb_k_blocks=5)
+        ttnn.experimental.matmul_decode(a, weight, prefetcher_pipes=pipes, prefetch_k_blocks=5)
 
 
-def test_matmul_decode_rejects_k_blocks_without_global_cb(device, expect_error):
-    """global_cb_k_blocks describes GCB pages, so it is meaningless without a GCB."""
+def test_matmul_decode_rejects_k_blocks_without_pipes(device, expect_error):
+    """prefetch_k_blocks describes pipe entries, so it is meaningless without pipes."""
     m, k, n = 32, 1024, 2048
-    _, _, a, weight, _, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32, build_gcb=False)
+    _, _, a, weight, _, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32, build_pipes=False)
     l1_weight = ttnn.to_memory_config(weight, ttnn.L1_MEMORY_CONFIG)
 
-    with expect_error(RuntimeError, "global_cb_k_blocks"):
-        ttnn.experimental.matmul_decode(a, l1_weight, global_cb_k_blocks=2)
+    with expect_error(RuntimeError, "prefetch_k_blocks"):
+        ttnn.experimental.matmul_decode(a, l1_weight, prefetch_k_blocks=2)
 
 
-def test_matmul_decode_two_distinct_global_cbs(device):
-    """Two GCBs of identical geometry must not alias through the program cache.
+def test_matmul_decode_two_distinct_pipe_sets(device):
+    """Two pipe sets of identical geometry must not alias through the program cache.
 
-    GlobalCircularBuffer hashes on (core mapping, size, buffer type) and not on its
-    address, so a cached program could target the first GCB while the prefetcher fills
-    the second. The two operand sets are built from different seeds (asserted below),
+    A cached program that kept the first set's ring addresses would read the first ring
+    while the prefetcher fills the second. The two operand sets are built from different seeds (asserted below),
     so aliasing shows up as a PCC failure against the second reference (or as a hang)
     rather than silently passing.
     """
     m, k, n = 32, 1024, 2048
-    pt_a1, pt_b1, a1, w1, gcb1, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32, seed=0)
-    pt_a2, pt_b2, a2, w2, gcb2, _ = _make_gcb_and_operands(device, m, k, n, num_a_cores=32, seed=1)
+    pt_a1, pt_b1, a1, w1, pipes1, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32, seed=0)
+    pt_a2, pt_b2, a2, w2, pipes2, _ = _make_pipes_and_operands(device, m, k, n, num_a_cores=32, seed=1)
     # Without this the test could not tell aliasing apart from correctness.
     assert not torch.equal(pt_b1, pt_b2), "the two weight sets must differ for this test to mean anything"
 
@@ -1161,10 +1160,10 @@ def test_matmul_decode_two_distinct_global_cbs(device):
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(w1, 1)], global_cb=gcb1)
-        r1 = ttnn.to_torch(ttnn.experimental.matmul_decode(a1, w1, global_cb=gcb1)).float()
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(w2, 1)], global_cb=gcb2)
-        r2 = ttnn.to_torch(ttnn.experimental.matmul_decode(a2, w2, global_cb=gcb2)).float()
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(w1, 1)], prefetcher_pipes=pipes1)
+        r1 = ttnn.to_torch(ttnn.experimental.matmul_decode(a1, w1, prefetcher_pipes=pipes1)).float()
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(w2, 1)], prefetcher_pipes=pipes2)
+        r2 = ttnn.to_torch(ttnn.experimental.matmul_decode(a2, w2, prefetcher_pipes=pipes2)).float()
 
     assert_with_pcc(ref1, r1, 0.99)
     assert_with_pcc(ref2, r2, 0.99)
@@ -1180,7 +1179,7 @@ def test_matmul_decode_prefetched_vs_l1_resident_perf(device):
     from ttnn._experimental.tensor_prefetcher_matmul_decode import prefetch_and_matmul_decode
 
     m, k, n = 32, 1024, 2048
-    pt_a, pt_b, a, weight, gcb, num_b_cores = _make_gcb_and_operands(device, m, k, n, num_a_cores=32)
+    pt_a, pt_b, a, weight, pipes, num_b_cores = _make_pipes_and_operands(device, m, k, n, num_a_cores=32)
     ref = pt_a.to(torch.float32) @ pt_b.to(torch.float32)
 
     # Baseline operands: the same weight as a DRAM-interleaved tensor that must be copied
@@ -1199,7 +1198,7 @@ def test_matmul_decode_prefetched_vs_l1_resident_perf(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
         signpost("matmul_decode_prefetched")
         for _ in range(4):
-            prefetched_out = prefetch_and_matmul_decode(a, weight, global_cb=gcb)
+            prefetched_out = prefetch_and_matmul_decode(a, weight, prefetcher_pipes=pipes)
         signpost("matmul_decode_l1_copy")
         for _ in range(4):
             l1_weight = ttnn.to_memory_config(dram_weight, l1_weight_config)

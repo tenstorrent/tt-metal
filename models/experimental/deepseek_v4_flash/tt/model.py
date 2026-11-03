@@ -36,7 +36,6 @@ import gc
 import math
 import os
 import queue
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -69,7 +68,7 @@ from .common import CCL_TOPOLOGY, DeepSeekV4Module, _MASK_NEG, _profile, _trace_
 from .decode.decoder_layer import DeepSeekV4DecoderLayer, _strip_prefix
 from .embedding import DeepSeekV4Embedding
 from .decode.hyperconnection import DeepSeekV4HyperHead
-from .layers import DeepSeekV4RMSNorm, Linear, build_gcb_from_recipe, gcb_config_in_l1_small, take_gcb_recipe
+from .layers import DeepSeekV4RMSNorm, Linear
 from .decode.moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from .prefill.attention import (
     ALIGNMENT,
@@ -205,10 +204,6 @@ def _create_socket_pair(from_submesh, to_submesh, socket_l1_bytes: int):
 _PACKAGE = __name__.rsplit(".tt.", 1)[0]
 
 
-def _is_gcb(value) -> bool:
-    return type(value).__name__ == "global_circular_buffer"
-
-
 def _is_l1_tensor(value) -> bool:
     return (
         isinstance(value, ttnn.Tensor)
@@ -222,8 +217,8 @@ def _is_device_tensor(value) -> bool:
     return isinstance(value, ttnn.Tensor) and value.storage_type() == ttnn.StorageType.DEVICE and value.is_allocated()
 
 
-def _gcb_holders(root, match: Callable = _is_gcb, skip: Sequence = (), replaceable: bool = True) -> dict[int, tuple]:
-    """``id(value) -> (value, [holder])`` for every ``match``-ing value (GCBs by default) reachable from
+def _held_values(root, match: Callable, skip: Sequence = (), replaceable: bool = True) -> dict[int, tuple]:
+    """``id(value) -> (value, [holder])`` for every ``match``-ing value reachable from
     ``root`` through objects of this package's classes or their subclasses (e.g. V4.1's; ``__dict__`` or every
     class's ``__slots__``), dicts, lists and tuples; a holder is ``(container, key, is_attribute)``. Objects in
     ``skip`` are not entered. With ``replaceable`` (the holders will be reassigned) a match held in a tuple raises."""
@@ -281,27 +276,6 @@ def _assign_holder(holder: tuple, value) -> None:
         container[key] = value
 
 
-def _describe_referrers(value, skip: Sequence) -> list[str]:
-    """Where ``value`` is still referenced from, ignoring the objects in ``skip``: ``Owner['attr']`` for an
-    object's ``__dict__``, the container's type otherwise."""
-    skip_ids = {id(obj) for obj in skip}
-    described = []
-    for ref in gc.get_referrers(value):
-        if id(ref) in skip_ids:
-            continue
-        if isinstance(ref, dict):
-            keys = ", ".join(repr(k) for k, v in ref.items() if v is value)
-            owners = "/".join(
-                type(o).__qualname__ for o in gc.get_referrers(ref) if getattr(o, "__dict__", None) is ref
-            )
-            described.append(f"{owners or 'dict'}[{keys}]")
-        elif type(ref).__name__ == "frame":
-            described.append(f"frame of {ref.f_code.co_name}")
-        else:
-            described.append(type(ref).__qualname__)
-    return described
-
-
 def _l1_buffers(device) -> dict[int, int]:
     """``address -> bytes per bank`` of every L1 buffer ``device``'s allocator holds."""
     l1 = str(ttnn.BufferType.L1)
@@ -325,7 +299,7 @@ def _dspark_enabled() -> bool:
 
 
 def _gcb_headroom_bytes() -> int:
-    """Bytes per L1 bank held free just above the decode GCB rings from when they are built until the device's
+    """Bytes per L1 bank held free just above the decode rings from when they are built until the device's
     host socket is created or decode first runs (``DEEPSEEK_V4_GCB_HEADROOM``, 0 by default).
 
     L1 is allocated top-down, so the long-lived buffers allocated after the rings -- the H2D / D2H sockets of
@@ -412,12 +386,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         The attention projections (with their compressor) and the MoE shared expert run on
         DRISC-prefetched weights instead of a DRAM->L1 copy per call, so decode must run
-        inside :meth:`prefetcher_session`. One GCB per device is shared by every prefetched
+        inside :meth:`prefetcher_session`. One ring per device is shared by every prefetched
         weight on it (see :func:`make_decode_prefetch_buffers`), so the cost is 288 KB of L1
         per receiver core for the whole model rather than per layer, and the prefetcher stays
-        on under TP for every projection whose per-rank B-core count still matches that GCB
+        on under TP for every projection whose per-rank B-core count still matches that ring
         (see :class:`~.decode.attention.DeepSeekV4Attention`). ``use_prefetcher=False`` builds no
-        GCB at all: every projection copies its weight DRAM -> L1 per call instead (slower), and
+        ring at all: every projection copies its weight DRAM -> L1 per call instead (slower), and
         :meth:`prefetcher_session` is a no-op. ``None`` keeps the prefetcher on.
 
         ``system_config`` is the per-machine tuning profile (see :mod:`.system_config`); it
@@ -449,10 +423,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if num_prefetch_pages is None:
             num_prefetch_pages = system_config.prefetcher.num_prefetch_pages
         self._prefetch_buffers_by_device: dict[int, dict] = {}
-        # L1 held just above each device's GCB rings until decode first runs (see _gcb_headroom_bytes), by id(device).
+        # L1 held just above each device's rings until decode first runs (see _gcb_headroom_bytes), by id(device).
         self._gcb_headroom: dict[int, ttnn.Tensor] = {}
-        # GCBs dropped by :meth:`release_prefetch_buffers`: ``[(serial, recipe, holders)]``, or None.
-        self._released_gcbs: Optional[list] = None
+        # Whether :meth:`release_prefetch_buffers` has parked decode's L1 tensors.
+        self._prefetch_released = False
         self._evicted_l1: list = []
         # The holders of the L1 tensors the first release parked; a release after the decode capture parks these.
         self._l1_holders: list = []
@@ -878,13 +852,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return None
 
     def _prefetch_buffers_for(self, device, weight_dtype, num_prefetch_pages) -> dict:
-        """The GCB for ``device``, built on first use and reused after.
+        """The ring for ``device``, built on first use and reused after.
 
-        One buffer per device, not per layer or per weight: a GCB is a permanent L1 allocation,
+        One buffer per device, not per layer or per weight: a ring is a permanent L1 allocation,
         and every layer's weights have the same ``[K, N]`` shapes, so they can all stream
         through the same ring. Building one per layer would multiply 288 KB per receiver core
         by the layer count and exhaust L1 -- and long before that, the DRISC senders' state
-        zone, which holds only about six GCBs per device however small they are.
+        zone, which holds only about six rings per device however small they are.
         """
         key = id(device)
         if key not in self._prefetch_buffers_by_device:
@@ -898,7 +872,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return self._prefetch_buffers_by_device[key][1]
 
     def _drop_gcb_headroom(self, device=None) -> None:
-        """Free the L1 held above the GCB rings (see :func:`_gcb_headroom_bytes`) on ``device``, or on every
+        """Free the L1 held above the rings (see :func:`_gcb_headroom_bytes`) on ``device``, or on every
         device, so the long-lived buffers allocated there next (a host socket, the buffers decode's ops keep for
         themselves) land above the rings rather than below them."""
         for key in [id(device)] if device is not None else list(self._gcb_headroom):
@@ -912,7 +886,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         Required around every :meth:`decode`, whose step returns ``[B, 1, 1, D]``. One
         session should span a whole generation rather than a single step, because starting
-        and stopping the senders is not free and the GCB ring state carries across steps.
+        and stopping the senders is not free and the ring state carries across steps.
 
         Opened on every device holding prefetch buffers (one per submesh under
         ``use_submeshes``). Entry fences against the weight uploads already on the command
@@ -923,7 +897,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         any op that throws while building or launching its program -- leaves the requests
         that ``prefetch_weights`` hoisted for the next layer sitting with the DRISC senders,
         with no matmul left to drain them. A clean stop cannot retire that: its sentinel
-        queues behind the orphaned requests, so the kernel blocks on a full GCB and never
+        queues behind the orphaned requests, so the kernel blocks on a full ring and never
         reaches it. The exception path therefore force-stops (abandoning the kernels) and
         skips the device sync, both of which would otherwise hang and bury the error. Forcing
         leaves DRISC kernels running, so the device must be closed or reset before another
@@ -949,60 +923,34 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
     @property
     def prefetch_buffers_released(self) -> bool:
-        return self._released_gcbs is not None
+        return self._prefetch_released
 
     def release_prefetch_buffers(self) -> None:
-        """Stop the DRISC senders and free every weight-prefetch GCB, returning their L1 to the device.
+        """Park decode's resident L1 tensors (the CSA windows, position bias, ...) on host, returning their L1 to
+        the device for prefill's wide ops; :meth:`restore_prefetch_buffers` uploads them back. Decode cannot run
+        in between.
 
-        The GCBs are permanent L1 allocations on the receiver cores (hundreds of KB per core), which is room
-        prefill's wide ops need. Every holder of a GCB (the per-device mapping, each ``LinearDecode``) is
-        cleared so the last reference goes and the buffer is freed; :meth:`restore_prefetch_buffers` builds
-        identical ones and hands them back. Decode's other resident L1 tensors (the CSA windows, position
-        bias, ...) are parked on host the same way and uploaded back. Decode cannot run in between.
-
-        With the prefetcher on, only before the first :meth:`decode_traced`: stopping the prefetcher discards
-        the prefetch requests the decode traces recorded, so captured traces would stall on replay. The program
-        cache is kept, so the buffers decode's ops own (global semaphores, cached constants) stay where
-        :meth:`compile_traces` put them; the rebuilt rings may land at new addresses, which ``matmul_decode``
-        hashes, so the next :meth:`decode_traced` runs the compile pass again before capturing. With it off the release
-        may be repeated after the capture (e.g. around a prefill capture): it then parks the same L1 tensors the
-        first release did, and :meth:`restore_prefetch_buffers` checks each comes back at the address the traces
-        recorded. Idempotent.
+        Only with the prefetcher off. Its pipes are carved from L1 that stays reserved until the device closes,
+        so there is nothing to give back while it is on, and prefill alongside decode needs
+        ``use_prefetcher=False``. The release may be repeated after the decode capture (e.g. around a prefill
+        capture): it then parks the same L1 tensors the first release did, and :meth:`restore_prefetch_buffers`
+        checks each comes back at the address the traces recorded. Idempotent.
         """
-        if self._released_gcbs is not None:
+        if self._prefetch_released:
             return
-        if self._traced_captured and self._prefetch_buffers_by_device:
+        if self._prefetch_buffers_by_device:
             raise RuntimeError(
-                "release the prefetch buffers before the first decode_traced(): stopping the prefetcher drops the "
-                "prefetch requests the captured decode traces replay"
+                "the prefetcher's pipes hold their L1 until the device closes, so the prefetch buffers cannot be "
+                "released: build the model with use_prefetcher=False to run prefill alongside decode"
             )
         if self._traced_captured and not self._l1_holders:
             raise RuntimeError("after the decode capture, only the L1 tensors parked before it can be parked again")
         self._drop_gcb_headroom()
-        devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
-        for device in devices:
-            ttnn.synchronize_device(device)
-            ttnn.experimental.stop_tensor_prefetcher(device)
-        released = []
-        rings = []
-        for entry in _gcb_holders(self).values():
-            gcb, holders = entry
-            serial, recipe = take_gcb_recipe(gcb)
-            for holder in holders:
-                _assign_holder(holder, None)
-            # Expected: the entry, ``gcb`` and getrefcount's argument.
-            others = _describe_referrers(gcb, (entry, sys._getframe())) if sys.getrefcount(gcb) > 3 else []
-            _, args, _ = recipe
-            rings.append((args[0], gcb.buffer_address(), others))
-            released.append((serial, recipe, holders))
-        entry = gcb = None
-        if released:
-            self._traces_compiled = False
         if self._traced_captured:
             # The capture's outputs are L1 tensors too (held in tuples); they stay where the traces put them.
             l1 = [(_held(holders[0]), holders) for holders in self._l1_holders]
         else:
-            l1 = list(_gcb_holders(self, _is_l1_tensor).values())
+            l1 = list(_held_values(self, _is_l1_tensor).values())
         evicted = []
         for tensor, holders in l1:
             memory_config, device, address = tensor.memory_config(), tensor.device(), tensor.buffer_address()
@@ -1013,40 +961,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
             evicted.append((memory_config, device, parked, holders, address))
         tensor = parked = l1 = None
         gc.collect()
-        live = {}
-        stuck = []
-        for device, address, others in rings:
-            if id(device) not in live:
-                live[id(device)] = _l1_buffers(device)
-            if address in live[id(device)]:
-                held = ", ".join(others) or "no Python object (a C++ copy of the GCB)"
-                stuck.append(f"{address} ({live[id(device)][address]} B/bank), held by {held}")
-        if stuck:
-            raise RuntimeError(
-                f"{len(stuck)} of {len(rings)} GCB ring(s) still allocated after release, so prefill cannot use "
-                "their L1: " + "; ".join(stuck)
-            )
-        lowest_ring = {}
-        for device, address, _ in rings:
-            lowest_ring[id(device)] = min(address, lowest_ring.get(id(device), address))
-        for i, device in enumerate(self.submeshes):
-            if id(device) not in lowest_ring:
-                continue
-            below = {a: s for a, s in live[id(device)].items() if a < lowest_ring[id(device)]}
-            if below:
-                logger.warning(
-                    f"submesh {i}: {sum(below.values())} B/bank of L1 in {len(below)} buffer(s) left below the released "
-                    f"GCB rings, the lowest at {min(below)}; prefill's circular buffers cannot pass it (allocated after "
-                    f"the rings: compile the decode traces before the release, or raise DEEPSEEK_V4_GCB_HEADROOM)"
-                )
-        self._released_gcbs = released
+        self._prefetch_released = True
         self._evicted_l1 = evicted
         self._l1_holders = [holders for *_, holders, _ in evicted]
         self._pre_release = {
-            key: tensor for key, (tensor, _) in _gcb_holders(self, _is_device_tensor, replaceable=False).items()
+            key: tensor for key, (tensor, _) in _held_values(self, _is_device_tensor, replaceable=False).items()
         }
         if os.environ.get("DEEPSEEK_V4_DUMP_L1", "0") == "1":
-            for i, device in enumerate(devices or self.submeshes):
+            for i, device in enumerate(self.submeshes):
                 ttnn.synchronize_device(device)
                 ttnn.dump_device_memory_state(device, prefix=f"after_release_sm{i}_")
         lowest = min(
@@ -1054,8 +976,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             default=None,
         )
         logger.info(
-            f"prefetch buffers released: {len(released)} GCB(s) and {len(evicted)} L1 tensor(s) parked on host "
-            f"on {len(devices)} device(s)"
+            f"prefetch buffers released: {len(evicted)} L1 tensor(s) parked on host"
             + (
                 ""
                 if lowest is None
@@ -1064,16 +985,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         )
 
     def restore_prefetch_buffers(self) -> None:
-        """Rebuild the GCBs :meth:`release_prefetch_buffers` freed (in their original order) and restart the
-        DRISC senders. Idempotent."""
-        released, self._released_gcbs = self._released_gcbs, None
-        if released is None:
+        """Upload the L1 tensors :meth:`release_prefetch_buffers` parked. Idempotent."""
+        if not self._prefetch_released:
             return
+        self._prefetch_released = False
         self._prefill_footprint = self._allocated_buffers()
-        for _, recipe, holders in sorted(released, key=lambda entry: entry[0]):
-            gcb = build_gcb_from_recipe(recipe)
-            for holder in holders:
-                _assign_holder(holder, gcb)
         evicted, self._evicted_l1 = self._evicted_l1, []
         for memory_config, device, parked, holders, address in evicted:
             tensor = ttnn.to_device(parked, device, memory_config=memory_config)
@@ -1084,19 +1000,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 )
             for holder in holders:
                 _assign_holder(holder, tensor)
-        devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
-        for device in devices:
-            ttnn.experimental.start_tensor_prefetcher(device)
-        for device in devices:
-            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        l1_small_free = min(
-            (ttnn.get_memory_view(d, ttnn.BufferType.L1_SMALL).largest_contiguous_bytes_free_per_bank for d in devices),
-            default=None,
-        )
-        logger.info(
-            f"prefetch buffers restored: {len(released)} GCB(s)"
-            + ("" if l1_small_free is None else f"; L1_SMALL left: {l1_small_free} B per bank")
-        )
+        logger.info(f"prefetch buffers restored: {len(evicted)} L1 tensor(s)")
 
     def snapshot_resident_state(self) -> None:
         """Keep host copies of every decode tensor a prefill replay may overwrite, for :meth:`reload_resident_state`.
@@ -1106,23 +1010,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         release were allocated, so everything decode allocated after that (the restored L1 tensors, and what
         the decode capture created) may sit under prefill's buffers. Call once after the decode traces are
         captured; the prefill model itself is not copied.
-
-        With the prefetcher on, the GCBs are not copied either: their ring data is empty between decode steps,
-        and their config pages (read pointer, credit counters) must be in L1_SMALL, above every circular buffer
-        prefill places (the device needs an ``l1_small_size``; see :func:`~.layers.gcb_config_buffer_type`).
         """
         if self._pre_release is None:
             raise RuntimeError("call release_prefetch_buffers() before the prefill capture, and snapshot only once")
-        in_l1 = [gcb for gcb, _ in _gcb_holders(self, replaceable=False).values() if not gcb_config_in_l1_small(gcb)]
-        if in_l1:
-            raise RuntimeError(
-                f"{len(in_l1)} GCB(s) keep their config pages in L1, where a prefill replay overwrites them: open the "
-                "device with an l1_small_size so they are built in L1_SMALL"
-            )
         skip = [self.prefill_model] if getattr(self, "prefill_model", None) is not None else []
         tensors = [
             tensor
-            for key, (tensor, _) in _gcb_holders(self, _is_device_tensor, skip=skip, replaceable=False).items()
+            for key, (tensor, _) in _held_values(self, _is_device_tensor, skip=skip, replaceable=False).items()
             if key not in self._pre_release
         ]
         self._pre_release = None
@@ -1150,10 +1044,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if footprint is None:
             return
         covered = {(str(t.memory_config().buffer_type), t.buffer_address()) for t in snapshot}
-        # The rings are empty between decode steps, and their config pages sit in L1_SMALL.
-        for gcb, _ in _gcb_holders(self, replaceable=False).values():
-            covered.add((str(ttnn.BufferType.L1), gcb.buffer_address()))
-            covered.add((str(ttnn.BufferType.L1_SMALL), gcb.config_address()))
         total = 0
         for i, buffers in self._allocated_buffers().items():
             missing = sorted(
@@ -3233,16 +3123,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
     ) -> ttnn.Tensor:
         """Prefill ``input_ids`` (a multiple of ``ALIGNMENT`` tokens) into session ``session_id``.
 
-        With the prefetch GCBs released (:meth:`release_prefetch_buffers`, a no-op if they already are), runs
+        With decode's L1 tensors parked (:meth:`release_prefetch_buffers`, a no-op if they already are), runs
         :meth:`build_prefill`'s model over the prompt (replaying its traces with ``traced=True``); then restores
-        the GCBs, captures the decode traces with a throw-away step of ``capture_token`` if they do not exist
+        them, captures the decode traces with a throw-away step of ``capture_token`` if they do not exist
         yet (its scratch cache writes are overwritten next), and commits the attention state into the decode
         buffers (:meth:`commit_prefill_state`). The next :meth:`decode_traced` continues at ``len(input_ids)``.
         Returns the prompt's last-token logits ``[1, 1, 1, V]``: on the last stage, or on the host with ``traced``.
 
-        With the prefetcher on, only before the decode traces exist (the release raises after that). To
-        alternate prefill and decode, capture prefill first and replay it between decode steps instead
-        (:meth:`snapshot_resident_state`, :meth:`reload_resident_state`; see ``test_prefill_decode_demo.py``).
+        Only with ``use_prefetcher=False`` (the release raises otherwise). To alternate prefill and decode,
+        capture prefill first and replay it between decode steps instead (:meth:`snapshot_resident_state`,
+        :meth:`reload_resident_state`; see ``test_prefill_decode_demo.py``).
         """
         prefill = getattr(self, "prefill_model", None)
         if prefill is None:

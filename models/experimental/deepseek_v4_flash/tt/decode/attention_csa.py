@@ -248,7 +248,7 @@ class DeepSeekV4CSACompressor:
     def prefetch_weights(self, *, index_sparse: bool = False):
         """Stage the two projection weights ahead of the :meth:`decode_static` that uses them.
 
-        Queued kv before gate, the order :meth:`decode_static` pops them off their shared GCB
+        Queued kv before gate, the order :meth:`decode_static` pops them off their shared ring
         (q_a's 32-receiver ring); both stay DRAM ND-sharded ``[D, 2*Dh]``. ``index_sparse``
         also stages the indexer's score projections; key compression is staged either way,
         because both the short-sequence and the indexer trace write index keys.
@@ -262,7 +262,7 @@ class DeepSeekV4CSACompressor:
     def _write_projection(self, proj, tokens: ttnn.Tensor, window: ttnn.Tensor, win_index: ttnn.Tensor) -> None:
         """Project ``tokens`` with ``proj`` into ``window`` at ``win_index``, then free the row.
 
-        kv and gate share a GCB, and ``matmul_decode`` places its circular buffers on the
+        kv and gate share a ring, and ``matmul_decode`` places its circular buffers on the
         bounding box of every core the activation and the weight touch. That box is the
         whole compute grid for the indexer's 8-core ring. The kv row lives in that box;
         leaving it allocated while the gate program is built drops the lowest L1 address
@@ -531,8 +531,8 @@ class DeepSeekV4Indexer:
             extra = {}
             if prefetch:
                 extra = {
-                    "global_cb": prefetch_buffers["q_b_proj"],
-                    "global_cb_page_bytes": decode_prefetch_page_bytes(weight_dtype),
+                    "prefetcher_pipes": prefetch_buffers["q_b_proj"],
+                    "prefetch_page_bytes": decode_prefetch_page_bytes(weight_dtype),
                 }
             proj = LinearDecode(
                 weight,
@@ -571,7 +571,7 @@ class DeepSeekV4Indexer:
         """Stage compressor kv/gate, and the score projections when ``score`` is set.
 
         The short-sequence trace writes index keys but does not score, and a queued
-        page that no matmul pops desynchronizes that GCB. Score weights are staged
+        page that no matmul pops desynchronizes that ring. Score weights are staged
         only on the indexer trace. ``q_b`` is false when the caller already queued
         ``q_b_proj`` on the shared ring (it has to precede o_a).
         """

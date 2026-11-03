@@ -8,28 +8,23 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
-// Scatter [Bc, M, Nc] output block to DRAM-interleaved tile pages.
+// Scatter [Bc, M, Nc] output block to interleaved tile pages.
 void kernel_main() {
-    // CB indices come in as named args so op fusion can remap them onto the hardware slots it
-    // pool-allocates across phases (see models/experimental/ops/descriptors/fusion/docs/op_fusion.md).
-    constexpr uint32_t out_cb_index = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t Bc = get_arg(args::Bc);
+    constexpr uint32_t M_tiles = get_arg(args::M_tiles);
+    constexpr uint32_t Nc_tiles = get_arg(args::Nc_tiles);
+    constexpr uint32_t N_tiles = get_arg(args::N_tiles);
 
-    constexpr uint32_t Bc = get_compile_time_arg_val(0);
-    constexpr uint32_t M_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t Nc_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(3);
-    constexpr auto out_args = TensorAccessorArgs<4>();
-
-    const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    const uint32_t b_idx = get_arg_val<uint32_t>(1);
-    const uint32_t n_idx = get_arg_val<uint32_t>(2);
+    const uint32_t b_idx = get_arg(args::b_idx);
+    const uint32_t n_idx = get_arg(args::n_idx);
 
     constexpr uint32_t out_num_tiles = Bc * M_tiles * Nc_tiles;
 
     Noc noc;
-    CircularBuffer out_cb(out_cb_index);
-    const auto out = TensorAccessor(out_args, out_addr, out_cb.get_tile_size());
+    CircularBuffer out_cb(dfb::out);
+    const auto out = TensorAccessor(tensor::output);
 
     const uint32_t tile_size = out_cb.get_tile_size();
     out_cb.wait_front(out_num_tiles);

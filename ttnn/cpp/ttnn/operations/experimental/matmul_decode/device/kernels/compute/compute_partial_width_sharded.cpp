@@ -13,53 +13,52 @@
 #endif
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 using std::uint32_t;
 
-// Phase 1: partial matmul per K-block. Phase 2 (base core): sum K_blocks partials.
+// Phase 1: partial matmul per K-block. Phase 2 (IS_BASE): sum the K_blocks partials into the output.
 // full_in0 is sender-major; matmul_block does not reduce over kt_dim.
 //
-// With ENABLE_GLOBAL_CB the in1 tiles arrive through a GCB-backed circular buffer instead of a
-// globally-allocated one, so this kernel must tell the reader (via the sync CB) that the GCB
-// page can be released. That happens as soon as a page has been read in full: phase 2 never
-// touches in1, and holding a page across it would serialize the GCB ring behind the cross-core
-// reduction.
+// With IN1_PIPE the in1 tiles arrive through a relay over a PrefetcherPipe's ring instead of
+// sitting resident, so this kernel must actually wait on them; popping a page is what lets the
+// reader hand the pipe entry back to the prefetcher. That happens as soon as a page has been read in
+// full: phase 2 never touches in1, and holding a page across it would serialize the ring behind the
+// cross-core reduction.
 //
-// num_k_blocks > 1 means this receiver's slab arrives as that many GCB pages rather than one, so
-// phase 1's K loop becomes the outer loop: a page can only be read while it is held, and it is
-// popped before the next arrives. Every partial tile is therefore still incomplete when its page
-// is released, and the running sums live in the partial CB, where the packer accumulates into
-// them (pack_reconfig_l1_acc). num_k_blocks == 1 leaves the single-page traversal below unchanged:
-// the loop runs once, the packer never switches into accumulate mode, and the tile indexing
-// collapses to what it was.
+// num_k_blocks > 1 means this receiver's slab arrives as that many pipe entries ("pages") rather
+// than one, so phase 1's K loop becomes the outer loop: a page can only be read while it is held,
+// and it is popped before the next arrives. Every partial tile is therefore still incomplete when its
+// page is released, and the running sums live in the partial buffer, where the packer accumulates
+// into them (pack_reconfig_l1_acc). num_k_blocks == 1 leaves the single-page traversal unchanged: the
+// loop runs once, the packer never switches into accumulate mode, and the tile indexing collapses to
+// what it was.
+//
+// reduce is bound on every weight core so that each one has the consumer its writer needs, but only
+// the base cores read it.
 using namespace ckernel;
 void kernel_main() {
-    constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t Kc_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t Nc_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t K_blocks = get_compile_time_arg_val(4);
-    constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(6);
+    constexpr uint32_t M_tiles = get_arg(args::M_tiles);
+    constexpr uint32_t K_tiles = get_arg(args::K_tiles);
+    constexpr uint32_t Kc_tiles = get_arg(args::Kc_tiles);
+    constexpr uint32_t Nc_tiles = get_arg(args::Nc_tiles);
+    constexpr uint32_t K_blocks = get_arg(args::K_blocks);
+    constexpr uint32_t inA_K_tiles_per_core = get_arg(args::inA_K_tiles_per_core);
+    constexpr uint32_t num_k_blocks = get_arg(args::num_k_blocks);
 
-    const uint32_t k_idx = get_arg_val<uint32_t>(0);
-    const uint32_t is_base = get_arg_val<uint32_t>(1);
+    const uint32_t k_idx = get_arg(args::k_idx);
 
-    // Named so op fusion can remap them; the reader gathers A into cb_full_in0, which is what
-    // compute reads as its in0.
-    constexpr uint32_t full_in0_cb_id = get_named_compile_time_arg_val("cb_full_in0");
-    constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t partial_cb_id = get_named_compile_time_arg_val("cb_partial");
-    constexpr uint32_t reduce_cb_id = get_named_compile_time_arg_val("cb_reduce");
-    constexpr uint32_t sync_cb_id = get_named_compile_time_arg_val("cb_sync");
+    // The reader gathers A into full_in0, which is what compute reads as its in0.
+    constexpr uint32_t full_in0_cb_id = dfb::full_in0;
+    constexpr uint32_t in1_cb_id = dfb::in1;
+    constexpr uint32_t partial_cb_id = dfb::partial;
 
     constexpr uint32_t full_in0_num_tiles = M_tiles * K_tiles;
-    // One GCB page: k_block_tiles whole K-rows of this receiver's [Kc, Nc] slab.
+    // One page: k_block_tiles whole K-rows of this receiver's [Kc, Nc] slab.
     constexpr uint32_t k_block_tiles = Kc_tiles / num_k_blocks;
     constexpr uint32_t in1_page_tiles = k_block_tiles * Nc_tiles;
     constexpr uint32_t block_num_tiles = M_tiles * Nc_tiles;
-    constexpr uint32_t reduce_num_tiles = K_blocks * block_num_tiles;
     constexpr uint32_t sender_slice_tiles = M_tiles * inA_K_tiles_per_core;
 
     constexpr uint32_t out_block_h = M_tiles;
@@ -67,15 +66,24 @@ void kernel_main() {
     constexpr uint32_t in0_block_w = inA_K_tiles_per_core;
 
     CircularBuffer full_in0_cb(full_in0_cb_id);
-    CircularBuffer in1_cb(in1_cb_id);
-    CircularBuffer out_cb(out_cb_id);
-    CircularBuffer partial_cb(partial_cb_id);
-    CircularBuffer reduce_cb(reduce_cb_id);
-#ifdef ENABLE_GLOBAL_CB
-    CircularBuffer sync_cb(sync_cb_id);
+#ifdef IN1_PIPE
+    // Constructing in1 from its relay token snaps it to the pipe's cursor, which carries over from
+    // the previous launch; a CircularBuffer over the bare id would restart at the ring's base.
+    DataflowBuffer in1_relay(dfb::in1);
 #endif
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer partial_cb(partial_cb_id);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(full_in0_cb_id, in1_cb_id, partial_cb_id);
+
+#ifndef IN1_PIPE
+    // A packed weight's slab starts this many tiles into the shard in1 borrows.
+    constexpr uint32_t in1_tile_offset = get_arg(args::in1_tile_offset);
+    if constexpr (in1_tile_offset > 0) {
+        in1_cb.wait_front(in1_tile_offset);
+        in1_cb.pop_front(in1_tile_offset);
+    }
+#endif
 
     full_in0_cb.wait_front(full_in0_num_tiles);
 
@@ -83,7 +91,6 @@ void kernel_main() {
 #ifdef USE_CUSTOM_MM
     constexpr bool transpose = false;
     constexpr auto layout = CustomMmDestLayout::DenseSplitAcc;
-    constexpr bool finalize = true;
 
     static_assert(M_tiles == 1, "custom_mm partial path requires a single in0 tile row");
     static_assert(k_block_tiles >= 2 && k_block_tiles <= 256 && k_block_tiles % 2 == 0);
@@ -95,22 +102,22 @@ void kernel_main() {
     partial_cb.reserve_back(block_num_tiles);
     // Each page covers k_block_tiles of this core's reduction, and MVMUL adds into DST without
     // clearing it, so chaining one call per page leaves the running sum in DST rather than in the
-    // partial CB. Only the last page finalizes, merging the split_acc partials once the reduction
+    // partial buffer. Only the last page finalizes, merging the split_acc partials once the reduction
     // is whole. This is why streaming needs no packer L1 accumulation here.
     tile_regs_acquire();
     for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+#ifdef IN1_PIPE
         in1_cb.wait_front(in1_page_tiles);
+#endif
         const uint32_t in0_tile = k_offset + kb * k_block_tiles;
         if (kb == num_k_blocks - 1) {
             custom_mm_block<layout, true>(full_in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, Nc_tiles);
         } else {
             custom_mm_block<layout, false>(full_in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, Nc_tiles);
         }
-#ifdef ENABLE_GLOBAL_CB
-        // This page has been read in full; release the local alias and let the reader ack it.
+#ifdef IN1_PIPE
+        // This page has been read in full; popping it lets the reader hand it back.
         in1_cb.pop_front(in1_page_tiles);
-        sync_cb.reserve_back(1);
-        sync_cb.push_back(1);
 #endif
     }
     tile_regs_commit();
@@ -124,7 +131,9 @@ void kernel_main() {
 
     partial_cb.reserve_back(block_num_tiles);
     for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
+#ifdef IN1_PIPE
         in1_cb.wait_front(in1_page_tiles);
+#endif
         const uint32_t k_block_base = k_offset + kb * k_block_tiles;
         for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
             tile_regs_acquire();
@@ -133,7 +142,7 @@ void kernel_main() {
                 const uint32_t sender = k_global / inA_K_tiles_per_core;
                 const uint32_t kc_local = k_global - sender * inA_K_tiles_per_core;
                 const uint32_t in0_tile = sender * sender_slice_tiles + kc_local;
-                // in1 is indexed within the page currently at the front of the CB.
+                // in1 is indexed within the page currently at the front of the buffer.
                 const uint32_t in1_tile = kc * Nc_tiles + nc;
                 matmul_block(
                     full_in0_cb_id, in1_cb_id, in0_tile, in1_tile, 0, false, out_block_w, out_block_h, in0_block_w);
@@ -145,11 +154,9 @@ void kernel_main() {
             }
             tile_regs_release();
         }
-#ifdef ENABLE_GLOBAL_CB
-        // This page has been read in full; release the local alias and let the reader ack it.
+#ifdef IN1_PIPE
+        // This page has been read in full; popping it lets the reader hand it back.
         in1_cb.pop_front(in1_page_tiles);
-        sync_cb.reserve_back(1);
-        sync_cb.push_back(1);
 #endif
         if constexpr (num_k_blocks > 1) {
             // From here on the packs add to the partial sums the previous pages left behind.
@@ -165,9 +172,12 @@ void kernel_main() {
 #endif
     full_in0_cb.pop_front(full_in0_num_tiles);
 
-    if (is_base == 0) {
-        return;
-    }
+#ifdef IS_BASE
+    constexpr uint32_t reduce_cb_id = dfb::reduce;
+    constexpr uint32_t out_cb_id = dfb::out;
+    constexpr uint32_t reduce_num_tiles = K_blocks * block_num_tiles;
+    CircularBuffer reduce_cb(reduce_cb_id);
+    CircularBuffer out_cb(out_cb_id);
 
     reduce_cb.wait_front(reduce_num_tiles);
 
@@ -197,4 +207,5 @@ void kernel_main() {
     }
     out_cb.push_back(block_num_tiles);
     reduce_cb.pop_front(reduce_num_tiles);
+#endif
 }

@@ -104,7 +104,7 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores, ring_gather, use_prefe
     if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < num_inputB_cores:
         pytest.skip(f"Skipping test as device doesn't have {num_inputB_cores} cores")
     if use_prefetcher and ring_gather:
-        pytest.skip("ring_gather is mutually exclusive with the prefetcher (global_cb) path")
+        pytest.skip("ring_gather is mutually exclusive with the prefetcher (prefetcher_pipes) path")
     if use_prefetcher and not ttnn.experimental.is_tensor_prefetcher_supported(device):
         pytest.skip(
             "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, "
@@ -141,7 +141,7 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores, ring_gather, use_prefe
             tensor_prefetcher_session,
         )
         from ttnn._experimental.tensor_prefetcher_matmul_decode import (
-            make_matmul_decode_gcb,
+            make_matmul_decode_pipes,
             prefetch_and_matmul_decode,
         )
 
@@ -162,7 +162,7 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores, ring_gather, use_prefe
             (b, bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
             for b in range(num_dram_banks)
         ]
-        global_cb = make_matmul_decode_gcb(device, input_tensor_b, bank_to_receivers)
+        prefetcher_pipes = make_matmul_decode_pipes(device, input_tensor_b, bank_to_receivers)
     else:
         in1_memory_config = ttnn.create_sharded_memory_config(
             (k, n // num_inputB_cores),
@@ -244,7 +244,9 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores, ring_gather, use_prefe
         with tensor_prefetcher_session(device):
             ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
             for _ in range(2):
-                output_tensor = prefetch_and_matmul_decode(input_tensor_a, input_tensor_b, global_cb=global_cb)
+                output_tensor = prefetch_and_matmul_decode(
+                    input_tensor_a, input_tensor_b, prefetcher_pipes=prefetcher_pipes
+                )
     else:
         for _ in range(2):
             output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, ring_gather=ring_gather)
