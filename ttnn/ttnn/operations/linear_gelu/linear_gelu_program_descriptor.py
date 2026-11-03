@@ -36,9 +36,9 @@ BLOCK_W = 1
 # column's chunk-0 owner off its row's x round-0 sender (x round offset = row), so the two first reads overlap.
 W_SENDER_STAGGER = True
 W_ROUND_SHIFT = 1
-# Chunks of the first W_PREFETCH_ROUNDS rounds are read at kernel start, before x row-block 0; later chunks in their
-# own round. 1 measured best (2x512 44.0 -> 42.4 us); 2 and 3 lose: W reads are DRAM-bandwidth-bound, so more in
-# flight only delays the chunk compute needs first.
+# W read lookahead in rounds: chunks < W_PREFETCH_ROUNDS are read at kernel start, chunk j + W_PREFETCH_ROUNDS at the
+# start of round j, so each read lands during the previous round's multicast. 1 measured best: 8x512 94.6 -> 92.4,
+# 2x512 36.3 -> 33.1 us; 2 / 3 rounds 94.8 / 96.3 us (reads in flight contend with the column multicast).
 W_PREFETCH_ROUNDS = 1
 # W chunks multicast before x row-block 0, by x's buffer type; the x round-0 sender's reads are issued first and land
 # meanwhile. Either order serializes the two first multicasts (each channel's handshake waits for the other), so this

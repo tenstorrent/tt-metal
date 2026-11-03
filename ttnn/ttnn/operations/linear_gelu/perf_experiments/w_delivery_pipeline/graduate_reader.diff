@@ -1,0 +1,44 @@
+--- kernels_baseline/linear_gelu_reader.cpp	2026-11-02 23:43:51.641852118 +0000
++++ kernels_graduate/linear_gelu_reader.cpp	2026-11-03 00:17:49.671190313 +0000
+@@ -7,9 +7,11 @@
+ //   nominal block_h * k_ext_tiles pages pushed.
+ // deliver_weight_block: chunk j of the column's W slice (W rows 0..k_tiles-1 plus the bias tile row, block_w
+ //   columns, laid out [j][k][w] in cb_weight_resident) is owned by the column's core of rotating round
+-//   w_round_offset + j. The owner issues its DRAM read at kernel start for j < w_prefetch_rounds, else in round j,
+-//   zeroes the bias tiles' padding rows (they multiply the ones tile's zero columns) and multicasts it along the
+-//   column; the rest receive. Never popped.
++//   w_round_offset + j. Reads roll w_prefetch_rounds ahead: chunks < w_prefetch_rounds are read at kernel start,
++//   chunk j + w_prefetch_rounds at the start of round j, so a chunk's DRAM read lands during the previous round's
++//   multicast instead of after it. Each chunk's reads carry their own transaction id, so the owner waits only for
++//   its round's chunk. The owner zeroes the bias tiles' padding rows (they multiply the ones tile's zero columns)
++//   and multicasts the chunk along the column; the rest receive. Never popped.
+ // Order: owned W reads of rounds < w_prefetch_rounds, x row-block 0 reads issued (sender), W chunks
+ // < w_chunks_before_x, x row-block 0 multicast, remaining W chunks, remaining row-blocks.
+
+@@ -146,19 +148,22 @@
+             noc_async_read_page(n_first + w, bias_accessor, chunk_addr + (k_tiles * block_w + w) * tile_bytes);
+         }
+     };
++    // W reads cycle transaction ids 1..15 (x reads stay on 0), one per chunk; the lookahead keeps fewer in flight.
++    static_assert(w_prefetch_rounds >= 1 && w_prefetch_rounds < 15, "one trid per chunk in flight");
++    auto w_trid = [](uint32_t n_block_idx) -> uint32_t { return 1 + n_block_idx % 15; };
+     auto issue_owned_chunk_read = [&](uint32_t n_block_idx) {
+         if (n_block_idx < num_n_blocks && w_mcast.should_send(w_round_offset + n_block_idx)) {
++            noc_async_read_set_trid(w_trid(n_block_idx));
+             read_weight_chunk(n_block_idx);
++            noc_async_read_set_trid(0);
+         }
+     };
+     auto deliver_weight_block = [&](uint32_t n_block_idx) {
+-        if (n_block_idx >= w_prefetch_rounds) {
+-            issue_owned_chunk_read(n_block_idx);
+-        }
++        issue_owned_chunk_read(n_block_idx + w_prefetch_rounds);
+         weight_cb.reserve_back(w_chunk_tiles);
+         const uint32_t chunk_addr = weight_cb.get_write_ptr();
+         if (w_mcast.should_send(w_round_offset + n_block_idx)) {
+-            noc_async_read_barrier();
++            noc_async_read_barrier_with_trid(w_trid(n_block_idx));
+             // Bias tile rows 1..31 are padding: zero them so 0 * padding cannot inject NaN. Offsets are relative
+             // to the CB write pointer, which is chunk_addr until the push.
+             for (uint32_t w = 0; w < block_w; ++w) {

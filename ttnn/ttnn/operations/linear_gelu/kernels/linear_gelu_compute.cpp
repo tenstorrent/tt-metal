@@ -67,6 +67,11 @@ void kernel_main() {
     uint32_t init_sb_h = 0;
     uint32_t init_sb_w = 0;
     for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks; ++row_block_idx) {
+        if (row_block_idx > 0) {
+            // Starvation on x row-block i (row-block 0's wait is compute_fill); the helper's own wait then passes.
+            MaybeDeviceZoneScope("compute_wait_x");
+            act_buf.wait_front(act_block_tiles);
+        }
         // Occupancy: matmul + packer GELU for one row-block, including the in-helper W / output CB waits.
         MaybeDeviceZoneScope("compute_matmul_gelu");
         const uint32_t first_row = row_block_idx * block_h;

@@ -1,0 +1,40 @@
+--- ../../kernels/linear_gelu_reader.cpp	2026-11-02 22:51:10.066278225 +0000
++++ kernels_graduate/linear_gelu_reader.cpp	2026-11-03 00:04:24.607399304 +0000
+@@ -11,7 +11,8 @@
+ //   zeroes the bias tiles' padding rows (they multiply the ones tile's zero columns) and multicasts it along the
+ //   column; the rest receive. Never popped.
+ // Order: owned W reads of rounds < w_prefetch_rounds, x row-block 0 reads issued (sender), W chunks
+-// < w_chunks_before_x, x row-block 0 multicast, remaining W chunks, remaining row-blocks.
++// < w_chunks_before_x, x row-block 0 multicast, remaining W chunks with x row-block 1's reads issued before the
++// middle one, x row-block 1 multicast, remaining row-blocks.
+
+ #include <cstdint>
+
+@@ -186,8 +187,16 @@
+     // Fill: the first w_chunks_before_x W chunks are delivered while the x round-0 sender's reads are in flight.
+     // Row-block 0 computes each W chunk as it lands; row-block 1 is not needed until all are consumed.
+     const uint32_t num_w_first = num_n_blocks < w_chunks_before_x ? num_n_blocks : w_chunks_before_x;
++    // Row-block 1's slot is free from the start (ACT_DEPTH 2). Its sender reads go out mid W delivery so they land
++    // before the last chunk; earlier they slow the first chunks, when row-block 0 has the least W slack. Its
++    // multicast stays after the last chunk: placed between chunks it delays W and row-block 0 stalls instead.
++    const uint32_t rb1_issue_chunk = num_n_blocks / 2;
++    const bool rb1_issue_early =
++        num_row_blocks > 1 && rb1_issue_chunk >= num_w_first && rb1_issue_chunk < num_n_blocks;
+     for (uint32_t row_block_idx = 0; row_block_idx < num_row_blocks; ++row_block_idx) {
+-        issue_activation_reads(row_block_idx);
++        if (row_block_idx != 1 || !rb1_issue_early) {
++            issue_activation_reads(row_block_idx);
++        }
+         if (row_block_idx == 0) {
+             MaybeDeviceZoneScope("reader_w_first");
+             for (uint32_t n_block_idx = 0; n_block_idx < num_w_first; ++n_block_idx) {
+@@ -198,6 +207,9 @@
+         if (row_block_idx == 0) {
+             MaybeDeviceZoneScope("reader_w_deliver");
+             for (uint32_t n_block_idx = num_w_first; n_block_idx < num_n_blocks; ++n_block_idx) {
++                if (rb1_issue_early && n_block_idx == rb1_issue_chunk) {
++                    issue_activation_reads(1);
++                }
+                 deliver_weight_block(n_block_idx);
+             }
+         }
