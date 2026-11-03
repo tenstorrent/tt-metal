@@ -30,6 +30,31 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
+if(ENABLE_DISTRIBUTED)
+    # Kept out of distributed_unit_tests: its children re-exec this binary, and must not open devices or start MPI
+    # during test registration.
+    add_executable(distributed_mpi_cleanup_tests test_mpi_resource_cleanup.cpp)
+    target_link_libraries(
+        distributed_mpi_cleanup_tests
+        PRIVATE
+            tt_metal
+            test_common_libs
+            OpenMPI::MPI
+    )
+    target_include_directories(
+        distributed_mpi_cleanup_tests
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+            ${PROJECT_SOURCE_DIR}/tests
+    )
+    set_target_properties(
+        distributed_mpi_cleanup_tests
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+    )
+endif()
+
 add_executable(distributed_benchmarks)
 target_sources(
     distributed_benchmarks
