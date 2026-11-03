@@ -40,7 +40,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 
     TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat dfb_data_format =
+        ttnn::operations::data_movement::get_slice_dfb_data_format(input.dtype(), device->arch());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
 
     const auto& input_shape = input.padded_shape();

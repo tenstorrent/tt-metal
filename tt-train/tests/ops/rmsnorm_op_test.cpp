@@ -328,16 +328,13 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Backward_Batch) {
  * 2. Backward pass: gradients computed by both implementations match
  * 3. All outputs and gradients are finite (no NaN/Inf values)
  *
- * @param shape Input tensor shape [N, C, H, W] where:
- *   - N: batch size
- *   - C: number of channels (normalized dimension)
- *   - H: height
- *   - W: width
+ * @param shape Input tensor shape [B, N, S, C]; RMSNorm normalizes over the last dim, C
  *
  * Test cases cover various scenarios:
  * - Alignment: C % 32 == 0 (aligned) vs C % 32 != 0 (unaligned/masking)
  * - Memory: fits in L1 cache vs exceeds L1 cache capacity
- * - Block size: odd C (block_size=1) vs even C (block_size=2)
+ * - Block size: set by the tile count Wt = ceil(C / 32), not by the parity of C: the forward uses the largest of
+ *   3, 2, 1 that divides Wt, the backward the largest of 2, 1
  * - Scale: small to very large C dimensions
  *
  * @param train_gamma With false, gamma is frozen: the kernel skips dL/dgamma and gamma gets no gradient.
@@ -418,8 +415,8 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape, const b
 // against the composite implementation across different scenarios:
 //
 // - Memory usage patterns: L1 cache fit vs overflow
-// - Tensor alignment: 32-byte aligned vs unaligned (masking required)
-// - Block sizes: odd vs even C dimensions
+// - Width alignment: C % 32 == 0 vs not (masking required)
+// - Block sizes: 1 and 2 in both passes; the forward also uses 3 when 3 divides Wt (NanoLlama, Wt = 12)
 // - Scale testing: small to very large tensor dimensions
 // - Training scenarios: realistic model shapes (NanoLlama, etc.)
 // ============================================================================
@@ -428,12 +425,15 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Basic_Small) {
     CompareKernelVsComposite({1U, 1U, 2U, 32U});
 }
 
+// Which L1 path a width takes on Blackhole: the backward keeps the row in L1 up to about C = 7.4K; the forward
+// keeps everything in L1 up to about C = 11K and everything but gamma up to about C = 22K. Wider rows stream.
+
 // Test aligned dimensions (C % 32 == 0) that fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
     // C = 1024 (32 * 32), fits in L1 cache
     CompareKernelVsComposite({1U, 1U, 1U, 1024U});
 
-    // C = 4096 (32 * 128), largest size that fits in L1 cache (1 << 12)
+    // C = 4096 (32 * 128), fits in L1 cache in both passes
     CompareKernelVsComposite({1U, 1U, 1U, 4096U});
 }
 
@@ -443,21 +443,21 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_Qwen3_32B_Hidden) {
     CompareKernelVsComposite({1U, 1U, 32U, 5120U});
 }
 
-// Test aligned dimensions (C % 32 == 0) that fit in L1 except for gamma
-TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_L1ExceptGamma) {
-    // C = 8192 (1 << 13), fits in L1 except gamma parameter
+// Test aligned dimensions (C % 32 == 0) where the forward fits in L1 and the backward does not
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_BwDoesNotFitInL1) {
+    // C = 8192 (1 << 13), the forward keeps everything in L1, the backward streams
     CompareKernelVsComposite({1U, 1U, 1U, 8192U});
 }
 
-// Test aligned dimensions (C % 32 == 0) that don't fit in L1 cache
-TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_DoesNotFitInL1) {
-    // C = 16384 (1 << 14), does not fit in L1 cache
+// Test aligned dimensions (C % 32 == 0) where the forward fits in L1 except for gamma
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FwL1ExceptGamma) {
+    // C = 16384 (1 << 14), the forward keeps everything but gamma in L1, the backward streams
     CompareKernelVsComposite({1U, 1U, 1U, 16384U});
 }
 
 // Test aligned dimensions (C % 32 == 0) with very large C
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_VeryLargeC) {
-    // C = 1048576 (1 << 20), very large C dimension (1M elements)
+    // C = 1048576 (1 << 20), very large C dimension (1M elements), both passes stream
     CompareKernelVsComposite({1U, 1U, 1U, 1048576U});
 }
 
@@ -470,28 +470,47 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FitsInL1) {
     CompareKernelVsComposite({1U, 1U, 1U, 4095U});
 }
 
-// Test unaligned dimensions (C % 32 != 0) that don't fit in L1 cache
-TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_DoesNotFitInL1) {
-    // C = 16383 (1 << 14 - 1), requires masking, does not fit in L1
+// Test unaligned dimensions (C % 32 != 0) where the forward fits in L1 except for gamma
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FwL1ExceptGamma) {
+    // C = 16383 ((1 << 14) - 1), requires masking, the forward keeps everything but gamma in L1, the backward streams
     CompareKernelVsComposite({1U, 1U, 1U, 16383U});
 }
 
 // Test unaligned dimensions (C % 32 != 0) with very large C
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_VeryLargeC) {
-    // C = 1048575 (1 << 20 - 1), very large C with masking
+    // C = 1048575 ((1 << 20) - 1), very large C with masking, both passes stream
     CompareKernelVsComposite({1U, 1U, 1U, 1048575U});
 
-    // C = 1048558 (1 << 20 - 18), very large C with different masking pattern
+    // C = 1048558 ((1 << 20) - 18), very large C with different masking pattern
     CompareKernelVsComposite({1U, 1U, 1U, 1048558U});
 }
 
-// Test block_size = 1 (C is odd)
-TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize1_OddC) {
+// Test block_size = 1: Wt has no divisor 2 or 3
+TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize1) {
+    CompareKernelVsComposite({1U, 1U, 1U, 160U});  // C = 160, Wt = 5
+    CompareKernelVsComposite({1U, 1U, 1U, 223U});  // C = 223, Wt = 7, requires masking
+    // C = 12500, Wt = 391, requires masking: the forward keeps everything but gamma in L1, the backward streams
+    CompareKernelVsComposite({1U, 1U, 1U, 12500U});
+    // C = 24540, Wt = 767, requires masking: both passes stream
+    CompareKernelVsComposite({1U, 1U, 1U, 24540U});
+}
+
+// Test the forward's block_size = 3 on the two paths that don't keep everything in L1. NanoLlama (Wt = 12) covers it on
+// the everything-in-L1 path.
+TEST_F(RMSNormOpTest, RMSNorm_Compare_FwBlockSize3) {
+    // C = 12480, Wt = 390: the forward keeps everything but gamma in L1, the backward streams with block size 2
+    CompareKernelVsComposite({1U, 1U, 1U, 12480U});
+    // C = 24480, Wt = 765: both passes stream, the backward with block size 1
+    CompareKernelVsComposite({1U, 1U, 1U, 24480U});
+}
+
+// Test block_size = 2 with odd C (Wt = 2 and 4), which requires masking (C % 32 = 1 and 31)
+TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_OddC) {
     CompareKernelVsComposite({1U, 1U, 1U, 33U});   // C = 33 (odd)
     CompareKernelVsComposite({1U, 1U, 1U, 127U});  // C = 127 (odd)
 }
 
-// Test block_size = 2 (C is even)
+// Test block_size = 2 with even C (Wt = 2 and 4), which also requires masking (C % 32 = 2 and 30)
 TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
     CompareKernelVsComposite({1U, 1U, 1U, 34U});   // C = 34 (even)
     CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
@@ -518,7 +537,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
 }
 
 // Test training-like shapes with LLaMA 7B dimensions
-TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoGPT) {
+TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_Llama7B) {
     CompareKernelVsComposite({1U, 1U, 512U, 4096U});
 }
 
@@ -530,8 +549,8 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
 
 // Test different masking patterns with larger batches
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
-    CompareKernelVsComposite({32U, 1U, 1024U, 4091U});  // C % 32 = 11
-    CompareKernelVsComposite({32U, 1U, 1024U, 4079U});  // C % 32 = 31
+    CompareKernelVsComposite({32U, 1U, 1024U, 4091U});  // C % 32 = 27
+    CompareKernelVsComposite({32U, 1U, 1024U, 4079U});  // C % 32 = 15
     CompareKernelVsComposite({32U, 1U, 1024U, 4097U});  // C % 32 = 1
 }
 
