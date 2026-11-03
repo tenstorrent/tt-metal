@@ -44,6 +44,13 @@ void check_device_scalar(
 // A cached program refreshes each buffer argument through its own binding on a program-cache hit; one buffer passed as
 // two arguments leaves the bindings ambiguous, and the cached program would keep reading and writing the first call's
 // buffers. Absent optional tensors are passed as nullptr and skipped.
+// A program-cache hit matches every spec the miss validated, but not where the tensors live: each input, absent
+// optional ones passed as nullptr, must be allocated on the reference's mesh.
+void check_allocated_on_device(
+    const Tensor& reference,
+    std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors,
+    std::string_view operation_name);
+
 void check_distinct_buffers(
     std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors, std::string_view operation_name);
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name);

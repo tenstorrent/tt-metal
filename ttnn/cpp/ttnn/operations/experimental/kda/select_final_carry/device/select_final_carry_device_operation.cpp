@@ -21,14 +21,13 @@ SelectFinalCarryOperation::program_factory_t SelectFinalCarryOperation::select_p
 // A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
 void SelectFinalCarryOperation::validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t& in) {
     constexpr std::string_view operation_name = "select_final_carry";
-    kda_factory_detail::check_allocated_device_tensor(in.rank_final, operation_name, "rank_final");
-    kda_factory_detail::check_allocated_device_tensor(in.prefix_final, operation_name, "prefix_final");
-    kda_factory_detail::check_distinct_buffers(
-        {{&in.rank_final, "rank_final"},
-         {&in.prefix_final, "prefix_final"},
-         {&in.actual_start, "actual_start"},
-         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
-        operation_name);
+    const std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors = {
+        {&in.rank_final, "rank_final"},
+        {&in.prefix_final, "prefix_final"},
+        {&in.actual_start, "actual_start"},
+        {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}};
+    kda_factory_detail::check_allocated_on_device(in.rank_final, tensors, operation_name);
+    kda_factory_detail::check_distinct_buffers(tensors, operation_name);
 }
 
 void SelectFinalCarryOperation::validate_on_program_cache_miss(

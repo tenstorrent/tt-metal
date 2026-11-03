@@ -47,23 +47,20 @@ void RecurrentChunkScanOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     const std::string_view operation_name =
         attrs.mode == RecurrentChunkScanMode::RECURRENT ? "recurrent_chunk_scan" : "summarize_chunk_recurrence";
-    for (const auto& [tensor, name] : std::array{
-             std::pair{&in.v_beta, "v_beta"},
-             std::pair{&in.kd, "kd"},
-             std::pair{&in.q_decay, "q_decay"},
-             std::pair{&in.intra, "intra"},
-             std::pair{&in.k_dec_t, "k_dec_t"},
-             std::pair{&in.final_decay, "final_decay"},
-             std::pair{&in.t_inv, "t_inv"}}) {
-        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
-    }
-    for (const auto& [tensor, name] :
-         {std::pair{&in.group_entry_states, "group_entry_states"},
-          std::pair{&in.tail_entry_states, "tail_entry_states"}}) {
-        if (tensor->has_value()) {
-            kda_factory_detail::check_allocated_device_tensor(**tensor, operation_name, name);
-        }
-    }
+    kda_factory_detail::check_allocated_on_device(
+        in.v_beta,
+        {{&in.v_beta, "v_beta"},
+         {&in.kd, "kd"},
+         {&in.q_decay, "q_decay"},
+         {&in.intra, "intra"},
+         {&in.k_dec_t, "k_dec_t"},
+         {&in.final_decay, "final_decay"},
+         {&in.t_inv, "t_inv"},
+         {in.group_entry_states ? &*in.group_entry_states : nullptr, "group_entry_states"},
+         {in.tail_entry_states ? &*in.tail_entry_states : nullptr, "tail_entry_states"},
+         {&in.actual_start, "actual_start"},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
+        operation_name);
 }
 
 void RecurrentChunkScanOperation::validate_on_program_cache_miss(
