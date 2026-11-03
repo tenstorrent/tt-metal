@@ -605,6 +605,12 @@
       timeout -k 2m 32m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and shape-8x4 and not kv_only" -vvv --tb=short
+      ' || exit $?
+      # Chunk size must not change the answer: one GLM-5.3 sequence at 2,048- and 5,120-token chunks, each vs
+      # the same single-shot CPU reference (production stays at 5,120). ~10 min.
+      timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py::test_sparse_mla_chunk_size_vs_reference -k "shape-8x4" -vvv --tb=short
       '
     )
 
@@ -617,10 +623,10 @@
       # RANDOM weights (never rebuilds): the dense block matches directly, and the MoE block runs at the first
       # FULL-indexer layer (6; GLM-5.3 layers 3-5 reuse a prior layer's indexer top-k, which an isolated block
       # cannot supply) where the non-degenerate random gate agrees with the reference. -k glm53 runs both the
-      # dense and MoE parametrizations.
+      # dense and MoE parametrizations, at the production 5,120-token chunk and at 2,048 (256 rows per chip).
       timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm53" -vvv --tb=short --timeout=600
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "(seq5120 or seq2048) and torus-xy-8x4 and glm53" -vvv --tb=short --timeout=600
       '
     )
 
@@ -656,9 +662,9 @@
       '
     )
 
-    echo "===== [1/5] (GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k ====="
+    echo "===== [1/5] (GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k; GLM-5.3 at 2k vs 5k chunks ====="
     glm_dsa_mla || exit $?
-    echo "===== [2/5] (GLM-5.3-744B) prefill block accuracy 5k ====="
+    echo "===== [2/5] (GLM-5.3-744B) prefill block accuracy 5k and 2k ====="
     glm_prefill_block || exit $?
     echo "===== [3/5] (GLM-5.3-744B) MTP module + predictor accuracy 5k ====="
     glm_mtp || exit $?
@@ -672,7 +678,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 182
+      timeout: 200
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
