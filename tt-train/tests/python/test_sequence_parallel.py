@@ -95,6 +95,16 @@ def backward(model, ids, mask) -> None:
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+def perturb_lora_B(model) -> None:
+    """lora_B starts at zero, which zeroes every gradient upstream of it; give it values so all LoRA paths are live."""
+    for name, param in model.parameters().items():
+        if name.endswith("lora_B"):
+            sharding = ttml.Sharding.from_tensor(param)
+            full = sharding.gather(param)
+            values = (np.random.default_rng(1).standard_normal(full.shape) * 0.05).astype(np.float32)
+            ttml.autograd.assign_numpy(param, values, layout=ttnn.Layout.TILE, mapper=sharding.derive_mapper())
+
+
 def assert_same_grads(sp_model, tp_model, label: str = "") -> None:
     tp_params, sp_params = tp_model.parameters(), sp_model.parameters()
     assert set(tp_params.keys()) == set(sp_params.keys())
@@ -171,17 +181,14 @@ class TestMatchesTensorParallel:
         for model in (tp_model, sp_model):
             np.random.seed(0)  # lora_A is drawn from numpy's global RNG
             wrapped.append(LoraModel(model, lora))
+            # Set rather than trained: AdamW's first step is about lr * sign(grad), so a 1-ulp difference on a
+            # near-zero gradient element would flip a lora_B update and fail the comparison for no SP reason.
+            perturb_lora_B(wrapped[-1])
         tp_lora, sp_lora = wrapped
-        optimizers = [adamw(model) for model in wrapped]
-        for step in range(2):
-            ids, mask = token_ids(1, SEQ_LEN, seed=step), causal_mask(SEQ_LEN)
-            for model, optimizer in zip(wrapped, optimizers):
-                optimizer.zero_grad()
-                backward(model, ids, mask)
-            ttml.sync_gradients(sp_lora.parameters())
-            if step == 0:
-                for optimizer in optimizers:
-                    optimizer.step()
+        ids, mask = token_ids(1, SEQ_LEN, seed=3), causal_mask(SEQ_LEN)
+        for model in wrapped:
+            backward(model, ids, mask)
+        ttml.sync_gradients(sp_lora.parameters())
 
         for model in wrapped:
             column = [(n, m) for n, m in model.named_modules() if isinstance(m, LoraColumnParallelLinear)]

@@ -241,9 +241,9 @@ def sync_gradients(parameters):
 def average_gradients(parameters, axis_names: tuple[str, ...]):
     """Average parameter gradients across one or more mesh axes.
 
-    Axes listed in ``axis_names`` but not present on the active mesh are
-    silently skipped. If none are present (or ``axis_names`` is empty, or
-    no mesh is open), the function is a no-op.
+    Axes listed in ``axis_names`` but not present on the active mesh, or of
+    size 1, are silently skipped. If none are left (or ``axis_names`` is
+    empty, or no mesh is open), the function is a no-op.
 
     FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
     mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
@@ -257,7 +257,8 @@ def average_gradients(parameters, axis_names: tuple[str, ...]):
     if m is None or not axis_names:
         return
 
-    axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name))
+    # A collective over a size-1 axis is an error, not a no-op: sync_gradients always names "dp" and "fsdp".
+    axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name) and m.axis_size(name) > 1)
     if not axes:
         return
 
