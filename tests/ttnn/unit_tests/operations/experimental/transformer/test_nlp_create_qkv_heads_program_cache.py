@@ -194,6 +194,50 @@ def test_nlp_cqkv_h3_dynamic_rows_flat_cache(device, isolate_program_cache, batc
     assert device.num_program_cache_entries() == 1
 
 
+@pytest.mark.parametrize("transpose_k_heads", (False, True), ids=["no_transpose", "transpose_k"])
+def test_nlp_cqkv_runtime_rows_preallocated_outputs_flat_cache(device, isolate_program_cache, transpose_k_heads):
+    """runtime_rows with preallocated Q/K/V: one program over every seq_len, bit-exact. A transposed K is
+    [B, Hkv, D, S], so its row count sits in the last dim and must stay out of the hash too."""
+    batch, head_dim, num_q_heads, num_kv_heads = 1, 64, 8, 2
+    mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    def make_output(shape):
+        return ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=mem_config,
+        )
+
+    def run(seq_len):
+        A, in_t = _make_interleaved_input(
+            device, batch, seq_len, head_dim, num_q_heads, num_kv_heads, ttnn.bfloat16, mem_config, seq_len
+        )
+        k_shape = (
+            [batch, num_kv_heads, head_dim, seq_len] if transpose_k_heads else [batch, num_kv_heads, seq_len, head_dim]
+        )
+        outputs = [
+            make_output([batch, num_q_heads, seq_len, head_dim]),
+            make_output(k_shape),
+            make_output([batch, num_kv_heads, seq_len, head_dim]),
+        ]
+        outs = ttnn.experimental.nlp_create_qkv_heads(
+            in_t,
+            None,
+            num_heads=num_q_heads,
+            num_kv_heads=num_kv_heads,
+            transpose_k_heads=transpose_k_heads,
+            memory_config=mem_config,
+            output_tensors=outputs,
+            runtime_rows=True,
+        )
+        _check_exact(outs, _refs_interleaved(A, batch, seq_len, head_dim, num_q_heads, num_kv_heads, transpose_k_heads))
+
+    assert_program_cache_flat(device, run, [128, 256, 32])
+    assert device.num_program_cache_entries() == 1
+
+
 def test_nlp_cqkv_q_only_crosses_head_parallel_threshold(device, isolate_program_cache):
     """The head-parallel split is decided on device, so lengths on both sides of it share one program."""
     grid = device.compute_with_storage_grid_size()
