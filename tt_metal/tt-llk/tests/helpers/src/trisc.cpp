@@ -148,6 +148,12 @@ extern "C" __attribute__((noinline, used, section(".llk_kernel_end_tail"), no_pr
         {
         }
     }
+    // The REG_RMW mutex arbiter remembers which thread took the mutex last; that pointer survives the kernel (only a
+    // tile reset clears it) and orders the next kernel's init-time mutex requests. Take and release the mutex here,
+    // after the pack thread has finished, so every kernel ends with the math thread as its last owner.
+    ckernel::t6_mutex_acquire(ckernel::mutex::REG_RMW);
+    ckernel::t6_mutex_release(ckernel::mutex::REG_RMW);
+    ckernel::tensix_sync();
     const std::uint64_t settle_start = ckernel::read_wall_clock();
     while (ckernel::read_wall_clock() - settle_start < SETTLE_CYCLES)
     {
