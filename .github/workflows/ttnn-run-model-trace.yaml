@@ -34,11 +34,6 @@ on:
         required: false
         type: boolean
         default: false
-      db-check-only:
-        description: "Only check that the CI Snowflake credentials can load (read-only, no tracing). Ignores the other inputs."
-        required: false
-        type: boolean
-        default: false
       run-validation:
         description: "Run the sweep validation pipeline against the newly uploaded trace (requires load-to-db)"
         required: false
@@ -61,7 +56,6 @@ concurrency:
 jobs:
   validate-inputs:
     name: Validate inputs & derive arch
-    if: ${{ !inputs.db-check-only }}
     runs-on: ubuntu-latest
     outputs:
       arch: ${{ steps.derive.outputs.arch }}
@@ -607,42 +601,10 @@ jobs:
           path: /work/leg-status/${{ matrix.slug }}.json
           retention-days: 1
 
-  db-preflight:
-    name: Snowflake write preflight
-    if: ${{ inputs.load-to-db || inputs.db-check-only }}
-    runs-on: ubuntu-latest
-    env:
-      PYTHONPATH: ${{ github.workspace }}
-      SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
-      SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
-      SNOWFLAKE_ROLE: SELF_SERVE_OWNER_TTNN_OPS_V6
-      SNOWFLAKE_WAREHOUSE: PUBLIC
-      SNOWFLAKE_DATABASE: SELF_SERVE
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: "3.10"
-
-      - name: Install dependencies
-        run: pip install pyyaml tqdm snowflake-connector-python cryptography
-
-      # The key is scoped to this step, not to the dependency install above.
-      - name: Check load privileges (EXPLAIN only, no writes)
-        env:
-          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
-        run: python3 model_tracer/snowflake_write_preflight.py
-
   homogenize-and-load:
     name: Homogenize & load
-    needs: [validate-inputs, trace-model, db-preflight]
-    if: ${{ inputs.load-to-db && always() && needs.db-preflight.result == 'success' && needs.trace-model.result != 'cancelled' && needs.trace-model.result != 'skipped' }}
+    needs: [validate-inputs, trace-model]
+    if: ${{ inputs.load-to-db && always() && needs.trace-model.result != 'cancelled' && needs.trace-model.result != 'skipped' }}
     runs-on: ubuntu-latest
     continue-on-error: true
     # Snowflake enforces no UNIQUE keys and the loader does lookup-then-insert, so two
