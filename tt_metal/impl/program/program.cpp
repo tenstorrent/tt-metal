@@ -2412,8 +2412,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
     for (const auto& group : scratchpad_allocation_groups()) {
         const auto size_bytes = group.bindings.front().second->size_bytes;
-        const DeviceAddr addr =
-            allocate_program_resource(this->dfb_allocation_metadata_, group.cores, size_bytes, alignment);
+        const DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, group.cores, size_bytes, alignment);
         for (const auto& [kernel, handle] : group.bindings) {
             set_address_on_scratchpad(addr, *handle, *kernel);
         }
@@ -2494,7 +2493,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             continue;
         }
 
-        const uint64_t computed_addr = allocate_circular_buffer(
+        const uint64_t computed_addr = allocate_dfb(
             this->cb_allocation_metadata_,
             circular_buffer->core_ranges(),
             circular_buffer->size(),

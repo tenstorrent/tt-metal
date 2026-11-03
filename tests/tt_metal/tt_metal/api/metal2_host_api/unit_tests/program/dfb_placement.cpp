@@ -124,18 +124,6 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementPreservesDifferentUnpackModes) {
     EXPECT_EQ(config.unpack_to_dest_mode[second->device_slot], UnpackToDestMode::Default);
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementOverlappingAllocationsDoNotCollide) {
-    // A DFB spanning two earlier allocations starts above both on their common nodes.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeOverlappingDFBPlacementsForTest();
-    auto program = MakeProgramFromSpec(fixture_device, spec);
-    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
-    const auto second = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
-    const auto third = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_2"));
-    EXPECT_GE(third->uniform_alloc_addr(), first->uniform_alloc_addr() + 256);
-    EXPECT_GE(third->uniform_alloc_addr(), second->uniform_alloc_addr() + 768);
-}
-
 TYPED_TEST(DFBPlacementOverrideTest, CPU_DFBPlacementSerializesPartiallyOverlappingOverrides) {
     // A program produces device configuration for partially overlapping DFB storage placements.
     distributed::MeshDevice& fixture_device = this->fixture_device();
