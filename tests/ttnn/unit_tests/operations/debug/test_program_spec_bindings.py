@@ -22,7 +22,7 @@ TENSOR_SPEC = ttnn.TensorSpec(ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TI
 
 # Every class and the fields Python binds. A field Metal adds to one of these types fails the ttnn build
 # (program_spec.cpp counts each type's fields) until it is bound here or noted as C++ only, except for
-# KernelAdvancedOptions and DFBAdvancedOptions, which Python binds only in part.
+# DFBAdvancedOptions, which Python binds only in part.
 FIELDS = {
     E.TensorSpecRelaxations: {
         "match_padded_shape_only",
@@ -64,12 +64,17 @@ FIELDS = {
     },
     E.KernelSpec.SourceCode: {"code"},
     E.KernelSpec.CompilerOptions: {"include_paths", "defines", "opt_level"},
-    E.KernelSpec.RuntimeArgSchema: {"runtime_arg_names", "common_runtime_arg_names"},
+    E.KernelSpec.RuntimeArgSchema: {
+        "runtime_arg_names",
+        "common_runtime_arg_names",
+        "runtime_array_args",
+        "common_runtime_array_args",
+    },
+    E.ArrayArgDecl: {"name", "size"},
     E.DFBBinding: {"dfb_spec_name", "accessor_name", "endpoint_type", "access_pattern", "block_size"},
     E.SemaphoreBinding: {"semaphore_spec_name", "accessor_name"},
     E.ScratchpadBinding: {"scratchpad_spec_name", "accessor_name"},
     E.TensorBinding: {"tensor_parameter_name", "accessor_name"},
-    E.KernelAdvancedOptions: {"num_runtime_varargs", "num_common_runtime_varargs"},
     E.KernelSpec: {
         "unique_id",
         "source",
@@ -80,9 +85,9 @@ FIELDS = {
         "scratchpad_bindings",
         "tensor_bindings",
         "compile_time_args",
+        "compile_time_array_args",
         "runtime_arg_schema",
         "hw_config",
-        "advanced_options",
     },
     E.WorkUnitSpec: {"name", "kernels", "target_nodes"},
     E.ProgramSpec: {
@@ -94,8 +99,13 @@ FIELDS = {
         "tensor_parameters",
         "work_units",
     },
-    E.AdvancedKernelRunArgs: {"runtime_varargs", "common_runtime_varargs"},
-    E.KernelRunArgs: {"kernel", "runtime_arg_values", "common_runtime_arg_values", "advanced_options"},
+    E.KernelRunArgs: {
+        "kernel",
+        "runtime_arg_values",
+        "common_runtime_arg_values",
+        "runtime_array_arg_values",
+        "common_runtime_array_arg_values",
+    },
     E.DFBRunOverrides: {"dfb", "entry_size", "num_entries"},
     E.ProgramRunArgs: {"kernel_run_args", "tensor_args", "dfb_run_overrides"},
 }
@@ -128,6 +138,7 @@ def test_metal_aliases_name_the_nested_classes():
     assert E.TensorBinding is E.KernelSpec.TensorBinding
     assert E.SemaphoreBinding is E.KernelSpec.SemaphoreBinding
     assert E.ScratchpadBinding is E.KernelSpec.ScratchpadBinding
+    assert E.ArrayArgDecl is E.KernelSpec.RuntimeArgSchema.ArrayArgDecl
     assert E.DFBEndpointType is E.DFBBinding.EndpointType
     assert E.DFBAccessPattern is E.DFBBinding.AccessPattern
     assert E.KernelRunArgs is E.ProgramRunArgs.KernelRunArgs
@@ -138,8 +149,8 @@ def test_defaults_are_the_header_defaults():
     kernel = _kernel()
     assert kernel.num_threads == 1
     assert kernel.compiler_options.opt_level == E.KernelBuildOptLevel.O2
-    assert kernel.dfb_bindings == [] and kernel.compile_time_args == {}
-    assert kernel.advanced_options.num_runtime_varargs == 0
+    assert kernel.dfb_bindings == [] and kernel.compile_time_args == {} and kernel.compile_time_array_args == {}
+    assert kernel.runtime_arg_schema.runtime_array_args == []
 
     compute = E.ComputeHardwareConfig()
     assert compute.fpu_math_fidelity == ttnn.MathFidelity.HiFi4
@@ -180,6 +191,8 @@ def test_constructors_take_keywords_and_need_the_required_fields(expect_error):
         E.ProgramSpec()
     with expect_error(TypeError, "incompatible function arguments"):
         E.WorkUnitSpec(target_nodes=ttnn.CoreCoord(0, 0))
+    with expect_error(TypeError, "incompatible function arguments"):
+        E.ArrayArgDecl(name="coords")
 
 
 def test_names_are_str_and_tables_are_dicts():
@@ -209,6 +222,25 @@ def test_two_keys_for_one_node_are_rejected(expect_error):
 def test_argument_values_are_uint32(value, expect_error):
     with expect_error(TypeError, "incompatible function arguments"):
         E.KernelRunArgs(kernel="reader", common_runtime_arg_values={"stride": value})
+    with expect_error(TypeError, "incompatible function arguments"):
+        E.KernelRunArgs(kernel="reader", common_runtime_array_arg_values={"table": [1, value]})
+    with expect_error(TypeError, "incompatible function arguments"):
+        _kernel(compile_time_array_args={"sizes": [value]})
+
+
+def test_array_values_are_lists_of_ints():
+    core = ttnn.CoreCoord(0, 0)
+    kernel = _kernel(compile_time_args={"block": 8}, compile_time_array_args={"sizes": [1, 2**32 - 1]})
+    assert (kernel.compile_time_args, kernel.compile_time_array_args) == ({"block": 8}, {"sizes": [1, 2**32 - 1]})
+    run_args = E.KernelRunArgs(
+        kernel="reader",
+        runtime_array_arg_values={"coords": {core: [3, 4]}},
+        common_runtime_array_arg_values={"table": [5, 6, 7]},
+    )
+    # Array values read back as plain lists, like every other list field.
+    assert type(kernel.compile_time_array_args["sizes"]) is list
+    assert type(run_args.runtime_array_arg_values["coords"][core]) is list
+    assert type(run_args.common_runtime_array_arg_values["table"]) is list
 
 
 def test_variant_fields_keep_their_type():
@@ -294,8 +326,27 @@ def test_each_field_reads_back_what_it_was_given():
         relaxations = E.TensorSpecRelaxations(**{field: True})
         assert [name for name in FIELDS[E.TensorSpecRelaxations] if getattr(relaxations, name)] == [field]
 
-    schema = E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["each"], common_runtime_arg_names=["all"])
+    schema = E.KernelSpec.RuntimeArgSchema(
+        runtime_arg_names=["each"],
+        common_runtime_arg_names=["all"],
+        runtime_array_args=[E.ArrayArgDecl(name="each_list", size=2)],
+        common_runtime_array_args=[E.ArrayArgDecl(name="all_list", size=3)],
+    )
     assert (schema.runtime_arg_names, schema.common_runtime_arg_names) == (["each"], ["all"])
+    assert [(array.name, array.size) for array in schema.runtime_array_args] == [("each_list", 2)]
+    assert [(array.name, array.size) for array in schema.common_runtime_array_args] == [("all_list", 3)]
+    core = ttnn.CoreCoord(0, 0)
+    kernel_run_args = E.KernelRunArgs(
+        kernel="reader",
+        runtime_arg_values={"each": {core: 1}},
+        common_runtime_arg_values={"all": 2},
+        runtime_array_arg_values={"each_list": {core: [3, 4]}},
+        common_runtime_array_arg_values={"all_list": [5, 6, 7]},
+    )
+    assert kernel_run_args.runtime_arg_values == {"each": {core: 1}}
+    assert kernel_run_args.common_runtime_arg_values == {"all": 2}
+    assert kernel_run_args.runtime_array_arg_values == {"each_list": {core: [3, 4]}}
+    assert kernel_run_args.common_runtime_array_arg_values == {"all_list": [5, 6, 7]}
     dfb = E.DataflowBufferSpec(
         unique_id="in",
         entry_size=64,
@@ -386,19 +437,15 @@ def test_each_field_reads_back_what_it_was_given():
 def test_writes_reach_nested_objects():
     kernel = _kernel()
     kernel.compiler_options.opt_level = E.KernelBuildOptLevel.O0
-    kernel.advanced_options.num_runtime_varargs = 2
     kernel.runtime_arg_schema.runtime_arg_names = ["a"]
+    kernel.runtime_arg_schema.runtime_array_args = [E.ArrayArgDecl(name="coords", size=2)]
     assert kernel.compiler_options.opt_level == E.KernelBuildOptLevel.O0
-    assert kernel.advanced_options.num_runtime_varargs == 2
     assert kernel.runtime_arg_schema.runtime_arg_names == ["a"]
+    assert [array.name for array in kernel.runtime_arg_schema.runtime_array_args] == ["coords"]
 
     dfb = E.DataflowBufferSpec(unique_id="in")
     dfb.advanced_options.alias_with = ["other"]
     assert dfb.advanced_options.alias_with == ["other"]
-
-    kernel_run_args = E.KernelRunArgs(kernel="reader")
-    kernel_run_args.advanced_options.runtime_varargs = {ttnn.CoreCoord(0, 0): [5, 6]}
-    assert kernel_run_args.advanced_options.runtime_varargs == {ttnn.CoreCoord(0, 0): [5, 6]}
 
     parameter = E.TensorParameter(unique_id="input", spec=TENSOR_SPEC)
     parameter.relaxations.dynamic_tensor_shape = True
@@ -406,28 +453,17 @@ def test_writes_reach_nested_objects():
 
     # A nested object keeps its parent alive.
     references = sys.getrefcount(kernel)
-    options = kernel.advanced_options
+    schema = kernel.runtime_arg_schema
     assert sys.getrefcount(kernel) == references + 1
     del kernel
-    assert options.num_runtime_varargs == 2
+    assert schema.runtime_arg_names == ["a"]
 
 
 def test_advanced_options_are_the_ones_blaze_uses():
-    kernel = _kernel(advanced_options=E.KernelAdvancedOptions(num_runtime_varargs=2, num_common_runtime_varargs=1))
-    assert (kernel.advanced_options.num_runtime_varargs, kernel.advanced_options.num_common_runtime_varargs) == (2, 1)
-
     dfb = E.DataflowBufferSpec(unique_id="a", advanced_options=E.DFBAdvancedOptions(alias_with=["b"]))
     assert dfb.advanced_options.alias_with == ["b"]
-
-    varargs = E.AdvancedKernelRunArgs(runtime_varargs={ttnn.CoreCoord(0, 0): [1, 2]}, common_runtime_varargs=[7])
-    run_args = E.KernelRunArgs(kernel="reader", advanced_options=varargs)
-    # Vararg values read back as plain lists, like every other list field.
-    assert run_args.advanced_options.runtime_varargs == {ttnn.CoreCoord(0, 0): [1, 2]}
-    assert type(run_args.advanced_options.runtime_varargs[ttnn.CoreCoord(0, 0)]) is list
-    assert run_args.advanced_options.common_runtime_varargs == [7]
-    assert type(run_args.advanced_options.common_runtime_varargs) is list
-    varargs.common_runtime_varargs = varargs.common_runtime_varargs + [8]
-    assert varargs.common_runtime_varargs == [7, 8]
+    # Varargs are C++ only: Metal 2.0 keeps them only to ease migration, and array arguments replace them.
+    assert not hasattr(E, "KernelAdvancedOptions") and not hasattr(E, "AdvancedKernelRunArgs")
 
 
 PRODUCER, CONSUMER = E.DFBEndpointType.PRODUCER, E.DFBEndpointType.CONSUMER
