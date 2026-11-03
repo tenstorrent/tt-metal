@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import ttnn
 
+# A sender core's count semaphores, one per head it serves (relay_affine_prefix_max_heads_per_link).
+_MAX_HEADS_PER_LINK = 14
+
 
 def persistent_semaphores(mesh_device, count: int) -> list:
     """Zeroed global semaphores on every worker core that persist across calls, created up front so they sit with the
@@ -68,6 +71,12 @@ class RelayAffinePrefix:
     ):
         if key_dim != value_dim:
             raise ValueError("relay prefix requires K == V")
+        heads_per_link = -(-batch_heads // num_links)
+        if heads_per_link > _MAX_HEADS_PER_LINK:
+            raise ValueError(
+                f"relay prefix: {batch_heads} heads over {num_links} links put {heads_per_link} on a sender, "
+                f"which has semaphores for {_MAX_HEADS_PER_LINK}: use more links"
+            )
         self.mesh_device = mesh_device
         self.axis = sequence_parallel_axis
         self.num_links = num_links
@@ -84,10 +93,10 @@ class RelayAffinePrefix:
         self._landing_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(head_set, (3 * key_dim, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(head_set, (2 * key_dim, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
         )
-        # Three K x K states per head core (the entry state, the staged next state, the final state) while reserved.
-        self._landing_shape = ttnn.Shape([3 * batch_heads * key_dim, key_dim])
+        # Two K x K states per head core (the entry state, the final state) while reserved.
+        self._landing_shape = ttnn.Shape([2 * batch_heads * key_dim, key_dim])
         self._landing = None
         # A peer can bump the entry and final arrival counters before this rank's call starts.
         self.semaphores = persistent_semaphores(mesh_device, 2)

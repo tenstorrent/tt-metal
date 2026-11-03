@@ -33,9 +33,9 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar with the absolute position of the
                 chunk's first token. Keep its address stable and update its contents before replay of a
                 captured trace.
-            landing (ttnn.Tensor): FLOAT32 TILE-layout ``[3*B*H*K, K]`` height-sharded in L1, three ``K x K``
-                states per head core: the entry state the predecessor's sender writes, this rank's next state
-                read out by its senders, and the final state the last rank writes on the first rank.
+            landing (ttnn.Tensor): FLOAT32 TILE-layout ``[2*B*H*K, K]`` height-sharded in L1, two ``K x K``
+                states per head core: the entry state the predecessor's sender writes and the final state the
+                last rank writes on the first rank.
             semaphores (list[ttnn.GlobalSemaphore]): The zeroed entry-state and final-state arrival counters.
 
         Keyword Args:

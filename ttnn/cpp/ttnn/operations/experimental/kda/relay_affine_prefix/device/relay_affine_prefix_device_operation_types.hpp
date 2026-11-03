@@ -26,17 +26,17 @@ struct RelayAffinePrefixParams {
     std::array<uint32_t, 2> semaphore_addresses{};
 };
 
-// The landing buffer's K x K slots per head core: entry state, staged next state, final state.
-inline constexpr uint32_t relay_landing_slots = 3;
+// The landing buffer's K x K slots per head core: entry state, final state.
+inline constexpr uint32_t relay_landing_slots = 2;
 
 struct RelayAffinePrefixInputs {
     Tensor packed;
     Tensor initial_state;
     Tensor actual_start;
     // L1, height-sharded relay_landing_slots K x K states per head core, in order: the entry state the predecessor
-    // writes, this rank's next state staged for its sender, and the final state the last rank writes into the first
-    // rank's. Consecutive calls need a barrier across the SP line between them: a rank's writer copies the entry and
-    // final states out at the end of its call, and its predecessor's next call overwrites them as soon as it starts.
+    // writes and the final state the last rank writes into the first rank's. Consecutive calls need a barrier across
+    // the SP line between them: a rank's writer copies the entry and final states out at the end of its call, and its
+    // predecessor's next call overwrites them as soon as it starts.
     Tensor landing;
 };
 

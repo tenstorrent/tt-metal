@@ -73,6 +73,14 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         attrs.num_links > 0 && attrs.cores.size() >= heads + attrs.num_links,
         "{}: needs a core per head, then a sender per link",
         operation_name);
+    TT_FATAL(
+        (heads + attrs.num_links - 1) / attrs.num_links <= relay_affine_prefix_max_heads_per_link,
+        "{}: {} heads over {} links put {} on a sender, which has semaphores for {}: use more links",
+        operation_name,
+        heads,
+        attrs.num_links,
+        (heads + attrs.num_links - 1) / attrs.num_links,
+        relay_affine_prefix_max_heads_per_link);
     const std::span<const CoreCoord> used_cores(attrs.cores.data(), heads + attrs.num_links);
     TT_FATAL(
         std::set<CoreCoord>(used_cores.begin(), used_cores.end()).size() == used_cores.size(),
