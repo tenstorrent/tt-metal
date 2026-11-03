@@ -44,5 +44,8 @@ jobs:
         kind: shell
         shell:
           run:
-            - /tmp/tt-smi -ls
-            - /tmp/tt-smi -s
+            # --local: local chips only and no ETH training wait (the VM's VFIO
+            # open resets the card; n150 has no ETH links). timeout makes a hang
+            # fail fast instead of eating the job's 20 m.
+            - timeout 300 /tmp/tt-smi --local -ls
+            - timeout 300 /tmp/tt-smi --local -s
