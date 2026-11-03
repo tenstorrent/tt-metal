@@ -79,10 +79,6 @@ class M3VLMLP(LightweightModule):
         dtype=ttnn.bfloat16,
     ) -> "M3VLMLP":
         """Construct from a torch MLP with fc1 and fc2: VisionMLP of the Torch reference (reference/vision.py)."""
-        assert hasattr(ref, "fc1") and hasattr(ref, "fc2"), (
-            f"expected an MLP-like module with fc1+fc2, got {type(ref).__name__} "
-            f"with children {[n for n, _ in ref.named_children()]}"
-        )
         return cls(
             mesh_device=mesh_device,
             fc1_weight=ref.fc1.weight.data,

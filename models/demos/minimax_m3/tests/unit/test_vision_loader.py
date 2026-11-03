@@ -9,7 +9,8 @@ defaults. As in the checkpoint:
     to them; the third shard holds text weights only and is not on disk, so the test fails if the loader reads it;
   - the patch embed weight is fp32 and the other weights bf16;
   - config.json has the merge and temporal sizes under img_token_compression_config.
-No device and no checkpoint.
+It also checks that the loader rejects an index with no vision tensor and that the vision config rejects an activation
+other than the exact GELU. No device and no checkpoint.
 
 These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes "test_vision_").
 
@@ -117,3 +118,26 @@ def test_vision_build_reference_reads_config_first(tmp_path, expect_error):
         build_reference(tmp_path)
     with expect_error(ValueError, "snapshot_dir must be a MiniMax-M3 checkpoint directory"):
         build_reference("")
+
+
+def test_vision_load_rejects_index_without_vision_tensors(tmp_path, expect_error):
+    """load_vision_state_dict raises ValueError for a checkpoint whose index lists no vision tensor, such as a text-only
+    one, instead of returning no weights."""
+    weight_map = {"language_model.model.embed_tokens.weight": TEXT_SHARD}
+    (tmp_path / "model.safetensors.index.json").write_text(json.dumps({"weight_map": weight_map}))
+    with expect_error(ValueError, r"lists no tensor starting with vision_tower\., multi_modal_projector\."):
+        load_vision_state_dict(tmp_path)
+
+
+def test_vision_config_rejects_other_activation(expect_error):
+    """from_hf_config takes a vision hidden_act of "gelu", the exact (erf) GELU that the reference and the TT MLP run,
+    and raises ValueError for any other: Hugging Face's vision MLP reads it, so such a checkpoint would load and give
+    other outputs than Hugging Face's."""
+
+    def config_json(hidden_act):
+        return {**CONFIG_JSON, "vision_config": {**CONFIG_JSON["vision_config"], "hidden_act": hidden_act}}
+
+    assert MiniMaxM3VisionConfig.from_hf_config(config_json("gelu")) == CONFIG
+    for hidden_act in ("quick_gelu", "gelu_pytorch_tanh"):
+        with expect_error(ValueError, f"hidden_act must be 'gelu', the exact \\(erf\\) GELU, got '{hidden_act}'"):
+            MiniMaxM3VisionConfig.from_hf_config(config_json(hidden_act))
