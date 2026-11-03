@@ -16,6 +16,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -29,7 +30,7 @@ constexpr uint32_t kMaxSlabBytes = 4096;
 constexpr uint32_t kMaxSlabBatch = 8;
 // A CB's received and acked page counters are 16 bits, so program creation rejects a CB of more pages.
 constexpr uint64_t kMaxCbPages = std::numeric_limits<uint16_t>::max();
-// Write batches the LCM writer tries, largest first; it drains one batch per barrier.
+// Write batches fit_lcm tries, largest first; the LCM writer drains one batch per barrier.
 constexpr std::array<uint32_t, 4> kLcmWriteBatches = {8, 4, 2, 1};
 
 // Program creation starts every CB at a DRAM-aligned address, so a CB takes its size rounded up to that alignment.
@@ -162,6 +163,9 @@ bool lcm_bit_exact(tt::tt_metal::DataType dtype) {
 
 std::optional<LcmPlan> lcm_tile_geometry(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores) {
+    if (!lcm_bit_exact(input.dtype())) {
+        return std::nullopt;
+    }
     const auto& in_shape = input.logical_shape();
     if (in_shape.rank() < 2 || logical_output_shape.rank() < 2) {
         return std::nullopt;
@@ -170,8 +174,8 @@ std::optional<LcmPlan> lcm_tile_geometry(
     constexpr uint32_t tile_w = tt::constants::TILE_WIDTH;
     const uint32_t w_in = in_shape[-1];
     const uint32_t w_out = logical_output_shape[-1];
-    // The compute engine re-tilizes the input's tile stream as it is, padding included, so only unpadded tensors keep
-    // the output's padding zero. With no padding the two streams hold the same datums in the same order.
+    // The compute engine re-tilizes the input's tile stream as it is, so padding rows would land inside the output's
+    // logical data. With no tile padding on either side the two streams hold the same datums in the same order.
     if (w_in == w_out || w_in % tile_w != 0 || w_out % tile_w != 0 || in_shape[-2] % tile_h != 0 ||
         logical_output_shape[-2] % tile_h != 0) {
         return std::nullopt;
@@ -182,14 +186,15 @@ std::optional<LcmPlan> lcm_tile_geometry(
     plan.wt_out = w_out / tile_w;
     const uint64_t lcm_w = std::lcm<uint64_t, uint64_t>(w_in, w_out);
     const uint64_t ht_in = volume_before_last(in_shape) / tile_h;
-    plan.in_rows = static_cast<uint32_t>(lcm_w / w_in);
-    plan.out_rows = static_cast<uint32_t>(lcm_w / w_out);
-    if (ht_in == 0 || ht_in % plan.in_rows != 0) {
+    if (ht_in == 0) {
         return std::nullopt;
     }
-    plan.total_chunks = static_cast<uint32_t>(ht_in / plan.in_rows);
-    plan.in_tiles = plan.in_rows * plan.wt_in;
-    plan.out_tiles = plan.out_rows * plan.wt_out;
+    plan.in_tile_rows = static_cast<uint32_t>(lcm_w / w_in);
+    plan.out_tile_rows = static_cast<uint32_t>(lcm_w / w_out);
+    // ht_in * w_in == ht_out * w_out is a common multiple of both widths, so whole chunks cover the tensor.
+    TT_ASSERT(ht_in % plan.in_tile_rows == 0);
+    plan.total_chunks = static_cast<uint32_t>(ht_in / plan.in_tile_rows);
+    plan.chunk_tiles = static_cast<uint32_t>(lcm_w / tile_w);
     plan.tile_bytes = tile_bytes_of(input);
     plan.out_page_bytes = out_aligned_page;
     plan.split = count_units(grid_cores, plan.total_chunks);
@@ -203,17 +208,15 @@ std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget) {
     // while fewer than two batches are pushed: depth >= 2 * batch + Wt_out - 1. The unbatched writer waits only on an
     // empty CB. Each batch offers two depths, a whole chunk's output and its minimum, so small moves of the L1
     // frontier keep the same program and its cache key.
-    const uint64_t chunk_bytes = 2 * cb_footprint(static_cast<uint64_t>(plan.in_tiles) * plan.tile_bytes);
+    const uint64_t in_mid_bytes = 2 * cb_footprint(static_cast<uint64_t>(plan.chunk_tiles) * plan.tile_bytes);
     for (const uint32_t batch : kLcmWriteBatches) {
         const uint64_t unit = std::lcm(plan.wt_out, batch);
         const uint64_t needed = batch == 1 ? plan.wt_out : 2ull * batch + plan.wt_out - 1;
         for (const uint64_t depth :
-             {tt::round_up(std::max<uint64_t>(plan.out_tiles, needed), unit), tt::round_up(needed, unit)}) {
-            const uint64_t bytes = chunk_bytes + cb_footprint(depth * plan.tile_bytes);
-            if (bytes <= l1_budget) {
+             {tt::round_up(std::max<uint64_t>(plan.chunk_tiles, needed), unit), tt::round_up(needed, unit)}) {
+            if (in_mid_bytes + cb_footprint(depth * plan.tile_bytes) <= l1_budget) {
                 plan.out_cb_depth = static_cast<uint32_t>(depth);
                 plan.write_batch = batch;
-                plan.l1_bytes = bytes;
                 return plan;
             }
         }

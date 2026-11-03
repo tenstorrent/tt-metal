@@ -38,8 +38,9 @@ constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbMid = tt::CBIndex::c_1;
 constexpr uint32_t kCbOut = tt::CBIndex::c_16;
 constexpr uint32_t kSeqIdentity = 0;  // mirrors common/kernels/codegen/sequencers.h SEQ_IDENTITY
-// pack_untilize block width limit for 32-bit datums, as untilize codegen's compute_block_ct_dim sets it.
-constexpr uint32_t kMaxBlockCtDim32 = 4;
+// The LCM reader pushes one tile per barrier. A larger batch must divide chunk_tiles so a read never crosses the CB
+// wrap.
+constexpr uint32_t kLcmReadBatch = 1;
 constexpr uint32_t kCbPlan = tt::CBIndex::c_0;
 constexpr uint32_t kCbStaged = tt::CBIndex::c_1;
 constexpr uint32_t kCbRing = tt::CBIndex::c_2;
@@ -269,11 +270,11 @@ ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& 
     const auto fmt = datatype_to_dataformat_converter(input.dtype());
     Buffer* in_buf = input.buffer();
     Buffer* out_buf = output.buffer();
-    // lcm_bit_exact admits only 4-byte dtypes.
-    TT_ASSERT(input.element_size() == 4, "the LCM program supports 4-byte dtypes only");
+    // The compute config below round-trips only 32-bit datums unchanged (lcm_bit_exact).
+    TT_FATAL(input.element_size() == 4, "ReshapeCodegen: the LCM program takes only 32-bit dtypes");
 
-    desc.cbs.push_back(make_cb(kCbIn, fmt, p.tile_bytes, p.in_tiles, all_cores));
-    desc.cbs.push_back(make_cb(kCbMid, fmt, p.tile_bytes, p.in_tiles, all_cores));
+    desc.cbs.push_back(make_cb(kCbIn, fmt, p.tile_bytes, p.chunk_tiles, all_cores));
+    desc.cbs.push_back(make_cb(kCbMid, fmt, p.tile_bytes, p.chunk_tiles, all_cores));
     desc.cbs.push_back(make_cb(kCbOut, fmt, p.tile_bytes, p.out_cb_depth, all_cores));
 
     KernelDescriptor reader;
@@ -284,7 +285,7 @@ ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& 
     reader.named_compile_time_args = {
         {"seq_id", kSeqIdentity},
         {"cb_id", kCbIn},
-        {"batch", 1},
+        {"batch", kLcmReadBatch},
         {"src_page_pitch", 0},  // 0: use the accessor's own page size
     };
     reader.config = ReaderConfigDescriptor{};
@@ -298,7 +299,7 @@ ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& 
     writer.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute;
-    compute.kernel_source = op_kernel("compute_reshape_tile.cpp");
+    compute.kernel_source = op_kernel("compute_reshape_lcm.cpp");
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = all_cores;
     compute.named_compile_time_args = {
@@ -307,9 +308,8 @@ ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& 
         {"cb_out", kCbOut},
         {"wt_in", p.wt_in},
         {"wt_out", p.wt_out},
-        {"in_tile_rows", p.in_rows},
-        {"out_tile_rows", p.out_rows},
-        {"max_bct", kMaxBlockCtDim32},
+        {"in_tile_rows", p.in_tile_rows},
+        {"out_tile_rows", p.out_tile_rows},
     };
     ComputeConfigDescriptor compute_config{.fp32_dest_acc_en = true};
     // Untilize reads cb_in and tilize reads cb_mid; both must unpack 32-bit data straight to DEST.
@@ -319,17 +319,14 @@ ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& 
     compute.config = compute_config;
 
     const auto cores = corerange_to_cores(split.all_cores, split.num_cores, false);
-    uint32_t in_tile_offset = 0;
-    uint32_t out_tile_offset = 0;
+    uint32_t tile_offset = 0;
     for (const auto& core : cores) {
         const uint32_t n_chunks = split.group1.contains(core) ? split.units_group1 : split.units_group2;
-        const uint32_t n_in_tiles = n_chunks * p.in_tiles;
-        const uint32_t n_out_tiles = n_chunks * p.out_tiles;
-        reader.emplace_runtime_args(core, {in_buf, n_in_tiles, in_tile_offset});
-        writer.emplace_runtime_args(core, {out_buf, n_out_tiles, out_tile_offset});
+        const uint32_t n_tiles = n_chunks * p.chunk_tiles;
+        reader.emplace_runtime_args(core, {in_buf, n_tiles, tile_offset});
+        writer.emplace_runtime_args(core, {out_buf, n_tiles, tile_offset});
         compute.emplace_runtime_args(core, {n_chunks});
-        in_tile_offset += n_in_tiles;
-        out_tile_offset += n_out_tiles;
+        tile_offset += n_tiles;
     }
 
     desc.kernels.push_back(std::move(reader));
@@ -517,20 +514,7 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenRMProgramFactory::create_descripto
     const Tensor& input = tensor_args.input;
     const auto& plan = operation_attributes.plan;
     const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
-    if (input.layout() == Layout::TILE) {
-        // Selection sends a TILE reshape here on the LCM route unless the segment map is the live choice, so a call
-        // nothing fits reaches the error.
-        const auto chosen =
-            rcg::live_tile_choice(input, operation_attributes.logical_output_shape, grid.num_cores(), plan);
-        const auto* lcm = chosen.has_value() ? std::get_if<rcg::LcmPlan>(&*chosen) : nullptr;
-        TT_FATAL(
-            lcm != nullptr,
-            "ReshapeCodegen: neither the LCM tile plan nor the segment map fits the {} B of L1 free per core below "
-            "the lowest L1 allocation; free L1 tensors or use the native reshape",
-            ttnn::operations::data_movement::get_max_l1_space(input));
-        TT_ASSERT(tensor_return_value.buffer()->aligned_page_size() == lcm->out_page_bytes);
-        return build_lcm(*lcm, input, tensor_return_value, rcg::split_units(grid, lcm->split.units));
-    }
+    TT_ASSERT(input.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(tensor_return_value.buffer()->aligned_page_size() == plan.out_aligned_page);
 
     const auto chosen = rcg::live_rm_choice(
@@ -549,6 +533,25 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenRMProgramFactory::create_descripto
     }
     const auto& slab = std::get<rcg::RmArbitraryPlan>(*chosen);
     return build_rm_arbitrary(slab, input, tensor_return_value, rcg::split_units(grid, slab.split.units));
+}
+
+tt::tt_metal::ProgramDescriptor ReshapeCodegenLcmProgramFactory::create_descriptor(
+    const ReshapeCodegenParams& operation_attributes,
+    const ReshapeCodegenInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    const Tensor& input = tensor_args.input;
+    const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
+    // Selection sends a call here unless the segment map is the live choice, so a call nothing fits reaches the error.
+    const auto chosen = rcg::live_tile_choice(
+        input, operation_attributes.logical_output_shape, grid.num_cores(), operation_attributes.plan);
+    const auto* lcm = chosen.has_value() ? std::get_if<rcg::LcmPlan>(&*chosen) : nullptr;
+    TT_FATAL(
+        lcm != nullptr,
+        "ReshapeCodegen: neither the LCM tile plan nor the segment map fits the {} B of L1 free per core below the "
+        "lowest L1 allocation; free L1 tensors or use the native reshape",
+        ttnn::operations::data_movement::get_max_l1_space(input));
+    TT_ASSERT(tensor_return_value.buffer()->aligned_page_size() == lcm->out_page_bytes);
+    return build_lcm(*lcm, input, tensor_return_value, rcg::split_units(grid, lcm->split.units));
 }
 
 tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_workload_descriptor(

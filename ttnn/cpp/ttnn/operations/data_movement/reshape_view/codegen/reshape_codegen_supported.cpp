@@ -114,30 +114,23 @@ bool native_faster(const TileRowsChoice& choice, uint32_t num_cores) {
     return !read_cut && !reads_saved && !whole_halves;
 }
 
-// The LCM kernel moves a tile through untilize and tilize about 5.9x faster than native's reader and writer finish an
-// output tile: about 0.85 us against 5 us per round (measured on Blackhole), rounded down for margin.
+// A round is every core finishing one output tile in parallel; native takes about 5 us per round. The LCM kernel
+// untilizes and re-tilizes a tile in about 0.85 us, about 5.9x faster, rounded down for margin. Measured on
+// Blackhole; Wormhole uses the same constant unmeasured.
 constexpr uint64_t kLcmTileSpeedup = 5;
 
+// Compares per-core critical paths: the chunk tiles on the busiest LCM core against the output tiles on the busiest
+// native core, since LCM splits whole chunks over the cores and native splits output tiles.
 bool lcm_beats_native(const LcmPlan& plan, uint32_t num_cores) {
-    const uint64_t out_tiles = static_cast<uint64_t>(plan.total_chunks) * plan.out_tiles;
-    return static_cast<uint64_t>(plan.in_tiles) * tt::div_up(plan.total_chunks, num_cores) <=
+    const uint64_t out_tiles = static_cast<uint64_t>(plan.total_chunks) * plan.chunk_tiles;
+    return static_cast<uint64_t>(plan.chunk_tiles) * tt::div_up(plan.total_chunks, num_cores) <=
            kLcmTileSpeedup * tt::div_up(out_tiles, num_cores);
-}
-
-// The LCM geometry for dtypes the compute engine round-trips unchanged, else nullopt.
-std::optional<LcmPlan> lcm_geometry(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    const tt::tt_metal::TensorSpec& spec,
-    uint32_t num_cores) {
-    if (!lcm_bit_exact(input.dtype())) {
-        return std::nullopt;
-    }
-    return lcm_tile_geometry(input, logical_output_shape, output_aligned_page(input, spec), num_cores);
 }
 
 constexpr const char* kTileCapsViolation = "no TILE program takes these shapes within its size caps";
 constexpr const char* kTileStaticFitViolation = "no TILE program fits the static L1 budget even at its smallest plan";
+constexpr const char* kLcmGeometryViolation = "the LCM route was planned without its geometry";
+constexpr const char* kLcmDtypeViolation = "the LCM program takes only 32-bit dtypes (float32, int32, uint32)";
 
 // Native's row-major factory treats a stick as NOC-aligned at this multiple.
 constexpr uint32_t kNativeNocAlignment = 16;
@@ -441,9 +434,10 @@ const char* unsupported_reason(
     const auto& in_shape = input.logical_shape();
     const auto spec = output_spec(input, logical_output_shape, output_mem_config);
     if (plan == nullptr) {
-        const bool within_caps = plan_tile_rows(in_shape, logical_output_shape).has_value() ||
-                                 lcm_geometry(input, logical_output_shape, spec, num_cores).has_value() ||
-                                 segment_map_within_caps(input, logical_output_shape, num_cores);
+        const bool within_caps =
+            plan_tile_rows(in_shape, logical_output_shape).has_value() ||
+            lcm_tile_geometry(input, logical_output_shape, output_aligned_page(input, spec), num_cores).has_value() ||
+            segment_map_within_caps(input, logical_output_shape, num_cores);
         return within_caps ? kTileStaticFitViolation : kTileCapsViolation;
     }
     const uint64_t budget = static_l1_budget(input, spec);
@@ -455,7 +449,13 @@ const char* unsupported_reason(
             return nullptr;
         }
     } else if (plan->tile_route == TileRoute::Lcm) {
-        if (plan->lcm.has_value() && fit_lcm(*plan->lcm, budget).has_value()) {
+        if (!plan->lcm.has_value()) {
+            return kLcmGeometryViolation;
+        }
+        if (!lcm_bit_exact(input.dtype())) {
+            return kLcmDtypeViolation;
+        }
+        if (fit_lcm(*plan->lcm, budget).has_value()) {
             return nullptr;
         }
     } else if (fit_tile_mapped(input, logical_output_shape, num_cores, budget).has_value()) {
@@ -507,7 +507,7 @@ std::optional<LaunchPlan> plan_codegen(
     }
     std::optional<LaunchPlan> lcm;
     const auto spec = output_spec(input, logical_output_shape, output_mem_config);
-    if (auto geometry = lcm_geometry(input, logical_output_shape, spec, num_cores)) {
+    if (auto geometry = lcm_tile_geometry(input, logical_output_shape, output_aligned_page(input, spec), num_cores)) {
         LaunchPlan plan{.tile_route = TileRoute::Lcm, .lcm = std::move(geometry)};
         if (supported(plan)) {
             lcm = std::move(plan);

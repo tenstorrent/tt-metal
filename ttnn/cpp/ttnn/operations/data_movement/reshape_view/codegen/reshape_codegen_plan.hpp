@@ -152,22 +152,22 @@ struct RmArbitraryPlan {
     WorkCounts split;
 };
 
-// LCM TILE plan: tiles are untilized and re-tilized through the compute engine in chunks of lcm(W_in, W_out) datums
-// per row.
+// LCM TILE plan: the compute engine untilizes and re-tilizes the tensor one chunk at a time. A chunk is
+// lcm(W_in, W_out) datums wide in row-major order: in_tile_rows tile rows of the input and out_tile_rows of the
+// output, chunk_tiles tiles on either side.
 struct LcmPlan {
     uint32_t wt_in = 0;
     uint32_t wt_out = 0;
-    uint32_t in_rows = 0;
-    uint32_t out_rows = 0;
-    uint32_t in_tiles = 0;
-    uint32_t out_tiles = 0;
-    uint32_t out_cb_depth = 0;
-    uint32_t write_batch = 0;
+    uint32_t in_tile_rows = 0;
+    uint32_t out_tile_rows = 0;
+    uint32_t chunk_tiles = 0;
     uint32_t total_chunks = 0;
     uint32_t tile_bytes = 0;
     uint32_t out_page_bytes = 0;
-    uint64_t l1_bytes = 0;
     WorkCounts split;
+    // Set by fit_lcm; zero in the unfitted geometry LaunchPlan holds.
+    uint32_t out_cb_depth = 0;
+    uint32_t write_batch = 0;
 };
 
 // A segment map fitted to a budget: the layout and its input CB depth.
@@ -178,8 +178,10 @@ struct TileMappedChoice {
 
 WorkSplit split_units(const tt::tt_metal::CoreRangeSet& grid, uint32_t units);
 
-// The TILE program a call runs. Tile rows needs both widths to be multiples of 32, the LCM program that too, no tile
-// padding and 32-bit datums (lcm_bit_exact); the segment map takes any widths.
+// The TILE program a call runs.
+// - Tile rows: both widths multiples of 32.
+// - LCM: both widths and both heights multiples of 32 (no tile padding), 32-bit dtypes only (lcm_bit_exact).
+// - Segment map: any widths.
 enum class TileRoute : uint32_t { TileRows = 0, Lcm = 1, TileMapped = 2 };
 
 // What the entry planned for one call. A program-cache miss builds from it instead of planning again; live L1 then
@@ -234,14 +236,17 @@ std::optional<TileRowsChoice> live_tile_rows_choice(
 std::optional<TileChoice> live_tile_choice(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, const LaunchPlan& planned);
 
-// The LCM kernel untilizes and re-tilizes through the compute engine, which round-trips only 32-bit datums
-// unchanged: bf16 NaN comes back as Inf.
+// The LCM program round-trips only 32-bit datums unchanged: bf16 NaN comes back as Inf. It holds because build_lcm
+// runs the compute engine with fp32 DEST and UnpackToDestFp32 on its input and middle CBs; the two change together.
 bool lcm_bit_exact(tt::tt_metal::DataType dtype);
 
-// The LCM program's geometry, nullopt outside what it handles; fit_lcm sizes its output CB to `l1_budget`.
+// The LCM program's unfitted geometry; nullopt for a dtype lcm_bit_exact refuses, a rank below 2, equal widths, or a
+// width or height that is not a multiple of 32.
 std::optional<LcmPlan> lcm_tile_geometry(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores);
 
+// `plan` with the largest write batch, then the deepest output CB, whose CBs fit `l1_budget`; nullopt when a one-tile
+// batch at its smallest depth does not.
 std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget);
 
 // The segment map fitted to `l1_budget`, nullopt when it exceeds its size caps or does not fit with one input slot.

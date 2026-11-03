@@ -41,6 +41,8 @@ ReshapeCodegenDeviceOperation::program_factory_t ReshapeCodegenDeviceOperation::
         if (operation_attributes.plan.tile_route == rcg::TileRoute::TileRows) {
             return ReshapeCodegenTileRowsProgramFactory{};
         }
+        TT_ASSERT(operation_attributes.plan.tile_route == rcg::TileRoute::Lcm);
+        return ReshapeCodegenLcmProgramFactory{};
     }
     return ReshapeCodegenRMProgramFactory{};
 }
@@ -74,8 +76,8 @@ void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
     // A view keeps its source's buffer, so the buffer may hold more pages than the plan reads; interleaved
     // page i sits at the same address either way, so only a short buffer is an error.
     if (plan.tile_route == rcg::TileRoute::Lcm) {
-        TT_FATAL(plan.lcm.has_value(), "ReshapeCodegen was launched on the LCM route without its geometry");
-        const uint64_t lcm_pages = static_cast<uint64_t>(plan.lcm->total_chunks) * plan.lcm->in_tiles;
+        // The gate above refuses an LCM route without its geometry.
+        const uint64_t lcm_pages = static_cast<uint64_t>(plan.lcm->total_chunks) * plan.lcm->chunk_tiles;
         TT_FATAL(
             input.buffer()->num_pages() >= lcm_pages,
             "Reshape input has {} tiles, the LCM plan needs at least {}",
