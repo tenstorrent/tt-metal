@@ -396,6 +396,27 @@ execute_step_setup_review_run() {
     # The reviewer agent reads the solve's own review verdict for continuity.
     cp "$src/review_result.json" "$_L/source_review_result.json" 2>/dev/null || true
 
+    # setup_worktree.sh links these harness files to the shared copy and hides them
+    # from git, so a round can't commit a change to them. When a reviewer names one,
+    # put the PR's tracked file back so the round can edit and commit it.
+    local rel
+    for rel in $(REVIEW_INPUT="$(sg REVIEW_INPUT)" python - 2>/dev/null <<'PY'
+import json, os
+threads = json.load(open(os.environ["REVIEW_INPUT"])).get("actionable_threads") or []
+text = " ".join(str(t.get("path") or "") + " " + " ".join(str(c.get("body") or "")
+                for c in t.get("conversation") or []) for t in threads)
+for name in ("run_test.sh", "run_qsr_metal_test.sh", "llk_triage.py"):
+    if f".claude/scripts/{name}" in text:
+        print(f".claude/scripts/{name}")
+PY
+); do
+        [ -L "$rel" ] && git ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 || continue
+        rm -f "$rel"
+        git update-index --no-skip-worktree -- "$rel"
+        git checkout -- "$rel"
+        echo "RESTORED=$rel (reviewer named it; edits here are committed with the PR)"
+    done
+
     rj message --message "Addressing review on PR #$(sg PR_NUMBER); imported ${imported} artifact(s) from $(sg SOURCE_RUN_ID)"
     echo "PR=#$(sg PR_NUMBER) SOURCE_RUN_ID=$(sg SOURCE_RUN_ID) ARTIFACTS=${imported}"
 }
