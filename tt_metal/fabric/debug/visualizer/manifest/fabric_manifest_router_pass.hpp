@@ -24,6 +24,19 @@ namespace tt::tt_fabric {
 class FabricEriscDatamoverBuilder;
 struct RouterVcShape;
 
+// The router pass's view of a router's kernel inputs.
+struct RouterKernelInputs {
+    // Shared by eriscs.
+    std::map<std::string, std::string> defines;
+    // Per-erisc.
+    std::vector<tt::tt_metal::DataMovementProcessor> processors;
+    // Per-erisc.
+    std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args;
+};
+
+// Builds RouterKernelInputs from the KernelInputs for each erisc in the router.
+RouterKernelInputs make_router_kernel_inputs(const std::vector<KernelInputs>& kernel_inputs_by_erisc);
+
 // Everything the router pass reads about one router.
 struct ManifestRouterInputs {
     const FabricEriscDatamoverBuilder& erisc_builder;

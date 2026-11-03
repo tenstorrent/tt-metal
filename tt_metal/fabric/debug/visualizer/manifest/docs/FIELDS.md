@@ -137,3 +137,10 @@ The named arguments and defines the router kernel is fed that the manifest does 
 | Define | Reason |
 | --- | --- |
 | `FABRIC_2D` | The same fact as IS_2D_FABRIC: both come from is_2D_routing_enabled. |
+| `ROUTING_MODE` | Fabric-wide: CreateEthernetKernel adds it to every fabric kernel (FabricContext::get_fabric_kernel_defines). |
+| `UDM_MODE` | Fabric-wide: CreateEthernetKernel adds it to every fabric kernel (FabricContext::get_fabric_kernel_defines). |
+| `FABRIC_1D_PKT_HDR_EXTENSION_WORDS` | Fabric-wide: CreateEthernetKernel adds it to every fabric kernel (FabricContext::get_fabric_kernel_defines). |
+| `FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE` | Fabric-wide: CreateEthernetKernel adds it to every fabric kernel (FabricContext::get_fabric_kernel_defines). |
+| `FABRIC_EXPRESS_ENABLED` | Fabric-wide: CreateEthernetKernel adds it to every fabric kernel (FabricContext::get_fabric_kernel_defines). |
+| `FABRIC_EXPRESS_AXIS` | Fabric-wide: CreateEthernetKernel adds it to every fabric kernel (FabricContext::get_fabric_kernel_defines). |
+| `FORCE_WATCHER_OFF` | CreateEthernetKernel adds it when watcher is disabled on Ethernet cores. |

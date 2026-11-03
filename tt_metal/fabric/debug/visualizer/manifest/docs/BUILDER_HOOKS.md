@@ -28,7 +28,7 @@ FabricFirmwareInitializer::init                         (fabric_firmware_initial
 ├── per device: create_and_compile_tt_fabric_program    (fabric_init.cpp)
 │   ├── FabricBuilder::create_kernels
 │   │   ├── keeps the KernelCreationContext                master router, router count, router channel mask
-│   │   └── each router's create_kernel                    records its RouterKernelInputs
+│   │   └── each router's create_kernel                    records each RISC's KernelInputs
 │   ├── FabricBuilder::publish_manifest_chip              only with TT_METAL_FABRIC_GENERATE_MANIFEST
 │   │   ├── each router's collect_manifest_router          runs the router pass on that router
 │   │   └── PublishedChips::publish                        keeps the chip in the builder context
@@ -47,7 +47,7 @@ way.
 
 | Hook | Where | What it hands over |
 | --- | --- | --- |
-| `RouterKernelInputs` | Defined in `fabric_router_builder.hpp`; filled by `ComputeMeshRouterBuilder::create_kernel` | What the router passed to `CreateKernel`: the defines every RISC shares, and each RISC's processor and named compile-time arguments |
+| `KernelInputs`, one per RISC | Defined in `fabric_router_builder.hpp`; filled by `ComputeMeshRouterBuilder::create_kernel` | What each RISC's kernel was created with: its kernel handle, processor, NoC, positional and named compile-time arguments, defines and runtime arguments. The defines are read back from the `Kernel` after `CreateKernel`, so they include the fabric-wide ones `CreateEthernetKernel` adds |
 | The kept `KernelCreationContext` | `FabricBuilder::create_kernels` | The chip-wide values every router's kernel was given: the master router's channel, the router count and the router channel mask. The manifest records them as the chip's `local_sync` |
 | `collect_manifest_router(chip_facts)` | Pure virtual on `FabricRouterBuilder`; implemented by `ComputeMeshRouterBuilder` | One `manifest::Router`. The builder gathers what only it can see into a `ManifestRouterInputs` and hands it to the router pass (`fabric_manifest_router_pass.cpp`) |
 | `publish_manifest_chip()` | `FabricBuilder` | The chip: its Z port role, its local sync, every router sorted by Ethernet channel, and the router pairs it connected (`get_router_connection_pairs`), which the topology pass finds each edge's sibling in |
@@ -68,7 +68,7 @@ way.
 | `location` | The router's `RouterLocation` | Its Ethernet channel, the direction it faces, and whether its link is a dispatch link |
 | `chip_facts` | The chip's `ChipRoutingFacts`, passed in by `FabricBuilder` | The edge capability of the direction the router faces, which becomes its link's `edge_capability` |
 | `addresses_to_clear` | `FabricBuilderContext::get_fabric_router_addresses_to_clear()` | Whether fabric init clears each L1 region (`cleared_by_host`) |
-| `kernel` | The `RouterKernelInputs` recorded in `create_kernel` | Every field the field tables read, and the check that every argument and define is accounted for |
+| `kernel` | `make_router_kernel_inputs` over the `KernelInputs` recorded in `create_kernel`: ERISC 0's defines, and each RISC's processor and named compile-time arguments | Every field the field tables read, and the check that every argument and define is accounted for |
 | `hal` | `FabricContext`'s HAL | The physical ERISC each RISC runs on |
 
 [ROUTER_PASS.md](ROUTER_PASS.md) covers what the router pass does with these.
@@ -79,14 +79,14 @@ The hooks are meant to cost fabric as little as possible:
 
 - **Fabric's headers include no manifest headers.** `fabric_router_builder.hpp` forward-declares `manifest::Router`,
 `fabric_builder_context.hpp` forward-declares `manifest::PublishedChips` and holds it through a `unique_ptr`, and
-`RouterKernelInputs` is plain builder data. Only four fabric `.cpp` files include manifest headers:
+`KernelInputs` is plain builder data. Only four fabric `.cpp` files include manifest headers:
 `compute_mesh_router_builder.cpp`, `fabric_builder.cpp`, `fabric_builder_context.cpp` and
 `fabric_firmware_initializer.cpp`. A change to the manifest doesn't recompile the code that includes fabric's
 headers.
 - **Each hook lives in the class that has the data.** The router builder knows its ERISC builder, VC shape and kernel
 arguments, so it gathers them itself. The manifest needs no friend access, and fabric needs no accessors added just
 for it.
-- **With the option off, almost nothing runs.** Every router still records its `RouterKernelInputs`, which is a copy of
+- **With the option off, almost nothing runs.** Every router still records its `KernelInputs`, which is a copy of
 arguments it already computed, and the builder context holds an empty `PublishedChips`. Nothing is collected or
 written.
 
@@ -106,7 +106,7 @@ arguments are final. `publish_manifest_chip` is called right after `create_kerne
 A new `FabricRouterBuilder` subclass has to:
 
 1. Implement `collect_manifest_router`. It's pure virtual, so the build fails until it does.
-2. Record its `RouterKernelInputs` in `create_kernel`, as it calls `CreateKernel`.
+2. Record each RISC's `KernelInputs` in `create_kernel`, as it calls `CreateKernel`.
 3. Fill a `ManifestRouterInputs` and call the router pass, or describe its router some other way if it isn't an
 
    ERISC datamover router. The router pass assumes one.

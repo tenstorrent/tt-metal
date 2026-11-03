@@ -761,8 +761,18 @@ inline constexpr auto k_unrecorded_args = std::to_array<Unrecorded>({
     {"CODE_PROFILING_ENABLED_TIMERS", k_not_yet_described},
 });
 
+inline constexpr std::string_view k_fabric_wide_define =
+    "Fabric-wide: CreateEthernetKernel adds it to every fabric kernel (FabricContext::get_fabric_kernel_defines).";
+
 inline constexpr auto k_unrecorded_defines = std::to_array<Unrecorded>({
     {"FABRIC_2D", "The same fact as IS_2D_FABRIC: both come from is_2D_routing_enabled."},
+    {"ROUTING_MODE", k_fabric_wide_define},
+    {"UDM_MODE", k_fabric_wide_define},
+    {"FABRIC_1D_PKT_HDR_EXTENSION_WORDS", k_fabric_wide_define},
+    {"FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE", k_fabric_wide_define},
+    {"FABRIC_EXPRESS_ENABLED", k_fabric_wide_define},
+    {"FABRIC_EXPRESS_AXIS", k_fabric_wide_define},
+    {"FORCE_WATCHER_OFF", "CreateEthernetKernel adds it when watcher is disabled on Ethernet cores."},
 });
 
 constexpr bool table_reads(const auto& fields, std::string_view name) {

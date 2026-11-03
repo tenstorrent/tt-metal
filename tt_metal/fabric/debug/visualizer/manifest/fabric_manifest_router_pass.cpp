@@ -742,6 +742,18 @@ std::vector<std::vector<manifest::DownstreamEdge>> collect_router_edges(const Ch
 
 }  // namespace
 
+RouterKernelInputs make_router_kernel_inputs(const std::vector<KernelInputs>& kernel_inputs_by_erisc) {
+    RouterKernelInputs kernel;
+    if (!kernel_inputs_by_erisc.empty()) {
+        kernel.defines = kernel_inputs_by_erisc.front().defines;
+    }
+    for (const KernelInputs& erisc_inputs : kernel_inputs_by_erisc) {
+        kernel.processors.push_back(erisc_inputs.processor);
+        kernel.named_ct_args.push_back(erisc_inputs.named_compile_args);
+    }
+    return kernel;
+}
+
 // Go through all inputs fed into the kernel and ensure that they are
 // accounted for by the manifest.
 void check_kernel_inputs_accounted(const RouterKernelInputs& kernel) {
