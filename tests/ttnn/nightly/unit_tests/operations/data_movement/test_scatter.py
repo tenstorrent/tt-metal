@@ -27,6 +27,16 @@ def select_torch_dtype(ttnn_dtype):
         )  # !!! there is a strict requirement for the index tensor in Torch to be int64, and there is no int64 in ttnn
 
 
+def expected_cache_entries(device, expected):
+    # A (native, codegen) pair pins a case the codegen route serves with fewer programs than native.
+    # ttnn::scatter() takes that route on Wormhole and Blackhole only (codegen_supported_on_arch), so
+    # the pair is read by the device's architecture; a bare count holds on every architecture.
+    if isinstance(expected, tuple):
+        native, codegen = expected
+        return codegen if ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device) else native
+    return expected
+
+
 def rand_scatter_index(index_shape, dim, input_dim_size, dtype):
     """Indices unique along `dim`, drawn from the whole `[0, input_dim_size)` range.
 
@@ -242,12 +252,12 @@ def test_scatter_add_zero_volume(input_shape, dim, index_shape, device):
         ([50, 20], 0, [50, 20], [200, 80], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 5),
         # bfloat16 TILE rows with an int32 or uint32 index route to codegen (ttnn::scatter() in
         # scatter.cpp; the gate is codegen/scatter_codegen_supported.hpp): TILE stays TILE, so
-        # native's to_layout legs never run and the count is lower than native's.
-        ([10, 10, 10], 1, [2, 30, 10], [2, 30, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 4),
+        # native's to_layout legs never run and the count is lower than native's: (native, codegen).
+        ([10, 10, 10], 1, [2, 30, 10], [2, 30, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, (8, 4)),
         ([10, 30, 6, 10], -1, [2, 30, 6, 5], [2, 30, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 2),
         ([10, 30, 6, 10], 2, [2, 30, 6, 5], [2, 30, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 6),
         ([50, 200], 0, [49, 199], [51, 201], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 10),
-        ([10, 20], 0, [9, 19], [11, 21], ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE, 6),
+        ([10, 20], 0, [9, 19], [11, 21], ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE, (10, 6)),
     ],
 )
 def test_scatter_partial(
@@ -276,7 +286,7 @@ def test_scatter_partial(
         assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
     else:
         assert_allclose(torch_result_from_ttnn, torch_result)
-    assert device.num_program_cache_entries() == expected_num_cache_entries
+    assert device.num_program_cache_entries() == expected_cache_entries(device, expected_num_cache_entries)
 
 
 # A rank > 4 input used to be collapsed to 4D by merging its leading (rank - 3) dims, and the index
@@ -456,12 +466,12 @@ def test_scatter_reduction_high_rank_unequal_leading_dims(
         ([50, 20], 0, [50, 20], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 4),
         # bfloat16 TILE rows with an int32 or uint32 index route to codegen (ttnn::scatter() in
         # scatter.cpp; the gate is codegen/scatter_codegen_supported.hpp): TILE stays TILE, so
-        # native's to_layout legs never run and the count is lower than native's.
-        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 3),
+        # native's to_layout legs never run and the count is lower than native's: (native, codegen).
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, (6, 3)),
         ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 3),
-        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 3),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, (6, 3)),
         ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 3),
-        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 4),
+        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, (7, 4)),
         ##################
         # these cases fail due to the to_layout precision issue (fp32 tiled <-> row-major) : #23405
         # ([10, 50, 10, 50, 100], -1, [10, 50, 10, 50, 100], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),
@@ -509,7 +519,7 @@ def test_scatter_normal_with_callback(
             entries_after_first_call = device.num_program_cache_entries()
     # The second call hits every program the first one cached, whichever route served it.
     assert device.num_program_cache_entries() == entries_after_first_call
-    assert device.num_program_cache_entries() == expected_num_cache_entries
+    assert device.num_program_cache_entries() == expected_cache_entries(device, expected_num_cache_entries)
 
 
 ##### !!!! WARNING !!!! #####

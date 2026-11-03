@@ -67,9 +67,9 @@ ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim)
 // buffer type, so a mismatched placement keeps the TILE factory instead. The one definition both the
 // dispatch and is_demoted() read: a case this detour serves never pays the TILE factories'
 // padded-row cost that is_demoted() otherwise guards against. `transposed_copies_pending` is set by
-// is_demoted(), which asks before the dispatch has transposed the operands: the transposed copy of
-// each operand is then charged to the budget too, so both evaluations see the same frontier and
-// cannot disagree on a unit row.
+// is_demoted(), which asks before the dispatch has transposed the operands: the TILE copy of each
+// operand is then charged to the budget too, at its tile-padded size, so both evaluations see the
+// same frontier and cannot disagree on a unit row.
 bool prefers_row_major_strategy(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
@@ -96,10 +96,11 @@ bool is_demoted(
 // the codegen factory will build fits the L1 that is free right now, with the buffers this call
 // still allocates before the factory runs already deducted. The ROW_MAJOR factories keep the full
 // input and output sticks resident, so unlike the chunked native kernels they cannot shrink to
-// whatever is left; a ROW_MAJOR call they cannot fit takes native as a whole. TILE calls always
-// pass: the TILE factories' footprint is a fixed handful of tile pages, and the row-major detour
-// runs this same budget inside prefers_row_major_strategy(). Same `dim` and reduction_mode
-// conventions as supported_by_codegen(), which must already have accepted the call.
+// whatever is left; a ROW_MAJOR call they cannot fit takes native as a whole. A TILE call needs the
+// streaming plan's handful of tile pages, the least any TILE factory seats, unless the row-major
+// detour, which runs this same budget inside prefers_row_major_strategy(), serves it instead. Same
+// `dim` and reduction_mode conventions as supported_by_codegen(), which must already have accepted
+// the call.
 bool codegen_plan_fits_live_l1(
     const Tensor& input_tensor,
     int32_t dim,
