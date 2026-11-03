@@ -921,6 +921,12 @@ void CommandListBuilderImpl::resolve_parameters(
             TT_FATAL(!info.nodes.empty(), "Command list runtime parameter '{}' must name at least one node", *name);
             auto& captured = find_captured_program(info.program.get());
             const auto* schema = rta_schema_of(captured, info.kernel_name);
+            TT_FATAL(
+                !schema->runtime_array_arg_slots.contains(info.arg_name),
+                "Runtime argument '{}' of kernel '{}' is an array argument, which command list parameters do not "
+                "support yet",
+                info.arg_name,
+                info.kernel_name);
             const auto slot = schema->runtime_arg_name_to_slot.find(info.arg_name);
             TT_FATAL(
                 slot != schema->runtime_arg_name_to_slot.end(),
@@ -941,6 +947,12 @@ void CommandListBuilderImpl::resolve_parameters(
         for (const auto& info : infos) {
             auto& captured = find_captured_program(info.program.get());
             const auto* schema = rta_schema_of(captured, info.kernel_name);
+            TT_FATAL(
+                !schema->common_runtime_array_arg_slots.contains(info.arg_name),
+                "Common runtime argument '{}' of kernel '{}' is an array argument, which command list parameters do "
+                "not support yet",
+                info.arg_name,
+                info.kernel_name);
             const auto slot = schema->common_runtime_arg_name_to_slot.find(info.arg_name);
             TT_FATAL(
                 slot != schema->common_runtime_arg_name_to_slot.end(),
@@ -976,6 +988,10 @@ void CommandListBuilderImpl::resolve_parameters(
                     if (handle.tensor_parameter_name != *info.param_name) {
                         continue;
                     }
+                    TT_FATAL(
+                        !handle.is_per_node,
+                        "TensorParameter '{}' is per-node allocated, which command lists cannot patch",
+                        info.param_name);
                     bound = true;
                     auto binding = std::make_shared<const TensorPatchBinding>(TensorPatchBinding{
                         .binding = handle, .expected_spec = *expected_spec, .relaxations = relaxations});
@@ -1000,7 +1016,7 @@ void CommandListBuilderImpl::add(MeshWorkload& workload, const CmdListParameters
         "The active sub-device manager changed while recording a command list");
     validate_no_service_cores(workload, mesh_device);
 
-    auto& binary_load_cq = mesh_device.mesh_command_queue();
+    auto& binary_load_cq = mesh_device.mesh_command_queue(0);
     auto binary_buffer = workload.impl().prepare_for_command_list(binary_load_cq);
 
     StagedCommandListNode staged_node;

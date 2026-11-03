@@ -20,14 +20,8 @@ from typing import Literal
 import ttnn
 
 import torch
-from ..config import DeformableAttentionConfig
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
+from ..model_config import DeformableAttentionConfig
+from .tt_common import signpost
 
 from loguru import logger
 
@@ -68,6 +62,7 @@ def multi_scale_deformable_attn_fused(
     spatial_shapes,
     num_valid_queries=None,
     *,
+    num_valid_queries_tensor=None,
     value_memory: ValueMemory = "auto",
 ):
     """Core multi-scale deformable attention, as one device op.
@@ -86,9 +81,12 @@ def multi_scale_deformable_attn_fused(
             raw, in feature-map pixel units. The SFPU applies the per-level scale.
         attention_weights: (bs, num_queries, num_heads, num_levels*num_points) ROW_MAJOR
         spatial_shapes: torch (num_levels, 2) of (H, W)
-        num_valid_queries: optional per-batch count of rows to compute. Rows past it are left
-            unwritten and may hold NaN or Inf, so the caller must drop them with a select
-            (``ttnn.where``), not by multiplying with a mask.
+        num_valid_queries: optional per-batch count of rows to compute, as host ints. Rows past a
+            count are left unwritten and may hold NaN or Inf, so the caller must drop them with a
+            select (``ttnn.where``), not by multiplying with a mask.
+        num_valid_queries_tensor: the same counts as a (bs,) uint32 ROW_MAJOR device tensor, read on
+            device, so a captured trace follows its contents. Counts above num_queries are
+            clamped. Pass at most one of the two.
         value_memory: ``"auto"`` selects L1 only when value, output, and fused-op
             circular buffers fit safely, retries in DRAM if an L1 allocation still
             runs out of memory, and logs one warning per input shape when it falls
@@ -100,8 +98,7 @@ def multi_scale_deformable_attn_fused(
         concatenated by the op's writer, so no reshape/permute follows. The output
         lives in the memory ``value_memory`` selected (L1 or interleaved DRAM).
     """
-    if use_signpost:
-        signpost(header="fused_msda Start")
+    signpost(header="fused_msda Start")
 
     if value_memory not in {"auto", "l1", "dram"}:
         raise ValueError(f'value_memory must be "auto", "l1", or "dram", got {value_memory!r}')
@@ -122,6 +119,7 @@ def multi_scale_deformable_attn_fused(
             attention_weights,
             _spatial_shapes_list(spatial_shapes),
             reference_mode="pillar",
+            device_valid_counts=num_valid_queries_tensor is not None,
         )
         if value_memory == "l1" and not l1_is_safe:
             raise RuntimeError("fused_msda value_memory='l1' is unsafe under the current L1 allocation")
@@ -151,6 +149,7 @@ def multi_scale_deformable_attn_fused(
                 reference_mode="pillar",
                 memory_config=memory_config,
                 num_valid_queries=valid_queries,
+                num_valid_queries_tensor=num_valid_queries_tensor,
             )
         finally:
             if owns_staged_value:
@@ -169,8 +168,7 @@ def multi_scale_deformable_attn_fused(
         )
         output = run_with_memory_config(ttnn.DRAM_MEMORY_CONFIG)
 
-    if use_signpost:
-        signpost(header="fused_msda End")
+    signpost(header="fused_msda End")
     return output
 
 
@@ -180,7 +178,7 @@ class TTMSDeformableAttention:
     Based on the MMCV/BEVFormer approach.
     """
 
-    def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes):
+    def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes, residual=True):
         """
         Initialize TTNN Multi-Scale Deformable Attention module.
 
@@ -198,6 +196,8 @@ class TTMSDeformableAttention:
                 module: forward takes no shapes of its own, and they are handed to the
                 fused op as a static attribute. Features at a different resolution
                 require a new instance.
+            residual: Add the identity to the output. BEVFormer's MSDeformableAttention3D, inside
+                the spatial cross-attention, has no shortcut.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
@@ -233,6 +233,7 @@ class TTMSDeformableAttention:
         self.total_keys = int(self.spatial_shapes.prod(dim=1).sum().item())
 
         self.head_dim = self.embed_dims // self.num_heads
+        self.residual = residual
 
     def forward(
         self,
@@ -244,6 +245,7 @@ class TTMSDeformableAttention:
         key_padding_mask=None,
         reference_points=None,
         num_valid_queries=None,
+        num_valid_queries_tensor=None,
         **kwargs,
     ):
         """
@@ -256,8 +258,10 @@ class TTMSDeformableAttention:
             query_pos: [bs, num_queries, embed_dims] Query positional encoding
             key_padding_mask: [bs, num_keys] Padding mask for keys
             reference_points: [bs, num_queries, num_points_in_pillar, 2] Reference points
-            num_valid_queries: Optional per-batch count of rows to compute. Rows past it are left
-                unwritten and may hold NaN or Inf; drop them with ``ttnn.where``.
+            num_valid_queries: Optional per-batch count of rows to compute, as host ints. Rows past
+                it are left unwritten and may hold NaN or Inf; drop them with ``ttnn.where``.
+            num_valid_queries_tensor: The same counts as a (bs,) uint32 device tensor, read on
+                device so a captured trace follows them.
 
         Returns:
             output: [bs, num_queries, embed_dims]
@@ -273,8 +277,8 @@ class TTMSDeformableAttention:
         if query_pos is not None:
             query = ttnn.add(query, query_pos)
 
-        if use_signpost:
-            signpost(header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {self.total_keys}")
+        deformable_attn_region = f"TT MS Deformable Attn Module {query.shape[1]} - {self.total_keys}"
+        signpost(header=f"{deformable_attn_region} Start")
 
         # Handle batch_first format
         if not self.batch_first:
@@ -350,6 +354,7 @@ class TTMSDeformableAttention:
             attention_weights=attention_weights,
             spatial_shapes=self.spatial_shapes,
             num_valid_queries=num_valid_queries,
+            num_valid_queries_tensor=num_valid_queries_tensor,
         )
 
         if ENABLE_LOGGING:
@@ -364,14 +369,17 @@ class TTMSDeformableAttention:
             logger.info("MSDA Adding Residual")
 
         # Add residual connection
-        output = ttnn.add(output, identity)
+        if self.residual:
+            output = ttnn.add(output, identity)
+        else:
+            # The fused op's output is ROW_MAJOR; without output_proj or the residual nothing tiles it.
+            output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
 
         # Handle batch_first format for output
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 
-        if use_signpost:
-            signpost(header="TT MS Deformable Attn Module End")
+        signpost(header=f"{deformable_attn_region} End")
 
         return output
 

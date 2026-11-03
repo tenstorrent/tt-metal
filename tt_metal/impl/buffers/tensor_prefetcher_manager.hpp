@@ -279,7 +279,8 @@ private:
     std::thread host_worker_;
     std::mutex queue_mu_;
     std::condition_variable queue_cv_;
-    std::deque<Request> pending_;
+    // Shared and immutable: a trace replay queues its captured requests again without copying their pages.
+    std::deque<std::shared_ptr<const Request>> pending_;
     // Whether pending_ holds requests the worker has not taken; only written under queue_mu_. Lets
     // worker_loop skip the lock while it waits for room in the socket FIFOs and nothing new has come.
     std::atomic<bool> has_pending_{false};
@@ -288,7 +289,7 @@ private:
     // Requests captured during trace capture, keyed by the recording trace's id. Populated by
     // queue() when its command queue is mid-capture; drained back onto pending_ by
     // replay_trace() on each trace execution; erased by release_trace(). Guarded by queue_mu_.
-    std::unordered_map<MeshTraceId, std::vector<Request>> trace_requests_;
+    std::unordered_map<MeshTraceId, std::vector<std::shared_ptr<const Request>>> trace_requests_;
 
     // In benchmark mode, created only after kernels and the worker are live and
     // destroyed immediately after shutdown/drain so setup and cleanup are excluded.
