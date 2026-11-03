@@ -121,11 +121,12 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
 
     reconfig_data_format(cb_attention_weights, cb_cur_max);
     sub_bcast_cols_init(cb_attention_weights, cb_cur_max);
+    // Fused scale+exp, exp(scale * (score - max)), in one SFPU pass per tile; the exp state is set once
+    // here, as nothing below but the subtract (FPU) and the packs runs between the tiles.
+    sdpa_exp_tile_scaled_init<scaler_fp32>();
 
     for (uint32_t t0 = 0; t0 < total; t0 += pass_tiles) {
         const uint32_t n = (total - t0 < pass_tiles) ? (total - t0) : pass_tiles;
-        // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
-        // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
         tile_regs_acquire();
         for (uint32_t i = 0; i < n; ++i) {
             sub_tiles_bcast_cols(
@@ -276,6 +277,7 @@ void update_exp_max_diffs(
     uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff, uint32_t row0, uint32_t n) {
     reconfig_data_format(cb_prev_max_value, cb_cur_max_value);
     sub_init(cb_prev_max_value, cb_cur_max_value);
+    sdpa_exp_tile_scaled_init<scaler_fp32>();
     tile_regs_acquire();
     for (uint32_t i = 0; i < n; ++i) {
         sub_tiles(cb_prev_max_value, cb_cur_max_value, /* tile_idx */ row0 + i, /* tile_idx */ row0 + i, i);
