@@ -68,7 +68,8 @@ _PRODUCTION_CASES = (
 # References are medians of five runs on the Blackhole LoudBox development machine bh-lb-42, whose DRAM-placement
 # medians in the same runs (97,625 / 75,386 / 65,397 ns) lie within 2% of the CI references above. Replace them with
 # CI runner medians once nightlies report them.
-_ND_SHARDED_DURATION_NS = {"sp1-tp8": 90327, "sp2-tp4": 71042, "sp4-tp2": 59443}
+# sp4-tp2 reads the complement form [E | B]: measured on a P150b (12x10 grid) 2026-11-02.
+_ND_SHARDED_DURATION_NS = {"sp1-tp8": 90327, "sp2-tp4": 71042, "sp4-tp2": 61300}
 
 
 def _affine_exclusive_scan_ops(
@@ -189,8 +190,9 @@ def _to_device(
 
 
 def _pack(a: torch.Tensor, b: torch.Tensor, *, slots: int = 1) -> torch.Tensor:
-    """Packed [slots, N, K, K+V] summaries of [A | B] rows. An unsplit rank never reads a tail slot, so it is NaN."""
-    head = torch.cat([a, b], dim=-1)
+    """Packed [slots, N, K, K+V] summaries of complement-form [E | B] rows, E = A - I. An unsplit rank never reads a
+    tail slot, so it is NaN."""
+    head = torch.cat([a - torch.eye(a.shape[-1]), b], dim=-1)
     return torch.stack([head, torch.full_like(head, float("nan"))][:slots])
 
 
@@ -463,17 +465,31 @@ def test_affine_exclusive_scan_approximate_math_uses_distinct_accurate_program(
     )
 
 
+@pytest.mark.parametrize(
+    ("unsupported_config", "message"),
+    [
+        (
+            ttnn.types.BlackholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, packer_l1_acc=True),
+            "packer_l1_acc=true is unsupported",
+        ),
+        (
+            ttnn.types.BlackholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False),
+            "fp32_dest_acc_en=false is unsupported",
+        ),
+    ],
+    ids=["packer-l1-acc", "bf16-dest"],
+)
 def test_affine_exclusive_scan_rejects_unsupported_compute_config(
-    zero_actual_start, device: ttnn.Device, expect_error: Callable
+    zero_actual_start,
+    device: ttnn.Device,
+    expect_error: Callable,
+    unsupported_config: ttnn.DeviceComputeKernelConfig,
+    message: str,
 ) -> None:
     case = _UNIT_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
     device_inputs = _device_inputs(host, device)
-    unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        packer_l1_acc=True,
-    )
-    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+    with expect_error(RuntimeError, message):
         _run(
             *device_inputs,
             case.groups_per_head,
