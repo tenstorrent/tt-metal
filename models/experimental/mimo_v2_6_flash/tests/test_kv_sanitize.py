@@ -3,8 +3,8 @@
 
 """The K / V cache only ever holds finite rows (attention.py KV_SANITIZE), on one chip:
 
-* ``finite_kv`` maps NaN and +-inf to 0, clamps the rest to +-KV_LIMIT and leaves every other value bit for bit, in
-  an interleaved and in the decode heads' height-sharded layout;
+* ``finite_kv`` (one ttnn.clamp) clamps to +-KV_LIMIT, maps NaN to one of the bounds (the SFPU clamp's compares are
+  not IEEE) and leaves every other value bit for bit, in an interleaved and in the decode heads' height-sharded layout;
 * SwaDecodeQkv (the SWA decode's fused qkv split, RoPE and cache update) writes a finite row for a user whose new K or
   V is NaN or infinite, and the other users' rows exactly as without the bad one;
 * the SWA decode SDPA (paged MLA decode with the sliding window and sinks, as the SWA layers run it) does not change
@@ -35,19 +35,20 @@ def _special(shape, seed):
     return x
 
 
-def _expected(x):
-    """finite_kv on the host, after the bf16 round trip the device sees."""
+def _check(got, x):
+    """``got`` is finite_kv of ``x``: x after the bf16 round trip the device sees, clamped, a NaN at a bound."""
     x = x.to(torch.bfloat16).float()
-    x = torch.where(torch.isfinite(x), x, torch.zeros_like(x))
-    return x.clamp(-KV_LIMIT, KV_LIMIT)
+    nan = torch.isnan(x)
+    assert torch.isfinite(got).all()
+    assert torch.equal(got[~nan], x[~nan].clamp(-KV_LIMIT, KV_LIMIT))
+    assert (got[nan].abs() == KV_LIMIT).all()
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_finite_kv(mesh_device):
     x = _special((1, 1, 64, DK), 0)
     t = ttnn.from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    got = ttnn.to_torch(ttnn.get_device_tensors(finite_kv(t))[0]).float()
-    assert torch.equal(got, _expected(x))
+    _check(ttnn.to_torch(ttnn.get_device_tensors(finite_kv(t))[0]).float(), x)
 
     # The decode layout: the K heads nlp_create_qkv_heads_decode makes (height-sharded, one user per core).
     qkv = _special((1, 1, TILE, (NH + 2) * DK), 1)
@@ -62,7 +63,7 @@ def test_finite_kv(mesh_device):
     clean = finite_kv(k)
     assert clean.memory_config() == mc
     got = ttnn.to_torch(ttnn.get_device_tensors(clean)[0]).float()
-    assert torch.equal(got, _expected(before))
+    _check(got, before)
 
 
 def _swa_inputs(device, users, positions, block_ids, seed):

@@ -18,7 +18,7 @@ constexpr uint32_t kRoleQ = 0, kRoleK = 1, kRoleV = 2;
 #define SWA_KV_SANITIZE 1
 #endif
 
-// One bf16 as the cache stores it (attention.py finite_kv): inf / NaN -> 0, |x| >= 2^16 -> +-65280 (0x477F).
+// One bf16 made finite for the cache (attention.py KV_SANITIZE): inf / NaN -> 0, |x| >= 2^16 -> +-65280 (0x477F).
 FORCE_INLINE uint32_t finite_bf16(uint32_t h) {
     const uint32_t exponent = (h >> 7) & 0xFF;
     if (exponent == 0xFF) {
