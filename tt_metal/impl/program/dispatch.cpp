@@ -624,13 +624,19 @@ uint32_t finalize_kernel_bins(
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    // Emule and Quasar mock don't have real binaries, skip finalization.
+    // Quasar mock doesn't have real binaries, skip finalization. Neither does emule for a core type with no kernel
+    // groups, whose base_offset can still be nonzero (ETH semaphores are laid out for both ETH core types).
     const auto target = metal_ctx.get_cluster().get_target_device_type();
-    if (target == tt::TargetDevice::Emule || (target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR)) {
+    if ((target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) ||
+        (target == tt::TargetDevice::Emule && kernel_groups.empty())) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
         return base_offset;
     }
+    // Emule runs host code, not RISC-V binaries. Each binary still gets a text slot, which tt-emule fills with
+    // the kernel's identity, so a kernel-config block names its kernels wherever it is copied, as silicon's does.
+    const bool is_emule = target == tt::TargetDevice::Emule;
+    constexpr uint32_t emule_kernel_text_size = 16;
 
     const auto& hal = metal_ctx.hal();
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
@@ -646,14 +652,29 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
+            uint32_t num_binaries = kernel->expected_num_binaries();
+            TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
+            const bool stored_in_config_buffer = hal.get_core_kernel_stored_in_config_buffer(programmable_core_type);
+            if (is_emule) {
+                for (uint32_t i = 0; i < num_binaries; i++) {
+                    // Emule has no fixed text address to fall back on, so text outside the config buffer is empty.
+                    const uint32_t kernel_text_offset = stored_in_config_buffer ? offset : 0;
+                    const uint32_t text_size = stored_in_config_buffer ? emule_kernel_text_size : 0;
+                    offset = tt::align(offset + text_size, l1_alignment);
+                    for (uint32_t processor_index : kernel->get_processor_indices_for_binary(static_cast<int>(i))) {
+                        kg->kernel_text_offsets[processor_index] = kernel_text_offset;
+                        kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
+                        kernel_config.kernel_text_size()[processor_index] = text_size;
+                    }
+                }
+                continue;
+            }
             const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
                                                         .get_device_build_env(device->build_id())
                                                         .build_key());
-            uint32_t num_binaries = kernel->expected_num_binaries();
-            TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
             for (uint32_t i = 0; i < num_binaries; i++) {
                 uint32_t kernel_text_offset = 0;
-                if (hal.get_core_kernel_stored_in_config_buffer(programmable_core_type)) {
+                if (stored_in_config_buffer) {
                     kernel_text_offset = offset;
                     offset += binaries[i]->get_packed_size();
                     offset = tt::align(offset, l1_alignment);

@@ -145,7 +145,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
         for (const auto& logical_core : logical_cores) {
             KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
             CoreCoord physical_core = device.virtual_core_from_logical_core(logical_core, core_type);
-            // Skip binary writing for emulated mode (JIT compilation happens in execute_program_emulated)
+            // Emulated kernels have no binaries; their text is written below.
             if (!is_emulated) {
                 ConfigureKernelGroup(program, index, kernel_group, device, logical_core, hal);
             }
@@ -257,6 +257,11 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
             program.impl().init_semaphores(device, logical_core, index);
         }
     }
+#ifdef TT_METAL_USE_EMULE
+    if (is_emulated) {
+        emule::write_kernel_text(&device, program);
+    }
+#endif
 }
 
 void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow_dispatch) {
