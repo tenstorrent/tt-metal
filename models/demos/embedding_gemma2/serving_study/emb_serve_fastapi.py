@@ -5,7 +5,11 @@
 Ashai's FastAPI embedding-server template (via Gio's BGE-M3 copy, gtobarTT/bge_m3_optimized_demo
 models/demos/wormhole/bge_m3/demo/serve.py) with the device worker swapped to google/embeddinggemma-2
 (EmbeddingGemma2ForEmbedding, 1x1 mesh like tt-media-server). Pool, scheduler, tokenization and HTTP layer are the
-template's, unchanged. Serving-path comparison only.
+template's, with two changes: --max-batch N (texts per forward, emb_batcher.collect_batch) and, from Aniruddha's
+strands-decider server (atupe/strands-decider-fastapi @ c83659abfbe, 2026-11-02), non-blocking start-up (503
+"starting"), worker-failure and device-deadline watchdog (503 to pending requests, /health failed), a thread-safe
+tokenizer pool (shared backend encode, tested), validation before tokenizing (422), 127.0.0.1 by default and a
+join/terminate/kill shutdown. CPU tests with a stub worker: test_emb_serve.py.
 
 Lightweight OpenAI-compatible embedding server for BGE-M3 (single chip / DP=N).
 
@@ -112,17 +116,40 @@ def _fast_encode(tokenizer, text, max_len):
 
 
 # --------------------------------------------------------------------------- #
-# BGE-M3 device worker — one resident encoder per chip.
+# Device worker: one resident encoder per chip.
 # --------------------------------------------------------------------------- #
-def _bge_worker(chip_id, args, normalize, task_q, result_q, ready_q, worker_cores):
-    """Single chip: build a resident BgeM3ForEmbeddingOptimized, serve from ``task_q``.
+def _stub_model(spec):
+    """CPU stand-in for the chip (EMB_STUB_WORKER, tests only): 'ok', 'slow_start:S', 'die_after:N', 'hang_after:N'.
+    Row r of the output is a 768-vector whose element 0 is the row's token count, so callers can check ordering."""
+    mode, _, arg = spec.partition(":")
+    if mode == "slow_start":
+        time.sleep(float(arg))
+    calls = {"n": -1}  # the warmup forward does not count
+
+    def forward(id_lists):
+        calls["n"] += 1
+        if mode == "die_after" and calls["n"] > int(arg):
+            os._exit(3)
+        if mode == "hang_after" and calls["n"] > int(arg):
+            while True:  # a device that never finishes
+                time.sleep(3600)
+        time.sleep(0.002)
+        out = np.zeros((len(id_lists), EMBED_DIM), dtype=np.float32)
+        for r, ids in enumerate(id_lists):
+            out[r, 0] = len(ids)
+        return out
+
+    return forward
+
+
+def _bge_worker(chip_id, args, normalize, task_q, result_q, ctrl_q, worker_cores):
+    """Single chip: build a resident EmbeddingGemma2ForEmbedding, serve from ``task_q``.
 
     Protocol:
-      * On ready (after warmup) puts ``(chip_id, build_sec)`` on ``ready_q``.
-      * For each ``(idx, payload)`` task, puts
-        ``(idx, chip_id, emb_or_None, steps_or_None, n_tokens)`` on ``result_q``
-        (emb is a float32 numpy array). ``payload`` is token-id list (server-side
-        tokenize) or raw text (worker-side tokenize).
+      * ``ctrl_q``: ``(chip_id, "ready", build_s)`` after warmup; ``(chip_id, "failed", error)`` on any exception,
+        during warmup or while serving (the server fails its pending requests on it).
+      * For each ``(idx, payload)`` task, puts ``(idx, chip_id, emb_or_None, steps_or_None, n_tokens)`` on
+        ``result_q``; ``payload`` is a token-id list (server-side tokenize) or raw text (worker-side tokenize).
       * A ``None`` task terminates the worker.
     """
     os.environ["TT_VISIBLE_DEVICES"] = CHIPS[chip_id]
@@ -132,83 +159,53 @@ def _bge_worker(chip_id, args, normalize, task_q, result_q, ready_q, worker_core
             os.sched_setaffinity(0, set(worker_cores))
         except (OSError, AttributeError):
             pass
+    from emb_batcher import collect_batch, right_pad
 
     device = None
+    stub = os.environ.get("EMB_STUB_WORKER")
     try:
-        import torch
-
-        import ttnn
-        from models.demos.embedding_gemma2.demo.generator_vllm import EmbeddingGemma2ForEmbedding
-
         t_build0 = time.perf_counter()
-        device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=512 * 1024 * 1024)
-        model = EmbeddingGemma2ForEmbedding(
-            device=device,
-            max_batch_size=32,
-            max_seq_len=MAX_SEQ_LEN,
-            model_name=MODEL_ID,
-        )
+        if stub:
+            run_rows = _stub_model(stub)
+        else:
+            import torch
 
-        # Worker-side tokenizer (used only if server didn't pre-tokenize).
+            import ttnn
+            from models.demos.embedding_gemma2.demo.generator_vllm import EmbeddingGemma2ForEmbedding
+
+            device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=512 * 1024 * 1024)
+            # The constructor compiles and captures a trace for every served (batch, bucket) shape; forward() pads
+            # every request to one of them, so serving never compiles or captures (checked in test_emb_serve.py).
+            model = EmbeddingGemma2ForEmbedding(device=device, max_batch_size=32, max_seq_len=MAX_SEQ_LEN, model_name=MODEL_ID)
+
+            def run_rows(id_lists):
+                input_ids, mask = right_pad(id_lists)
+                out = model.forward(torch.tensor(input_ids), attention_mask=torch.tensor(mask))  # [B, HIDDEN], unit L2
+                ttnn.synchronize_device(device)
+                return out.float().numpy().astype(np.float32)
+
         tokenizer = None
         if not args.server_tokenize:
             from transformers import AutoTokenizer
 
             tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION)
 
-        def _run_batch(id_lists):
-            """id_lists: B lists of ids -> (embs np f32 [B, HIDDEN], t_prep, t_done); right-padded, one forward."""
-            L = max(len(ids) for ids in id_lists)
-            input_ids = torch.zeros((len(id_lists), L), dtype=torch.int64)
-            attention_mask = torch.zeros((len(id_lists), L), dtype=torch.int64)
-            for r, ids in enumerate(id_lists):
-                input_ids[r, : len(ids)] = torch.tensor(ids, dtype=torch.int64)
-                attention_mask[r, : len(ids)] = 1
-            t_prep = time.perf_counter()
-            out = model.forward(input_ids, attention_mask=attention_mask)  # [B, HIDDEN], L2-normalized
-            ttnn.synchronize_device(device)
-            t_done = time.perf_counter()
-            return out.float().numpy().astype(np.float32), t_prep, t_done
+        run_rows([[2, 3, 4, 5]])  # first replay outside the request path
+        ctrl_q.put((chip_id, "ready", time.perf_counter() - t_build0))
 
-        def _run(ids):
-            """ids: list[int] -> (emb_np_f32 [HIDDEN], n_tokens, steps)."""
-            n = len(ids)
-            input_ids = torch.tensor([ids], dtype=torch.int64)  # [1, n]
-            t_prep = time.perf_counter()
-            out = model.forward(input_ids)  # [1, HIDDEN] (already L2-normalized)
-            ttnn.synchronize_device(device)
-            t_done = time.perf_counter()
-            emb = out[0]
-            if not normalize:
-                # The wrapper always L2-normalizes; only used if caller opts out.
-                emb = emb  # no-op placeholder; normalization is intrinsic here
-            return emb.float().numpy().astype(np.float32), n, t_prep, t_done
+        def get(timeout):
+            if timeout is None:
+                return task_q.get()
+            if timeout == 0:
+                return task_q.get_nowait()
+            return task_q.get(timeout=timeout)
 
-        # Warmup: first call compiles + captures the trace.
-        _ = _run(_fast_encode(tokenizer, "warm up the model", MAX_SEQ_LEN)) if tokenizer else _run([0, 1, 2, 3])
-        ready_q.put((chip_id, time.perf_counter() - t_build0))
-
-        max_batch = max(1, int(getattr(args, "max_batch", 1)))
-        batch_wait_s = max(0.0, float(getattr(args, "batch_wait_ms", 0.0))) / 1000.0
-        while max_batch > 1:
-            # Batched mode: take every queued task (up to max_batch, waiting at most batch_wait_ms for more)
-            # and run them as one right-padded forward; the model groups rows by bucket and batch ladder.
-            task = task_q.get()
+        max_texts = max(1, int(args.max_batch))
+        wait_s = max(0.0, float(args.batch_wait_ms)) / 1000.0
+        batch_id = 0
+        while True:
+            tasks, stop = collect_batch(get, wait_s, max_texts)
             t_recv = time.perf_counter()
-            if task is None:
-                return
-            tasks, stop = [task], False
-            deadline = t_recv + batch_wait_s
-            while len(tasks) < max_batch:
-                try:
-                    left = deadline - time.perf_counter()
-                    nxt = task_q.get(timeout=left) if left > 0 else task_q.get_nowait()
-                except queue.Empty:
-                    break
-                if nxt is None:
-                    stop = True
-                    break
-                tasks.append(nxt)
             rows = []
             for idx, payload in tasks:
                 ids = _fast_encode(tokenizer, payload, MAX_SEQ_LEN) if isinstance(payload, str) else payload
@@ -217,9 +214,12 @@ def _bge_worker(chip_id, args, normalize, task_q, result_q, ready_q, worker_core
                 else:
                     result_q.put((idx, chip_id, None, None, 0))
             if rows:
+                batch_id += 1
                 if os.environ.get("EMB_BATCH_LOG"):
                     print(f"[batch] n={len(rows)} L={max(len(ids) for _, ids in rows)} t={time.time():.3f}", file=sys.stderr, flush=True)
-                embs, t_prep, t_done = _run_batch([ids for _, ids in rows])
+                t_prep = time.perf_counter()
+                embs = run_rows([ids for _, ids in rows])
+                t_done = time.perf_counter()
                 for r, (idx, ids) in enumerate(rows):
                     steps = {
                         "device": (t_done - t_prep) * 1000.0,
@@ -228,36 +228,15 @@ def _bge_worker(chip_id, args, normalize, task_q, result_q, ready_q, worker_core
                         "t_prep": t_prep,
                         "t_done": t_done,
                         "batch": len(rows),
+                        "batch_id": batch_id,
+                        "first_in_batch": r == 0,
                     }
                     result_q.put((idx, chip_id, embs[r], steps, len(ids)))
             if stop:
-                return
-
-        while True:
-            task = task_q.get()
-            t_recv = time.perf_counter()
-            if task is None:
                 break
-            idx, payload = task
-            if isinstance(payload, str):
-                ids = _fast_encode(tokenizer, payload, MAX_SEQ_LEN)
-            else:
-                ids = payload
-            if not ids:
-                result_q.put((idx, chip_id, None, None, 0))
-                continue
-            emb, n, t_prep, t_done = _run(ids)
-            steps = {
-                "device": (t_done - t_prep) * 1000.0,
-                "total": (t_done - t_recv) * 1000.0,
-                "t_recv": t_recv,
-                "t_prep": t_prep,
-                "t_done": t_done,
-            }
-            result_q.put((idx, chip_id, emb, steps, n))
-    except Exception as exc:  # surface build/serve failures to the parent
+    except BaseException as exc:  # surface build and serve failures to the server
         try:
-            ready_q.put((chip_id, None, f"{type(exc).__name__}: {exc}"))
+            ctrl_q.put((chip_id, "failed", f"{type(exc).__name__}: {exc}"))
         except Exception:
             pass
     finally:
@@ -269,10 +248,40 @@ def _bge_worker(chip_id, args, normalize, task_q, result_q, ready_q, worker_core
 
 
 # --------------------------------------------------------------------------- #
-# Async chip pool — model-agnostic, from pplx serve.py.
+# Async chip pool (from pplx serve.py), with the strands-decider server's start-up, failure and shutdown handling.
 # --------------------------------------------------------------------------- #
+class _TokenizerPool:
+    """Thread pool that tokenizes on the server. One tokenizer shared by the threads: the server only calls the Rust
+    backend's encode() (_fast_encode), which test_emb_serve.py checks is safe and identical under 16 threads; HF's
+    __call__ (which raises "Already borrowed" when shared) is never used. Loaded once, in the background, so the
+    event loop keeps answering /health during start-up (per-thread copies held the GIL for over 30 s)."""
+
+    def __init__(self, threads: int):
+        self.threads = threads
+        self.pool = ThreadPoolExecutor(max_workers=threads, thread_name_prefix="tok")
+        self.tokenizer = None
+
+    def load(self) -> None:
+        from transformers import AutoTokenizer
+
+        tok = AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION)
+        if getattr(tok, "backend_tokenizer", None) is None:
+            raise RuntimeError("server-side tokenization needs a fast tokenizer (backend encode is the thread-safe path)")
+        self.tokenizer = tok
+
+    def encode(self, text: str, max_len: int):
+        return _fast_encode(self.tokenizer, text, max_len)
+
+    def shutdown(self) -> None:
+        self.pool.shutdown(wait=False, cancel_futures=True)
+
+
 class AsyncEmbeddingPool:
-    """Spawns N resident chip workers and schedules requests across idle chips."""
+    """Spawns N resident chip workers and schedules requests across them.
+
+    State (event-loop owned): ``starting`` until every worker and the tokenizers are ready, then ``ok``; ``failed``
+    for good when a worker reports an error, exits, or holds a batch longer than ``device_timeout_s`` (a device hang
+    keeps the process alive, so liveness alone does not catch it). On failure every pending request gets 503."""
 
     def __init__(
         self,
@@ -283,117 +292,180 @@ class AsyncEmbeddingPool:
         server_tokenize: bool = True,
         max_batch: int = 1,
         batch_wait_ms: float = 0.0,
+        device_timeout_s: float = 60.0,
     ):
         self.n = dp
         self.max_batch = max(1, max_batch)
         self.normalize = normalize
         self.isl = MAX_SEQ_LEN
-        args = SimpleNamespace(
-            dp=dp,
-            max_length=self.isl,
-            cq2=False,
-            server_tokenize=server_tokenize,
-            max_batch=self.max_batch,
-            batch_wait_ms=batch_wait_ms,
+        self.device_timeout_s = device_timeout_s
+        self.cores_per_worker, self.server_phys = cores_per_worker, server_phys
+        self.args = SimpleNamespace(
+            dp=dp, max_length=self.isl, cq2=False, server_tokenize=server_tokenize, max_batch=self.max_batch, batch_wait_ms=batch_wait_ms
         )
         self.server_tokenize = server_tokenize
-        self.tokenizer = None
-        self._tok_pool: Optional[ThreadPoolExecutor] = None
-        if self.server_tokenize:
-            from transformers import AutoTokenizer
+        n_tok_threads = max(4, 2 * server_phys) if server_phys > 0 else 8
+        self.tokenizers = _TokenizerPool(n_tok_threads) if server_tokenize else None
+        self.state, self.tok_state, self.error = "starting", ("starting" if server_tokenize else "ok"), None
+        self.ready, self.failed = set(), {}
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.idle_chips: Optional[asyncio.Queue] = None
+        self.failed_event: Optional[asyncio.Event] = None
+        self.pending: dict = {}  # req_id -> future
+        self.inflight: dict = {}  # req_id -> (chip, t_dispatch) for the device deadline
+        self._req_id = 0
+        self.metrics: deque = deque(maxlen=200_000)
+        self.batch_sizes: deque = deque(maxlen=200_000)
+        self.procs, self.task_qs = [], []
+        self.result_q = self.ctrl_q = None
 
-            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION)
-            n_tok_threads = max(4, 2 * server_phys) if server_phys > 0 else 8
-            self._tok_pool = ThreadPoolExecutor(max_workers=n_tok_threads, thread_name_prefix="tok")
-            logger.info(f"Server-side tokenization ON ({n_tok_threads} tokenizer threads).")
+    @property
+    def status(self) -> str:
+        if "failed" in (self.state, self.tok_state):
+            return "failed"
+        return "ok" if self.state == self.tok_state == "ok" else "starting"
 
+    def start(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Non-blocking: spawn the workers and the tokenizer load; the server accepts requests (503) meanwhile."""
+        self.loop = loop
+        self.idle_chips = asyncio.Queue()
+        self.failed_event = asyncio.Event()
         ctx = mp.get_context("spawn")
         self.task_qs = [ctx.Queue() for _ in range(self.n)]
-        self.result_q = ctx.Queue()
-        ready_q = ctx.Queue()
-        self.procs = []
+        self.result_q, self.ctrl_q = ctx.Queue(), ctx.Queue()
         for i in range(self.n):
-            worker_cores = compute_worker_cores(i, self.n, cores_per_worker, server_phys=server_phys)
+            cores = compute_worker_cores(i, self.n, self.cores_per_worker, server_phys=self.server_phys)
             p = ctx.Process(
-                target=_bge_worker,
-                args=(i, args, normalize, self.task_qs[i], self.result_q, ready_q, worker_cores),
-                name=f"chip-{i}",
-                daemon=True,
+                target=_bge_worker, args=(i, self.args, self.normalize, self.task_qs[i], self.result_q, self.ctrl_q, cores), name=f"chip-{i}", daemon=True
             )
             p.start()
             self.procs.append(p)
+        logger.info(f"Building {self.n} resident encoder(s) (one per chip); serving 503 until ready.")
+        threading.Thread(target=self._collect, name="result-collector", daemon=True).start()
+        threading.Thread(target=self._control, name="worker-control", daemon=True).start()
+        if self.tokenizers is not None:
+            threading.Thread(target=self._load_tokenizers, name="tok-load", daemon=True).start()
+        self.watchdog = loop.create_task(self._watch())
 
-        logger.info(f"Building {self.n} resident encoder(s) (one per chip) — this takes ~1-2 min...")
-        self.ready, self.failed = set(), {}
-        for _ in range(self.n):
-            msg = ready_q.get()
-            if len(msg) == 3 and msg[1] is None:
-                self.failed[msg[0]] = msg[2]
-            else:
-                self.ready.add(msg[0])
-                logger.info(f"  chip {msg[0]:>2} ready (build {msg[1]:.0f}s) [{len(self.ready)}/{self.n}]")
-        if self.failed:
-            logger.error(f"{len(self.failed)} chip(s) failed to build:")
-            for cid, err in sorted(self.failed.items()):
-                logger.error(f"  chip {cid}: {err[:300]}")
-        if not self.ready:
-            raise RuntimeError("All DP workers failed to build.")
-        logger.info(f"Embedding pool ready: {len(self.ready)}/{self.n} chips live.")
+    def _load_tokenizers(self) -> None:
+        try:
+            self.tokenizers.load()
+            self.loop.call_soon_threadsafe(setattr, self, "tok_state", "ok")
+            logger.info(f"Server-side tokenization ON ({self.tokenizers.threads} tokenizer threads, shared fast tokenizer).")
+        except Exception as exc:
+            self.loop.call_soon_threadsafe(self._fail, f"tokenizer load failed: {exc!r}")
 
-        self.loop: Optional[asyncio.AbstractEventLoop] = None
-        self.idle_chips: Optional[asyncio.Queue] = None
-        self.pending: dict = {}
-        self._req_id = 0
-        self._collector: Optional[threading.Thread] = None
-        self.metrics: deque = deque(maxlen=200_000)
+    def _control(self) -> None:
+        while True:
+            msg = self.ctrl_q.get()
+            if msg is None:
+                break
+            self.loop.call_soon_threadsafe(self._on_control, msg)
 
-    def start(self, loop: asyncio.AbstractEventLoop) -> None:
-        self.loop = loop
-        self.idle_chips = asyncio.Queue()
-        # One slot per request a chip may hold: 1 = the template (one in-flight request per chip); with
-        # --max-batch N up to N requests queue at a worker, which runs them as one forward.
-        for _ in range(self.max_batch):
-            for chip in sorted(self.ready):
+    def _on_control(self, msg) -> None:
+        chip, kind, value = msg
+        if kind == "ready":
+            self.ready.add(chip)
+            logger.info(f"  chip {chip:>2} ready (build {value:.0f}s) [{len(self.ready)}/{self.n}]")
+            for _ in range(self.max_batch):  # one slot per request a chip may hold (1 = the template)
                 self.idle_chips.put_nowait(chip)
-        self._collector = threading.Thread(target=self._collect, name="result-collector", daemon=True)
-        self._collector.start()
+            if len(self.ready) == self.n and self.state == "starting":
+                self.state = "ok"
+                logger.info(f"Embedding pool ready: {self.n}/{self.n} chips live.")
+        else:
+            self.failed[chip] = value
+            self._fail(f"chip {chip} worker failed: {value[:300]}")
+
+    def _fail(self, error: str) -> None:
+        if self.state == "failed":
+            return
+        self.state, self.error = "failed", error
+        logger.error(error)
+        self.failed_event.set()
+        for fut in self.pending.values():
+            if not fut.done():
+                fut.set_exception(HTTPException(status_code=503, detail=error))
+        self.pending.clear()
+        self.inflight.clear()
+
+    async def _watch(self) -> None:
+        """Every second: a worker that exited, or a batch held past the device deadline, fails the server. A hung
+        worker is killed so the chip is released (killing the process frees it; no reset needed)."""
+        while True:
+            await asyncio.sleep(1.0)
+            if self.state == "failed":
+                continue
+            for i, p in enumerate(self.procs):
+                if not p.is_alive():
+                    self._fail(f"chip {i} worker exited with code {p.exitcode}")
+                    break
+            if self.state != "failed" and self.inflight:
+                chip, t_disp = min(self.inflight.values(), key=lambda v: v[1])
+                held = time.perf_counter() - t_disp
+                if held > self.device_timeout_s:
+                    self._fail(f"chip {chip} device timeout: a batch has not finished after {held:.0f} s (hang)")
+                    p = self.procs[chip]
+                    p.terminate()
+                    await asyncio.sleep(3)
+                    if p.is_alive():
+                        p.kill()
 
     def _collect(self) -> None:
         while True:
             item = self.result_q.get()
             if item is None:
                 break
-            req_id, chip, emb, steps, n = item
-            fut = self.pending.pop(req_id, None)
-            if fut is not None:
-                self.loop.call_soon_threadsafe(self._resolve, fut, emb, n, steps)
-            self.loop.call_soon_threadsafe(self.idle_chips.put_nowait, chip)
+            self.loop.call_soon_threadsafe(self._on_result, item)
 
-    @staticmethod
-    def _resolve(fut: asyncio.Future, emb, n: int, steps) -> None:
-        if fut.done():
-            return
-        if emb is None:
-            fut.set_exception(ValueError("empty input"))
-        else:
-            fut.set_result((emb, n, steps))
+    def _on_result(self, item) -> None:
+        req_id, chip, emb, steps, n = item
+        self.inflight.pop(req_id, None)
+        fut = self.pending.pop(req_id, None)
+        if fut is not None and not fut.done():
+            if emb is None:
+                fut.set_exception(ValueError("empty input"))
+            else:
+                fut.set_result((emb, n, steps))
+        if steps and steps.get("first_in_batch"):
+            self.batch_sizes.append(steps["batch"])
+        if self.state != "failed":
+            self.idle_chips.put_nowait(chip)
+
+    def _check(self) -> None:
+        if self.status == "starting":
+            raise HTTPException(status_code=503, detail="model is starting")
+        if self.status == "failed":
+            raise HTTPException(status_code=503, detail=self.error)
+
+    async def _slot(self) -> int:
+        get = asyncio.ensure_future(self.idle_chips.get())
+        failed = asyncio.ensure_future(self.failed_event.wait())
+        done, _ = await asyncio.wait({get, failed}, return_when=asyncio.FIRST_COMPLETED)
+        if get in done:
+            failed.cancel()
+            if self.state == "failed":  # a slot freed by a dying chip must not be used
+                raise HTTPException(status_code=503, detail=self.error)
+            return get.result()
+        get.cancel()
+        raise HTTPException(status_code=503, detail=self.error)
 
     async def embed_one(self, text: str):
         t0 = time.perf_counter()
         if self.server_tokenize:
-            payload = await self.loop.run_in_executor(self._tok_pool, _fast_encode, self.tokenizer, text, self.isl)
+            payload = await self.loop.run_in_executor(self.tokenizers.pool, self.tokenizers.encode, text, self.isl)
             if not payload:
                 raise ValueError("empty input")
         else:
             payload = text
         t_tok = time.perf_counter()
-
-        chip = await self.idle_chips.get()
+        self._check()  # the server may have failed while this request was in the tokenizer
+        chip = await self._slot()
         req_id = self._req_id
         self._req_id += 1
         fut = self.loop.create_future()
         self.pending[req_id] = fut
         t_disp = time.perf_counter()
+        self.inflight[req_id] = (chip, t_disp)
         self.task_qs[chip].put((req_id, payload))
         emb, n, steps = await fut
         t_end = time.perf_counter()
@@ -421,74 +493,84 @@ class AsyncEmbeddingPool:
         return await asyncio.gather(*(self.embed_one(t) for t in texts))
 
     def stats(self, reset: bool = False) -> dict:
-        samples = list(self.metrics)
+        samples, sizes = list(self.metrics), list(self.batch_sizes)
         if reset:
             self.metrics.clear()
-        out: dict = {"count": len(samples)}
+            self.batch_sizes.clear()
+        out: dict = {"count": len(samples), "status": self.status}
+        hist: dict = {}
+        for s in sizes:
+            hist[s] = hist.get(s, 0) + 1
+        out["texts_per_forward"] = dict(sorted(hist.items()))
         if not samples:
             return out
 
         def pct(vals, p):
             vals = sorted(vals)
-            if not vals:
-                return None
             k = (len(vals) - 1) * (p / 100.0)
             lo = int(k)
             hi = min(lo + 1, len(vals) - 1)
             return vals[lo] + (vals[hi] - vals[lo]) * (k - lo)
 
-        keys = (
-            "device",
-            "worker_total",
-            "server_wall",
-            "overhead",
-            "server_tok",
-            "chip_wait",
-            "task_q",
-            "prepare",
-            "replay",
-            "result",
-        )
-        for key in keys:
+        for key in ("device", "worker_total", "server_wall", "overhead", "server_tok", "chip_wait", "task_q", "prepare", "replay", "result"):
             vals = [s[key] for s in samples if key in s]
-            if not vals:
-                continue
-            out[key] = {
-                "p50": round(pct(vals, 50), 3),
-                "p90": round(pct(vals, 90), 3),
-                "p99": round(pct(vals, 99), 3),
-                "max": round(max(vals), 3),
-                "mean": round(sum(vals) / len(vals), 3),
-            }
+            if vals:
+                out[key] = {
+                    "p50": round(pct(vals, 50), 3),
+                    "p90": round(pct(vals, 90), 3),
+                    "p99": round(pct(vals, 99), 3),
+                    "max": round(max(vals), 3),
+                    "mean": round(sum(vals) / len(vals), 3),
+                }
         return out
 
     def close(self) -> None:
+        """Stop sentinel, join 30 s, then terminate / kill a worker stuck in a hung device close."""
+        if getattr(self, "watchdog", None) is not None:
+            self.watchdog.cancel()
+        if self.tokenizers is not None:
+            self.tokenizers.shutdown()
         for q in self.task_qs:
             try:
                 q.put(None)
             except Exception:
                 pass
-        try:
-            self.result_q.put(None)
-        except Exception:
-            pass
         for p in self.procs:
-            try:
-                p.join(timeout=5)
-            except Exception:
-                pass
+            p.join(30)
+            if p.is_alive():
+                p.terminate()
+                p.join(3)
+            if p.is_alive():
+                p.kill()
+                p.join()
+        for q in (self.result_q, self.ctrl_q):
+            if q is not None:
+                try:
+                    q.put(None)
+                except Exception:
+                    pass
+        time.sleep(0.5)  # let the collector threads read their sentinels before the queues close
+        for q in [*self.task_qs, self.result_q, self.ctrl_q]:
+            if q is not None:
+                q.cancel_join_thread()
+                q.close()
+        self.task_qs, self.result_q, self.ctrl_q = [], None, None  # drop the SemLocks before interpreter exit
+        import gc
+
+        gc.collect()  # their finalizers run now, so the resource tracker reports no leaked semaphores
 
 
 # --------------------------------------------------------------------------- #
 # FastAPI app
 # --------------------------------------------------------------------------- #
 from fastapi import FastAPI, HTTPException  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 try:
     from fastapi.responses import ORJSONResponse as _DEFAULT_RESPONSE_CLASS  # uses orjson
 except Exception:  # pragma: no cover - orjson optional
-    from fastapi.responses import JSONResponse as _DEFAULT_RESPONSE_CLASS
+    _DEFAULT_RESPONSE_CLASS = JSONResponse
 
 
 class EmbeddingRequest(BaseModel):
@@ -497,7 +579,9 @@ class EmbeddingRequest(BaseModel):
     encoding_format: str = Field("float", description='"float" or "base64"')
 
 
-_CONFIG = SimpleNamespace(dp=1, cores_per_worker=0, server_phys=4, server_tokenize=True, max_batch=1, batch_wait_ms=0.0)
+_CONFIG = SimpleNamespace(
+    dp=1, cores_per_worker=0, server_phys=4, server_tokenize=True, max_batch=1, batch_wait_ms=0.0, device_timeout_s=60.0, max_inputs=2048
+)
 _POOL: Optional[AsyncEmbeddingPool] = None
 
 
@@ -505,25 +589,22 @@ _POOL: Optional[AsyncEmbeddingPool] = None
 async def lifespan(app: FastAPI):
     global _POOL
     loop = asyncio.get_running_loop()
-    _POOL = await loop.run_in_executor(
-        None,
-        lambda: AsyncEmbeddingPool(
-            dp=_CONFIG.dp,
-            normalize=True,
-            cores_per_worker=_CONFIG.cores_per_worker,
-            server_phys=_CONFIG.server_phys,
-            server_tokenize=_CONFIG.server_tokenize,
-            max_batch=_CONFIG.max_batch,
-            batch_wait_ms=_CONFIG.batch_wait_ms,
-        ),
+    _POOL = AsyncEmbeddingPool(
+        dp=_CONFIG.dp,
+        normalize=True,
+        cores_per_worker=_CONFIG.cores_per_worker,
+        server_phys=_CONFIG.server_phys,
+        server_tokenize=_CONFIG.server_tokenize,
+        max_batch=_CONFIG.max_batch,
+        batch_wait_ms=_CONFIG.batch_wait_ms,
+        device_timeout_s=_CONFIG.device_timeout_s,
     )
-    _POOL.start(loop)
+    _POOL.start(loop)  # non-blocking: requests get 503 "starting" until the workers report ready
     try:
         yield
     finally:
-        if _POOL is not None:
-            _POOL.close()
-            _POOL = None
+        pool, _POOL = _POOL, None
+        await loop.run_in_executor(None, pool.close)
 
 
 app = FastAPI(title="google/embeddinggemma-2 embedding server (FastAPI template)", default_response_class=_DEFAULT_RESPONSE_CLASS, lifespan=lifespan)
@@ -538,18 +619,24 @@ def _encode_vector(emb: np.ndarray, fmt: str):
 @app.post("/v1/embeddings")
 async def create_embeddings(req: EmbeddingRequest):
     if _POOL is None:
-        raise HTTPException(status_code=503, detail="pool not ready")
+        raise HTTPException(status_code=503, detail="model is starting")
+    _POOL._check()
+    # Validate on the event loop before any tokenizing, so a bad request costs no tokenizer or chip time.
     fmt = req.encoding_format
     if fmt not in ("float", "base64"):
-        raise HTTPException(status_code=400, detail='encoding_format must be "float" or "base64"')
+        raise HTTPException(status_code=422, detail='encoding_format must be "float" or "base64"')
     texts = [req.input] if isinstance(req.input, str) else list(req.input)
     if not texts:
-        raise HTTPException(status_code=400, detail="input must not be empty")
+        raise HTTPException(status_code=422, detail="input must not be empty")
+    if len(texts) > _CONFIG.max_inputs:
+        raise HTTPException(status_code=422, detail=f"at most {_CONFIG.max_inputs} inputs per request")
+    if any(not t for t in texts):
+        raise HTTPException(status_code=422, detail="every input must be a non-empty string")
 
     try:
         results = await _POOL.embed_batch(texts)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc))
 
     data = []
     total_tokens = 0
@@ -566,8 +653,11 @@ async def create_embeddings(req: EmbeddingRequest):
 
 @app.get("/health")
 async def health():
-    ready = len(_POOL.ready) if _POOL is not None else 0
-    return {"status": "ok" if ready else "starting", "chips_ready": ready, "chips_total": _CONFIG.dp}
+    if _POOL is None or _POOL.status == "starting":
+        return JSONResponse({"status": "starting", "chips_ready": len(_POOL.ready) if _POOL else 0, "chips_total": _CONFIG.dp}, status_code=503)
+    if _POOL.status == "failed":
+        return JSONResponse({"status": "failed", "error": _POOL.error}, status_code=503)
+    return {"status": "ok", "chips_ready": len(_POOL.ready), "chips_total": _CONFIG.dp, "max_batch": _CONFIG.max_batch, "device_timeout_s": _CONFIG.device_timeout_s}
 
 
 @app.get("/v1/models")
@@ -577,9 +667,9 @@ async def list_models():
 
 @app.get("/metrics")
 async def metrics(reset: bool = False):
-    """Per-request latency breakdown (ms): on-device replay vs. server overhead."""
+    """Per-request latency breakdown (ms): on-device replay vs. server overhead; texts-per-forward histogram."""
     if _POOL is None:
-        raise HTTPException(status_code=503, detail="pool not ready")
+        raise HTTPException(status_code=503, detail="model is starting")
     return _POOL.stats(reset=reset)
 
 
@@ -606,7 +696,7 @@ def _pin_server_cores(server_phys: int) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="OpenAI-compatible embedding server (DP=N) for google/embeddinggemma-2.")
     parser.add_argument("--dp", type=int, default=1, help="Number of chips / workers (default 1).")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind host (default 0.0.0.0).")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1; 0.0.0.0 exposes it).")
     parser.add_argument("--port", type=int, default=8000, help="Bind port (default 8000).")
     parser.add_argument(
         "--cores-per-worker",
@@ -650,6 +740,14 @@ def main() -> None:
         help="With --max-batch > 1: how long a worker waits for more requests after the first (default 0 = "
         "take only what is already queued).",
     )
+    parser.add_argument(
+        "--device-timeout-s",
+        type=float,
+        default=60.0,
+        help="A batch still running after this long marks the chip hung: pending requests get 503, /health fails "
+        "and the worker is killed to release the chip (default 60).",
+    )
+    parser.add_argument("--max-inputs", type=int, default=2048, help="Most texts accepted in one request (422 above).")
     args = parser.parse_args()
     os.environ["EMB_CHIPS"] = args.chips  # spawned workers re-import this module and read it
     CHIPS[:] = args.chips.split(",")
@@ -666,6 +764,8 @@ def main() -> None:
     _CONFIG.server_tokenize = args.server_tokenize
     _CONFIG.max_batch = args.max_batch
     _CONFIG.batch_wait_ms = args.batch_wait_ms
+    _CONFIG.device_timeout_s = args.device_timeout_s
+    _CONFIG.max_inputs = args.max_inputs
     _pin_server_cores(server_phys)
 
     import uvicorn
