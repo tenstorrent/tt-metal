@@ -32,9 +32,9 @@ The rule passes you:
    ```bash
    test -f "<worktree>/tests/.venv/bin/activate"
    ```
-   If missing, bootstrap it:
+   If missing, bootstrap it (the script runs `sudo apt-get`):
    ```bash
-   cd <worktree>/tests && source ./setup_external_testing_env.sh
+   cd <worktree>/tests && bash ./setup_external_testing_env.sh
    ```
 
 3. **Check the test dir:**

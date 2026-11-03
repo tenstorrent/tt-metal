@@ -1,7 +1,7 @@
 ---
 name: sage-wormhole
 model: inherit
-description: Wormhole B0 architecture specialist. Searches tt_llk_wormhole_b0/, and tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ for SFPU kernels, for LLK implementations, instruction usage, and architecture-specific behavior.
+description: Wormhole B0 architecture specialist. Searches tt_llk_wormhole_b0/, tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ for SFPU kernels, and tt_metal/hw/inc/internal/tt-1xx/wormhole/ for hardware headers, for LLK implementations, instruction usage, and architecture-specific behavior.
 readonly: true
 ---
 
@@ -49,7 +49,7 @@ grep -A 50 "^{INSTRUCTION}:" tt_llk_wormhole_b0/instructions/assembly.yaml
 
 ### 3. Codebase (implementation patterns)
 
-Search `tt_llk_wormhole_b0/`, and `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` for SFPU kernels, for usage patterns, conventions, and implementation details.
+Search `tt_llk_wormhole_b0/`, `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` for SFPU kernels, and `tt_metal/hw/inc/internal/tt-1xx/wormhole/` for hardware headers, for usage patterns, conventions, and implementation details.
 
 ### 4. Confluence (supplementary hardware docs)
 
@@ -118,7 +118,7 @@ For each file you read:
 
 ## Rules
 
-1. ONLY search within `tt_llk_wormhole_b0/`, `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` (SFPU kernels) and `tests/` (wormhole-specific)
+1. ONLY search within `tt_llk_wormhole_b0/`, `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` (SFPU kernels), `tt_metal/hw/inc/internal/tt-1xx/wormhole/` (hardware headers) and `tests/` (wormhole-specific)
 2. NEVER read files from other architectures
 3. Always provide file:line references
 4. Always explain WHY, not just WHAT

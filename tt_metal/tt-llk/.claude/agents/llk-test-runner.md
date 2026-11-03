@@ -31,9 +31,9 @@ The skill passes you:
    ```bash
    test -f "<worktree>/tests/.venv/bin/activate"
    ```
-   If missing, bootstrap it:
+   If missing, bootstrap it (the script runs `sudo apt-get`):
    ```bash
-   cd <worktree>/tests && source ./setup_external_testing_env.sh
+   cd <worktree>/tests && bash ./setup_external_testing_env.sh
    ```
 
 Do not pre-check the test directory — the script validates it and exits 3 if missing.
