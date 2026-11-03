@@ -354,7 +354,7 @@ def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
     assert_quality(padded_torch_tensor, padded_torch_output_tensor)
 
 
-def _make_interior_core_block_shard_memory_config(shape):
+def _make_interior_core_block_shard_memory_config(shape, orientation=ttnn.ShardOrientation.ROW_MAJOR):
     """2×2 block shards (64×64 elements = 2×2 tiles) over a 128×128-padded tensor.
 
     Exercises interior-core skip (rp=0, bp=0 → no kernels placed) and all four
@@ -370,13 +370,14 @@ def _make_interior_core_block_shard_memory_config(shape):
     ), f"interior-core block shard fixture expects 128×128 padded tensor, got {padded_shape[-2]}×{padded_shape[-1]}"
 
     shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
-    shard_spec = ttnn.ShardSpec(shard_grid, (64, 64), ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, (64, 64), orientation)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
 @pytest.mark.parametrize("fill_value", [1])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
-def test_fill_pad_sharded_interior_block_core(device, fill_value, dtype):
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_fill_pad_sharded_interior_block_core(device, fill_value, dtype, orientation):
     """Cover interior-core skip and all four sharded writer (rp, bp) KernelSpec combos.
 
     (97, 97) pads to 128×128 (4×4 tiles). 2×2 block shards of 64×64 elements (2×2 tiles)
@@ -387,7 +388,7 @@ def test_fill_pad_sharded_interior_block_core(device, fill_value, dtype):
     torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
         shape, 32, fill_value, ttnn_dtype_to_torch_dtype[dtype]
     )
-    input_mem_config = _make_interior_core_block_shard_memory_config(shape)
+    input_mem_config = _make_interior_core_block_shard_memory_config(shape, orientation)
 
     input_tensor = ttnn.to_device(
         ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT),
@@ -532,6 +533,7 @@ def test_fill_pad_rank_gt3_sharded(device, fill_value, shape, shard_shape, dtype
     [
         ((1, 1, 100, 256), (1, 1), (64, 128)),
         ((1, 1, 100, 288), (1, 2), (64, 96)),
+        ((1, 1, 1, 33), (1, 2), (32, 32)),
     ],
 )
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
@@ -550,3 +552,14 @@ def test_fill_implicit_tile_padding_block_sharded_orientations(device, shape, gr
     expected = torch.full_like(padded_output, 7.0)
     expected[..., : shape[-2], : shape[-1]] = x
     assert torch.equal(padded_output, expected)
+
+
+def test_pad_tile_block_sharded_col_major(device):
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))])
+    spec = ttnn.ShardSpec(grid, [32, 32], ttnn.ShardOrientation.COL_MAJOR)
+    mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+    data = ((torch.arange(33) % 17 - 8) / 8).reshape(1, 1, 1, 33).bfloat16()
+    x = ttnn.from_torch(data, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    want = torch.nn.functional.pad(ttnn.to_torch(x), (0, 31, 0, 31), value=-3.0)
+    got = ttnn.to_torch(ttnn.pad(x, [[0, 0], [0, 0], [0, 31], [0, 31]], -3.0))
+    assert torch.equal(got, want)
