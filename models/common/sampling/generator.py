@@ -520,6 +520,11 @@ class SamplingGenerator:
                 # under their sub-device config (untilize with sub_core_grids=None).
                 if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
                     continue
+                # reset_params routes top-K logprob reporting through candidate
+                # sampling even for greedy rows. The force-argmax implementation
+                # uses the old single-logprob buffers, which are absent here.
+                if force_argmax and log_probs_on and getattr(log_probs, "_use_topk_logprobs", False):
+                    continue
                 # A model whose mesh layout the penalty program does not support
                 # sets _allow_penalties_sampling=False (default True elsewhere).
                 if penalties_on and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
