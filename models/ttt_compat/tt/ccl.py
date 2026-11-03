@@ -160,11 +160,17 @@ def tt_all_reduce(
     if mesh_shape == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
 
-    # Auto-detect num_links if not provided
+    # Auto-detect num_links if not provided. On a 1D (1xN or Nx1) mesh the reduce_scatter below runs along the
+    # mesh's only multi-device axis whatever cluster_axis is, so query that axis (on a 1xN mesh, axis 0 has no
+    # links and get_num_links(0) falls back to 1).
+    if 1 in mesh_shape:
+        num_links_axis = 1 if mesh_shape[0] == 1 else 0
+    else:
+        num_links_axis = cluster_axis
     if num_reduce_scatter_links is None:
-        num_reduce_scatter_links = tt_ccl.get_num_links(cluster_axis)
+        num_reduce_scatter_links = tt_ccl.get_num_links(num_links_axis)
     if num_all_gather_links is None:
-        num_all_gather_links = tt_ccl.get_num_links(cluster_axis)
+        num_all_gather_links = tt_ccl.get_num_links(num_links_axis)
 
     # Ensure dim 0 and 1 are 1
     original_shape = input_tensor.shape
