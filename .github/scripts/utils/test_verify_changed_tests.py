@@ -331,6 +331,43 @@ def test_removing_one_sku_does_not_block_a_genuine_change_to_another(repo: Repo)
     assert all(leg["reason"] == "changed" for leg in legs_for(payload, "unit alpha"))
 
 
+def test_adding_one_sku_and_changing_another_does_not_duplicate_legs(repo: Repo):
+    """Adding bh_p150 and reconfiguring wh_n300_civ2 in the same entry pushes two
+    touched tuples for it (an "added" one and a "changed" one). Their SKU sets
+    are disjoint by construction, so this must resolve to exactly one leg per
+    SKU -- no duplicate legs, no duplicate dropped rows -- and leave the
+    untouched wh_n150_civ2 out of scope."""
+    edited = BASE_TESTS_YAML.replace(
+        "    wh_n300_civ2:\n      timeout: 10\n",
+        "    wh_n300_civ2:\n      timeout: 15\n    bh_p150:\n      timeout: 5\n",
+    )
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", edited)
+    code, payload, _ = repo.scope()
+    assert code == 0
+    assert payload["status"] == "run"
+    legs = legs_for(payload, "unit alpha")
+    assert len(legs) == 2
+    assert {leg["sku"]: leg["reason"] for leg in legs} == {"bh_p150": "added", "wh_n300_civ2": "changed"}
+    assert payload["dropped_legs"] == []
+
+
+def test_adding_an_unsupported_sku_and_changing_another_drops_only_once(repo: Repo):
+    """Same shape as above, but the added SKU (wh_galaxy) is unsupported: its
+    "added" tuple must drop exactly one row, not one per touched tuple."""
+    edited = BASE_TESTS_YAML.replace(
+        "    wh_n150_civ2:\n      timeout: 10\n",
+        "    wh_n150_civ2:\n      timeout: 15\n    wh_galaxy:\n      timeout: 10\n",
+    )
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", edited)
+    code, payload, _ = repo.scope()
+    assert code == 0
+    assert payload["status"] == "run"
+    assert [leg["sku"] for leg in legs_for(payload, "unit alpha")] == ["wh_n150_civ2"]
+    assert payload["dropped_legs"] == [
+        {"file": "tests/pipeline_reorg/sample_unit_tests.yaml", "name": "unit alpha", "sku": "wh_galaxy"}
+    ]
+
+
 def test_per_sku_tier_change_runs(repo: Repo):
     """tier selects which pipeline an entry runs in, so it is behaviour-affecting."""
     repo.write(
