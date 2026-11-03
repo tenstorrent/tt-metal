@@ -316,6 +316,7 @@ class Llama(AbstractModuleBase):
         new_tokens: Optional[int] = None,
         unpadded_token_positions: Optional[ttml.autograd.Tensor] = None,
     ) -> ttml.autograd.Tensor:
+        """``unpadded_token_positions``: [B, S] UINT32 ROW_MAJOR, sharded like input, ids < max_position_embeddings."""
         # Token IDs must be padded to the tile boundary so the embedding lookup
         # produces a tile-aligned tensor.  The padding is stripped after lookup.
         TILE_SIZE = 32

@@ -156,8 +156,8 @@ class Qwen3(AbstractModuleBase):
         past_key_values=None,
         new_tokens: Optional[int] = None,
         unpadded_token_positions: Optional[ttml.autograd.Tensor] = None,
-        **kwargs,
     ) -> ttml.autograd.Tensor:
+        """``unpadded_token_positions``: [B, S] UINT32 ROW_MAJOR, sharded like input, ids < max_position_embeddings."""
         TILE_SIZE = 32
         input_shape = input.shape()
         actual_seq_len = input_shape[-1]
