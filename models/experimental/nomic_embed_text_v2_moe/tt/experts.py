@@ -28,12 +28,15 @@ padding row with a real one, and gathers the real token rows only.
 
 from __future__ import annotations
 
+import os
+
 import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     activation_memory_config,
+    compute_config_descriptor,
     pack_expert_weights,
     stack_expert_columns,
     to_device,
@@ -41,6 +44,12 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
+
+# The generated moe_down_proj (ttnn/ttnn/operations/moe_down_proj) runs the expert w2.
+# NOMIC_W2_IMPL=stock selects grouped_matmul.
+W2_IMPL = os.environ.get("NOMIC_W2_IMPL", "generated")
+if W2_IMPL not in ("generated", "stock"):
+    raise ValueError(f"NOMIC_W2_IMPL must be 'generated' or 'stock', got {W2_IMPL!r}")
 
 # The largest window of a routed pass: routing_metadata takes 65536 slots, top_k x tokens. A larger
 # window would also hold more of its intermediates in DRAM: at this size Xg, the w1 output and the
@@ -197,6 +206,25 @@ class TtNomicExperts(LightweightModule):
         per_expert_lanes as in grouped_w1.
         """
         rows, hidden = activated.shape[-2], self.w2_columns.shape[-2]
+        memory_config = self.routed_memory_config(rows, hidden * BFLOAT16_BYTES)
+        if W2_IMPL == "generated":
+            from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+            from ttnn.operations.moe_down_proj import moe_down_proj
+
+            # The op refuses what its contract excludes (> 4096 tokens, other dtypes or sizes) before it
+            # allocates anything; those calls take grouped_matmul.
+            try:
+                return moe_down_proj(
+                    activated,
+                    self.w2_columns,
+                    expert_counts,
+                    compute_kernel_config=compute_config_descriptor(
+                        self.tt_config.compute_kernel_config(OpGroup.ROUTED_W2)
+                    ),
+                    memory_config=memory_config,
+                )
+            except (UnsupportedAxisValue, ExcludedCell):
+                pass
         return ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul(
             activated,
             self.w2_columns,
@@ -204,7 +232,7 @@ class TtNomicExperts(LightweightModule):
             dtype=ttnn.bfloat16,
             transpose_weight=True,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=self.routed_memory_config(rows, hidden * BFLOAT16_BYTES),
+            memory_config=memory_config,
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.ROUTED_W2),
             per_expert_lanes=per_expert_lanes,
         )
