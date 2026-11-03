@@ -866,9 +866,6 @@
       models/demos/gemma4/tests/test_prose_accuracy.py \
       models/demos/gemma4/tests/unit/test_mm_prefill_vision_device.py \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
-    # Report-only 2K prose reading with the fused prefill op on (GEMMA4_QKV_NORM_ROPE_PREFILL=1), next to the gated row
-    GEMMA4_QKV_NORM_ROPE_PREFILL=0 GEMMA4_PROSE_REPORT_ONLY=1 GEMMA4_PROSE_TAG="report-only composite qkv-norm-rope" \
-      pytest -s --timeout 900 models/demos/gemma4/tests/test_prose_accuracy.py
   model: gemma-4-12b
   model_family: Gemma
   skus:
@@ -880,7 +877,7 @@
       timeout: 6
       tier: 2
     bh_quietbox_2:
-      timeout: 13  # 9.7 min measured plus ~1 min for test_prose_accuracy (24 s of test on a warm cache + load)
+      timeout: 17  # cold-JIT runner (run 41674924722, 0/425 cache hits): text_demo 9:21 + the unit/prose/vision session 3:22 + install and load
       tier: 1
       release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy
