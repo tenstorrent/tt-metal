@@ -244,7 +244,6 @@ def test_matmul_commands(tmp_path, monkeypatch):
         seen.clear()
         steps[key].run(Ctx(tmp_path, tmp_path, False), State())
         assert seen[cmds[key]] == {
-            "TMPDIR": str(tmp_path / "matmul" / key.removeprefix("matmul:")),
             "MATMUL_ITERS": "10",
             "MATMUL_WORKLOAD": workload,
         }
@@ -347,9 +346,7 @@ def test_matmul_fail_reruns_throttled(tmp_path, monkeypatch, key):
     assert first.result.status == Status.FAIL and first.log == str(d / "log_02")
     assert first.env == {"TT_MM_THROTTLE_PERF": "5"} and first.opts == [] and first.end >= first.start
     assert len(state.fallbacks) == (2 if key == "matmul:minimal" else 1)
-    if key.startswith("matmul:mcast-ack"):
-        assert seen[4][1]["TMPDIR"] == str(d / "tmp_02")
-    else:
+    if not key.startswith("matmul:mcast-ack"):
         assert seen[4][1]["TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"].endswith(
             f"--llm-output-path={d / 'crash_triage_02.csv'}; kill -9 $PPID"
         )

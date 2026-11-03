@@ -540,8 +540,8 @@ def core_sweep_step() -> Step:
 
 
 def write_ack_step(workload: str = "wkv_b1") -> Step:
-    """One process per chip, each with its own cold cache and dispatch watchdog; logs land in the step dir via
-    TMPDIR. workload wkv_b1 is the MLA projection the screen was written for (matmul:mcast-ack); duty is the
+    """One process per chip, each with its own cold cache and dispatch watchdog. workload wkv_b1 is the MLA
+    projection the screen was written for (matmul:mcast-ack); duty is the
     duty-cycle-bursty-5 op alone on each chip (matmul:mcast-ack-duty), which hung 81:00.0 (T4:N1) and c2:00.0
     (T3:N2) on bh-glx-803 in 3 of 5 resets when wkv_b1 passed them."""
     key = "matmul:mcast-ack" if workload == "wkv_b1" else f"matmul:mcast-ack-{workload}"
@@ -558,9 +558,7 @@ def write_ack_step(workload: str = "wkv_b1") -> Step:
             return failed
         log = d / f"log_{n:02d}"
         state.log = str(log)
-        # The script wipes its work dir under TMPDIR, so a rerun gets its own.
-        tmp = d if n == 1 else d / f"tmp_{n:02d}"
-        env = {"TMPDIR": str(tmp), "MATMUL_ITERS": str(WRITE_ACK_ITERS), "MATMUL_WORKLOAD": workload, **state.env}
+        env = {"MATMUL_ITERS": str(WRITE_ACK_ITERS), "MATMUL_WORKLOAD": workload, **state.env}
         sh(ctx, cmd, log, env, timeout=1800)
         save_smi(ctx, d, n)
         return write_ack_result(log.read_text(errors="replace"))
