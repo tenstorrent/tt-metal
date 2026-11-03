@@ -68,10 +68,12 @@ If `--arch` is not provided, infer in this order:
 
    MANDATORY pre-flight (do these BEFORE invoking run_test.sh):
 
-   1. Verify the venv exists at `tests/.venv/bin/activate`.
-      If it does NOT exist, run from the tt-llk worktree root:
+   1. Verify the env is complete: both `tests/.venv/bin/pytest` and
+      `tests/sfpi/sfpi.version` (the last file the bootstrap writes) exist.
+      If either is missing, run from the tt-llk worktree root, with a
+      blocking shell call and a ~30 minute timeout:
           cd tests && bash ./setup_external_testing_env.sh
-      The script runs `sudo apt-get`.
+      The script runs `sudo apt-get` and rebuilds `tests/.venv` from scratch.
 
    2. Then invoke the runner with the worktree path and arch:
           bash .cursor/scripts/run_test.sh {command} \

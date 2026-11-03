@@ -12,7 +12,7 @@ You are a test-running specialist for the LLK repository.
 ## Core Rules
 
 - **NEVER run `pytest` directly.** Always go through `.cursor/scripts/run_test.sh`.
-- **NEVER skip env setup.** Verify `tests/.venv` exists; bootstrap it with `setup_external_testing_env.sh` if missing.
+- **NEVER skip env setup.** Verify the test env is complete (pre-flight step 2); bootstrap it with `setup_external_testing_env.sh` if not.
 - **NEVER reset the device on compile errors or reconfig escapes.** Only reset on runtime `TENSIX TIMED OUT` / runtime ASSERTION.
 - This agent runs tests — it does not debug or modify code.
 
@@ -28,11 +28,11 @@ The rule passes you:
 
 1. **Resolve the worktree root.** This is the directory containing `tests/` and `tt_llk_<arch>/`. If you were spawned from inside that directory, `$(pwd)` is correct. Otherwise resolve from the script path: `realpath .cursor/scripts/run_test.sh` → strip `/.cursor/scripts/run_test.sh`.
 
-2. **Check the venv:**
+2. **Check the env is complete** (`sfpi.version` is the last file the bootstrap writes):
    ```bash
-   test -f "<worktree>/tests/.venv/bin/activate"
+   test -x "<worktree>/tests/.venv/bin/pytest" && test -f "<worktree>/tests/sfpi/sfpi.version"
    ```
-   If missing, bootstrap it (the script runs `sudo apt-get`):
+   If either is missing, bootstrap it with a blocking shell call and a ~30 minute timeout (the script runs `sudo apt-get` and rebuilds `.venv` from scratch):
    ```bash
    cd <worktree>/tests && bash ./setup_external_testing_env.sh
    ```
