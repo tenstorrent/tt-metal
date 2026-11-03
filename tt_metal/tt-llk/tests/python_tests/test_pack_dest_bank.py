@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -39,6 +41,58 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test, result_tensor
 
 _CPP_SOURCE = "sources/pack_dest_bank_test.cpp"
+PACK_DEST_BANK_DIMENSIONS = [
+    (32, 32),
+    (32, 64),
+    (128, 32),
+    (128, 64),
+    (128, 256),
+]
+
+
+@dataclass(frozen=True)
+class PackDestBankCase:
+    formats: InputOutputFormat
+    dest_acc: DestAccumulation
+    input_dimensions: tuple[int, int]
+    num_blocks: int
+    num_tiles_in_block: int
+
+
+def pack_dest_bank_cases():
+    """Ordered union of correctness dimensions and blocked-pack perf patterns."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    cases = []
+    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+        for dimensions in PACK_DEST_BANK_DIMENSIONS:
+            num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+                DestSync.Half,
+                dest_acc,
+                formats,
+                dimensions,
+                TILE_DIMENSIONS,
+                BlocksCalculationAlgorithm.Standard,
+            )
+            cases.append(
+                PackDestBankCase(
+                    formats,
+                    dest_acc,
+                    dimensions,
+                    num_blocks,
+                    num_tiles_in_block,
+                )
+            )
+
+    perf_only_pattern = PackDestBankCase(
+        formats,
+        DestAccumulation.No,
+        (128, 64),
+        2,
+        4,
+    )
+    if perf_only_pattern not in cases:
+        cases.append(perf_only_pattern)
+    return cases
 
 
 def create_pack_dest_bank_config(
@@ -168,17 +222,16 @@ def get_valid_num_faces_datacopy(tilize):
 
 
 @parametrize(
-    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    case=pack_dest_bank_cases,
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     num_faces=4,
     tilize=[Tilize.No],
     dest_index=0,
-    input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
 )
-def test_pack_dest_bank(
-    formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
-):
+def test_pack_dest_bank(case, l1_acc, num_faces, tilize, dest_index):
+    formats = case.formats
+    dest_acc = case.dest_acc
+    input_dimensions = case.input_dimensions
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -190,19 +243,6 @@ def test_pack_dest_bank(
     torch_format = format_dict[formats.output_format]
     golden_tensor = src_A.to(torch_format)
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        (
-            BlocksCalculationAlgorithm.Standard
-            if tilize == Tilize.No
-            else BlocksCalculationAlgorithm.Tilize
-        ),
-    )
-
     configuration = create_pack_dest_bank_config(
         formats,
         dest_acc,
@@ -211,8 +251,8 @@ def test_pack_dest_bank(
         tilize,
         dest_index,
         tile_cnt_A,
-        num_blocks,
-        num_tiles_in_block,
+        case.num_blocks,
+        case.num_tiles_in_block,
         StimuliConfig(
             src_A,
             formats.input_format,

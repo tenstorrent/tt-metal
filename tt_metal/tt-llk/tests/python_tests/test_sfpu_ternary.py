@@ -276,6 +276,9 @@ def _run_sfpu_ternary(
     )
 
 
+SFPU_TERNARY_INPUT_DIMENSIONS = [[64, 64], [128, 64]]
+
+
 @parametrize(
     formats=input_output_formats(
         [

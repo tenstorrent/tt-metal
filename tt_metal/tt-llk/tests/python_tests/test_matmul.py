@@ -1,23 +1,28 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import List
 
 import torch
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
-from helpers.golden_generators import MatmulGolden, get_golden_generator
+from helpers.golden_generators import TILE_DIM, MatmulGolden, get_golden_generator
 from helpers.llk_params import (
     ALL_MATH_FIDELITIES,
     DEST_ACC_MODES,
     DestAccumulation,
+    DestSync,
     PerfRunType,
     Transpose,
     format_dict,
 )
 from helpers.matmul_sweep import (
+    DEST_RT_CT_BLOCKS,
     generate_matmul_dimension_combinations,
     generate_tile_dims,
+    mid_fill_rt_ct_pairs,
+    unpack_matmul_fits_perf_ring,
 )
 from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -74,24 +79,113 @@ MATMUL_FORMATS = input_output_formats(
 ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
     MATMUL_FORMATS, DEST_ACC_MODES
 )
+MATMUL_KT_DIMS = [1, 4, 32]
+MATMUL_DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
+
+
+def dest_corner_mn(max_tiles: int) -> List[tuple]:
+    """Destination occupancy corners used by both correctness and performance."""
+    square = int(max_tiles**0.5)
+    corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
+    corners.extend((rt, ct) for rt, ct in DEST_RT_CT_BLOCKS if rt * ct <= max_tiles)
+    corners.extend(mid_fill_rt_ct_pairs(max_tiles))
+    return list(dict.fromkeys(corners))
+
+
+def generate_dest_corner_combinations(max_tiles: int) -> List[tuple]:
+    return [
+        (
+            [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
+            [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
+        )
+        for mt_dim, nt_dim in dest_corner_mn(max_tiles)
+        for kt_dim in MATMUL_KT_DIMS
+        if unpack_matmul_fits_perf_ring(mt_dim, nt_dim, kt_dim)
+    ]
+
+
+def matmul_combos(format_configs, dest_acc_modes):
+    dimensions = {
+        max_tiles: generate_dest_corner_combinations(max_tiles)
+        for max_tiles in {
+            max_dest_tiles(
+                is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes,
+                dest_sync,
+            )
+            for formats in format_configs
+            for dest_acc in dest_acc_modes
+            for dest_sync in MATMUL_DEST_SYNC_MODES
+        }
+    }
+    return [
+        (formats, dest_acc, dest_sync, dims)
+        for formats in format_configs
+        for dest_acc in dest_acc_modes
+        for dest_sync in MATMUL_DEST_SYNC_MODES
+        for dims in dimensions[
+            max_dest_tiles(
+                is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes,
+                dest_sync,
+            )
+        ]
+    ]
+
+
+@dataclass(frozen=True)
+class MatmulCase:
+    formats: FormatConfig
+    dest_acc: DestAccumulation
+    dest_sync: DestSync
+    matrix_a: tuple[int, int]
+    matrix_b: tuple[int, int]
+
+
+def _matmul_case(formats, dest_acc, dest_sync, dimensions):
+    matrix_a, matrix_b = dimensions
+    return MatmulCase(
+        formats,
+        dest_acc,
+        dest_sync,
+        tuple(matrix_a),
+        tuple(matrix_b),
+    )
+
+
+def matmul_cases():
+    """Ordered union of the functional sweep and the performance corner sweep."""
+    cases = [
+        _matmul_case(formats, dest_acc, DestSync.Half, dimensions)
+        for formats, dest_acc, dimensions in ALL_MATMUL_COMBINATIONS
+    ]
+
+    perf_cases = (
+        _matmul_case(formats, dest_acc, dest_sync, dimensions)
+        for formats, dest_acc, dest_sync, dimensions in matmul_combos(
+            MATMUL_FORMATS, DEST_ACC_MODES
+        )
+    )
+    for case in perf_cases:
+        if case not in cases:
+            cases.append(case)
+    return cases
 
 
 @parametrize(
     math_fidelity=ALL_MATH_FIDELITIES,
-    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
+    case=matmul_cases,
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     math_fidelity,
-    format_dest_acc_and_dims,
+    case,
     boot_mode=BootMode.DEFAULT,
 ):
-    torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
+    torch_format = format_dict[case.formats.output_format]
 
-    formats = format_dest_acc_and_dims[0]
-    dest_acc = format_dest_acc_and_dims[1]
-    input_A_dimensions = format_dest_acc_and_dims[2][0]
-    input_B_dimensions = format_dest_acc_and_dims[2][1]
+    formats = case.formats
+    dest_acc = case.dest_acc
+    input_A_dimensions = case.matrix_a
+    input_B_dimensions = case.matrix_b
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -138,7 +232,7 @@ def test_matmul(
         templates=[
             MATH_FIDELITY(math_fidelity),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
-            DEST_SYNC(),
+            DEST_SYNC(case.dest_sync),
             THROTTLE_LEVEL(),
         ],
         runtimes=[

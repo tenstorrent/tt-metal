@@ -220,6 +220,7 @@ SFPU_BINOP_SCALAR_SWEEP = dict(
     formats=_SCALAR_FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=_SCALAR_OPS,
+    input_dimensions=[[32, 32], [128, 64]],
 )
 
 
@@ -235,9 +236,15 @@ def _skip_unsupported(formats, dest_acc, mathop, scalar):
 
 
 @parametrize(**SFPU_BINOP_SCALAR_SWEEP)
-def test_sfpu_binop_scalar(formats, dest_acc, mathop):
+def test_sfpu_binop_scalar(formats, dest_acc, mathop, input_dimensions):
     _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
-    _run_sfpu_binop_scalar(formats, dest_acc, mathop, scalar=_PRESUBMIT_SCALAR)
+    _run_sfpu_binop_scalar(
+        formats,
+        dest_acc,
+        mathop,
+        scalar=_PRESUBMIT_SCALAR,
+        input_dimensions=input_dimensions,
+    )
 
 
 @pytest.mark.nightly

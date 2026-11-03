@@ -327,6 +327,8 @@ _UNARY_SWEEP_ARGNAMES = (
 
 @pytest.mark.nightly
 @pytest.mark.parametrize("dest_sync", [DestSync.Half])
+@pytest.mark.parametrize("stable_sort", [StableSort.No, StableSort.Yes])
+@pytest.mark.parametrize("fused_sort", [FusedSort.No, FusedSort.Yes])
 @pytest.mark.parametrize(
     ",".join(_UNARY_SWEEP_ARGNAMES),
     UNARY_SWEEP_PARAMS,
@@ -340,6 +342,8 @@ def test_eltwise_unary_sfpu(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
     dest_sync: DestSync,
+    stable_sort: StableSort,
+    fused_sort: FusedSort,
 ):
     """Every float unary SFPU op, over its registered domain.
 
@@ -353,6 +357,16 @@ def test_eltwise_unary_sfpu(
     if not broad:
         _skip_bh_unless_fp32(formats, dest_acc)
 
+    if fused_sort == FusedSort.Yes and (
+        stable_sort == StableSort.Yes
+        or dest_acc == DestAccumulation.No
+        or formats.input_format != DataFormat.Float16_b
+        or formats.output_format != DataFormat.Float16_b
+    ):
+        pytest.skip(
+            "fused sort requires bf16 formats, dest_acc=Yes, and stable_sort=No"
+        )
+
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -362,6 +376,8 @@ def test_eltwise_unary_sfpu(
         fast_mode,
         input_dimensions,
         dest_sync=dest_sync,
+        stable_sort=stable_sort,
+        fused_sort=fused_sort,
     )
 
 
@@ -950,12 +966,14 @@ def _shift_stimulus_values(mathop, shift_amount):
 
 @pytest.mark.nightly
 @parametrize(
+    formats=input_output_formats([DataFormat.Int32], same=True),
     mathop=_UNARY_SHIFT_OPS,
     shift_amount=_UNARY_SHIFT_AMOUNTS,
     dest_acc=[DestAccumulation.Yes],
     input_dimensions=[[64, 64]],
 )
 def test_eltwise_unary_sfpu_int_shift(
+    formats: InputOutputFormat,
     mathop: MathOperation,
     shift_amount: int,
     dest_acc: DestAccumulation,
@@ -966,7 +984,12 @@ def test_eltwise_unary_sfpu_int_shift(
     Two's complement is what ttnn feeds and the kernels' raw I32 loads expect.
     """
     values = _shift_stimulus_values(mathop, shift_amount)
-    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    if not any(v for v in values):
+        # Only 0 survives the representable-result filter, so the variant would assert
+        # 0 << n == 0 and nothing else. Skipped rather than left as a green vacuous pass.
+        pytest.skip(
+            reason=f"every non-zero value overflows int32 at a left shift of {shift_amount}"
+        )
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,

@@ -119,9 +119,7 @@ def _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc):
 # (a 32x32 tile is 4 faces of 16x16, and input_dimensions=[64, 32] is 8 faces).
 _FACES_PER_TILE = 4
 
-#: The approximation mode the contract-gated drivers below compile, and so the one their
-#: contract names.
-_APPROX_MODE = ApproximationMode.No
+_APPROX_MODE_SWEEP = dict(approx_mode=[ApproximationMode.No])
 _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
@@ -818,7 +816,7 @@ def sfpu_binary(
         dest_acc,
         golden_tensor,
         res_tensor,
-        approx_mode=_APPROX_MODE,
+        approx_mode=approx_mode,
     )
 
 
@@ -896,6 +894,7 @@ ATAN2_SWEEP = dict(
     formats=_BF16_FP32_FORMATS,
     mathop=[MathOperation.SfpuAtan2],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    approx_mode=[ApproximationMode.Yes, ApproximationMode.No],
 )
 EQ_NE_SWEEP = dict(
     formats=_BF16_FP32_FORMATS,
@@ -924,12 +923,14 @@ LOGSIGMOID_SWEEP = dict(
 )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**FLOAT_SWEEP)
 def test_eltwise_binary_sfpu_float(
     formats,
     dest_acc,
     mathop,
     bcast_dim,
+    approx_mode,
     **run_kwargs,
 ):
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
@@ -973,6 +974,7 @@ def test_eltwise_binary_sfpu_float(
         dest_acc,
         mathop,
         broadcast_type=bcast_dim,
+        approx_mode=approx_mode,
         **run_kwargs,
     )
 
@@ -988,13 +990,17 @@ MIXED_FORMAT_SWEEP = dict(
 )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**MIXED_FORMAT_SWEEP)
-def test_eltwise_binary_sfpu_mixed_format(formats, mathop, dest_acc, **run_kwargs):
+def test_eltwise_binary_sfpu_mixed_format(
+    formats, mathop, dest_acc, approx_mode, **run_kwargs
+):
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
         input_dimensions=[32, 32],
+        approx_mode=approx_mode,
         **run_kwargs,
     )
 
@@ -1076,8 +1082,9 @@ def test_eltwise_binary_sfpu_mul_production_exact():
     assert_bit_exact(res, golden, "production mul")
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**DIV_SWEEP)
-def test_eltwise_binary_sfpu_div(formats, dest_acc, **run_kwargs):
+def test_eltwise_binary_sfpu_div(formats, dest_acc, approx_mode, **run_kwargs):
     # DIV routes through the dedicated production kernel (calculate_sfpu_binary_div);
     # split out from the float sweep since the reciprocal path is precision-sensitive.
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
@@ -1087,12 +1094,16 @@ def test_eltwise_binary_sfpu_div(formats, dest_acc, **run_kwargs):
         dest_acc,
         MathOperation.SfpuElwdiv,
         broadcast_type=LlkBroadcastType.None_,
+        approx_mode=approx_mode,
         **run_kwargs,
     )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**FLOAT_EXTENDED_SWEEP)
-def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_float_extended(
+    formats, dest_acc, mathop, approx_mode, **run_kwargs
+):
     # max/min (SFPSWAP) and fmod/remainder (fp32 reciprocal) binary kernels with no
     # dedicated production BinaryOp; driven through the same in-DST harness as add/sub.
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
@@ -1117,12 +1128,14 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwa
         dest_acc,
         mathop,
         broadcast_type=LlkBroadcastType.None_,
+        approx_mode=approx_mode,
         **run_kwargs,
     )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**MASK_SWEEP)
-def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, approx_mode, **run_kwargs):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0
     # (MASK) or +inf (MASK_POSINF).
     # Crafted stimuli so the mask carries real zeros.
@@ -1140,12 +1153,15 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
         spec_A=spec_A,
         spec_B=spec_B,
         input_dimensions=[64, 32],
+        approx_mode=approx_mode,
         **run_kwargs,
     )
 
 
 @parametrize(**ATAN2_SWEEP)
-def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_atan2(
+    formats, dest_acc, mathop, approx_mode, **run_kwargs
+):
     # atan2(y, x): y = tile0, x = tile1. Signed [-5, 5] gives mixed signs so all quadrants
     # (and the |y|>=|x| / x<0 branches) are exercised. A minimax approximation: gated by
     # its step budget on Wormhole and Blackhole, and by tolerance + PCC on Quasar.
@@ -1156,22 +1172,37 @@ def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop, **run_kwargs):
         dest_acc,
         mathop,
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0),
+        approx_mode=approx_mode,
         **run_kwargs,
     )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**EQ_NE_SWEEP)
-def test_eltwise_binary_sfpu_eq_ne(formats, dest_acc, mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_eq_ne(
+    formats, dest_acc, mathop, approx_mode, **run_kwargs
+):
     # Eq/Ne(a, b) with a = tile0, b = tile1. Crafted paired stimuli give a non-constant 0/1
     # golden so the equal branch is exercised (the default random sweep never is).
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _eq_ne_stimuli_specs()
-    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=spec_A,
+        spec_B=spec_B,
+        approx_mode=approx_mode,
+        **run_kwargs,
+    )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**FLOAT_COMPARISON_SWEEP)
-def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_float_comparison(
+    formats, dest_acc, mathop, approx_mode, **run_kwargs
+):
     # lt/gt/le/ge(a, b) with a = tile0, b = tile1. Crafted so a third of the elements are
     # exactly equal and the rest differ by +/-1.0: the tie is what distinguishes the strict
     # comparisons from the non-strict ones, and the wide gaps keep every other element's
@@ -1179,17 +1210,36 @@ def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop, **run_k
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _comparison_stimuli_specs()
-    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=spec_A,
+        spec_B=spec_B,
+        approx_mode=approx_mode,
+        **run_kwargs,
+    )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**ISCLOSE_SWEEP)
-def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_isclose(
+    formats, dest_acc, mathop, approx_mode, **run_kwargs
+):
     # isclose(a, b) = |a - b| <= atol + rtol*|b|, a = tile0, b = tile1. torch default
     # tolerances (fixed in the C++ dispatch); crafted stimuli give a non-constant 0/1 mix.
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _isclose_stimuli_specs()
-    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=spec_A,
+        spec_B=spec_B,
+        approx_mode=approx_mode,
+        **run_kwargs,
+    )
 
 
 @parametrize(**ISCLOSE_SWEEP)
@@ -1223,8 +1273,11 @@ def test_eltwise_binary_sfpu_xlogy_denormal(mathop, dest_acc):
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**LOGSIGMOID_SWEEP)
-def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_logsigmoid(
+    formats, dest_acc, mathop, approx_mode, **run_kwargs
+):
     # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation, gated by its
     # step budget on Wormhole and Blackhole and by tolerance + PCC on Quasar; x swept
     # over [-8, 3.9].
@@ -1237,6 +1290,7 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs)
         dest_acc,
         mathop,
         spec_A=_logsigmoid_stimuli_spec(),
+        approx_mode=approx_mode,
         **run_kwargs,
     )
 
@@ -1442,9 +1496,10 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
     ), f"{mathop.name} sign_magnitude={sign_magnitude} mismatch"
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**QUANT_SWEEP)
-def test_eltwise_binary_sfpu_quant(mathop, sign_magnitude, **run_kwargs):
-    _run_quant(mathop, sign_magnitude, **run_kwargs)
+def test_eltwise_binary_sfpu_quant(mathop, sign_magnitude, approx_mode, **run_kwargs):
+    _run_quant(mathop, sign_magnitude, approx_mode=approx_mode, **run_kwargs)
 
 
 # =============================================================================
@@ -1744,9 +1799,11 @@ def _run_quant_byte(mathop, in0_words, scale_words, zero_point_bits, **run_kwarg
 
 # A lone axis goes through plain pytest.mark.parametrize: the harness @parametrize hands it over as a
 # 1-tuple that --op does not see. The perf twin adds its own axes and uses QUANT_BYTE_SWEEP.
+@parametrize(**_APPROX_MODE_SWEEP)
 @pytest.mark.parametrize("mathop", _QUANT_BYTE_OPS)
-def test_eltwise_binary_sfpu_quant_byte(mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_quant_byte(mathop, approx_mode, **run_kwargs):
     """Sweep: eight pairs of exact, tie-free stimuli that reach the saturation sides."""
+    run_kwargs["approx_mode"] = approx_mode
     generator = np.random.default_rng(0)
     if run_kwargs.get("is_perf"):
         # One pair, like the quant rows above; the instruction stream is data-independent.
@@ -1885,11 +1942,13 @@ INT_SWEEP = dict(
 )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**INT_SWEEP)
 def test_eltwise_binary_sfpu_int(
     formats,
     dest_acc,
     mathop,
+    approx_mode,
     **run_kwargs,
 ):
     # The random half of the Int32 coverage, on the positive-only tie-free integer default --
@@ -1898,6 +1957,7 @@ def test_eltwise_binary_sfpu_int(
         formats,
         dest_acc,
         mathop,
+        approx_mode=approx_mode,
         **run_kwargs,
     )
 
@@ -2061,10 +2121,13 @@ BITWISE_SWEEP = dict(
 )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**BITWISE_SWEEP)
-def test_eltwise_binary_sfpu_bitwise(formats, dest_acc, mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_bitwise(
+    formats, dest_acc, mathop, approx_mode, **run_kwargs
+):
     # int32 bitwise AND/OR/XOR: exact on the full default int range.
-    sfpu_binary(formats, dest_acc, mathop, **run_kwargs)
+    sfpu_binary(formats, dest_acc, mathop, approx_mode=approx_mode, **run_kwargs)
 
 
 # Ops whose kernel interprets DST as unsigned; run them under UInt32 (the rest are Int32).
@@ -2108,8 +2171,9 @@ INT_UNIFORM_SWEEP = dict(
 )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**INT_UNIFORM_SWEEP)
-def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc, **run_kwargs):
+def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc, approx_mode, **run_kwargs):
     _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc)
     int_format = DataFormat.UInt32 if mathop in _UINT32_BINARY_OPS else DataFormat.Int32
     formats = InputOutputFormat(int_format, int_format)
@@ -2119,6 +2183,7 @@ def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc, **run_kwargs):
         dest_acc,
         mathop,
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=low, high=high),
+        approx_mode=approx_mode,
         **run_kwargs,
     )
 
@@ -2182,9 +2247,19 @@ RSUB_INT32_SWEEP = dict(
 )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**RSUB_INT32_SWEEP)
-def test_eltwise_binary_sfpu_rsub_int32(formats, dest_acc, mathop, **run_kwargs):
-    sfpu_binary(formats, dest_acc, mathop, twos_complement=True, **run_kwargs)
+def test_eltwise_binary_sfpu_rsub_int32(
+    formats, dest_acc, mathop, approx_mode, **run_kwargs
+):
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        twos_complement=True,
+        approx_mode=approx_mode,
+        **run_kwargs,
+    )
 
 
 EQ_NE_INT_SWEEP = dict(
@@ -2194,13 +2269,24 @@ EQ_NE_INT_SWEEP = dict(
 )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**EQ_NE_INT_SWEEP)
-def test_eltwise_binary_sfpu_eq_ne_int(formats, dest_acc, mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_eq_ne_int(
+    formats, dest_acc, mathop, approx_mode, **run_kwargs
+):
     # int32 eq/ne via calculate_binary_eq_int (exact 0/1 over the raw INT32 dest bits).
     # Reuse the paired eq/ne stimuli so ~50% of positions compare equal — the equal branch
     # a plain random int sweep would essentially never hit.
     spec_A, spec_B = _eq_ne_stimuli_specs()
-    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=spec_A,
+        spec_B=spec_B,
+        approx_mode=approx_mode,
+        **run_kwargs,
+    )
 
 
 # Integer shift edge cases: shift amounts outside [0, 31], arithmetic sign extension, and
@@ -2698,15 +2784,20 @@ def _run_sfpu_add_top_row(
         dest_acc,
         golden_tensor,
         res_tensor,
-        approx_mode=_APPROX_MODE,
+        approx_mode=approx_mode,
     )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**ADD_TOP_ROW_SWEEP)
-def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs):
+def test_eltwise_binary_sfpu_add_top_row(
+    formats, dest_acc, mathop, approx_mode, **run_kwargs
+):
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
-    _run_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs)
+    _run_sfpu_add_top_row(
+        formats, dest_acc, mathop, approx_mode=approx_mode, **run_kwargs
+    )
 
 
 # Both operands of the across-zero pair cycle through the same small signed range.
@@ -2924,16 +3015,24 @@ def _run_sfpu_binary_bcast(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # approx_mode unset: this kernel compiles no APPROX_MODE.
-    assert_against_contract(mathop, formats, dest_acc, golden_tensor, res_tensor)
+    assert_against_contract(
+        mathop,
+        formats,
+        dest_acc,
+        golden_tensor,
+        res_tensor,
+        approx_mode=approx_mode,
+    )
 
 
+@parametrize(**_APPROX_MODE_SWEEP)
 @parametrize(**BCAST_SWEEP)
 def test_eltwise_binary_sfpu_bcast(
     formats,
     bcast_dim,
     mathop,
     dest_acc,
+    approx_mode,
     **run_kwargs,
 ):
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
@@ -2946,7 +3045,14 @@ def test_eltwise_binary_sfpu_bcast(
     ):
         dest_acc = DestAccumulation.Yes
 
-    _run_sfpu_binary_bcast(formats, bcast_dim, mathop, dest_acc, **run_kwargs)
+    _run_sfpu_binary_bcast(
+        formats,
+        bcast_dim,
+        mathop,
+        dest_acc,
+        approx_mode=approx_mode,
+        **run_kwargs,
+    )
 
 
 # BCAST_COL loads the even columns, so SFPU lanes 1..7 hold the discarded tile columns 2, 4, ..., 14;

@@ -90,6 +90,7 @@ class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 _TILE_ROWS = [32, 16]
 # Each column tile is tile_rows x 32; srcA is one row of ct_dim tiles.
 _BCST_COL_RT_DIM = 1
+BCAST_COL_CT_DIMS = list(range(1, 9)) + [32]
 _CPP_SOURCE = "sources/eltwise_bcast_col_custom_test.cpp"
 
 
@@ -255,7 +256,7 @@ def _canonical_bcast_col_config(
     tile_rows=_TILE_ROWS,
     # Widths up to 256 fit a single dest section; 1024 (32 tiles) spans multiple
     # sections, exercising destination bank switching in the custom pipeline.
-    input_width=list(range(32, 257, 32)) + [1024],
+    ct_dim=BCAST_COL_CT_DIMS,
 )
 def test_eltwise_bcast_col_custom(
     formats,
@@ -264,7 +265,7 @@ def test_eltwise_bcast_col_custom(
     math_fidelity,
     broadcast_type,
     tile_rows,
-    input_width,
+    ct_dim,
 ):
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
@@ -276,7 +277,7 @@ def test_eltwise_bcast_col_custom(
     ):
         pytest.skip("MUL bcast-col reuse scaffold is Blackhole-only")
 
-    input_dimensions_A = [tile_rows, input_width]
+    input_dimensions_A = [tile_rows, ct_dim * 32]
     input_dimensions_B = [tile_rows, 32]
 
     # 32x32 tile => num_faces=4, 16x32 tiny tile => num_faces=2.
@@ -284,7 +285,7 @@ def test_eltwise_bcast_col_custom(
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
     num_faces = num_faces_r_dim * num_faces_c_dim
 
-    ct_dim = input_dimensions_A[1] // 32
+    # Each column tile is tile_rows x 32; the operand is a single row of ct_dim tiles.
     logger.info(
         "Running ct_dim=%d  srcA=%s  srcB=%s  num_faces=%d  face_r_dim=%d",
         ct_dim,

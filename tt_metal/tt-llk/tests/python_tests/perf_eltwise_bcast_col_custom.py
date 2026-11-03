@@ -12,7 +12,10 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from test_eltwise_bcast_col_custom import create_eltwise_bcast_col_custom_config
+from test_eltwise_bcast_col_custom import (
+    BCAST_COL_CT_DIMS,
+    create_eltwise_bcast_col_custom_config,
+)
 
 
 @pytest.mark.perf
@@ -22,7 +25,7 @@ from test_eltwise_bcast_col_custom import create_eltwise_bcast_col_custom_config
     dest_acc=[DestAccumulation.No],
     math_fidelity=[MathFidelity.LoFi],
     broadcast_type=[BroadcastType.Column],
-    ct_dim=[1, 8],
+    ct_dim=BCAST_COL_CT_DIMS,
     loop_factor=[64],
 )
 def test_perf_eltwise_bcast_col_custom(

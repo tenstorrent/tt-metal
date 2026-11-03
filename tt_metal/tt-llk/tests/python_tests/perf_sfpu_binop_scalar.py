@@ -35,7 +35,6 @@ from test_sfpu_binop_scalar import (
     loop_factor=[16],
     # Retained as a schema-v3 catalog column; the kernel uses 8 iterations per face.
     iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
     is_perf=[True],
 )
 def test_perf_sfpu_binop_scalar(

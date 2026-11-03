@@ -35,6 +35,10 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test, result_tensor
 
 
+def unpack_tilize_input_dimensions(rt_dim, ct_dim):
+    return [rt_dim * TILE_DIMENSIONS[0], ct_dim * TILE_DIMENSIONS[1]]
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -45,10 +49,14 @@ from helpers.utils import passed_test, result_tensor
         ]
     ),
     num_faces=[2, 4],
+    rt_dim=list(range(1, 9)),
+    ct_dim=list(range(1, 9)),
 )
 def test_unpack_tilize_float(
     formats,
     num_faces,
+    rt_dim,
+    ct_dim,
 ):
     if (
         formats.input_format == DataFormat.Fp8_e4m3
@@ -64,7 +72,11 @@ def test_unpack_tilize_float(
     if formats.output_format == DataFormat.Bfp8_b and num_faces != FACES_PER_TILE:
         pytest.skip("Bfp8_b output format only works with num_faces=4")
 
-    unpack_tilize(formats, num_faces=num_faces)
+    unpack_tilize(
+        formats,
+        num_faces=num_faces,
+        input_dimensions=unpack_tilize_input_dimensions(rt_dim, ct_dim),
+    )
 
 
 @parametrize(
@@ -89,12 +101,21 @@ def test_unpack_tilize_float32_lossless(
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     num_faces=[2, 4],
+    rt_dim=[1, 2],
+    ct_dim=[1, 2],
 )
 def test_unpack_tilize_int(
     formats,
     num_faces,
+    rt_dim,
+    ct_dim,
 ):
-    unpack_tilize(formats, unpack_to_dest=True, num_faces=num_faces)
+    unpack_tilize(
+        formats,
+        unpack_to_dest=True,
+        num_faces=num_faces,
+        input_dimensions=unpack_tilize_input_dimensions(rt_dim, ct_dim),
+    )
 
 
 @parametrize(

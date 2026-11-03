@@ -27,8 +27,7 @@ _PERF_AXES = dict(
 )
 
 _ATAN2_PERF_AXES = {
-    **_PERF_AXES,
-    "approx_mode": [ApproximationMode.Yes, ApproximationMode.No],
+    name: values for name, values in _PERF_AXES.items() if name != "approx_mode"
 }
 
 
