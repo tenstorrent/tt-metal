@@ -31,6 +31,7 @@ import logging
 import math
 import multiprocessing as mp
 import os
+import re
 import signal
 import threading
 import time
@@ -56,6 +57,7 @@ REVISION = os.environ.get("NEMOTRON_RERANK_REVISION", "828765652b05bd439c9789d2a
 MAX_DOCUMENTS = 1000  # tt-media-server MAX_RERANK_DOCUMENTS
 TRACE_REGION_SIZE = int(os.environ.get("RR_TRACE_REGION_SIZE", 400_000_000))  # 18 traces fit (PR #5490)
 SAMPLES = 100_000
+_EXC_LINE = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Interrupt|Exit)\b")
 
 DEFAULT_CONFIG = {
     "host": "127.0.0.1",
@@ -343,7 +345,9 @@ class Runtime:
                     logger.warning(f"worker {w.idx} traced max_length {msg['max_length']} != server {self.max_length}")
                 logger.info(f"worker {w.idx} ({w.bdf}) ready after {msg['warmup_s']} s, {msg['traces']} traces")
         elif kind == "failed":
-            last = next((l for l in reversed(msg["error"].splitlines()) if l.strip()), "unknown error")
+            lines = [l.strip() for l in msg["error"].splitlines() if l.strip()]
+            # the exception line, not a C++ backtrace frame that ttnn appends to the message
+            last = next((l for l in reversed(lines) if _EXC_LINE.match(l)), lines[-1] if lines else "unknown error")
             logger.error(msg["error"])
             self._fail_worker(w, f"worker {w.idx} ({w.bdf}) failed: {last.strip()}")
 
