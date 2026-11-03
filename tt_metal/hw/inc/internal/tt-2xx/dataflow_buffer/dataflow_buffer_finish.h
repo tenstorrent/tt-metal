@@ -100,8 +100,8 @@ FORCE_INLINE void dfb_dm_kernel_exit(uint32_t hartid, volatile uint8_t* run_stat
 
     // 2. Hand the records to DM0, then move to DFB_DRAINING. DM0 flushes a side once all its issuers have
     // reached it. This is separate from DONE because the drain below can wait on DM0's flush of a side.
-    volatile uint32_t* record_out =
-        dfb_l1_uncached_u32_ptr(reinterpret_cast<uintptr_t>(&g_dfb_exit_record[hartid - dfb::FIRST_KERNEL_DM_HART][0]));
+    volatile uint32_t* record_out = dfb_l1_uncached_u32_ptr(
+        reinterpret_cast<uintptr_t>(&g_dfb_exit_record[hartid - ReservedDMProcessorsPerCoreType][0]));
     for (uint32_t m = record_mask; m != 0; m &= m - 1) {
         const uint32_t slot = static_cast<uint32_t>(__builtin_ctz(m));
         record_out[slot] = records[slot];
@@ -160,10 +160,12 @@ inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
     asm volatile("fence" ::: "memory");
 
     // Producers credit a counter's posted count, consumers its acked count.
-    const uint64_t read_reg = is_producer ? TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__READ_POSTED_REG_ADDR
-                                          : TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__READ_ACKED_REG_ADDR;
-    const uint64_t inc_reg = is_producer ? TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__POSTED_REG_ADDR
-                                         : TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__ACKED_REG_ADDR;
+    const uint64_t read_reg = is_producer
+                                  ? TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__READ_POSTED_REG_ADDR
+                                  : TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__READ_ACKED_REG_ADDR;
+    const uint64_t inc_reg = is_producer
+                                 ? TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__POSTED_REG_ADDR
+                                 : TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__ACKED_REG_ADDR;
     const uint32_t first_trid = static_cast<uint32_t>(__builtin_ctz(side_trids));
     const volatile TxnDFBDescriptor& desc = g_txn_dfb_descriptor[first_trid];
     const uint8_t issuer_mask = desc.finish.issuer_hart_mask;
@@ -176,7 +178,7 @@ inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
     for (uint32_t h = issuer_mask; h != 0; h &= h - 1) {
         const uint32_t hart = static_cast<uint32_t>(__builtin_ctz(h));
         volatile uint32_t* const rec_slot = dfb_l1_uncached_u32_ptr(
-            reinterpret_cast<uintptr_t>(&g_dfb_exit_record[hart - dfb::FIRST_KERNEL_DM_HART][record_slot]));
+            reinterpret_cast<uintptr_t>(&g_dfb_exit_record[hart - ReservedDMProcessorsPerCoreType][record_slot]));
         const uint32_t rec = *rec_slot;
         *rec_slot = DFB_EXIT_RECORD_NONE;
         const uint32_t loop = rec & 0xFFFFu;
@@ -195,6 +197,7 @@ inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
             owed += pos / num_tcs;
         } else if (pos != 0) {
             const uint32_t round = num_tcs * share;
+            ASSERT(round != 0);  // a record with pos != 0 has a non-zero share
             owed += (pos / round) * share;
             rr_rem = pos % round;
         }
@@ -206,10 +209,11 @@ inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
                 rr_rem -= n;
             }
             const dfb::PackedTileCounter ptc = desc.tile_counters[counter];
-            const uint64_t tc_base = dfb::get_tensix_id(ptc) * LLK_REG_SIZE +
-                                     dfb::get_counter_id(ptc) * COUNTER_REG_SIZE;
+            const uint64_t tc_base =
+                dfb::get_tensix_id(ptc) * LLK_REG_SIZE + dfb::get_counter_id(ptc) * COUNTER_REG_SIZE;
             const uint16_t actual = static_cast<uint16_t>(overlay::fast_llk_reg_read(tc_base + read_reg));
-            // Modular: negative means the counter is behind what this issuer moved.
+            // Modular: negative means the counter is behind what this issuer moved. Valid while the counter and
+            // `expected` are less than 2^15 apart.
             const uint16_t behind = static_cast<uint16_t>(expected - actual);
             if (static_cast<int16_t>(behind) > 0) {
                 overlay::fast_llk_reg_write(tc_base + inc_reg, behind);
@@ -247,7 +251,7 @@ inline bool dfb_dm0_records_written(uint8_t issuers, uint32_t first_trid) {
     for (uint32_t h = issuers; h != 0; h &= h - 1) {
         const uint32_t hart = static_cast<uint32_t>(__builtin_ctz(h));
         if (*dfb_l1_uncached_u32_ptr(reinterpret_cast<uintptr_t>(
-                &g_dfb_exit_record[hart - dfb::FIRST_KERNEL_DM_HART][first_trid - DFB_TXN_ID_BASE])) ==
+                &g_dfb_exit_record[hart - ReservedDMProcessorsPerCoreType][first_trid - DFB_TXN_ID_BASE])) ==
             DFB_EXIT_RECORD_NONE) {
             return false;
         }
@@ -266,7 +270,7 @@ inline void dfb_dm0_discard_records(uint32_t pending) {
         for (uint32_t h = finish.issuer_hart_mask; h != 0; h &= h - 1) {
             const uint32_t hart = static_cast<uint32_t>(__builtin_ctz(h));
             *dfb_l1_uncached_u32_ptr(reinterpret_cast<uintptr_t>(
-                &g_dfb_exit_record[hart - dfb::FIRST_KERNEL_DM_HART][first_trid - DFB_TXN_ID_BASE])) =
+                &g_dfb_exit_record[hart - ReservedDMProcessorsPerCoreType][first_trid - DFB_TXN_ID_BASE])) =
                 DFB_EXIT_RECORD_NONE;
         }
     }
@@ -290,6 +294,7 @@ inline bool __attribute__((noinline)) dfb_dm0_flush_ready_sides(uint32_t& pendin
             continue;
         }
         if (!dfb_dm0_records_written(issuers, first_trid)) {
+            // Keep visiting the other sides: a DM still writing this side's record can be waiting on one of them.
             records_missing = true;
             continue;
         }

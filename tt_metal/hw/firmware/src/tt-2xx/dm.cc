@@ -254,7 +254,7 @@ inline void wait_subordinates() {
 // Bit per kernel DM whose run state is DFB_DRAINING or DONE, i.e. whose DFB exit records are written.
 inline uint8_t dfb_dm0_draining_harts(uint64_t all_dms) {
     uint8_t ready = 0;
-    for (uint32_t hart = dfb::FIRST_KERNEL_DM_HART; hart < 8; hart++) {
+    for (uint32_t hart = ReservedDMProcessorsPerCoreType; hart < NUM_DM_CORES; hart++) {
         const uint8_t state = static_cast<uint8_t>(all_dms >> (8 * (hart - 1)));
         if (state == RUN_SYNC_MSG_DFB_DRAINING || state == RUN_SYNC_MSG_DONE) {
             ready |= static_cast<uint8_t>(1u << hart);
