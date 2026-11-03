@@ -276,8 +276,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     KernelRunArgs writer_run{.kernel = WRITER};
     KernelRunArgs compute_run{.kernel = COMPUTE};
     std::uint32_t work_start = 0;
-    for (std::uint32_t i = 0; i < cores.size(); ++i) {
-        const CoreCoord& core = cores[i];
+    for (const CoreCoord& core : cores) {
         const std::uint32_t num_work =
             core_group_1.contains(core) ? num_work_per_core_group_1 : num_work_per_core_group_2;
 

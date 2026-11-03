@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include <optional>
+
+#include <tt-metalium/core_coord.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
@@ -11,7 +15,7 @@ namespace ttnn::prim {
 struct FillPadParams {
     ttnn::PadValue fill_value;
     tt::tt_metal::MemoryConfig output_mem_config;
-    std::optional<CoreRangeSet> sub_core_grids;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 };
 
 struct FillPadInputs {

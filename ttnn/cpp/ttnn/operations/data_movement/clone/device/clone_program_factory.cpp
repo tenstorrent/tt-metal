@@ -260,8 +260,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
     KernelRunArgs writer_ra{.kernel = WRITER};
 
     uint32_t start_id = 0;
-    for (size_t i = 0; i < cores.size(); ++i) {
-        const auto& core = cores[i];
+    for (const auto& core : cores) {
         uint32_t num_units_per_core =
             core_group_1.contains(core) ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
