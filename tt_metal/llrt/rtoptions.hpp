@@ -329,6 +329,9 @@ class RunTimeOptions {
     // Enable instruction gathering in Tensix core.
     bool enable_gathering = false;
 
+    // Value written to the Tensix RISC I$ prefetcher control register at boot. Unset leaves it at reset.
+    std::optional<uint32_t> risc_prefetch_ctrl;
+
     // Buffer in DRAM to store various ARC processor samples. Feature not ready yet
     uint32_t arc_debug_buffer_size = 0;
 
@@ -699,7 +702,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -707,7 +710,8 @@ public:
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
-            get_eth_ptp_trace());
+            get_eth_ptp_trace(),
+            risc_prefetch_ctrl.has_value() ? std::to_string(*risc_prefetch_ctrl) : "none");
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -830,6 +834,7 @@ public:
     // Callers also check for Blackhole; the option is arch-agnostic.
     bool get_l1_ecc_halt_enabled() const { return !this->disable_l1_ecc_halt; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
+    std::optional<uint32_t> get_risc_prefetch_ctrl() const { return this->risc_prefetch_ctrl; }
 
     std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
         return dispatch_core_type_override;

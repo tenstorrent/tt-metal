@@ -369,6 +369,11 @@ void device_setup() {
     cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
         RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
+#ifdef RISC_PREFETCH_CTRL_VALUE
+    // The I$ prefetchers reset to off. This is a global config register, so one write at boot covers every launch.
+    cfg_regs[RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32] = RISC_PREFETCH_CTRL_VALUE;
+#endif
+
     // Clear destination registers
     core.ex_zeroacc(instrn_buf[0]);
 
