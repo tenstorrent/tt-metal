@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
+#if defined(TOPK_PAD_LAST_TILE_W) || defined(TOPK_PAD_TILES)
+#include "topk_fill_width_padding.hpp"
+#endif
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -22,6 +25,11 @@ void kernel_main() {
     constexpr uint32_t Wt = get_arg(args::Wt);
     constexpr uint32_t total_number_of_cores = get_arg(args::total_number_of_cores);
     constexpr bool uint16_output = get_arg(args::uint16_output) == 1;
+#ifdef TOPK_PAD_TILES
+    constexpr uint32_t input_Wt = Wt - TOPK_PAD_TILES;  // the last tiles of each row are pad tiles
+#else
+    constexpr uint32_t input_Wt = Wt;
+#endif
 
 #if not GENERATE_INDICES
     // Precomputed indices tensor accessor
@@ -47,9 +55,25 @@ void kernel_main() {
         const uint32_t row = id + (core_loop * total_number_of_cores);
         for (uint32_t w = 0; w < Wt; ++w) {
             dfb_in0.reserve_back(onetile);
-            noc.async_read(
-                inout_tensor_accessor, dfb_in0, tile_bytes_in0, {.page_id = (row * Wt) + w}, {.offset_bytes = 0});
-            noc.async_read_barrier();
+            if (w < input_Wt) {
+                noc.async_read(
+                    inout_tensor_accessor,
+                    dfb_in0,
+                    tile_bytes_in0,
+                    {.page_id = (row * input_Wt) + w},
+                    {.offset_bytes = 0});
+                noc.async_read_barrier();
+#ifdef TOPK_PAD_LAST_TILE_W
+                if (w == input_Wt - 1) {
+                    topk_fill_width_padding(dfb_in0.get_write_ptr());
+                }
+#endif
+            }
+#ifdef TOPK_PAD_TILES
+            else {
+                topk_fill_pad_tile(dfb_in0.get_write_ptr());
+            }
+#endif
 
             dfb_in0.push_back(onetile);
 #if GENERATE_INDICES

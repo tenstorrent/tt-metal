@@ -484,8 +484,10 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     sfpi::vFloat pio2 = PI_2;
     r = __builtin_rvtt_sfpmad(p.get(), z.get(), z.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-    // Undo the endpoint reduction and restore the input sign.
-    v_if(t >= 0.0f) { r = pio2 + neg_two * r; }
+    // Undo the endpoint reduction and restore the input sign. One predicated SFPMAD
+    // (-2*r is exact, so pio2 + neg_two*r rounds once either way); writing r in place
+    // avoids the copy sfpi needs to keep r live for the disabled lanes.
+    v_if(t >= 0.0f) { r = __builtin_rvtt_sfpmad(r.get(), neg_two.get(), pio2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE); }
     v_endif;
 
     r = sfpi::copysgn(r, x);
