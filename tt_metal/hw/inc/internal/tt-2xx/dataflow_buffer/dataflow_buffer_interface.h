@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "dataflow_buffer_config.h"
-#include "core_config.h"  // MaxDMProcessorsPerCoreType
+#include "core_config.h"  // MaxDMProcessorsPerCoreType, ReservedDMProcessorsPerCoreType
 #ifndef COMPILE_FOR_TRISC
 #include "internal/tt-2xx/quasar/overlay/remapper_api.hpp"
 #endif
@@ -134,9 +134,7 @@ static_assert(sizeof(DFBTCSlot) == 16, "DFBTCSlot size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 128, "LocalDFBInterface size is incorrect");
 
 namespace dfb {
-// DM0 (ISR) and DM1 (remapper) never run kernels, so kernel DMs are DM2 onward.
-constexpr uint8_t FIRST_KERNEL_DM_HART = 2;
-constexpr uint8_t NUM_KERNEL_DM_HARTS = MaxDMProcessorsPerCoreType - FIRST_KERNEL_DM_HART;
+constexpr uint8_t NUM_KERNEL_DM_HARTS = MaxDMProcessorsPerCoreType - ReservedDMProcessorsPerCoreType;
 static_assert(NUM_KERNEL_DM_HARTS == MAX_PRODUCERS_PER_DFB, "kernel DMs and DFB producer slots must agree");
 }  // namespace dfb
 
