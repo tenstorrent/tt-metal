@@ -2635,7 +2635,8 @@ targets:
         entries:
           - status: active
             perf:
-              fps: 0.0933
+              # Re-centred 2026-11-03 from 10 scheduled nights (10-25..11-03) on 7 QB2 hosts: 0.1051-0.1081 fps.
+              fps: 0.1060
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
