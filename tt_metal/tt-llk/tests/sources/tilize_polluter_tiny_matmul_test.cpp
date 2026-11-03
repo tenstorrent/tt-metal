@@ -90,19 +90,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // ---- Run 1: TINY matmul on independent pre-tilized operands (verbatim) ----
-    run = 1;
+    run                                         = 1;
+    const ckernel::TensorShape in0_tensor_shape = tensor_shape_from_tile_dims(params.in0_tile_r_dim, params.in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = tensor_shape_from_tile_dims(params.in1_tile_r_dim, params.in1_tile_c_dim);
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats_array[run].unpack_A_src,
         formats_array[run].unpack_B_src,
         formats_array[run].unpack_A_dst,
         formats_array[run].unpack_B_dst,
-        ckernel::make_tensor_shape_from_legacy(params.in1_tile_r_dim < FACE_R_DIM ? params.in1_tile_r_dim : FACE_R_DIM, params.num_faces_B),
-        ckernel::make_tensor_shape_from_legacy(params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM, params.num_faces_A), // in0
+        in1_tensor_shape,
+        in0_tensor_shape, // in0
         params.TILE_SIZE_UNPACK_B,
         params.TILE_SIZE_UNPACK_A);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
-    const ckernel::TensorShape in0_tensor_shape = tensor_shape_from_tile_dims(params.in0_tile_r_dim, params.in0_tile_c_dim);
-    const ckernel::TensorShape in1_tensor_shape = tensor_shape_from_tile_dims(params.in1_tile_r_dim, params.in1_tile_c_dim);
     _llk_unpack_AB_matmul_init_<>(params.UNPACK_TRANSPOSE_FACES, params.CT_DIM, params.RT_DIM, params.KT_DIM, in0_tensor_shape, in1_tensor_shape);
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
