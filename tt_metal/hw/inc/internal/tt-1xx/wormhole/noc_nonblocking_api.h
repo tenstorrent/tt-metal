@@ -1098,9 +1098,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
  * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | True     |
  */
 // clang-format on
+// skip_cmdbuf_chk: the caller has already seen the command buffer ready (and issued nothing on it since).
+template <bool skip_cmdbuf_chk = false>
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
 }
 
@@ -1453,7 +1457,8 @@ template <
     bool update_val = false,
     bool posted = false,
     bool update_counter = true,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>  // the caller has already seen the command buffer ready
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
     static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
@@ -1466,7 +1471,9 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
         }
     }
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
 
     if constexpr (update_addr_lo) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr);
@@ -1482,6 +1489,47 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
+    if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += 1;
+        }
+    }
+}
+
+// clang-format off
+/**
+ * Like noc_fast_write_dw_inline_with_state, for a destination whose node and local address both change per write:
+ * writes the local address (NOC_TARG_ADDR_LO) and the node (NOC_TARG_ADDR_COORDINATE, encoded as
+ * noc_fast_write_dw_inline_set_state encodes it: (noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK), then
+ * sends.
+ * The value, byte enables, control and NOC_TARG_ADDR_MID stay as noc_fast_write_dw_inline_set_state left them, so the
+ * destination must be a register or a word-aligned address (the byte enables are not rewritten).
+ */
+// clang-format on
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool posted = false,
+    bool update_counter = true,
+    bool skip_cmdbuf_chk = false>  // the caller has already seen the command buffer ready
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_to_node_with_state(
+    uint32_t noc, uint32_t cmd_buf, uint32_t node_coordinate, uint32_t addr_lo) {
+    if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        } else {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+        }
+    }
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr_lo);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, node_coordinate);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
         if constexpr (posted) {
             noc_posted_writes_num_issued[noc] += 1;
@@ -1835,6 +1883,32 @@ inline __attribute__((always_inline)) void noc_write_with_state(
     }
     noc_wwrite_with_state<noc_mode, cmd_buf, flags, send, wait, update_counter, posted>(
         noc, src_addr, dst_noc_addr, dst_addr, size, ndests);
+}
+
+// clang-format off
+/**
+ * Like noc_write_with_state, for a destination given as a node coordinate and a local address: the coordinate is
+ * written as given (as NOC_RET_ADDR_COORDINATE takes it, (noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK), not
+ * extracted from a 64-bit address.
+ */
+// clang-format on
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT,
+    bool update_counter = true,
+    bool posted = false>
+inline __attribute__((always_inline)) void noc_write_to_node_with_state(
+    uint32_t noc,
+    uint32_t src_addr,
+    uint32_t node_coordinate,
+    uint32_t dst_addr,
+    uint32_t size = 0,
+    uint32_t ndests = 1) {
+    noc_wwrite_with_state<noc_mode, cmd_buf, flags, send, wait, update_counter, posted>(
+        noc, src_addr, node_coordinate, dst_addr, size, ndests);
 }
 
 // clang-format off

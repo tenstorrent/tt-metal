@@ -845,7 +845,8 @@ template <
     bool update_val = false,
     bool posted = false,
     bool update_counter = true,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>  // as on Wormhole and Blackhole; the simple command buffer has no ready wait here
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");

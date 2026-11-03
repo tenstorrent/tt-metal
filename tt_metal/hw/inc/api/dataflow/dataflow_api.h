@@ -2204,24 +2204,37 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * | flush               (template parameter) | Whether to flush the NOC transaction before issuing the    | bool     | true or false                    | False    |
  * |                                          | write (`false` callers must prevent races on the caller    |          |                                  |          |
  * |                                          | side)                                                      |          |                                  |          |
+ * | cmd_buf                                  | Command buffer to issue on                                 | uint8_t  | 0..3                             | False    |
+ * | emulated_write_on_cmd_buf (template)     | Blackhole: issue an emulated L1 write on cmd_buf too       | bool     | true or false                    | False    |
  *
  * When `flush` is disabled the caller is responsible for providing a valid `customized_src_addr` scratch location and
  * ensuring no outstanding inline write uses that address before issuing another write.
+ *
+ * On Blackhole an inline write to L1 is emulated by a 4-byte write from a scratch word, which goes out on the write
+ * command buffer and reprograms it, whatever `cmd_buf` says, unless `emulated_write_on_cmd_buf` is set: then it goes
+ * out on `cmd_buf`, for a caller that keeps that buffer programmed between its writes and restores it after this one.
+ * Do not pass the inline-write command buffer with it: on Blackhole its return address is preset for atomics.
  */
 // clang-format on
 
 // Raw NoC address, not attributable to a bound accessor: conservatively OPAQUE
 // (api/dataflow/buf_rw_note.h).
-template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
+template <
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool posted = false,
+    bool flush = true,
+    bool emulated_write_on_cmd_buf = false>
 FORCE_INLINE void noc_inline_dw_write(
     uint64_t addr,
     uint32_t val,
     uint8_t be = 0xF,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC,
-    uint32_t customized_src_addr = 0) {
+    uint32_t customized_src_addr = 0,
+    uint8_t cmd_buf = write_at_cmd_buf) {
     tt_buf_rw::note_opaque();
-    noc_inline_dw_write_impl<dst_type, posted, flush>(addr, val, be, noc, vc, customized_src_addr);
+    noc_inline_dw_write_impl<dst_type, posted, flush, emulated_write_on_cmd_buf>(
+        addr, val, be, noc, vc, customized_src_addr, cmd_buf);
 }
 
 // clang-format off
@@ -2351,7 +2364,8 @@ template <
     bool posted = false,
     bool update_addr_hi = false,
     bool update_val = false,
-    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT,
+    bool skip_cmdbuf_chk = false>  // the caller has already seen the command buffer ready
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
 #ifdef ARCH_BLACKHOLE
@@ -2371,9 +2385,46 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
         update_val,
         posted,
         update_counter_in_callee,
-        dst_type>(noc, cmd_buf, val, addr);
+        dst_type,
+        skip_cmdbuf_chk>(noc, cmd_buf, val, addr);
     WAYPOINT("NWID");
 }
+
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+// clang-format off
+/**
+ * Like noc_inline_dw_write_with_state, for a destination whose node and local address both change per write: writes
+ * the local address and the node, then sends; the value, byte enables and control stay as noc_inline_dw_write_set_state
+ * left them. Only for registers and word-aligned addresses (the byte enables are not rewritten).
+ *
+ * Return value: None
+ *
+ * | Argument                    | Description                                                    | Type     | Valid Range                        | Required |
+ * |-----------------------------|----------------------------------------------------------------|----------|------------------------------------|----------|
+ * | node_coordinate             | Destination node, as the NoC's coordinate field encodes it     | uint32_t | (noc_addr >> NOC_ADDR_COORD_SHIFT) | True     |
+ * | addr                        | Destination address on that node                               | uint32_t | 0..1MB                             | True     |
+ * | cmd_buf                     | Command buffer the state was set on                            | uint8_t  | 0..3                               | False    |
+ * | noc                         | Which NOC to use for the transaction                           | uint8_t  | 0 or 1                             | False    |
+ * | update_counter (template)   | Whether to update the write counters (Blackhole always does)   | bool     | true or false                      | False    |
+ * | posted (template)           | Whether the write is posted (no ack)                           | bool     | true or false                      | False    |
+ * | skip_cmdbuf_chk (template)  | The caller has already seen the command buffer ready           | bool     | true or false                      | False    |
+ */
+// clang-format on
+template <bool update_counter = true, bool posted = false, bool skip_cmdbuf_chk = false>
+FORCE_INLINE void noc_inline_dw_write_to_node_with_state(
+    uint32_t node_coordinate, uint32_t addr, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
+    // As noc_inline_dw_write_with_state: always update the counter on Blackhole (issue 28758).
+    constexpr bool update_counter_in_callee = true;
+#else
+    constexpr bool update_counter_in_callee = update_counter;
+#endif
+    WAYPOINT("NWNW");
+    noc_fast_write_dw_inline_to_node_with_state<noc_mode, posted, update_counter_in_callee, skip_cmdbuf_chk>(
+        noc, cmd_buf, node_coordinate, addr);
+    WAYPOINT("NWND");
+}
+#endif
 
 // clang-format off
 /**
