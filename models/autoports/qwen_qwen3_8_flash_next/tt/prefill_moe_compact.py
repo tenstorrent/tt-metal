@@ -331,3 +331,50 @@ COMPACT_GROUP_PACKED = _variant(
 def compact_group_cb_bytes(n):
     t = (n + 31) // 32
     return 1024 + (10 * n + 128 * 16) * 4 + 8 * SLOT_BYTES + compact_routes_per_pass(n) * t * SLOT_BYTES + 512
+
+
+def dispatch_onepass_enabled():
+    return os.environ.get("QWEN_PREFILL_DISPATCH_ONEPASS", "1") != "0"
+
+
+# One scan instead of two: count every expert (for the packed region offsets) and list this worker's
+# matches in (row, route) order as (row * 16 + route) | (e << 16); the moves then walk the list, so
+# capacity rows, mapping, inverse map and counts are unchanged. Routes 0..9 of a token are adjacent in
+# one tile face, so the per-entry tile index is a row base plus the route.
+DISPATCH_PACKED_ONEPASS = _variant(
+    DISPATCH1024_PACKED,
+    [
+        (
+            "    for(uint32_t row=0;row<N;++row)for(uint32_t route=0;route<10;++route) {\n"
+            "        const uint32_t at=(row/32)*1024+(row%32/16)*512+(route/16)*256+(row%16)*16+route%16;\n"
+            "        const uint32_t v=id[at];\n"
+            "        if(v/128==rank && score[at]!=0)reg[v%128]+=1;\n"
+            "    }\n",
+            "    auto matches=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+invs+SL*16+512);\n"
+            "    uint32_t total=0;\n"
+            "    for(uint32_t row=0;row<N;++row) {\n"
+            "        const uint32_t row_base=(row/32)*1024+(row%32/16)*512+(row%16)*16;\n"
+            "        for(uint32_t route=0;route<10;++route) {\n"
+            "            const uint32_t v=id[row_base+route];\n"
+            "            if(v/128!=rank || score[row_base+route]==0)continue;\n"
+            "            reg[v%128]+=1;\n"
+            "            if(v%128%W==worker)matches[total++]=(row*16+route)|((v%128)<<16);\n"
+            "        }\n"
+            "    }\n",
+        ),
+        (
+            "    for(uint32_t row=0;row<N;++row)for(uint32_t route=0;route<10;++route) {\n"
+            "        const uint32_t at=(row/32)*1024+(row%32/16)*512+(route/16)*256+(row%16)*16+route%16;\n"
+            "        const uint32_t v=id[at];\n"
+            "        if(v/128!=rank || score[at]==0)continue;\n"
+            "        const uint32_t e=v%128;\n"
+            "        if(e%W!=worker)continue;\n",
+            "    for(uint32_t m=0;m<total;++m) {\n"
+            "        const uint32_t e=matches[m]>>16,row=(matches[m]&0xffff)/16,route=matches[m]%16;\n",
+        ),
+    ],
+)
+
+
+def dispatch_onepass_cb_bytes(n):
+    return dispatch_packed_cb_bytes(n) + 10 * n * 4

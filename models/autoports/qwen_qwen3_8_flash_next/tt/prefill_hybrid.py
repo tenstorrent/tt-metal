@@ -16,12 +16,15 @@ from .prefill_moe_compact import (
     COMPACT_GROUP_PACKED,
     DISPATCH1024_PACKED,
     DISPATCH1024_PIPE,
+    DISPATCH_PACKED_ONEPASS,
     compact_cb_bytes,
     compact_group_cb_bytes,
     compact_packed_cb_bytes,
     compact_pipe_enabled,
     compact_routes_per_pass,
     dispatch_cb_bytes,
+    dispatch_onepass_cb_bytes,
+    dispatch_onepass_enabled,
     dispatch_packed_cb_bytes,
     dispatch_pipe_enabled,
     moe_group_sizes,
@@ -96,10 +99,10 @@ def group1024(self, x):
         _expert_kernel(
             self.ops.mesh,
             [source, ids_tile, selected, self.rank, counts, mapping, capacity, inverse, region],
-            DISPATCH1024_PACKED,
+            DISPATCH_PACKED_ONEPASS if dispatch_onepass_enabled() else DISPATCH1024_PACKED,
             [n],
             workers=32,
-            cb_size=dispatch_packed_cb_bytes(n),
+            cb_size=dispatch_onepass_cb_bytes(n) if dispatch_onepass_enabled() else dispatch_packed_cb_bytes(n),
         )
     else:
         _expert_kernel(

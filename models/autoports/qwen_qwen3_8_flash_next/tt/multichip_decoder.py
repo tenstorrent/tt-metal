@@ -2781,6 +2781,10 @@ void kernel_main() {
 
 def _local_ple_conv(x, positions, slots, valid_lengths, history, *, output, batch, seq):
     """Device gather/cache update, separated from tensor-core arithmetic."""
+    from .prefill_ple import local_ple_conv_parallel, ple_parallel_enabled
+
+    if batch == 1 and seq > 1 and ple_parallel_enabled():
+        return local_ple_conv_parallel(x, positions, slots, valid_lengths, history, output=output, seq=seq)
     grid = x.device().compute_with_storage_grid_size()
     if batch > grid.x * grid.y:
         raise ValueError("PLE convolution needs one worker per batch lane")
