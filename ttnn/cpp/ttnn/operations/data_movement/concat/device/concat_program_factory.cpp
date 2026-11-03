@@ -62,9 +62,26 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
 
     uint32_t num_output_pages;
     uint32_t single_page_size;
-    const uint32_t common_align_len = std::max(
-        inputs[0].get().mesh_buffer().get_reference_buffer()->alignment(),
-        output.mesh_buffer().get_reference_buffer()->alignment());
+    uint32_t common_align_len = output.mesh_buffer().get_reference_buffer()->alignment();
+    uint32_t scratch_size = 0;
+    std::vector<uint32_t> stage_input(num_input_tensors, 0);
+    if (rm_layout) {
+        uint32_t offset = 0;
+        for (uint32_t i = 0; i < num_input_tensors; ++i) {
+            const auto& buffer = inputs[i].get().mesh_buffer();
+            const uint32_t alignment = buffer.get_reference_buffer()->alignment();
+            const uint32_t page_bytes = inputs[i].get().padded_shape()[-1] == 0 ? 0 : buffer.page_size();
+            common_align_len = std::max(common_align_len, alignment);
+            if (dim == output.padded_shape().rank() - 1 && offset % alignment != 0) {
+                stage_input[i] = 1;
+                scratch_size = std::max(scratch_size, page_bytes);
+            }
+            offset += page_bytes;
+        }
+    }
+    // Bound private staging independently of the input width; chunks preserve NoC alignment.
+    // Round to halfwords so even a one-byte copy has room for the final drain store.
+    scratch_size = tt::align(std::min(scratch_size, std::max(common_align_len, 256U)), 2U);
     if (rm_layout) {
         num_output_pages = output.physical_volume() / output.padded_shape()[-1];
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
@@ -140,13 +157,13 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
     const uint32_t l1_capacity =
         device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(HalMemType::L1);
     TT_FATAL(
-        single_page_size <= l1_capacity,
+        single_page_size + tt::align(scratch_size, common_align_len) <= l1_capacity,
         "ttnn.concat: required DFB entry size ({} B) exceeds per-core L1 capacity ({} B); "
         "op cannot fit on this device.",
         single_page_size,
         l1_capacity);
     uint32_t num_input_pages = 2;
-    if (num_input_pages * single_page_size > l1_budget) {
+    if (num_input_pages * single_page_size + tt::align(scratch_size, common_align_len) > l1_budget) {
         num_input_pages = 1;
     }
 
@@ -196,7 +213,9 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
 
     if (rm_layout) {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
-            page_size_per_tensor[i] = inputs[i].get().mesh_buffer().page_size();
+            page_size_per_tensor[i] = inputs[i].get().padded_shape()[-1] == 0
+                                          ? 0
+                                          : inputs[i].get().mesh_buffer().page_size();
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
             } else {
@@ -259,6 +278,14 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
         reader_advanced_options.compile_time_varargs = page_size_per_tensor;
     }
 
+    const ScratchpadSpecName STAGING{"staging"};
+    if (scratch_size != 0) {
+        reader_defines.emplace("STAGE_UNALIGNED", "1");
+        reader_advanced_options.compile_time_varargs.insert(
+            reader_advanced_options.compile_time_varargs.end(), stage_input.begin(), stage_input.end());
+        reader_advanced_options.compile_time_varargs.push_back(scratch_size);
+    }
+
     KernelSpec reader_spec{
         .unique_id = READER,
         .source = rm_layout ? "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
@@ -284,6 +311,11 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
         .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = std::move(reader_advanced_options),
     };
+
+    if (scratch_size != 0) {
+        reader_spec.scratchpad_bindings.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = STAGING, .accessor_name = "staging"});
+    }
 
     // --- Writer kernel ---
     // Both writers are Metal 2.0 forks of shared donor kernels that live beside their originals in
@@ -346,6 +378,10 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
                 },
             },
     };
+
+    if (scratch_size != 0) {
+        spec.scratchpads.push_back(ScratchpadSpec{.unique_id = STAGING, .size_per_node = scratch_size});
+    }
 
     // --- Per-core runtime args ---
 

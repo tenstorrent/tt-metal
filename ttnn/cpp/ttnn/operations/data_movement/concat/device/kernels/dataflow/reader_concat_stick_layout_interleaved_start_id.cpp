@@ -8,17 +8,61 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
+#include "ckernel.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/data_movement/concat/device/kernels/dataflow/concat_reader_common.hpp"
 
-// Issues a read of page page_id of input I to l1_write_addr. The caller issues the read barrier.
+// Reads input I; staged reads finish here, while direct reads use the caller's barrier.
 // The per-tensor page sizes are compile-time varargs.
 template <uint32_t I>
 FORCE_INLINE void read_input_page(Noc& noc, uint32_t l1_write_addr, uint32_t page_id) {
+    if constexpr (get_compile_time_vararg<I>() == 0) {
+        return;
+    }
     const auto accessor = TensorAccessor(std::get<I>(tensor::inputs));
-    noc.async_read(
-        accessor, CoreLocalMem<uint8_t>(l1_write_addr), get_compile_time_vararg<I>(), {.page_id = page_id}, {});
+#ifdef STAGE_UNALIGNED
+    constexpr uint32_t num_tensors = std::tuple_size_v<decltype(tensor::inputs)>;
+    if constexpr (get_compile_time_vararg<num_tensors + I>() != 0) {
+        Scratchpad<volatile uint8_t> staging(scratch::staging);
+        Scratchpad<volatile uint16_t> staging_words(scratch::staging);
+        constexpr uint32_t page_bytes = get_compile_time_vararg<I>();
+        constexpr uint32_t chunk_bytes = get_compile_time_vararg<2 * num_tensors>();
+        for (uint32_t offset = 0; offset < page_bytes; offset += chunk_bytes) {
+            const uint32_t bytes = page_bytes - offset < chunk_bytes ? page_bytes - offset : chunk_bytes;
+            noc.async_read(accessor, staging, bytes, {.page_id = page_id, .offset_bytes = offset}, {});
+            noc.async_read_barrier();
+            const auto src = staging.local_mem();
+            CoreLocalMem<volatile uint8_t> dst(l1_write_addr + offset);
+            CoreLocalMem<volatile uint16_t> dst_words((l1_write_addr + offset + 1) & ~1U);
+            uint32_t byte;
+            if ((l1_write_addr & 1U) == 0) {
+                const auto src_words = staging_words.local_mem();
+                for (uint32_t word = 0; word < bytes / sizeof(uint16_t); ++word) {
+                    dst_words[word] = src_words[word];
+                }
+                byte = bytes & ~1U;
+            } else {
+                dst[0] = src[0];
+                for (byte = 1; byte + 1 < bytes; byte += 2) {
+                    dst_words[(byte - 1) / 2] =
+                        static_cast<uint16_t>(src[byte]) | (static_cast<uint16_t>(src[byte + 1]) << 8);
+                }
+            }
+            if (byte < bytes) {
+                dst[byte] = src[byte];
+            }
+        }
+        // L1 stores stay ordered; match this final halfword store to drain the output stores too.
+        staging_words[0] = 0;
+        (void)ckernel::load_blocking(&staging_words[0]);
+    } else
+#endif
+    {
+        noc.async_read(
+            accessor, CoreLocalMem<uint8_t>(l1_write_addr), get_compile_time_vararg<I>(), {.page_id = page_id}, {});
+    }
 }
 
 // Reads num_pages pages into the bound Dataflow Buffer in L1.
