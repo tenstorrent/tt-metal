@@ -69,7 +69,7 @@ def loop(monkeypatch):
             d2d_rows=0,
             d2d_width=0,
             h2d_service=object(),
-            d2d_out=d2d_out,
+            outbound=runner.D2DBoundary(activation=d2d_out),
             sockets=runner.SocketBuffers(metadata=None),
         )
 
@@ -106,7 +106,7 @@ def test_first_rank_refuses_a_bad_forward(loop, expect_error):
 def test_a_wrong_chunk_output_shuts_down_the_next_rank(loop, monkeypatch, expect_error, is_last_rank, returns, message):
     shutdowns = []
     monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
-    monkeypatch.setattr(runner, "_forward_shutdown", lambda d2d_out, *a: shutdowns.append(d2d_out))
+    monkeypatch.setattr(runner, "_forward_shutdown", lambda outbound, *a: shutdowns.append(outbound.activation))
     monkeypatch.setattr(runner, "_chunk_rows", lambda inp, k, rows: _Tensor())
     monkeypatch.setattr(runner, "_device_record", lambda words, dev: _Tensor())
 
@@ -127,7 +127,7 @@ def test_a_wrong_chunk_output_shuts_down_the_next_rank(loop, monkeypatch, expect
 def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_error):
     shutdowns = []
     monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
-    monkeypatch.setattr(runner, "_forward_shutdown", lambda d2d_out, *a: shutdowns.append(d2d_out))
+    monkeypatch.setattr(runner, "_forward_shutdown", lambda outbound, *a: shutdowns.append(outbound.activation))
     runtime = _PackedRuntime()
     runtime.config.is_last_rank = False
     d2d_out = object()
@@ -164,12 +164,24 @@ class _PerChunkRuntime(_PackedRuntime):
         self.calls.append((request_id, PrefillChunk(slot_id, actual_start, actual_end)))
 
 
-@pytest.mark.parametrize("per_chunk, rank, size", [(True, 0, 12), (True, 1, 12), (False, 0, 56), (False, 1, 60)])
-def test_layer_ack_record_size(monkeypatch, per_chunk, rank, size):
-    monkeypatch.setattr(runner, "PER_CHUNK_FORWARDS", per_chunk)
-    monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", 56)
-    monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 60)
+# Above one chunk per forward every ack names one chunk (12 B), whether the runner or prefill_forward runs the chunks.
+@pytest.mark.parametrize("forward_chunks, rank, size", [(4, 0, 12), (4, 1, 12), (1, 0, 12), (1, 1, 16)])
+def test_layer_ack_record_size(monkeypatch, forward_chunks, rank, size):
+    monkeypatch.setattr(runner, "FORWARD_CHUNKS", forward_chunks)
+    monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", 56 if forward_chunks > 1 else 12)
+    monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 60 if forward_chunks > 1 else 16)
     assert runner._layer_ack_record_bytes(rank) == size
+
+
+@pytest.mark.parametrize(
+    "use_trace, packed, size",
+    [(False, True, 4096), (True, False, 4096), (True, True, 16384)],  # 60 records x 64 B: 3840 -> 4 KiB; x4 -> 16 KiB
+)
+def test_layer_ack_fifo_holds_the_warm_pass(monkeypatch, use_trace, packed, size):
+    monkeypatch.setattr(runner, "FORWARD_CHUNKS", 4)
+    monkeypatch.setattr(runner, "LAYER_ACK_FIFO_SIZE_BYTES", 4096)
+    monkeypatch.setattr(runner, "ADAPTER", SimpleNamespace(supports_packed_forward=packed))
+    assert runner._layer_ack_fifo_bytes(60, use_trace) == size
 
 
 def test_per_chunk_forwards_run_each_chunk_once(loop, monkeypatch):
@@ -268,8 +280,8 @@ def test_downstream_rank_writes_chunks_into_one_buffer_and_forwards_the_metadata
         3,
         d2d_rows=0,
         d2d_width=0,
-        d2d_in=_D2D(),
-        d2d_out=_D2D(),
+        inbound=runner.D2DBoundary(activation=_D2D()),
+        outbound=runner.D2DBoundary(activation=_D2D()),
         sockets=sockets,
     )
 

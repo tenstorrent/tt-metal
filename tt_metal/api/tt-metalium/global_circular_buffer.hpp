@@ -37,21 +37,25 @@ public:
     explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
 
     // Allocate and own data and configuration buffers at allocator-selected addresses.
+    // `cq_id` is the command queue used for the config write.
     GlobalCircularBuffer(
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type = BufferType::L1);
+        BufferType buffer_type = BufferType::L1,
+        uint8_t cq_id = 0);
 
     // Allocate and own both buffers at the exact addresses. Both ranges must be free.
     // This reserves new storage; it does not view or adopt existing allocations.
+    // `cq_id` is the command queue used for the config write.
     GlobalCircularBuffer(
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type,
         DeviceAddr buffer_address,
-        DeviceAddr config_address);
+        DeviceAddr config_address,
+        uint8_t cq_id = 0);
 
     GlobalCircularBuffer(const GlobalCircularBuffer& other);
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer& other);
@@ -93,13 +97,15 @@ private:
  * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular buffer.
  * @param size Size of the global circular buffer per core in bytes.
  * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
+ * @param cq_id Command queue used for the config write.
  * @return The allocated global circular buffer.
  */
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     distributed::MeshDevice& device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    uint8_t cq_id = 0);
 
 /**
  * @brief Allocates and owns a global circular buffer at two exact L1 addresses.
@@ -114,6 +120,7 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
  * @param buffer_type L1 buffer type for both allocations.
  * @param buffer_address Exact data address.
  * @param config_address Exact configuration address.
+ * @param cq_id Command queue used for the config write.
  * @return The global circular buffer that owns both allocations.
  */
 GlobalCircularBuffer CreateGlobalCircularBuffer(
@@ -122,7 +129,8 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
     uint32_t size,
     BufferType buffer_type,
     DeviceAddr buffer_address,
-    DeviceAddr config_address);
+    DeviceAddr config_address,
+    uint8_t cq_id = 0);
 
 /**
  * @brief Creates a Circular Buffer in L1 memory of specified cores using the address space of the

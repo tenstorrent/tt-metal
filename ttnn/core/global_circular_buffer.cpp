@@ -18,6 +18,8 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include "ttnn/core.hpp"
+
 namespace ttnn::global_circular_buffer {
 
 GlobalCircularBuffer create_global_circular_buffer(
@@ -31,12 +33,19 @@ GlobalCircularBuffer create_global_circular_buffer(
     TT_FATAL(
         buffer_address.has_value() == config_address.has_value(),
         "Global circular buffer data and configuration addresses must be supplied together");
+    const uint8_t cq_id = ttnn::core::get_current_command_queue_id_for_thread().get();
     if (!buffer_address.has_value()) {
         return tt::tt_metal::experimental::GlobalCircularBuffer(
-            *device, sender_receiver_core_mapping, size, buffer_type);
+            *device, sender_receiver_core_mapping, size, buffer_type, cq_id);
     }
     return tt::tt_metal::experimental::GlobalCircularBuffer(
-        *device, sender_receiver_core_mapping, size, buffer_type, buffer_address.value(), config_address.value());
+        *device,
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        buffer_address.value(),
+        config_address.value(),
+        cq_id);
 }
 
 namespace {
