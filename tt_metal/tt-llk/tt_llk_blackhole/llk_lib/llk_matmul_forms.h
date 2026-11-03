@@ -694,6 +694,9 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 2, 1, 1, 0, false, 1},
+    // 8-bit integer operands to Int32 at half sync, 1x1x1
+    {MathFidelity::HiFi2, true, true, DataFormat::Int8, DataFormat::Int8, DataFormat::Int32, 1, 1, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::UInt8, DataFormat::UInt8, DataFormat::Int32, 1, 1, 1, 0, false, 1},
 };
 
 constexpr bool matmul_grid_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,

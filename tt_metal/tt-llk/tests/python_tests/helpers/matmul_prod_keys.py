@@ -658,9 +658,11 @@ _GRID_MAIN_ROWS = (
     ('LoFi', True, True, 'F32', 'B4', 'B4', 2, 1, 1, 0, False, 1),
     ('LoFi', True, True, 'F32', 'B8', 'B4', 2, 1, 1, 0, False, 1),
     ('LoFi', True, True, 'F32', 'F16b', 'B4', 2, 1, 1, 0, False, 1),
+    ('HiFi2', True, True, 'I8', 'I8', 'I32', 1, 1, 1, 0, False, 1),
+    ('HiFi2', True, True, 'U8', 'U8', 'I32', 1, 1, 1, 0, False, 1),
 )
 _GRID_MAIN = frozenset(_GRID_MAIN_ROWS)
-_SHORT = {DataFormat.Float16_b: "F16b", DataFormat.Bfp8_b: "B8", DataFormat.Bfp4_b: "B4", DataFormat.Float32: "F32", DataFormat.Float16: "F16", DataFormat.Bfp8: "B8x", DataFormat.Bfp2_b: "B2"}
+_SHORT = {DataFormat.Float16_b: "F16b", DataFormat.Bfp8_b: "B8", DataFormat.Bfp4_b: "B4", DataFormat.Float32: "F32", DataFormat.Float16: "F16", DataFormat.Bfp8: "B8x", DataFormat.Bfp2_b: "B2", DataFormat.Int8: "I8", DataFormat.UInt8: "U8", DataFormat.Int32: "I32"}
 
 
 def grid_main_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kb, throttle=0, l1_acc=False, nb=1) -> bool:

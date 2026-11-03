@@ -20,12 +20,12 @@ HEADER = Path(__file__).resolve().parents[2] / "tt_llk_blackhole/llk_lib/llk_mat
 STUB = """#pragma once
 #include <cstdint>
 namespace ckernel {
-enum class DataFormat { Invalid, Float32, Tf32, Float16, Float16_b, Bfp8, Bfp8_b, Bfp4_b, Bfp2, Bfp2_b, Bfp4 };
+enum class DataFormat { Invalid, Float32, Tf32, Float16, Float16_b, Bfp8, Bfp8_b, Bfp4_b, Bfp2, Bfp2_b, Bfp4, Int8, UInt8, Int32 };
 enum class MathFidelity { LoFi = 0, HiFi2 = 2, HiFi3 = 3, HiFi4 = 4 };
 enum class DstSync { SyncHalf, SyncFull };
 }
 """
-NAME = {"F16b": "Float16_b", "B8": "Bfp8_b", "B4": "Bfp4_b", "F32": "Float32", "F16": "Float16", "B8x": "Bfp8", "B2": "Bfp2_b"}
+NAME = {"F16b": "Float16_b", "B8": "Bfp8_b", "B4": "Bfp4_b", "F32": "Float32", "F16": "Float16", "B8x": "Bfp8", "B2": "Bfp2_b", "I8": "Int8", "U8": "UInt8", "I32": "Int32"}
 
 
 def check_tiny() -> int:
