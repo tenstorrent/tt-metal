@@ -4,3 +4,4 @@
 {"event":"test_run","status":"pass","test":"unit dir --no-precompile","detail":"55 passed; store_on_reader for DRAM y: t4096 dram_out 254->220, t1024 124->113","ts":"2026-11-03T02:06:12+00:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/moe_down_proj/","note":"R2 paced store + 976KiB budget; t4096 L0-5 163.3/162.2/162.9/164.7/163.3/161.6 us","ts":"2026-11-03T02:51:04+00:00"}
 {"event":"test_run","status":"pass","test":"eval/golden_tests/moe_down_proj -k t4096|t3072|t1_|t37","result":"55/55","ts":"2026-11-03T02:55:12+00:00"}
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/moe_down_proj/","detail":"72/72 after R3 w reader share + one-pass blocking; t4096 163.9 t3072 133.8 t2048 107.5 t1024 84.2 us","ts":"2026-11-03T03:20:01+00:00"}

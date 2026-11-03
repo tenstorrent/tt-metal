@@ -9,14 +9,19 @@
 //   (xb). After a send the sender starts the reads of its next owned step into staging, a quota per step, so a
 //   step's L1 reads overlap the steps in between. Nominal core_row_tiles_max * k_block_tiles pages pushed per step; an
 //   empty m-group moves no data.
+// w_reads_on_reader: this RISC also runs the w line sender's DRAM prefetch (moe_down_proj_w_prefetch.h) on NoC1 into
+//   cb_w_stage, a quota per step once the writer RISC has freed the stage, and pushes it one step before the owned
+//   w step; the writer RISC multicasts it on NoC0.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "moe_down_proj_plan.h"
 #include "moe_down_proj_store.h"
+#include "moe_down_proj_w_prefetch.h"
 
 void kernel_main() {
     constexpr uint32_t cb_x_round = get_compile_time_arg_val(0);
@@ -40,9 +45,15 @@ void kernel_main() {
     constexpr uint32_t out_page_bytes = get_compile_time_arg_val(17);
     constexpr uint32_t x_depth = get_compile_time_arg_val(18);
     constexpr uint32_t store_blocks_per_round = get_compile_time_arg_val(19);
-    constexpr auto x_args = TensorAccessorArgs<20>();
+    constexpr uint32_t w_reader_share = get_compile_time_arg_val(20);
+    constexpr bool w_reads_on_reader = w_reader_share > 0;
+    constexpr uint32_t w_share_den = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_w_stage = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_w_owner = get_compile_time_arg_val(23);
+    constexpr auto x_args = TensorAccessorArgs<24>();
     constexpr auto counts_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto w_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto xa_mcast = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("xa_ct_offset"), get_named_compile_time_arg_val("xa_rt_offset")>();
     constexpr auto xb_mcast = dataflow_kernel_lib::
@@ -53,6 +64,7 @@ void kernel_main() {
     const uint32_t group = get_arg_val<uint32_t>(2);
     const uint32_t out_addr = get_arg_val<uint32_t>(3);
     const uint32_t line = get_arg_val<uint32_t>(4);
+    const uint32_t w_addr = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t x_round_tiles = core_row_tiles_max * k_block_tiles;
 
@@ -135,6 +147,52 @@ void kernel_main() {
         return first;
     };
 
+    // x and w staged reads carry their own transaction ids, so neither channel's barrier waits on the other's reads.
+    constexpr uint32_t X_TRID = 1;
+    constexpr uint32_t W_TRID = 2;
+    dataflow_kernel_lib::set_read_trid(noc, X_TRID);
+    constexpr uint32_t w_round_tiles = MOE_NUM_EXPERTS * k_block_tiles * core_n_tiles;
+    constexpr uint32_t w_issue_quota = (w_round_tiles + prefetch_issue_steps - 1) / prefetch_issue_steps;
+    const auto w_accessor = TensorAccessor(w_args, w_addr, tile_bytes);
+    MoeWPrefetch<
+        k_block_tiles,
+        core_n_tiles,
+        tensor_k_tiles,
+        num_k_rounds,
+        tile_bytes,
+        w_share_den,
+        decltype(w_accessor)>
+        w_prefetch(plan, w_accessor, line * core_n_tiles, 0, w_reader_share);
+    MoeWOwner w_owns{MOE_W_OWNER_NONE, 1};
+    bool w_reserved = false;
+    // Before x step `step`: advance the w prefetch, and complete it (barrier + push) one step before its owned step.
+    auto w_stage_step = [&](uint32_t step) {
+        if (w_prefetch.step == w_prefetch.NONE) {
+            return;
+        }
+        const bool due = w_prefetch.step <= step + 1;
+        if (!w_reserved && (due || cb_pages_reservable_at_back(cb_w_stage, w_round_tiles))) {
+            cb_reserve_back(cb_w_stage, w_round_tiles);
+            w_reserved = true;
+        }
+        if (!w_reserved) {
+            return;
+        }
+        dataflow_kernel_lib::set_read_trid(noc, W_TRID);
+        w_prefetch.issue(get_write_ptr(cb_w_stage), due ? w_prefetch.total : w_issue_quota);
+        dataflow_kernel_lib::set_read_trid(noc, X_TRID);
+        if (due) {
+            dataflow_kernel_lib::async_read_barrier_with_trid(noc, W_TRID);
+            cb_push_back(cb_w_stage, w_round_tiles);
+            w_reserved = false;
+            w_prefetch.start(w_prefetch.step + 1, num_steps, w_owns);
+        }
+    };
+    if constexpr (w_reads_on_reader) {
+        w_owns = moe_receive_w_owner<cb_w_owner>();
+        w_prefetch.start(0, num_steps, w_owns);
+    }
+
     start_prefetch(0);
     uint32_t stored = 0;
     for (uint32_t step = 0; step < num_steps; ++step) {
@@ -145,6 +203,9 @@ void kernel_main() {
         if (step >= num_k_rounds && round >= x_store_round) {
             stored = store_wave(step / num_k_rounds - 1, stored, store_blocks_per_round);
         }
+        if constexpr (w_reads_on_reader) {
+            w_stage_step(step);
+        }
         const uint32_t group_rows = plan.group_rows(step / num_k_rounds, group);
         const bool owned = on_xa && xa_mcast.should_send(step);
         issue_prefetch(owned ? pf_total : issue_quota);
@@ -153,7 +214,7 @@ void kernel_main() {
             const uint32_t slot = get_write_ptr(cb_x_round);
             const uint32_t bytes = group_rows * k_block_tiles * tile_bytes;
             if (owned) {
-                noc_async_read_barrier();
+                dataflow_kernel_lib::async_read_barrier_with_trid(noc, X_TRID);
                 xa_sender->send(stage_l1, slot, bytes);
                 if (xb_mcast.can_send()) {
                     xb_sender->send(stage_l1, slot, bytes);

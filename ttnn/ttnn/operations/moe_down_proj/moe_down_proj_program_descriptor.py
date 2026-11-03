@@ -27,6 +27,11 @@ TENSOR_N_TILES = HIDDEN // TILE
 
 # Largest K block per round. Round 0 must land before compute starts, so a larger block lengthens the fill.
 K_BLOCK_MAX = 8
+# select_blocking takes the fewest waves among K blocks >= this, then the largest K block. One wave skips the second
+# wave's re-read of the straddling expert's w; a K block below it costs more per-round sync than that saves.
+# t3072 (8x384): 2 waves at k = 8 138.5-140.8 -> 1 wave at k = 6 133.5-134.8 us; t4096 1 wave would need k = 4
+# (164 -> 177 us).
+K_BLOCK_ONE_PASS_MIN = 6
 MAX_WAVES = 4
 X_DEPTH = 2
 W_DEPTH = 2
@@ -53,10 +58,24 @@ CB_COUNTS_WRITER = 5
 # Sender-private staging: a rotating sender prefetches its next owned step here, then multicasts it into the slot.
 CB_X_STAGE = 6
 CB_W_STAGE = 7
+# Writer -> reader: the w sender's (first owned step, period), for the reader's share of the w prefetch.
+CB_W_OWNER = 8
+W_OWNER_PAGE_BYTES = 16
 # A staged prefetch's reads are issued over this many channel steps (a quota per step), so a sender never stalls
 # the steps it receives in between on one long issue burst. 8x512 layer 0 / t = 1024: 1 -> 259 / 120 us,
 # 4 -> 202 / 108, 9 -> 179 / 106, 16 -> 174 / 102, 32 -> 178 / 103, 128 -> 193 / 120.
 PREFETCH_ISSUE_STEPS = 16
+# Each owned w step's DRAM reads split by tile: w_reader_share / W_SHARE_DEN go on the reader RISC (NoC1) into the
+# stage CB, the rest stay on the writer RISC (NoC0), which multicasts the stage. NoC1 DRAM reads are about half as
+# fast here, but w reads sharing NoC0 with the w multicast cost t = 1024 about 22 us, so a share pays while the
+# x channel (also NoC1) is light: the best share falls with the core's rows per step (x bytes / w bytes per step
+# = rows / 16 at any K block). Best measured (eighths, us from share 0): 1 row 4 (44.1 -> 38.9), 2 rows 4-5
+# (135 -> 76-81), 3 rows 3-4 (94.6 -> 79-82), 8 rows 3 (102.5 -> 84.8), 14-15 rows 1-2 (110 -> 103,
+# 113 -> 106.5), 23 rows 0. With >= 2 waves every share measured worse (t3072 at 2 waves, t4096: x binds NoC1).
+W_SHARE_DEN = 8
+W_SHARE_MAX = 4
+W_SHARE_ROWS_ZERO = 25
+W_SHARE_ROWS_PER_STEP = 5
 
 X_MAIN, X_STRIP, W_MAIN, W_STRIP = "xa", "xb", "wa", "wb"
 # NoC of each channel's RISC (the reader RISC carries x, the writer RISC carries w and the y store). w's DRAM reads
@@ -205,6 +224,7 @@ def cb_plan(core_row_tiles_max, k_block_tiles, core_n_tiles, counts_page_bytes, 
         (CB_OUTPUT_ROWS, out_depth_blocks(core_row_tiles_max, num_waves) * core_n_tiles, out_tile, ttnn.bfloat16),
         (CB_COUNTS_COMPUTE, 1, counts_page_bytes, ttnn.uint32),
         (CB_COUNTS_WRITER, 1, counts_page_bytes, ttnn.uint32),
+        (CB_W_OWNER, 1, W_OWNER_PAGE_BYTES, ttnn.uint32),
     ]
 
 
@@ -227,22 +247,32 @@ def cb_budget_bytes(num_l1_banks, x_in_dram, out_in_dram):
 
 
 def select_blocking(tensor_row_tiles, layout, counts_page_bytes, budget_bytes=CB_BUDGET_BYTES):
-    """Largest k_block_tiles (divisor of 96, <= K_BLOCK_MAX), then the fewest waves, that fit budget_bytes."""
+    """The fewest waves, then the largest k_block_tiles >= K_BLOCK_ONE_PASS_MIN, that fit budget_bytes; failing that the
+    largest k_block_tiles (divisor of 96, <= K_BLOCK_MAX), then the fewest waves."""
     k_blocks = [k for k in range(K_BLOCK_MAX, 0, -1) if TENSOR_K_TILES % k == 0]
-    # Fewest waves first (one wave at a smaller K block) measured 8x512 layer 0 172 -> 177 us (L1 / L1), 221 -> 223 us
-    # (DRAM x), so K block size leads.
-    for k_block_tiles in k_blocks:
-        for num_waves in range(1, MAX_WAVES + 1):
-            core_row_tiles_max = _div_up(_div_up(tensor_row_tiles, num_waves), layout.num_m_groups)
-            if (
-                footprint_bytes(core_row_tiles_max, k_block_tiles, layout.core_n_tiles, counts_page_bytes, num_waves)
-                <= budget_bytes
-            ):
-                return Blocking(tensor_row_tiles, num_waves, k_block_tiles, core_row_tiles_max)
+    waves = range(1, MAX_WAVES + 1)
+    # Unrestricted fewest waves first (one wave at k = 4) measured 8x512 layer 0 172 -> 177 us (L1 / L1), 221 -> 223 us
+    # (DRAM x), hence the K block floor.
+    order = [(k, w) for w in waves for k in k_blocks if k >= K_BLOCK_ONE_PASS_MIN]
+    order += [(k, w) for k in k_blocks for w in waves]
+    for k_block_tiles, num_waves in order:
+        core_row_tiles_max = _div_up(_div_up(tensor_row_tiles, num_waves), layout.num_m_groups)
+        if (
+            footprint_bytes(core_row_tiles_max, k_block_tiles, layout.core_n_tiles, counts_page_bytes, num_waves)
+            <= budget_bytes
+        ):
+            return Blocking(tensor_row_tiles, num_waves, k_block_tiles, core_row_tiles_max)
     raise RuntimeError(
         f"moe_down_proj: no (num_waves <= {MAX_WAVES}, k_block_tiles) fits {budget_bytes} B of CBs "
         f"for {tensor_row_tiles} tile rows on the {layout.name} layout"
     )
+
+
+def w_reader_share(blocking):
+    """Eighths (W_SHARE_DEN) of each w step's DRAM reads the reader RISC issues; 0 keeps them all on the writer."""
+    if blocking.num_waves > 1:
+        return 0
+    return max(0, min(W_SHARE_MAX, (W_SHARE_ROWS_ZERO - blocking.core_row_tiles_max) // W_SHARE_ROWS_PER_STEP))
 
 
 def _cb(index, num_pages, page_bytes, dtype, cores):
@@ -268,6 +298,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
     cores = layout.cores
 
     store_on_reader = out_in_dram
+    w_share = w_reader_share(blocking)
     # The store starts once the storing RISC has filled its channel's slots for wave p + 1 (X_DEPTH / W_DEPTH rounds).
     store_quota = store_blocks_per_round(
         blocking.core_row_tiles_max,
@@ -295,8 +326,12 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         output.buffer_page_size(),
         X_DEPTH,
         store_quota,
+        w_share,
+        W_SHARE_DEN,
+        CB_W_STAGE,
+        CB_W_OWNER,
     ]
-    for tensor in (input_tensor, expert_counts, output):
+    for tensor in (input_tensor, expert_counts, output, weight):
         reader_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
     writer_ct = [
         CB_OUTPUT_ROWS,
@@ -307,7 +342,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         blocking.num_k_rounds,
         core_n_tiles,
         TENSOR_K_TILES,
-        NUM_EXPERTS * TENSOR_K_TILES,
+        w_share,
         in_tile,
         output.buffer_page_size(),
         W_DEPTH,
@@ -315,6 +350,8 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
         PREFETCH_ISSUE_STEPS,
         int(store_on_reader),
         store_quota,
+        CB_W_OWNER,
+        W_SHARE_DEN,
     ]
     for tensor in (output, weight):
         writer_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
@@ -341,6 +378,7 @@ def create_program_descriptor(input_tensor, weight, expert_counts, output, compu
             group,
             output.buffer_address(),
             line,
+            weight.buffer_address(),
         ]
         writer_rt[x][y] = [output.buffer_address(), weight.buffer_address(), group, line]
         compute_rt[x][y] = [group]
