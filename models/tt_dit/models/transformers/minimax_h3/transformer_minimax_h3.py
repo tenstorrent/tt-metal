@@ -241,6 +241,7 @@ class MiniMaxH3Transformer3DModel(Module):
         if dynamic_length and kv_gather_capacity is not None:
             norm_row_capacity = kv_gather_capacity // parallel_config.sequence_parallel.factor
         self._temb_state = StateTensor()
+        self._timestep_idx_state: dict[int, StateTensor] = {}  # traced path only, keyed by padded length
         self._eye_states: dict[int, StateTensor] = {}
         # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
         # at the arena caps, is one persistent ROW_MAJOR buffer written in place (`slice_write`), not rebuilt
@@ -544,8 +545,16 @@ class MiniMaxH3Transformer3DModel(Module):
         temb = self._temb_state.value
 
         adaln_idx = as_indices(adaln_indices)
-        # Read eagerly by `norm_out` after the traced block loop, so it needs no per-trace state.
-        timestep_idx = as_indices(timestep_indices)
+        if traced:
+            # `norm_out` reads it eagerly after the traced block loop, but a replay may overwrite any buffer
+            # allocated after its capture, so the traced path keeps one persistent copy per length.
+            ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
+            ts_state.update(as_indices(timestep_indices), traced=True)
+            timestep_idx = ts_state.value
+        else:
+            # Eager (every dynamic-length forward): nothing replays, and a per-length copy would pin one
+            # buffer per served length.
+            timestep_idx = as_indices(timestep_indices)
 
         # Identity table of the one-hot gathers, refreshed from the host every forward like the rest of the
         # per-forward state: a trace captured earlier may overwrite long-lived device buffers on replay.
