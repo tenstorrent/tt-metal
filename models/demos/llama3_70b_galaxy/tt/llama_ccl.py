@@ -988,9 +988,36 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return output_tensor_mesh
 
+    # Longest sequence slice _prefill_ff2_gather_reduce gathers at once. The gather output is ring_size x the input,
+    # so a whole 128k prefill would need one 2.5 GB DRAM buffer (224 MB contiguous per bank); next to running decodes
+    # the allocator could not place it (OOM with 1.7 MB short). Slicing along the sequence halves each gather at 128k;
+    # every output row is still the same rank-ordered local sum, so results are unchanged. 65536 rather than smaller:
+    # each slice costs a slice + concat (~0.5 s per 128k prefill at 32768), and <= 64k prefills fit unsliced.
+    FF2_GATHER_MAX_ROWS = 65536
+
     def _prefill_ff2_gather_reduce(self, input_tensor_mesh, cluster_axis, memory_config):
         """Gather FF2 partials in rank order, then reduce locally without intermediate ring sums."""
         assert input_tensor_mesh.shape[0] == 1, "FF2 prefill requires a leading singleton dimension"
+        seq_len = input_tensor_mesh.shape[-2]
+        if seq_len > self.FF2_GATHER_MAX_ROWS and seq_len % self.FF2_GATHER_MAX_ROWS == 0:
+            shape = list(input_tensor_mesh.shape)
+            outputs = []
+            for start in range(0, seq_len, self.FF2_GATHER_MAX_ROWS):
+                piece = ttnn.slice(
+                    input_tensor_mesh,
+                    [0, 0, start, 0],
+                    shape[:2] + [start + self.FF2_GATHER_MAX_ROWS, shape[3]],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                outputs.append(self._prefill_ff2_gather_reduce_slice(piece, cluster_axis, ttnn.DRAM_MEMORY_CONFIG))
+                ttnn.deallocate(piece)
+            output = ttnn.concat(outputs, dim=2, memory_config=memory_config)
+            for piece_out in outputs:
+                ttnn.deallocate(piece_out)
+            return output
+        return self._prefill_ff2_gather_reduce_slice(input_tensor_mesh, cluster_axis, memory_config)
+
+    def _prefill_ff2_gather_reduce_slice(self, input_tensor_mesh, cluster_axis, memory_config):
         gathered = ttnn.experimental.all_gather_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffer=None,
