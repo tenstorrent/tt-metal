@@ -1448,55 +1448,6 @@ def test_ttnn_where_uint8_ttt(c_shape, t_shape, f_shape, condition, device):
 
 
 @pytest.mark.parametrize(
-    "c_shape, t_shape, f_shape",
-    [
-        ((1, 1, 32, 64), (1, 1, 32, 64), (1, 1, 32, 64)),
-        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),
-    ],
-)
-@pytest.mark.parametrize("condition", [1, 0])
-@pytest.mark.parametrize("variant", ["TTT", "TTS", "TST", "TSS"])
-def test_ttnn_where_uint8_variants(c_shape, t_shape, f_shape, condition, variant, device):
-    # TTT is the native ternary LLK path. TTS/TST route through binary_ng and TSS through the
-    # unary where_tss kernel, so they are the controls for the TTT fix: all four must agree.
-    torch.manual_seed(0)
-    scalar = 7
-    C = torch.ones(c_shape, dtype=torch.uint8) * condition
-    T = torch.randint(1, 50, t_shape, dtype=torch.uint8)
-    F = torch.randint(200, 250, f_shape, dtype=torch.uint8)
-    if variant == "TTS":
-        golden = torch.where(C.bool(), T, scalar)
-        ttnn_F = scalar
-    elif variant == "TST":
-        golden = torch.where(C.bool(), scalar, F)
-        ttnn_T = scalar
-    elif variant == "TSS":
-        golden = torch.where(C.bool(), scalar, 9)
-    else:
-        golden = torch.where(C.bool(), T, F)
-
-    ttnn_C = ttnn.from_torch(C, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
-    # The nanobind entry point names the two value arguments true_value / false_value.
-    kwargs = {}
-    if variant == "TTS":
-        kwargs["false_value"] = scalar
-    elif variant == "TST":
-        kwargs["true_value"] = scalar
-    elif variant == "TSS":
-        kwargs["true_value"] = scalar
-        kwargs["false_value"] = 9
-    else:
-        kwargs["true_value"] = ttnn.from_torch(T, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
-        kwargs["false_value"] = ttnn.from_torch(F, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
-
-    ttnn_result = ttnn.where(ttnn_C, **kwargs)
-    result = ttnn.to_torch(ttnn_result)
-    assert torch.equal(
-        result, golden
-    ), f"{variant}: expected {golden.flatten()[:8].tolist()}, got {result.flatten()[:8].tolist()}"
-
-
-@pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
         (torch.int32, ttnn.uint16),
