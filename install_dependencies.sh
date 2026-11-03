@@ -315,16 +315,20 @@ prep_ubuntu_system() {
         return
     fi
 
-    # Add LLVM repository for Clang 17
+    # Add LLVM repositories
     local llvm_keyring="/usr/share/keyrings/llvm-snapshot.gpg"
     local llvm_keyring_tmp
     llvm_keyring_tmp="$(mktemp "${llvm_keyring}.XXXXXX")"
     ( set -o pipefail; wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor --batch --yes --no-tty -o "$llvm_keyring_tmp" )
     chmod 0644 "$llvm_keyring_tmp"
     mv -f "$llvm_keyring_tmp" "$llvm_keyring"
-    echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
-    # Also v20
-    echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
+    # apt.llvm.org doesn't publish v20 for newer releases (e.g. Ubuntu 26.04, whose
+    # own archive ships clang-20), and a missing repo makes apt-get update fail.
+    if wget -q --spider "https://apt.llvm.org/$OS_CODENAME/dists/llvm-toolchain-$OS_CODENAME-20/Release"; then
+        echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
+    else
+        echo "[INFO] apt.llvm.org has no LLVM 20 repository for $OS_CODENAME; using the distro archive"
+    fi
     # Also v23
     echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-23 main" | tee /etc/apt/sources.list.d/llvm-23.list
 
@@ -447,16 +451,12 @@ install_llvm() {
 
     # Install LLVM 20:
     # - clang-20: default toolchain for tt-metal (build_metal.sh) and tt-train
-    TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
-    chmod u+x $TEMP_DIR/llvm.sh
-
     echo "[INFO] Checking if LLVM 20 is already installed..."
     if command -v clang-20 &> /dev/null; then
         echo "[INFO] LLVM 20 is already installed. Skipping installation."
     else
         echo "[INFO] Installing LLVM 20..."
-        $TEMP_DIR/llvm.sh 20
+        apt-get install -y clang-20 lldb-20 lld-20 clangd-20
     fi
 
     # clang-tidy-23 only, not the full llvm-23 toolchain.
@@ -467,8 +467,6 @@ install_llvm() {
         echo "[INFO] Installing clang-tidy-23..."
         apt-get install -y --no-install-recommends clang-tidy-23
     fi
-
-    rm -rf "$TEMP_DIR"
 }
 
 install_sfpi() {

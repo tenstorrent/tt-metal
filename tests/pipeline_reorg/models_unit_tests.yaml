@@ -1215,7 +1215,9 @@
     export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE  # umt5 fetches the Wan2.2 tokenizer from the hub
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    export DIT_UNIT_TEST=1  # read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection
+    # Read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection and the
+    # qwen25vl tests, which leave out their slowest cases (~13 min of the new Qwen2.5-VL tests' ~19).
+    export DIT_UNIT_TEST=1
     # No -k: params needing more than 8 devices skip themselves in the mesh_device fixture.
     # -rs keeps those skip reasons visible so a green leg can be told from one that ran nothing.
     # mistral3 is excluded: it loads black-forest-labs/FLUX.2-dev, a manually gated repo that CI's
@@ -1575,12 +1577,15 @@
     export TT_METAL_WATCHER=30
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     pytest --timeout 1500 models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair
-    pytest --timeout 900 models/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py -k "not not_traced"
+    # One size per edit checkpoint: each case loads the torch reference and converts the weights.
+    pytest --timeout 900 models/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py \
+      -k "not not_traced and (not test_transformer_edit or (1024 and 2x2sp0tp1))"
   model: qwenimage
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 45
+      # 38 min on job 122853963781 (10-28), with one edit case per checkpoint.
+      timeout: 55
       tier: 2
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
