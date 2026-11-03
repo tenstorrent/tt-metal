@@ -140,7 +140,7 @@ def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
     is_bh = is_blackhole()
     for item in items:
         # Every uncollect_if mark counts, not just the closest: a function-level one and a per-param one
-        # (tests/chunk_params.py) can sit on the same case.
+        # (utils/stage_4x4_params.py) can sit on the same case.
         markers = list(item.iter_markers("uncollect_if"))
         if not markers:
             kept.append(item)

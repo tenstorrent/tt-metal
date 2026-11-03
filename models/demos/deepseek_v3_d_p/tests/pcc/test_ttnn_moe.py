@@ -34,7 +34,6 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_SITU,
 )
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
-from models.demos.deepseek_v3_d_p.tests.chunk_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     moe_fabric_payload,
@@ -78,6 +77,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, mesh_cache_key
+from models.demos.deepseek_v3_d_p.utils.stage_4x4_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -109,11 +109,6 @@ _UPSTREAM_ACT = {
 # Synthetic tid2eid depth: no checkpoint table exists, and the lookup is exact on both sides.
 _HASH_VOCAB_SIZE = 1024
 _HASH_GATE_MODES = (GateComputeMode.HASH_HOST, GateComputeMode.HASH_DEVICE)
-
-
-# run_model's default for routed_expert_hybrid_token_threshold: take the variant's own. A sentinel, because
-# None is a real setting (no hybrid split, the single-op dispatch).
-_VARIANT_THRESHOLD = object()
 
 
 def run_model(
@@ -152,7 +147,8 @@ def run_model(
     moe_transport="direct",
     combine_fwd_reduction=None,
     sp_axis=0,
-    routed_expert_hybrid_token_threshold=_VARIANT_THRESHOLD,
+    # "variant": the variant config's own threshold. None is a real setting (no hybrid split, single-op dispatch).
+    routed_expert_hybrid_token_threshold="variant",
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -556,7 +552,7 @@ def run_model(
         # K3 included: its crossover is measured but parked until the split is enabled for it.
         routed_expert_hybrid_token_threshold=(
             getattr(variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None)
-            if routed_expert_hybrid_token_threshold is _VARIANT_THRESHOLD
+            if routed_expert_hybrid_token_threshold == "variant"
             else routed_expert_hybrid_token_threshold
         ),
         shared_expert_activations_dtype=ttnn.bfloat16,

@@ -1202,8 +1202,9 @@ def init_kvpe_cache(
         # validation and return rows out of order, and an axis gather of dim 2 is flagged as interleaving.
         # assert_full_mesh_stripe_order refuses such a gather at sp_axis=1: MiniMax's index_k read calls it
         # behind its two-leg (TP then SP) route, which it takes at sp_axis=1. mla's full-mesh KVPE gather
-        # passes full_mesh_outer_axis=sp_axis, which orders the ring by physical coordinates instead. The GLM index cache needs no guard: its only full-mesh consumer is ring_indexer_score_dsa,
-        # which orders by physical coordinates. Relabeling the cache to match is a follow-up.
+        # passes full_mesh_outer_axis=sp_axis, which orders the ring by physical coordinates instead. The
+        # GLM index cache needs no guard: its only full-mesh consumer is ring_indexer_score_dsa, which
+        # orders by physical coordinates. Relabeling the cache to match is a follow-up.
         kvpe_cache.update_tensor_topology(row_major_seq_topology)
         return kvpe_cache
 
