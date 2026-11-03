@@ -36,6 +36,7 @@ import gc
 import math
 import os
 import queue
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -68,7 +69,13 @@ from .common import CCL_TOPOLOGY, DeepSeekV4Module, _MASK_NEG, _profile, _trace_
 from .decode.decoder_layer import DeepSeekV4DecoderLayer, _strip_prefix
 from .embedding import DeepSeekV4Embedding
 from .decode.hyperconnection import DeepSeekV4HyperHead
-from .layers import DeepSeekV4RMSNorm, Linear
+from .layers import (
+    DeepSeekV4RMSNorm,
+    Linear,
+    is_prefetch_pipes,
+    rebuild_prefetch_pipes,
+    take_prefetch_pipes_recipe,
+)
 from .decode.moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from .prefill.attention import (
     ALIGNMENT,
@@ -425,8 +432,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self._prefetch_buffers_by_device: dict[int, dict] = {}
         # L1 held just above each device's rings until decode first runs (see _gcb_headroom_bytes), by id(device).
         self._gcb_headroom: dict[int, ttnn.Tensor] = {}
-        # Whether :meth:`release_prefetch_buffers` has parked decode's L1 tensors.
+        # Whether :meth:`release_prefetch_buffers` has dropped the pipes and parked decode's L1 tensors.
         self._prefetch_released = False
+        # ``(serial, recipe, holders)`` of every pipe list the release dropped.
+        self._released_pipes: list = []
         self._evicted_l1: list = []
         # The holders of the L1 tensors the first release parked; a release after the decode capture parks these.
         self._l1_holders: list = []
@@ -926,26 +935,57 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return self._prefetch_released
 
     def release_prefetch_buffers(self) -> None:
-        """Park decode's resident L1 tensors (the CSA windows, position bias, ...) on host, returning their L1 to
-        the device for prefill's wide ops; :meth:`restore_prefetch_buffers` uploads them back. Decode cannot run
-        in between.
+        """Stop the DRISC senders and drop every weight-prefetch pipe, returning their rings' L1 to the device.
 
-        Only with the prefetcher off. Its pipes are carved from L1 that stays reserved until the device closes,
-        so there is nothing to give back while it is on, and prefill alongside decode needs
-        ``use_prefetcher=False``. The release may be repeated after the decode capture (e.g. around a prefill
-        capture): it then parks the same L1 tensors the first release did, and :meth:`restore_prefetch_buffers`
-        checks each comes back at the address the traces recorded. Idempotent.
+        The rings are persistent L1 on the receiver cores (hundreds of KB per core), which is room prefill's wide
+        ops need. Every holder of a pipe list (the per-device mapping, each ``LinearDecode``) is cleared so the
+        last reference goes and its pipe space is freed; :meth:`restore_prefetch_buffers` builds identical ones
+        and hands them back. Decode's other resident L1 tensors (the CSA windows, position bias, ...) are parked
+        on host the same way and uploaded back. Decode cannot run in between.
+
+        With the prefetcher on, only before the first :meth:`decode_traced`: stopping the prefetcher discards
+        the prefetch requests the decode traces recorded, so captured traces would stall on replay. The program
+        cache is kept, so the buffers decode's ops own (global semaphores, cached constants) stay where
+        :meth:`compile_traces` put them; the rebuilt pipes are new objects, which ``matmul_decode`` hashes, so the
+        next :meth:`decode_traced` runs the compile pass again before capturing. With it off the release may be
+        repeated after the capture (e.g. around a prefill capture): it then parks the same L1 tensors the first
+        release did, and :meth:`restore_prefetch_buffers` checks each comes back at the address the traces
+        recorded. Idempotent.
         """
         if self._prefetch_released:
             return
-        if self._prefetch_buffers_by_device:
+        if self._traced_captured and self._prefetch_buffers_by_device:
             raise RuntimeError(
-                "the prefetcher's pipes hold their L1 until the device closes, so the prefetch buffers cannot be "
-                "released: build the model with use_prefetcher=False to run prefill alongside decode"
+                "release the prefetch buffers before the first decode_traced(): stopping the prefetcher drops the "
+                "prefetch requests the captured decode traces replay"
             )
         if self._traced_captured and not self._l1_holders:
             raise RuntimeError("after the decode capture, only the L1 tensors parked before it can be parked again")
         self._drop_gcb_headroom()
+        devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
+        for device in devices:
+            ttnn.synchronize_device(device)
+            ttnn.experimental.stop_tensor_prefetcher(device)
+        held = list(_held_values(self, is_prefetch_pipes).values())
+        members = [pipe for pipes, _ in held for pipe in pipes]
+        released = []
+        for pipes, holders in held:
+            serial, recipe = take_prefetch_pipes_recipe(pipes)
+            for holder in holders:
+                _assign_holder(holder, None)
+            released.append((serial, recipe, holders))
+        held = pipes = None
+        gc.collect()
+        # Expected: ``members`` and getrefcount's argument.
+        stuck = sum(sys.getrefcount(members[i]) > 2 for i in range(len(members)))
+        if stuck:
+            raise RuntimeError(
+                f"{stuck} of {len(members)} prefetch pipe(s) still referenced after release, so their rings keep "
+                "the L1 prefill needs"
+            )
+        members = None
+        if released:
+            self._traces_compiled = False
         if self._traced_captured:
             # The capture's outputs are L1 tensors too (held in tuples); they stay where the traces put them.
             l1 = [(_held(holders[0]), holders) for holders in self._l1_holders]
@@ -962,6 +1002,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         tensor = parked = l1 = None
         gc.collect()
         self._prefetch_released = True
+        self._released_pipes = released
         self._evicted_l1 = evicted
         self._l1_holders = [holders for *_, holders, _ in evicted]
         self._pre_release = {
@@ -976,7 +1017,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
             default=None,
         )
         logger.info(
-            f"prefetch buffers released: {len(evicted)} L1 tensor(s) parked on host"
+            f"prefetch buffers released: {len(released)} pipe set(s) dropped and {len(evicted)} L1 tensor(s) parked "
+            f"on host on {len(devices)} device(s)"
             + (
                 ""
                 if lowest is None
@@ -985,11 +1027,17 @@ class DeepSeekV4Model(DeepSeekV4Module):
         )
 
     def restore_prefetch_buffers(self) -> None:
-        """Upload the L1 tensors :meth:`release_prefetch_buffers` parked. Idempotent."""
+        """Rebuild the pipes :meth:`release_prefetch_buffers` dropped (in their original order), upload the L1
+        tensors it parked and restart the DRISC senders. Idempotent."""
         if not self._prefetch_released:
             return
         self._prefetch_released = False
         self._prefill_footprint = self._allocated_buffers()
+        released, self._released_pipes = self._released_pipes, []
+        for _, recipe, holders in sorted(released, key=lambda entry: entry[0]):
+            pipes = rebuild_prefetch_pipes(recipe)
+            for holder in holders:
+                _assign_holder(holder, pipes)
         evicted, self._evicted_l1 = self._evicted_l1, []
         for memory_config, device, parked, holders, address in evicted:
             tensor = ttnn.to_device(parked, device, memory_config=memory_config)
@@ -1000,7 +1048,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 )
             for holder in holders:
                 _assign_holder(holder, tensor)
-        logger.info(f"prefetch buffers restored: {len(evicted)} L1 tensor(s)")
+        devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
+        for device in devices:
+            ttnn.experimental.start_tensor_prefetcher(device)
+        for device in devices:
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        logger.info(f"prefetch buffers restored: {len(released)} pipe set(s) and {len(evicted)} L1 tensor(s)")
 
     def snapshot_resident_state(self) -> None:
         """Keep host copies of every decode tensor a prefill replay may overwrite, for :meth:`reload_resident_state`.
@@ -3130,9 +3183,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         buffers (:meth:`commit_prefill_state`). The next :meth:`decode_traced` continues at ``len(input_ids)``.
         Returns the prompt's last-token logits ``[1, 1, 1, V]``: on the last stage, or on the host with ``traced``.
 
-        Only with ``use_prefetcher=False`` (the release raises otherwise). To alternate prefill and decode,
-        capture prefill first and replay it between decode steps instead (:meth:`snapshot_resident_state`,
-        :meth:`reload_resident_state`; see ``test_prefill_decode_demo.py``).
+        To alternate prefill and decode, capture prefill first and replay it between decode steps instead
+        (:meth:`snapshot_resident_state`, :meth:`reload_resident_state`; see ``test_prefill_decode_demo.py``).
         """
         prefill = getattr(self, "prefill_model", None)
         if prefill is None:

@@ -99,9 +99,11 @@ def _run_case(
     x_scale: float = 1.0,
     hidden: int = _HIDDEN,
     inter: int = _INTER,
+    gate_up_k_shards: int = 1,
 ):
     """Run the op and compare tokens ``t % check_every == 0`` (and the last one) to torch, at hidden size
-    ``hidden`` and per-rank intermediate size ``inter`` (the decode layout's shards are [H, 64] / [I, 64])."""
+    ``hidden`` and per-rank intermediate size ``inter`` (the decode layout's shards are [H, 64] / [I, 64], or
+    with ``gate_up_k_shards > 1`` the bank-balanced decode layout's [H / gate_up_k_shards, 64] gate_up)."""
     rng = random.Random(0)
     torch.manual_seed(0)
     dram_banks = device.dram_grid_size().x
@@ -121,7 +123,7 @@ def _run_case(
     )
 
     # ---- weights: quantize on the host, upload the interleaved copy in the decode layout ----
-    gate_up_nd = _fused_nd_dram_config(hidden, 2 * inter, 2 * _TILE, dram_banks)
+    gate_up_nd = _fused_nd_dram_config(hidden // gate_up_k_shards, 2 * inter, 2 * _TILE, dram_banks)
     down_nd = _fused_nd_dram_config(inter, hidden, 2 * _TILE, dram_banks)
     gate_up_q, down_q, gate_up_tt, down_tt = {}, {}, [], []
     dummy = None

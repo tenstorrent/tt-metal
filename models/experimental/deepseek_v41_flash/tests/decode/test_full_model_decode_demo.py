@@ -46,9 +46,9 @@ step's logits, or with ``DEEPSEEK_V4_DEVICE_SAMPLING=1`` on the output stage, wh
 (:class:`~models.experimental.deepseek_v41_flash.tt.lm_head.DeepSeekV41DeviceSampler`).
 ``DEEPSEEK_V4_SEED`` (default 1234) seeds either sampler.
 
-``DEEPSEEK_V4_BALANCE_DRAM_BANKS=1`` builds the routed experts with K-split gate_up shards spread over every DRAM
-bank (``layers.N.ffn.experts.E.gate_up_fused.tp4.k4``; ``tools/fill_expert_cache.py --balance-dram-banks`` writes
-them ahead of time).
+``DEEPSEEK_V4_BALANCE_DRAM_BANKS`` (default 1) builds the routed experts with K-split gate_up shards spread over
+every DRAM bank (``layers.N.ffn.experts.E.gate_up_fused.tp4.k4``; ``tools/fill_expert_cache.py`` writes them ahead
+of time); ``0`` keeps whole-K shards.
 """
 
 from __future__ import annotations
@@ -111,7 +111,7 @@ _ENGRAM_RAM_MARGIN = 1.25
 _DEVICE_SAMPLING = os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "0") not in ("0", "", "false", "False")
 _TEMPERATURE = float(os.environ.get("DEEPSEEK_V4_TEMPERATURE", "0"))
 _SEED = int(os.environ.get("DEEPSEEK_V4_SEED", "1234"))
-_BALANCE_DRAM_BANKS = os.environ.get("DEEPSEEK_V4_BALANCE_DRAM_BANKS", "0") not in ("0", "", "false", "False")
+_BALANCE_DRAM_BANKS = os.environ.get("DEEPSEEK_V4_BALANCE_DRAM_BANKS", "1") not in ("0", "", "false", "False")
 _USE_PREFETCHER = os.environ.get("DEEPSEEK_V4_USE_PREFETCHER", "1") not in ("0", "", "false", "False")
 
 

@@ -210,7 +210,7 @@ def test_prefill_decode_longbench_known_correct(mesh_device, reset_seeds) -> Non
 def _run_with_progress(mesh_device, AutoTokenizer, make_prompts) -> list[_Result]:
     progress = _Progress(interval=0.0, stall=0.0)  # never entered: step logging only, no heartbeat thread
     progress.verbose = False
-    # Room above the GCB rings for decode's own buffers, so releasing the rings frees one block of L1 for prefill.
+    # Room above the prefetch rings for decode's own buffers, so releasing the rings frees one block of L1 for prefill.
     os.environ.setdefault("DEEPSEEK_V4_GCB_HEADROOM", "16384")
     # The decode model's prefetcher session spans everything (as in the decode demo).
     with contextlib.ExitStack() as prefetcher:
@@ -338,7 +338,7 @@ def _run(
     sid = decode.open_session()
     decode.activate_session(sid)
 
-    # --- decode compile, then prefill compile and capture, with decode's GCBs and L1 tensors released ----- #
+    # --- decode compile, then prefill compile and capture, with decode's pipes and L1 tensors released ----- #
     prefill = None
     build_seconds = prepare_seconds = 0.0
     num_stages = len(spans)
@@ -355,7 +355,7 @@ def _run(
         progress.step(
             "[3/6] prefill model on the decode stages (sharing the routed experts, embedding, lm_head, Engram)"
         )
-        # Stops the prefetcher and frees the GCBs; allowed because no decode trace exists yet.
+        # Stops the prefetcher and frees the pipes; allowed because no decode trace exists yet.
         decode.release_prefetch_buffers()
         t0 = time.perf_counter()
         prefill = decode.build_prefill(
@@ -386,7 +386,7 @@ def _run(
         capture_seconds = time.perf_counter() - t0
         prepare_seconds += capture_seconds
         logger.info(f"traced prefill captured in {capture_seconds:.1f}s")
-        # The GCBs (config pages in L1_SMALL) and the L1 tensors come back under prefill's buffers; restarts the
+        # The pipes (config pages in L1_SMALL) and the L1 tensors come back under prefill's buffers; restarts the
         # prefetcher, which then runs until teardown.
         decode.restore_prefetch_buffers()
 

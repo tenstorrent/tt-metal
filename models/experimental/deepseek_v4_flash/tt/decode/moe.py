@@ -952,8 +952,8 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         ``I/TP`` slice) and down shards K, whose partials
         :class:`DeepSeekV4SparseMoeBlock` all-reduces. ``balance_dram_banks`` cuts each gate_up
         shard into K-row pieces (see :func:`_gate_up_k_shards`) so an expert with fewer column
-        shards than a multiple of the bank count still reads from every bank; the decode op reads
-        that layout, the prefill op does not yet. ``system_config`` supplies the op geometry
+        shards than a multiple of the bank count still reads from every bank; the decode and
+        prefill ops both read that layout. ``system_config`` supplies the op geometry
         (``moe.fused_num_cores`` / ``fused_dram_banks``), the L1 expert block size and
         ``routing_eps``; ``dtype`` defaults to the profile's weight dtype, and an explicit one
         wins. Raises if the config is not the fused layout this op is hard-wired to.

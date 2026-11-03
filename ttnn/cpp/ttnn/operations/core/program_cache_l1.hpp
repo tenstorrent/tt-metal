@@ -26,11 +26,15 @@ constexpr std::uint64_t available_program_l1_capacity(
 
 inline std::uint64_t available_program_l1_capacity(const tt::tt_metal::IDevice* device) {
     const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
-    const auto cb_l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const auto allocator_l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const auto cb_l1_base = device->allocator()->get_program_l1_base();
     // The occupancy query ignores L1_SMALL. The ordinary bank's byte capacity
-    // already excludes both the CB base and the reserved L1_SMALL region, even
-    // when that region has no live tensors.
-    const auto bank_capacity = device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    // already excludes both the allocator base and the reserved L1_SMALL region,
+    // even when that region has no live tensors; persistent L1 above the
+    // allocator base is not part of it.
+    const auto bank_size = device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    const auto persistent_l1 = cb_l1_base - allocator_l1_base;
+    const auto bank_capacity = bank_size > persistent_l1 ? bank_size - persistent_l1 : 0;
     return available_program_l1_capacity(lowest_occupied_l1, cb_l1_base, bank_capacity);
 }
 

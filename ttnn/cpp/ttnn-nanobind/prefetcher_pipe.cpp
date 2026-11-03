@@ -38,7 +38,9 @@ PrefetcherPipeSpaceConfig make_space_config(
     uint32_t max_receivers_per_pipe,
     tt::tt_metal::BufferType buffer_type,
     uint32_t num_dram_senders,
-    PrefetcherPipeL1Source l1_source) {
+    PrefetcherPipeL1Source l1_source,
+    tt::tt_metal::BufferType config_buffer_type,
+    bool overlap_program_l1) {
     return PrefetcherPipeSpaceConfig{
         .sender_cores = sender_cores,
         .num_dram_senders = num_dram_senders,
@@ -47,6 +49,8 @@ PrefetcherPipeSpaceConfig make_space_config(
         .max_receivers_per_pipe = max_receivers_per_pipe,
         .buffer_type = buffer_type,
         .l1_source = l1_source,
+        .config_buffer_type = config_buffer_type,
+        .overlap_program_l1 = overlap_program_l1,
     };
 }
 
@@ -84,7 +88,9 @@ void py_module_types(nb::module_& mod) {
                uint32_t max_receivers_per_pipe,
                tt::tt_metal::BufferType buffer_type,
                uint32_t num_dram_senders,
-               PrefetcherPipeL1Source l1_source) {
+               PrefetcherPipeL1Source l1_source,
+               tt::tt_metal::BufferType config_buffer_type,
+               bool overlap_program_l1) {
                 new (self) PrefetcherPipeSpaceConfig(make_space_config(
                     sender_cores,
                     receiver_domain,
@@ -92,7 +98,9 @@ void py_module_types(nb::module_& mod) {
                     max_receivers_per_pipe,
                     buffer_type,
                     num_dram_senders,
-                    l1_source));
+                    l1_source,
+                    config_buffer_type,
+                    overlap_program_l1));
             },
             nb::arg("sender_cores"),
             nb::arg("receiver_domain"),
@@ -101,14 +109,18 @@ void py_module_types(nb::module_& mod) {
             nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
             nb::kw_only(),
             nb::arg("num_dram_senders") = 0,
-            nb::arg("l1_source") = PrefetcherPipeL1Source::Default)
+            nb::arg("l1_source") = PrefetcherPipeL1Source::Default,
+            nb::arg("config_buffer_type") = tt::tt_metal::BufferType::L1,
+            nb::arg("overlap_program_l1") = false)
         .def_rw("sender_cores", &PrefetcherPipeSpaceConfig::sender_cores)
         .def_rw("receiver_domain", &PrefetcherPipeSpaceConfig::receiver_domain)
         .def_rw("ring_size", &PrefetcherPipeSpaceConfig::ring_size)
         .def_rw("max_receivers_per_pipe", &PrefetcherPipeSpaceConfig::max_receivers_per_pipe)
         .def_rw("buffer_type", &PrefetcherPipeSpaceConfig::buffer_type)
         .def_rw("num_dram_senders", &PrefetcherPipeSpaceConfig::num_dram_senders)
-        .def_rw("l1_source", &PrefetcherPipeSpaceConfig::l1_source);
+        .def_rw("l1_source", &PrefetcherPipeSpaceConfig::l1_source)
+        .def_rw("config_buffer_type", &PrefetcherPipeSpaceConfig::config_buffer_type)
+        .def_rw("overlap_program_l1", &PrefetcherPipeSpaceConfig::overlap_program_l1);
 
     nb::class_<PrefetcherPipe>(mod, "PrefetcherPipe", R"doc(
         One sender -> receivers PrefetcherPipe carved from a PrefetcherPipeSpace.
@@ -227,7 +239,9 @@ void py_module(nb::module_& mod) {
            uint32_t max_receivers_per_pipe,
            tt::tt_metal::BufferType buffer_type,
            uint32_t num_dram_senders,
-           PrefetcherPipeL1Source l1_source) {
+           PrefetcherPipeL1Source l1_source,
+           tt::tt_metal::BufferType config_buffer_type,
+           bool overlap_program_l1) {
             auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.experimental.create_prefetcher_pipe_space");
             return tt::tt_metal::experimental::CreatePrefetcherPipeSpace(
                 mesh_device.mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()),
@@ -238,7 +252,9 @@ void py_module(nb::module_& mod) {
                     max_receivers_per_pipe,
                     buffer_type,
                     num_dram_senders,
-                    l1_source));
+                    l1_source,
+                    config_buffer_type,
+                    overlap_program_l1));
         },
         nb::keep_alive<0, 1>(),
         nb::arg("mesh_device"),
@@ -250,6 +266,8 @@ void py_module(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("num_dram_senders") = 0,
         nb::arg("l1_source") = PrefetcherPipeL1Source::Default,
+        nb::arg("config_buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("overlap_program_l1") = false,
         R"doc(
             Reserve L1 for PrefetcherPipes on sender_cores ∪ receiver_domain.
 
@@ -273,6 +291,13 @@ void py_module(nb::module_& mod) {
                 num_dram_senders (int): capacity for DRAM-sender endpoints; 0 for a worker-only space.
                 l1_source (PrefetcherPipeL1Source): where the L1 comes from. A space with DRAM senders
                     must use Allocator, which Default resolves to.
+                config_buffer_type (BufferType): L1 (the default) keeps the config pages in the
+                    persistent arena beside the ring; L1_SMALL keeps them where no program's circular
+                    buffers reach, so the pipes' read pointers and credit counters survive a program
+                    that reuses the ring's L1 while the pipes are idle.
+                overlap_program_l1 (bool): reserve even on cores a cached program already placed
+                    circular buffers on. That L1 may alias the ring, so such a program must never run
+                    while the pipes hold data.
 
             Returns:
                 PrefetcherPipeSpace
