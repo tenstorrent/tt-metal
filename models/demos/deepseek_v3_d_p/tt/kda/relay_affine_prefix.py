@@ -9,10 +9,13 @@ sp_size - 1 hops back on a 1D fabric).
 The relay's landing buffer is an L1 tensor sharded one head per head core, at the same address on every device. A
 rank's predecessor writes into it before the rank's own call starts, so a layer reserves it before its first program
 (reserve) and the call frees it once the relay has consumed it: between layers that L1 is free for the other
-attention layers (ring_mla's circular buffers span nearly all of L1 on the relay's head columns). The program that ends a
-layer on every SP rank (the MoE combine, a ring attention) keeps a predecessor from writing before its successor has
-reserved it. Layers run one after another, so one relay per mesh and geometry is shared; the final carry's SP-line
-barrier separates consecutive calls.
+attention layers (ring_mla's circular buffers span nearly all of L1 on the relay's head columns).
+
+Load-bearing: the entry barrier of the layer's qkv convolution history exchange runs after the reservation and before
+the relay, so no rank relays until every rank has reserved its landing buffer and finished the programs before it,
+whose circular buffers may overlap that L1. A layer that drops that exchange needs another SP barrier there. Layers run
+one after another, so one relay per mesh and geometry is shared; the final carry's SP-line barrier separates
+consecutive calls.
 """
 
 from __future__ import annotations

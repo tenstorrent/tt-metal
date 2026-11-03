@@ -578,7 +578,9 @@ class ttKDA:
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
-        # The SP predecessor's relay can write into this rank's landing buffer before its own recurrence starts.
+        # The SP predecessor's relay can write into this rank's landing buffer before its own recurrence starts. The
+        # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
+        # keep an SP barrier between this reservation and the recurrence.
         self.recurrence.reserve_affine_relay()
         inputs = self._project_inputs(hidden_states)
         q, k, v, new_convolution = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
