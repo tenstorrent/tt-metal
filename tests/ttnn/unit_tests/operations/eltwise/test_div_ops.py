@@ -7,6 +7,7 @@ import ttnn
 
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_ulp
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -841,3 +842,195 @@ def test_fmod_scalar_just_below_exact_multiple_fp32(scalar, device):
     assert torch.allclose(output_tensor, torch_output_tensor, atol=1e-3, rtol=0)
     # The defining contract, stated separately: the magnitude of the result is below the modulus.
     assert torch.all(output_tensor.abs() < abs(scalar))
+
+
+blackhole_scalar_modulo = pytest.mark.skipif(
+    not is_blackhole(),
+    reason="Scalar modulo correction is Blackhole-only; #63732 shows Wormhole returning ±0 where float64 is near ±s",
+)
+
+
+@blackhole_scalar_modulo
+@pytest.mark.parametrize("ttnn_op", [ttnn.fmod, ttnn.remainder])
+@pytest.mark.parametrize("scalar", [-0.002, -0.001, 0.001, 0.002])
+@pytest.mark.parametrize("scale_exp", [-80, 0, 80])
+def test_modulo_ops_scalar_rounded_quotient_residual(device, ttnn_op, scalar, scale_exp):
+    # Scale #63732 dividends and scalars to retain the trigger across normal FP32 magnitudes.
+    magnitudes = torch.tensor(
+        [
+            39.31800079345703,
+            71.63800048828125,
+            81.4000015258789,
+            74.26200103759766,
+            43.2140007019043,
+            33.479000091552734,
+            17.170000076293945,
+            67.94400024414062,
+            3030.859130859375,
+        ],
+        dtype=torch.float32,
+    ) * (2.0**scale_exp)
+    a = torch.cat((magnitudes, -magnitudes)).reshape(1, -1)
+    scalar = torch.tensor(scalar * (2.0**scale_exp), dtype=torch.float32).item()
+    golden_op = torch.fmod if ttnn_op == ttnn.fmod else torch.remainder
+    expected = golden_op(a.double(), scalar)
+    x = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn_op(x, scalar)).double()
+
+    error = (actual - expected).abs()
+    scale = torch.maximum(a.double().abs(), torch.full_like(expected, abs(scalar)))
+    _, exponent = torch.frexp(scale)
+    ulp = torch.ldexp(torch.ones_like(scale), exponent - 24)
+    assert torch.all(error <= 0.5 * ulp), f"Maximum error: {(error / ulp).max().item()} ULP"
+    assert torch.all(actual.abs() < abs(scalar)), f"Result magnitude reaches divisor {scalar}: {actual}"
+    expected_sign = torch.signbit(a) if ttnn_op == ttnn.fmod else scalar < 0
+    assert torch.all((actual == 0) | (torch.signbit(actual) == expected_sign)), f"Wrong modulo sign: {actual}"
+
+
+@blackhole_scalar_modulo
+@pytest.mark.parametrize(
+    "ttnn_op, dividend, scalar",
+    [
+        pytest.param(ttnn.fmod, -2091442.75, 1.7965977191925049, id="fmod-exp20"),
+        pytest.param(ttnn.fmod, -4046563.25, 1.7965977191925049, id="fmod-exp21"),
+        pytest.param(ttnn.fmod, 8094659.0, 1.7965977191925049, id="fmod-exp22"),
+        pytest.param(ttnn.fmod, 76636120.0, 6.914502143859863, id="fmod-exp23"),
+        pytest.param(ttnn.remainder, 2028366.0, 1.7965977191925049, id="remainder-exp20"),
+        pytest.param(ttnn.remainder, 26125968.0, 6.914502143859863, id="remainder-exp21"),
+        pytest.param(ttnn.remainder, 8094659.0, 1.7965977191925049, id="remainder-exp22"),
+        pytest.param(ttnn.remainder, 76636120.0, 6.914502143859863, id="remainder-exp23"),
+    ],
+)
+def test_modulo_ops_scalar_quotient_precision_boundary(device, ttnn_op, dividend, scalar):
+    a = torch.full((1, 32), dividend, dtype=torch.float32)
+    scalar = torch.tensor(scalar, dtype=torch.float32).item()
+    golden_op = torch.fmod if ttnn_op == ttnn.fmod else torch.remainder
+    expected = golden_op(a.double(), scalar)
+    x = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn_op(x, scalar)).double()
+
+    # Absolute error must stay below 0.5% of the divisor on these boundary cases.
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0.005 * abs(scalar))
+    assert torch.all(actual.abs() < abs(scalar)), f"Result magnitude reaches divisor {scalar}: {actual}"
+
+
+@blackhole_scalar_modulo
+@pytest.mark.parametrize(
+    "ttnn_op, scalar, dividend_sign",
+    [
+        (ttnn.fmod, -13.492485046386719, -1),
+        (ttnn.fmod, 13.492485046386719, -1),
+        (ttnn.remainder, -13.492485046386719, -1),
+        (ttnn.remainder, 13.492485046386719, -1),
+        (ttnn.remainder, -13.492485046386719, 1),
+    ],
+)
+def test_modulo_ops_scalar_residual_above_divisor(device, ttnn_op, scalar, dividend_sign):
+    # Positive dividends exercise the legacy reduction after the verified correction.
+    a = dividend_sign * torch.tensor([[3386.61376953125, 101665.875]], dtype=torch.float32)
+    golden_op = torch.fmod if ttnn_op == ttnn.fmod else torch.remainder
+    expected = golden_op(a.double(), scalar)
+    x = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn_op(x, scalar)).double()
+
+    _, exponent = torch.frexp(a.double().abs())
+    ulp = torch.ldexp(torch.ones_like(expected), exponent - 24)
+    assert torch.all(
+        (actual - expected).abs() <= 0.5 * ulp
+    ), f"Residual differs from float64 golden: {actual} vs {expected}"
+    assert torch.all(actual.abs() < abs(scalar)), f"Result magnitude reaches divisor {scalar}: {actual}"
+    expected_sign = torch.signbit(a) if ttnn_op == ttnn.fmod else scalar < 0
+    assert torch.all((actual == 0) | (torch.signbit(actual) == expected_sign)), f"Wrong modulo sign: {actual}"
+
+
+@blackhole_scalar_modulo
+@pytest.mark.parametrize("ttnn_op", [ttnn.fmod, ttnn.remainder])
+@pytest.mark.parametrize("divisor_sign", [-1, 1])
+@pytest.mark.parametrize("dividend_sign", [-1, 1])
+@pytest.mark.parametrize(
+    "dividend, scalar",
+    [
+        (54.400001525878906, 1.7000000476837158),
+        (1243.5465087890625, 77.7216567993164),
+        (2487.093017578125, 77.7216567993164),
+    ],
+)
+def test_modulo_ops_scalar_exact_multiple_residual(device, ttnn_op, divisor_sign, dividend_sign, dividend, scalar):
+    # Recomputing the residual must accept zero even when the first residual is below the divisor.
+    dividend *= dividend_sign
+    scalar *= divisor_sign
+    a = torch.full((1, 32), dividend, dtype=torch.float32)
+    golden_op = torch.fmod if ttnn_op == ttnn.fmod else torch.remainder
+    expected = golden_op(a.double(), scalar)
+    x = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn_op(x, scalar)).double()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    if ttnn_op == ttnn.fmod:
+        assert torch.equal(torch.signbit(actual), torch.signbit(a)), f"Fmod lost the dividend zero sign: {actual}"
+
+
+@blackhole_scalar_modulo
+@pytest.mark.parametrize("divisor_sign", [-1, 1])
+def test_modulo_ops_scalar_product_guard_precision(device, divisor_sign):
+    # The rounded-product guard preserves an exact result that residual wrapping alone loses.
+    scalar = divisor_sign * 5.717580860958441e18
+    a = torch.tensor([[1.4988351377074246e24, -1.4988351377074246e24]], dtype=torch.float32)
+    expected = torch.fmod(a.double(), scalar)
+    x = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.fmod(x, scalar)).double()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@blackhole_scalar_modulo
+@pytest.mark.parametrize("scalar", [-7.0, 7.0])
+def test_modulo_ops_scalar_fmod_cleanup_zero_sign(device, scalar):
+    # Coarse quotients reach the final equality cleanup, independently of residual correction.
+    a = torch.tensor([[-88880960.0, -88491760.0, -89786872.0, 88880960.0, -0.0, 0.0]], dtype=torch.float32)
+    expected = torch.fmod(a.double(), scalar)
+    x = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.fmod(x, scalar)).double()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert torch.equal(torch.signbit(actual), torch.signbit(expected)), f"Wrong fmod zero sign: {actual}"
+
+
+@blackhole_scalar_modulo
+@pytest.mark.parametrize("ttnn_op, divisor_sign", [(ttnn.fmod, -1), (ttnn.fmod, 1), (ttnn.remainder, 1)])
+def test_modulo_ops_scalar_preserves_positive_tail_precision(device, ttnn_op, divisor_sign):
+    # Recomputing a nonzero residual must not replace the tail's exact positive result.
+    a = torch.full((1, 32), 1.5690447829896925e-09, dtype=torch.float32)
+    scalar = divisor_sign * 4.084990267057276e-13
+    golden_op = torch.fmod if ttnn_op == ttnn.fmod else torch.remainder
+    expected = golden_op(a.double(), scalar)
+    x = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn_op(x, scalar)).double()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@blackhole_scalar_modulo
+def test_modulo_ops_scalar_flushed_reciprocal_zero_sign(device):
+    # A flushed reciprocal must not change an existing exact remainder's zero sign.
+    a = torch.full((1, 32), 10 * 2.0**124, dtype=torch.float32)
+    scalar = -5 * 2.0**124
+    expected = torch.remainder(a.double(), scalar)
+    x = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.remainder(x, scalar)).double()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert torch.equal(
+        torch.signbit(actual), torch.signbit(expected)
+    ), f"Remainder changed an exact zero sign: {actual}"
+
+
+@blackhole_scalar_modulo
+@pytest.mark.parametrize("ttnn_op", [ttnn.fmod, ttnn.remainder])
+@pytest.mark.parametrize("scalar", [-0.030147626996040344, 0.030147626996040344])
+def test_modulo_ops_scalar_next_residual_below_divisor(device, ttnn_op, scalar):
+    # A first residual below the divisor can still hide a quotient one too low.
+    a = torch.full((1, 32), -6.361149311065674, dtype=torch.float32)
+    golden_op = torch.fmod if ttnn_op == ttnn.fmod else torch.remainder
+    expected = golden_op(a.double(), scalar)
+    x = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn_op(x, scalar)).double()
+    _, exponent = torch.frexp(a.double().abs())
+    half_ulp = torch.ldexp(torch.ones_like(expected), exponent - 25)
+    assert torch.all((actual - expected).abs() <= half_ulp), f"Next residual was discarded: {actual} vs {expected}"
+    assert torch.all(actual.abs() < abs(scalar)), f"Result reaches divisor {scalar}: {actual}"

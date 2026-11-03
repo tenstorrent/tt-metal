@@ -5,7 +5,6 @@
 import torch
 import pytest
 import ttnn
-from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import (
     assert_equal,
     assert_with_ulp,
@@ -30,7 +29,7 @@ Category 5: division family + power
 | 2 | ttnn.remainder                    | a - floor(a / b) * b | exact for abs(a / b) < 2^16 on the grid; within   |
 | 3 | ttnn.fmod                         | a - trunc(a / b) * b | 1 ULP(max(abs(a), abs(b))) modulo b elsewhere;    |
 |   |                                   |                      | abs(a / b) ≥ 2^128 overflows and is not checked.  |
-|   |                                   |                      | Scalar b: 0.5 ULP (Blackhole xfail, #63732). Sign |
+|   |                                   |                      | Scalar b: 0.5 ULP, modulo b. Sign                 |
 |   |                                   |                      | and abs(result) ≤ abs(b) wherever the tolerance   |
 |   |                                   |                      | is below abs(b)                                   |
 | 4 | ttnn.div_no_nan                   | a / b, 0 where b = 0 | ULP ≤ 1                                           |
@@ -461,11 +460,6 @@ def _near_multiple_dividends(scalar):
     "ttnn_op, golden_fn", [(ttnn.remainder, torch.remainder), (ttnn.fmod, torch.fmod)], ids=["remainder", "fmod"]
 )
 @pytest.mark.parametrize("scalar", [-0.002, 0.001])
-@pytest.mark.xfail(
-    is_blackhole(),
-    strict=True,
-    reason="#63732: Blackhole scalar remainder/fmod exceeds 0.5 ULP next to multiples of the scalar",
-)
 def test_modulo_ops_scalar_near_multiples(device, ttnn_op, golden_fn, scalar):
     """Full-mantissa dividends within ±4 ULP of every multiple of the scalar
     in ±[abs(s), 100].
@@ -479,7 +473,7 @@ def test_modulo_ops_scalar_near_multiples(device, ttnn_op, golden_fn, scalar):
     | ULP(max(abs(a), abs(s))) ≤ 0.5, modulo the       | Wormhole 0.5 (also over   |
     | scalar; sign and range as in                     | every float32 in          |
     | _assert_modulo_within                            | [-100, 100]);             |
-    |                                                  | Blackhole 0.77 (#63732)   |
+    |                                                  | Blackhole ≤0.5            |
     """
     input_a = _near_multiple_dividends(scalar)
     result = _float32_result(
