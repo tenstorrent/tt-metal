@@ -24,18 +24,13 @@ RelayAffinePrefixOperation::program_factory_t RelayAffinePrefixOperation::select
 // A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
 void RelayAffinePrefixOperation::validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t& in) {
     constexpr std::string_view operation_name = "relay_affine_prefix";
-    for (const auto& [tensor, name] :
-         {std::pair{&in.packed, "packed"},
-          std::pair{&in.initial_state, "initial_state"},
-          std::pair{&in.landing, "landing"}}) {
-        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
-    }
-    kda_factory_detail::check_distinct_buffers(
-        {{&in.packed, "packed"},
-         {&in.initial_state, "initial_state"},
-         {&in.actual_start, "actual_start"},
-         {&in.landing, "landing"}},
-        operation_name);
+    const std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors = {
+        {&in.packed, "packed"},
+        {&in.initial_state, "initial_state"},
+        {&in.actual_start, "actual_start"},
+        {&in.landing, "landing"}};
+    kda_factory_detail::check_allocated_on_device(in.packed, tensors, operation_name);
+    kda_factory_detail::check_distinct_buffers(tensors, operation_name);
 }
 
 void RelayAffinePrefixOperation::validate_on_program_cache_miss(

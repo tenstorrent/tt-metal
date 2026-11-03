@@ -106,6 +106,18 @@ void check_device_scalar(
     TT_FATAL(scalar.logical_shape().volume() == 1, "{}: {} must be a scalar", operation_name, scalar_name);
 }
 
+void check_allocated_on_device(
+    const Tensor& reference,
+    std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors,
+    std::string_view operation_name) {
+    for (const auto& [tensor, name] : tensors) {
+        if (tensor != nullptr) {
+            check_allocated_device_tensor(*tensor, operation_name, name);
+            check_same_device(reference, *tensor, operation_name, name);
+        }
+    }
+}
+
 void check_distinct_buffers(
     std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors, std::string_view operation_name) {
     for (const auto* first = tensors.begin(); first != tensors.end(); ++first) {
