@@ -464,8 +464,10 @@ def test_rebatch_plan_over_a_sequence(device, bs):
     assert reallocations >= 2
 
 
-def test_spatial_cross_attention_dram_intermediates(device, monkeypatch):
-    """The 100x100 base case with every group of intermediates out of L1, as when they do not fit."""
+def test_spatial_cross_attention_glue_intermediates_in_dram(device, monkeypatch):
+    """The 100x100 base case with every group of intermediates around the fused op in DRAM, as
+    ``tt_common.l1_if_fits`` places them when they do not fit L1. Where the fused op stages its
+    own value is decided apart, by ``value_memory`` (``test_fused_msda.py``)."""
     monkeypatch.setattr(tt_common, "L1_INTERMEDIATE_SHARE", 0.0)
     test_spatial_cross_attention_forward(
         device, "nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5, blank_cams=(), valid_per_pair=None, seed=0

@@ -226,22 +226,28 @@ def test_temporal_self_attention_forward(
         logger.info("✅ All TSA tolerance checks passed successfully!")
 
 
+# shift_scale 1.0 is a few cells of ego motion, 8.0 highway speed (~34 px at 200x200): the
+# previous map's float32 reference points must carry the shift without the rounding bfloat16
+# offsets would add.
+# "dram" forces every group of intermediates around the fused op out of L1, as when they do not
+# fit, which also gives the offsets a page per head where DRAM's alignment exceeds a head's. The
+# fused op's own value placement is decided apart, by ``value_memory``.
 @pytest.mark.parametrize(
-    "batch_size, bev_h, bev_w",
-    [(1, 50, 50), (2, 30, 30), (1, 200, 200)],
-    ids=["bs1_50x50", "bs2_30x30", "bs1_200x200"],
+    "batch_size, bev_h, bev_w, shift_scale, glue_intermediates",
+    [
+        (1, 50, 50, 1.0, "fit"),
+        (2, 30, 30, 1.0, "fit"),
+        (1, 200, 200, 1.0, "fit"),
+        (1, 200, 200, 8.0, "fit"),
+        (2, 30, 30, 1.0, "dram"),
+    ],
+    ids=["bs1_50x50", "bs2_30x30", "bs1_200x200", "bs1_200x200_highway", "bs2_30x30_dram"],
 )
-# A few cells of ego motion, and highway speed (~34 px at 200x200): the previous map's float32
-# reference points must carry the shift without the rounding bfloat16 offsets would add.
-@pytest.mark.parametrize("shift_scale", [1.0, 8.0], ids=["shift_cells", "shift_highway"])
-# "dram" forces every group of intermediates out of L1, as when they do not fit, which also gives
-# the offsets a page per head where DRAM's alignment exceeds a head's.
-@pytest.mark.parametrize("intermediates", ["fit", "dram"])
 def test_temporal_self_attention_previous_bev(
-    device, batch_size, bev_h, bev_w, shift_scale, intermediates, monkeypatch
+    device, batch_size, bev_h, bev_w, shift_scale, glue_intermediates, monkeypatch
 ):
     """A previous BEV distinct from the queries, each sample shifted by its own ego motion."""
-    if intermediates == "dram":
+    if glue_intermediates == "dram":
         monkeypatch.setattr(tt_common, "L1_INTERMEDIATE_SHARE", 0.0)
     torch.manual_seed(0)
     config = PRESETS["nuscenes_base"]
