@@ -10,6 +10,7 @@
 // drain_and_rearm: wait until every item from upstream landed and every compute reader of this device stopped
 //       polling my counter (consumers_done), then re-arm both counters for the next call.
 
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -92,10 +93,14 @@ void kernel_main() {
                 reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
         }
         if (num_sources > 0) {  // the peer sent me exactly one ready iff I send to it
-            volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
-            noc_semaphore_wait_min(ready, 1);
-            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
-            noc_async_atomic_barrier();
+            {
+                MaybeDeviceZoneScope("port_ready_fence");
+                volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
+                noc_semaphore_wait_min(ready, 1);
+                noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
+                noc_async_atomic_barrier();
+            }
+            MaybeDeviceZoneScope("port_send");
 
             const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
             uint32_t chunks_left = total;
@@ -141,8 +146,12 @@ void kernel_main() {
     // Every compute reader of this device must have stopped polling my arrival counter before it is re-armed
     // (consumers_done), and every upstream item must have landed.
     volatile tt_l1_ptr uint32_t* cdone = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cdone_addr);
-    noc_semaphore_wait_min(cdone, num_consumers);
+    {
+        MaybeDeviceZoneScope("port_wait_consumers");  // idle until every compute reader of this chip is done
+        noc_semaphore_wait_min(cdone, num_consumers);
+    }
     if (expect_in > 0) {
+        MaybeDeviceZoneScope("port_wait_arrivals");
         volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
         noc_semaphore_wait_min(arrived, expect_in);
         noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect_in);

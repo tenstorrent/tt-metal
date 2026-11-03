@@ -34,9 +34,14 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/minmax.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ring_joint_sdpa_common.hpp"
 
 using namespace compute_kernel_lib;
+
+// Sampled per-phase zone window (key blocks of the first unit); see the zone budget note at the loop.
+constexpr uint32_t ZONE_SAMPLE_KB0 = 4;
+constexpr uint32_t ZONE_SAMPLE_NKB = 6;
 
 // exp(scale * x): the chain's Exp<> has no scale parameter; the SFPU exp folds the scale (SFPMULI) for free.
 template <uint32_t scale_bf16>
@@ -112,6 +117,7 @@ void kernel_main() {
     const uint32_t pv_sbw = subblock_w(pv_sbw_n);
 
     for (uint32_t i = 0; i < my_units; ++i) {
+        MaybeDeviceZoneScope("compute_unit");
         uint32_t kb = 0;  // processed key blocks of this unit
         for (uint32_t s = 0; s < num_segments; ++s) {
             const uint32_t valid = get_arg_val<uint32_t>(2 + 2 * s);
@@ -119,10 +125,17 @@ void kernel_main() {
             for (uint32_t t0 = 0; t0 < valid; t0 += Sk, ++kb) {
                 const uint32_t skv = (valid - t0) < Sk ? (valid - t0) : Sk;
                 const bool masked = seg_masked && (t0 + skv == valid);
+                // Per-phase zones on a sampled window (first unit, steady-state local blocks): the marker budget
+                // (~125 zone executions per RISC) cannot hold every block.
+                const bool zs = (i == 0) && (kb >= ZONE_SAMPLE_KB0) && (kb < ZONE_SAMPLE_KB0 + ZONE_SAMPLE_NKB);
 
                 // ---- score_block: S (Sq x skv, row stride Sk) = Q . K^T ----
-                k_buf.wait_front(Sk * DHt);
                 {
+                    MaybeDeviceZoneScopeIf("compute_k_wait", zs);
+                    k_buf.wait_front(Sk * DHt);
+                }
+                {
+                    MaybeDeviceZoneScopeIf("compute_qk", zs);
                     const uint32_t sbw = subblock_w(skv);
                     matmul_block<
                         true,
@@ -147,6 +160,7 @@ void kernel_main() {
 
                 // ---- mask_block: last valid key tile column of the boundary block ----
                 if (masked) {
+                    MaybeDeviceZoneScopeIf("compute_mask", zs);
                     eltwise_chain(
                         IterationShape::grid(Sq, 1),
                         BinaryFpu<
@@ -170,95 +184,111 @@ void kernel_main() {
                 }
 
                 // ---- row_max_block ----
-                reduce<
-                    PoolType::MAX,
-                    ReduceDim::REDUCE_ROW,
-                    cb_scores,
-                    cb_max_scaler,
-                    cb_max_blk,
-                    ReduceInputPolicy::NoWaitNoPop>(
-                    ReduceInputBlockShape::of(Sq, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
-                if (kb > 0) {
-                    binary_sfpu<
-                        BinaryMax<>,
-                        input(cb_max_blk),
-                        input(cb_max_acc, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
-                        output(cb_max_blk)>(IterationShape::tiles(Sq));
+                {
+                    MaybeDeviceZoneScopeIf("compute_rowmax", zs);
+                    reduce<
+                        PoolType::MAX,
+                        ReduceDim::REDUCE_ROW,
+                        cb_scores,
+                        cb_max_scaler,
+                        cb_max_blk,
+                        ReduceInputPolicy::NoWaitNoPop>(
+                        ReduceInputBlockShape::of(Sq, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
+                    if (kb > 0) {
+                        binary_sfpu<
+                            BinaryMax<>,
+                            input(cb_max_blk),
+                            input(cb_max_acc, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
+                            output(cb_max_blk)>(IterationShape::tiles(Sq));
+                    }
                 }
 
                 // ---- exp_block: P = exp(s (S - m_blk)) in place ----
-                eltwise_chain(
-                    IterationShape::grid(Sq, skv),
-                    BinaryFpu<
-                        BinaryFpuOp::Sub,
-                        input(
+                {
+                    MaybeDeviceZoneScopeIf("compute_sub_exp", zs);
+                    eltwise_chain(
+                        IterationShape::grid(Sq, skv),
+                        BinaryFpu<
+                            BinaryFpuOp::Sub,
+                            input(
+                                cb_scores,
+                                WaitPolicy::None,
+                                PopPolicy::None,
+                                InputTileMapping::Block,
+                                DataFormatReconfig::Enabled,
+                                TileAddressing::Strided),
+                            input(
+                                cb_max_blk,
+                                BroadcastDim::Col,
+                                WaitPolicy::Upfront,
+                                PopPolicy::None,
+                                InputTileMapping::Col)>{StridedTileRange{0, Sk}},
+                        ScaledExp<scale_bits>{},
+                        PackTile<output(
                             cb_scores,
-                            WaitPolicy::None,
-                            PopPolicy::None,
-                            InputTileMapping::Block,
+                            ReservePolicy::None,
+                            PushPolicy::None,
                             DataFormatReconfig::Enabled,
-                            TileAddressing::Strided),
-                        input(
-                            cb_max_blk,
-                            BroadcastDim::Col,
-                            WaitPolicy::Upfront,
-                            PopPolicy::None,
-                            InputTileMapping::Col)>{StridedTileRange{0, Sk}},
-                    ScaledExp<scale_bits>{},
-                    PackTile<output(
-                        cb_scores,
-                        ReservePolicy::None,
-                        PushPolicy::None,
-                        DataFormatReconfig::Enabled,
-                        TileAddressing::Strided)>{StridedTileRange{0, Sk}});
-                inplace_fence(cb_scores, Sq * Sk);
+                            TileAddressing::Strided)>{StridedTileRange{0, Sk}});
+                    inplace_fence(cb_scores, Sq * Sk);
+                }
 
                 // ---- row sums of P ----
-                if (kb == 0) {
-                    reduce<
-                        PoolType::SUM,
-                        ReduceDim::REDUCE_ROW,
-                        cb_scores,
-                        cb_sum_scaler,
-                        cb_sum_acc,
-                        ReduceInputPolicy::NoWaitNoPop>(
-                        ReduceInputBlockShape::of(Sq, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
-                } else {
-                    reduce<
-                        PoolType::SUM,
-                        ReduceDim::REDUCE_ROW,
-                        cb_scores,
-                        cb_sum_scaler,
-                        cb_sum_blk,
-                        ReduceInputPolicy::NoWaitNoPop>(
-                        ReduceInputBlockShape::of(Sq, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
+                {
+                    MaybeDeviceZoneScopeIf("compute_rowsum", zs);
+                    if (kb == 0) {
+                        reduce<
+                            PoolType::SUM,
+                            ReduceDim::REDUCE_ROW,
+                            cb_scores,
+                            cb_sum_scaler,
+                            cb_sum_acc,
+                            ReduceInputPolicy::NoWaitNoPop>(
+                            ReduceInputBlockShape::of(Sq, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
+                    } else {
+                        reduce<
+                            PoolType::SUM,
+                            ReduceDim::REDUCE_ROW,
+                            cb_scores,
+                            cb_sum_scaler,
+                            cb_sum_blk,
+                            ReduceInputPolicy::NoWaitNoPop>(
+                            ReduceInputBlockShape::of(Sq, skv), ReduceInputMemoryLayout::with_row_stride(Sk));
+                    }
                 }
 
                 // ---- pv_block: O = P . V (first block straight into the accumulator) ----
-                v_buf.wait_front(Sk * DVt);
-                matmul_block<
-                    false,
-                    false,
-                    LastBlockTarget::Out,
-                    OutputCBLayout::TileRowMajor,
-                    matmul_config::InitMode::Short,
-                    InputPolicy::WaitAndPopPerKBlock,
-                    InputPolicy::NoWaitNoPop>(
-                    scores_buf,
-                    v_buf,
-                    kb == 0 ? out_acc_buf : out_blk_buf,
-                    kb == 0 ? out_acc_buf : out_blk_buf,
-                    MatmulBlockShape::of(Sq, DVt / pv_sbw, 1, pv_sbw, Sk, 1),
-                    NoPostCompute{},
-                    NoPreKBlock{},
-                    DVt,
-                    DVt,
-                    NoPostKBlock{},
-                    ValidKeyTiles{skv});
+                {
+                    MaybeDeviceZoneScopeIf("compute_v_wait", zs);
+                    v_buf.wait_front(Sk * DVt);
+                }
+                {
+                    MaybeDeviceZoneScopeIf("compute_pv", zs);
+                    matmul_block<
+                        false,
+                        false,
+                        LastBlockTarget::Out,
+                        OutputCBLayout::TileRowMajor,
+                        matmul_config::InitMode::Short,
+                        InputPolicy::WaitAndPopPerKBlock,
+                        InputPolicy::NoWaitNoPop>(
+                        scores_buf,
+                        v_buf,
+                        kb == 0 ? out_acc_buf : out_blk_buf,
+                        kb == 0 ? out_acc_buf : out_blk_buf,
+                        MatmulBlockShape::of(Sq, DVt / pv_sbw, 1, pv_sbw, Sk, 1),
+                        NoPostCompute{},
+                        NoPreKBlock{},
+                        DVt,
+                        DVt,
+                        NoPostKBlock{},
+                        ValidKeyTiles{skv});
+                }
                 v_buf.pop_front(Sk * DVt);
 
                 // ---- rescale_block ----
                 if (kb > 0) {
+                    MaybeDeviceZoneScopeIf("compute_rescale", zs);
                     // a = exp(s (m_acc - m_blk)); consumes m_acc
                     eltwise_chain(
                         IterationShape::tiles(Sq),
@@ -298,15 +328,19 @@ void kernel_main() {
                         PackTile<output(cb_out_acc)>{});
                 }
                 // m_acc <- m_blk
+                MaybeDeviceZoneScopeIf("compute_copy_max", zs);
                 copy<input(cb_max_blk), output(cb_max_acc)>(IterationShape::tiles(Sq));
             }
         }
 
         // ---- finalize_block: out = O_acc / l_acc ----
-        unary<Recip<>, input(cb_sum_acc), output(cb_row_factor)>(IterationShape::tiles(Sq));
-        mul<input(cb_out_acc),
-            input(cb_row_factor, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
-            output(cb_out_tiles)>(IterationShape::grid(Sq, DVt));
+        {
+            MaybeDeviceZoneScope("compute_finalize");
+            unary<Recip<>, input(cb_sum_acc), output(cb_row_factor)>(IterationShape::tiles(Sq));
+            mul<input(cb_out_acc),
+                input(cb_row_factor, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+                output(cb_out_tiles)>(IterationShape::grid(Sq, DVt));
+        }
         cb_wait_front(cb_max_acc, Sq);
         cb_pop_front(cb_max_acc, Sq);
         cb_pop_front(cb_q, Sq * DHt);

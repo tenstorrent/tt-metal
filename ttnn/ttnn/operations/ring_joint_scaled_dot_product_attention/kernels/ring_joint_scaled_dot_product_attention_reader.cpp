@@ -13,7 +13,12 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ring_joint_sdpa_common.hpp"
+
+// Sampled per-block zone window (key blocks of the first unit), matched to the compute kernel's.
+constexpr uint32_t ZONE_SAMPLE_KB0 = 4;
+constexpr uint32_t ZONE_SAMPLE_NKB = 6;
 
 constexpr uint32_t MAX_PORTS = 16;
 
@@ -89,14 +94,20 @@ void kernel_main() {
     const uint32_t my_units = units_of_core(U, C, core_idx);
 
     for (uint32_t i = 0; i < my_units; ++i) {
+        MaybeDeviceZoneScope("reader_unit");
+        uint32_t kb = 0;  // key blocks issued for this unit (zone sampling)
         const AttnUnit unit = decode_unit<Sq, n_q_t, Lq_t>(core_idx + i * C);
         const uint32_t b = unit.bh / hq;
         const uint32_t h = unit.bh - b * hq;
         const uint32_t entry = b * hk + h / q_per_kv;
 
         // ---- load_q_block ----
-        cb_reserve_back(cb_q, Sq * DHt);
         {
+            MaybeDeviceZoneScope("reader_q_reserve");
+            cb_reserve_back(cb_q, Sq * DHt);
+        }
+        {
+            MaybeDeviceZoneScope("reader_q_read");
             uint32_t wptr = get_write_ptr(cb_q);
             if (!unit.joint) {
                 uint32_t page = (unit.bh * n_q_t + unit.row0) * DHt;
@@ -133,6 +144,7 @@ void kernel_main() {
                 v_base = (kind == 2 ? slot * v_slot_pages : 0) + entry * n_kv_t * DVt;
             }
             if (kind == 2) {
+                MaybeDeviceZoneScope("reader_landing_wait");
                 // ---- await_landing: count needed = entry * S_in + rank + 1 on every port carrying the source ----
                 const uint32_t S_in = get_arg_val<uint32_t>(base + 4);
                 const uint32_t rank = get_arg_val<uint32_t>(base + 5);
@@ -149,44 +161,54 @@ void kernel_main() {
                     }
                 }
             }
-            for (uint32_t t0 = 0; t0 < valid; t0 += Sk) {
+            for (uint32_t t0 = 0; t0 < valid; t0 += Sk, ++kb) {
                 const uint32_t skv = (valid - t0) < Sk ? (valid - t0) : Sk;
+                const bool zs = (i == 0) && (kb >= ZONE_SAMPLE_KB0) && (kb < ZONE_SAMPLE_KB0 + ZONE_SAMPLE_NKB);
                 // ---- load_kv_block ----
-                cb_reserve_back(cb_k, Sk * DHt);
-                cb_reserve_back(cb_v, Sk * DVt);
-                const uint32_t kw = get_write_ptr(cb_k);
-                const uint32_t vw = get_write_ptr(cb_v);
-                for (uint32_t t = 0; t < skv; ++t) {
-                    const uint32_t kpage = k_base + (t0 + t) * DHt;
-                    const uint32_t vpage = v_base + (t0 + t) * DVt;
-                    for (uint32_t d = 0; d < DHt; ++d) {
-                        const uint32_t dst = kw + (d * Sk + t) * kv_tile;
-                        if (kind == 0) {
-                            noc_async_read_tile(kpage + d, k_acc, dst);
-                        } else if (kind == 2) {
-                            noc_async_read_tile(kpage + d, lk_acc, dst);
-                        } else {
-                            if constexpr (has_joint) {
-                                const auto jk_acc = TensorAccessor(jk_args, jk_addr, kv_tile);
-                                noc_async_read_tile(kpage + d, jk_acc, dst);
+                {
+                    MaybeDeviceZoneScopeIf("reader_kv_reserve", zs);  // back-pressure: compute not done with block
+                    cb_reserve_back(cb_k, Sk * DHt);
+                    cb_reserve_back(cb_v, Sk * DVt);
+                }
+                {
+                    MaybeDeviceZoneScopeIf("reader_kv_issue", zs);
+                    const uint32_t kw = get_write_ptr(cb_k);
+                    const uint32_t vw = get_write_ptr(cb_v);
+                    for (uint32_t t = 0; t < skv; ++t) {
+                        const uint32_t kpage = k_base + (t0 + t) * DHt;
+                        const uint32_t vpage = v_base + (t0 + t) * DVt;
+                        for (uint32_t d = 0; d < DHt; ++d) {
+                            const uint32_t dst = kw + (d * Sk + t) * kv_tile;
+                            if (kind == 0) {
+                                noc_async_read_tile(kpage + d, k_acc, dst);
+                            } else if (kind == 2) {
+                                noc_async_read_tile(kpage + d, lk_acc, dst);
+                            } else {
+                                if constexpr (has_joint) {
+                                    const auto jk_acc = TensorAccessor(jk_args, jk_addr, kv_tile);
+                                    noc_async_read_tile(kpage + d, jk_acc, dst);
+                                }
                             }
                         }
-                    }
-                    for (uint32_t d = 0; d < DVt; ++d) {
-                        const uint32_t dst = vw + (t * DVt + d) * kv_tile;
-                        if (kind == 0) {
-                            noc_async_read_tile(vpage + d, v_acc, dst);
-                        } else if (kind == 2) {
-                            noc_async_read_tile(vpage + d, lv_acc, dst);
-                        } else {
-                            if constexpr (has_joint) {
-                                const auto jv_acc = TensorAccessor(jv_args, jv_addr, kv_tile);
-                                noc_async_read_tile(vpage + d, jv_acc, dst);
+                        for (uint32_t d = 0; d < DVt; ++d) {
+                            const uint32_t dst = vw + (t * DVt + d) * kv_tile;
+                            if (kind == 0) {
+                                noc_async_read_tile(vpage + d, v_acc, dst);
+                            } else if (kind == 2) {
+                                noc_async_read_tile(vpage + d, lv_acc, dst);
+                            } else {
+                                if constexpr (has_joint) {
+                                    const auto jv_acc = TensorAccessor(jv_args, jv_addr, kv_tile);
+                                    noc_async_read_tile(vpage + d, jv_acc, dst);
+                                }
                             }
                         }
                     }
                 }
-                noc_async_read_barrier();
+                {
+                    MaybeDeviceZoneScopeIf("reader_kv_barrier", zs);
+                    noc_async_read_barrier();
+                }
                 cb_push_back(cb_k, Sk * DHt);
                 cb_push_back(cb_v, Sk * DVt);
             }

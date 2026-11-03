@@ -12,6 +12,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ring_joint_sdpa_common.hpp"
 
 void kernel_main() {
@@ -76,7 +77,11 @@ void kernel_main() {
     const uint32_t my_units = units_of_core(U, C, core_idx);
     for (uint32_t i = 0; i < my_units; ++i) {
         const AttnUnit unit = decode_unit<Sq, n_q_t, Lq_t>(core_idx + i * C);
-        cb_wait_front(cb_out, Sq * DVt);
+        {
+            MaybeDeviceZoneScope("writer_out_wait");
+            cb_wait_front(cb_out, Sq * DVt);
+        }
+        MaybeDeviceZoneScope("writer_out_write");
         uint32_t rptr = get_read_ptr(cb_out);
         if (!unit.joint) {
             const uint32_t page = (unit.bh * n_q_t + unit.row0) * DVt;
