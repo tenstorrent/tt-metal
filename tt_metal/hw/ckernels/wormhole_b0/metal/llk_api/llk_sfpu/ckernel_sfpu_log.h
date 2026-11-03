@@ -115,7 +115,9 @@ sfpi_inline sfpi::vFloat _calculate_log_series_(const sfpi::vFloat in, const sfp
  * @brief One row of ln(x) in place in Dest.
  *
  * The zero test is bitwise, so -0.0 is not mapped to -inf: XLOGY turns -0.0 into NaN before
- * calling, _calculate_log_ returns a finite value for it.
+ * calling, _calculate_log_ returns a finite value for it. On a 32-bit Dest, a caller that
+ * holds a sign-clear operand in a register can use @ref _calculate_log_body_on_reg_ instead;
+ * see its @note for where the two differ.
  *
  * @param c: LogPoly::C, bound outside the caller's row loop.
  * @param d: LogPoly::D, bound outside the caller's row loop.
@@ -136,6 +138,42 @@ sfpi_inline void _calculate_log_body_(const sfpi::vFloat c, const sfpi::vFloat d
     v_endif;
 
     sfpi::dst_reg[dst_idx * dst_tile_size_sfpi] = result;
+}
+
+/**
+ * @brief ln(in) of a value already held in a register, with no Dest load or store.
+ *
+ * Same arithmetic as _calculate_log_body_, for a caller that holds its operand in a register
+ * and would otherwise store it to Dest, run the in-place body and reload the result (two
+ * SFPSTOREs and two SFPLOADs per row).
+ *
+ * The -inf lane is every input whose biased exponent is 0: +-0 *and* the denormals. For a
+ * sign-clear input that is what the Dest round trip it replaces produces: on a 32-bit Dest the
+ * round trip flushes a denormal to a zero of the same sign (measured on Wormhole: xlogy(1, y)
+ * reads -inf for y = 0x00000001 and 0x007FFFFF), so the in-place body sees +0 there. An
+ * `in == 0.0F` test would instead return a finite value for a denormal (about -88.0..-87.3
+ * for a positive one: setexp gives 1.m and exexp the raw 0 - 127, since SFPEXEXP does not
+ * normalize).
+ *
+ * @param in: Input value.
+ * @param c: LogPoly::C, bound outside the caller's row loop.
+ * @param d: LogPoly::D, bound outside the caller's row loop.
+ * @note Call @ref _init_log_ first.
+ * @note Equivalent to the store / _calculate_log_body_ / reload round trip only on a 32-bit
+ *       Dest and for sign-clear inputs. On a 16-bit Dest the store also truncates the log
+ *       before the reload. For -0.0 and a negative denormal (flushed to -0.0) the in-place
+ *       body's bitwise zero test misses, so the round trip returns a finite value where this
+ *       body returns -inf. XLOGY stays bit-identical only because its `in1 < 0.0f` guard
+ *       overwrites those lanes with NaN.
+ */
+sfpi_inline sfpi::vFloat _calculate_log_body_on_reg_(
+    const sfpi::vFloat in, const sfpi::vFloat c, const sfpi::vFloat d) {
+    sfpi::vFloat result = _calculate_log_series_(in, c, d);
+
+    v_if(sfpi::exexp(in, sfpi::ExponentMode::Biased) == 0) { result = -std::numeric_limits<float>::infinity(); }
+    v_endif;
+
+    return result;
 }
 
 /**
@@ -258,14 +296,36 @@ inline void _init_log_() {
     sfpi::vConstFloatPrgm2 = LogPoly::B;
 }
 
+/**
+ * @tparam FAST_APPROX Ignored. The only code it ever selected was skipping the input
+ *   normalisation below, which returned NaN for -0.0 and for positive subnormals, so
+ *   fast mode now runs the same instructions as accurate mode.
+ * @tparam HAS_BASE_SCALING If true, multiply the natural log by log_base_scale_factor, the fp32
+ *   bits of 1/ln(base) (with IS_BASE_TWO, only the mantissa term is multiplied; see below)
+ * @tparam is_fp32_dest_acc_en If true, use the fp32 polynomial; otherwise the bf16 one
+ * @tparam IS_BASE_TWO If true, multiply only the mantissa term by log_base_scale_factor and add the
+ *   exponent term as e_float * 2^-23, so log2 of a power of two is exact. log_base_scale_factor is
+ *   always applied, and the result is log2(a) only when the factor is the fp32 bits of 1/ln(2)
+ *   (0x3FB8AA3B). Requires HAS_BASE_SCALING, enforced below.
+ */
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
-    if constexpr (!FAST_APPROX) {
-        // normalise a (-0.0 and subnormals become +0.0). This must run before
-        // the exponent read below so that -0.0 follows the same path as +0.0
-        // and log(±0.0) returns -inf, matching torch.
-        a = a * 1.0f + 0.0f;
-    }
+    static_assert(
+        !IS_BASE_TWO || HAS_BASE_SCALING,
+        "IS_BASE_TWO always applies log_base_scale_factor, so it must be instantiated with HAS_BASE_SCALING");
+    // Normalise a (-0.0 and subnormals become +0.0): SFPMAD treats subnormal
+    // inputs as zero, and adding +0.0 turns a -0.0 product into +0.0 on both
+    // Wormhole and Blackhole (Wormhole also makes every zero result +0.0;
+    // Blackhole keeps the sign of a zero only when both addends share it).
+    // This must run before the exponent read below so that -0.0 follows the
+    // same path as +0.0 and log(±0.0) returns -inf, matching torch. Fast mode
+    // used to skip it, and that was the only thing FAST_APPROX selected:
+    // without it the sign test below excludes the -0.0 lane, which then keeps
+    // the NaN that result is initialised with, and a positive subnormal reaches
+    // addexp(a, -1) with a zero exponent field and a non-zero mantissa, where
+    // the wrap to exponent 255 makes a NaN instead of the +inf the special-case
+    // handling relies on.
+    a = a * 1.0f + 0.0f;
 
     sfpi::vFloat three_quarters = 0.75f;
     sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
@@ -307,9 +367,9 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
         //   input +inf -> +inf
         //   input NaN  -> NaN
         //
-        // In the non-fast path, earlier normalisation maps -0.0 and subnormals
-        // to +0.0. addexp(a, -1) wraps exponent 0 to 255, so zero becomes
-        // +inf; exponent 255 values (Inf/NaN) are left unchanged.
+        // The normalisation at the top maps -0.0 and subnormals to +0.0.
+        // addexp(a, -1) wraps exponent 0 to 255, so zero becomes +inf;
+        // exponent 255 values (Inf/NaN) are left unchanged.
         a = sfpi::addexp(a, -1);
 
         r = r * s + m;
@@ -351,6 +411,17 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     return result;
 }
 
+/**
+ * @tparam APPROXIMATION_MODE Ignored
+ * @tparam FAST_APPROX Ignored (see calculate_log_body)
+ * @tparam HAS_BASE_SCALING If true, multiply the natural log by log_base_scale_factor, the fp32
+ *   bits of 1/ln(base) (with IS_BASE_TWO, only the mantissa term; see calculate_log_body)
+ * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
+ * @tparam ITERATIONS Number of iterations for given face
+ * @tparam IS_BASE_TWO If true, take the exact log2 path: log_base_scale_factor is always applied to
+ *   the mantissa term, so it must be the fp32 bits of 1/ln(2) (0x3FB8AA3B) and HAS_BASE_SCALING
+ *   must be true (see calculate_log_body)
+ */
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
@@ -371,6 +442,11 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
+/**
+ * @tparam APPROXIMATION_MODE Ignored
+ * @tparam FAST_APPROX Ignored (see calculate_log_body)
+ * @tparam is_fp32_dest_acc_en If true, program the fp32 polynomial coefficients; otherwise the bf16 ones
+ */
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);

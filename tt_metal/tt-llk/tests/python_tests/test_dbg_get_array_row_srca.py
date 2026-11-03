@@ -14,9 +14,8 @@ Row 0 carries planted patterns a converting save would change: integer values th
 denormals, and float denormals and negative zero, which a flush or a half-width save alters.
 """
 
-import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -64,6 +63,8 @@ def bit_view(tensor):
     return tensor.view(torch.int16 if tensor.dtype == torch.bfloat16 else torch.int32)
 
 
+# The RISC-DEST debug window is only available on Blackhole.
+@blackhole_only
 @parametrize(
     formats=input_output_formats(
         [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Int32],
@@ -72,10 +73,6 @@ def bit_view(tensor):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
-
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("The RISC-DEST debug window is only available on Blackhole.")
-
     input_dimensions = [32, 32]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(

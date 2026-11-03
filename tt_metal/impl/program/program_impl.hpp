@@ -27,8 +27,8 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
 
-#include <umd/device/types/core_coordinates.hpp>          // CoreType
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/core_coordinates.hpp>          // CoreType
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 
 #include <atomic>
 #include <bitset>
@@ -51,6 +51,7 @@ namespace tt::tt_metal {
 class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
+class MeshTensor;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
@@ -205,6 +206,18 @@ public:
 
     bool contains(IDevice* device);
 };
+
+// The device memory a bound TensorParameter occupies, whether or not an allocation backs it.
+struct BoundTensorFootprint {
+    BufferType buffer_type = BufferType::DRAM;
+    DeviceAddr address = 0;
+    DeviceAddr size_per_bank = 0;
+    // Buffer::unique_id() of the allocation that backed the tensor when it was bound. Empty when the tensor does not
+    // own its allocation.
+    std::optional<size_t> buffer_id;
+};
+
+BoundTensorFootprint make_bound_tensor_footprint(const MeshTensor& tensor);
 
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
@@ -553,6 +566,14 @@ public:
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
+    // True if any static CB region of this program covers a core claimed through ServiceCoreManager on
+    // any physical device behind `device`. False (and cheap) when nothing is claimed.
+    bool cb_regions_touch_service_cores(const IDevice* device) const;
+    // Records the lockstep fast-path state after a full validation (see simple_l1_validation_cached_).
+    void cache_simple_l1_validation(const IDevice* device);
+    // True if a cached compile_and_allocate on `device` may replace the full CB/DFB validation with the
+    // lockstep L1 frontier check.
+    bool simple_l1_validation_usable(const IDevice* device) const;
     void validate_dataflow_buffer_region(const IDevice* device);
     // Ensures that circular buffer core ranges are within the device compute grid
     void validate_circular_buffer_core_ranges(const IDevice* device);
@@ -614,6 +635,10 @@ public:
     // name is unknown; the caller validates known-ness separately).
     experimental::TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
+    // Footprint of the tensor most recently bound to a registered parameter. The setter ignores unregistered names;
+    // the getter returns nullptr if no tensor has been bound.
+    void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
+    const BoundTensorFootprint* get_bound_tensor_footprint(const std::string& name) const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
     // bound to `tensor_parameter_name`.
@@ -640,6 +665,16 @@ public:
         // host overhead on the inner re-enqueue loop.
         std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
         std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
+
+        // Array arg name -> its slots in the dispatch buffer: [first_slot, first_slot + size).
+        // The arrays follow the scalars in the named section. (Copied from the kernel's ArrayArgLayouts:
+        // first_slot is their word_offset.)
+        struct ArraySlots {
+            size_t first_slot = 0;
+            size_t size = 0;
+        };
+        std::unordered_map<std::string, ArraySlots> runtime_array_arg_slots;
+        std::unordered_map<std::string, ArraySlots> common_runtime_array_arg_slots;
 
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
@@ -741,6 +776,7 @@ private:
         struct RegisteredTensorParameter {
             TensorSpec spec;
             experimental::TensorSpecRelaxations relaxations;
+            std::optional<BoundTensorFootprint> bound;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 
@@ -769,11 +805,16 @@ private:
     // per device, since the layout steps also register the program against the device.
     bool compile_and_allocate_needed_{true};
     const IDevice* compile_and_allocate_device_{nullptr};
-    // For lockstep allocation without service-core claims, a single live L1 frontier
-    // check covers every static CB and DFB region validated during layout.
+    // For lockstep allocation, a single live L1 frontier check covers every static CB and DFB
+    // region validated during layout. Service-core claims only add checks for CB regions that sit
+    // on a claimed core, so the shortcut also holds while services run, for any program whose CBs
+    // touch no claimed core. That answer depends only on which cores are claimed, so it is cached
+    // against the ServiceCoreManager claims generation and recomputed when the claims change.
     bool simple_l1_validation_cached_{false};
     SubDeviceManagerId simple_l1_validation_manager_id_;
     uint64_t simple_l1_validation_region_end_{0};
+    uint64_t simple_l1_validation_claims_gen_{0};
+    bool simple_l1_validation_touches_service_{false};
 
     // Scratchpads (Metal 2.0 only)
     // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.

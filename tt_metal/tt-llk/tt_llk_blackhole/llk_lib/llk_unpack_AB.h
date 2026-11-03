@@ -27,6 +27,9 @@ using namespace ckernel::unpacker;
  * Sets up the unpacker MOP to handle various broadcast modes and transpose configurations.
  * The MOP programs the sequence of unpack operations based on tile geometry and broadcast type.
  *
+ * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows zeroes the unpacker's
+ * own SrcA and SrcB banks before each face, because the FPU reads at least MAX_FPU_ROWS rows per face.
+ *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param transpose_of_faces: Whether to transpose faces (reorder faces 0,2,1,3)
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
@@ -138,6 +141,45 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         }
         else
         {
+            if (tensor_shape.face_r_dim < MAX_FPU_ROWS)
+            {
+                // The FPU reads at least MAX_FPU_ROWS rows per face. Zero the unpacker's own bank of both sources
+                // before each face, so ELWADD and ELWSUB also see zeros in the rows past the face.
+                static constexpr std::uint32_t clear_srca = TT_OP_UNPACR_NOP(
+                    SrcA,
+                    0 /*Stream_Id*/,
+                    0 /*Msg_Clr_Cnt*/,
+                    0 /*Set_Dvalid*/,
+                    0 /*Clr_to1_fmt_Ctrl*/,
+                    p_unpacr_nop::WAIT_LIKE_UNPACR,
+                    0 /*Bank_Clr_Ctrl*/,
+                    p_unpacr_nop::CLR_SRC_0,
+                    p_unpacr_nop::CLR_SRC);
+                static constexpr std::uint32_t clear_srcb = TT_OP_UNPACR_NOP(
+                    SrcB,
+                    0 /*Stream_Id*/,
+                    0 /*Msg_Clr_Cnt*/,
+                    0 /*Set_Dvalid*/,
+                    0 /*Clr_to1_fmt_Ctrl*/,
+                    p_unpacr_nop::WAIT_LIKE_UNPACR,
+                    0 /*Bank_Clr_Ctrl*/,
+                    p_unpacr_nop::CLR_SRC_0,
+                    p_unpacr_nop::CLR_SRC);
+                constexpr std::uint32_t replay_buf_len = 4;
+                load_replay_buf(
+                    0,
+                    replay_buf_len,
+                    []
+                    {
+                        TTI_INSN(clear_srca);
+                        TTI_INSN(unpack_srca);
+                        TTI_INSN(clear_srcb);
+                        TTI_INSN(unpack_srcb);
+                    });
+                ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, lltt::replay_insn(0, replay_buf_len));
+                tmp.program();
+                return;
+            }
             ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srca, unpack_srcb);
             tmp.program();
         }
@@ -153,6 +195,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
+ * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows zeroes the unpacker's
+ * own SrcA and SrcB banks before each face (see @ref _llk_unpack_AB_mop_config_).
  * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
  * @ref _llk_unpack_AB_ is the matching execute call.
  * @ref _llk_math_eltwise_binary_init_ is the matching init on the math thread (consumes SrcA/SrcB).

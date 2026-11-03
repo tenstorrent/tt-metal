@@ -18,9 +18,14 @@ CLASSIFY = SCRIPTS / "llk-perf-inputs-changed.sh"
 COMMITS = SCRIPTS / "llk-perf-baseline-commits.sh"
 
 
-def _classify(*paths):
+def _classify(*paths, cwd=None):
     out = subprocess.run(
-        ["bash", str(CLASSIFY)], input="".join(f"{p}\n" for p in paths), capture_output=True, text=True, check=True
+        ["bash", str(CLASSIFY)],
+        input="".join(f"{p}\n" for p in paths),
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=cwd,
     )
     return out.stdout.strip()
 
@@ -47,6 +52,14 @@ def _classify(*paths):
         ("tt_metal/tt-llk/tests/python_tests/test_pack.py", "true"),
         ("tt_metal/tt-llk/tt_llk_quasar/llk_lib/llk_math_matmul.h", "false"),
         ("tt_metal/tt-llk/tests/python_tests/quasar/test_matmul_quasar.py", "false"),
+        ("tt_metal/tt-llk/tests/python_tests/fuser/quasar/fpu/common.py", "false"),
+        ("tt_metal/tt-llk/tests/python_tests/fuser/tests/quasar/sfpu_unary_float_dest16.yaml", "false"),
+        ("tt_metal/tt-llk/tests/helpers/include/sfpu_operations_quasar.h", "false"),
+        ("tt_metal/tt-llk/tests/helpers/include/quasar_test_common.h", "false"),
+        ("tt_metal/tt-llk/tests/helpers/ld/memory.quasar.ld", "false"),
+        # The same trees for an architecture that does have a perf number.
+        ("tt_metal/tt-llk/tests/python_tests/fuser/wormhole/fpu/common.py", "true"),
+        ("tt_metal/tt-llk/tests/helpers/include/tensix_types.h", "true"),
         ("tt_metal/hw/ckernels/quasar/llk_api/llk_math_api.h", "false"),
         ("ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp", "false"),
         (".github/workflows/merge-gate.yaml", "false"),
@@ -70,6 +83,28 @@ def _classify(*paths):
 )
 def test_classify_one_path(path, changed):
     assert _classify(path) == changed
+
+
+def test_classify_skips_a_quasar_only_change_whole():
+    """PR #61865 touched only Quasar, and the merge gate measured Wormhole and
+    Blackhole anyway: two of its paths fell through to the tests/ catch-all."""
+    paths = [
+        "tt_metal/hw/ckernels/quasar/metal/llk_api/llk_math_common_api.h",
+        "tt_metal/tt-llk/tt_llk_quasar/llk_lib/llk_math_common.h",
+        "tt_metal/tt-llk/tests/sources/quasar/matmul_quasar_test.cpp",
+        "tt_metal/tt-llk/tests/helpers/include/sfpu_operations_quasar.h",
+        "tt_metal/tt-llk/tests/python_tests/fuser/quasar/fpu/common.py",
+        "tt_metal/tt-llk/tests/python_tests/fuser/quasar/fpu/transpose_dest.py",
+    ]
+    assert _classify(*paths) == "false"
+
+
+def test_classify_does_not_depend_on_the_callers_directory(tmp_path):
+    """Deciding whether a perf test imports a functional one means reading the tree,
+    which must be found from the script, not from wherever it was run."""
+    imported = "tt_metal/tt-llk/tests/python_tests/test_pack.py"
+    assert _classify(imported, cwd=tmp_path) == "true"
+    assert _classify("tt_metal/tt-llk/tests/python_tests/test_matmul.py", cwd=tmp_path) == "false"
 
 
 def test_classify_any_changed_path_counts():

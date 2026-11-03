@@ -7,6 +7,8 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
 
 // Row-major addressing shared by the unary-backward row-major reader and writer.
 //
@@ -72,6 +74,7 @@ inline void copy_bytes(uint32_t dst, uint32_t src, uint32_t bytes) {
 // `scratch` is an L1 buffer of at least round_up(bytes + 2 * alignment) bytes, itself aligned.
 template <typename Accessor>
 inline void read_piece(
+    const Noc& noc,
     const Accessor& src,
     const RowMajorPaging& paging,
     uint32_t page,
@@ -84,13 +87,18 @@ inline void read_piece(
     const bool aligned_ends = (page_offset % a) == 0 && (cb_addr % a) == 0;
     const bool tail_safe = (bytes % a) == 0 || cb_addr + round_up_to(bytes, a) <= region_end;
     if (aligned_ends && tail_safe) {
-        noc_async_read(src.get_noc_addr(page, page_offset), cb_addr, bytes);
+        noc.async_read(src, CoreLocalMem<uint8_t>(cb_addr), bytes, {.page_id = page, .offset_bytes = page_offset}, {});
         return;
     }
     const uint32_t window_start = (page_offset / a) * a;
     const uint32_t delta = page_offset - window_start;
-    noc_async_read(src.get_noc_addr(page, window_start), scratch, round_up_to(delta + bytes, a));
-    noc_async_read_barrier();
+    noc.async_read(
+        src,
+        CoreLocalMem<uint8_t>(scratch),
+        round_up_to(delta + bytes, a),
+        {.page_id = page, .offset_bytes = window_start},
+        {});
+    noc.async_read_barrier();
     copy_bytes(cb_addr, scratch + delta, bytes);
 }
 
@@ -99,6 +107,7 @@ inline void read_piece(
 // the window's neighbouring bytes are not being written by anyone else concurrently.
 template <typename Accessor>
 inline void write_piece(
+    const Noc& noc,
     const Accessor& dst,
     const RowMajorPaging& paging,
     uint32_t page,
@@ -110,24 +119,25 @@ inline void write_piece(
     const bool aligned_ends = (page_offset % a) == 0 && (cb_addr % a) == 0;
     const bool tail_safe = (bytes % a) == 0 || page_offset + bytes == paging.page_bytes();
     if (aligned_ends && tail_safe) {
-        noc_async_write(cb_addr, dst.get_noc_addr(page, page_offset), bytes);
+        noc.async_write(CoreLocalMem<uint8_t>(cb_addr), dst, bytes, {}, {.page_id = page, .offset_bytes = page_offset});
         return;
     }
     // Earlier pieces of this page may still be in flight, and the window may cover their bytes.
-    noc_async_write_barrier();
+    noc.async_write_barrier();
     const uint32_t window_start = (page_offset / a) * a;
     const uint32_t delta = page_offset - window_start;
     const uint32_t window_bytes = round_up_to(delta + bytes, a);
-    const uint64_t window = dst.get_noc_addr(page, window_start);
-    noc_async_read(window, scratch, window_bytes);
-    noc_async_read_barrier();
+    const CoreLocalMem<uint8_t> scratch_mem(scratch);
+    noc.async_read(dst, scratch_mem, window_bytes, {.page_id = page, .offset_bytes = window_start}, {});
+    noc.async_read_barrier();
     copy_bytes(scratch + delta, cb_addr, bytes);
-    noc_async_write(scratch, window, window_bytes);
-    noc_async_write_barrier();
+    noc.async_write(scratch_mem, dst, window_bytes, {}, {.page_id = page, .offset_bytes = window_start});
+    noc.async_write_barrier();
 }
 
 // The scratch CB is sized with slack (by the host, from the buffers' alignments) so its start can
 // be rounded up to the widest alignment any of its transfers use.
-inline uint32_t aligned_scratch(uint32_t cb_id, uint32_t alignment) {
-    return round_up_to(get_write_ptr(cb_id), alignment);
+template <typename Dfb>
+inline uint32_t aligned_scratch(const Dfb& scratch, uint32_t alignment) {
+    return round_up_to(scratch.get_write_ptr(), alignment);
 }

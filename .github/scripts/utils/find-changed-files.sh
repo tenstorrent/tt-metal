@@ -83,7 +83,8 @@ while IFS= read -r FILE; do
         .github/time_budget.yaml)
             TTSIM_CI_CHANGED=true
             ;;
-        .clang-tidy|**/.clang-tidy)
+        .clang-tidy|**/.clang-tidy|\
+        cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml)
             CLANG_TIDY_CONFIG_CHANGED=true
             ;;
         tt_stl/**/*.@(h|hpp|c|cpp))
@@ -287,7 +288,8 @@ while IFS= read -r FILE; do
         .github/workflows/clang-tidy-reusable.yaml|\
         .github/workflows/pr-gate.yaml|\
         .github/workflows/build-docker-artifact.yaml|\
-        .github/workflows/resolve-docker-pull-refs.yaml)
+        .github/workflows/resolve-docker-pull-refs.yaml|\
+        cmake/clang-tidy-export-fixes-wrapper.sh)
             CLANG_TIDY_KEY_WORKFLOW_CHANGED=true
             ;;
     esac

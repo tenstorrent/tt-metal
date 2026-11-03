@@ -17,8 +17,15 @@
 #include "experimental/kernel_args.h"
 #include "../accumulation_common.hpp"
 
+#ifdef COMPENSATED_SUM
+constexpr auto CUMSUM_MODE = ckernel::CumsumMode::Compensated;
+#elif !defined(CUMPROD)
+constexpr auto CUMSUM_MODE = ckernel::CumsumMode::Default;
+#endif
+
 // Cumulative sum along one of the two tile axes, without first permuting the scan axis to dim 0.
-// With CUMPROD, a cumulative product: cumprod_tile works like cumsum_tile below.
+// With CUMPROD, a cumulative product: cumprod_tile works like cumsum_tile below. With
+// COMPENSATED_SUM, cumsum_tile also carries the Kahan compensation in SFPU registers.
 //
 // The reader delivers num_rows runs of tiles_per_row tiles, each run in scan order. cumsum_tile
 // scans every column of a tile top to bottom and carries the column totals into the next tile in
@@ -50,14 +57,14 @@ void kernel_main() {
             copy_tile(dfb::in, FIRST_TILE, DST_TILE);
 #endif
             // The unpack/datacopy init above reprograms the math pipeline, so re-init before every
-            // tile. The init only records the SFPU sequence without running it, which leaves the
-            // totals carried in SFPU registers from the previous tile intact.
+            // tile. The init does not run the SFPU, so the totals carried in SFPU registers from the
+            // previous tile stay intact.
 #ifdef CUMPROD
             cumprod_tile_init();
             cumprod_tile(DST_TILE, /*first=*/j == 0);
 #else
-            cumsum_tile_init();
-            cumsum_tile(DST_TILE, /*first=*/j == 0);
+            cumsum_tile_init<CUMSUM_MODE>();
+            cumsum_tile<CUMSUM_MODE>(DST_TILE, /*first=*/j == 0);
 #endif
 #ifdef SCAN_WIDTH
             transpose_dest_init<DST_ACCUM_MODE>();
