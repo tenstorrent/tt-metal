@@ -49,14 +49,29 @@ slot's position plus one, into the trace's own inputs (TtMiMoModel._feed_back): 
 while a lane holds a row with temperature > 0, the sampled step (DeviceSampler: temperature, top_k up to
 ``max_device_top_k``, top_p; its random stream is on device, seeded with the parameters, a seeded row's by (seed,
 position)). With ``sample_on_device_mode`` the plugin samples on device unless a row asks for what the sampler lacks
-(a top_k past its candidates, pure temperature sampling without top_p or top_k, penalties, logprobs or structured
-output send the whole batch to host sampling, which reads the logit rows) and overlaps the steps (``decode_input_update_contract`` 1,
+(a top_k past its candidates, pure temperature sampling without top_p or top_k, penalties or logprobs
+send the whole batch to host sampling, which reads the logit rows) and overlaps the steps (``decode_input_update_contract`` 1,
 ``supports_async_decode``): a steady step copies nothing (the trace reads its RoPE
 cos / sin from device tables at its own positions, at every context length; with MIMO_DEVICE_ROPE=0 it copies those
 of the adapter's own position counter), and its tokens are read back without blocking. Prefill runs
 eagerly in chunks of up to 4096 tokens, between the replays. A program first compiled after the capture would keep buffers the replays overwrite, so
 ``warmup_model_prefill`` compiles every prefill program a served chunk can run first: they key only on the chunk's
 padded length and the alignment of its start (attention.py), a bounded set.
+
+Structured output (``supports_device_grammar``, the plugin's docs/DEVICE_GRAMMAR_CONTRACT.md; with or without
+async scheduling): vLLM builds a step's grammar bitmask after the step is submitted, so a decode step with a
+structured request comes as ``decode_forward(defer_device_sampling=True)``, which replays every active lane's greedy
+decode trace at once (DeferredDecode), then ``sample_deferred_decode`` with the rows' sampling parameters and the packed
+mask: each lane queues its parameters and mask rows behind its forward, and a lane with a sampled or constrained row
+then replays the sampler trace (TtMiMoModel.sample_enqueue) over the greedy tokens, whose sampler sets the logits a
+row's mask disallows below every other before it draws (DeviceSampler.set_grammar), greedy rows included. vLLM builds
+the mask, and the lanes upload it, while the forward runs. The sampler trace replays on an empty queue, so its drain
+waits for the forward; ``sample_deferred_decode`` leaves the draws pending (PendingDraws) and the adapter's next device
+work enqueues them first (``_flush_draws``: the next step's decode or prefill, or the read of the step's tokens). Under
+async scheduling the host then builds the next step while this one's forward runs, instead of waiting for it in
+``sample_deferred_decode``; the device queue holds the same work in the same order either way. Structured prefill
+(the first token) samples on host. A replica with more than MAX_USERS decode users has no device sampler: such a launch
+keeps host grammar (``enable_device_grammar``).
 
 Speculative decoding (MIMO_SPEC_DECODE=mtp; the plugin's model-owned drafter contract, docs/SPEC_DECODE_CONTRACT.md,
 with ``--speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter",
@@ -122,6 +137,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling.tt_sampling import format_grammar_bitmask
 
 from ..reference import kv_pair_split
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
@@ -145,7 +161,7 @@ from ..reference.spec_decode import (
 )
 from .common import fabric_config
 from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_variant, verify_variants
-from .device_sampler import CANDIDATES_PER_CHIP, stream_states
+from .device_sampler import CANDIDATES_PER_CHIP, MAX_USERS, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import PREFILL_CHUNK_TRACE, prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
 
@@ -409,6 +425,28 @@ class VerifyHandle:
             return self._readout
 
 
+class DeferredDecode:
+    """A decode step submitted with ``defer_device_sampling`` (module docstring): its forward, on the device already
+    (``_decode`` without sampling parameters), which ``sample_deferred_decode`` samples once with the rows' sampling
+    parameters and grammar mask. ``positions``: the step's decode positions (-1: idle row), int32 [rows];
+    ``reload``: whether the step uploads the rows' sampling parameters."""
+
+    def __init__(self, positions, forward, reload):
+        self.positions, self.forward, self.reload = positions, forward, reload
+
+
+class PendingDraws:
+    """The sampler draws of a sampled deferred step, enqueued by the adapter's next device work (``_flush_draws``).
+    ``out``: the step's output, whose drawing lanes' handles get the sampler's tokens then; ``draws``: per drawing
+    lane, (its index in ``out["handles"]``, its active rows, whether a mask constrains it); ``read``: the host output
+    of a ``read_decode_output(out, async_read=True)`` before the flush, whose token reads the flush enqueues."""
+
+    def __init__(self, out, draws):
+        self.out, self.draws = out, draws
+        self.read = None
+        self.done = False
+
+
 class MiMoV2ForCausalLM:
     model_capabilities = {
         "supports_chunked_prefill": True,
@@ -424,6 +462,8 @@ class MiMoV2ForCausalLM:
         "supports_device_top_p_without_top_k": True,
         "supports_device_penalties": False,
         "supports_device_logprobs": False,
+        # Structured output samples on device: DeviceSampler applies vLLM's grammar mask (sample_deferred_decode).
+        "supports_device_grammar": True,
         # The MTP drafter (spec_plan, propose_draft_tokens): it keeps the target hidden on device, so it needs no
         # hidden feed. Under async scheduling (MIMO_ASYNC_SPEC, module docstring) ordinary steps overlap as in a
         # launch that does not speculate, a fused verify is read a step later, and the next verify may chain onto it
@@ -471,6 +511,17 @@ class MiMoV2ForCausalLM:
         # Per lane: whether its rows' sampling parameters (set by a reloading step) include a sampled row, which
         # selects the sampled decode trace.
         self.lane_sampled = [False] * self.dp
+        # Device grammar (module docstring): whether it is on (``enable_device_grammar``), the step waiting for its
+        # mask, per lane whether the sampler's parameters still flag rows of the last mask (``_set_grammar``), and why
+        # a deferred step failed (every later decode raises).
+        self.device_grammar_enabled = False
+        self._deferred = None
+        self.lane_grammar = [False] * self.dp
+        self._grammar_failure = None
+        # The draws of the last sampled deferred step until the next device work enqueues them (PendingDraws), and the
+        # lock that makes one caller enqueue them: the plugin may read a step's tokens on another thread.
+        self._draws = None
+        self._draws_lock = threading.Lock()
         # Per lane: where the last step left its requests' committed tokens (reference.spec_decode.DraftSource), one
         # per draft group, none when that step ran no request or more than DRAFT_GROUPS; propose_draft_tokens drafts
         # from them.
@@ -830,6 +881,7 @@ class MiMoV2ForCausalLM:
         verify afterwards, and a lane taking a prompt restarts its MTP ring (its drafter serves one request)."""
         if sampling_params is not None:
             raise ValueError("MiMo samples on the host; got device sampling_params")
+        self._flush_draws()
         tables = self._layer_tables(page_table, page_tables_per_layer)
         rows = tokens.shape[0]
         starts = np.asarray(start_pos).reshape(-1).astype(np.int64)
@@ -965,8 +1017,8 @@ class MiMoV2ForCausalLM:
             if model.decode_trace is None or model.mesh_device.num_program_cache_entries() == programs[lane]:
                 continue
             new = model.mesh_device.num_program_cache_entries() - programs[lane]
-            # Every trace of the replica, in warmup_model_decode's order: the greedy and sampled decode steps, the
-            # verify step and the MTP draft program, then the later-chunk prefill traces.
+            # Every trace of the replica, in warmup_model_decode's order: the greedy and sampled decode steps and the
+            # sampler alone, the verify step and the MTP draft program, then the later-chunk prefill traces.
             model.release_spec_traces()
             model.release_decode_trace()
             model.release_prefill_chunk_traces()
@@ -1023,11 +1075,29 @@ class MiMoV2ForCausalLM:
         own position counter (``decode_positions``); ``reload_page_table`` then copies the page tables.
 
         The model keeps no other slot state (no penalty or RNG state), so a reloading step needs no ``slot_remap``:
-        it rewrites every slot's tokens and positions. A steady step with a non-identity remap raises."""
+        it rewrites every slot's tokens and positions. A steady step with a non-identity remap raises.
+
+        ``defer_device_sampling`` (device grammar, module docstring): a device-sampled step without its
+        ``sampling_params``; runs the forward and returns a DeferredDecode for ``sample_deferred_decode``, and no decode
+        may come before that samples it."""
+        if self._grammar_failure is not None:
+            raise RuntimeError(
+                f"MiMo device grammar sampling failed after a decode submission: {self._grammar_failure}"
+            )
+        if self._deferred is not None:
+            raise RuntimeError("a deferred decode step is pending: sample_deferred_decode must run it first")
+        self._flush_draws()
         if "reset_batch" in kwargs:
             raise ValueError("MiMo implements decode_input_update_contract 1; got the legacy reset_batch keyword")
-        if kwargs.get("defer_device_sampling"):
-            raise ValueError("MiMo has no deferred device sampling (no device grammar)")
+        defer = bool(kwargs.pop("defer_device_sampling", False))
+        if defer:
+            if not self.device_grammar_enabled:
+                raise ValueError("defer_device_sampling needs device grammar (enable_device_grammar)")
+            if spec_mode is not None or sampling_params is not None or read_from_device:
+                raise ValueError(
+                    "a deferred decode is a plain step without sampling_params or a read: got spec_mode "
+                    f"{spec_mode!r}, sampling_params {sampling_params is not None}, read_from_device {read_from_device}"
+                )
         if defer_read and spec_mode != "fused_sample":
             raise ValueError(f"defer_read comes with a fused_sample verify, got spec_mode {spec_mode!r}")
         if (chain_rows is not None or chain_tip is not None) and spec_mode != "fused_sample":
@@ -1052,14 +1122,56 @@ class MiMoV2ForCausalLM:
             raise ValueError("reload_inputs already copies the page tables; got reload_page_table too")
         if reset_sampling_state and not reload_inputs:
             raise ValueError("reset_sampling_state without reload_inputs")
-        on_device = sampling_params is not None
         if not reload_inputs:
-            if not on_device:
+            if sampling_params is None and not defer:
                 raise ValueError("host sampling decodes from host inputs: reload_inputs must be True")
             if not enable_trace:
                 raise ValueError("a steady decode (reload_inputs False) replays the decode trace: enable_trace False")
             if slot_remap is not None and any(int(j) != i for i, j in enumerate(slot_remap)):
                 raise ValueError(f"a steady decode cannot move resident slot state: slot_remap {list(slot_remap)}")
+        args = {
+            "tokens": tokens,
+            "start_pos": start_pos,
+            "page_table": page_table,
+            "page_tables_per_layer": page_tables_per_layer,
+            "enable_trace": enable_trace,
+            "reload_inputs": reload_inputs,
+            "reload_page_table": reload_page_table,
+            "reload_sampling_params": reload_sampling_params,
+        }
+        if defer:
+            if reload_inputs:
+                positions = torch.as_tensor(start_pos).reshape(-1).clone()
+            elif any(p is None for p in self.decode_positions):
+                raise RuntimeError("a steady decode before any reloading decode")
+            else:
+                positions = torch.cat([p[: self.per_lane] for p in self.decode_positions])
+            try:
+                forward = self._decode(**args, sampling_params=None, read_from_device=False)
+            except Exception as e:
+                self._grammar_failure = f"{type(e).__name__}: {e}"
+                raise
+            self._deferred = DeferredDecode(positions, forward, reload_inputs or reload_sampling_params)
+            return self._deferred
+        return self._decode(**args, sampling_params=sampling_params, read_from_device=read_from_device)
+
+    def _decode(
+        self,
+        tokens,
+        start_pos,
+        page_table,
+        page_tables_per_layer,
+        enable_trace,
+        reload_inputs,
+        reload_page_table,
+        reload_sampling_params,
+        sampling_params,
+        read_from_device,
+    ):
+        """A plain decode step (``decode_forward``'s arguments, checked); without ``sampling_params`` and the read, a
+        deferred step's forward too (greedy replays). Its ``lanes``: per lane it ran, (lane, first row, last row, the
+        lane's positions before the step)."""
+        on_device = sampling_params is not None
         t0 = time.perf_counter()
         tables = self._layer_tables(page_table, page_tables_per_layer)
         rows = self.dp * self.per_lane
@@ -1069,7 +1181,7 @@ class MiMoV2ForCausalLM:
             rows = positions.numel()
             if rows > self.dp * self.per_lane:
                 raise ValueError(f"{rows} decode rows > {self.dp} lanes x {self.per_lane} slots")
-        handles = []
+        handles, lanes = [], []
         self.spec_sources = [[] for _ in range(self.dp)]
         self.source_positions = [{} for _ in range(self.dp)]
         self.chained = [{} for _ in range(self.dp)]
@@ -1089,13 +1201,16 @@ class MiMoV2ForCausalLM:
                 if pos is None:
                     raise RuntimeError(f"lane {lane}: a steady decode before any reloading decode")
             active = pos >= 0
+            lanes.append((lane, first, last, pos))
             if on_device and (reload_inputs or reload_sampling_params):
                 self._set_sampling(lane, model, sampling_params, first, last, pos)
-            sample = on_device and self.lane_sampled[lane]
             if not bool(active.any()):
                 self.decode_positions[lane] = pos
                 handles.append(None)
                 continue
+            if on_device:
+                self._set_grammar(lane, model, None, first, last, active)  # lifts the flags a structured step left
+            sample = on_device and self.lane_sampled[lane]
             if reload_inputs or reload_page_table:
                 model.set_vllm_page_tables(
                     {s: self._group_rows(tables, first + s) for s in range(last - first) if active[s]}
@@ -1121,7 +1236,7 @@ class MiMoV2ForCausalLM:
                     DraftSource(row=first + s, slots=[s], group=groups[s], width=width) for s in live
                 ]
                 self.source_positions[lane] = {first + s: int(pos[s]) + 1 for s in live}
-        out = {"rows": rows, "handles": handles, "tokens": on_device}
+        out = {"rows": rows, "handles": handles, "tokens": on_device, "lanes": lanes}
         if TIMING:
             self._decode_timing(t0, reload_inputs, on_device)
         if read_from_device:
@@ -1581,6 +1696,7 @@ class MiMoV2ForCausalLM:
         whose propose returns the drafts its pages carry (``_propose_deferred``)."""
         from vllm_tt_plugin.spec_decode import DraftOutput
 
+        self._flush_draws()
         if isinstance(hidden, VerifyHandle):
             return self._propose_deferred(hidden, num_drafts, committed_tokens, committed_positions, accepted_counts)
         t0 = time.perf_counter()
@@ -2021,15 +2137,25 @@ class MiMoV2ForCausalLM:
         within what the plugin routes to the device (``model_capabilities``): top_k up to ``max_device_top_k``, or
         none with top_p < 1."""
         n = last - first
-        active = pos[:n] >= 0
+        temperature, top_k, top_p = self._check_device_sampling(sampling_params, first, last, pos[:n] >= 0)
+        seeds = list(sampling_params.seed[first:last]) if sampling_params.seed is not None else [None] * n
+        rows = model.max_batch
+        states = stream_states(seeds + [None] * (rows - n), pos.tolist())
+        hosts, sampled = model.sampler.host_params(temperature, top_k, top_p, states=states)
+        model.sampler.set_params(hosts)
+        self.lane_sampled[lane] = sampled
+        self.lane_grammar[lane] = False  # the parameters flag no grammar row now
+
+    def _check_device_sampling(self, sampling_params, first, last, active):
+        """The temperature (0 on idle rows), top_k and top_p of rows [first, last) (torch, each [last - first]); raises
+        when an active sampled row asks for more than the device sampler serves (``_set_sampling``)."""
         temperature = torch.tensor([float(t) for t in sampling_params.temperature[first:last]])
         top_k = torch.tensor([int(k) for k in sampling_params.top_k[first:last]])
         top_p = torch.tensor([float(p) for p in sampling_params.top_p[first:last]])
-        seeds = list(sampling_params.seed[first:last]) if sampling_params.seed is not None else [None] * n
         temperature = torch.where(active, temperature, torch.zeros_like(temperature))
         vocab = self.gen.cfg.vocab_size
         max_k = self.model_capabilities["max_device_top_k"]
-        for s in range(n):
+        for s in range(last - first):
             if temperature[s] == 0 or top_k[s] == 1:
                 continue
             k, p = int(top_k[s]), float(top_p[s])
@@ -2039,18 +2165,34 @@ class MiMoV2ForCausalLM:
                     f"row {first + s}: device sampling takes top_k <= {max_k}, or none with top_p < 1; got "
                     f"temperature {float(temperature[s])}, top_k {k}, top_p {p}"
                 )
-        rows = model.max_batch
-        states = stream_states(seeds + [None] * (rows - n), pos.tolist())
-        hosts, sampled = model.sampler.host_params(temperature, top_k, top_p, states=states)
-        model.sampler.set_params(hosts)
-        self.lane_sampled[lane] = sampled
+        return temperature, top_k, top_p
+
+    def _set_grammar(self, lane, model, grammar, first, last, active):
+        """Uploads the grammar mask of the lane's rows [first, last) (``grammar``'s rows, or None) and flags its active
+        constrained rows in the sampler's parameters, or lifts the flags the lane's last mask left; returns whether a
+        row of the lane is constrained."""
+        rows = None
+        if grammar is not None:
+            mask = grammar[first:last]
+            rows = active[: last - first] & (mask != -1).any(dim=1)
+        if rows is not None and bool(rows.any()):
+            model.sampler.set_grammar(mask, rows)
+            self.lane_grammar[lane] = True
+            return True
+        if self.lane_grammar[lane]:
+            model.sampler.set_grammar()
+            self.lane_grammar[lane] = False
+        return False
 
     def read_decode_output(self, out, async_read=False, **kwargs):
         """Starts reading a decode step's output: its greedy tokens (device sampling), without blocking when
         ``async_read`` (returns the per-lane host tensors and their read events), or its logit rows (host sampling;
         read now, returned with no events). A verify's output is on the host already (the plugin unwraps its mode's
         tensor, or passes a fused_sample VerifyOutput whole): returned as it is, with no events. A deferred verify's
-        handle (VerifyHandle; any thread, blocking on its step's events) returns its FusedReadout."""
+        handle (VerifyHandle; any thread, blocking on its step's events) returns its FusedReadout. A device grammar
+        step's output with its draws pending (``sample_deferred_decode``) is read behind them: blocking, the draws are
+        enqueued first; ``async_read``, the reads are left to the flush and come back with no events
+        (``process_decode_output_host`` waits for theirs)."""
         if kwargs.get("sample_rows") is not None:
             raise ValueError("MiMo declares no selective host readback; got sample_rows")
         if isinstance(out, VerifyHandle):
@@ -2062,6 +2204,22 @@ class MiMoV2ForCausalLM:
         if not out["tokens"]:
             logits = self._read_logits(out)
             return (logits, []) if async_read else logits
+        draws = out.get("draws")
+        if draws is not None and async_read:
+            with self._draws_lock:
+                if not draws.done:
+                    # The reads queue behind the draws, at the flush; process_decode_output_host waits for them.
+                    draws.read = {"rows": out["rows"], "reads": None, "events": None, "draws": draws}
+                    return draws.read, []
+        elif draws is not None:
+            self._flush_draws()
+        reads, events = self._enqueue_reads(out, async_read)
+        host = {"rows": out["rows"], "reads": reads}
+        return (host, events) if async_read else host
+
+    def _enqueue_reads(self, out, async_read):
+        """Reads of a device-sampled step's tokens, per lane that ran: without blocking when ``async_read`` (with the
+        read events), else blocking."""
         reads, events = [], []
         for entry in out["handles"]:
             if entry is None:
@@ -2070,8 +2228,7 @@ class MiMoV2ForCausalLM:
             reads.append((lane, n, handle["next_tokens"].cpu(blocking=not async_read)))
             if async_read:
                 events.append(ttnn.record_event(self.models[lane].mesh_device, 0))
-        host = {"rows": out["rows"], "reads": reads}
-        return (host, events) if async_read else host
+        return reads, events
 
     def _read_logits(self, out):
         vocab = self.gen.cfg.vocab_size
@@ -2085,13 +2242,23 @@ class MiMoV2ForCausalLM:
 
     def process_decode_output_host(self, out, is_tokens=False, **kwargs):
         """Host output of ``read_decode_output``: greedy tokens int32 [B] in slot order (``is_tokens``; idle slots
-        0), else the logits it read."""
+        0), else the logits it read. A device-sampled step's output that nobody read (``sample_deferred_decode``'s:
+        the plugin finalizes it without ``read_decode_output``) is read here, blocking; an async read left to the flush
+        of its step's draws is enqueued with them (now, unless the next step's work already did) and waited for."""
         if kwargs.get("sample_rows") is not None:
             raise ValueError("MiMo declares no compact host logits; got sample_rows")
         if not is_tokens:
             if not isinstance(out, torch.Tensor):
                 raise ValueError("host sampling: read_decode_output returns the logits")
             return out
+        if isinstance(out, dict) and "handles" in out and out["tokens"]:
+            out = self.read_decode_output(out)
+        if isinstance(out, dict) and out.get("draws") is not None:
+            # An async read of a step whose draws were pending: the flush (here, unless the next step's already ran)
+            # queued its reads behind them.
+            self._flush_draws()
+            for event in out["events"]:
+                ttnn.event_synchronize(event)
         if isinstance(out, torch.Tensor) or "reads" not in out:
             raise ValueError("device sampling: expected the token reads of read_decode_output")
         tokens = torch.zeros(out["rows"], dtype=torch.int32)
@@ -2099,6 +2266,101 @@ class MiMoV2ForCausalLM:
             row = ttnn.to_torch(ttnn.get_device_tensors(host)[0]).reshape(-1)[:n]
             tokens[lane * self.per_lane : lane * self.per_lane + n] = row.to(torch.int32)
         return tokens
+
+    # ------------------------------------------------------------------ device grammar (module docstring)
+    def enable_device_grammar(self):
+        """The plugin calls it once after load, when it may sample structured decode steps on device. The sampler's
+        mask buffers exist from the KV cache setup on, before any capture, and the sampled decode trace applies them,
+        so this only checks that every replica has a device sampler (at most MAX_USERS decode users); otherwise
+        ``device_grammar_enabled`` stays False and the plugin keeps host grammar."""
+        if self.per_lane > MAX_USERS:
+            logger.warning(
+                f"MiMo vLLM: device grammar needs at most {MAX_USERS} decode users per lane (got {self.per_lane}): "
+                "structured output samples on host"
+            )
+            return
+        self.device_grammar_enabled = True
+
+    def sample_deferred_decode(self, payload, sampling_params=None, *, grammar_bitmask=None):
+        """Samples the deferred step ``payload`` (``decode_forward(defer_device_sampling=True)``) with the rows'
+        ``sampling_params`` and ``grammar_bitmask``: vLLM's packed mask, int32 [rows, ceil(vocab / 32)] in decode row
+        order (lane after lane, rows past it and rows without a grammar allowed everything). Returns what a
+        device-sampled ``decode_forward(..., read_from_device=False)`` returns, its draws pending until the adapter's
+        next device work (``_flush_draws``). Checks everything before the sampling starts (a failed check leaves the
+        step pending); once it started, a failure is final (every later decode raises)."""
+        if self._grammar_failure is not None:
+            raise RuntimeError(
+                f"MiMo device grammar sampling failed after a decode submission: {self._grammar_failure}"
+            )
+        if not isinstance(payload, DeferredDecode) or payload is not self._deferred:
+            raise ValueError("not the pending deferred decode (stale, already sampled, or never submitted)")
+        if sampling_params is None:
+            raise ValueError("sample_deferred_decode needs the rows' sampling_params")
+        if any(bool(x) for x in (getattr(sampling_params, "enable_log_probs", None) or [])):
+            raise ValueError("MiMo's device sampler returns no logprobs: a logprobs request samples on host")
+        if grammar_bitmask is None:
+            raise ValueError("sample_deferred_decode needs the step's grammar_bitmask")
+        rows = self.dp * self.per_lane
+        vocab = self.gen.cfg.vocab_size
+        grammar = format_grammar_bitmask(
+            grammar_bitmask, vocab_size=vocab, padded_vocab_size=-(-vocab // 32) * 32, max_batch_size=rows
+        )
+        positions = payload.positions
+        self._check_device_sampling(sampling_params, 0, positions.numel(), positions >= 0)
+        self._deferred = None
+        try:
+            return self._sample_deferred(payload, sampling_params, grammar)
+        except Exception as e:
+            self._grammar_failure = f"{type(e).__name__}: {e}"
+            raise
+
+    def _sample_deferred(self, payload, sampling_params, grammar):
+        """The sampling of a deferred step (checked) on its forward's lanes. Every lane queues its rows' parameters (a
+        reloading step) and its mask rows (``grammar``: int32 [lanes x per_lane, words], -1 words allowed) behind its
+        forward; each active lane with a sampled or constrained row then draws on the sampler trace, whose drain waits
+        for that lane's forward, at the adapter's next device work (PendingDraws, ``_flush_draws``), and the others
+        keep the greedy tokens."""
+        lanes = {}
+        for lane, first, last, pos in payload.forward["lanes"]:
+            model = self.models[lane]
+            if payload.reload:
+                self._set_sampling(lane, model, sampling_params, first, last, pos)
+            active = pos >= 0
+            if bool(active.any()):
+                masked = self._set_grammar(lane, model, grammar, first, last, active)
+                lanes[lane] = (active, masked, self.lane_sampled[lane] or masked)
+        handles = list(payload.forward["handles"])
+        out = {"rows": payload.forward["rows"], "handles": handles, "tokens": True}
+        draws = [(i, *lanes[e[0]][:2]) for i, e in enumerate(handles) if e is not None and lanes[e[0]][2]]
+        if draws:
+            self._draws = out["draws"] = PendingDraws(out, draws)
+        return out
+
+    def _flush_draws(self):
+        """Enqueues the pending draws of the last sampled deferred step (``_sample_deferred``), each drawing lane's
+        sampler replay over its greedy tokens, and then the token reads an async ``read_decode_output`` of its output
+        asked for. Every entry point that queues device work calls it first, so the draws keep their place on the
+        queue: right behind the step's forward and uploads. A failure is final, as one in ``sample_deferred_decode``."""
+        with self._draws_lock:
+            pending, self._draws = self._draws, None
+            if pending is None:
+                return
+            try:
+                handles = pending.out["handles"]
+                for i, active, masked in pending.draws:
+                    lane, n, handle = handles[i]
+                    model = self.models[lane]
+                    # MIMO_SAMPLER_CHECK's host draw knows no grammar: it checks unconstrained steps only.
+                    rng = model.sampler.read_rng() if SAMPLER_CHECK and not masked else None
+                    handles[i] = (lane, n, dict(handle, next_tokens=model.sample_enqueue(handle)))
+                    if rng is not None:
+                        self._check_sampling(lane, model, handles[i][2], rng, active)
+                if pending.read is not None:
+                    pending.read["reads"], pending.read["events"] = self._enqueue_reads(pending.out, True)
+                pending.done = True
+            except Exception as e:
+                self._grammar_failure = f"{type(e).__name__}: {e}"
+                raise
 
     # ------------------------------------------------------------------ warmup and lifetime
     def _max_prefill_tokens(self):
@@ -2255,6 +2517,7 @@ class MiMoV2ForCausalLM:
                 model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))
 
     def release_persistent_capture(self):
+        self._flush_draws()
         for model in self.models:
             model.release_decode_trace()
             model.release_prefill_traces()

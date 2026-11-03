@@ -14,6 +14,10 @@
 // offset (core % (4096 / block)) * block, block = slots * K * 8); slots of users past `users` zero. To the compute
 // kernel: the range's tiles (cb_x), and two tiles whose row u holds, in every column, user u's largest logit of the
 // range (cb_m) and 1 / T (cb_a), rows past the users zero. To the writer: the tiles' address (cb_ready).
+//
+// Grammar: a user whose params word 5 is set reads its row of the mask (uint32 row-major [users, mask_stride] on this
+// chip: word w, bit j allows local token 32 * w + j, so a tile column's word is its tile index), and every logit of the
+// range it disallows becomes kMasked in L1 before anything reads the tiles.
 
 #include <cstdint>
 
@@ -21,6 +25,12 @@
 #include "sample_topk.hpp"
 
 namespace {
+
+// -2^100: below every real logit, so a disallowed token ranks after every allowed one and weighs nothing next to it
+// (exp((kMasked - m) / T) is 0, and the fixed-point merge saturates it to 0). Finite, so a range or a chip whose logits
+// are all disallowed keeps a finite largest logit (its sum is relative to it and drops out of the merge); with -inf
+// its exp((x - m) / T) would be NaN.
+constexpr uint32_t kMasked = 0xF1800000u;
 
 // Every column of row r of a 32x32 fp32 tile at `tile` set to `bits`.
 FORCE_INLINE void fill_row(uint32_t* tile, uint32_t r, uint32_t bits) {
@@ -40,6 +50,7 @@ void kernel_main() {
     const uint32_t tile_begin = get_arg_val<uint32_t>(3);
     const uint32_t tile_end = get_arg_val<uint32_t>(4);
     const uint32_t core = get_arg_val<uint32_t>(5);
+    const uint32_t mask_addr = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t users = get_compile_time_arg_val(0);
     constexpr uint32_t K = get_compile_time_arg_val(1);
@@ -49,7 +60,8 @@ void kernel_main() {
     constexpr uint32_t cb_a = get_compile_time_arg_val(5);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(6);
     constexpr uint32_t cb_ready = get_compile_time_arg_val(7);
-    constexpr uint32_t slots = get_compile_time_arg_val(8);  // user slots of a core's block: 4, or 8
+    constexpr uint32_t slots = get_compile_time_arg_val(8);        // user slots of a core's block: 4, or 8
+    constexpr uint32_t mask_stride = get_compile_time_arg_val(9);  // words of a user's mask row (64-byte multiple)
     static_assert(users >= 1 && users <= slots && (slots == 4 || slots == 8), "users in rows 0-7");
     constexpr uint32_t half = slots / 2;  // the reader's slots
     constexpr uint32_t tile_bytes = 4096;
@@ -65,6 +77,7 @@ void kernel_main() {
     cb_reserve_back(cb_scratch, 1);
     const uint32_t out_l1 = get_write_ptr(cb_scratch);  // the reader's slots, then the params page
     const uint32_t params_l1 = out_l1 + half * slot_bytes;
+    const uint32_t mask_l1 = params_l1 + params_bytes;  // the users' mask rows
 
     const InterleavedAddrGen<true> logits_gen = {.bank_base_address = logits_addr, .page_size = tile_bytes};
     for (uint32_t i = 0; i < n; ++i) {
@@ -73,6 +86,43 @@ void kernel_main() {
     const InterleavedAddrGen<true> params_gen = {.bank_base_address = params_addr, .page_size = params_bytes};
     noc_async_read(get_noc_addr(0, params_gen), params_l1, params_bytes);
     noc_async_read_barrier();
+    const uint32_t* params = reinterpret_cast<const uint32_t*>(params_l1);
+
+    // Grammar: the flagged users' mask rows, then their disallowed logits of the range set to kMasked.
+    constexpr uint32_t mask_row_bytes = mask_stride * 4;
+    const InterleavedAddrGen<true> mask_gen = {.bank_base_address = mask_addr, .page_size = mask_row_bytes};
+    bool masked = false;
+    for (uint32_t u = 0; u < users; ++u) {
+        if (params[u * 8 + 5] != 0) {
+            noc_async_read(get_noc_addr(u, mask_gen), mask_l1 + u * mask_row_bytes, mask_row_bytes);
+            masked = true;
+        }
+    }
+    if (masked) {
+        noc_async_read_barrier();
+        uint32_t* tiles = reinterpret_cast<uint32_t*>(x_l1);
+        for (uint32_t u = 0; u < users; ++u) {
+            if (params[u * 8 + 5] == 0) {
+                continue;
+            }
+            const uint32_t* words = reinterpret_cast<const uint32_t*>(mask_l1 + u * mask_row_bytes) + tile_begin;
+            for (uint32_t i = 0; i < n; ++i) {
+                const uint32_t w = words[i];
+                if (w == 0xFFFFFFFFu) {
+                    continue;
+                }
+                uint32_t* row0 = tiles + i * 1024 + u * 16;  // columns 0-15 (face 0); 16-31 at + 256 (face 1)
+                for (uint32_t c = 0; c < 16; ++c) {
+                    if (!((w >> c) & 1u)) {
+                        row0[c] = kMasked;
+                    }
+                    if (!((w >> (16 + c)) & 1u)) {
+                        row0[256 + c] = kMasked;
+                    }
+                }
+            }
+        }
+    }
 
     // Each user's largest logit of the range: the normalizer's shift, released to the compute kernel first.
     const uint32_t* x = reinterpret_cast<const uint32_t*>(x_l1);
@@ -90,7 +140,6 @@ void kernel_main() {
             largest[u] = best;
         }
     }
-    const uint32_t* params = reinterpret_cast<const uint32_t*>(params_l1);
     cb_reserve_back(cb_m, 1);
     cb_reserve_back(cb_a, 1);
     uint32_t* m_tile = reinterpret_cast<uint32_t*>(get_write_ptr(cb_m));

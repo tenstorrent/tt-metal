@@ -70,10 +70,12 @@ void kernel_main() {
         write[j] = w;
         sdpa[j] = s;
     }
-    for (uint32_t k = 0; k < S; ++k) {
-        volatile tt_l1_ptr int32_t* row = reinterpret_cast<volatile tt_l1_ptr int32_t*>(out_l1 + (2 + k) * row_l1);
-        for (uint32_t j = 0; j < B; ++j) {
-            row[j] = j % S == k ? write[j] : -1;
+    if constexpr (S > 0) {  // no drafter: no serial rows, and j % S would not compile (-Werror=div-by-zero)
+        for (uint32_t k = 0; k < S; ++k) {
+            volatile tt_l1_ptr int32_t* row = reinterpret_cast<volatile tt_l1_ptr int32_t*>(out_l1 + (2 + k) * row_l1);
+            for (uint32_t j = 0; j < B; ++j) {
+                row[j] = j % S == k ? write[j] : -1;
+            }
         }
     }
 
