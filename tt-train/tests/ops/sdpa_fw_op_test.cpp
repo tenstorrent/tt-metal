@@ -1612,17 +1612,19 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal_HeadStacking) 
 // shards spread the kernel compiles; the full sweeps are nightly.
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke_Causal) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // GQA (two heads per K/V head): whole-sequence chunks (one item per sequence, Sk_chunk_t = St), and two
+    // stacked heads, the causal stamp at a nonzero row_base.
     run_chunk_knob_sweep(
         SDPATestConfig{
             .batch_size = 1U,
             .sequence_length = 256U,
-            .query_dim = 128U,
-            .key_value_dim = 128U,
-            .num_query_heads = 2U,
+            .query_dim = 256U,      // 4 heads * 64
+            .key_value_dim = 128U,  // 2 kv heads * 64
+            .num_query_heads = 4U,
             .num_key_heads = 2U,
             .mask_type = ttml::metal::AttentionMaskType::Causal,
             .test_name = "ChunkKnobs_Smoke_Causal"},
-        {{256, 256, 1}});  // whole-sequence chunks: one item per sequence, Sk_chunk_t = St
+        {{256, 256, 1}, {64, 64, 2}});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke_Arbitrary) {
@@ -1660,7 +1662,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke_NoneGate) {
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NoIntermediates) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // The RETURN_INTERMEDIATES-less compile with the gate and an explicit chunking, checked against the
-    // references (ValidationTest_IntermediateReturnModes covers it without the gate at the default pick).
+    // references (ValidationTest_IntermediateReturnModes covers it without the gate at the default pick). The
+    // chunking is the one the pick reaches at D=512 (four rows, two K/V tiles), which the sweeps do not run
+    // blocking: a causal row with Sq > Sk has rows fully masked inside a later K step.
     run_chunk_knob_sweep(
         SDPATestConfig{
             .batch_size = 1U,
@@ -1673,7 +1677,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NoIntermediates) {
             .use_gate = true,
             .return_intermediates = false,
             .test_name = "ChunkKnobs_NoIntermediates_Gate"},
-        {{64, 64, 1}});
+        {{128, 64, 1}});  // Sq > Sk: rows fully masked inside a later K step, with the gate
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Arbitrary_NonPow2) {
@@ -2074,14 +2078,16 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     auto* device = &autograd::ctx().get_device();
     device->enable_program_cache();
     const std::array<std::size_t, 4> shape{1U, 2U, 256U, 64U};
-    auto make = [&](uint32_t seed) {
-        return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device);
+    auto make_host = [&](uint32_t seed) {
+        return round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed));
     };
+    auto make = [&](const xt::xarray<float>& host) { return core::from_xtensor(host, device); };
     struct Inputs {
         ttnn::Tensor query, key, value;
     };
-    const Inputs first{make(1U), make(2U), make(3U)};
-    const Inputs second{make(4U), make(5U), make(6U)};  // both sets stay alive: different addresses
+    const xt::xarray<float> first_q = make_host(1U), first_k = make_host(2U), first_v = make_host(3U);
+    const Inputs first{make(first_q), make(first_k), make(first_v)};
+    const Inputs second{make(make_host(4U)), make(make_host(5U)), make(make_host(6U))};  // both sets stay alive
     auto run = [&](const Inputs& in, const metal::SDPAForwardProgramConfig& cfg) {
         return core::to_xtensor(metal::sdpa_fw(
                                     in.query,
@@ -2124,7 +2130,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
         << "the hit on the second inputs must agree with the uncached run: stale addresses";
 
     // The mask address is a reader runtime arg of its own: a hit with a second live mask tensor (same shape,
-    // other values and address) must read the new mask, not the first one.
+    // other values and address) must read the new mask, not the first one. The anticausal mask runs at the
+    // four-step K chunking: for the later rows the first K steps are fully masked, so alpha = 0 has to wipe
+    // what those steps accumulated (the packed-sequence / sliding-window case), and the result is held
+    // against the host reference, not just against the causal run.
     const std::array<std::size_t, 4> mask_shape{1U, 1U, 256U, 256U};
     xt::xarray<float> lower = xt::tril(xt::ones<float>({256UL, 256UL}));
     lower.reshape(mask_shape);
@@ -2143,7 +2152,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
                                     0.0F,
                                     false,
                                     std::nullopt,
-                                    a)[0]
+                                    b)[0]
                                     .value());
     };
     const xt::xarray<float> out_causal = run_masked(causal_mask);
@@ -2153,8 +2162,12 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     EXPECT_EQ(device->num_program_cache_entries(), entries_masked) << "the second mask must hit";
     EXPECT_LT(xt::mean(xt::abs(out_causal - out_a))(), kCrossChunkingMeanAbsTol)
         << "the lower-triangular mask tensor must agree with the causal kernel mask";
-    EXPECT_FALSE(xt::allclose(out_anticausal, out_causal, 1e-3F, 1e-3F))
-        << "hit reproduced the first mask: stale mask address";
+    const xt::xarray<float> anticausal_ref =
+        sdpa_split_heads_naive_with_intermediates(first_q, first_k, first_v, upper).first;
+    EXPECT_TRUE(xt::allclose(out_anticausal, anticausal_ref, 2e-2F, 2e-2F))
+        << "hit with the second mask does not match the anticausal reference: stale mask address, or the "
+           "fully masked first K steps leaked into the output";
+    EXPECT_LT(ttml::test_utils::relative_l2(out_anticausal, anticausal_ref), 1e-2F);
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
