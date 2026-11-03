@@ -1348,11 +1348,21 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     // ---- Compute Kernel ----
     // Any 32-bit operand needs a 32-bit Dest: a Float32 input CB is unpacked with UnpackToDestFp32 below,
     // and that lands corrupted in a Dest configured for 16-bit datums.
+    // 8-bit integer operands need the same treatment. An 8-bit CB is unpacked into a 16-bit Datum when
+    // Dest is 16-bit, but the where/lerp/addcmul/addcdiv SFPU variants that an 8-bit dtype selects read
+    // and write those Datums 32 bits at a time, so the operand lanes come back as zero (ttnn.where with
+    // UINT8 predicate/values returned all-zero results before this). The unary and typecast factories
+    // already force a 32-bit Dest for 8-bit int dtypes; do the same here.
     auto is_32bit_format = [](tt::DataFormat format) {
         return format == tt::DataFormat::UInt32 || format == tt::DataFormat::Int32 || format == tt::DataFormat::Float32;
     };
+    auto is_8bit_format = [](tt::DataFormat format) {
+        return format == tt::DataFormat::UInt8 || format == tt::DataFormat::Int8;
+    };
     bool fp32_dest_acc_en = is_32bit_format(output_data_format) || is_32bit_format(predicate_data_format) ||
-                            is_32bit_format(value_true_data_format) || is_32bit_format(value_false_data_format);
+                            is_32bit_format(value_true_data_format) || is_32bit_format(value_false_data_format) ||
+                            is_8bit_format(output_data_format) || is_8bit_format(predicate_data_format) ||
+                            is_8bit_format(value_true_data_format) || is_8bit_format(value_false_data_format);
 
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
