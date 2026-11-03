@@ -41,6 +41,9 @@ static inline void mark_stack_usage() {
     }
 }
 
+// True once the stack has grown past its base into the TLS block below it (mark_stack_usage painted that word).
+static inline bool stack_overflowed() { return *get_stack_base() != stack_usage_pattern; }
+
 // Returns unused stack + 1. (0 means unknown.)
 static inline uint32_t measure_stack_usage() {
     uint32_t* __stack_base = get_stack_base();
@@ -81,6 +84,7 @@ static inline void record_stack_usage(uint32_t stack_free) {
 #else  // !WATCHER_ENABLED
 
 static inline void mark_stack_usage() {}
+static inline bool stack_overflowed() { return false; }
 static inline uint32_t measure_stack_usage() { return 0; }
 static inline void record_stack_usage(uint32_t) {}
 

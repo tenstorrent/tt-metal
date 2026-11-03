@@ -24,14 +24,24 @@ Observed on Quasar craq-sim, watcher + LLK asserts, before the fix:
 So the usable DM kernel stack is about 1.6-1.7 KB, and a fused blaze DM kernel_main frame of about 1.3 KB plus callees
 and watcher frames crosses it.
 
+After the fix (dm.cc no longer defines the unused cb_interface; get_arg_addr / get_common_arg_addr assert that the
+stack is intact before trusting the counts):
+- 1800, 2560, 3072 and 3584 pass. The usable stack is about 3.6-3.9 KB.
+- 4096 trips "DM2 tripped an assert on line N", where N is the DM_ASSERT_STACK_INTACT() in get_arg_addr
+  (api/dataflow/dataflow_api.h), instead of a misleading RTA error or a simulator abort.
+
 Only sizes that must pass are parametrized, since an overflow kills the process instead of failing an assert.
 """
 
 import pytest
 import torch
 import ttnn
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 E = ttnn.experimental
+
+# The sizes are about Quasar DM's local memory and TLS layout; other architectures size their DM stacks differently.
+pytestmark = pytest.mark.skipif(not is_quasar(), reason="Measures the Quasar DM stack budget")
 CORE = ttnn.CoreCoord(0, 0)
 VALUE = 0x1234
 
@@ -58,7 +68,7 @@ void kernel_main() {
 """
 
 
-@pytest.mark.parametrize("frame_bytes", [512, 1024, 1536])
+@pytest.mark.parametrize("frame_bytes", [512, 1024, 1536, 1800, 2560, 3072, 3584])
 def test_generic_spec_op_dm_stack_frame(device, frame_bytes):
     cfg = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

@@ -305,13 +305,12 @@ inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) 
 #endif
 
 #if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC) && \
-    !defined(COMPILE_FOR_DRISC)
+    !defined(COMPILE_FOR_DRISC) && !defined(ARCH_QUASAR)
 // Check whether an L1 address range [l1_addr, l1_addr+len) that falls within a
 // circular buffer stays within that buffer's allocated region.  Only runs on
 // BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
 // Relies on unused CBs having fifo_size == 0 (cleared at kernel startup).
-// Effectively BH/WH-only: Quasar uses DFBs (separate g_dfb_interface) and never populates
-// cb_interface[], so every slot is fifo_size == 0 and this returns OK -- no alias handling needed.
+// BH/WH-only: Quasar uses DFBs (separate g_dfb_interface) and its DM firmware has no cb_interface[].
 inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         LocalCBInterface& cb = get_local_cb_interface(i);
@@ -335,7 +334,8 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
     // Address is not inside any known CB; other checks will validate it.
     return DebugSanitizeOK;
 }
-#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC && !COMPILE_FOR_IDLE_ERISC && !COMPILE_FOR_DRISC
+#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC && !COMPILE_FOR_IDLE_ERISC && !COMPILE_FOR_DRISC &&
+        // !ARCH_QUASAR
 
 // Note:
 //  - this isn't racy w/ the host so long as return_code is written last
@@ -753,7 +753,7 @@ void debug_sanitize_noc_and_worker_addr(
     }
 
 #if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC) && \
-    !defined(COMPILE_FOR_DRISC)
+    !defined(COMPILE_FOR_DRISC) && !defined(ARCH_QUASAR)
     // Check local L1 address against CB bounds (both read and write directions).
     debug_sanitize_post_addr_and_hang(
         noc_id,

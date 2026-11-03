@@ -27,6 +27,12 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(KERNEL_BUILD)
+#include "internal/debug/stack_usage.h"
+#define DM_ASSERT_STACK_INTACT() ASSERT(!stack_overflowed(), DebugAssertTripped)
+#else
+#define DM_ASSERT_STACK_INTACT()
+#endif
 
 #if !defined(KERNEL_BUILD)
 // This file uses noc_mode, which isn't defined in the firmware build.
@@ -107,6 +113,9 @@ bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_
 // clang-format on
 static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) {
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+    // On Quasar DM, rta_count/crta_count and their base pointers sit at the top of the TLS block, right below the
+    // stack, so a stack overflow corrupts them first. Check the stack before trusting the count.
+    DM_ASSERT_STACK_INTACT();
     ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < rta_count, DebugAssertRtaOutOfBounds);
 #endif
     return (uintptr_t)&rta_l1_base[arg_idx];
@@ -126,6 +135,9 @@ static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) {
 // clang-format on
 static FORCE_INLINE uintptr_t get_common_arg_addr(int arg_idx) {
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+    // On Quasar DM, rta_count/crta_count and their base pointers sit at the top of the TLS block, right below the
+    // stack, so a stack overflow corrupts them first. Check the stack before trusting the count.
+    DM_ASSERT_STACK_INTACT();
     ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < crta_count, DebugAssertCrtaOutOfBounds);
 #endif
     return (uintptr_t)&crta_l1_base[arg_idx];

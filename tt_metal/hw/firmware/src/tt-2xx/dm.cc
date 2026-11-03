@@ -62,8 +62,8 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_cmd_buf_lock[NOC_NUM_CMD_BUFS] __attribute__((used));
 #endif
 
-// temporary for things to build
-thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+// No cb_interface on Quasar DM: nothing uses it, and as TLS it took 2 KiB of the hart's 8 KiB local memory
+// from the kernel stack (tests/ttnn/unit_tests/operations/debug/test_generic_spec_op_dm_stack_frame.py).
 
 thread_local uint32_t hw_thread_idx __attribute__((used));
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
