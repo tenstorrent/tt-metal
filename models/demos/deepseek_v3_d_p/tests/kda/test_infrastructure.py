@@ -176,6 +176,11 @@ def test_kimi_k3_fixed_geometry_configuration(local_rows, expected_group_chunks)
     config = kimi_k3_program_config(active_seq_len_local=local_rows, tp_ccl_topology=ttnn.Topology.Linear)
     assert config.recurrence.summary_group_chunks == expected_group_chunks
     assert config.recurrence.local_scan_strategy == "grouped"
+    hifi3 = ttnn.MathFidelity.HiFi3
+    assert config.recurrence.scan_math_fidelity == hifi3
+    assert config.recurrence.affine_prefix_math_fidelity == hifi3
+    assert config.output_projection_math_fidelity == hifi3
+    assert config.input_projection_math_fidelity == ttnn.MathFidelity.HiFi2
 
 
 def test_kimi_k3_rejects_untuned_geometry(expect_error):
