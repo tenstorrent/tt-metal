@@ -9,6 +9,9 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#if ROW_MAJOR_OUTPUT
+#include "api/compute/pack_untilize.h"
+#endif
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -77,6 +80,17 @@ void kernel_main() {
     DataflowBuffer cos_interm_dfb_obj(cos_interm_dfb);
     DataflowBuffer sin_interm_dfb_obj(sin_interm_dfb);
     DataflowBuffer out_dfb_obj(out_dfb);
+#if ROW_MAJOR_OUTPUT
+    // Row-major output (indexed RoPE with a concat prefix): each tile row leaves as one untilized block of the
+    // prefix tiles (from the reader) then the rotated ones, 32 rows of (prefix_Wt + Wt) tiles' width, for the writer.
+    constexpr auto prefix_dfb = dfb::prefix;
+    constexpr auto rows_dfb = dfb::rows;
+    constexpr auto prefix_Wt = get_arg(args::prefix_Wt);
+    constexpr uint32_t row_Wt = prefix_Wt + Wt;
+    static_assert(prefix_Wt % Wt == 0, "the untilize places the row in blocks of Wt tiles");
+    DataflowBuffer prefix_dfb_obj(prefix_dfb);
+    DataflowBuffer rows_dfb_obj(rows_dfb);
+#endif
 
     const uint32_t rotary_seq_t_end = seq_t_end < rotary_Ht ? seq_t_end : rotary_Ht;
     const uint32_t my_rotary_seq_tiles = seq_t_start < rotary_seq_t_end ? rotary_seq_t_end - seq_t_start : 0;
@@ -183,6 +197,28 @@ void kernel_main() {
                     cos_interm_dfb_obj,
                     sin_interm_dfb_obj,
                     out_dfb_obj);
+
+#if ROW_MAJOR_OUTPUT
+                // Untilize the prefix, then the rotated tiles, into one block of 32 full-width rows. The rotation's
+                // last op (out = cos_interim + sin_interim) left srcA set for cos_interm and the packer for out.
+                rows_dfb_obj.reserve_back(row_Wt);
+                reconfig_data_format_srca(cos_interm_dfb, prefix_dfb);
+                pack_reconfig_data_format(out_dfb, rows_dfb);
+                pack_untilize_init<Wt, row_Wt>(prefix_dfb, rows_dfb);
+                for (uint32_t block = 0; block < prefix_Wt / Wt; ++block) {
+                    prefix_dfb_obj.wait_front(Wt);
+                    pack_untilize_block<Wt, row_Wt>(prefix_dfb, 1, rows_dfb, block);
+                    prefix_dfb_obj.pop_front(Wt);
+                }
+                out_dfb_obj.wait_front(Wt);
+                pack_untilize_block<Wt, row_Wt>(out_dfb, 1, rows_dfb, prefix_Wt / Wt);
+                out_dfb_obj.pop_front(Wt);
+                pack_untilize_uninit(rows_dfb);
+                rows_dfb_obj.push_back(row_Wt);
+                // Back to those formats, which the next tile row's first reconfigure starts from.
+                reconfig_data_format_srca(out_dfb, cos_interm_dfb);
+                pack_reconfig_data_format(rows_dfb, out_dfb);
+#endif
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter
