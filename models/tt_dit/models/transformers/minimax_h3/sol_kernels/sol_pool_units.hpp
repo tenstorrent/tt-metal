@@ -2,17 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sol-Attn block-pooling pre-pass: unit order and per-core unit ranges, shared by the reader, compute and writer so the
-// three kernels agree without per-core runtime args.
+// Sol-Attn pre-pass, pool step: unit order and per-core unit ranges, shared by the three kernels.
 //
-// A unit is (tensor t in {0,1,2}, head h, output tile row g) = the 32 Sol blocks of one head of one Q/K/V shard, i.e. the
-// 64 tile rows [64g, 64g+64) clipped to RT. Groups g < G_FULL = RT/64 are full (64 tile rows, 4*DT*64 KB of data);
-// group G_FULL, if any, holds the RT % 64 remaining rows; groups past that are empty (zero output tiles).
+// A unit is (tensor t, head h, output tile row g): the 64 tile rows [64g, 64g+64) of one Q/K/V shard, clipped to RT.
+// Groups g < G_FULL are full, group G_FULL (if any) holds the remaining rows, later groups are empty.
 //
-// Unit order puts the full units first. When the full units fit the grid with at least one core to spare, every core
-// takes at most ONE full unit and the short units share the leftover cores, so the slowest core reads one full unit
-// (512 KB at DT = 4) instead of two (the even split put 2 units on 6 of 120 cores at the 5 s geometry: 1 MB). When the
-// full units do not fit (10 s, 15 s), units are split evenly in this order as before.
+// Full units come first. If they fit the grid with a core to spare, each core gets at most one full unit and the short
+// units share the remaining cores; otherwise units are split evenly.
 
 #pragma once
 
@@ -33,7 +29,7 @@ struct Layout {
     static constexpr uint32_t NF = 3 * H * G_FULL;
     static constexpr uint32_t NS = 3 * H * G_SHORT;
     static constexpr uint32_t UNITS = NF + NS;
-    // Divisors guarded against zero (the branch using them is then never taken).
+    // Guard the divisions by zero (that branch is never taken then).
     static constexpr uint32_t GF1 = G_FULL ? G_FULL : 1;
     static constexpr uint32_t GS1 = G_SHORT ? G_SHORT : 1;
 
@@ -54,7 +50,7 @@ struct Layout {
                 count = 1;
                 return;
             }
-            const uint32_t rest = ncores - NF;  // cores left for the short units (>= 1 when NS > 0)
+            const uint32_t rest = ncores - NF;  // cores left for the short units
             const uint32_t cj = ci - NF;
             start = NF + cj * NS / rest;
             count = NF + (cj + 1) * NS / rest - start;

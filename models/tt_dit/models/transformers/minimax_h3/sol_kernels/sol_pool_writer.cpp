@@ -2,13 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sol-Attn block-pooling pre-pass, writer (BRISC): stores each unit's DT output tiles at (head h, tile row g)
-// of the unit's output tensor [1, H, NBP, D].
+// Sol-Attn pre-pass, pool step, writer kernel: stores each unit's DT output tiles at (head h, tile row g) of the
+// output tensor [1, H, NBP, D].
 //
-// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 R, 5 NX, 6 NY, 7 UNITS, then TensorAccessorArgs of out0, out1, out2.
-// Unit order and per-core ranges: sol_pool_units.hpp.
-// Common runtime args: 0..2 buffer addresses of out0..out2. Per-core runtime args: none (unit range from the core's
-// logical coordinates).
+// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 R, 5 NX, 6 NY, 7 UNITS, then TensorAccessorArgs of out0..out2.
+// Common runtime args: 0..2 out0..out2 addresses. Units and per-core ranges: sol_pool_units.hpp.
 
 #include <cstdint>
 

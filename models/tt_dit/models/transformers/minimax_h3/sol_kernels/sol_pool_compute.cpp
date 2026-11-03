@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sol-Attn block-pooling pre-pass, compute. See sol_pool_reader.cpp for the unit decomposition.
-// Per unit: O[n] = sum over the group's tile rows k of P[k] @ X[k, n] (DT output tiles accumulated in fp32 DST), with
-// P[k] delivered by the reader in batches of 4 rows alongside the data (zero past the valid end); groups without tile
-// rows output zero tiles. Unit order and per-core ranges: sol_pool_units.hpp.
+// Sol-Attn pre-pass, pool step, compute kernel.
 //
-// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 R, 5 NX, 6 NY, 7 UNITS. Per-core runtime args: none (unit range from the
-// core's logical coordinates).
+// Per unit: O[n] = sum_k P[k] @ X[k, n] over the unit's tile rows, accumulated in fp32 DST; units with no rows output
+// zero tiles. Units and per-core ranges: sol_pool_units.hpp.
+//
+// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 R, 5 NX, 6 NY, 7 UNITS.
 
 #include <cstdint>
 
@@ -66,7 +65,7 @@ void kernel_main() {
             matmul_init(cb_ps, cb_x);
             for (uint32_t k0 = k_begin; k0 < k_end; k0 += ROWS_PER_BATCH) {
                 const uint32_t nk = min_u(ROWS_PER_BATCH, k_end - k0);
-                cbx.wait_front(ROWS_PER_BATCH * DT);  // full batches, see the reader
+                cbx.wait_front(ROWS_PER_BATCH * DT);  // batches are always full
                 cbps.wait_front(ROWS_PER_BATCH);
                 for (uint32_t kk = 0; kk < nk; ++kk) {
                     for (uint32_t n = 0; n < DT; ++n) {

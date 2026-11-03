@@ -2,15 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Single-tile primitive checks for the fused Sol-Attn pre-pass (test_sol_prepass_minimax_h3: test_sol_primitives).
-// Inputs: one tile A in c_0, one tile B in c_1 (reader_inputs.cpp, NumInputs = 2); output one tile in c_16.
-// Compile-time arg 0 = OP:
-//   0: C = A @ B                       1: C = A @ T(B) (matmul_init transpose = 1)
-//   2: C = gtz(A - B)  (SFPU binary sub + gtz on DST 0/1)
-//   3: C = A * s1 + sqrt(B * s1 + s2) (binop-with-scalar, sqrt, SFPU add; s1, s2 = ct args 1, 2 as fp32 bits)
-//   4: C = A + B computed in DST tiles 6 and 7 (high DST indices under full sync)
-//   5: C = relu(A * A - B)  (mul_binary, sub_binary, relu)
-//   6: C = A * s1 computed in DST tile 5 (unary SFPU op on a high DST index)   7: same in DST tile 1
+// Single-tile checks of the compute primitives the Sol-Attn pre-pass uses (test_sol_primitives).
+// Inputs: tile A in c_0, tile B in c_1; output tile in c_16. Compile-time arg 0 = OP:
+//   0: A @ B                 1: A @ B^T
+//   2: gtz(A - B)            3: A*s1 + sqrt(B*s1 + s2)   (s1, s2 = args 1, 2 as fp32 bits)
+//   4: A + B in DST tiles 6, 7
+//   5: relu(A*A - B)
+//   6: A*s1 in DST tile 5    7: A*s1 in DST tile 1
+
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"

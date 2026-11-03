@@ -2,28 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sol-Attn block-pooling pre-pass, reader (NCRISC).
+// Sol-Attn pre-pass, pool step, reader kernel.
 //
-// Work unit = (tensor t in {0,1,2}, head h, output tile row g): the 32 Sol blocks [32g, 32g+32) of one head of one
-// of the Q/K/V shards [1, H, R, D] (tile layout); unit order and per-core ranges in sol_pool_units.hpp. For every tile
-// row k of the group ([64g, 64g+64) clipped to RT) the reader streams the DT data tiles into cb_x (batches of 4 rows =
-// 4*DT pages, always full) and one pooling tile P[k] into cb_ps (32x32, one nonzero row r = (k/2) mod 32 holding 1/len
-// of the block, zero in the columns past the shard's valid end), so that compute accumulates O[n] = sum_k P[k] @ X[k, n]
-// without any geometry of its own. Rows at or past the valid end get a zero P tile and zero-filled data pages (never
-// read from DRAM). The shard's valid token count comes from a per-device uint32 row (geo tensor, word 0), so the same
-// program runs on every device (SPMD).
+// Pooling = the mean of every 64-token block of Q, K and V. A unit is (tensor, head, output tile row g): 32 blocks.
+// For each tile row k of the unit the reader sends compute the DT data tiles (cb_x) and one pooling tile P[k]
+// (cb_ps): a 32x32 tile with 1/len in the block's row, so compute just accumulates P[k] @ X[k]. Rows past the shard's
+// valid end get zero tiles instead of DRAM reads. The valid token count comes from the geo tensor (word 0).
 //
-// Pooling tiles are not built per row on the RISC (that cost 94 of 131 us per core, profile job 143608): the 32
-// standard tiles (1/64 in row r, all 32 columns) are built once per core in cb_ptab and each row's tile is a 2 KB local
-// NoC copy from there; only the rows of a partial last block (the last shard) are built in place. Two batches are kept in
-// flight on the NoC (transaction ids 1 and 2) while compute consumes a third: the CBs hold three batches, a batch is
-// pushed only after its own barrier, and a new batch is placed one batch past the write pointer while one is pending.
-// The table is built after the first batch's data pages are issued, so its 7.5 us of RISC work overlaps the DRAM read.
+// The 32 standard pooling tiles are built once per core (cb_ptab) and copied per row with a local NoC copy; only the
+// rows of a partial last block are built in place. Data is read in batches of 4 rows with two batches in flight
+// (transaction ids 1 and 2) while compute works on a third.
 //
-// Compile-time args: 0 H, 1 RT (tile rows per shard), 2 DT, 3 NBPT (output tile rows per head), 4 R (rows per
-// shard), 5 NX, 6 NY, 7 UNITS, then TensorAccessorArgs of x0, x1, x2, geo.
-// Common runtime args: 0..2 buffer addresses of x0..x2, 3 geo address. Per-core runtime args: none (unit range from the
-// core's logical coordinates).
+// Compile-time args: 0 H, 1 RT (tile rows per shard), 2 DT, 3 NBPT (output tile rows per head), 4 R, 5 NX, 6 NY,
+// 7 UNITS, then TensorAccessorArgs of x0, x1, x2, geo. Common runtime args: 0..2 x0..x2 addresses, 3 geo address.
 
 #include <cstdint>
 
@@ -41,7 +32,7 @@ constexpr uint32_t TILE_BYTES = 2048;
 constexpr uint32_t BLOCK = sol_pool::BLOCK;
 constexpr uint32_t GEO_BYTES = 128;
 constexpr uint32_t ROWS_PER_BATCH = 4;
-constexpr uint32_t BATCHES_IN_CB = 3;  // cb_x = 3 * 4 * DT pages, cb_ps = 3 * 4 pages (sol_prepass.SolPrepass._pool_program)
+constexpr uint32_t BATCHES_IN_CB = 3;  // three batches per CB (SolPrepass._pool_program)
 
 // bf16(1/len) for len = 0..64 (len 0 unused).
 constexpr uint16_t RECIP_BF16[65] = {
@@ -51,14 +42,13 @@ constexpr uint16_t RECIP_BF16[65] = {
     0x3cd2, 0x3ccd, 0x3cc8, 0x3cc3, 0x3cbf, 0x3cba, 0x3cb6, 0x3cb2, 0x3cae, 0x3cab, 0x3ca7, 0x3ca4, 0x3ca1,
     0x3c9e, 0x3c9b, 0x3c98, 0x3c95, 0x3c92, 0x3c90, 0x3c8d, 0x3c8b, 0x3c89, 0x3c86, 0x3c84, 0x3c82, 0x3c80};
 
-// Element index of (r, c) in a 32x32 bf16 tile (4 faces of 16x16, faces ordered (r<16,c<16),(r<16,c>=16),
-// (r>=16,c<16),(r>=16,c>=16)).
+// Index of element (r, c) in a 32x32 bf16 tile (four 16x16 faces).
 inline uint32_t tile_elem(uint32_t r, uint32_t c) {
     const uint32_t face = ((r >> 4) << 1) | (c >> 4);
     return face * 256 + (r & 15) * 16 + (c & 15);
 }
 
-// Row r of a zeroed tile, the first ncols columns set to v: element pairs (c, c+1) with c even share a word.
+// Set the first ncols columns of row r to v (two elements per word).
 inline void write_row(uint32_t addr, uint32_t r, uint32_t ncols, uint16_t v) {
     CoreLocalMem<volatile uint32_t> w(addr);
     const uint32_t vv = (static_cast<uint32_t>(v) << 16) | v;
@@ -106,16 +96,14 @@ void kernel_main() {
     CircularBuffer cbx(cb_x), cbps(cb_ps), cbz(cb_zero), cbg(cb_geo), cbt(cb_ptab);
     const PrecomposedUnicastEndpoint local;
 
-    // This shard's valid token count (geo row word 0).
+    // This shard's valid token count.
     cbg.reserve_back(1);
     noc.async_read(geo, cbg, GEO_BYTES, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     const uint32_t valid_end = CoreLocalMem<volatile uint32_t>(cbg.get_write_ptr())[0];
 
-    // Zero tile (compute's output for empty groups; the P tile of rows past the valid end) and the table of the 32
-    // standard pooling tiles: tile r has 1/64 in row r, all 32 columns. Zeroed by the NoC, rows written as 16 words.
-    // Built after the first batch's data pages are on the NoC (7.5 us of RISC work that otherwise delays the first
-    // DRAM read; the pooling tiles of that batch are copied from the table once it exists).
+    // The zero tile and the table of the 32 standard pooling tiles (1/64 in row r), built after the first batch's
+    // reads are issued.
     cbz.reserve_back(1);
     const uint32_t zero_addr = cbz.get_write_ptr();
     cbt.reserve_back(32);
@@ -131,7 +119,7 @@ void kernel_main() {
             write_row(tab + r * TILE_BYTES, r, 32, RECIP_BF16[BLOCK]);
         }
         cbz.push_back(1);
-        cbt.push_back(32);  // never popped: the table stays resident for the whole program
+        cbt.push_back(32);  // never popped: resident for the whole program
         table_built = true;
     };
 
@@ -141,7 +129,7 @@ void kernel_main() {
     const uint32_t x_base = cbx.get_write_ptr();
     const uint32_t p_base = cbps.get_write_ptr();
 
-    bool pending = false;  // a batch issued on the NoC but not yet pushed
+    bool pending = false;  // a batch on the NoC, not yet pushed
     uint32_t pend_trid = 2;
     auto finish_pending = [&]() {
         noc.async_read_barrier<NocOptions::TXN_ID>({.trid = pend_trid});
@@ -149,7 +137,7 @@ void kernel_main() {
         cbx.push_back(NT);
         pending = false;
     };
-    // One 2 KB copy from local L1 (the table or the zero tile) into a pooling-tile page, tagged with the batch's id.
+    // Copy one pooling tile from local L1 (the table or the zero tile) into the batch.
     auto copy_ptile = [&](uint32_t src, uint32_t dst, uint32_t trid) {
         noc.async_read<NocOptions::TXN_ID>(
             local, CoreLocalMem<uint32_t>(dst), TILE_BYTES, {.noc_addr = get_noc_addr(src)}, {}, {.trid = trid});
@@ -176,8 +164,7 @@ void kernel_main() {
 
         for (uint32_t k0 = k_begin; k0 < k_end; k0 += ROWS_PER_BATCH) {
             const uint32_t nk = min_u(ROWS_PER_BATCH, k_end - k0);
-            // Space for this batch one batch past the pending one (the CBs hold three batches; a reservation of two
-            // batches guarantees the region after the pending batch is free).
+            // Reserve two batches so the slot after the pending batch is free.
             cbx.reserve_back(2 * NT);
             cbps.reserve_back(2 * ROWS_PER_BATCH);
             uint32_t xa = cbx.get_write_ptr(), pa = cbps.get_write_ptr();
@@ -193,8 +180,8 @@ void kernel_main() {
             }
             const uint32_t trid = pending ? 3 - pend_trid : 1;  // alternate 1, 2
 
-            // Pooling tiles: standard rows copy from the table, rows past the valid end copy the zero tile, the rows of
-            // a partial last block (last shard only) are zero-filled now and written after the zero barrier.
+            // Pooling tiles: copied from the table, or the zero tile past the valid end; the rows of a partial last
+            // block are built in place.
             uint32_t tail_rows = 0;
             bool zeros = false;
             auto issue_ptiles = [&]() {
@@ -217,7 +204,7 @@ void kernel_main() {
                     }
                 }
             };
-            // Data pages (zero-filled past the valid end, never read from DRAM).
+            // Data pages, zero past the valid end.
             auto issue_pages = [&]() {
                 uint32_t off = 0;
                 for (uint32_t kk = 0; kk < nk; ++kk) {
@@ -236,7 +223,7 @@ void kernel_main() {
             if (table_built) {
                 issue_ptiles();
                 issue_pages();
-            } else {  // first batch of the core: DRAM reads first, the table while they are in flight
+            } else {  // first batch: issue the reads, then build the table
                 issue_pages();
                 build_table();
                 issue_ptiles();
@@ -262,6 +249,6 @@ void kernel_main() {
     if (pending) {
         finish_pending();
     }
-    // The NoC packet tag is sticky per command buffer: leave it at 0 for whatever kernel runs next on this core.
+    // Leave the NoC transaction id at 0 for the next kernel on this core.
     noc_async_read_set_trid(0, noc.get_noc_id());
 }

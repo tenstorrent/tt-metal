@@ -2,17 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sol-Attn routing pre-pass, writer (BRISC). Unit (compile-time arg 20 UNITS_PER_SHARD = 0) = (head h, Q-chunk tile
-// row it), outputs arrive per column shard; UNITS_PER_SHARD = 1: unit = (head h, column shard sp), outputs arrive per
-// Q-chunk tile row (gather-form rows only: MODE 1, enforced below).
-//   chunk-form rows (MODE 0 mask, MODE 2 union row): the 0/1 chunk tiles of every shard are gathered into an L1 row
-//     buffer [32 rows x NKCP words] (word s*NKC + c, padding words zero) and the 32 complete rows are written as whole
-//     pages (NoC-aligned) to [1, H, NQCP, NKCP] at pages h*NQCP + 32*it + r.
-//   gather-form rows (MODE 1/2 mask): per shard, the NBP words [sp*NBP, (sp+1)*NBP) of each row are written directly
-//     (NBP*4 is a multiple of 128 bytes, so these partial-row writes are aligned).
+// Sol-Attn pre-pass, route step, writer kernel.
 //
-// Compile-time args: 0..18 as the reader, then TensorAccessorArgs of mask and union (dummy unless MODE 2).
-// Common runtime args: 0 mask address, 1 union address. Per-core: none.
+// Stores the mask rows. Two row layouts:
+//   chunk-form (MODE 0 mask, MODE 2 union row): every shard's 0/1 chunk tiles are collected in an L1 row buffer
+//     (32 rows x NKCP words) and written as whole rows, pages h*NQCP + 32*it + r.
+//   gather-form (MODE 1/2 mask): each shard's NBP words of a row are written directly (aligned partial-row writes).
+// (head, shard) units (MODE 1 only): compute already delivers row-major uint32 rows, one NoC write per row.
+//
+// Compile-time args: 0..18 as the reader, then TensorAccessorArgs of mask and union.
+// Common runtime args: 0 mask address, 1 union address.
 
 #include <cstdint>
 
@@ -28,22 +27,20 @@ constexpr uint32_t TILE_BYTES = 2048;
 constexpr uint32_t RING_PAGES = 8;
 inline uint32_t min_u(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
-// Element (r, c) of a 32x32 bf16 tile (face layout) is nonzero.
+// Is element (r, c) of a bf16 tile nonzero?
 inline uint32_t tile_elem_nz(uint32_t tile_addr, uint32_t r, uint32_t c) {
     CoreLocalMem<volatile uint16_t> e(tile_addr);
     const uint32_t face = ((r >> 4) << 1) | (c >> 4);
     return e[face * 256 + (r & 15) * 16 + (c & 15)] != 0 ? 1u : 0u;
 }
 
-// Row r of ntiles consecutive 32x32 bf16 tiles -> 32*ntiles uint32 words (1 where the element is nonzero) at out_addr.
-// In the face layout a row of a face is 16 contiguous elements (32 bytes), so the row is read as 8 words per face,
-// two elements per word (low half = even column), instead of one indexed 16-bit element at a time.
+// Row r of ntiles bf16 tiles -> 32*ntiles uint32 words (1 where nonzero), read two elements per word.
 inline void tile_row_to_words(uint32_t tiles_addr, uint32_t r, uint32_t ntiles, uint32_t out_addr) {
     CoreLocalMem<volatile uint32_t> w(out_addr);
-    const uint32_t row_bytes = (((r >> 4) << 1) * 256 + (r & 15) * 16) * 2;  // the row's start in the left face
+    const uint32_t row_bytes = (((r >> 4) << 1) * 256 + (r & 15) * 16) * 2;  // row start in the left face
     uint32_t k = 0;
     for (uint32_t t = 0; t < ntiles; ++t) {
-        for (uint32_t f = 0; f < 2; ++f) {  // left face (columns 0..15), right face (16..31)
+        for (uint32_t f = 0; f < 2; ++f) {  // left face, right face
             CoreLocalMem<volatile uint32_t> e(tiles_addr + t * TILE_BYTES + row_bytes + f * 512);
             for (uint32_t i = 0; i < 8; ++i) {
                 const uint32_t v = e[i];
@@ -75,10 +72,9 @@ void kernel_main() {
     constexpr uint32_t NY = get_compile_time_arg_val(16);
     constexpr uint32_t UNITS = get_compile_time_arg_val(17);
     constexpr uint32_t UNITS_PER_SHARD = get_compile_time_arg_val(18);  // 1: unit = (head, shard); 0: (head, it)
-    // Chunk-form rows (MODE 0 mask, MODE 2 union) need every shard's words: their per-shard word ranges (s*NKC words,
-    // NKC*4 bytes each) are not NoC-aligned, so they stay on the (head, Q-chunk tile row) unit.
+    // Chunk-form rows need every shard's words, so they need (head, Q-chunk tile row) units.
     static_assert(UNITS_PER_SHARD == 0 || MODE == 1, "(head, shard) units emit only gather-form rows (MODE 1)");
-    // Unit range of this core from its logical coordinates (no per-core runtime args): units [ci*U/N, (ci+1)*U/N).
+    // This core's units, [ci*U/N, (ci+1)*U/N), from its logical coordinates.
     constexpr uint32_t NCORES = NX * NY;
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
     const uint32_t unit_start = ci * UNITS / NCORES;
@@ -98,7 +94,7 @@ void kernel_main() {
     uint32_t ring_used = 0;
 
     for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
-        // Unit decode: one of the two ranges below is a singleton, the loops run the same code either way.
+        // One of the two ranges is a single value; the loops are the same either way.
         const uint32_t h = UNITS_PER_SHARD ? u / S : u / NQCT;
         const uint32_t it_lo = UNITS_PER_SHARD ? 0 : u % NQCT;
         const uint32_t it_hi = UNITS_PER_SHARD ? NQCT : it_lo + 1;
@@ -106,7 +102,7 @@ void kernel_main() {
         const uint32_t sp_hi = UNITS_PER_SHARD ? sp_lo + 1 : S;
 
         for (uint32_t it = it_lo; it < it_hi; ++it) {
-            // Zero the row buffer (chunk-form outputs fill only the real chunk words).
+            // Clear the row buffer.
             if constexpr (MODE != 1) {
                 CoreLocalMem<volatile uint32_t> w(rows_base);
                 for (uint32_t i = 0; i < 32 * NKCP; ++i) {
@@ -115,10 +111,9 @@ void kernel_main() {
             }
 
             for (uint32_t sp = sp_lo; sp < sp_hi; ++sp) {
-                // ---- mask of this shard
+                // ---- this shard's mask
                 if constexpr (UNITS_PER_SHARD) {
-                    // (head, shard) units: compute delivers the 32 mask rows of (it, sp) row-major (uint32, NBP words
-                    // per row) in one page; each row is one NoC copy into the mask tensor row.
+                    // Rows arrive row-major in one page: one NoC write per row.
                     cbm.wait_front(1);
                     const uint32_t rbase = cbm.get_read_ptr();
                     for (uint32_t r = 0; r < 32; ++r) {
@@ -160,7 +155,7 @@ void kernel_main() {
                 cbm.pop_front(MASK_T);
                 }
 
-                // ---- union-row tiles of this shard (MODE 2) into the row buffer
+                // ---- this shard's union-row tiles (MODE 2)
                 if constexpr (MODE == 2) {
                     cbu.wait_front(NKCLT);
                     const uint32_t ubase = cbu.get_read_ptr();
@@ -175,7 +170,7 @@ void kernel_main() {
 
             }
 
-            // ---- complete chunk-form rows (whole, aligned pages)
+            // ---- write the complete chunk-form rows
             if constexpr (MODE != 1) {
                 for (uint32_t r = 0; r < 32; ++r) {
                     if constexpr (MODE == 0) {
