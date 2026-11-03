@@ -183,3 +183,150 @@ void kernel_main() {
 }
 """
 )
+
+
+def moe_packed_enabled():
+    return os.environ.get("QWEN_PREFILL_MOE_PACKED", "1") != "0"
+
+
+def packed_capacity_rows(n):
+    """Rows of the packed capacity buffer: every routed row once, each expert region 32-row aligned."""
+    return 10 * n + 128 * 32
+
+
+def _variant(source, pairs):
+    for old, new in pairs:
+        if source.count(old) != 1:
+            raise ValueError(f"Expected one kernel fragment: {old}")
+        source = source.replace(old, new)
+    return source
+
+
+# Packed capacity: expert e's rows start at region[e] = sum over e' < e of ceil32(count[e']) instead of
+# e * 1024. The unified FFN reads and writes each expert at its device-side region offset and never
+# touches rows past ceil32(count) (its writer guards row < count_tiles), so 32-row alignment is enough.
+DISPATCH1024_PACKED = _variant(
+    DISPATCH1024_PIPE,
+    [
+        (
+            "    const auto inverse=TensorAccessor(va,get_arg_val<uint32_t>(7));\n    const uint32_t worker=get_arg_val<uint32_t>(8);",
+            "    constexpr auto ga=TensorAccessorArgs<va.next_compile_time_args_offset()>();\n"
+            "    const auto inverse=TensorAccessor(va,get_arg_val<uint32_t>(7));\n"
+            "    const auto region=TensorAccessor(ga,get_arg_val<uint32_t>(8));\n"
+            "    const uint32_t worker=get_arg_val<uint32_t>(9);",
+        ),
+        (
+            "    uint32_t count[E];\n",
+            "    auto reg=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+invs+SL*16);\n"
+            "    for(uint32_t e=0;e<128;++e)reg[e]=0;\n"
+            "    for(uint32_t row=0;row<N;++row)for(uint32_t route=0;route<10;++route) {\n"
+            "        const uint32_t at=(row/32)*1024+(row%32/16)*512+(route/16)*256+(row%16)*16+route%16;\n"
+            "        const uint32_t v=id[at];\n"
+            "        if(v/128==rank && score[at]!=0)reg[v%128]+=1;\n"
+            "    }\n"
+            "    for(uint32_t e=0,acc=0;e<128;++e){const uint32_t c=reg[e];reg[e]=acc;acc+=(c+31)/32*32;}\n"
+            "    if(worker==0){noc.async_write(CoreLocalMem<uint32_t>(base+invs+SL*16),region,512,{}, {.page_id=0});noc.async_write_barrier();}\n"
+            "    uint32_t count[E];\n",
+        ),
+        ("{.page_id=pexp[i]*1024+pcnt[i]}", "{.page_id=reg[pexp[i]]+pcnt[i]}"),
+    ],
+)
+
+
+def dispatch_packed_cb_bytes(n):
+    return dispatch_cb_bytes(n) + 512 + 64
+
+
+COMPACT1024_PACKED = _variant(
+    COMPACT1024_PIPE,
+    [
+        (
+            "    constexpr auto oa=TensorAccessorArgs<ra.next_compile_time_args_offset()>();\n",
+            "    constexpr auto oa=TensorAccessorArgs<ra.next_compile_time_args_offset()>();\n"
+            "    constexpr auto ga=TensorAccessorArgs<oa.next_compile_time_args_offset()>();\n",
+        ),
+        (
+            "    const uint32_t col=get_arg_val<uint32_t>(5);",
+            "    const auto region=TensorAccessor(ga,get_arg_val<uint32_t>(5));\n    const uint32_t col=get_arg_val<uint32_t>(6);",
+        ),
+        (
+            "    noc.async_read(counts,CoreLocalMem<uint32_t>(base+cnt),512,{.page_id=0},{});noc.async_read_barrier();",
+            "    noc.async_read(counts,CoreLocalMem<uint32_t>(base+cnt),512,{.page_id=0},{});\n"
+            "    noc.async_read(region,CoreLocalMem<uint32_t>(base+outs+10*T*TILE),512,{.page_id=0},{});noc.async_read_barrier();\n"
+            "    auto reg=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs+10*T*TILE);",
+        ),
+        ("{.page_id=(e*32+block)*80+col}", "{.page_id=(reg[e]/32+block)*80+col}"),
+    ],
+)
+
+
+def compact_packed_cb_bytes(n):
+    return compact_cb_bytes(n) + 512
+
+
+def moe_group_sizes():
+    """Serial prefill MoE group sizes: 1024, plus 2048 when QWEN_PREFILL_MOE_GROUP=2048 (packed path only).
+
+    4096 is not supported yet: the router/shared-expert linears at 4096 rows exceed L1 (CB 1.78 MB).
+    """
+    largest = int(os.environ.get("QWEN_PREFILL_MOE_GROUP", "1024"))
+    if largest not in (1024, 2048):
+        raise ValueError("QWEN_PREFILL_MOE_GROUP must be 1024 or 2048")
+    if largest > 1024 and not (moe_packed_enabled() and dispatch_pipe_enabled() and compact_pipe_enabled()):
+        raise ValueError("QWEN_PREFILL_MOE_GROUP > 1024 requires the packed, pipelined MoE kernels")
+    return [g for g in (1024, 2048) if g <= largest]
+
+
+def compact_routes_per_pass(n):
+    return max(1, 320 // ((n + 31) // 32))
+
+
+# Larger groups: the L1 output block holds RP routes x T tiles (RP = 320 // T); each pass re-reads the
+# touched expert tiles and places only its routes' rows. Extra compile-time arg: RP (after N).
+COMPACT_GROUP_PACKED = _variant(
+    COMPACT1024_PACKED,
+    [
+        (
+            "    constexpr uint32_t N=get_compile_time_arg_val(0),T=(N+31)/32;\n    constexpr auto da=TensorAccessorArgs<2>();",
+            "    constexpr uint32_t N=get_compile_time_arg_val(0),T=(N+31)/32,RP=get_compile_time_arg_val(1);\n"
+            "    constexpr auto da=TensorAccessorArgs<3>();",
+        ),
+        (
+            "    auto out_words=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs);\n"
+            "    for(uint32_t i=0;i<10*T*TILE/4;++i)out_words[i]=0;\n"
+            "    auto out=reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base+outs);\n"
+            "    noc.async_read_barrier();",
+            "    auto out_words=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs);\n"
+            "    auto out=reinterpret_cast<volatile tt_l1_ptr uint8_t*>(base+outs);\n"
+            "    noc.async_read_barrier();\n"
+            "    for(uint32_t r0=0;r0<10;r0+=RP) {\n"
+            "    for(uint32_t i=0;i<RP*T*TILE/4;++i)out_words[i]=0;",
+        ),
+        (
+            "                const uint32_t v=entries[packed],row=v/16,route=v%16,tile=route*T+row/32;",
+            "                const uint32_t v=entries[packed],row=v/16,route=v%16;\n"
+            "                if(route<r0||route>=r0+RP)continue;\n"
+            "                const uint32_t tile=(route-r0)*T+row/32;",
+        ),
+        (
+            "    for(uint32_t route=0;route<10;++route)for(uint32_t tile=0;tile<T;++tile)\n"
+            "        noc.async_write(CoreLocalMem<uint32_t>(base+outs+(route*T+tile)*TILE),output,TILE,{}, {.page_id=(route*T+tile)*80+col});\n"
+            "    noc.async_write_barrier();",
+            "    for(uint32_t route=r0;route<r0+RP&&route<10;++route)for(uint32_t tile=0;tile<T;++tile)\n"
+            "        noc.async_write(CoreLocalMem<uint32_t>(base+outs+((route-r0)*T+tile)*TILE),output,TILE,{}, {.page_id=(route*T+tile)*80+col});\n"
+            "    noc.async_write_barrier();\n"
+            "    }",
+        ),
+        (
+            "    noc.async_read(region,CoreLocalMem<uint32_t>(base+outs+10*T*TILE),512,{.page_id=0},{});noc.async_read_barrier();\n"
+            "    auto reg=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs+10*T*TILE);",
+            "    noc.async_read(region,CoreLocalMem<uint32_t>(base+outs+RP*T*TILE),512,{.page_id=0},{});noc.async_read_barrier();\n"
+            "    auto reg=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base+outs+RP*T*TILE);",
+        ),
+    ],
+)
+
+
+def compact_group_cb_bytes(n):
+    t = (n + 31) // 32
+    return 1024 + (10 * n + 128 * 16) * 4 + 8 * SLOT_BYTES + compact_routes_per_pass(n) * t * SLOT_BYTES + 512

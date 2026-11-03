@@ -11,12 +11,22 @@ import ttnn
 
 from .multichip_decoder import _EXPERT_COMPACT_PACKED, _EXPERT_DISPATCH_PACKED, _expert_capacity_source, _expert_kernel
 from .prefill_moe_compact import (
+    COMPACT1024_PACKED,
     COMPACT1024_PIPE,
+    COMPACT_GROUP_PACKED,
+    DISPATCH1024_PACKED,
     DISPATCH1024_PIPE,
     compact_cb_bytes,
+    compact_group_cb_bytes,
+    compact_packed_cb_bytes,
     compact_pipe_enabled,
+    compact_routes_per_pass,
     dispatch_cb_bytes,
+    dispatch_packed_cb_bytes,
     dispatch_pipe_enabled,
+    moe_group_sizes,
+    moe_packed_enabled,
+    packed_capacity_rows,
 )
 
 DISPATCH1024 = _expert_capacity_source(_EXPERT_DISPATCH_PACKED, "e*128+count", "e*1024+count")
@@ -25,7 +35,8 @@ COMPACT1024 = _expert_capacity_source(COMPACT1024, "(e%128)*4+packed/32", "(e%12
 
 
 def group1024(self, x):
-    if tuple(x.shape) != (1, 1, 1024, 2560):
+    # 2048/4096-row groups (QWEN_PREFILL_MOE_GROUP) run only on the packed, pipelined kernels.
+    if tuple(x.shape)[:2] != (1, 1) or x.shape[3] != 2560 or x.shape[2] not in moe_group_sizes():
         raise ValueError("Hybrid expert group requires exactly1024 serial rows")
     n = x.shape[2]
     padded = math.ceil(n / 32) * 32
@@ -45,10 +56,23 @@ def group1024(self, x):
         scores = ttnn.to_layout(selected, ttnn.ROW_MAJOR_LAYOUT)
     counts = ttnn.empty((128,), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ops.mesh)
     mapping = ttnn.empty((1, 1, n, 32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ops.mesh)
-    capacity = ttnn.empty(
-        (1, 1, 128 * 1024, 2560), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ops.mesh
-    )
-    self.hybrid_capacity_rows = int(capacity.shape[2]) // 128
+    # Packed capacity (QWEN_PREFILL_MOE_PACKED): expert regions at device-computed 32-row-aligned offsets,
+    # 10 * n + 4096 rows instead of 128 * 1024.
+    packed = pipelined and compact_pipe_enabled() and moe_packed_enabled()
+    if n > 1024 and not packed:
+        raise ValueError("Expert groups above 1024 rows require the packed capacity buffer")
+    rows = packed_capacity_rows(n) if packed else 128 * 1024
+    capacity = ttnn.empty((1, 1, rows, 2560), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ops.mesh)
+    region = None
+    if packed:
+        region = ttnn.empty(
+            (128,),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.ops.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    self.hybrid_capacity_rows = 1024
     counts = ttnn.to_memory_config(counts, ttnn.DRAM_MEMORY_CONFIG)
     source = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     # The batched dispatch also writes inverse[e][packed] = row * 16 + route for the tile-once compaction.
@@ -61,25 +85,35 @@ def group1024(self, x):
             device=self.ops.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-    _expert_kernel(
-        self.ops.mesh,
-        [source, ids_tile, selected, self.rank, counts, mapping, capacity, inverse]
-        if inverse is not None
-        else [source, ids, scores, self.rank, counts, mapping, capacity],
-        DISPATCH1024_PIPE if inverse is not None else DISPATCH1024,
-        [n],
-        workers=32,
-        cb_size=dispatch_cb_bytes(n) if inverse is not None else 5120 + n * 192 + 64,
-    )
+    if packed:
+        _expert_kernel(
+            self.ops.mesh,
+            [source, ids_tile, selected, self.rank, counts, mapping, capacity, inverse, region],
+            DISPATCH1024_PACKED,
+            [n],
+            workers=32,
+            cb_size=dispatch_packed_cb_bytes(n),
+        )
+    else:
+        _expert_kernel(
+            self.ops.mesh,
+            [source, ids_tile, selected, self.rank, counts, mapping, capacity, inverse]
+            if inverse is not None
+            else [source, ids, scores, self.rank, counts, mapping, capacity],
+            DISPATCH1024_PIPE if inverse is not None else DISPATCH1024,
+            [n],
+            workers=32,
+            cb_size=dispatch_cb_bytes(n) if inverse is not None else 5120 + n * 192 + 64,
+        )
     down = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
         capacity,
-        self.offsets1024,
+        region if packed else self.offsets1024,
         counts,
         self.ids,
         self.gates,
         self.ups,
         self.downs,
-        1024,
+        n,
         compute_kernel_config=self.routed_compute,
     )
     compact = ttnn.empty(
@@ -87,9 +121,27 @@ def group1024(self, x):
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=self.ops.mesh,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG if n <= 1024 else ttnn.DRAM_MEMORY_CONFIG,
     )
-    if compact_pipe_enabled() and inverse is not None:
+    if packed and n > 1024:
+        _expert_kernel(
+            self.ops.mesh,
+            [down, counts, inverse, self.rank, compact, region],
+            COMPACT_GROUP_PACKED,
+            [n, compact_routes_per_pass(n)],
+            workers=80,
+            cb_size=compact_group_cb_bytes(n),
+        )
+    elif packed:
+        _expert_kernel(
+            self.ops.mesh,
+            [down, counts, inverse, self.rank, compact, region],
+            COMPACT1024_PACKED,
+            [n],
+            workers=80,
+            cb_size=compact_packed_cb_bytes(n),
+        )
+    elif compact_pipe_enabled() and inverse is not None:
         _expert_kernel(
             self.ops.mesh,
             [down, counts, inverse, self.rank, compact],
@@ -124,9 +176,9 @@ def group1024(self, x):
 
 
 def forward1024(self, x, *, positions, slots, tokens, page_table):
-    if tuple(x.shape) != (1, 1, 1024, 2560) or not self.prefill_hybrid_enabled:
+    if tuple(x.shape)[:2] != (1, 1) or x.shape[2] not in moe_group_sizes() or not self.prefill_hybrid_enabled:
         raise ValueError("Hybrid prefill requires the enabled serial1024 view")
-    length = 1024
+    length = x.shape[2]
     old_large, old_l1 = self.ops.large_prefill, self.ops.l1_prefill
     pieces, mixtures, injections = [], [], []
     observed_pieces, observed_l1 = [], []
@@ -188,7 +240,7 @@ def forward1024(self, x, *, positions, slots, tokens, page_table):
             outputs.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
             del out
         result = ttnn.concat(outputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        self.prefill_hybrid_signatures["1024"] = dict(
+        self.prefill_hybrid_signatures[str(length)] = dict(
             sequence=int(x.shape[2]),
             non_moe_chunks=observed_pieces,
             moe_group_rows=observed_group,
