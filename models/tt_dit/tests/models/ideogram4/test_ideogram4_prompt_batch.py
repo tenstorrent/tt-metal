@@ -119,6 +119,8 @@ def test_prompt_batch(*, mesh_device) -> None:
     t0 = time.perf_counter()
     pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=height, width=width)
     load_s = time.perf_counter() - t0
+    if traced:
+        pipe.warmup(sizes=[(width, height)])
     dev = pipe.mesh_device  # sync the pipeline's submesh, never the parent mesh (see the GPU-bench test)
 
     def generate(text: str, preset: str):

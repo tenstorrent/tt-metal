@@ -56,7 +56,7 @@ _PERF_TARGETS = {
 def test_latency(*, mesh_device, is_ci_env, height, width, preset) -> None:
     pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=height, width=width)
 
-    pipe(prompts=[PROMPT], preset=preset, seed=1)  # warmup (compile + cache)
+    pipe.warmup(sizes=[(width, height)])  # compiles everything and captures the step trace
     profiler = BenchmarkProfiler()
     pipe(prompts=[PROMPT], preset=preset, seed=2, on_event=profiler_event_callback(profiler, 0))  # timed (warm)
 

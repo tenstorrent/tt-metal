@@ -101,6 +101,8 @@ def test_resolution_matrix(*, mesh_device) -> None:
     t0 = time.perf_counter()
     pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=sizes[0][3], width=sizes[0][2])
     load_s = time.perf_counter() - t0
+    if traced:
+        pipe.warmup(sizes=[(w, h) for _, _, w, h in sizes])
     dev = pipe.mesh_device  # sync the pipeline's submesh, never the parent mesh (see the GPU-bench test)
     tokens = pipe.count_text_tokens(text)
 

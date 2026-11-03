@@ -2664,6 +2664,17 @@ targets:
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
+  ideogram-4:
+    aliases: ["ideogram-4"]
+    skus:
+      bh_sc1:
+        entries:
+          # The tests assert their own latency ceilings and serving invariants.
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ANYQF656Y # Rahmy Salman
+            team: models
   wan-2.2-t2v:
     aliases: ["wan-2.2-t2v", "wan2.2"]
     skus:
