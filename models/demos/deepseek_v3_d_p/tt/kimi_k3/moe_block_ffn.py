@@ -33,14 +33,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.moe_block.tt.flat_gather import flat_face_map, flat_weights_module, gather
+from models.demos.moe_block.tt.flat_gather import flat_face_map, flat_weights_module, gather, gather_batches
 from models.demos.moe_block.tt.moe_block import MoEBlock, MoEBlockWeights
 
 LINKS = 2
 _WEKA_CACHE = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill"
 _BLOCKS: dict = {}  # (id(mesh), chunk) -> (mesh, MoEBlockResources, MoEBlock)
 _REPLAY: dict = {}  # (MOE_BLOCK_REPLAY=1: the first MoE call's x, weights and output - replayed before the next)
-_FACE_MAPS: dict = {}  # (H, I, E, layout) -> flat_face_map: the same every layer
+_FACE_MAPS: dict = {}  # ((H, I, E, layout), experts a batch) -> gather_batches of flat_face_map: the same every layer
 
 
 def _bytes_of(d):
@@ -154,8 +154,13 @@ def _glm_nonrouted(layer_idx: int, hf_config):
 def host_weights(mesh, dims, layer_idx: int, hf_config=None):
     """The layer's non-routed weights in the block's expert order: dict of float32 torch tensors (router weight / bias,
     shared gate / up / down, K3: latent down / up / norm)."""
-    from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import GATE_KEYS, LATENT_KEYS, SHARED_EXPERT_KEYS
-    from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import layer_prefix, load_tensors
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import (
+        GATE_KEYS,
+        LATENT_KEYS,
+        SHARED_EXPERT_KEYS,
+        layer_prefix,
+        load_tensors,
+    )
 
     R, C = tuple(mesh.shape)
     epc = dims.num_experts // (R * C)
@@ -192,11 +197,12 @@ def host_weights(mesh, dims, layer_idx: int, hf_config=None):
     }
 
 
-def device_sources(mesh, layer_idx: int, epc: int, cache):
+def device_sources(mesh, layer_idx: int, epc: int, cache, experts=None):
     """TtMoe's cached routed experts of a layer straight to DRAM (bfp4 as stored, interleaved): flat_gather's sources,
-    s = le * 3 + (0 gate, 1 up, 2 down) - each [1, 1, in, out] a chip (W^T: the flat op's orientation)."""
+    s = le * 3 + (0 gate, 1 up, 2 down) - each [1, 1, in, out] a chip (W^T: the flat op's orientation). experts: the
+    local experts to load (default all epc), s counted from the first."""
     srcs = []
-    for le in range(epc):
+    for le in range(epc) if experts is None else experts:
         for proj in ("gate", "up", "down"):
             hits = sorted(Path(cache).glob(f"layer_{layer_idx}.routed_expert.local_{le}_{proj}_dtype_*.tensorbin"))
             assert hits, f"MoE block: no layer_{layer_idx}.routed_expert.local_{le}_{proj} in {cache}"
@@ -276,8 +282,30 @@ class TtK3MoEBlockFfn:
                 max_tokens_per_expert=max(chunk, 256),
                 activation=flat_weights_module().ACTS[self.act],
                 layout=mb.FlatLayoutOptions(
-                    rows_hint=round(chunk * self.dims.top_k / self.dims.num_experts), x_helpers=1
+                    rows_hint=round(chunk * self.dims.top_k / self.dims.num_experts),
+                    x_helpers=1,
+                    # (which DRISC tiles of each DRAM bank send the gate/up weights: both / free_only /
+                    # noc1_endpoint_only - FlatLayoutOptions.drisc_tiles; MOE_DRISC_TILES overrides "both")
+                    drisc_tiles=getattr(mb.FlatDriscTiles, os.environ.get("MOE_DRISC_TILES", "both")),
+                    # (who reads the gate/up weights - FlatLayoutOptions.gu_source drisc | tensix | tensix_split |
+                    # tensix_noc1 | placed | auto_tensix | auto_hybrid; MOE_GU_PLACE: a JSON file of gu_place words for
+                    # placed). Default: the gate/up cores read their own weights on NOC0, each block as 2 reads - no
+                    # DRISC sender is launched on the DRAM cores (K3 L1-4 golden, traced: +3.0% over the DRISC senders,
+                    # the fastest DRISC-free choice; MOE_GU_SOURCE=drisc restores the senders)
+                    gu_source=getattr(mb.FlatGuSource, os.environ.get("MOE_GU_SOURCE", "tensix")),
+                    gu_read_depth=int(os.environ.get("MOE_GU_READ_DEPTH", "-1")),
+                    gu_read_pieces=int(
+                        os.environ.get(
+                            "MOE_GU_READ_PIECES", "-1" if os.environ.get("MOE_GU_SOURCE") == "drisc" else "2"
+                        )
+                    ),
+                    gu_place=json.load(open(os.environ["MOE_GU_PLACE"])) if os.environ.get("MOE_GU_PLACE") else [],
                 ),
+            )
+            _lo = block.expert_kw["layout"]
+            logger.info(
+                f"MoE block: flat layout drisc_tiles {_lo.drisc_tiles} gu_source {_lo.gu_source} "
+                f"gu_read_depth {_lo.gu_read_depth} gu_read_pieces {_lo.gu_read_pieces} gu_place {len(_lo.gu_place)}"
             )
             logger.info(
                 f"MoE block: built for chunk {chunk} at layer {self.layer_idx} in {time.time() - t0:.1f} s - "
@@ -307,26 +335,42 @@ class TtK3MoEBlockFfn:
         ).as_dict()
         lo = kw["layout"]
         key = (Hr, I, epc, lo.x_helpers, lo.pin_ratio, lo.rows_hint, lo.x_ready, kw["max_tokens_per_expert"])
+        # (the layer's sources go to DRAM MOE_GATHER_EXPERTS local experts at a time and are freed after their gather:
+        # all 3 epc of them next to the laid-out dest held one layer's routed weights twice - 65 MB a bank on K3, which
+        # the last layer of an SC4 stage at 100 slots did not have)
+        per = int(os.environ.get("MOE_GATHER_EXPERTS", "4"))
         t0 = time.time()
-        maps = _FACE_MAPS.get(key)
-        if maps is None:
-            maps = _FACE_MAPS[key] = flat_face_map(Hr, I, epc, lay)
-            logger.info(f"MoE block gather: face maps in {time.time() - t0:.0f} s")
+        batches = _FACE_MAPS.get((key, per))
+        if batches is None:
+            maps = flat_face_map(Hr, I, epc, lay)
+            NT = (Hr // 32) * (I // 32)
+            batches = _FACE_MAPS[(key, per)] = gather_batches(maps, NT, epc, per)
+            del maps
+            logger.info(
+                f"MoE block gather: face maps in {time.time() - t0:.0f} s, {len(batches)} batches of {per} experts"
+            )
         shapes = fw.flat_weight_shapes(Hr, I, epc, lay)
         dst = {
             n: fw.uninitialized_bank_sharded(*shapes[n], lay["banks"], ttnn.bfloat4_b, self.mesh)
             for n in ("w_gu", "w_d")
         }
         cache = self.cache if self.cache is not None else _cache_dir(self.mesh)
-        t1 = time.time()
-        srcs = device_sources(self.mesh, self.layer_idx, epc, cache)
-        t2 = time.time()
-        for n, fm in maps.items():
+        for n in dst:
             pages = (int(dst[n].shape[-2]) // 32) * (int(dst[n].shape[-1]) // 32)
-            assert pages == fm.shape[0], f"{n}: {pages} pages, the face map {fm.shape[0]}"
-            gather(self.mesh, srcs, fm, dst[n])
-        for t in srcs:
-            ttnn.deallocate(t)
+            got = sum(int(sub[n][0].numel()) for _, _, sub in batches)
+            assert pages == got, f"{n}: {pages} pages, the face map {got}"
+        t_load = t_gather = 0.0
+        n_srcs = 0
+        for e0, e1, sub in batches:
+            t1 = time.time()
+            srcs = device_sources(self.mesh, self.layer_idx, epc, cache, experts=range(e0, e1))
+            t2 = time.time()
+            for n, (rows, fm) in sub.items():
+                gather(self.mesh, srcs, fm, dst[n], pages=rows)
+            for t in srcs:
+                ttnn.deallocate(t)
+            n_srcs += len(srcs)
+            t_load, t_gather = t_load + t2 - t1, t_gather + time.time() - t2
         gids = torch.arange(E, dtype=torch.int32).reshape(N, 1, epc)
         gidx = ttnn.from_torch(
             gids,
@@ -337,8 +381,8 @@ class TtK3MoEBlockFfn:
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
         )
         logger.info(
-            f"MoE block layer {self.layer_idx}: {len(srcs)} tensorbins to DRAM {t2 - t1:.0f} s, gather "
-            f"{time.time() - t2:.1f} s ({cache})"
+            f"MoE block layer {self.layer_idx}: {n_srcs} tensorbins to DRAM {t_load:.0f} s, gather {t_gather:.1f} s "
+            f"in {len(batches)} batches ({cache})"
         )
         return gidx, dst["w_gu"], dst["w_d"]
 

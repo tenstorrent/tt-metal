@@ -10,9 +10,13 @@ pack / requantize (~4 min a Kimi-K3 layer of 896 experts that way).
       Sources s = e * 3 + m (local expert e; m 0 Wg [H, I], 1 Wu [H, I], 2 Wd [I, H]), tile = the source's row-major
       tile index, NT its tiles. Derived by running the C++ op's own weight prep (flat_routed_expert_weights.
       flat_weight_regions + bank_host_tensor) on index tensors, every face checked to be one source face, in order.
-  gather(mesh, srcs, face_map, dst)  device: one data-movement program a chip (the same everywhere) - each dest page:
-      the source tiles its faces come from read into L1, the faces copied (a bfp face: its 16 shared exponent bytes and
-      its mantissa bytes), the page written. srcs: the NS source tensors in s order, DRAM interleaved, the dst's dtype.
+  gather(mesh, srcs, face_map, dst, pages=None)  device: one data-movement program a chip (the same everywhere) - each
+      dest page: the source tiles its faces come from read into L1, the faces copied (a bfp face: its 16 shared exponent
+      bytes and its mantissa bytes), the page written. srcs: the NS source tensors in s order, DRAM interleaved, the
+      dst's dtype. pages: the dest page of each face_map row (default: row i is page i) - a subset of the pages.
+  gather_batches(face_map, NT, E, per)  host: the face map split by local expert, `per` experts a batch: per batch
+      (e0, e1, pages, sub map with sources renumbered from 3 e0) - so a layer's sources go to DRAM a batch at a time
+      (the whole layer's sources next to its laid-out dest needed one layer's routed weights twice in DRAM).
   emulate_gather(srcs, face_map, banks)  host: gather's result on float matrices (the layout check, test_flat_gather.py).
 
 TODO: this becomes part of the C++ flat op's weight prep (a "from bfp DRAM sources" path of the flat expert's weight
@@ -45,7 +49,8 @@ def flat_weights_module():
     return _FW
 
 
-TPP = 64  # (dest pages a face-map table page holds: 64 x 4 words = 1 KB)
+TPP = 32  # (dest pages a face-map table page holds: 32 entries x 8 words (4 faces, the dest page, 3 pad) = 1 KB)
+TW = 8  # (words a table entry)
 
 _KERNEL = r"""
 #include <cstdint>
@@ -55,7 +60,7 @@ constexpr uint32_t NT = get_compile_time_arg_val(1);   // tiles a source
 constexpr uint32_t TB = get_compile_time_arg_val(2);   // bytes a tile (page)
 constexpr uint32_t EB = get_compile_time_arg_val(3);   // shared exponent bytes a face (the tile's first 4 EB)
 constexpr uint32_t MB = get_compile_time_arg_val(4);   // mantissa bytes a face (after the exponents, face-major)
-constexpr uint32_t TP = get_compile_time_arg_val(5);   // dest pages a table page
+constexpr uint32_t TP = get_compile_time_arg_val(5);   // entries a table page (8 words each: 4 faces, dest page)
 constexpr auto src_args = TensorAccessorArgs<6>();
 constexpr auto tab_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 constexpr auto dst_args = TensorAccessorArgs<tab_args.next_compile_time_args_offset()>();
@@ -73,24 +78,24 @@ FORCE_INLINE void zero_bytes(uint32_t dst, uint32_t n) {
 void kernel_main() {
     const uint32_t tab_addr = get_arg_val<uint32_t>(0), dst_addr = get_arg_val<uint32_t>(1);
     const uint32_t q0 = get_arg_val<uint32_t>(2), nq = get_arg_val<uint32_t>(3), np_ = get_arg_val<uint32_t>(4);
-    const auto tab = TensorAccessor(tab_args, tab_addr, TP * 16);
+    const auto tab = TensorAccessor(tab_args, tab_addr, TP * 32);
     const auto dst = TensorAccessor(dst_args, dst_addr, TB);
     // L1: the table page | 4 source tile slots | 2 dest tiles
     const uint32_t base = get_write_ptr(0);
-    const uint32_t tl1 = base, sl1 = base + TP * 16, dl1 = sl1 + 4 * TB;
+    const uint32_t tl1 = base, sl1 = base + TP * 32, dl1 = sl1 + 4 * TB;
     uint32_t wbuf = 0;
-    for (uint32_t q = q0; q < q0 + nq; ++q) {  // (table page q: dest pages q TP ..)
-        noc_async_read(tab.get_noc_addr(q), tl1, TP * 16);
+    for (uint32_t q = q0; q < q0 + nq; ++q) {  // (table page q: entries q TP ..)
+        noc_async_read(tab.get_noc_addr(q), tl1, TP * 32);
         noc_async_read_barrier();
         volatile tt_l1_ptr int32_t* e = reinterpret_cast<volatile tt_l1_ptr int32_t*>(tl1);
         for (uint32_t i = 0; i < TP; ++i) {
-            const uint32_t p = q * TP + i;
-            if (p >= np_) break;
+            if (q * TP + i >= np_) break;
+            const uint32_t p = static_cast<uint32_t>(e[i * 8 + 4]);  // (the dest page)
             int32_t tile_of[4];  // (the slot each face's source tile went to: distinct tiles read once)
             int32_t slot_tile[4] = {-1, -1, -1, -1};
             uint32_t ns = 0;
             for (uint32_t f = 0; f < 4; ++f) {
-                const int32_t c = e[i * 4 + f];
+                const int32_t c = e[i * 8 + f];
                 tile_of[f] = -1;
                 if (c < 0) continue;
                 const int32_t g = c >> 2;  // (s NT + tile)
@@ -108,7 +113,7 @@ void kernel_main() {
             noc_async_write_barrier();  // (this dest buffer's previous write out)
             noc_async_read_barrier();
             for (uint32_t f = 0; f < 4; ++f) {
-                const int32_t c = e[i * 4 + f];
+                const int32_t c = e[i * 8 + f];
                 if (c < 0) {
                     zero_bytes(d + f * EB, EB);
                     zero_bytes(d + 4 * EB + f * MB, MB);
@@ -190,18 +195,50 @@ def emulate_gather(srcs: list, face_map: torch.Tensor) -> torch.Tensor:
     return got.reshape(P, 2, 2, 16, 16).permute(0, 1, 3, 2, 4).reshape(P, 32, 32)
 
 
-def gather(mesh, srcs: list, face_map: torch.Tensor, dst, num_cores: int | None = None):
-    """dst (a laid-out flat expert weight tensor) <- its faces from srcs (module docstring); face_map int32 [pages, 4]."""
+def gather_batches(face_map: dict, NT: int, E: int, per: int) -> list:
+    """flat_face_map's {name: [pages, 4]} split into batches of `per` local experts: [(e0, e1, {name: (pages int32 [n],
+    sub map int32 [n, 4])})], a page in the batch of the expert its faces come from (a page's faces all come from one
+    expert's gate / up / down; all-padding pages go with the first batch), its sources renumbered s - 3 e0."""
+    per = max(1, min(per, E))
+    out = [(e0, min(E, e0 + per), {}) for e0 in range(0, E, per)]
+    for name, fm in face_map.items():
+        fm = fm.to(torch.int64)
+        pad = fm < 0
+        expert = torch.where(pad, torch.full_like(fm, -1), (fm >> 2) // NT // 3)  # [pages, 4]
+        hi = expert.max(dim=1).values
+        lo = torch.where(pad, torch.full_like(fm, E), expert).min(dim=1).values
+        mixed = (hi >= 0) & (lo != hi)
+        assert not bool(mixed.any()), f"{name}: {int(mixed.sum())} pages take faces from two experts"
+        page_batch = hi.clamp(min=0) // per
+        for b, (e0, _, sub) in enumerate(out):
+            rows = torch.nonzero(page_batch == b).flatten()
+            m = fm[rows]
+            m = torch.where(m < 0, m, m - 3 * e0 * NT * 4)
+            sub[name] = (rows.to(torch.int32), m.to(torch.int32))
+    for name, fm in face_map.items():
+        assert sum(int(s[name][0].numel()) for _, _, s in out) == fm.shape[0], f"{name}: batches miss pages"
+    return out
+
+
+def gather(mesh, srcs: list, face_map: torch.Tensor, dst, num_cores: int | None = None, pages=None):
+    """dst (a laid-out flat expert weight tensor) <- its faces from srcs (module docstring); face_map int32 [n, 4], row i
+    the faces of dest page pages[i] (default i)."""
     tb, eb, mb = _BFP[dst.dtype]
     assert all(s.dtype == dst.dtype for s in srcs), "sources and dest: one bfp dtype"
     shape = tuple(srcs[0].shape)
     NT = (shape[-2] // 32) * (shape[-1] // 32)
-    pages = face_map.shape[0]
-    nq = -(-pages // TPP)
-    tab = torch.full((nq * TPP, 4), -1, dtype=torch.int32)
-    tab[:pages] = face_map
+    n = face_map.shape[0]
+    if n == 0:
+        return
+    if pages is None:
+        pages = torch.arange(n, dtype=torch.int32)
+    assert pages.shape[0] == n, "a dest page a face-map row"
+    nq = -(-n // TPP)
+    tab = torch.full((nq * TPP, TW), -1, dtype=torch.int32)
+    tab[:n, :4] = face_map
+    tab[:n, 4] = pages.to(torch.int32)
     tab_t = ttnn.from_torch(
-        tab.view(nq, TPP * 4).view(torch.int32),
+        tab.view(nq, TPP * TW),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh,
@@ -214,26 +251,26 @@ def gather(mesh, srcs: list, face_map: torch.Tensor, dst, num_cores: int | None 
     used = [(c, i * per, min(per, nq - i * per)) for i, c in enumerate(cores) if i * per < nq]
     crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c, _, _ in used])
     rt = ttnn.RuntimeArgs()
-    for c, q0, n in used:
-        rt[c.x][c.y] = [int(tab_t.buffer_address()), int(dst.buffer_address()), q0, n, pages]
+    for c, q0, n_q in used:
+        rt[c.x][c.y] = [int(tab_t.buffer_address()), int(dst.buffer_address()), q0, n_q, n]
     ct = (
         [len(srcs), NT, tb, eb, mb, TPP]
         + list(ttnn.TensorAccessorArgs(srcs[0]).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
         + list(ttnn.TensorAccessorArgs(dst).get_compile_time_args())
     )
-    # (generic_op's program cache does not re-read this descriptor's runtime args on a hit: every address set gets its
-    # own program - a salt the kernel ignores, after its accessor args)
+    # (generic_op's program cache does not re-read this descriptor's runtime args on a hit: every address set and entry
+    # count gets its own program - a salt the kernel ignores, after its accessor args)
     salt = 0
-    for a in [int(t.buffer_address()) for t in (tab_t, dst, *srcs)]:
+    for a in [n, *(int(t.buffer_address()) for t in (tab_t, dst, *srcs))]:
         salt = (salt * 1000003 + a) & 0x7FFFFFFF
     ct.append(salt)
     prog = ttnn.ProgramDescriptor()
     prog.cbs = [
         ttnn.CBDescriptor(
-            total_size=TPP * 16 + 6 * tb,
+            total_size=TPP * TW * 4 + 6 * tb,
             core_ranges=crs,
-            format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, TPP * 16 + 6 * tb)],
+            format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, TPP * TW * 4 + 6 * tb)],
         )
     ]
     prog.kernels = [
@@ -251,5 +288,6 @@ def gather(mesh, srcs: list, face_map: torch.Tensor, dst, num_cores: int | None 
     md = ttnn.MeshProgramDescriptor()
     md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))] = prog
     ttnn.generic_op(list(srcs) + [tab_t, dst], md)
+    ttnn.deallocate(tab_t)  # (ordered after the gather on the command queue)
     ttnn.synchronize_device(mesh)
     ttnn.deallocate(tab_t)

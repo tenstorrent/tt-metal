@@ -9,6 +9,7 @@ TtPrefillBlock state dict the synthetic-weight tests use), the router non-degene
 block's time a call (eager, after the build and a warm-up call).
 """
 
+import os
 import time
 
 import pytest
@@ -17,11 +18,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from tests.ttnn.utils_for_testing import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.moe import glm_moe_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_mesh_params
+from tests.ttnn.utils_for_testing import comp_pcc
 
 CHUNK = 5120
 FINAL_PCC = 0.982  # (test_ttnn_moe.run_model's final-output bar)
@@ -104,7 +105,7 @@ def test_glm_moe_block(mesh_device, device_params):
 
     # (time a call: eager, programs built, weights resident)
     ttnn.deallocate(y_tt)
-    calls = 5
+    calls = int(os.environ.get("K3_GOLDEN_CALLS", "10"))
     ttnn.synchronize_device(mesh_device)
     t0 = time.perf_counter()
     for _ in range(calls):
@@ -218,3 +219,216 @@ def test_k3_moe_block(mesh_device, device_params):
     ok, msg = comp_pcc(want.reshape(-1, H), y.reshape(-1, H), K3_FINAL_PCC)
     logger.info(f"MoE block (Kimi-K3, random weights, {CHUNK} tokens) vs the host K3 MoE: {msg}")
     assert ok, f"MoE block vs the host K3 MoE: {msg} (need {K3_FINAL_PCC})"
+
+
+# ---- Kimi-K3 on real activations: the vLLM 100k trace's MoE inputs / outputs (moe_io) and the real weights ----
+# The trace's 5-layer SLIM checkpoint is the full model's first 5 layers (test_golden_contract.py), so layer L's
+# moe_input (ffn_norm's output) through the full checkpoint's layer L MoE is compared with its moe_output. Layer 0 is
+# dense. Weights: the routed experts from the TtMoe bfp4 ttnn cache ($TT_KIMI_K3_PREFILL_TTNN_CACHE), the router /
+# shared / latent from the checkpoint ($KIMI_K3_CKPT) - what the K3 runner loads. In CI (GITHUB_ACTIONS) a missing
+# trace or checkpoint fails the test; elsewhere it skips.
+K3_GOLDEN_PCC = float(os.environ.get("K3_GOLDEN_PCC", "0.97"))
+K3_GOLDEN_START = int(os.environ.get("K3_GOLDEN_START", str(4 * CHUNK)))  # (trace row of the chunk's first token)
+_K3_GOLDEN_TRACE_REGION = 64 << 20
+
+
+def _require(ok: bool, what: str):
+    if ok:
+        return
+    if os.environ.get("GITHUB_ACTIONS"):
+        pytest.fail(f"CI runs the MoE block on real activations: {what}")
+    pytest.skip(what)
+
+
+def _routing_load(x, w):
+    """Kimi-K3's router (sigmoid + correction bias, top-16) on the host on x [T, H]: per-expert and per-chip token
+    counts, in the block's expert order (expert e on chip e // epc)."""
+    K = KimiK3Config
+    scores = torch.sigmoid(x.float() @ w["router_weight"].T)
+    ids = (scores + w["router_bias"]).topk(K.NUM_EXPERTS_PER_TOKEN, dim=-1).indices
+    per_expert = torch.bincount(ids.flatten(), minlength=K.NUM_ROUTED_EXPERTS)
+    return per_expert
+
+
+@pytest.mark.parametrize("impl", ["block", "ttmoe"])
+@pytest.mark.parametrize("layer", [1, 2, 3, 4], ids=lambda v: f"L{v}")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=max(_K3_PAYLOAD, moe_fabric_payload(KimiK3Config)),
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+                l1_small_size=_K3_L1_SMALL,
+                trace_region_size=_K3_GOLDEN_TRACE_REGION,
+            ),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(1800)
+def test_k3_moe_block_golden(mesh_device, device_params, layer, impl):
+    """Kimi-K3 layer `layer` on the MoE block with the real weights on the trace's real MoE input (one 5120-token chunk
+    from K3_GOLDEN_START) vs the trace's MoE output (K3_GOLDEN_PCC). Logs the chunk's real routing load (per chip and
+    per expert, host router on the golden x) and the block's eager and traced time a call."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_100K, resolve_checkpoint, resolve_trace
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn, host_weights
+
+    trace = resolve_trace(TRACE_100K)
+    _require(trace is not None, f"no K3 100k golden trace at {TRACE_100K} ($KIMI_K3_GOLDEN_TRACE)")
+    _require(
+        trace.has("moe_io", f"moe_input_layer_{layer}") and trace.has("moe_io", f"moe_output_layer_{layer}"),
+        f"{trace.path.name} has no moe_io for layer {layer}",
+    )
+    _require(resolve_checkpoint() is not None, "no K3 checkpoint ($KIMI_K3_CKPT)")
+
+    R, C = tuple(mesh_device.shape)
+    K = KimiK3Config
+    H, epc = K.EMB_SIZE, K.NUM_ROUTED_EXPERTS // (R * C)
+    s0, s1 = K3_GOLDEN_START, K3_GOLDEN_START + CHUNK
+    x = trace.rows("moe_io", f"moe_input_layer_{layer}", s0, s1)
+    want = trace.rows("moe_io", f"moe_output_layer_{layer}", s0, s1)
+    assert tuple(x.shape) == (CHUNK, H), f"moe_input_layer_{layer}[{s0}:{s1}]: {tuple(x.shape)}"
+
+    # (the chunk's real routing: how uneven the experts' and chips' loads are - random routing spreads them evenly)
+    w = host_weights(mesh_device, block_dims_of_k3(), layer)
+    per_expert = _routing_load(x, w)
+    per_chip = per_expert.view(R * C, epc).sum(-1).float()
+    mean_e = per_expert.float().mean()
+    logger.info(
+        f"K3 L{layer} tokens [{s0}, {s1}) real routing: per chip max/mean {per_chip.max() / per_chip.mean():.2f} "
+        f"(min {int(per_chip.min())}, max {int(per_chip.max())} of mean {per_chip.mean():.0f} rows); per expert max "
+        f"{int(per_expert.max())} ({per_expert.max() / mean_e:.1f}x mean {mean_e:.0f}), "
+        f"{int((per_expert == 0).sum())} of {K.NUM_ROUTED_EXPERTS} unused"
+    )
+
+    if impl == "block":
+        ffn = TtK3MoEBlockFfn(mesh_device, KimiK3Config, layer_idx=layer)
+    else:
+        ffn = _k3_ttmoe(mesh_device, layer)
+    name = "MoE block" if impl == "block" else "TtMoe"
+    x_tt = ttnn.from_torch(
+        x.to(torch.bfloat16).reshape(1, 1, CHUNK, H),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3)),
+    )
+    comp = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+    t0 = time.perf_counter()
+    y_tt = ffn(x_tt)  # (the layer's weights load here)
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"K3 L{layer}: first call (weights load + compile) {time.perf_counter() - t0:.0f} s")
+    y = ttnn.to_torch(y_tt, mesh_composer=comp).float().reshape(CHUNK, H)
+    ttnn.deallocate(y_tt)
+    ok, msg = comp_pcc(want, y, K3_GOLDEN_PCC)
+    logger.info(f"{name} (Kimi-K3 L{layer}, real weights, golden x) vs the vLLM trace's moe_output: {msg}")
+
+    # (time a call: eager, then a traced replay - weights resident, programs built)
+    calls = int(os.environ.get("K3_GOLDEN_CALLS", "10"))
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(calls):
+        ttnn.deallocate(ffn(x_tt))
+    ttnn.synchronize_device(mesh_device)
+    eager = (time.perf_counter() - t0) / calls
+    moe = getattr(ffn, "moe", None)
+    if moe is None:
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        y_tr = ffn(x_tt)
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        replay = lambda: ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        release = lambda: ttnn.release_trace(mesh_device, tid)
+    else:
+        # TtMoe loads/clears a sub-device manager around dispatch + shared expert, which a single trace cannot
+        # hold: trace it the way the model does, split at those points (utils/sub_device_trace.py). The
+        # controller also turns on the traced-only routed expert + combine overlap, so warm that up first.
+        from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
+
+        ctl = SubDeviceTraceController(mesh_device)
+        moe.set_trace_controller(ctl)
+        ttnn.deallocate(ffn(x_tt))
+        ttnn.synchronize_device(mesh_device)
+        ctl.begin_capture()
+        y_tr = ffn(x_tt)
+        ctl.end_capture()
+        logger.info(f"TtMoe trace: {ctl.num_segments} segments")
+        replay = lambda: ctl._replay_steps(ctl._program, None)  # (no per-replay sync, like execute_trace)
+
+        def release():
+            ctl.release()
+            moe.set_trace_controller(None)
+
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(calls):
+        replay()
+    ttnn.synchronize_device(mesh_device)
+    traced = (time.perf_counter() - t0) / calls
+    y2 = ttnn.to_torch(y_tr, mesh_composer=comp).float().reshape(CHUNK, H)
+    release()
+    ttnn.deallocate(y_tr)
+    if moe is not None:
+        mesh_device.clear_loaded_sub_device_manager()
+        moe.release_sub_device_manager()
+    ok2, msg2 = comp_pcc(want, y2, K3_GOLDEN_PCC)
+    logger.info(
+        f"K3GOLDEN impl={impl} L{layer} {CHUNK} tokens: eager {eager * 1e3:.2f} ms a call, traced {traced * 1e3:.2f} ms "
+        f"a replay; the traced output vs moe_output: {msg2}"
+    )
+    assert ok, f"K3 L{layer} {name} vs the golden moe_output: {msg} (need {K3_GOLDEN_PCC})"
+    assert ok2, f"K3 L{layer} traced {name} vs the golden moe_output: {msg2} (need {K3_GOLDEN_PCC})"
+
+
+def _k3_ttmoe(mesh_device, layer):
+    """Kimi-K3 layer `layer`'s TtMoe as the K3 model builds it (kimi_k3/block.py: TtPrefillBlock._build_moe, device FP32
+    gate, bfp4 routed experts) from the same TtMoe tensorbin cache the block's routed experts come from; called like the
+    block ([1, 1, S/SP, H/TP] in and out)."""
+    import json
+    import types
+
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import resolve_checkpoint
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import _cache_dir
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+    from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+
+    cfg = json.load(open(resolve_checkpoint() / "config.json"))
+    eps = cfg.get("rms_norm_eps") or (cfg.get("text_config") or {})["rms_norm_eps"]
+    moe = TtPrefillBlock._build_moe(
+        mesh_device=mesh_device,
+        model_cfg=KimiK3Config,
+        config=types.SimpleNamespace(rms_norm_eps=eps),
+        state_dict={},  # (all from the cache)
+        seq_len=CHUNK,
+        sp_axis=0,
+        emb_dim=KimiK3Config.EMB_SIZE,
+        num_links=2,
+        topology=per_axis_topology(ttnn.get_fabric_config()),
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        shared_expert_activations_dtype=ttnn.bfloat16,
+        shared_expert_weights_dtype=ttnn.bfloat8_b,
+        dispatch_buffer_capacity_factor=2,
+        weight_cache_path=_cache_dir(mesh_device),
+        layer_idx=layer,
+    )
+
+    def call(x):
+        out, _ = moe(ttnn.squeeze(x, dim=0), return_intermediates=False)
+        return ttnn.unsqueeze(out, dim=0)
+
+    call.moe = moe
+    return call
+
+
+def block_dims_of_k3():
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import block_dims
+
+    return block_dims(KimiK3Config)[0]

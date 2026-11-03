@@ -16,7 +16,14 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.moe_block.tt.flat_gather import _pages, emulate_gather, flat_face_map, flat_weights_module, gather
+from models.demos.moe_block.tt.flat_gather import (
+    _pages,
+    emulate_gather,
+    flat_face_map,
+    flat_weights_module,
+    gather,
+    gather_batches,
+)
 
 R, C = 8, 4
 H, I, E, NG, CHUNK = 6144, 2048, 8, 256, 5120
@@ -57,22 +64,33 @@ def test_flat_gather_layout(mesh):
         want = _pages(regs, lay["banks"])
         got = emulate_gather(srcs, fm[name])
         assert torch.equal(got, want), f"{name}: {int((got != want).sum())} values differ"
+    # (in batches of 3 experts - the K3 loader's way, sources renumbered from the batch's first: the same pages)
+    NT = (H // 32) * (I // 32)
+    for name, regs in (("w_gu", regions), ("w_d", dregs)):
+        want = _pages(regs, lay["banks"])
+        got = torch.full_like(want, float("nan"))
+        for e0, e1, sub in gather_batches(fm, NT, E, 3):
+            rows, m = sub[name]
+            got[rows.long()] = emulate_gather(srcs[3 * e0 : 3 * e1], m)
+        assert torch.equal(got, want), f"{name} in batches: {int((got != want).sum())} values differ"
 
 
+@pytest.mark.parametrize("per", [None, 3], ids=["whole", "batches-of-3"])
 @pytest.mark.parametrize("rounds", [2])
-def test_flat_gather_device(mesh, rounds):
-    """Two rounds on fresh tensors (a model gathers every layer: the second hits the program cache)."""
+def test_flat_gather_device(mesh, rounds, per):
+    """Two rounds on fresh tensors (a model gathers every layer: the second hits the program cache); per: gather in
+    batches of that many experts (gather_batches, the sources of a batch only), else all at once."""
     fw = flat_weights_module()
     lay = _lay(mesh)
     fm = flat_face_map(H, I, E, lay)
     kept = []  # (the rounds' sources stay allocated: each round's at other addresses)
     for seed in range(1, rounds + 1):
-        kept += _device_round(mesh, fw, lay, fm, seed)
+        kept += _device_round(mesh, fw, lay, fm, seed, per)
     for t in kept:
         ttnn.deallocate(t)
 
 
-def _device_round(mesh, fw, lay, fm, seed):
+def _device_round(mesh, fw, lay, fm, seed, per=None):
     W = [tuple(m_.to(torch.bfloat16) for m_ in w) for w in _weights(seed)]
     dt = ttnn.bfloat4_b
     rep = ttnn.ReplicateTensorToMesh(mesh)
@@ -86,7 +104,12 @@ def _device_round(mesh, fw, lay, fm, seed):
     for name, regs in (("w_gu", regions), ("w_d", dregs)):
         want = fw.bank_sharded([regs], banks, dt, mesh, replicate=True)
         dst = fw.uninitialized_bank_sharded(len(regs), regs[0].shape[0], banks, dt, mesh)
-        gather(mesh, srcs, fm[name], dst)
+        if per is None:
+            gather(mesh, srcs, fm[name], dst)
+        else:
+            for e0, e1, sub in gather_batches({name: fm[name]}, (H // 32) * (I // 32), E, per):
+                rows, m = sub[name]
+                gather(mesh, srcs[3 * e0 : 3 * e1], m, dst, pages=rows)
         a = ttnn.to_torch(ttnn.get_device_tensors(dst)[0])
         b = ttnn.to_torch(ttnn.get_device_tensors(want)[0])
         assert torch.equal(a, b), f"{name}: {int((a != b).sum())} values differ from the weight prep"
