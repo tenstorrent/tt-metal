@@ -262,9 +262,9 @@ PagedFusedUpdateCacheDeviceOperation::tensor_return_value_t PagedFusedUpdateCach
 PagedFusedUpdateCacheDeviceOperation::topology_return_value_t
 PagedFusedUpdateCacheDeviceOperation::compute_output_topologies(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    // Each cache is updated in place from its own input and the shared update_idxs / page_table, so it is checked
-    // against those only, where the framework default would also check it against the other cache and its input. A
-    // cache the rule rejects takes the union of every tensor here.
+    // Each cache is updated in place from its own input and the shared update_idxs / page_table, and is labelled as
+    // paged_update_cache would label it: checked against those tensors only, where the framework default would also
+    // check it against the other cache and its input, and given their union when the rule rejects it.
     const Tensor* update_idxs = tensor_args.update_idxs_tensor.has_value() ? &*tensor_args.update_idxs_tensor : nullptr;
     const Tensor* page_table = tensor_args.page_table.has_value() ? &*tensor_args.page_table : nullptr;
     const auto label = [&](const Tensor& cache, const Tensor& input) {
@@ -272,14 +272,13 @@ PagedFusedUpdateCacheDeviceOperation::compute_output_topologies(
                 cache, {&input, update_idxs, page_table}, "ttnn::experimental::paged_fused_update_cache")) {
             return std::move(*kept);
         }
-        std::vector<std::reference_wrapper<const Tensor>> all_tensors = {
-            tensor_args.cache_tensor1, tensor_args.input_tensor1, tensor_args.cache_tensor2, tensor_args.input_tensor2};
+        std::vector<std::reference_wrapper<const Tensor>> tensors = {cache, input};
         for (const Tensor* optional_input : {update_idxs, page_table}) {
             if (optional_input != nullptr) {
-                all_tensors.emplace_back(*optional_input);
+                tensors.emplace_back(*optional_input);
             }
         }
-        auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(all_tensors);
+        auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(tensors);
         return tt::tt_metal::TensorTopology(
             std::move(shape), std::move(placements), cache.tensor_topology().mesh_coords());
     };
