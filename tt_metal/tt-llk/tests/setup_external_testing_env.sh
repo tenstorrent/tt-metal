@@ -63,15 +63,25 @@ if [[ "$CLEAN" == true ]]; then
     exit 0
 fi
 
-# Initial checks
-check_deps
-check_python_version
-
 # Deactivate any active virtual environment
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
     echo "Deactivating current Python environment: $VIRTUAL_ENV"
-    deactivate
+    if declare -F deactivate > /dev/null; then
+        deactivate
+    else
+        # A child process does not inherit the parent shell's deactivate function.
+        PATH=":${PATH}:"
+        PATH="${PATH//":${VIRTUAL_ENV}/bin:"/:}"
+        PATH="${PATH#:}"
+        PATH="${PATH%:}"
+        unset VIRTUAL_ENV
+        hash -r
+    fi
 fi
+
+# Initial checks
+check_deps
+check_python_version
 
 # Main setup logic
 if [[ "$REUSE" == false || ! -d "$VENV_DIR" ]]; then

@@ -71,9 +71,13 @@ If `--arch` is not provided, infer in this order:
    1. Verify the env is complete: both `tests/.venv/bin/pytest` and
       `tests/sfpi/sfpi.version` (the last file the bootstrap writes) exist.
       If either is missing, run from the tt-llk worktree root, with a
-      blocking shell call and a ~30 minute timeout:
-          cd tests && bash ./setup_external_testing_env.sh
-      The script runs `sudo apt-get` and rebuilds `tests/.venv` from scratch.
+      blocking shell call and a ~30 minute timeout, under a lock on `tests/`:
+          cd tests && flock . bash -c '
+            if [[ ! -x .venv/bin/pytest ]]; then bash ./setup_external_testing_env.sh
+            elif [[ ! -f sfpi/sfpi.version ]]; then ./setup_testing_env.sh; fi'
+      A missing `pytest` needs the full setup (`sudo apt-get`, `tests/.venv`
+      rebuilt); a missing `sfpi.version` alone needs only the SFPI fetch,
+      which leaves `tests/.venv` untouched.
 
    2. Then invoke the runner with the worktree path and arch:
           bash .cursor/scripts/run_test.sh {command} \

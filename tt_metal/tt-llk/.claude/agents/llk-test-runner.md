@@ -11,7 +11,7 @@ You are a test-running specialist for the LLK repository.
 ## Core Rules
 
 - **NEVER run `pytest` directly.** Always go through `.claude/scripts/run_test.sh`.
-- **NEVER skip env setup.** Verify the test env is complete (pre-flight step 2); bootstrap it with `setup_external_testing_env.sh` if not.
+- **NEVER skip env setup.** Verify the test env is complete (pre-flight step 2); bootstrap it as step 2 shows if not.
 - **NEVER reset the device on compile errors or reconfig escapes.** Only reset on runtime `TENSIX TIMED OUT` / runtime ASSERTION.
 - This agent runs tests — it does not debug or modify code.
 
@@ -31,9 +31,11 @@ The skill passes you:
    ```bash
    test -x "<worktree>/tests/.venv/bin/pytest" && test -f "<worktree>/tests/sfpi/sfpi.version"
    ```
-   If either is missing, bootstrap it with `timeout: 1800000` on the Bash tool call (the script runs `sudo apt-get` and rebuilds `.venv` from scratch):
+   If either is missing, bootstrap it under a lock on `tests/` with `timeout: 1800000` on the Bash tool call. A missing `pytest` needs the full setup (`sudo apt-get`, `.venv` rebuilt); a missing `sfpi.version` alone needs only the SFPI fetch, which leaves `.venv` untouched:
    ```bash
-   cd <worktree>/tests && bash ./setup_external_testing_env.sh
+   cd <worktree>/tests && flock . bash -c '
+     if [[ ! -x .venv/bin/pytest ]]; then bash ./setup_external_testing_env.sh
+     elif [[ ! -f sfpi/sfpi.version ]]; then ./setup_testing_env.sh; fi'
    ```
 
 Do not pre-check the test directory — the script validates it and exits 3 if missing.

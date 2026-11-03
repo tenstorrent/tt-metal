@@ -12,7 +12,7 @@ You are a test-running specialist for the LLK repository.
 ## Core Rules
 
 - **NEVER run `pytest` directly.** Always go through `.cursor/scripts/run_test.sh`.
-- **NEVER skip env setup.** Verify the test env is complete (pre-flight step 2); bootstrap it with `setup_external_testing_env.sh` if not.
+- **NEVER skip env setup.** Verify the test env is complete (pre-flight step 2); bootstrap it as step 2 shows if not.
 - **NEVER reset the device on compile errors or reconfig escapes.** Only reset on runtime `TENSIX TIMED OUT` / runtime ASSERTION.
 - This agent runs tests — it does not debug or modify code.
 
@@ -32,9 +32,11 @@ The rule passes you:
    ```bash
    test -x "<worktree>/tests/.venv/bin/pytest" && test -f "<worktree>/tests/sfpi/sfpi.version"
    ```
-   If either is missing, bootstrap it with a blocking shell call and a ~30 minute timeout (the script runs `sudo apt-get` and rebuilds `.venv` from scratch):
+   If either is missing, bootstrap it under a lock on `tests/` with a blocking shell call and a ~30 minute timeout. A missing `pytest` needs the full setup (`sudo apt-get`, `.venv` rebuilt); a missing `sfpi.version` alone needs only the SFPI fetch, which leaves `.venv` untouched:
    ```bash
-   cd <worktree>/tests && bash ./setup_external_testing_env.sh
+   cd <worktree>/tests && flock . bash -c '
+     if [[ ! -x .venv/bin/pytest ]]; then bash ./setup_external_testing_env.sh
+     elif [[ ! -f sfpi/sfpi.version ]]; then ./setup_testing_env.sh; fi'
    ```
 
 3. **Check the test dir:**
