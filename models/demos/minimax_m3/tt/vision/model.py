@@ -37,7 +37,7 @@ from models.common.tensor_utils import nearest_32
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.block import M3VLBlock
 from models.demos.minimax_m3.tt.vision.common import to_device
-from models.demos.minimax_m3.tt.vision.image_input import check_image_input
+from models.demos.minimax_m3.tt.vision.image_input import check_image_grid, check_image_input
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 from models.demos.minimax_m3.tt.vision.projector import M3VLProjector
@@ -107,12 +107,12 @@ class M3VLVisionModel(LightweightModule):
     def push_pixel_values(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
         """Check one image's input and push its pixel values to device as forward_device takes them.
 
-        Takes one image, pixel_values (L, 1176) and image_grid_thw (1, 3) as the image processor gives them, and raises
-        ValueError (check_image_input) for anything else before any device work. On the device, rows past the grid's
-        patches would get zero q and k from the RoPE op (rotary_embedding_llama) without an error, one NaN or Inf
-        value would reach every patch through attention, and the patches of several images would attend to each other,
-        as in Hugging Face 5.12.1; vLLM and SGLang keep attention inside each image. Returns the pixel values on device
-        as bf16 (1, 1, L, 1176), whatever the weights' dtype.
+        Takes one image, pixel_values (L, 1176) and image_grid_thw (1, 3), and raises ValueError before any device work
+        unless they pass check_image_input. On the device, rows past the grid's patches would get zero q and k from the
+        RoPE op (rotary_embedding_llama) without an error, one NaN or Inf value would reach every patch through
+        attention, and the patches of several images would attend to each other, as in Hugging Face 5.12.1; vLLM and
+        SGLang keep attention inside each image. Returns the pixel values on device as bf16 (1, 1, L, 1176), whatever
+        the weights' dtype.
         """
         check_image_input(pixel_values, image_grid_thw, self.config.patch_dim)
         return to_device(pixel_values.reshape(1, 1, *pixel_values.shape), self.device)
@@ -172,9 +172,20 @@ class M3VLVisionModel(LightweightModule):
 
     def forward_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
         """Every device op of forward, on the pixel values that push_pixel_values gave for image_grid_thw. They stay
-        allocated, so one upload serves several calls. It does not check that they belong to image_grid_thw: pixel
-        values pushed for another grid can give wrong tokens without an error. With projector: (1, 1, L//4, 6144); else
-        the tower out (1, 1, L, 1280)."""
+        allocated, so one upload serves several calls. With projector: (1, 1, L//4, 6144); else the tower out (1, 1, L,
+        1280).
+
+        Raises ValueError before any device work unless image_grid_thw passes check_image_grid and x_tt has the shape
+        that push_pixel_values gives for it, (1, 1, h * w, patch_dim), which it reads from the tensor's host metadata.
+        Pixel values pushed for another grid of the same patch count, such as 32 x 72 for 48 x 48 or 46 x 34 for
+        34 x 46, pass and give wrong tokens without an error.
+        """
+        expected_shape = (1, 1, check_image_grid(image_grid_thw), self.config.patch_dim)
+        if tuple(x_tt.shape) != expected_shape:
+            raise ValueError(
+                f"x_tt must be the pixel values that push_pixel_values gives for grid_thw {image_grid_thw.tolist()},"
+                f" of shape {expected_shape}, got {tuple(x_tt.shape)}"
+            )
         x_tt = self._tower_device(x_tt, image_grid_thw)
         if self.projector is None:
             return x_tt

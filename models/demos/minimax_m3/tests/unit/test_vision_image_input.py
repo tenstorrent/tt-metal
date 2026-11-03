@@ -6,6 +6,8 @@ Host-side checks of M3VLVisionModel's input, which push_pixel_values checks with
 splits at the upload. No device. The tests check that:
   - push_pixel_values, and forward_tower and forward through it, raise ValueError for input that is not one image,
     before any ttnn call;
+  - forward_device raises ValueError, before any ttnn call, for a grid that is not one image's and for pixel values on
+    the device whose shape is not the one push_pixel_values gives for the grid;
   - a good image's pixel values go to the device as bf16 whatever the weights' dtype;
   - forward runs the modules in order, each on the output of the one before, and makes the calls of
     push_pixel_values, then those of forward_device on its upload, which stays allocated;
@@ -47,6 +49,29 @@ def _device_work(*args, **kwargs):
     raise AssertionError("device work before the input check")
 
 
+def _model_without_device_work():
+    """A model whose modules are stand-ins that fail the test if they run."""
+    return M3VLVisionModel(
+        None,
+        CONFIG,
+        padded_head_dim=96,  # head_dim 80 in whole tiles; no case gets as far as the RoPE tables
+        patch_embed=_device_work,
+        pre_layrnorm=_device_work,
+        blocks=[],
+        projector=_device_work,
+    )
+
+
+class _Upload(str):
+    """A logged upload: its name, which the logs compare, and the shape of the tensor it stands for, which
+    forward_device checks."""
+
+    def __new__(cls, name: str, shape: tuple):
+        upload = super().__new__(cls, name)
+        upload.shape = shape
+        return upload
+
+
 # id: (pixel_values, image_grid_thw, message). Every case is the image of ROWS and GRID or a mistake on it.
 MODEL_BAD_INPUTS = {
     "rows_3d": (ROWS[..., None], GRID, r"\(num_patches, 1176\)"),
@@ -83,18 +108,45 @@ def test_vision_model_rejects_bad_input(case, expect_error, monkeypatch):
     and inf_pixel have it in the last value only, and the two Inf values of inf_pair add up to NaN."""
     pixel_values, grid_thw, message = MODEL_BAD_INPUTS[case]
     monkeypatch.setattr(ttnn, "from_torch", _device_work)
-    model = M3VLVisionModel(
-        None,
-        CONFIG,
-        padded_head_dim=96,  # head_dim 80 in whole tiles; no case gets as far as the RoPE tables
-        patch_embed=_device_work,
-        pre_layrnorm=_device_work,
-        blocks=[],
-        projector=_device_work,
-    )
+    model = _model_without_device_work()
     for run in (model.push_pixel_values, model.forward_tower, model.forward):
         with expect_error(ValueError, message):
             run(pixel_values, grid_thw)
+
+
+UPLOAD = (1, 1, 16, 1176)  # the shape of the pixel values that push_pixel_values gives for ROWS and GRID
+# id: (shape of the pixel values on the device, image_grid_thw, message). Every case is the upload of ROWS and GRID or
+# a mistake on it.
+FORWARD_DEVICE_BAD_INPUTS = {
+    "more_rows": ((1, 1, 20, 1176), GRID, r"of shape \(1, 1, 16, 1176\), got \(1, 1, 20, 1176\)"),
+    "fewer_rows": ((1, 1, 12, 1176), GRID, r"got \(1, 1, 12, 1176\)"),
+    "other_grid": (UPLOAD, torch.tensor([[1, 4, 6]]), r"of shape \(1, 1, 24, 1176\), got \(1, 1, 16, 1176\)"),
+    "row_width": ((1, 1, 16, 1000), GRID, r"got \(1, 1, 16, 1000\)"),
+    "rows_2d": ((16, 1176), GRID, r"got \(16, 1176\)"),
+    "grid_list": (UPLOAD, GRID.tolist(), "must be a torch tensor, got list"),
+    "float_grid": (UPLOAD, GRID.float(), "integer tensor"),
+    "grid_1d": (UPLOAD, GRID[0], r"\(1, 3\)"),
+    "two_images": ((1, 1, 32, 1176), torch.cat([GRID, GRID]), "grid of one image"),
+    "video": ((1, 1, 32, 1176), torch.tensor([[2, 4, 4]]), "t = 1"),
+    "odd_grid": ((1, 1, 12, 1176), torch.tensor([[1, 3, 4]]), "multiples of 2"),
+}
+
+
+@pytest.mark.parametrize("case", FORWARD_DEVICE_BAD_INPUTS)
+def test_vision_forward_device_rejects_mismatched_upload(case, expect_error, monkeypatch):
+    """M3VLVisionModel.forward_device raises ValueError before any ttnn call for a grid that is not one image's and for
+    pixel values on the device whose shape is not the one push_pixel_values gives for the grid. No device: the pixel
+    values are a stand-in with a shape, and ttnn's ops and the modules are stand-ins that fail the test if they run.
+
+    more_rows is the mismatch the device would not catch: the RoPE op gives zero q and k for the rows past the grid's
+    patches. two_images would also put the RoPE tables of both images in the cache under the first image's grid."""
+    shape, grid_thw, message = FORWARD_DEVICE_BAD_INPUTS[case]
+    for op in ("from_torch", "to_memory_config", "deallocate"):
+        monkeypatch.setattr(ttnn, op, _device_work)
+    model = _model_without_device_work()
+    with expect_error(ValueError, message):
+        model.forward_device(SimpleNamespace(shape=shape), grid_thw)
+    assert not model._rope_cache, "forward_device staged RoPE tables for input it rejects"
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16], ids=["fp32_rows", "fp16_rows"])
@@ -134,7 +186,7 @@ def test_vision_model_forward_device_after_upload(monkeypatch):
     forward_tower makes forward's calls up to the last block. No device: ttnn.from_torch, ttnn.to_memory_config,
     ttnn.deallocate and the modules are stand-ins that log each call with its inputs. Each output is named after its
     kind of call and the number of such calls before it since the log was cleared, so the logs of two models
-    compare."""
+    compare; an upload also has the shape of the tensor it stands for, which forward_device checks."""
     calls = []  # (kind, inputs) of each call since the log was cleared
 
     def logged(kind):
@@ -144,7 +196,10 @@ def test_vision_model_forward_device_after_upload(monkeypatch):
 
         return call
 
-    monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **kwargs: logged("from_torch")(tuple(tensor.shape)))
+    def from_torch(tensor, **kwargs):
+        return _Upload(logged("from_torch")(tuple(tensor.shape)), tuple(tensor.shape))
+
+    monkeypatch.setattr(ttnn, "from_torch", from_torch)
     monkeypatch.setattr(ttnn, "to_memory_config", logged("to_memory_config"))
     monkeypatch.setattr(ttnn, "deallocate", logged("deallocate"))
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
@@ -187,7 +242,7 @@ def test_vision_model_forward_device_after_upload(monkeypatch):
     first = list(calls)
     upload, after_upload = first[:1], first[1:]
     following = log(lambda: model.forward_device(x_tt, GRID))
-    assert upload == [("from_torch", ((1, 1, 16, 1176),))] and x_tt == "from_torch0", upload
+    assert upload == [("from_torch", (UPLOAD,))] and x_tt == "from_torch0", upload
     assert upload + after_upload == forward[0], f"forward_device on the first image of the grid made {after_upload}"
     assert upload + following == forward[1], f"forward_device on the next image of the grid made {following}"
     assert ("deallocate", (x_tt,)) not in first + following, "forward_device freed its input"
