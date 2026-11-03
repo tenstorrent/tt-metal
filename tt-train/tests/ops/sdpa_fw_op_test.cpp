@@ -521,7 +521,12 @@ struct SDPATestConfig {
 };
 
 // kernel_output, when given, receives the kernel's output so callers can compare runs with each other.
-void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_output = nullptr) {
+// kernel_output receives the kernel's output; keep_alive receives the device inputs (Q, K, V, the mask tensor if
+// any), so a caller can hold them past the call and force the next call's inputs to other addresses.
+void run_sdpa_test(
+    const SDPATestConfig& config,
+    xt::xarray<float>* kernel_output = nullptr,
+    std::vector<ttnn::Tensor>* keep_alive = nullptr) {
     using namespace ttml;
 
     ASSERT_GT(config.num_query_heads, 0U) << "num_query_heads must be greater than zero";
@@ -593,6 +598,12 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
     std::optional<ttnn::Tensor> kernel_gate = std::nullopt;
     if (gate_tensor.has_value()) {
         kernel_gate = core::from_xtensor(gate_tensor.value(), &autograd::ctx().get_device());
+    }
+    if (keep_alive != nullptr) {
+        keep_alive->assign({query, key, value});
+        if (kernel_mask.has_value()) {
+            keep_alive->push_back(kernel_mask.value());
+        }
     }
 
     // Run SDPA kernel with new interface - this is our reference implementation
@@ -2086,6 +2097,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     };
     const metal::SDPAForwardProgramConfig a{.q_chunk_size = 128U, .k_chunk_size = 256U};
     const metal::SDPAForwardProgramConfig b{.q_chunk_size = 32U, .k_chunk_size = 64U};
+    const metal::SDPAForwardProgramConfig c{.q_chunk_size = 64U, .k_chunk_size = 128U};  // run once: a miss
     const auto entries0 = device->num_program_cache_entries();
     const xt::xarray<float> out_a = run(first, a);
     const auto entries_a = device->num_program_cache_entries();
@@ -2097,13 +2109,19 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     EXPECT_TRUE(xt::all(xt::equal(out_a, out_a_again))) << "cache hit must reproduce the first run";
     EXPECT_LT(xt::mean(xt::abs(out_a - out_b))(), kCrossChunkingMeanAbsTol) << "both chunkings compute the same op";
 
-    // Same shapes at other addresses: a hit that computes the new inputs (both chunkings agree on them).
+    // Same shapes at other addresses: a hit that computes the new inputs. The two hits agreeing with each
+    // other would not show a stale Q/K/V address (both would be wrong the same way), so the reference is a
+    // third chunking run for the first time on these tensors: a miss, whose addresses are set from scratch.
     const xt::xarray<float> out_a2 = run(second, a);
     const xt::xarray<float> out_b2 = run(second, b);
     EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "other addresses must hit";
+    const xt::xarray<float> out_c2 = run(second, c);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 2U) << "the third config must miss";
     EXPECT_FALSE(xt::allclose(out_a2, out_a, 1e-3F, 1e-3F)) << "hit reproduced the first inputs: stale addresses";
-    EXPECT_LT(xt::mean(xt::abs(out_a2 - out_b2))(), kCrossChunkingMeanAbsTol)
-        << "the hits on the second inputs must agree with each other";
+    EXPECT_LT(xt::mean(xt::abs(out_a2 - out_c2))(), kCrossChunkingMeanAbsTol)
+        << "the hit on the second inputs must agree with the uncached run: stale addresses";
+    EXPECT_LT(xt::mean(xt::abs(out_b2 - out_c2))(), kCrossChunkingMeanAbsTol)
+        << "the hit on the second inputs must agree with the uncached run: stale addresses";
 
     // The mask address is a reader runtime arg of its own: a hit with a second live mask tensor (same shape,
     // other values and address) must read the new mask, not the first one.
@@ -2194,10 +2212,20 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_RingChunking_SingleDevice) {
                 .mask_type = mask_type,
                 .program_config = config,
                 .test_name = name};
-            run_sdpa_test(shard);
+            // The first shard's inputs stay alive through the second run, so the second run's land at other
+            // addresses (freed inputs of the same size would be reallocated where the first ones were, and a
+            // stale address would still read the right data).
+            std::vector<ttnn::Tensor> first_inputs;
+            run_sdpa_test(shard, nullptr, &first_inputs);
             const auto entries = device->num_program_cache_entries();
-            run_sdpa_test(shard);  // fresh inputs at other addresses
+            std::vector<ttnn::Tensor> second_inputs;
+            run_sdpa_test(shard, nullptr, &second_inputs);
             EXPECT_EQ(device->num_program_cache_entries(), entries) << name << ": the second shard must hit";
+            ASSERT_EQ(first_inputs.size(), second_inputs.size());
+            for (std::size_t i = 0; i < first_inputs.size(); ++i) {
+                EXPECT_NE(first_inputs[i].buffer()->address(), second_inputs[i].buffer()->address())
+                    << name << ": the second shard's inputs must sit at other addresses";
+            }
         }
     }
 }
