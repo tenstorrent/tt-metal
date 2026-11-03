@@ -71,6 +71,43 @@ inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 #endif
 inline constexpr uint32_t kDstTiles = GDN_DST_TILES;
 
+// GDN_ROUND_OPERANDS: the FPU reads fp32 CB data through its source registers by TRUNCATING the mantissa to
+// 9 bits (always toward zero), so every fp32 intermediate re-read by a matmul / copy_tile is biased low; in
+// the carried state the bias compounds chunk over chunk. With this define each fp32 tile is rounded to the
+// nearest 9-bit-mantissa value (ties to even) on the SFPU right before it is packed, which makes the later
+// truncation exact and the error unbiased. The final state and o are packed unrounded.
+#if defined(GDN_ROUND_OPERANDS)
+#ifdef TRISC_MATH
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+namespace ckernel::sfpu {
+inline void gdn_round9_face() {
+#pragma GCC unroll 0
+    for (int d = 0; d < 8; d++) {
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(value);
+        sfpi::vUInt lsb = (bits >> 14) & 1;
+        bits = bits + 0x1fffU + lsb;
+        bits = bits & 0xffffc000U;
+        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(bits);
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+#endif
+[[gnu::noinline]] inline void gdn_round(uint32_t first, uint32_t n) {
+    if (n == 0) {
+        return;
+    }
+    MATH((::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::unused, DST_ACCUM_MODE>()));
+    for (uint32_t j = 0; j < n; j++) {
+        MATH((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+            DST_SYNC_MODE, DST_ACCUM_MODE, gdn_round9_face, first + j, VectorMode::RC)));
+    }
+}
+#else
+inline void gdn_round(uint32_t, uint32_t) {}
+#endif
+
 inline void mm(
     uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr, bool skip_reconfig = false) {
     CircularBuffer(o).reserve_back(Mt * Nt);
@@ -91,6 +128,7 @@ inline void mm(
                     uint32_t bi = tr ? (ni * Kt + ki) : (ki * Nt + ni);
                     matmul_tiles(a, b, mi * Kt + ki, bi, 0);
                 }
+                gdn_round(0, 1);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(0, o, mi * Nt + ni);
@@ -113,6 +151,7 @@ inline void mm(
                 matmul_tiles(a, b, mi * Kt + ki, bi, j);
             }
         }
+        gdn_round(0, nb);
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t j = 0; j < nb; j++) {
@@ -150,6 +189,7 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool ski
             } else {
                 mul_tiles(a, b, i, i, 0);
             }
+            gdn_round(0, 1);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, o, i);
@@ -170,6 +210,7 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool ski
                 mul_tiles(a, b, i0 + j, i0 + j, j);
             }
         }
+        gdn_round(0, nb);
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t j = 0; j < nb; j++) {
@@ -220,6 +261,7 @@ inline void decay_all(
             mul_binary_tile_init();
             sfpu_mul_dst(1, 3, 2);  // dl = decayfac_i * decay_exp_i = exp(g_sum)
         }
+        gdn_round(0, 4);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o_decay, i);
@@ -258,6 +300,7 @@ inline void lmask_fused(uint32_t ones, uint32_t decay, uint32_t decay_row, uint3
             exp_tile_init();
             sfpu_exp_dst(0);
             sfpu_mul_dst(0, 1, 0);  // * tril -> L_mask
+            gdn_round(0, 1);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, o, mi * Ct + ni);
@@ -275,6 +318,7 @@ inline void dl_tile(uint32_t eye, uint32_t col, uint32_t col_tile, uint32_t o) {
     mul_bcast_cols_init(eye, col);
     tile_regs_acquire();
     mul_tiles_bcast_cols(eye, col, 0, col_tile, 0);
+    gdn_round(0, 1);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, o, 0);
@@ -295,6 +339,7 @@ inline void bcast_cols_mul_neg(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt
             tile_regs_acquire();
             mul_tiles_bcast_cols(a, col, mi * Nt + ni, mi, 0);
             negative_tile(0);
+            gdn_round(0, 1);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, o, mi * Nt + ni);
@@ -330,6 +375,7 @@ inline void negn_fused(uint32_t kbeta, uint32_t k, uint32_t lmask, uint32_t eye,
             binop_with_scalar_tile_init();
             add_unary_tile(2, 0xBF800000u);  // I - 1  (-1.0f)
             sfpu_mul_dst(0, 2, 0);           // negN
+            gdn_round(0, 1);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, o, mi * Ct + ni);
@@ -357,6 +403,7 @@ inline void intra_fused(uint32_t q, uint32_t k, uint32_t lmask, uint32_t o, uint
             copy_tile(lmask, mi * Ct + ni, 1);
             mul_binary_tile_init();
             sfpu_mul_dst(0, 1, 0);
+            gdn_round(0, 1);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, o, mi * Ct + ni);
@@ -407,6 +454,7 @@ inline void inv_rms_diag(
         }
         mul_binary_tile_init();
         sfpu_mul_dst(0, 1, 0);  // off-diagonal -> 0
+        gdn_round(0, 1);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o, mi);
@@ -425,6 +473,7 @@ inline void mm_diag(uint32_t d, uint32_t x, uint32_t o, uint32_t Ct, uint32_t Kt
         for (uint32_t ki = 0; ki < Kt; ki++) {
             tile_regs_acquire();
             matmul_tiles(d, x, mi, mi * Kt + ki, 0);
+            gdn_round(0, 1);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, o, mi * Kt + ki);
@@ -444,6 +493,7 @@ inline void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, ui
         for (uint32_t ni = 0; ni < Nt; ni++) {
             tile_regs_acquire();
             mul_tiles_bcast_cols(a, col, mi * Nt + ni, mi, 0);
+            gdn_round(0, 1);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, o, mi * Nt + ni);
@@ -463,6 +513,7 @@ inline void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o, bool skip_reconfi
     copy_init(src);
     tile_regs_acquire();
     copy_tile(src, src_tile, 0);
+    gdn_round(0, 1);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, o, 0);
@@ -488,6 +539,7 @@ inline void ewt(uint32_t a, uint32_t ai, uint32_t b, uint32_t bi, uint32_t o, Ew
     } else {
         mul_tiles(a, b, ai, bi, 0);
     }
+    gdn_round(0, 1);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, o, 0);
@@ -519,6 +571,7 @@ inline void invert16(uint32_t nq, uint32_t out, uint32_t tmp, uint32_t cb_eye) {
         add_init(a, b);
         tile_regs_acquire();
         add_tiles(a, b, 0, 0, 0);
+        gdn_round(0, 1);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o, 0);
@@ -536,6 +589,7 @@ inline void invert16(uint32_t nq, uint32_t out, uint32_t tmp, uint32_t cb_eye) {
         matmul_init(nq, out, 0);
         tile_regs_acquire();
         matmul_tiles(nq, out, 0, 0, 0);
+        gdn_round(0, 1);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, tmp, 0);
@@ -569,6 +623,7 @@ inline void asm4(
         copy_init(src[i]);
         tile_regs_acquire();
         copy_tile(src[i], tl[i], 0);
+        gdn_round(0, 1);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o, i);
@@ -663,6 +718,7 @@ inline void sfpu_tinv(uint32_t negN, uint32_t cb_eye, uint32_t out) {
     copy_tile(cb_eye, 0, DST_RHS);  // RHS = I
     triangle_solve_tile_init();
     triangle_solve_tile<DataFormat::Float32, true /*L_NEGATED*/>(negN, 0 /*l_tile_idx*/, DST_RHS, DST_X);
+    gdn_round(DST_X, 1);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(DST_X, out, 0);
@@ -680,6 +736,7 @@ inline void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
     for (uint32_t i = 0; i < Ct; i++) {
         tile_regs_acquire();
         transpose_tile(in, i, 0);
+        gdn_round(0, 1);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o, i);
@@ -927,6 +984,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
             for (uint32_t ci = 0; ci < Ct; ci++) {
                 tile_regs_acquire();
                 transpose_tile(cb.scr1, ci * Kt + ki, 0);
+                gdn_round(0, 1);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(0, cb.kdec_t, ki * Ct + ci);
@@ -954,7 +1012,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
 // chunk (reader-fed cb_S at chunk 0, then the compute-only ping-pong), dst = where the updated
 // state goes (the other ping-pong CB, or the final-state CB on the last chunk).
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
+inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst, bool round_state = true) {
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;
@@ -994,6 +1052,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
                 }
                 matmul_tiles(cb.eye, cb.vbeta, 0, t, j);  // DST[j] += I @ v_beta
             }
+            gdn_round(0, nb);
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < nb; j++) {
@@ -1073,6 +1132,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
                     matmul_tiles(cb.kdec_t, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j);
                 }
             }
+            gdn_round(0, round_state ? nb : 0);
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < nb; j++) {

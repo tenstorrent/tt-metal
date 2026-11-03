@@ -88,6 +88,8 @@ struct ChunkGdnParams {
     uint32_t placement = 0;
     // WY-inverse method of the producer's prep compute (GdnTinv, chunk_gdn_compute_config.hpp).
     GdnTinv tinv = GdnTinv::HORNER;
+    // Round fp32 intermediates to nearest before packing (GDN_ROUND_OPERANDS). Fused only.
+    bool round_operands = false;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -206,6 +208,7 @@ std::vector<Tensor> chunk_gdn(
     bool qk_norm = false,
     float scale = 1.0f,
     bool qk_flat = false,
-    uint32_t Hk = 0);
+    uint32_t Hk = 0,
+    bool round_operands = false);
 
 }  // namespace ttnn::prim

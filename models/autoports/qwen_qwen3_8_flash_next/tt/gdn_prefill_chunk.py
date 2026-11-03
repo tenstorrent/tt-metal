@@ -2,7 +2,9 @@
 """Chunked (FLA) GatedDeltaNet recurrence for the serial prefill view.
 
 Replaces the token-serial resident kernel with ttnn.transformer.chunk_gated_delta_rule
-(flat token-major q/k/v, in-kernel L2 norm, chunk 32, fp32 state). The initial state is
+(flat token-major q/k/v, in-kernel L2 norm, chunk 32, fp32 state, round_fp32_operands: the FPU
+truncates fp32 operands to 9 mantissa bits toward zero, which unrounded biases the carried state low
+chunk after chunk). The initial state is
 the view's recurrent_state (gathered from the slot bank by _route_state); the final state
 is copied back into it, so the bank scatter and the decode hand-off are unchanged.
 Causal-conv state handling is untouched. Toggle: QWEN_PREFILL_CHUNK_GDN=0 restores the
@@ -71,6 +73,7 @@ def chunk_recurrence(q, k, v, g, beta, state, consts, **options):
         tril=tril,
         ones=ones,
         masks=masks,
+        round_fp32_operands=True,
         **options,
     )
     o = ttnn.reshape(o, (b, 12, s + pad, 128))

@@ -53,6 +53,8 @@ struct ChunkGdnPrepParams {
     bool prep_serial = false;
     // WY-inverse method (GdnTinv, chunk_gdn_compute_config.hpp).
     GdnTinv tinv = GdnTinv::HORNER;
+    // Round fp32 intermediates to nearest before packing (GDN_ROUND_OPERANDS).
+    bool round_operands = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -110,7 +112,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_flat = false,
     uint32_t Hk = 0,
     bool prep_serial = false,
-    ttnn::transformer::ChunkGdnWyInverse wy_inverse = ttnn::transformer::ChunkGdnWyInverse::AUTO);
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse = ttnn::transformer::ChunkGdnWyInverse::AUTO,
+    bool round_operands = false);
 
 // ---------------------------------------------------------------------------
 // SCAN
@@ -125,6 +128,8 @@ struct ChunkGdnScanParams {
     // ChunkGdnPhasedProgramConfig::use_mcast / scan_serial (see chunk_gated_delta_rule_config.hpp).
     bool use_mcast = true;
     bool force_serial = false;
+    // Round the carried state to nearest before packing it for the next chunk (GDN_ROUND_OPERANDS).
+    bool round_operands = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -175,6 +180,7 @@ std::vector<Tensor> chunk_gdn_scan(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool use_mcast = true,
-    bool force_serial = false);
+    bool force_serial = false,
+    bool round_operands = false);
 
 }  // namespace ttnn::prim

@@ -325,7 +325,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     compute_ct.push_back(f32_bits(attrs.scale));
     compute_ct.push_back(f32_bits(1e-6f));
     compute.compile_time_args = compute_ct;
-    compute.defines = gdn_prep_defines(attrs.tinv, false /*hoist_reconfig*/);
+    compute.defines = gdn_prep_defines(attrs.tinv, false /*hoist_reconfig*/, attrs.round_operands);
     compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 
@@ -548,6 +548,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = ct_args;
+    compute.defines = gdn_scan_defines(attrs.round_operands);
     compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 

@@ -84,7 +84,7 @@ void kernel_main() {
 #endif
         {
             DeviceZoneScopedN("scan_step");
-            scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
+            scan_step<Ct, Kt, Vt>(CBS, cur_S, dst, !last);
         }
     }
 }

@@ -62,6 +62,12 @@ namespace ttnn::transformer {
  * Blackhole and chunk_size == 32 only) or AUTO (FORWARD_SUBSTITUTION wherever supported, Horner elsewhere).
  * The mono program is Horner-only.
  *
+ * round_fp32_operands: the FPU reads fp32 CB operands by truncating the mantissa to 9 bits (always toward
+ * zero), so every fp32 intermediate the kernels re-read is biased low and the carried state's bias compounds
+ * chunk after chunk. When true, the fused/phased prep and scan kernels round each fp32 intermediate to the
+ * nearest 9-bit-mantissa value on the SFPU before packing it (the later truncation is then exact and the
+ * error unbiased); o and the final state are packed unrounded. Off by default (bit-identical to before).
+ *
  * output_head_major: the kernel natively produces o head-major ([BH,T,V]); the default
  * path permutes it to token-major [B,T,HV,V]. Callers that want head-major (e.g. the qwen36
  * GDN adapter's return_o_bh) should set this to get [BH,T,V] TILE directly and skip a
@@ -86,6 +92,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& eye = std::nullopt,
     const std::optional<ttnn::Tensor>& tril = std::nullopt,
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
-    const std::optional<ttnn::Tensor>& masks = std::nullopt);
+    const std::optional<ttnn::Tensor>& masks = std::nullopt,
+    bool round_fp32_operands = false);
 
 }  // namespace ttnn::transformer

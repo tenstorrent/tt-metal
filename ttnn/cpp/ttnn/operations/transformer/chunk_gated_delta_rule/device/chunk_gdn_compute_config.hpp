@@ -74,14 +74,28 @@ inline void validate_gdn_tinv(GdnTinv tinv, uint32_t chunk_size, const Tensor& a
 }
 
 // Compile-time defines of the prep compute kernel: GDN_TINV_SFPU selects the solve; GDN_HOIST_RECONFIG is the
-// fused producer's hoisted WY-path reconfigs (chunk_gdn_math.hpp, kGdnHoistReconfig).
-inline tt::tt_metal::KernelDescriptor::Defines gdn_prep_defines(GdnTinv tinv, bool hoist_reconfig) {
+// fused producer's hoisted WY-path reconfigs (chunk_gdn_math.hpp, kGdnHoistReconfig); GDN_ROUND_OPERANDS rounds
+// fp32 intermediates to nearest before packing (round_fp32_operands).
+inline tt::tt_metal::KernelDescriptor::Defines gdn_prep_defines(
+    GdnTinv tinv, bool hoist_reconfig, bool round_operands = false) {
     tt::tt_metal::KernelDescriptor::Defines defines;
     if (hoist_reconfig) {
         defines.emplace_back("GDN_HOIST_RECONFIG", "1");
     }
     if (tinv == GdnTinv::SFPU_FP32) {
         defines.emplace_back("GDN_TINV_SFPU", "1");
+    }
+    if (round_operands) {
+        defines.emplace_back("GDN_ROUND_OPERANDS", "1");
+    }
+    return defines;
+}
+
+// Compile-time defines of the scan compute kernel.
+inline tt::tt_metal::KernelDescriptor::Defines gdn_scan_defines(bool round_operands) {
+    tt::tt_metal::KernelDescriptor::Defines defines;
+    if (round_operands) {
+        defines.emplace_back("GDN_ROUND_OPERANDS", "1");
     }
     return defines;
 }

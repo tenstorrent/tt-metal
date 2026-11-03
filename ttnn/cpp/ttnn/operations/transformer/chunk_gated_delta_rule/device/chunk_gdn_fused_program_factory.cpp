@@ -320,7 +320,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .core_ranges = prod_set,
         .compile_time_args = prep_compute_ct,
         // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
-        .defines = gdn_prep_defines(attrs.tinv, true /*hoist_reconfig*/),
+        .defines = gdn_prep_defines(attrs.tinv, true /*hoist_reconfig*/, attrs.round_operands),
         .config = gdn_compute_config(attrs.compute_kernel_config),
     };
     prep_compute.runtime_args.reserve(P);
@@ -356,6 +356,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = rcv_set,
         .compile_time_args = ct_scan,
+        .defines = gdn_scan_defines(attrs.round_operands),
         .config = gdn_compute_config(attrs.compute_kernel_config),
     };
     scan_compute.runtime_args.reserve(R);
