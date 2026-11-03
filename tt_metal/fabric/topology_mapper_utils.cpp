@@ -879,6 +879,67 @@ std::optional<std::string> add_pinning_constraints(
     return apply_pinning_groups(intra_mesh_constraints, config.pinnings, logical_mesh_id, asic_positions_to_asic_ids);
 }
 
+// Hard constraints from the optional --mesh-pinning-file: every fabric node of a pinned (mesh, host-rank)
+// must land inside that host-rank's selected ASIC pool (one hostname + TT_VISIBLE_DEVICES placement), and
+// the pool must sit inside the physical mesh this logical mesh is seated on. Returns an error message when
+// a pin cannot be honoured for this seating; the caller treats that as an intra-mesh failure so the
+// enumerator forbids the seating and moves on.
+std::optional<std::string> add_mesh_host_rank_pinning_constraints(
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId>&
+        intra_mesh_constraints,
+    const TopologyMappingConfig& config,
+    MeshId logical_mesh_id,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
+    const std::set<tt::tt_metal::experimental::PhysicalNodeId>& physical_mesh_asics) {
+    const auto mesh_ranks_it = fabric_node_id_to_mesh_rank.find(logical_mesh_id);
+    for (const auto& [mesh_host_rank, allowed_asics] : config.mesh_host_rank_pinnings) {
+        if (mesh_host_rank.first != logical_mesh_id) {
+            continue;
+        }
+        if (mesh_ranks_it == fabric_node_id_to_mesh_rank.end()) {
+            return fmt::format(
+                "Mesh-host-rank pinning: logical mesh {} has no host-rank metadata", logical_mesh_id.get());
+        }
+
+        std::set<FabricNodeId> fabric_nodes;
+        for (const auto& [fabric_node, rank] : mesh_ranks_it->second) {
+            if (rank == mesh_host_rank.second) {
+                fabric_nodes.insert(fabric_node);
+            }
+        }
+        if (fabric_nodes.empty()) {
+            return fmt::format(
+                "Mesh-host-rank pinning: logical mesh {} has no host rank {}",
+                logical_mesh_id.get(),
+                mesh_host_rank.second.get());
+        }
+        if (fabric_nodes.size() != allowed_asics.size()) {
+            return fmt::format(
+                "Mesh-host-rank pinning: mesh {} host rank {} has {} logical nodes but its selected placement "
+                "contains {} ASICs",
+                logical_mesh_id.get(),
+                mesh_host_rank.second.get(),
+                fabric_nodes.size(),
+                allowed_asics.size());
+        }
+        if (!std::includes(
+                physical_mesh_asics.begin(), physical_mesh_asics.end(), allowed_asics.begin(), allowed_asics.end())) {
+            return fmt::format(
+                "Mesh-host-rank pinning: the selected ASIC pool for mesh {} host rank {} is outside the seated "
+                "physical mesh",
+                logical_mesh_id.get(),
+                mesh_host_rank.second.get());
+        }
+        if (!intra_mesh_constraints.add_required_constraint(fabric_nodes, allowed_asics)) {
+            return fmt::format(
+                "Mesh-host-rank pinning: exact placement for mesh {} host rank {} conflicts with other constraints",
+                logical_mesh_id.get(),
+                mesh_host_rank.second.get());
+        }
+    }
+    return std::nullopt;
+}
+
 // Add the PGD-derived layout as PREFERRED (soft) intra-mesh constraints. Must be called AFTER the hard
 // rank/exit/MGD-pin constraints so it only biases ASIC choice where they leave freedom; soft constraints never
 // make the solve infeasible. `mesh_pgd_pinnings` is keyed by physical MeshId; the entry for the mapped
@@ -1438,6 +1499,30 @@ TopologyMappingResult complete_intra_mesh_for_placement(
                 *failing_pair_out = {logical_mesh_id, physical_mesh_id};
             }
             return result;
+        }
+
+        if (!config.mesh_host_rank_pinnings.empty()) {
+            const auto& physical_mesh_nodes = physical_graph.get_nodes();
+            const std::set<tt::tt_metal::experimental::PhysicalNodeId> physical_mesh_asics(
+                physical_mesh_nodes.begin(), physical_mesh_nodes.end());
+            auto mesh_host_rank_pinning_failure = add_mesh_host_rank_pinning_constraints(
+                intra_mesh_constraints, config, logical_mesh_id, fabric_node_id_to_mesh_rank, physical_mesh_asics);
+            if (mesh_host_rank_pinning_failure.has_value()) {
+                record_failing_meshes(result, logical_mesh_id, physical_mesh_id);
+                set_mapping_failure(
+                    result,
+                    "mesh_host_rank_pinning",
+                    fmt::format(
+                        "intra-mesh mapping failed: mesh-host-rank pinning for logical mesh {} -> physical mesh {}: "
+                        "{}",
+                        logical_mesh_id.get(),
+                        physical_mesh_id.get(),
+                        *mesh_host_rank_pinning_failure));
+                if (failing_pair_out) {
+                    *failing_pair_out = {logical_mesh_id, physical_mesh_id};
+                }
+                return result;
+            }
         }
 
         // Mirror the single-solution path: when the physical graph carries PGD-derived pinnings, bias the

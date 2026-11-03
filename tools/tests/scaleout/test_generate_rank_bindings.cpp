@@ -14,6 +14,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "generate_rank_bindings_helpers.hpp"
+#include "mesh_pinning_file.hpp"
 
 namespace {
 
@@ -351,4 +352,83 @@ TEST(GenerateRankBindingsHelpersTest, WriteSolutionMeta_ListsHostsAndCounts) {
     EXPECT_EQ(root["num_hosts"].as<int>(), 2);  // host-a, host-b
     // host_set is emitted as a comma-joined scalar (host_set_csv), not a YAML sequence.
     EXPECT_EQ(root["host_set"].as<std::string>(), "host-a,host-b");
+}
+
+// ---------------------------------------------------------------------------
+// Mesh pinning file (optional Phase 1 mesh-host-rank placement input)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::filesystem::path write_pinning_file(const std::filesystem::path& dir, const std::string& contents) {
+    const auto path = dir / "pinned_meshes.yaml";
+    std::ofstream out(path);
+    out << contents;
+    out.close();
+    return path;
+}
+
+}  // namespace
+
+TEST(MeshPinningFileTest, ParsesManyToManyPlacementGroup) {
+    const auto dir = make_temp_dir("pin_global");
+    const auto path = write_pinning_file(dir, R"(mesh_host_pinnings:
+  - mesh_host_ranks:
+      - mesh_id: 0
+        mesh_host_rank: 0
+      - mesh_id: 0
+        mesh_host_rank: 1
+    host_placements:
+      - hostname: host-A
+        TT_VISIBLE_DEVICES: "3,1"
+      - hostname: host-B
+        TT_VISIBLE_DEVICES: "1,3"
+      - hostname: host-C
+        TT_VISIBLE_DEVICES: "1,3"
+)");
+
+    const auto groups = parse_mesh_pinning_file(path.string());
+    ASSERT_EQ(groups.size(), 1u);
+    ASSERT_EQ(groups[0].mesh_host_ranks.size(), 2u);
+    EXPECT_EQ(*groups[0].mesh_host_ranks[1].first, 0u);
+    EXPECT_EQ(*groups[0].mesh_host_ranks[1].second, 1u);
+    ASSERT_EQ(groups[0].host_placements.size(), 3u);
+    EXPECT_EQ(groups[0].host_placements[0].hostname, "host-A");
+    EXPECT_EQ(groups[0].host_placements[0].tt_visible_devices, std::vector<int>({1, 3}));
+
+    const auto empty_path = write_pinning_file(dir, "mesh_host_pinnings: []\n");
+    EXPECT_TRUE(parse_mesh_pinning_file(empty_path.string()).empty());
+}
+
+TEST(MeshPinningFileTest, RejectsInvalidDocuments) {
+    const std::vector<std::string> invalid_documents = {
+        "mesh_pinnings:\n  - mesh_id: 0\n    host: host-A\n",
+        "mesh_host_pinnings: {}\n",
+        R"(mesh_host_pinnings:
+  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}, {mesh_id: 0, mesh_host_rank: 1}]
+    host_placements: [{hostname: h, TT_VISIBLE_DEVICES: "0"}]
+)",
+        R"(mesh_host_pinnings:
+  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}, {mesh_id: 0, mesh_host_rank: 0}]
+    host_placements: [{hostname: h0, TT_VISIBLE_DEVICES: "0"}, {hostname: h1, TT_VISIBLE_DEVICES: "0"}]
+)",
+        R"(mesh_host_pinnings:
+  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}]
+    host_placements: [{hostname: h, TT_VISIBLE_DEVICES: "0"}, {hostname: h, TT_VISIBLE_DEVICES: "0,1"}]
+)",
+        R"(mesh_host_pinnings:
+  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}]
+    host_placements: [{hostname: h}]
+)",
+        R"(mesh_host_pinnings:
+  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}]
+    host_placements: [{hostname: h, TT_VISIBLE_DEVICES: "0,nope"}]
+)",
+    };
+
+    for (std::size_t i = 0; i < invalid_documents.size(); ++i) {
+        const auto dir = make_temp_dir("pin_invalid_" + std::to_string(i));
+        const auto path = write_pinning_file(dir, invalid_documents[i]);
+        EXPECT_THROW(parse_mesh_pinning_file(path.string()), std::runtime_error) << "case " << i;
+    }
 }

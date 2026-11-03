@@ -41,6 +41,7 @@ Ensure **`LD_LIBRARY_PATH`** includes `<build>/lib` (or your install `lib`) when
 | `--mesh-graph-descriptor` | `-m` | **Yes** | Path to the Mesh Graph Descriptor (`.textproto`). |
 | `--physical-grouping-descriptor` | `-p` | No | Path to the Physical Grouping Descriptor (`.textproto`). If omitted, a default file is chosen automatically (see [Default Physical Grouping Descriptor](#default-physical-grouping-descriptor-omitting--p)). |
 | `--output-dir` | `-o` | No | Directory for outputs. Default: `generated/ttrun` (created if needed). |
+| `--mesh-pinning-file` | | No | Optional YAML constraining mesh host ranks to hostname + `TT_VISIBLE_DEVICES` placements (see [Mesh pinning file](#mesh-pinning-file-optional)). |
 | `--help` | `-h` | No | Print usage and exit (does not require MPI work beyond parsing). |
 
 Example:
@@ -62,6 +63,52 @@ mpirun -np <N> <mpi-args> \
   --mesh-graph-descriptor /absolute/or/repo/path/to/mesh_graph_descriptor.textproto \
   --output-dir /path/to/out
 ```
+
+---
+
+## Mesh pinning file (optional)
+
+By default the auto-mapper decides where each logical `(mesh_id, mesh_host_rank)` runs. Pass
+`--mesh-pinning-file` to constrain selected logical host ranks to exact physical
+`(hostname, TT_VISIBLE_DEVICES)` placements. Unlisted logical host ranks remain automatic.
+
+```yaml
+mesh_host_pinnings:
+  - mesh_host_ranks:
+      - mesh_id: 0
+        mesh_host_rank: 0
+      - mesh_id: 0
+        mesh_host_rank: 1
+    host_placements:
+      - hostname: host-A
+        TT_VISIBLE_DEVICES: "0,1,2,3"
+      - hostname: host-B
+        TT_VISIBLE_DEVICES: "0,1,2,3"
+      - hostname: host-C
+        TT_VISIBLE_DEVICES: "0,1,2,3"
+```
+
+Each group is many-to-many: every logical pair may use any placement in its group. The mapper selects an
+injective assignment, so two pairs never select the same placement. Extra placements may remain unused and
+available to unpinned ranks. A group with one pair and one placement is an exact one-to-one pin.
+
+`TT_VISIBLE_DEVICES` is required and exact: it resolves to the ASIC pool that the logical host rank must use,
+not merely an environment override or superset. The number of resolved ASICs must equal the number of logical
+nodes in every host rank in that group. Phase 1 tries the group's allowed injective assignments and keeps the
+first one satisfying topology, MGD, rank-binding, and other pinning constraints.
+
+Pinning currently supports one MGD (`-m`) and cannot be combined with `--all-solutions`. The generated MPI
+ranks and rankfile slots remain outputs derived after topology mapping; they are not identifiers in this input
+file.
+
+Failures reported before launch include:
+
+- a pinned hostname that physical system discovery did not find;
+- a `TT_VISIBLE_DEVICES` ID discovery did not find on the named host;
+- a pinned mesh ID or mesh host rank the MGD does not define;
+- overlapping visible-device pools on the same hostname;
+- fewer placements than logical pairs, or a placement with the wrong ASIC count;
+- a pin that conflicts with MGD or galaxy corner pinnings.
 
 ---
 

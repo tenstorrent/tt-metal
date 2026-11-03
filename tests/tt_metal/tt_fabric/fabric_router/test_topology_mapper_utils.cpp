@@ -543,6 +543,63 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     }
 }
 
+// --mesh-pinning-file: a (mesh, host-rank) pinned to an exact ASIC pool must land on that pool, whichever
+// host the mapper would otherwise have picked, and a pool of the wrong size is rejected.
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MeshHostRankPinning_PinsRankToSelectedPool) {
+    using namespace ::tt::tt_fabric;
+
+    // Two hosts on a 4-chip line: host0 owns 100-101, host1 owns 102-103.
+    auto psd = build_mock_psd({"host0", "host0", "host1", "host1"}, line_edges(4));
+    MeshGraphDescriptor mgd{std::string(R"(
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+    const MeshId mesh{0};
+    const MeshHostRankId rank0{0};
+    const auto fabric_ranks = fabric_ranks_for_host_grid(mesh, 1, 4, 1, 2);
+
+    for (const std::string pinned_host : {"host1", "host0"}) {
+        TopologyMappingConfig config;
+        config.disable_rank_bindings = false;
+        fill_hosts_from_psd(config, psd);
+        const auto& pool = config.hostname_to_asics.at(pinned_host);
+        config.mesh_host_rank_pinnings[{mesh, rank0}] = pool;
+
+        const auto mapping =
+            map_multi_mesh_to_physical(psd, mgd, config, /*pinnings=*/{}, unset_asic_ranks(psd), fabric_ranks);
+        ASSERT_TRUE(mapping.success) << pinned_host << ": " << mapping.error_message;
+        EXPECT_EQ(mapping.fabric_node_to_physical.size(), 4u);
+        verify_bidirectional_consistency(mapping);
+        verify_each_rank_on_one_host(mapping, fabric_ranks.at(mesh), config.hostname_to_asics);
+        for (const auto& [node, rank] : fabric_ranks.at(mesh)) {
+            if (rank != rank0) {
+                continue;
+            }
+            EXPECT_TRUE(pool.contains(mapping.fabric_node_to_physical.at(node)))
+                << "host rank 0 chip " << node.chip_id << " not on pinned host " << pinned_host;
+        }
+    }
+
+    // A pool with fewer ASICs than the host rank has fabric nodes can never satisfy the pin.
+    {
+        TopologyMappingConfig config;
+        config.disable_rank_bindings = false;
+        fill_hosts_from_psd(config, psd);
+        config.mesh_host_rank_pinnings[{mesh, rank0}] = {*config.hostname_to_asics.at("host1").begin()};
+        const auto mapping =
+            map_multi_mesh_to_physical(psd, mgd, config, /*pinnings=*/{}, unset_asic_ranks(psd), fabric_ranks);
+        EXPECT_FALSE(mapping.success);
+        EXPECT_NE(mapping.error_message.find("Mesh-host-rank pinning"), std::string::npos) << mapping.error_message;
+    }
+}
+
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SingleBHGalaxy_2x4Pipeline) {
     using namespace ::tt::tt_fabric;
     if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
