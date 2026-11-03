@@ -112,12 +112,18 @@ ttnn::operations::moreh::moreh_mean::MorehMeanOperation::tensor_return_value_t m
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::moreh::moreh_mean::MorehMeanOperation;
+    const auto arch = input.device()->arch();
     auto operation_attributes = OperationType::operation_attributes_t{
         dim,
         keepdim,
         divisor,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(
+            arch,
+            compute_kernel_config,
+            arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4,
+            /*default_approx_mode=*/true,
+            /*default_fp32_acc=*/true)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
