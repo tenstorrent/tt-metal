@@ -629,7 +629,8 @@ jobs:
             needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
             needs.find-changes.outputs.llk-common-changed == 'true' ||
             needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
-            needs.find-changes.outputs.llk-ci-changed == 'true')
+            needs.find-changes.outputs.llk-ci-changed == 'true' ||
+            needs.find-changes.outputs.ttsim-ci-changed == 'true')
         }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-smoke-tests-impl.yaml

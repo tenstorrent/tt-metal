@@ -1,8 +1,9 @@
 # WH/BH LLK kernels on ttsim. Catches SFPU instruction modes silicon accepts but ttsim does not.
-# Run by ttnn-smoke-tests-impl.yaml from merge-gate.yaml, only on WH/BH/common/SFPI/LLK CI changes.
+# Run by ttnn-smoke-tests-impl.yaml from merge-gate.yaml, on WH/BH/common/SFPI/LLK CI and ttsim changes.
 # If ttsim lacks an instruction a change needs, skip the tests in ttsim-skip-list.yaml.
 # Not covered: max_pool_indices and direct topk (skip-listed, too slow on ttsim); topk is reached
-# via test_sampling.py. SFPLOADMACRO is disabled on ttsim. ~8-11 min per leg on ubuntu-latest.
+# via test_sampling.py. SFPLOADMACRO is disabled on ttsim. test_binary_category5_float32.py is left
+# out to stay within budget; its ops run in bf16 below. ~8-11 min per leg on ubuntu-latest.
 
 # Unary bf16 and int. 567 tests.
 - name: "llk sfpu unary bf16 int sim"
