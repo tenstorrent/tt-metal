@@ -23,6 +23,7 @@ torch.softmax over the same logical shape.  PCC 0.99.
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.experimental.ops.quasar.tests.yolo_ops import op_utils as U
@@ -62,12 +63,72 @@ def test_softmax(ttnn_mesh_device, reset_seeds, shape):
 @pytest.mark.parametrize("shape", _DFL_SITES)
 def test_softmax_l1(ttnn_mesh_device, reset_seeds, shape):
     """DFL softmax(dim=2) on L1 detect buffer (ttnn_yolov8l.py:645, mem cfg :772-773)."""
-    mesh = ttnn_mesh_device
+    run_softmax_l1(ttnn_mesh_device, shape)
 
+
+def run_softmax_l1(mesh, shape, compute_kernel_config=None, label=None):
+    """Body of test_softmax_l1. ``compute_kernel_config=None`` is the model's call (op default).
+
+    Logs accuracy metrics (see ``_log_softmax_accuracy``) under ``label`` before the PCC assert,
+    so a failing case still reports them.
+    """
     x_torch = U.torch_rand(shape)
     x = U.to_tile_l1(x_torch, mesh)
 
-    out = ttnn.softmax(x, dim=2)
+    if compute_kernel_config is None:
+        out = ttnn.softmax(x, dim=2)
+    else:
+        out = ttnn.softmax(x, dim=2, compute_kernel_config=compute_kernel_config)
+
+    # Read back once: the metrics and the PCC assert share it (readback dominates sim/emulator time).
+    got = U.from_tt(out, mesh)
+    _log_softmax_accuracy(x_torch, got, dim=2, label=label or f"shape={tuple(shape)}")
 
     ref = torch.softmax(x_torch.float(), dim=2)
-    U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh)
+    U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh, host=got)
+
+
+def _bf16_ordered(t):
+    """bf16 bit patterns mapped to integers that are monotonic in value, so differences are ulp counts."""
+    b = t.to(torch.bfloat16).view(torch.int16).to(torch.int32)
+    return torch.where(b >= 0, b, -(b & 0x7FFF))
+
+
+def _log_softmax_accuracy(x_torch, got, *, dim, label):
+    """Log softmax accuracy against an fp64 reference computed from the same bf16 input.
+
+    One line prefixed ``SOFTMAX_ACCURACY`` (grep-friendly), with:
+      pcc            Pearson correlation vs the fp64 reference
+      abs max/mean   |got - ref|
+      rel max/mean   |got - ref| / |ref|
+      ulp max/mean   bf16 ulp distance from the correctly rounded (RNE) bf16 reference
+      ulp0/1/2       fraction of outputs within 0, 1, 2 bf16 ulp of it (ulp0 = exactly rounded)
+      rowsum max/mean |sum(got, dim) - 1|  (the reference row sums to 1 to fp64 precision)
+    """
+    ref = torch.softmax(x_torch.double(), dim=dim)
+    got = got.double()
+    if got.shape != ref.shape and got.numel() >= ref.numel():
+        got = got.reshape(-1)[: ref.numel()].reshape(ref.shape)
+
+    g, r = got.reshape(-1), ref.reshape(-1)
+    pcc = torch.corrcoef(torch.stack([g, r]))[0, 1].item()
+
+    abs_err = (got - ref).abs()
+    rel_err = abs_err / ref.abs().clamp_min(torch.finfo(torch.float64).tiny)
+
+    ulp = (_bf16_ordered(got) - _bf16_ordered(ref)).abs().double()
+
+    rowsum_err = (got.sum(dim=dim) - 1.0).abs()
+
+    nonfinite = (~torch.isfinite(got)).sum().item()
+
+    logger.info(
+        f"SOFTMAX_ACCURACY [{label}] n={ref.numel()} pcc={pcc:.6f} "
+        f"abs_max={abs_err.max().item():.3e} abs_mean={abs_err.mean().item():.3e} "
+        f"rel_max={rel_err.max().item():.3e} rel_mean={rel_err.mean().item():.3e} "
+        f"ulp_max={int(ulp.max().item())} ulp_mean={ulp.mean().item():.3f} "
+        f"ulp0={(ulp == 0).double().mean().item():.4f} ulp1={(ulp <= 1).double().mean().item():.4f} "
+        f"ulp2={(ulp <= 2).double().mean().item():.4f} "
+        f"rowsum_max={rowsum_err.max().item():.3e} rowsum_mean={rowsum_err.mean().item():.3e} "
+        f"nonfinite={nonfinite}"
+    )
