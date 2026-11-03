@@ -79,10 +79,9 @@ enum class StallTarget : std::uint16_t
  * All selected conditions must hold simultaneously. All includes both source-cleared
  * conditions for the unpackers' banks and source-valid conditions for the matrix unit's banks.
  *
- * @note Ensure the selected conditions can become true together. If the unpacker and matrix
- *       unit select the same source bank, its cleared and valid conditions cannot both hold
- *       until a bank selection changes. Use All only when the source-bank ownership and
- *       selections allow every condition to hold; select the required Idle flags to drain work.
+ * @note STALLWAIT releases only once every selected condition holds simultaneously;
+ *       e.g. the cleared and valid conditions of one source bank cannot both hold until a bank
+ *       selection changes. Select the required Idle flags to drain work.
  */
 enum class StallCondition : std::uint16_t
 {
@@ -227,7 +226,7 @@ constexpr std::uint32_t semaphore_mask()
 }
 
 // These duplicate ckernel::semaphore_read, semaphore_post, and semaphore_get.
-// TODO(njokovic) issue #58443: Remove ckernel:: implementations when HAL is applied to all kernels.
+// TODO issue #58443: Remove ckernel:: implementations when HAL is applied to all kernels.
 
 /** @brief Read a semaphore value from the shared PC-buffer MMIO window. */
 inline __attribute__((always_inline)) std::uint8_t semaphore_read_mmio(const std::uint8_t index)
@@ -326,6 +325,7 @@ inline constexpr std::uint32_t init_operation()
 {
     static_assert(Initial < 16u, "SEMINIT initial value must fit in four bits");
     static_assert(Maximum < 16u, "SEMINIT maximum value must fit in four bits");
+    static_assert(Initial <= Maximum, "SEMINIT initial value must not exceed the maximum");
     return TT_OP_SEMINIT(Maximum, Initial, (detail::semaphore_mask<First, Others...>()));
 }
 
@@ -335,6 +335,7 @@ inline constexpr __attribute__((always_inline)) std::uint32_t init_operation(
 {
     detail::require_valid_operand(initial < 16u, "SEMINIT initial value must fit in four bits");
     detail::require_valid_operand(maximum < 16u, "SEMINIT maximum value must fit in four bits");
+    detail::require_valid_operand(initial <= maximum, "SEMINIT initial value must not exceed the maximum");
     return TT_OP_SEMINIT(maximum, initial, semaphores.mask());
 }
 

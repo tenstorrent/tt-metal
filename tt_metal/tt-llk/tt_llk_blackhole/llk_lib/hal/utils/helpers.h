@@ -9,11 +9,8 @@
 namespace hal
 {
 
-/**
- * @brief Convert an enum value to its underlying integral type.
- * @todo Remove the duplicate ckernel::to_underlying after HAL migration:
- *       https://github.com/tenstorrent/tt-metal/issues/58443
- */
+// TODO issue #58443: Remove the duplicate ckernel::to_underlying after HAL migration.
+/** @brief Convert an enum value to its underlying integral type. */
 template <typename T>
 constexpr auto to_underlying(T value) noexcept
 {

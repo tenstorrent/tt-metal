@@ -21,10 +21,8 @@ namespace hal::misc
  * default table lives in instructions/assembly.yaml). MOP- and replay-expanded instructions
  * inherit the parent MOP/REPLAY instruction's declared class.
  *
- * linger_time is a four-bit mask OR'ed into a shift register while a conflicting RISC
- * MMIO access stalls a Tensix instruction. After that access completes, the register shifts
- * right once per cycle; the instruction remains stalled until it reaches zero. For example,
- * 0b0100 adds three cycles of delay, and zero adds none. The declaration remains persistent.
+ * linger_time is a four-bit mask OR'ed into a shift register while a conflicting RISC MMIO
+ * access stalls a Tensix instruction; it shifts right once per cycle after that access completes, delaying the instruction until it reaches zero.
  *
  * @note No LLK call site exists; the hardware defaults are in use everywhere today.
  */
@@ -37,7 +35,7 @@ struct ResourceDeclaration
     /** @brief Encode the operation. */
     constexpr std::uint32_t operation() const;
 
-    /** @brief Encode the operation using the original accessor spelling. */
+    /** @brief Encode the operation. */
     constexpr std::uint32_t get_operation() const
     {
         return operation();
