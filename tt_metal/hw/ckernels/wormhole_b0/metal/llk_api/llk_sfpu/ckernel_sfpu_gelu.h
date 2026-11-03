@@ -109,6 +109,8 @@ void gelu_init() {
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (0x40 | (4 << 3) | 3) << 8);
         TTI_SFPCONFIG(0, 4 + 0, 0);
         TTI_SFPCONFIG(0, 8, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
 #endif
 
         // LUT segments (6-entry piecewise linear)
