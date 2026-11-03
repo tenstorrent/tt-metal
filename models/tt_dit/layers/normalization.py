@@ -248,8 +248,9 @@ class DistributedRMSNorm(Module):
         weight_key = (weight.shape[-1], weight.dtype) if weight is not None else None
         if row_capacity is None:
             row_capacity = self.row_capacity
-        # Folded per-device rows (batch * N) the stats buffer is sized for.
-        capacity = row_capacity if row_capacity is not None else x.shape[-3] * x.shape[-2]
+        # Folded per-device rows (batch * N, tile-padded) the stats buffer is sized for: the stats geometry
+        # follows the padded tile rows, so an unpinned call keys on those, not on the logical rows.
+        capacity = row_capacity if row_capacity is not None else x.padded_shape[-3] * x.padded_shape[-2]
 
         # dynamic_bias is the additive half of an adaLN modulation (the `shift`), folded into the same
         # fused op as the scale so the caller needs no separate elementwise add. The device op accepts
@@ -273,10 +274,21 @@ class DistributedRMSNorm(Module):
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
                 # Everything that changes the stats-buffer geometry (width, row capacity, heads per
                 # device, RoPE and weight presence/width), so modules never share a mismatched buffer.
+                # A pinned capacity and a bare row count of the same size take different worker splits
+                # (the op keys its program on both), so row_capacity itself sits next to the capacity.
                 # per_head_norm changes the stats geometry (per-head reduces locally -> no
                 # all-gather scratch), so it MUST be part of the key and forwarded to
                 # create_stats_buffer (which returns None for the per-head/local path).
-                ("rms", x.shape[-1], capacity, num_heads_per_device, per_head_norm, rope_cos is not None, weight_key),
+                (
+                    "rms",
+                    x.shape[-1],
+                    row_capacity,
+                    capacity,
+                    num_heads_per_device,
+                    per_head_norm,
+                    rope_cos is not None,
+                    weight_key,
+                ),
                 lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
