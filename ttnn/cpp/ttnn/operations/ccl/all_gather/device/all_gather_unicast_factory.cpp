@@ -225,20 +225,36 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
         /*base_l1_address=*/0);
 
-    tt::tt_metal::KernelHandle mux_kernel_id = 0;
-    if (use_mux && mux_core_range.num_cores() > 0) {
+    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+
+    if (use_mux) {
         mux_config.place_in_program_local_l1(desc, mux_core_range);
-        tt::tt_metal::KernelDescriptor mux_kernel_desc;
-        mux_kernel_desc.kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
-        mux_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-        mux_kernel_desc.core_ranges = mux_core_range;
-        mux_kernel_desc.compile_time_args = mux_config.get_fabric_mux_compile_time_args();
-        mux_kernel_desc.opt_level = tt::tt_metal::KernelBuildOptLevel::O3;
-        mux_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
+        tt::tt_metal::KernelDescriptor mux_kernel_desc{
+            .kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+            .core_ranges = mux_core_range,
+            .compile_time_args = mux_config.get_fabric_mux_compile_time_args(),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3,
+            .config =
+                tt::tt_metal::DataMovementConfigDescriptor{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt::tt_metal::NOC::RISCV_0_default,
+                },
         };
-        mux_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+        // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
+        // direction's workers all feed this one connection.
+        for (uint32_t link = 0; link < num_links; ++link) {
+            for (uint32_t dir = 0; dir < num_directions; ++dir) {
+                if (!dir_active(dir)) {
+                    continue;
+                }
+                const CoreCoord mux_core_coord = mux_core(link, dir);
+                const auto dst_node = mesh_device->get_fabric_node_id(*dir_neighbor(dir));
+                mux_kernel_desc.runtime_args.emplace_back(
+                    mux_core_coord,
+                    mux_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
+                        sender_fabric_node_id, dst_node, link, desc, mux_core_coord));
+            }
+        }
         desc.kernels.push_back(std::move(mux_kernel_desc));
     }
 
@@ -416,31 +432,29 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
 
     // When multiple workers share a fabric mux, the writer connects through it: append the mux geometry (after
     // the tensor-accessor args) and switch the kernel onto its USE_WORKER_MUX path.
-    std::map<std::string, std::string> writer_defines;
+    tt::tt_metal::KernelDescriptor::Defines writer_defines;
     if (use_mux) {
         ttnn::ccl::fabric_mux_connection_ct_args(
             workers_per_dir, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_config, writer_compile_args);
-        writer_defines["USE_WORKER_MUX"] = "1";
+        writer_defines.emplace_back("USE_WORKER_MUX", "1");
     }
 
-    tt::tt_metal::KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_reader.cpp";
-    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = worker_core_range;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_args);
-    reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
-    tt::tt_metal::KernelHandle reader_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
-    desc.kernels.push_back(std::move(reader_kernel_desc));
+    const auto reader_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_reader.cpp",
+        .core_ranges = worker_core_range,
+        .compile_time_args = std::move(reader_compile_args),
+        .config = tt::tt_metal::ReaderConfigDescriptor{},
+    });
 
-    tt::tt_metal::KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_writer.cpp";
-    writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = worker_core_range;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_args);
-    writer_kernel_desc.defines = {writer_defines.begin(), writer_defines.end()};
-    writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
-    tt::tt_metal::KernelHandle writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
-    desc.kernels.push_back(std::move(writer_kernel_desc));
+    const auto writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_writer.cpp",
+        .core_ranges = worker_core_range,
+        .compile_time_args = std::move(writer_compile_args),
+        .defines = std::move(writer_defines),
+        .config = tt::tt_metal::WriterConfigDescriptor{},
+    });
 
     ////////////////////////////////////////////////////////////////
     // Runtime args
@@ -451,24 +465,8 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // worker w on the neighbor.
     ////////////////////////////////////////////////////////////////
 
-    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-
-    // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
-    // direction's workers all feed this one connection.
-    if (use_mux) {
-        for (uint32_t link = 0; link < num_links; ++link) {
-            for (uint32_t dir = 0; dir < num_directions; ++dir) {
-                if (!dir_active(dir)) {
-                    continue;
-                }
-                const CoreCoord mux_core_coord = mux_core(link, dir);
-                const auto dst_node = mesh_device->get_fabric_node_id(*dir_neighbor(dir));
-                auto mux_rt_args = mux_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                    sender_fabric_node_id, dst_node, link, desc, mux_core_coord);
-                desc.kernels[mux_kernel_id].runtime_args.emplace_back(mux_core_coord, std::move(mux_rt_args));
-            }
-        }
-    }
+    const uint32_t barrier_sem_addr = barrier_sem.address();
+    const uint32_t data_valid_sem_addr = data_valid_sem.address();
 
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t w = 0; w < workers_per_dir; ++w) {
@@ -539,10 +537,8 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                     final_count,               // last-iteration slice length (even-ring split)
                     input_tile_id_start,       // local data: input page start
                     input_tile_id_end,         // local data: input page end
-                    barrier_sem
-                        .address(),  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
-                    data_valid_sem
-                        .address(),  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+                    barrier_sem_addr,          // smuggled-rta-ok: workload-scoped GlobalSemaphore
+                    data_valid_sem_addr,       // smuggled-rta-ok: workload-scoped GlobalSemaphore
                 };
                 emplace_runtime_args_with_leading_buffers(
                     desc.kernels[reader_kernel_id],
@@ -556,19 +552,17 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                 // Slot 0 is the output address; emplace replaces the placeholder with Buffer* after the fabric
                 // helpers append their words.
                 std::vector<uint32_t> writer_rt_args = {
-                    0u,                        // output tensor address (Buffer* binding)
-                    device_idx,                // this device's index (initial stripe)
-                    stripe_step,               // stripe index step per iteration
-                    num_iters,                 // iterations this direction runs
-                    local_output_start,        // this worker's slice start (chunks)
-                    num_worker_output_chunks,  // this worker's slice length (chunks)
-                    final_start,               // last-iteration slice start (even-ring split)
-                    final_count,               // last-iteration slice length (even-ring split)
-                    do_local_write ? 1u : 0u,  // write local data into local output on iteration 0
-                    barrier_sem
-                        .address(),  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
-                    data_valid_sem
-                        .address(),  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+                    0u,                               // output tensor address (Buffer* binding)
+                    device_idx,                       // this device's index (initial stripe)
+                    stripe_step,                      // stripe index step per iteration
+                    num_iters,                        // iterations this direction runs
+                    local_output_start,               // this worker's slice start (chunks)
+                    num_worker_output_chunks,         // this worker's slice length (chunks)
+                    final_start,                      // last-iteration slice start (even-ring split)
+                    final_count,                      // last-iteration slice length (even-ring split)
+                    do_local_write ? 1u : 0u,         // write local data into local output on iteration 0
+                    barrier_sem_addr,                 // smuggled-rta-ok: workload-scoped GlobalSemaphore
+                    data_valid_sem_addr,              // smuggled-rta-ok: workload-scoped GlobalSemaphore
                     (uint32_t)partner_core.x,         // barrier_sem target (neighbor partner core x)
                     (uint32_t)partner_core.y,         // barrier_sem target (neighbor partner core y)
                     (uint32_t)mirror_core.x,          // data_valid_sem target (neighbor mirror core x)
