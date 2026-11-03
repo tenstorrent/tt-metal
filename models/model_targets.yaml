@@ -576,10 +576,11 @@ targets:
             seq_len: null
             status: active
             perf:
-              # QB2 decode is bimodal by runner (37.4 or 44.8 ms/token, same code);
-              # centred so both modes pass at the default +/-15%.
-              decode_t/s/u: 24.5
-              decode_t/s: 24.5
+              # Re-centred to the measured 29.83 tok/s (33.5 ms/token, run 41667009094) after the
+              # Gemma 4 decode work in #62806; the symmetric +/-15% band [25.4, 34.3] still covers the
+              # runner bimodality seen before (37.4 / 44.8 ms/token at the old code, x1.22 now).
+              decode_t/s/u: 29.83
+              decode_t/s: 29.83
               prefill_t/s: 936.1785
               prefill_time_to_token: 0.0929
               compile_decode: 14.0365
