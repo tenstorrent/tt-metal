@@ -28,8 +28,6 @@ constexpr uint32_t max_fabric_connections = 4;
 
 constexpr uint32_t tiles_cb = 0;
 constexpr uint32_t mode_cb = 1;
-// A few tiles per copy worker keep the unsplit copy latency-bound.
-constexpr uint32_t tiles_per_copy_worker = 8;
 constexpr const char* kernel_dir =
     "ttnn/cpp/ttnn/operations/experimental/kda/select_final_carry/device/kernels/dataflow/";
 
@@ -64,45 +62,32 @@ tt::tt_metal::ProgramDescriptor build_program(
     TT_FATAL(page_size <= max_payload, "select_final_carry: a {} B tile exceeds the fabric payload", page_size);
     const uint32_t packet_pages = std::min<uint32_t>(2, max_payload / page_size);
 
-    const auto grid = mesh->compute_with_storage_grid_size();
-    // Given cores all copy (and the first num_links send); otherwise enough cores from the grid's start copy.
-    const uint32_t copy_workers =
-        attrs.cores
-            ? static_cast<uint32_t>(attrs.cores->size())
-            : std::min<uint32_t>(grid.x * grid.y, (state_tiles + tiles_per_copy_worker - 1) / tiles_per_copy_worker);
-    CoreRangeSet all_cores = attrs.cores
-                                 ? kda_factory_detail::merged_core_set(*attrs.cores)
-                                 : tt::tt_metal::num_cores_to_corerangeset(copy_workers, grid, /*row_wise=*/true);
-    const auto copy_cores =
-        attrs.cores ? *attrs.cores : tt::tt_metal::corerange_to_cores(all_cores, std::nullopt, true);
-
-    // The tail can only separate from the prefix on a line of several ranks. Two ranks are one pair of chips
-    // either way; as a ring both neighbors would be the same chip and every count would arrive twice.
+    // Two ranks are one pair of chips either way; as a ring both neighbors would be the same chip and every count
+    // would arrive twice.
     const auto topology = sp_size == 2 ? tt::tt_fabric::Topology::Linear : attrs.topology;
-    std::optional<ttnn::MeshCoordinate> forward, backward;
+    const auto forward =
+        ttnn::ccl::get_physical_neighbor_from_physical_coord(in.prefix_final, coord, 1, topology, axis);
+    const auto backward =
+        ttnn::ccl::get_physical_neighbor_from_physical_coord(in.prefix_final, coord, -1, topology, axis);
+    TT_FATAL(forward || backward, "select_final_carry: no fabric neighbor on the sequence-parallel line");
+    // One core per fabric link: the first num_links given cores, else cores chosen for the links.
+    CoreRangeSet all_cores;
     std::vector<CoreCoord> fabric_cores;
-    if (sp_size > 1) {
-        forward = ttnn::ccl::get_physical_neighbor_from_physical_coord(in.prefix_final, coord, 1, topology, axis);
-        backward = ttnn::ccl::get_physical_neighbor_from_physical_coord(in.prefix_final, coord, -1, topology, axis);
-        TT_FATAL(forward || backward, "select_final_carry: no fabric neighbor on the sequence-parallel line");
-        if (attrs.cores) {
-            fabric_cores.assign(attrs.cores->begin(), attrs.cores->begin() + attrs.num_links);
-        } else {
-            const auto sub_device = mesh->get_sub_device_ids().at(0);
-            CoreRangeSet fabric_range;
-            std::tie(fabric_range, fabric_cores) =
-                ttnn::ccl::choose_worker_cores(attrs.num_links, 1, mesh, sub_device, CoreCoord(0, 0), std::nullopt);
-            all_cores = all_cores.merge(fabric_range);
-        }
+    if (attrs.cores) {
+        fabric_cores.assign(attrs.cores->begin(), attrs.cores->begin() + attrs.num_links);
+        all_cores = kda_factory_detail::merged_core_set(fabric_cores);
+    } else {
+        const auto sub_device = mesh->get_sub_device_ids().at(0);
+        std::tie(all_cores, fabric_cores) =
+            ttnn::ccl::choose_worker_cores(attrs.num_links, 1, mesh, sub_device, CoreCoord(0, 0), std::nullopt);
     }
     // A 2D multicast leaves every hop in one ETH direction. On a 2D fabric whose SP axis turns, every send goes to
     // each other rank as a 2D unicast, through the connection its route leaves on.
-    const bool unicast_peers = sp_size > 1 && tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
+    const bool unicast_peers = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
                                !ttnn::ccl::is_axis_straight(*mesh, axis);
     const uint32_t ring_index = ttnn::ccl::get_linearized_index_from_physical_coord(in.prefix_final, coord, axis);
     const auto [targets_forward, targets_backward] =
-        sp_size > 1 ? ttnn::ccl::get_forward_backward_line_mcast_distance(sp_size, ring_index, topology, true)
-                    : std::tuple<uint32_t, uint32_t>{0, 0};
+        ttnn::ccl::get_forward_backward_line_mcast_distance(sp_size, ring_index, topology, true);
 
     // One scratch page receives each chronology scalar read from DRAM before it carries the derived mode, so it is
     // aligned for both DRAM reads and L1.
@@ -156,9 +141,6 @@ tt::tt_metal::ProgramDescriptor build_program(
     reader.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
     reader.compile_time_args = std::move(reader_args);
-    if (attrs.prefix_on_last_rank) {
-        reader.defines = {{"PREFIX_ON_LAST_RANK", "1"}};
-    }
     reader.config = tt::tt_metal::ReaderConfigDescriptor{};
     tt::tt_metal::KernelDescriptor writer;
     writer.kernel_source = std::string(kernel_dir) + "writer_select_final_carry.cpp";
@@ -175,80 +157,68 @@ tt::tt_metal::ProgramDescriptor build_program(
         {in.rank_final.buffer(), in.prefix_final.buffer(), in.actual_start.buffer(), end_tensor.buffer()});
     desc.kernels[writer_id].emplace_common_runtime_args({output.buffer()});
 
-    const auto drain_core =
-        fabric_cores.empty() ? CoreCoord{} : mesh->worker_core_from_logical_core(fabric_cores.front());
-    for (const auto& range : all_cores.ranges()) {
-        for (const auto& core : range) {
-            const auto copy_index = std::find(copy_cores.begin(), copy_cores.end(), core) - copy_cores.begin();
-            const auto link = std::find(fabric_cores.begin(), fabric_cores.end(), core) - fabric_cores.begin();
-            const bool fabric_worker = link < static_cast<std::ptrdiff_t>(fabric_cores.size());
-            const TileRange copy = copy_index < static_cast<std::ptrdiff_t>(copy_cores.size())
-                                       ? split_range(state_tiles, copy_workers, copy_index)
-                                       : TileRange{};
-            const TileRange send = fabric_worker ? split_range(state_tiles, attrs.num_links, link) : TileRange{};
+    const auto drain_core = mesh->worker_core_from_logical_core(fabric_cores.front());
+    for (uint32_t link = 0; link < fabric_cores.size(); ++link) {
+        const auto& core = fabric_cores[link];
+        const TileRange send = split_range(state_tiles, attrs.num_links, link);
+        desc.kernels[reader_id].emplace_runtime_args(core, {send.begin, send.end});
 
-            desc.kernels[reader_id].emplace_runtime_args(core, {copy.begin, copy.end, send.begin, send.end});
-
-            std::vector<uint32_t> writer_rt = {copy.begin, copy.end, send.begin, send.end, fabric_worker};
-            if (fabric_worker) {
-                const auto worker = mesh->worker_core_from_logical_core(core);
-                const auto source = mesh->get_fabric_node_id(coord);
-                std::vector<tt::tt_fabric::FabricNodeId> destinations;
-                for (const auto& neighbor : {forward, backward}) {
-                    if (neighbor) {
-                        destinations.push_back(mesh->get_fabric_node_id(*neighbor));
-                    }
-                }
-                // Per other rank: the connection its route leaves on, its chip and mesh. A route may leave on a link
-                // that is neither SP neighbor's (a shortcut across a 2x4 mesh): it gets a connection of its own,
-                // which carries only unicasts.
-                std::vector<uint32_t> peer_args;
-                if (unicast_peers) {
-                    std::vector<CoreCoord> connection_eth_cores;
-                    for (const auto& destination : destinations) {
-                        connection_eth_cores.push_back(
-                            tt::tt_fabric::get_forwarding_eth_core(*mesh, source, destination, link));
-                    }
-                    for (uint32_t step = 1; step < sp_size; ++step) {
-                        auto peer_coord = coord;
-                        peer_coord[axis] = (coord[axis] + step) % sp_size;
-                        const auto peer = mesh->get_fabric_node_id(peer_coord);
-                        const auto first_hop = tt::tt_fabric::get_forwarding_eth_core(*mesh, source, peer, link);
-                        auto connection =
-                            std::find(connection_eth_cores.begin(), connection_eth_cores.end(), first_hop);
-                        if (connection == connection_eth_cores.end()) {
-                            TT_FATAL(
-                                destinations.size() < max_fabric_connections,
-                                "select_final_carry: the routes to the other SP ranks leave on more than {} links",
-                                max_fabric_connections);
-                            destinations.push_back(peer);
-                            connection_eth_cores.push_back(first_hop);
-                            connection = connection_eth_cores.end() - 1;
-                        }
-                        peer_args.push_back(static_cast<uint32_t>(connection - connection_eth_cores.begin()));
-                        peer_args.push_back(peer.chip_id);
-                        peer_args.push_back(*peer.mesh_id);
-                    }
-                }
-                writer_rt.insert(
-                    writer_rt.end(),
-                    {arrival_address,
-                     static_cast<uint32_t>(drain_core.x),
-                     static_cast<uint32_t>(drain_core.y),
-                     uint32_t(link == 0),
-                     attrs.num_links,
-                     barrier_address,
-                     static_cast<uint32_t>(worker.x),
-                     static_cast<uint32_t>(worker.y),
-                     static_cast<uint32_t>(destinations.size())});
-                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                    *mesh, source, destinations, {static_cast<uint32_t>(link)}, desc, writer_id, core, writer_rt);
-                writer_rt.insert(writer_rt.end(), peer_args.begin(), peer_args.end());
+        std::vector<uint32_t> writer_rt = {send.begin, send.end};
+        const auto worker = mesh->worker_core_from_logical_core(core);
+        const auto source = mesh->get_fabric_node_id(coord);
+        std::vector<tt::tt_fabric::FabricNodeId> destinations;
+        for (const auto& neighbor : {forward, backward}) {
+            if (neighbor) {
+                destinations.push_back(mesh->get_fabric_node_id(*neighbor));
             }
-            tt::tt_metal::KernelDescriptor::RTArgList writer_list;
-            writer_list.append(writer_rt);
-            desc.kernels[writer_id].emplace_runtime_args(core, writer_list);
         }
+        // Per other rank: the connection its route leaves on, its chip and mesh. A route may leave on a link
+        // that is neither SP neighbor's (a shortcut across a 2x4 mesh): it gets a connection of its own,
+        // which carries only unicasts.
+        std::vector<uint32_t> peer_args;
+        if (unicast_peers) {
+            std::vector<CoreCoord> connection_eth_cores;
+            for (const auto& destination : destinations) {
+                connection_eth_cores.push_back(
+                    tt::tt_fabric::get_forwarding_eth_core(*mesh, source, destination, link));
+            }
+            for (uint32_t step = 1; step < sp_size; ++step) {
+                auto peer_coord = coord;
+                peer_coord[axis] = (coord[axis] + step) % sp_size;
+                const auto peer = mesh->get_fabric_node_id(peer_coord);
+                const auto first_hop = tt::tt_fabric::get_forwarding_eth_core(*mesh, source, peer, link);
+                auto connection = std::find(connection_eth_cores.begin(), connection_eth_cores.end(), first_hop);
+                if (connection == connection_eth_cores.end()) {
+                    TT_FATAL(
+                        destinations.size() < max_fabric_connections,
+                        "select_final_carry: the routes to the other SP ranks leave on more than {} links",
+                        max_fabric_connections);
+                    destinations.push_back(peer);
+                    connection_eth_cores.push_back(first_hop);
+                    connection = connection_eth_cores.end() - 1;
+                }
+                peer_args.push_back(static_cast<uint32_t>(connection - connection_eth_cores.begin()));
+                peer_args.push_back(peer.chip_id);
+                peer_args.push_back(*peer.mesh_id);
+            }
+        }
+        writer_rt.insert(
+            writer_rt.end(),
+            {arrival_address,
+             static_cast<uint32_t>(drain_core.x),
+             static_cast<uint32_t>(drain_core.y),
+             uint32_t(link == 0),
+             attrs.num_links,
+             barrier_address,
+             static_cast<uint32_t>(worker.x),
+             static_cast<uint32_t>(worker.y),
+             static_cast<uint32_t>(destinations.size())});
+        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            *mesh, source, destinations, {static_cast<uint32_t>(link)}, desc, writer_id, core, writer_rt);
+        writer_rt.insert(writer_rt.end(), peer_args.begin(), peer_args.end());
+        tt::tt_metal::KernelDescriptor::RTArgList writer_list;
+        writer_list.append(writer_rt);
+        desc.kernels[writer_id].emplace_runtime_args(core, writer_list);
     }
     return desc;
 }

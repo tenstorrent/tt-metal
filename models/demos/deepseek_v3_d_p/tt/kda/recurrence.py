@@ -502,7 +502,7 @@ def _scan_sp_grouped_chunks(
 
 
 class _RelayFinalCarry:
-    """select_final_carry with the prefix's final state on the last chronological rank, where the relay leaves it."""
+    """select_final_carry on its own cores and persistent semaphores, shared by the layers of a mesh and line."""
 
     _shared: dict = {}
 
@@ -517,8 +517,8 @@ class _RelayFinalCarry:
 
     def __init__(self, device: ttnn.MeshDevice, sequence_parallel_axis: int, num_links: int):
         grid = device.compute_with_storage_grid_size()
-        # The bottom of the last worker column: the fabric senders are the first num_links of these, the rest copy.
-        self._cores = [ttnn.CoreCoord(grid.x - 1, y) for y in range(grid.y - num_links - 1, grid.y)]
+        # One fabric sender per link, at the bottom of the last worker column.
+        self._cores = [ttnn.CoreCoord(grid.x - 1, y) for y in range(grid.y - num_links, grid.y)]
         self._axis = sequence_parallel_axis
         self._num_links = num_links
         # The line barrier and arrival counters persist across calls.
@@ -536,7 +536,6 @@ class _RelayFinalCarry:
             sequence_parallel_axis=self._axis,
             num_links=self._num_links,
             cores=self._cores,
-            prefix_on_last_rank=True,
             semaphores=self._semaphores,
         )
 
