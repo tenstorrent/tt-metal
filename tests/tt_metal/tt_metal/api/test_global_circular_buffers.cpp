@@ -162,8 +162,8 @@ TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferFixedAddressReconstruction
     for (const auto& [core, expected] : expected_config) {
         detail::WriteToDeviceL1(physical_device, core, config_address, scratch, CoreType::WORKER);
     }
-    auto restored =
-        experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1, data_address, config_address);
+    auto restored = experimental::GlobalCircularBuffer(
+        *mesh_device, mapping, 65536, BufferType::L1, /*cq_id=*/0, data_address, config_address);
     EXPECT_EQ(restored.buffer_address(), data_address);
     EXPECT_EQ(restored.config_address(), config_address);
     distributed::Synchronize(*mesh_device, std::nullopt);
@@ -211,7 +211,7 @@ TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferFixedAddressCollisionRolls
         detail::WriteToDeviceL1(physical_device, sender, blocked_address, sentinel, CoreType::WORKER);
         EXPECT_THROW(
             experimental::GlobalCircularBuffer(
-                *mesh_device, mapping, 65536, BufferType::L1, data_address, config_address),
+                *mesh_device, mapping, 65536, BufferType::L1, /*cq_id=*/0, data_address, config_address),
             std::runtime_error);
         EXPECT_EQ(mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes, occupied);
         distributed::Synchronize(*mesh_device, std::nullopt);
@@ -220,11 +220,11 @@ TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferFixedAddressCollisionRolls
         EXPECT_EQ(after, sentinel);
     }
     EXPECT_THROW(
-        experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1, data_address),
+        experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1, /*cq_id=*/0, data_address),
         std::runtime_error);
     // A failed config allocation must have released the successfully allocated data.
-    auto restored =
-        experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1, data_address, config_address);
+    auto restored = experimental::GlobalCircularBuffer(
+        *mesh_device, mapping, 65536, BufferType::L1, /*cq_id=*/0, data_address, config_address);
     distributed::Synchronize(*mesh_device, std::nullopt);
 }
 

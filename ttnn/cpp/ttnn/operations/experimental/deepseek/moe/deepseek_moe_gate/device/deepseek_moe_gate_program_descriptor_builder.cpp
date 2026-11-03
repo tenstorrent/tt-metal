@@ -8,10 +8,14 @@
 
 #include <tt_stl/assert.hpp>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate {
 
@@ -20,32 +24,52 @@ namespace {
 constexpr const char* kDeepseekMoeGateKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/device/kernels/deepseek_moe_gate_kernel.cpp";
 
+// The one unified kernel source, built once per RISC.
+const tt::tt_metal::experimental::KernelSpecName kReaderKernel{"reader"};
+const tt::tt_metal::experimental::KernelSpecName kWriterKernel{"writer"};
+const tt::tt_metal::experimental::KernelSpecName kComputeKernel{"compute"};
+
+// Tensor-backed dataflow buffers, one per io tensor.
+const tt::tt_metal::experimental::DFBSpecName kInputDfb{"input"};
+const tt::tt_metal::experimental::DFBSpecName kBiasDfb{"bias"};
+const tt::tt_metal::experimental::DFBSpecName kOutputDfb{"output"};
+const tt::tt_metal::experimental::DFBSpecName kInputIndicesDfb{"input_indices"};
+const tt::tt_metal::experimental::DFBSpecName kOutputIndicesDfb{"output_indices"};
+
 uint32_t float_bits_u32(float value) {
     static_assert(sizeof(float) == sizeof(uint32_t), "float must be 32 bits to pack into a compile-time arg");
     return std::bit_cast<uint32_t>(value);
 }
 
-void set_cb_page_size_for_tile(tt::tt_metal::CBDescriptor& cb_desc, const ttnn::Tensor& tensor) {
+// A dataflow buffer on the tensor's own sharded L1 memory: the whole per-core shard, split into tile-sized
+// entries (or a single entry when the tile size does not divide the shard).
+tt::tt_metal::experimental::DataflowBufferSpec make_tensor_backed_dfb(
+    const tt::tt_metal::experimental::DFBSpecName& dfb_name,
+    const tt::tt_metal::experimental::TensorParamName& tensor_name,
+    const ttnn::Tensor& tensor) {
     const auto& spec = tensor.tensor_spec();
     const auto& tile = spec.tile();
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(spec.data_type());
     uint32_t tile_size = tile.get_tile_size(data_format);
-    auto& fd = cb_desc.format_descriptors[0];
-    fd.tile = tt::tt_metal::TileDescriptor(tile);
-    fd.page_size = (cb_desc.total_size % tile_size == 0) ? tile_size : cb_desc.total_size;
+    uint32_t total_size = tensor.buffer()->aligned_size_per_bank();
+    uint32_t entry_size = (total_size % tile_size == 0) ? tile_size : total_size;
+    return tt::tt_metal::experimental::DataflowBufferSpec{
+        .unique_id = dfb_name,
+        .entry_size = entry_size,
+        .num_entries = total_size / entry_size,
+        .data_format_metadata = data_format,
+        .tile_format_metadata = tile,
+        .borrowed_from = tensor_name,
+    };
 }
 
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
+ttnn::device_operation::ProgramArtifacts build_moe_gate_program_artifacts(
     const tensor_args_t& tensor_args, const operation_attributes_t& operation_attrs) {
+    using namespace tt::tt_metal::experimental;
     using tt::tt_metal::CoreRangeSet;
-    using tt::tt_metal::DataMovementConfigDescriptor;
-    using tt::tt_metal::DataMovementProcessor;
     using tt::tt_metal::DataType;
-    using tt::tt_metal::KernelDescriptor;
-    using tt::tt_metal::NOC;
-    using tt::tt_metal::NOC_MODE;
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
@@ -90,98 +114,146 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     TT_FATAL(in_tile == input_indices_tensor.tensor_spec().tile(), "Input and input-indices tiles must match");
     TT_FATAL(out_tile == output_indices_tensor.tensor_spec().tile(), "Output tiles must match");
 
-    constexpr uint8_t input_cb = kInputCb;
-    constexpr uint8_t bias_cb = kBiasCb;
-    constexpr uint8_t output_cb = kOutputCb;
-    constexpr uint8_t input_indices_cb = kInputIndicesCb;
-    constexpr uint8_t output_indices_cb = kOutputIndicesCb;
+    const auto& input_mesh_tensor = input_tensor.mesh_tensor();
+    const auto& bias_mesh_tensor = bias_tensor.mesh_tensor();
+    const auto& input_indices_mesh_tensor = input_indices_tensor.mesh_tensor();
+    const auto& output_mesh_tensor = output_tensor.mesh_tensor();
+    const auto& output_indices_mesh_tensor = output_indices_tensor.mesh_tensor();
 
-    auto in_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(input_cb, input_tensor);
-    auto bias_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(bias_cb, bias_tensor);
-    auto out_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(output_cb, output_tensor);
-    auto in_indices_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(input_indices_cb, input_indices_tensor);
-    auto out_indices_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(output_indices_cb, output_indices_tensor);
+    ProgramSpec spec{.name = "deepseek_moe_gate"};
 
-    set_cb_page_size_for_tile(in_cb_desc, input_tensor);
-    set_cb_page_size_for_tile(bias_cb_desc, bias_tensor);
-    set_cb_page_size_for_tile(out_cb_desc, output_tensor);
-    set_cb_page_size_for_tile(in_indices_cb_desc, input_indices_tensor);
-    set_cb_page_size_for_tile(out_indices_cb_desc, output_indices_tensor);
-
-    KernelDescriptor::NamedCompileTimeArgs ncrisc_named = {
-        {"moe_gate_input_cb", input_cb},
-        {"moe_gate_bias_cb", bias_cb},
-        {"moe_gate_input_indices_cb", input_indices_cb},
-        {"moe_gate_is_active_core", 1},
-    };
-    KernelDescriptor::NamedCompileTimeArgs brisc_named = {
-        {"moe_gate_output_cb", output_cb},
-        {"moe_gate_output_indices_cb", output_indices_cb},
-        {"moe_gate_is_active_core", 1},
-    };
-    KernelDescriptor::NamedCompileTimeArgs trisc_named = {
-        {"moe_gate_input_cb", input_cb},
-        {"moe_gate_bias_cb", bias_cb},
-        {"moe_gate_input_indices_cb", input_indices_cb},
-        {"moe_gate_output_cb", output_cb},
-        {"moe_gate_output_indices_cb", output_indices_cb},
-        {"moe_gate_eps", float_bits_u32(operation_attrs.eps)},
-        {"moe_gate_scaling_factor", float_bits_u32(operation_attrs.scaling_factor)},
-        {"moe_gate_enable_sigmoid", operation_attrs.enable_sigmoid ? 1u : 0u},
-        {"moe_gate_is_active_core", 1},
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = kInputTensor, .spec = input_mesh_tensor.tensor_spec()},
+        TensorParameter{.unique_id = kBiasTensor, .spec = bias_mesh_tensor.tensor_spec()},
+        TensorParameter{.unique_id = kOutputTensor, .spec = output_mesh_tensor.tensor_spec()},
+        TensorParameter{.unique_id = kInputIndicesTensor, .spec = input_indices_mesh_tensor.tensor_spec()},
+        TensorParameter{.unique_id = kOutputIndicesTensor, .spec = output_indices_mesh_tensor.tensor_spec()},
     };
 
-    tt::tt_metal::ComputeConfigDescriptor compute_config{};
-    compute_config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
+    // Declaration order is load-bearing: a dataflow buffer takes the lowest device slot not used by the
+    // buffers declared before it, so this order puts input, bias, output, input_indices and output_indices on
+    // slots 0-4. The compute kernel's hardware startup (deepseek_compute_kernel_init) configures unpack and
+    // pack from slot 0 directly, which must be the input buffer.
+    spec.dataflow_buffers = {
+        make_tensor_backed_dfb(kInputDfb, kInputTensor, input_tensor),
+        make_tensor_backed_dfb(kBiasDfb, kBiasTensor, bias_tensor),
+        make_tensor_backed_dfb(kOutputDfb, kOutputTensor, output_tensor),
+        make_tensor_backed_dfb(kInputIndicesDfb, kInputIndicesTensor, input_indices_tensor),
+        make_tensor_backed_dfb(kOutputIndicesDfb, kOutputIndicesTensor, output_indices_tensor),
+    };
 
-    KernelDescriptor reader{
-        .kernel_source = std::string(kDeepseekMoeGateKernelPath),
-        .source_type = KernelDescriptor::SourceType::FILE_PATH,
-        .core_ranges = all_cores,
-        .named_compile_time_args = std::move(ncrisc_named),
-        .config =
-            DataMovementConfigDescriptor{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_0_default,
-                .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+    // NCRISC: makes the resident input, bias and input-index shards available to compute.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = kReaderKernel,
+        .source = kDeepseekMoeGateKernelPath,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = kInputDfb,
+                    .accessor_name = "moe_gate_input",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = kBiasDfb,
+                    .accessor_name = "moe_gate_bias",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = kInputIndicesDfb,
+                    .accessor_name = "moe_gate_input_indices",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
             },
-    };
+        .compile_time_args = {{"moe_gate_is_active_core", 1}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    });
 
-    KernelDescriptor writer{
-        .kernel_source = std::string(kDeepseekMoeGateKernelPath),
-        .source_type = KernelDescriptor::SourceType::FILE_PATH,
-        .core_ranges = all_cores,
-        .named_compile_time_args = std::move(brisc_named),
-        .config =
-            DataMovementConfigDescriptor{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_1_default,
-                .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+    // BRISC: waits for the scores and indices compute packs into the resident output shards.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = kWriterKernel,
+        .source = kDeepseekMoeGateKernelPath,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = kOutputDfb,
+                    .accessor_name = "moe_gate_output",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = kOutputIndicesDfb,
+                    .accessor_name = "moe_gate_output_indices",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
             },
-    };
+        .compile_time_args = {{"moe_gate_is_active_core", 1}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    });
 
-    KernelDescriptor compute_k{
-        .kernel_source = std::string(kDeepseekMoeGateKernelPath),
-        .source_type = KernelDescriptor::SourceType::FILE_PATH,
-        .core_ranges = all_cores,
-        .named_compile_time_args = std::move(trisc_named),
-        .config = compute_config,
-    };
+    // TRISC: the gate itself.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = kComputeKernel,
+        .source = kDeepseekMoeGateKernelPath,
+        // A compute kernel built with no explicit level ran at O3 before Metal 2.0; a KernelSpec defaults to O2,
+        // so the level is stated here.
+        .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = kInputDfb,
+                    .accessor_name = "moe_gate_input",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = kBiasDfb,
+                    .accessor_name = "moe_gate_bias",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = kInputIndicesDfb,
+                    .accessor_name = "moe_gate_input_indices",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = kOutputDfb,
+                    .accessor_name = "moe_gate_output",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = kOutputIndicesDfb,
+                    .accessor_name = "moe_gate_output_indices",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .compile_time_args =
+            {
+                {"moe_gate_eps", float_bits_u32(operation_attrs.eps)},
+                {"moe_gate_scaling_factor", float_bits_u32(operation_attrs.scaling_factor)},
+                {"moe_gate_enable_sigmoid", operation_attrs.enable_sigmoid ? 1u : 0u},
+                {"moe_gate_is_active_core", 1},
+            },
+        .hw_config =
+            ComputeHardwareConfig{
+                .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .sfpu_precision_mode = tt::tt_metal::Precision::Precise,
+                .enable_32_bit_dest = false,
+                .double_buffer_dest = true,
+            },
+    });
 
-    tt::tt_metal::ProgramDescriptor program_desc;
-    program_desc.kernels.reserve(3);
-    program_desc.kernels.push_back(std::move(reader));
-    program_desc.kernels.push_back(std::move(writer));
-    program_desc.kernels.push_back(std::move(compute_k));
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "main",
+        .kernels = {kReaderKernel, kWriterKernel, kComputeKernel},
+        .target_nodes = all_cores,
+    });
 
-    program_desc.cbs.reserve(5);
-    program_desc.cbs.push_back(std::move(in_cb_desc));
-    program_desc.cbs.push_back(std::move(bias_cb_desc));
-    program_desc.cbs.push_back(std::move(out_cb_desc));
-    program_desc.cbs.push_back(std::move(in_indices_cb_desc));
-    program_desc.cbs.push_back(std::move(out_indices_cb_desc));
+    ProgramRunArgs run_args;
+    run_args.tensor_args.emplace(kInputTensor, input_mesh_tensor);
+    run_args.tensor_args.emplace(kBiasTensor, bias_mesh_tensor);
+    run_args.tensor_args.emplace(kOutputTensor, output_mesh_tensor);
+    run_args.tensor_args.emplace(kInputIndicesTensor, input_indices_mesh_tensor);
+    run_args.tensor_args.emplace(kOutputIndicesTensor, output_indices_mesh_tensor);
 
-    return program_desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate

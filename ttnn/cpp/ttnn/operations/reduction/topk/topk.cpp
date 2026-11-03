@@ -120,7 +120,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     // Slice adjustment for tile-aligned K values
     // OP requires K to be tile-aligned (multiples of 32), but user wants exact K
     // If we had to round up K for op, trim the result down to the requested K value
-    if (adjusted_k != k) {
+    if (adjusted_k != k && result[0].logical_shape()[-1] != k) {
         // The kernels write whole tiles of adjusted_k columns, so for a 4D last-dim call the requested k is a
         // logical width change on the same buffer; the other cases still go through slice.
         if (orig_rank == 4 && is_dim_last_idx) {
@@ -586,9 +586,15 @@ std::vector<Tensor> topk(
     const uint32_t adjusted_k =
         operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k, tile_width);
 
-    // Padding fills can write through rank-only views, so isolate the input before transforming it.
+    // Reader kernels pad bf16/fp32 widths; the host pads other dtypes, or when an indices tensor is passed.
+    const uint32_t reduced_dim_size = input_tensor.logical_shape()[adjusted_dim];
+    const bool reader_fills_padding = ttnn::prim::topk_reader_fills_width_padding(input_tensor);
+    const bool host_pad = reduced_dim_size < ttnn::prim::constants::min_dim_per_core &&
+                          (!reader_fills_padding || indices_tensor.has_value());
+
+    // Host padding fills can write through rank-only views, so isolate the input before transforming it.
     auto working_input = input_tensor;
-    if (input_tensor.layout() == TILE_LAYOUT &&
+    if ((!reader_fills_padding || host_pad) && input_tensor.layout() == TILE_LAYOUT &&
         (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
          input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
         working_input = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
@@ -651,7 +657,7 @@ std::vector<Tensor> topk(
     // A caller-supplied indices tensor must keep describing the same tile grid as the input the
     // device op actually sees, so it is padded in lockstep.
     auto padded_indices_tensor = indices_tensor;
-    if (pad_amount > 0) {
+    if (host_pad) {
         ttsl::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
 
         // Use multicore padding for BFLOAT16 tensors not in L1 memory for better performance
@@ -663,8 +669,11 @@ std::vector<Tensor> topk(
         }
     }
 
-    // Fill any implicit tile padding with appropriate values
-    padded_tensor = ttnn::fill_implicit_tile_padding(padded_tensor, pad_val);
+    // Height padding never reaches the output, and the reader kernels fill bf16/fp32 width padding.
+    if (!ttnn::prim::topk_reader_fills_width_padding(padded_tensor) &&
+        padded_tensor.logical_shape()[-1] != padded_tensor.padded_shape()[-1]) {
+        padded_tensor = ttnn::fill_implicit_tile_padding(padded_tensor, pad_val);
+    }
 
     // Preprocess optional output tensors if provided
     std::optional<std::tuple<Tensor, Tensor>> output_tensors = std::nullopt;
@@ -718,7 +727,8 @@ std::vector<Tensor> topk(
         input_memory_config,
         used_sub_core_grids,
         padded_indices_tensor,
-        output_tensors);
+        output_tensors,
+        k);
 
     // Package results into vector format expected by post-processing
     std::vector<Tensor> output_tensor_vec;

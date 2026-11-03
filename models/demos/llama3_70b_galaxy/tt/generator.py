@@ -21,7 +21,7 @@ from models.common.sampling import (
     format_sampling_params,
 )
 from models.common.warmup import WarmupForwardMixin
-from models.tt_transformers.tt.trace_io import PreparedTraceIO
+from models.ttt_compat.tt.trace_io import PreparedTraceIO
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 from models.tt_transformers.tt.common import (
     InterleavedTextMedia,

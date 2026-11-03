@@ -78,7 +78,7 @@ from helpers.tile_constants import (
     MAX_FACE_R_DIM,
     MAX_NUM_FACES,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 @pytest.fixture(autouse=True)
@@ -1325,12 +1325,7 @@ def run_eltwise_unary_sfpu_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     if is_layout_sensitive:
         res_tensor = get_golden_generator(UntilizeGolden)(
@@ -1652,7 +1647,7 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
 
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = get_golden_generator(UntilizeGolden)(
         res_tensor, formats.output_format, input_dimensions
     )
@@ -1822,7 +1817,7 @@ def test_reshuffle_rows_quasar(reshuffle_variant_mask):
 
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = get_golden_generator(UntilizeGolden)(
         res_tensor, formats.output_format, input_dimensions
     )
@@ -2178,9 +2173,7 @@ def _dropout_config(variant, src_A, src_B, tile_cnt, dropout_params):
 def _dropout_result(configuration, variant, src_A):
     formats = variant.formats
     res_from_L1 = configuration.run().result
-    result = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format]).to(
-        torch.float32
-    )
+    result = result_tensor(res_from_L1, formats.output_format).to(torch.float32)
     assert (
         result.numel() == src_A.numel()
     ), f"result has {result.numel()} elements, expected {src_A.numel()}"

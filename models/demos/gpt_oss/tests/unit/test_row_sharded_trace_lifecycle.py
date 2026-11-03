@@ -14,9 +14,9 @@ from models.common.utility_functions import is_wormhole_b0
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.tt.model import Model
 from models.demos.gpt_oss.tt.model_config import ModelArgs
-from models.tt_transformers.tt.common import PagedAttentionConfig
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.ttt_compat.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
 @pytest.mark.skipif(not is_wormhole_b0() or ttnn.get_num_devices() < 32, reason="Requires Wormhole Galaxy")
