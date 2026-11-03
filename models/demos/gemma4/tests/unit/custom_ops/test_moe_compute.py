@@ -446,7 +446,7 @@ def test_mesh_block_pair_vs_shared(mesh_device, device_params):
     (the 6U harness data: 16 experts per chip, 32 tokens per chip, top-8, gemma shapes): the combine outputs
     must be bitwise equal on every chip, and both pass the harness' combine golden. NOT run in this pass (no
     multi-chip mesh was available): TT_VISIBLE_DEVICES=0,1,4,5,8,9,12,13 with the p150_x8 descriptor."""
-    from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
+    from models.demos.gemma4.tests.unit.custom_ops.moe_compute_helpers import (
         _build_moe_host_data,
         _build_quantized_weight_host_tensors,
         create_sharded_memory_config,
