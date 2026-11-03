@@ -384,6 +384,34 @@ def test_src_on_one_device_overwrites_dst_there_only(
         assert torch.equal(dst_shards[device_index], dst[device_index : device_index + 1]), f"device {device_index}"
 
 
+# The device op's error for a preallocated output of another per-device shape.
+_SHAPE_MISMATCH_ERRORS = {
+    _copy_via_copy: "does not match output tensor shape",
+    _copy_via_assign: "does not match output tensor shape",
+    _typecast_into: "logical shapes to match",
+}
+
+
+@MESH_PARAMS
+@pytest.mark.parametrize("write_into, dst_dtype, dst_torch_dtype", _WRITE_INTO_DST)
+def test_rejected_write_keeps_dst_label(mesh_device, write_into, dst_dtype, dst_torch_dtype, expect_error):
+    """A write the op rejects leaves dst's label alone: a replicated src and a dst labelled Shard(0) with another
+    per-device shape. The labels are applied before the op validates the call, so taking src's label first would
+    leave dst labelled Replicate over its unchanged shards."""
+    num_devices = mesh_device.get_num_devices()
+    src_t = _replicated(torch.randn([1, 1, 64, 64]).bfloat16(), mesh_device)
+    dst = torch.randn([num_devices, 1, 64, 32]).to(dst_torch_dtype)
+    dst_t = _sharded(dst, mesh_device, 0, dtype=dst_dtype)
+    label = dst_t.tensor_topology()
+
+    with expect_error(RuntimeError, _SHAPE_MISMATCH_ERRORS[write_into]):
+        write_into(src_t, dst_t)
+
+    assert dst_t.tensor_topology() == label
+    for device_index, dst_shard in enumerate(_per_device(dst_t)):
+        assert torch.equal(dst_shard, dst[device_index : device_index + 1]), f"device {device_index}"
+
+
 @MESH_PARAMS
 def test_fresh_copy_and_typecast_outputs_take_source_topology(mesh_device):
     """Without a preallocated output, copy/assign and typecast label the fresh tensor like the source."""
