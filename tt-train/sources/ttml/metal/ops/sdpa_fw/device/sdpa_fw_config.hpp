@@ -93,7 +93,7 @@ uint32_t num_causal_pairs(const SDPAForwardShape& shape, const SDPAForwardChunks
 uint32_t num_work_units(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_available_cores);
 
 // Per-core item runs for num_cores <= num_work_units cores: causal pairs when num_work_units pairs, otherwise
-// contiguous blocks of items; falls back to contiguous blocks when the lists would not fit the runtime args.
+// contiguous blocks of items. Throws if the paired lists would not fit the runtime args (they cannot today).
 std::vector<CoreItemRuns> split_work(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t num_available_cores);
 
