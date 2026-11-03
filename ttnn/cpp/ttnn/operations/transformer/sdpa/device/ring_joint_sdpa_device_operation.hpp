@@ -74,6 +74,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     // When set, the logical_n / logical_l params above are worst-case placeholders (see RingJointSDPAInputs).
     const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
+    // MLA expanded K: W_UK per head, [1, NH, nope, latent] (RingJointSDPAInputs::k_expand_weight).
+    const std::optional<ttnn::Tensor>& k_expand_weight = std::nullopt,
+    // MLA expanded V: W_UV^T per head, [1, NH, dv, latent] (RingJointSDPAInputs::v_expand_weight), with no V tensor.
+    const std::optional<ttnn::Tensor>& v_expand_weight = std::nullopt);
 
 }  // namespace ttnn::prim

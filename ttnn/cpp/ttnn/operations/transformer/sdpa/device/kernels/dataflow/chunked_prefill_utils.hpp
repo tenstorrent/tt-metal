@@ -206,8 +206,8 @@ inline bool kv_chunk_starts_before_logical_end(
 
 // One past the last global tile of this device's Q rows in the current chunk. A K chunk starting at or past it is
 // fully masked for all of them. KV-pad rotation maps the Q slab through pre-/post-wrap segments.
-// Assumes one Q slab per transport rank: split KV (kv_stripe_split > 1) indexes Q slabs by
-// ring_index / kv_stripe_split, so the host keeps dense_causal_skip and K split off for it.
+// One Q slab per ring_index / ring_size pair: with split KV (kv_stripe_split > 1) callers pass the Q-sequence slice
+// (ring_index / kv_stripe_split) and the Q-ring size (ring_size / kv_stripe_split).
 template <bool kv_pad_rotation_enabled, uint32_t q_local_padded_Nt>
 inline uint32_t chunked_q_global_end_tile(
     uint32_t logical_nt,

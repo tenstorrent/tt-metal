@@ -702,7 +702,7 @@ def run_ring_mla_split_kv_perf(model_name, q_chunk_size, k_chunk_size, repeats=1
             duration_ns, _ = profile_ring_joint_runtime_duration_ns(mesh, run)
             # Q rows per device and heads per device match the classic SP ring, so the
             # classic utilization model applies unchanged.
-            utilization, _ = compute_chunked_prefill_perf_check_utilization(
+            utilization = compute_chunked_prefill_perf_check_utilization(
                 MESH_CONFIG, model, chunk, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
             )
             logger.info(
@@ -753,7 +753,7 @@ def classic_ring_mla_chunked_utilization(model_name, q_chunk_size, k_chunk_size)
             )
     finally:
         close_ring_joint_sdpa_runtime(runtime)
-    utilization, _ = compute_chunked_prefill_perf_check_utilization(
+    utilization = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, chunk, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
     logger.info(f"classic ring_mla {model_name}-q{q_chunk_size}-k{k_chunk_size} 50k+5k: math_util={utilization:.2f}%")
