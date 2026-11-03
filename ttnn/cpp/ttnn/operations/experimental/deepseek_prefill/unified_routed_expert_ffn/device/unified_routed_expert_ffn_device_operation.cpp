@@ -465,6 +465,12 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t zero_output_row) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
+    // Checked here, not in validate_on_program_cache_miss, so it also runs on cache hits: the reader uses
+    // x_row_index's DRAM address on x's chips, so an index tensor on another mesh device reads unrelated memory.
+    if (x_row_index.has_value()) {
+        TT_FATAL(x_row_index->storage_type() == ttnn::StorageType::DEVICE, "x_row_index must be on device");
+        TT_FATAL(x_row_index->device() == x.device(), "x_row_index must be on the same mesh device as x");
+    }
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .m_tiles = m_tiles,
