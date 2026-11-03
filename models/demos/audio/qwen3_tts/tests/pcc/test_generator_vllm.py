@@ -41,6 +41,7 @@ BLOCK_SIZE = 64
 NUM_BLOCKS = 24
 STEPS = 12
 SEED = 0
+CODEBOOK_SIZE = 2048
 
 
 def _payload():
@@ -128,6 +129,14 @@ def test_the_stage_reproduces_the_pipelines_frames(device, expect_error):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+    for code in (0, CODEBOOK_SIZE, stage.pipeline.eos):
+        with expect_error(ValueError, f"codec id {code}"):
+            stage.decode_forward(
+                tokens=torch.tensor([[code]], dtype=torch.int32),
+                start_pos=torch.tensor([prompt_len + STEPS], dtype=torch.int32),
+                page_table=page_table,
+                kv_cache=kv_cache,
+            )
     stage.release_request(0)
     stage.release_persistent_capture()
 
@@ -222,3 +231,57 @@ def test_requests_decoding_together_get_the_frames_they_get_alone(device):
         for step, (left, right) in enumerate(zip(got[s], expected[s])):
             assert left == right, f"request {s}, frame {step}: {left} together, {right} alone"
     print(f"\n  2 requests, the second joining at frame {JOIN_AT}: {STEPS} frames each, identical to alone")
+
+
+# 557 frames (44.6 s) at seed 0: past the 256 frames (20.48 s) a talker with its frame budget
+# baked into the trace stopped at.
+LONG_TEXT = (
+    "The lighthouse keeper climbed the spiral stairs every evening, counting each step under his "
+    "breath. At the top he trimmed the wick, polished the great lens, and watched the beam swing "
+    "out across the water. Ships he would never meet passed safely in the dark, their captains "
+    "trusting a light they could not see the source of. In winter the storms came hard, and salt "
+    "crusted the windows until he scraped it away with a knife. He kept a logbook of every vessel, "
+    "every gale, and every quiet night when nothing happened at all. Years later, when the light "
+    "was automated, they found the logbooks stacked neatly in a cupboard, forty years of weather."
+)
+OLD_FRAME_CAP = 256
+LONG_MODEL_LEN = 2048
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_a_long_utterance_runs_past_the_old_frame_cap_and_stops_at_end_of_speech(device):
+    """Sampled as vLLM samples codebook 0, with the checkpoint's settings, the request's frames
+    are bounded by the context length alone, and it ends on end-of-speech."""
+    info = dict(_payload(), text=[LONG_TEXT])
+    stage = Qwen3TTSTalkerForConditionalGeneration.initialize_vllm_model(
+        SimpleNamespace(_name_or_path=""), device, 1, max_seq_len=LONG_MODEL_LEN
+    )
+    num_blocks = 1 + LONG_MODEL_LEN // BLOCK_SIZE
+    kv_cache = stage.allocate_kv_cache((num_blocks, 8, BLOCK_SIZE, 128), torch.bfloat16, 28)
+    table = torch.arange(1, num_blocks, dtype=torch.int32)
+    pipeline = stage.pipeline
+    reference = stage_inputs.clone_reference(info, device)
+    length = build_streaming_clone_prefill(LONG_TEXT, reference, "English", pipeline.tables)[0].shape[1]
+    pipeline.reseed(SEED)
+    penalty = pipeline.generation.get("repetition_penalty", 1.0)
+
+    logits = _prefill(stage, kv_cache, info, length, table, 0)
+    seen = []
+    while length + len(seen) < LONG_MODEL_LEN:
+        first = pipeline._pick(logits, seen=seen, penalty=penalty, emitted=len(seen))
+        if first == pipeline.eos:
+            break
+        logits = stage.decode_forward(
+            tokens=torch.tensor([[first]], dtype=torch.int32),
+            start_pos=torch.tensor([length + len(seen)], dtype=torch.int32),
+            page_table=table.reshape(1, -1),
+            kv_cache=kv_cache,
+        )[0]
+        stage.pop_stage_outputs()
+        seen.append(first)
+    stage.release_request(0)
+    stage.release_persistent_capture()
+
+    assert first == pipeline.eos, f"no end-of-speech within {len(seen)} frames, the context length"
+    assert len(seen) > OLD_FRAME_CAP, f"stopped at {len(seen)} frames, inside the old cap of {OLD_FRAME_CAP}"
+    print(f"\n  {len(LONG_TEXT)} chars: {len(seen)} frames, {len(seen) / 12.5:.1f} s, ended on end-of-speech")

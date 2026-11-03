@@ -30,7 +30,7 @@ import torch
 
 import ttnn
 from models.demos.audio.qwen3_tts import stage_inputs as stage
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline, ReferenceEncoders
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import CONTROL_ID_COUNT, Qwen3TTSPipeline, ReferenceEncoders
 
 # The talker's KV dtype. The plugin passes vLLM's torch dtype; the talker is bf16 throughout.
 KV_DTYPE = ttnn.bfloat16
@@ -186,13 +186,18 @@ class Qwen3TTSTalkerForConditionalGeneration:
             raise ValueError(f"{len(positions)} decode rows for a talker of {self.batch}")
         firsts = [int(code) for code in torch.as_tensor(tokens).reshape(-1)]
         active = [position >= 0 for position in positions]
-        for slot, (position, live) in enumerate(zip(positions, active)):
+        codebook = self.pipeline.talker_config["vocab_size"] - CONTROL_ID_COUNT
+        for slot, (position, first, live) in enumerate(zip(positions, firsts, active)):
             request = self._rows[slot]
             if live and (request is None or position != request.position):
                 raise ValueError(
                     f"slot {slot} decodes at position {position}, but its request is at "
                     f"{None if request is None else request.position}"
                 )
+            # `_logits` bans every other id and vLLM stops at end-of-speech, so one arriving
+            # here is a caller's error, and embedding it would make a frame of noise.
+            if live and not 1 <= first < codebook:
+                raise ValueError(f"slot {slot} decodes codec id {first}; codebook 0 takes 1 to {codebook - 1}")
         # An inactive row steps too, at position 0 of block 0, vLLM's null block, which the
         # plugin's zeroed page-table row points it at; its output is dropped.
         self.pipeline.talker.set_page_tables(page_table)
