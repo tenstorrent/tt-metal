@@ -275,6 +275,79 @@ def test_scatter_codegen_tile_row_too_wide_for_interleaved_streams(device):
     )
 
 
+def test_scatter_codegen_streaming_rows_without_index_coverage(device):
+    # Streaming splits by output column, so an input tile row the index never reaches is pushed
+    # through unscattered, and the last index tile row carries 8 valid rows of 32; three tile rows
+    # against more columns than that selects streaming, and the 12816 B stick keeps the call off the
+    # row-major detour.
+    xt, it, st = _make_case([1, 1, 96, 6408], [1, 1, 40, 100], -1, ttnn.TILE_LAYOUT, device)
+    assert_equal(ttnn.to_torch(_force_native(xt, -1, it, st)), ttnn.to_torch(_force_codegen(xt, -1, it, st)))
+
+
+@pytest.mark.parametrize(
+    "shape,index_shape",
+    [([1, 1, 1056, 64], [1, 1, 1056, 32]), ([1, 1, 32, 32800], [1, 1, 32, 256])],
+    ids=["ht_33", "stick_32800"],
+)
+def test_scatter_codegen_detour_bounds_keep_the_tile_factory(device, shape, index_shape):
+    # Just past each detour bound (32 tile rows, 32768-element sticks) with sticks that are 32 B
+    # aligned, so only the bound declines the detour: the TILE factory's one program beyond native's,
+    # where the detour would add its untilizes and the ROW_MAJOR factory. The stick bound is crossed
+    # by the input alone: 256 is the widest scatter row the entry contract admits an int32 TILE index.
+    xt, it, st = _make_case(shape, index_shape, -1, ttnn.TILE_LAYOUT, device)
+    _, added = _run_auto_against_native(device, xt, it, st, -1)
+    assert added == 1, "expected the codegen TILE factory's one program beyond native's"
+
+
+def test_scatter_codegen_tile_program_cache_key_follows_the_l1_frontier(device):
+    # The TILE factory choice is read off the live L1 frontier and the program hash keys on it: a
+    # row that fits the interleaved plan on a clear L1 must not replay that program once a blocker
+    # has moved the frontier past it, or its row-resident CBs would land on the blocker. Width from
+    # the bank: one column short of the widest row the interleaved plan seats, plus 8 elements to
+    # keep the raw stick off a 32 B boundary; 64 rows on two cores keep the row split from choosing
+    # streaming by itself.
+    torch.manual_seed(0)
+    bank = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
+    tile_bytes = 32 * 32 * 2
+    columns = (bank - 3 * tile_bytes) // (2 * tile_bytes) - 1
+    width = 32 * columns + 8
+    rows, index_w = 32 * 2, 32
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    index = (torch.arange(index_w) * (width // index_w) + torch.arange(rows).unsqueeze(1)) % width
+    xt = ttnn.from_torch(
+        torch.rand([1, 1, rows, width], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    it = ttnn.from_torch(
+        index.reshape(1, 1, rows, index_w).to(torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    st = ttnn.from_torch(
+        torch.rand([1, 1, rows, index_w], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    device.clear_program_cache()
+    entries_before = device.num_program_cache_entries()
+    first = ttnn.to_torch(_force_codegen(xt, -1, it, st, sub_core_grids=grid))
+    assert device.num_program_cache_entries() == entries_before + 1
+    blocker = ttnn.from_torch(
+        torch.zeros([1, 64 * 1024 // 2], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    second = ttnn.to_torch(_force_codegen(xt, -1, it, st, sub_core_grids=grid))
+    ttnn.deallocate(blocker)
+    assert (
+        device.num_program_cache_entries() == entries_before + 2
+    ), "a moved L1 frontier replayed the interleaved program"
+    assert_equal(first, second)
+
+
 def test_scatter_codegen_streaming_with_more_columns_than_cores(device):
     # Streaming splits work by output column; with more columns than cores the split is uneven and
     # the ordinal-numbered kernels must stride by the core count without drifting. Width 6408: its
@@ -290,6 +363,28 @@ def test_scatter_codegen_row_major_bf16_reduce_matches_native(device):
     xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.ROW_MAJOR_LAYOUT, device, index_max=8)
     golden = ttnn.to_torch(_force_native(xt, -1, it, st, reduce="multiply"))
     assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st, reduce="multiply")))
+
+
+@pytest.mark.parametrize("reduction", ["add", "multiply"])
+@pytest.mark.parametrize("index_dtype", [ttnn.int32, ttnn.uint32], ids=["int32", "uint32"])
+def test_scatter_codegen_row_major_bf16_reduce_chunks_a_long_stick(device, reduction, index_dtype):
+    # The bf16-reduce reader streams index and src in 8192-element chunks: a 20000-element stick
+    # walks two full chunks and a partial last one, and each of 64 columns takes hundreds of
+    # updates. Both legs stay exact so they can be compared bit for bit: integer inputs, 0/1 sources
+    # for add (sums stay under 256) and 1/2 sources for multiply (products are small powers of two).
+    torch.manual_seed(0)
+    width, columns = 20000, 64
+    x = torch.randint(0, 4, [1, width]).to(torch.bfloat16)
+    index = torch.randint(0, columns, [1, width], dtype=torch.int32)
+    if reduction == "add":
+        src = (torch.rand([1, width]) < 0.3).to(torch.bfloat16)
+    else:
+        src = torch.where(torch.rand([1, width]) < 0.02, 2.0, 1.0).to(torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    it = ttnn.from_torch(index, dtype=index_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    st = ttnn.from_torch(src, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    golden = ttnn.to_torch(_force_native(xt, -1, it, st, reduce=reduction))
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st, reduce=reduction)))
 
 
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
