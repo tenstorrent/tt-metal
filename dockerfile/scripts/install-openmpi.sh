@@ -66,7 +66,7 @@ rm -rf "${WORKDIR}"
 # It must NOT be a wrapper that adds "--with-ft ulfm". That flag marks the job recoverable: a rank killed by
 # a signal no longer aborts the job, surviving ranks keep waiting, and mpirun exits 0 even when every rank
 # crashed, so CI steps report success after fatal rank failures and the next command starts on a wedged
-# device (https://github.com/tenstorrent/tt-metal/issues/57698). Nothing after "--with-ft ulfm" on the
+# device. Nothing after "--with-ft ulfm" on the
 # command line can turn it back off. Programs that handle rank failures themselves (the fault-tolerance
 # tests) pass "--with-ft ulfm" explicitly.
 if [ -e "${OMPI_PREFIX}/bin/mpirun-ulfm" ]; then

@@ -1193,7 +1193,7 @@ class TestNewModeFlow:
 class TestLauncherSelection:
     """tt-run must launch with the plain ``mpirun`` of the ULFM-capable install, never a ``--with-ft ulfm`` wrapper.
 
-    Regression tests for https://github.com/tenstorrent/tt-metal/issues/57698: under ``--with-ft ulfm`` a rank
+    Regression tests for #57698: under ``--with-ft ulfm`` a rank
     killed by a signal is "recoverable" and mpirun can exit 0 although every rank aborted.
     """
 
