@@ -93,7 +93,6 @@ inline void _llk_unpack_tilizeA_B_wrapper_(
 #error "Unsupported architecture for LLK unpack tilize wrappers"
 #endif
 
-// Identical across archs, so they sit outside the #ifdef, like the uninit wrappers below.
 inline void _llk_unpack_tilize_init_wrapper_(
     const std::uint32_t unpack_src_format   = 0,
     const std::uint32_t unpack_dst_format   = 0,

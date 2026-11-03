@@ -117,10 +117,8 @@ UNPACK_FUNCTIONS = (
     "_llk_unpack_tilize_mop_config_",
     "_llk_unpack_tilize_",
     "_llk_unpack_tilize_uninit_",
-    "_llk_unpack_tilizeA_B_init_",
-    "_llk_unpack_tilizeA_B_mop_config_",
-    "_llk_unpack_tilizeA_B_",
-    "_llk_unpack_tilizeA_B_uninit_",
+    # No _llk_unpack_tilizeA_B_* names: the tilizeA_B path carries no coverage validate
+    # (ttnn pool shapes are not test-harvested), so harvest never sees a probe for them.
 )
 
 # Predicate name used when seeding from a checked-in TRISC header.
