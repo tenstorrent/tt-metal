@@ -44,8 +44,9 @@ MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize, const std::optiona
 
 namespace {
 
-// The Metal 2.0 spec validator rejects an empty program (no producer for the output), so zero-volume
-// inputs short-circuit to an empty output.
+// A zero-volume input has nothing to tilize. Legacy tolerated the resulting empty program, but the
+// Metal 2.0 spec validator rejects it (no work cores -> the output DFB has no producer), so
+// short-circuit to a correctly-shaped empty output the way the sibling tilize_with_val_padding does.
 ttnn::Tensor tilize_empty_output(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
@@ -60,6 +61,8 @@ ttnn::Tensor tilize_empty_output(
     return create_device_tensor(spec, input_tensor.device());
 }
 
+// The existing native implementation, unconditionally. Calls the native prim directly rather than
+// re-entering ttnn::tilize, so a call already routed to native cannot be routed a second time.
 ttnn::Tensor tilize_native(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
@@ -166,6 +169,8 @@ ttnn::Tensor tilize_force_codegen(
     using tilize_codegen::plan_codegen;
     using tilize_codegen::supported_by_codegen;
 
+    // Normalize exactly as the routed entry does, so a rank>4 input reaches the planner and the
+    // prim as the squeezed 4D tensor rather than the raw one.
     auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
         const DataType dtype = output_dtype.value_or(normalized_input.dtype());
@@ -217,6 +222,8 @@ ttnn::Tensor tilize(
 
     const bool controls_ok = supported_execution_controls(use_multicore, use_low_perf, tile, sub_core_grids);
 
+    // Route on the normalized (squeezed to 4D) tensor, the one native would see. The plan is sized against
+    // the L1 free now, so nullopt (out of scope or no room for the CBs) falls back to native.
     auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
         const DataType dtype = output_dtype.value_or(normalized_input.dtype());
