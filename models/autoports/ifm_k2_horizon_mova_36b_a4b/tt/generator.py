@@ -42,7 +42,7 @@ class K2HorizonGenerator(Generator):
         "supports_device_penalties": True,
         "supports_async_decode": True,
         "output_tokens_per_step": 1,
-        "supports_prefix_caching": False,
+        "supports_prefix_caching": True,
         "supports_device_grammar": False,
         "supports_spec_decode": False,
         "supports_async_spec_decode": False,
