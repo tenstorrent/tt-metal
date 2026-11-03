@@ -76,6 +76,19 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             break;
     }
 
+    // BRISC firmware writes RISC_PREFETCH_CTRL once at boot, before it releases the other RISCs on the core.
+    if (params.is_fw and params.core_type == HalProgrammableCoreType::TENSIX and
+        params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) {
+        auto risc_prefetch_ctrl = params.rtoptions.get_risc_prefetch_ctrl();
+        // The pinned ttsim release refuses writes to this register, so the arch default is skipped there.
+        if (not risc_prefetch_ctrl.has_value() and not params.rtoptions.get_simulator_enabled()) {
+            risc_prefetch_ctrl = default_risc_prefetch_ctrl();
+        }
+        if (risc_prefetch_ctrl.has_value()) {
+            defines.push_back(fmt::format("RISC_PREFETCH_CTRL_VALUE={}", *risc_prefetch_ctrl));
+        }
+    }
+
     // Index into kernel_config_base[] / mailboxes for the core type of this build.
     defines.push_back(fmt::format(
         "PROGRAMMABLE_CORE_TYPE={}", static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));

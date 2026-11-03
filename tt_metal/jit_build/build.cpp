@@ -474,10 +474,6 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_GATHERING ";
     }
 
-    if (const auto risc_prefetch_ctrl = rtoptions.get_risc_prefetch_ctrl(); risc_prefetch_ctrl.has_value()) {
-        this->defines_ += "-DRISC_PREFETCH_CTRL_VALUE=" + std::to_string(*risc_prefetch_ctrl) + " ";
-    }
-
     if (config.routing_fw_enabled) {
         this->defines_ += "-DROUTING_FW_ENABLED ";
     }

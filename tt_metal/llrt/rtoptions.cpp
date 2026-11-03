@@ -793,8 +793,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // TT_METAL_RISC_PREFETCH_CTRL
         // Value BRISC firmware writes to RISC_PREFETCH_CTRL at boot on Wormhole and Blackhole.
         // Bits 2:0 enable the TRISCs, bit 3 BRISC, bit 4 NCRISC, bits 12:5 are Max_Req_Count.
-        // Default: unset (register left at its reset value of 0, firmware does not write it)
-        // Usage: export TT_METAL_RISC_PREFETCH_CTRL=0x8F
+        // Default: unset (the arch default from the HAL: 0x8F on Wormhole, register left off on Blackhole and ttsim)
+        // Usage: export TT_METAL_RISC_PREFETCH_CTRL=0 to turn the prefetchers off
         case EnvVarID::TT_METAL_RISC_PREFETCH_CTRL: {
             std::string ctrl_value = trim_copy(value);
             if (ctrl_value.empty()) {
