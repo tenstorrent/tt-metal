@@ -40,6 +40,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      sfpi-tarball-url:
+        required: false
+        type: string
+        default: ""
+        description: "URL of a custom SFPI toolchain tarball; test legs install it and build every kernel with it (TT_METAL_SFPI_PATH)"
 
 jobs:
   check-harbor:
@@ -72,6 +77,7 @@ jobs:
       # This impl is invoked twice per run; distinct scopes keep the two sets of
       # per-leg summary artifacts from colliding on one name.
       summary-scope: perf
+      sfpi-tarball-url: ${{ inputs.sfpi-tarball-url }}
       enabled-skus: >-
         ${{
           github.event_name == 'schedule'
@@ -113,6 +119,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       tests-yaml-path: ./tests/pipeline_reorg/runtime_perf_profiler_tests.yaml
       summary-scope: perf-profiler
+      sfpi-tarball-url: ${{ inputs.sfpi-tarball-url }}
       enabled-skus: >-
         ${{
           github.event_name == 'schedule'

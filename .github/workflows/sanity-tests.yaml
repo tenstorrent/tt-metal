@@ -108,12 +108,25 @@ on:
         type: boolean
         default: true
         description: "Publish the AI run summary. A caller that invokes this workflow more than once per run must pass false on all but one invocation, or the reports collide on the artifact name."
+      sfpi-tarball-url:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          URL of a custom SFPI toolchain tarball. When set, the ttnn sanity legs install it and
+          export TT_METAL_SFPI_PATH, so every runtime kernel compile uses it (see
+          TT_METAL_SFPI_PATH in tt_metal/jit_build/build.cpp). Empty = packaged toolchain.
   workflow_dispatch:
     inputs:
       with-retries:
         default: false
         type: boolean
         description: "Re-run failed jobs (max 3)"
+      sfpi-tarball-url:
+        required: false
+        type: string
+        default: ""
+        description: "URL of a custom SFPI toolchain tarball; ttnn sanity legs install it and build every kernel with it (TT_METAL_SFPI_PATH)"
       run-wormhole:
         required: false
         default: true
@@ -521,6 +534,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ needs.resolve-ref.outputs.sha }}
       prebuilt-image: ${{ needs.bake-env-ci-test-wheel.outputs.image }}
+      sfpi-tarball-url: ${{ inputs.sfpi-tarball-url }}
 
   t3000-sanity-tests:
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-t3000-sanity-tests) != 'false' }}

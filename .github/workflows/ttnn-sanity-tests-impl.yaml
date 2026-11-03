@@ -91,6 +91,15 @@ on:
           On every HW leg, run Include What You Use on captured runtime JIT kernel compiles.
           Shares capture with kernel clang-tidy, but can run independently. Non-blocking;
           recommendations are uploaded in the per-leg capture artifact. Defeats kernel-compile caches.
+      sfpi-tarball-url:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          URL of a custom SFPI toolchain tarball (an archive whose tree contains an SFPI root:
+          a `compiler/` directory with `bin/riscv-tt-elf-g++` and an `include/` sibling). When set,
+          the leg installs it and exports TT_METAL_SFPI_PATH so every runtime kernel compile uses it,
+          bypassing the packaged / system SFPI (see TT_METAL_SFPI_PATH in tt_metal/jit_build/build.cpp).
     outputs:
       matrix:
         description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
@@ -256,6 +265,20 @@ jobs:
           # This allows different retention policies for runtime JIT vs. C++ build artifacts
           redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
           auto-triage: ${{ !inputs.enable-watcher }}
+      - name: 🔧 Install custom SFPI toolchain
+        if: ${{ inputs.sfpi-tarball-url != '' && !startsWith(matrix.test-group.sku, 'sim_') }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mkdir -p /work/custom-sfpi
+          curl -sSL "${{ inputs.sfpi-tarball-url }}" | tar -xJC /work/custom-sfpi
+          gxx="$(find /work/custom-sfpi -type f -name riscv-tt-elf-g++ | head -1)"
+          if [ -z "$gxx" ]; then
+            echo "::error::no riscv-tt-elf-g++ under the sfpi tarball's compiler/ tree"
+            exit 1
+          fi
+          echo "TT_METAL_SFPI_PATH=$(dirname "$(dirname "$gxx")")" >> "$GITHUB_ENV"
+          echo "Installed custom SFPI at $(dirname "$(dirname "$gxx")")"
 
       - name: ⬇️  Setup TTSim
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
