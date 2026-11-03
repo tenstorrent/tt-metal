@@ -267,6 +267,7 @@ class ttKDA:
             self.tensor_parallel_size > 1
             and self.gated_rms_output_dtype == ttnn.bfloat16
             and self.weights.output_projection.shape[-1] % (ttnn.TILE_SIZE * self.tensor_parallel_size) == 0
+            and program_config.fused_output_reduce_scatter
         )
         # The partial sums only feed the reduce-scatter; a single TP rank returns the projection itself.
         self.partial_output_memory_config = (
