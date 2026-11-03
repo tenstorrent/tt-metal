@@ -809,14 +809,15 @@
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
     # The release gates after the demo, so they reuse the runner's JIT kernel cache: the 2K prose accuracy gate
     # (fp32 top-5 reference) and the whole-model token-accuracy gate (top-1 / top-5 vs the stored HF predictions,
-    # batch 1, 385 positions). Each session reloads the checkpoint (~5.5 min from a warm TT cache).
+    # batch 1, 385 positions). Measured on a warm runner (run 41694520470, p05t09): demo 8.6 min, unit session 2.0,
+    # prose 0.5, token accuracy 0.7 (12.1 min for the whole command).
     pytest -s --timeout 900 models/demos/gemma4/tests/test_prose_accuracy.py
     pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
   model: gemma-4-31b
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      timeout: 24  # cold-JIT runner: text_demo + unit 5-13 min (runs 41667009094 / 41674924722), prose ~6, token accuracy ~9 on the warm JIT cache
+      timeout: 30  # the whole command is 12.1 min on a warm runner (run 41694520470); the slowest cold-JIT runner (p02t09, run 41674924722) spent 20.6 min on the demo + unit session alone, so the two gates need the margin
       tier: 1
       release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy
