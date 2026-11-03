@@ -211,7 +211,9 @@ TT_ALWAYS_INLINE void device_setup()
 #if defined(ARCH_QUASAR)
 constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000; // TRISC1..3 (TRISC0 is bit 11): what unpack releases
 #else
-constexpr std::uint32_t TRISC_SOFT_RESET_MASK = RISCV_SOFT_RESET_0_TRISCS;
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK  = RISCV_SOFT_RESET_0_TRISCS;
+constexpr std::uint32_t TRISC1_SOFT_RESET_MASK = 0x2000; // math: tensix.h has no per TRISC bit
+static_assert((TRISC1_SOFT_RESET_MASK & RISCV_SOFT_RESET_0_TRISCS) == TRISC1_SOFT_RESET_MASK);
 #endif
 
 #ifndef ARCH_QUASAR
