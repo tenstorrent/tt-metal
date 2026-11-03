@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -44,8 +45,9 @@ namespace ckernel::sfpu {
 // chosen by the destination precision instead, and is never the approximate body, which is
 // not accurate enough here.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    constexpr uint dst_tile_size_sfpi = 32;
+inline void calculate_sfpu_logaddexp2(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
     // log2(e), the correctly rounded float32 nearest value.
     constexpr float LOG2_E = 1.442695041f;
     // The first two of exp2's fractional-part coefficients, loaded once for the whole loop, as
@@ -77,7 +79,7 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
-        // ADDR_MOD_6 (set by logaddexp's init) advances the destination on the store,
+        // ADDR_MOD_6 at its dest += 2 invariant advances the destination on the store,
         // in place of a separate dst_reg++. Selected as 2 on Wormhole, as in logaddexp.
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_2) = result;
     }

@@ -96,7 +96,7 @@ inline void llk_math_reduce_block_max_row_reinit_short_runtime(
 
 /**
  * Minimal reinitialization for block-based reduce_max_row operation.
- * Only reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3).
+ * Only reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_3 (ADDR_MOD_6's dest+=2 invariant is preserved).
  */
 inline void llk_math_reduce_block_max_row_reinit_minimal_runtime() {
     SAN_HOOK(unsupported());
