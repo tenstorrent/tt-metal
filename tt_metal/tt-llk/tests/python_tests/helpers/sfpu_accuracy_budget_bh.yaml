@@ -1486,7 +1486,7 @@ SfpuMask:
 SfpuSnakeBeta:
 - {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 4 variants / 16384 lanes'}
 - {output: Float32, metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row; max 4 ULP, 2 variants / 8192 lanes'}
-- {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 12k lanes'}
+- {input: Float16_b, output: Float16_b, dest: 'No', measured: 1, note: 'bh: max 1 ULP on [128, 64]'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 12k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 5, note: 'bh: max 5 ULP, 3 variants / 12k lanes'}
 SfpuXlogy:
