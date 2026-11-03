@@ -20,3 +20,37 @@
   declarations were reordered. The ledger's `cb_w_round` producer was corrected (writer RISC). No kernel bugs.
 - **Tests added**: test_moe_down_proj.py (planner), test_moe_down_proj_perf.py (implementer),
   test_moe_down_proj_precision_baseline.py and test_moe_down_proj_layouts.py (verifier)
+
+## Refinement 1 - DRAM placement for x and the output
+- **Date**: 2026-11-03
+- **What was done**: `SUPPORTED["buffer_type"]` and `SUPPORTED["out_buffer_type"]` gain `DRAM`. The x senders and
+  the y store already went through `TensorAccessor`s. Reused: the whole R1 schedule, the CB plan, `select_blocking`.
+  Added: (1) `moe_down_proj_store.h`: `store_wave` moved out of the writer so either dataflow RISC can run it. When y
+  is in DRAM, the host sets `store_on_reader` and the reader RISC (NoC1, the DRAM-write NoC) stores each wave after
+  `X_DEPTH` rounds of the next wave, mirroring the writer's schedule. An L1 y store stays on the writer, because
+  moving it measured 172 -> 179 us. (2) `cb_budget_bytes()`: the CB budget is `CB_BUDGET_BYTES` plus the MAX_ROWS
+  per-bank share of whichever of x / y is in DRAM. It is shape- and placement-derived and byte-identical for L1 / L1.
+  `MAX_ROWS` / `MAX_TOKENS` moved into the descriptor module as the single source.
+- **Device kernel time (us)**, t = 4096 layer 0 / t = 1024 scaled, before (gate flip only) -> after:
+  L1/L1 174.1 / 101.7 -> 172.0 / 102.4; DRAM x 218.2 / 107.1 -> 221.2 / 117.2 (the levers do not touch this path;
+  t = 1024 DRAM x ranged 107-117 across runs); DRAM y 253.9 / 123.9 -> 220.4 / 112.2; DRAM both 291.3 / 126.7 ->
+  258.8 / 117.2. Production rows: 172.2 / 175.1 / 173.2 / 174.1 / 171.4 / 171.3 / 137.7 / 113.3 / 103.2 (no
+  regression).
+- **Measured and not kept**: DRAM bank stagger on the y row walk (flat; 7 banks, so 32k rows do not align);
+  swapping the reader/writer NoCs (DRAM x t4096 221 -> 200, but every t1024 row +40 us); DM_DYNAMIC_NOC to split
+  NoCs per transfer (does not compile: the mcast helper's TXN_ID flush static_asserts under dynamic NoC); the x
+  prefetch issue quota 4 / 8 / 11 for DRAM x (flat); fewest-waves-first blocking order (one wave at k=4/6; flat or
+  +5 us).
+- **Remaining headroom**: a write-stubbed ablation puts the DRAM y store at about 105 us of work at t = 4096 (128 B
+  segments, 25 us for L1 y). The next lever is a per-m-group row gather to 1536 B DRAM writes (cross-core). DRAM x
+  adds about 47 us at t = 4096 through 27.5 MB of NoC1 DRAM reads.
+- **Accuracy achieved**: PCC=0.99991, rel_rms=1.90e-2 (LoFi default; unchanged), all DRAM placements at golden
+  tolerances.
+- **Golden test progress**: 57/57 on the slice run (all 54 DRAM cells, plus t1_small and t4096_layer0 L1/L1 and
+  loose). The 27 L1/L1 cells are on unchanged code paths.
+- **Issues encountered**: whole-file runs of the unit tests under `run_safe_pytest.sh` precompile (inline up-front
+  collect) return NaN outputs (pcc nan) on every case, including at the pre-refinement kernels. The same files pass
+  33/33 and 45/45 with `--no-precompile`. This looks like the collect pass's addr-0 NO_DISPATCH program interacting
+  with the generic_op program cache, not a kernel bug. It is not addressed here.
+- **Tests added**: `test_moe_down_proj_perf_placement` in test_moe_down_proj_perf.py (t4096_layer0 and t1024_scaled
+  x 4 placements, for `--profile`).

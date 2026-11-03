@@ -47,7 +47,7 @@ t = 4096, and 103-140 us against 74.6 us below.
 - **Golden baseline**: 27 supported_pass / 54 xfail_expected / 0 loud (93 total, 12 regression tests untagged and passing)
 - **Device kernel time (us)**: t4096 L0..L5 173.2 / 174.5 / 175.0 / 178.9 / 173.7 / 173.1; t3072 140.0; t2048 113.7; t1024 102.8 (all under stock; L1 is 0.3 us under stock)
 
-### [ ] Refinement 1 - DRAM placement for x and the output
+### [x] Refinement 1 - DRAM placement for x and the output
 
 **Goal**: add `ttnn.BufferType.DRAM` to `SUPPORTED["buffer_type"]` (x) and to `SUPPORTED["out_buffer_type"]`
 (output), covering all three combinations (DRAM x / L1 out, L1 x / DRAM out, DRAM both). Both are knob-turns in the
@@ -75,6 +75,15 @@ perf refinements so their guard set includes the DRAM placements.
 pass, `test_dram_placement` (6 cells) passes instead of skipping, `verify_supported` is clean, device-ns for
 t = 4096 layer 0 and t = 1024 in each DRAM combination is recorded in the changelog, and the production L1 / L1
 rows do not regress.
+
+**Outcome**: all 54 DRAM golden cells and `test_dram_placement` pass. Device us (t = 4096 layer 0 / t = 1024):
+L1/L1 172.0 / 102.4, DRAM x 221.2 / 117.2 (gate-flip only: 218.2 / 107.1, noisy at t = 1024), DRAM y 220.4 / 112.2
+(was 253.9 / 123.9), DRAM both 258.8 / 117.2 (was 291.3 / 126.7). The DRAM y store now runs on the reader RISC
+(NoC1). A write-stubbed ablation puts the DRAM y store at about 105 us of work at t = 4096 (128 B segments). The
+next lever is gathering each row's 12 segments onto one core and writing full 1536 B rows, a cross-core change. DRAM x
+is bound by its 27.5 MB of NoC1 DRAM reads: the x issue quota (4 / 8 / 11 / 16) and one wave at a smaller K block
+were measured flat. Moving x reads to NoC0 needs DM_DYNAMIC_NOC, which the mcast helper's TXN_ID flush does not
+support yet.
 
 ### [ ] Refinement 2 - Cut the multicast scaffold on the t = 4096 rows
 

@@ -12,10 +12,15 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .moe_down_proj_program_descriptor import FFN, HIDDEN, NUM_EXPERTS, TILE, create_program_descriptor
-
-MAX_TOKENS = 4096
-MAX_ROWS = TILE * (-(-2 * MAX_TOKENS // TILE) + NUM_EXPERTS - 1)
+from .moe_down_proj_program_descriptor import (
+    FFN,
+    HIDDEN,
+    MAX_ROWS,
+    MAX_TOKENS,
+    NUM_EXPERTS,
+    TILE,
+    create_program_descriptor,
+)
 
 
 # ---------------------------------------------------------------------------
