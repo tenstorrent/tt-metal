@@ -67,8 +67,8 @@ REPORT="pytest-report-blackhole-${GROUP}${LLK_PERF_REPORT_TAG:-}"
 COMPILE_XML="${REPORT}-compile.xml"
 RUN_XML="${REPORT}-run.xml"
 
-export RUNS_SEQ=2
-export RUN_REV=1
+export RUNS_SEQ=0
+export RUN_REV=0
 export RUNS_X=2
 # Experiment: problem 1 check of the stack (1/5 to 3/5). One card runs this group single-worker in collection order
 # RUNS_SEQ times, then reversed when RUN_REV=1, then CI style (15 workers) RUNS_X times; each run keeps its own perf_data.
