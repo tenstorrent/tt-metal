@@ -526,3 +526,52 @@ def test_paged_fused_update_cache_checks_each_cache_against_its_own_update(mesh_
         assert out_tt.tensor_topology() == topology, "returned cache handle was relabelled"
     for (cache_global, _), out_tt, (update, _), sharded in zip(caches, outputs_tt, updates, (False, True)):
         assert torch.equal(case.read_global(out_tt), case.expected_global(cache_global, sharded, [(update, sharded)]))
+
+
+@pytest.mark.parametrize("mesh_device", [2], indirect=True)
+def test_paged_fused_update_cache_rejected_cache_takes_its_own_union(mesh_device):
+    """A cache the rule rejects takes the union of its own cache, update and indices, as paged_update_cache labels it.
+
+    Cache 1 is labelled ``[Shard(0), Replicate]``, split along the mesh axis that holds one device and so the same on
+    every device, and written from a replicated update: it keeps its label. Cache 2 is replicated and written from an
+    update split ``ShardTensorToMesh(dim=1)``: its devices now differ, and it takes the update's ``{2},[Shard(1)]``.
+    A union over both pairs would be cache 1's label, the only 2-D one, which calls cache 2 replicated along the mesh
+    axis on which its devices differ.
+    """
+    torch.manual_seed(15)
+    case = _PagedFusedUpdateCacheCase(mesh_device)
+    cache1 = case._local_cache()
+    cache1_tt = ttnn.from_torch(
+        cache1,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=MESH_SHAPE, dims=(0, None)),
+    )
+    cache2, cache2_tt = case.new_caches(sharded=False)[0]
+    update1, update1_tt = case._new_update(False, 0)
+    update2 = torch.randn(1, case.local_users * NUM_DEVICES, PADDED_ROWS, case.head_dim, dtype=torch.bfloat16)
+    update2_tt = ttnn.from_torch(
+        update2,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=_height_sharded_l1(_core_row(1, case.local_users), [PADDED_ROWS, case.head_dim]),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+    )
+    cache1_label = cache1_tt.tensor_topology()
+    assert len(cache1_label.placements()) == 2, "precondition: cache 1 has the only 2-D label"
+    _assert_collapsed(update2_tt.tensor_topology(), True, 1)
+
+    out1, out2 = case.run([cache1_tt, cache2_tt], [update1_tt, update2_tt])
+
+    assert out1.tensor_topology() == cache1_label, "cache 1 keeps its label"
+    assert cache1_tt.tensor_topology() == cache1_label, "caller's cache 1 handle was relabelled"
+    assert out2.tensor_topology() == update2_tt.tensor_topology(), "cache 2 takes its update's label"
+    assert cache2_tt.tensor_topology() == update2_tt.tensor_topology(), "the caller's handle aliases the output"
+    ttnn.verify_shards_match_topology(ttnn.from_device(out2))
+    first, second = case.expected_per_device(cache2, False, [(update2, True)])
+    assert not torch.equal(first, second), "precondition: the sharded update must leave the devices different"
+    assert torch.equal(case.read_global(out1), case.expected_global(cache1, False, [(update1, False)]))
+    assert torch.equal(case.read_global(out2), case.expected_global(cache2, False, [(update2, True)]))
