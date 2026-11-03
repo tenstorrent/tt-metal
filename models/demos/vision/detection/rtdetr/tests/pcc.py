@@ -11,6 +11,11 @@ from transformers import RTDetrForObjectDetection, RTDetrImageProcessor, RTDetrV
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.vision.detection.rtdetr.common.num_layers import (
+    load_reference_model,
+    log_layer_counts,
+    num_layers_from_env,
+)
 from models.demos.vision.detection.rtdetr.common.preprocessing import (
     custom_preprocessor,
     preprocess_conv_encoder,
@@ -646,8 +651,10 @@ def test_rtdetr_decoder(device):
 
 
 def run_rtdetr_model_test(device, model_name, model_class):
-    torch_rtdetr = model_class.from_pretrained(model_name).eval()
+    num_layers = num_layers_from_env()
+    torch_rtdetr = load_reference_model(model_class, model_name, num_layers)
     torch_module = torch_rtdetr.model
+    log_layer_counts(torch_rtdetr.config, num_layers)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_module,
