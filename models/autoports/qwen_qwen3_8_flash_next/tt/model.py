@@ -8,12 +8,13 @@ The untied LM head is vocabulary-sharded. No runtime host tensor conversion.
 
 import json
 import math
+import os
 from dataclasses import dataclass
 
 import ttnn
 
 from .checkpoint import CheckpointState
-from .multichip_decoder import MeshOps, MultichipDecoder, _hidden_parts
+from .multichip_decoder import MeshOps, MultichipDecoder, _from_flat, _from_sm, _hidden_parts, _to_flat, _to_sm
 
 
 @dataclass
@@ -368,10 +369,21 @@ class QwenFlashNextModel:
             raise ValueError("Serving GDN work sharing requires explicit request slots")
         self.bind_cache(kv_cache)
         x = self.embed(tokens)
+        # Multi-lane decode keeps the residual stream-major ([1,4,B,640]) across all layers (bit-identical).
+        stream_major = (
+            decode
+            and self.batch_size > 1
+            and x.shape[2] == 1
+            and all(os.environ.get(k, "1") == "1" for k in ("QWEN_FLASH_FLAT_HC", "QWEN_FLASH_HC_SM"))
+        )
+        if stream_major:
+            x = _to_sm(_to_flat(x))
         for layer in self.layers:
-            fn = layer.decode_forward if decode else layer.prefill_forward
+            fn = layer.decode_forward_sm if stream_major else layer.decode_forward if decode else layer.prefill_forward
             x = fn(x, current_positions=positions, slots=slots, tokens=tokens, page_table=page_table)
             assert x.dtype == self.residual_dtype
+        if stream_major:
+            x = _from_flat(_from_sm(x), self.batch_size)
         mixed = self.terminal(x)
         if last_token_only:
             # Preserve the terminal mixer's sequence-dependent norm policy.

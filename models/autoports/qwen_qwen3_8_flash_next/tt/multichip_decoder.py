@@ -15,6 +15,7 @@ import ttnn
 from models.common.modules.tt_ccl import TT_CCL
 
 from .fused_decoder import FusedQSA, _PrefixView
+from .gdn_conv_pack import flat_gdn_batches
 from .optimized_decoder import OptimizedDecoder, OptimizedGatedDeltaNet, OptimizedQSA
 
 
@@ -323,6 +324,22 @@ def _from_flat(x, b):
     return ttnn.to_layout(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, b, 1, n)), ttnn.TILE_LAYOUT)
 
 
+def _to_sm(x, memory_config=None):
+    """Flat [1,1,B,2560] -> stream-major [1,4,B,640]: stream j's 640 local columns become batch j."""
+    return ttnn.concat([x[..., j * 640 : (j + 1) * 640] for j in range(4)], dim=1, memory_config=memory_config)
+
+
+def _from_sm(x, memory_config=None):
+    """Stream-major [1,4,B,640] -> flat [1,1,B,2560]."""
+    return ttnn.concat([x[:, j : j + 1] for j in range(4)], dim=-1, memory_config=memory_config)
+
+
+def _sm_prefill(x):
+    """Single-request prefill rows ([1,1,S,2560], S > 1) take the stream-major HC implementation."""
+    shape = tuple(x.shape)
+    return shape[1] == 1 and shape[2] > 1 and os.environ.get("QWEN_FLASH_HC_SM_PREFILL", "1") == "1"
+
+
 class ParallelHyperConnection:
     def __init__(self, state, prefix, cfg, ops):
         import torch
@@ -347,6 +364,16 @@ class ParallelHyperConnection:
         )
         self.read_weight = ops.shards([x.T for x in _hidden_parts(packed.T)], ttnn.bfloat8_b)
         self.up = ops.shards(_hidden_parts(state[prefix + ".input_mix_weight_up.weight"].T), ttnn.bfloat8_b)
+        # Stream-major decode (QWEN_FLASH_HC_SM): gamma as [1,4,1,640] and the up projection split per
+        # stream as [1,4,320,640], so norm, mix and mean run on the [1,4,B,640] residual directly.
+        self.norm_sm = ops.shards([x.reshape(1, 4, 1, 640) for x in norm_parts])
+        self.up_sm = ops.shards(
+            [
+                x.reshape(320, 4, 640).permute(1, 0, 2).reshape(1, 4, 320, 640)
+                for x in _hidden_parts(state[prefix + ".input_mix_weight_up.weight"].T)
+            ],
+            ttnn.bfloat8_b,
+        )
         self.compute = ttnn.init_device_compute_kernel_config(
             ops.mesh.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
@@ -354,6 +381,9 @@ class ParallelHyperConnection:
     def read(self, x, *, decode=False):
         if tuple(x.shape) == (1, 1, 1, 2560) or self.ops.l1_prefill:
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        if not decode and _sm_prefill(x):
+            # Bit-identical; the returned inject is stream-major [1,4,S,1], which write() recognises.
+            return self.read_sm_prefill(_to_sm(x, ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else None))
         b, s = tuple(x.shape)[1:3]
         streams = self.ops.norm(ttnn.reshape(x, (1, b * s, 4, 640)), self.norm, self.eps)
         normalized = ttnn.reshape(streams, (1, b, s, 2560))
@@ -378,6 +408,9 @@ class ParallelHyperConnection:
         return self.ops.gather(mixed), inject
 
     def write(self, x, update, inject):
+        if tuple(inject.shape)[1] == 4 and inject.shape[-1] == 1 and _sm_prefill(x):
+            mem = ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else None
+            return _from_sm(self.write_sm_prefill(_to_sm(x, mem), update, inject), mem)
         if tuple(x.shape) == (1, 1, 1, 2560) or self.ops.l1_prefill:
             # Keep the local four-stream residual in L1 through the next HC
             # consumer. Mesh ownership remains four 640-wide hidden shards.
@@ -439,6 +472,99 @@ class ParallelHyperConnection:
             # product must not be rounded to bfloat8_b here.
             update = ttnn.typecast(update, ttnn.bfloat16)
         return ttnn.add(x, ttnn.multiply(ttnn.concat([update] * 4, dim=-1), scale))
+
+    def read_sm(self, x):
+        """Decode read on a stream-major [1,4,B,640] residual; bit-identical to read() per lane.
+
+        Returns the gathered [1,1,B,2560] mixed input and the per-stream inject as [1,4,B,1].
+        """
+        b = x.shape[-2]
+        streams = self.ops.norm(x, self.norm_sm, self.eps)
+        # The default program's K blocking (in0_block_w=2) is required: wider blocks accumulate in the FPU dest
+        # differently and change the result on real (heavy-tailed) activations.
+        partial = self.ops.linear(
+            _from_sm(streams), self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
+        )
+        packed = ttnn.typecast(self.ops.reduce(partial), ttnn.bfloat16)
+        # One K=320 product per stream (same sequential accumulation as the flat projection); the explicit
+        # 4x row batch lets the matmul spread over 20 cores (a broadcast in0 runs single-core).
+        mix = ttnn.sigmoid(
+            ttnn.matmul(
+                ttnn.concat([ttnn.silu(packed[..., :320])] * 4, dim=1),
+                self.up_sm,
+                compute_kernel_config=self.compute,
+                core_grid=ttnn.CoreGrid(y=4, x=5),
+            )
+        )
+        mixed = ttnn.mean(ttnn.multiply(mix, streams), dim=1, keepdim=True)
+        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
+        return self.ops.gather(mixed), ttnn.transpose(inject, 1, 3)
+
+    def _lane_mean(self, prod):
+        """Mean over the four streams of a flat [1,1,S,2560] product, bit-identical to read()'s ttnn.mean.
+
+        Rows are regrouped lane-major ([4S,640], row 4t+j: a dense row-major reinterpretation) and reduced
+        with a one-hot 0.25 matmul whose data operand holds each token's four stream values in adjacent
+        K rows; that reproduces the FPU reduce's rounding (the column-block/j-major forms do not).
+        """
+        s = prod.shape[-2]
+        mem = prod.memory_config()
+        groups = math.ceil(s / 32)
+        lanes = ttnn.reshape(ttnn.to_layout(prod, ttnn.ROW_MAJOR_LAYOUT), (1, 1, 4 * s, 640))
+        if 4 * s != groups * 128:
+            lanes = ttnn.pad(lanes, [(0, 0), (0, 0), (0, groups * 128 - 4 * s), (0, 0)], 0.0)
+        lanes = ttnn.view(ttnn.to_layout(lanes, ttnn.TILE_LAYOUT, memory_config=mem), (1, groups, 128, 640))
+        selector = self._lane_selector(groups)
+        mean = ttnn.matmul(
+            selector,
+            lanes,
+            compute_kernel_config=self.ops.exact_compute,
+            memory_config=mem,
+            core_grid=ttnn.CoreGrid(y=min(8, groups), x=10),
+        )
+        mean = ttnn.view(mean, (1, 1, groups * 32, 640))
+        return mean if groups * 32 == s else mean[:, :, :s, :]
+
+    def _lane_selector(self, groups):
+        cache = self.__dict__.setdefault("_selectors", {})
+        if groups not in cache:
+            import torch  # Setup only.
+
+            m = torch.zeros(32, 128)
+            for t in range(32):
+                m[t, 4 * t : 4 * t + 4] = 0.25
+            cache[groups] = self.ops.upload(m.reshape(1, 1, 32, 128).repeat(1, groups, 1, 1))
+        return cache[groups]
+
+    def read_sm_prefill(self, x):
+        """Prefill read (B=1, S>1) on a stream-major [1,4,S,640] residual; bit-identical to read().
+
+        Returns the gathered [1,1,S,2560] mixed input and the per-stream inject as [1,4,S,1].
+        """
+        mem = ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else ttnn.DRAM_MEMORY_CONFIG
+        streams = self.ops.norm(x, self.norm_sm, self.eps)
+        flat = ttnn.concat([streams[:, j : j + 1] for j in range(4)], dim=-1, memory_config=mem)
+        partial = self.ops.linear(
+            flat, self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
+        )
+        packed = ttnn.typecast(self.ops.reduce(partial), ttnn.bfloat16)
+        mix = ttnn.sigmoid(
+            self.ops.linear(ttnn.silu(packed[..., :320]), self.up, compute_kernel_config=self.compute, max_cores=5)
+        )
+        mixed = self._lane_mean(ttnn.multiply(mix, flat, memory_config=mem))
+        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
+        return self.ops.gather(mixed), ttnn.transpose(inject, 1, 3)
+
+    def write_sm_prefill(self, x, update, inject):
+        """Prefill write on [1,4,S,640]; like write(), the update keeps its dtype through the product."""
+        mem = ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else None
+        return ttnn.add(x, ttnn.multiply(update, inject, memory_config=mem), memory_config=mem)
+
+    def write_sm(self, x, update, inject):
+        """x [1,4,B,640] + update [1,1,B,640] (broadcast over streams) * inject [1,4,B,1]."""
+        if update.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            update = ttnn.typecast(update, ttnn.bfloat16)
+        return ttnn.add(x, ttnn.multiply(update, inject))
 
 
 class ParallelMoE:
@@ -1208,7 +1334,7 @@ class ParallelGatedDeltaNet(OptimizedGatedDeltaNet):
         padded = (s + 31) // 32 * 32
         projected = projections[..., :2560]
         self._decode_conv_history_packed = (
-            self._conv_decode_phase and b in (8, 16, 32) and s == 1 and self.conv_decode_history_enabled
+            self._conv_decode_phase and b in flat_gdn_batches() and s == 1 and self.conv_decode_history_enabled
         )
         if flat and not self._decode_conv_history_packed:
             raise ValueError("Flat decode requires the packed history convolution")
@@ -2715,6 +2841,8 @@ class MultichipDecoder(OptimizedDecoder):
             )
         if decode and self.batch_size > 1 and size == 1 and os.environ.get("QWEN_FLASH_FLAT_HC", "1") == "1":
             return self._decode_flat(x, positions=positions, slots=slots, page_table=page_table)
+        if not decode and x.shape[1] == 1 and size > 1 and os.environ.get("QWEN_FLASH_HC_SM_PREFILL", "1") == "1":
+            return self._prefill_sm(x, positions=positions, slots=slots, page_table=page_table)
         mixed, inject = self.attn_hyper.read(x, decode=decode)
         forward = self.attention.decode_forward if decode else self.attention.prefill_forward
         if self.kind == "linear_attention":
@@ -2725,12 +2853,71 @@ class MultichipDecoder(OptimizedDecoder):
         mixed, inject = self.mlp_hyper.read(x, decode=decode)
         return self.mlp_hyper.write(x, self.mlp(mixed), inject)
 
+    def decode_forward_sm(self, x, *, current_positions, slots=None, tokens=None, page_table=None):
+        """Multi-lane decode on a stream-major [1,4,B,640] residual (kept across layers by the model)."""
+        b = self.batch_size
+        if self.ple is not None:
+            lane = _from_flat(_from_sm(x), b)
+            ple = self.ple.forward(
+                lane,
+                tokens=tokens,
+                positions=current_positions,
+                slots=slots,
+                valid_lengths=self.lengths[1],
+                cache=self.ple_cache,
+            )
+            x = ttnn.add(x, _to_sm(_to_flat(ple)))
+        return self._decode_sm(x, positions=current_positions, slots=slots, page_table=page_table)
+
+    def _prefill_sm(self, x, *, positions, slots, page_table):
+        """One-request prefill chunk with stream-major hyper-connections (bit-identical to the per-token path)."""
+        mem = ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else None
+        stream = ttnn.concat([x[..., j * 640 : (j + 1) * 640] for j in range(4)], dim=1, memory_config=mem)
+        mixed, inject = self.attn_hyper.read_sm_prefill(stream)
+        if self.kind == "linear_attention":
+            update = self.attention.prefill_forward(mixed, current_positions=positions, slots=slots)
+        else:
+            update = self.attention.prefill_forward(mixed, current_pos=positions, page_table=page_table, slots=slots)
+        stream = self.attn_hyper.write_sm_prefill(stream, update, inject)
+        mixed, inject = self.mlp_hyper.read_sm_prefill(stream)
+        stream = self.mlp_hyper.write_sm_prefill(stream, self.mlp(mixed), inject)
+        return ttnn.concat([stream[:, j : j + 1] for j in range(4)], dim=-1, memory_config=mem)
+
+    def _decode_sm(self, x, *, positions, slots, page_table):
+        b = self.batch_size
+        mixed, inject = self.attn_hyper.read_sm(x)
+        if (
+            self.kind == "linear_attention"
+            and self.attention.conv_decode_history_enabled
+            and b in flat_gdn_batches()
+            and os.environ.get("QWEN_FLASH_FLAT_GDN", "1") == "1"
+        ):
+            update = self.attention.decode_forward_flat(mixed, current_positions=positions, slots=slots)
+        elif self.kind == "linear_attention":
+            update = _to_flat(
+                self.attention.decode_forward(_from_flat(mixed, b), current_positions=positions, slots=slots)
+            )
+        else:
+            update = _to_flat(
+                self.attention.decode_forward(
+                    _from_flat(mixed, b), current_pos=positions, page_table=page_table, slots=slots
+                )
+            )
+        x = self.attn_hyper.write_sm(x, update, inject)
+        mixed, inject = self.mlp_hyper.read_sm(x)
+        return self.mlp_hyper.write_sm(x, self.mlp.forward_flat(mixed), inject)
+
     def _decode_flat(self, x, *, positions, slots, page_table):
         """Multi-lane decode with the residual as one [1,1,B,2560] row block through HC and MoE.
 
         The attention modules keep their per-lane [1,B,1,2560] contract at their boundary.
         """
         b = self.batch_size
+        if os.environ.get("QWEN_FLASH_HC_SM", "1") == "1":
+            return _from_flat(
+                _from_sm(self._decode_sm(_to_sm(_to_flat(x)), positions=positions, slots=slots, page_table=page_table)),
+                b,
+            )
         flat = _to_flat(x)
 
         # Precision bisection switches: route one HC half through the per-lane implementation via exact
@@ -2750,7 +2937,7 @@ class MultichipDecoder(OptimizedDecoder):
         if (
             self.kind == "linear_attention"
             and self.attention.conv_decode_history_enabled
-            and b in (8, 16, 32)
+            and b in flat_gdn_batches()
             and os.environ.get("QWEN_FLASH_FLAT_GDN", "1") == "1"
         ):
             update = self.attention.decode_forward_flat(mixed, current_positions=positions, slots=slots)
