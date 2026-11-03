@@ -749,6 +749,59 @@ def test_transpose_hc_sharded_cache_hit_new_input(device, n, c, h, w, grid_size)
             ), "transpose must reuse the cached program on a hit"
 
 
+# The sharded HC factory used to place its runtime args on an origin-anchored walk of the shard grid's
+# bounding box, so on any other grid the kernels ran on cores whose args were never written (a hang).
+# Each grid reaches the special case with one H block per shard, with several, and the generic path.
+@pytest.mark.parametrize(
+    "grid_ranges, orientation, layout",
+    [
+        ([((1, 1), (1, 1))], ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([((1, 1), (1, 1))], ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ([((1, 1), (2, 1))], ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([((0, 0), (0, 0)), ((2, 1), (2, 1))], ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([((1, 1), (2, 2))], ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([((1, 1), (2, 2))], ttnn.ShardOrientation.COL_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        # Every core of the bounding-box walk is in this grid, but COL_MAJOR walks each one-row range in
+        # turn: shard 1 is on (1, 0), not (0, 1).
+        ([((0, 0), (1, 0)), ((0, 1), (1, 1))], ttnn.ShardOrientation.COL_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+    ],
+    ids=[
+        "core_1_1_height",
+        "core_1_1_width",
+        "offset_row",
+        "two_ranges",
+        "offset_2x2_row",
+        "offset_2x2_col",
+        "two_row_ranges_col",
+    ],
+)
+@pytest.mark.parametrize("path", ["special_single_h", "special_multi_h", "generic"])
+def test_transpose_hc_sharded_non_origin_grid(device, grid_ranges, orientation, layout, path):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*s), ttnn.CoreCoord(*e)) for s, e in grid_ranges})
+    num_cores = grid.num_cores()
+    # Shard heights H, 2 * H, and (C = 3) 96 / num_cores, which neither divides nor is a multiple of H = 32.
+    # Every shard holds a multiple of 1024 values and H, W are tile multiples, or transpose would not
+    # pick the sharded HC factory.
+    shape = {
+        "special_single_h": [1, num_cores, 32, 32],
+        "special_multi_h": [1, 2 * num_cores, 32, 32],
+        "generic": [1, 3, 32, 128],
+    }[path]
+    n, c, h, w = shape
+    shard_spec = ttnn.ShardSpec(grid, (n * c * h // num_cores, w), orientation)
+    mem_config = ttnn.MemoryConfig(layout, ttnn.BufferType.L1, shard_spec)
+
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+    )
+    tt_output = ttnn.transpose(tt_input, 1, 2)
+    assert tt_output.memory_config() == mem_config
+    wrong = int((ttnn.to_torch(tt_output) != torch_input.transpose(1, 2)).sum())
+    assert wrong == 0, f"{wrong} of {torch_input.numel()} values wrong"
+
+
 def _run_transpose_sharded_override_addr_change(
     device, dim0, dim1, n, c, h, w, grid_size, orientation, pass_output_mem_config
 ):
