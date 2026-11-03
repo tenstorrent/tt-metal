@@ -101,6 +101,15 @@ void kernel_main() {
     const DataflowBuffer dfb_partial_size_ref(dfb::ex_partial);
 #endif
     const uint32_t single_tile_size_bytes = dfb_partial_size_ref.get_tile_size();
+#ifdef ARCH_WORMHOLE
+    constexpr bool split_exchange = !use_welford;
+    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+#else
+    constexpr bool split_exchange = false;
+#endif
+    const uint32_t face_bytes = single_tile_size_bytes / 4;
+    const bool read_half_tiles = split_exchange && single_tile_size_bytes == 2048;
+    constexpr uint32_t partial_push_blocks = 3;
 
     // Compute the NOC coordinates for remote cores that interact with this core
     constexpr df::NumNocAddrs num_remote_noc_addrs_first_stage = is_all_to_all_worker ? num_blocks_first_stage : 1;
@@ -177,18 +186,50 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_tiles_to_read; i++) {
                 dfb_external_obj.reserve_back(static_cast<uint16_t>(num_blocks_first_stage * num_tiles_scaler));
                 uint32_t write_offset = 0;
+                uint32_t num_pushed = 0;
+                uint32_t num_read = 0;
                 for (const auto& coord : remote_coords_first_stage) {
-                    noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                        remote_ep,
-                        dfb_external_obj,
-                        num_tiles_scaler * single_tile_size_bytes,
-                        {.noc_x = coord.x, .noc_y = coord.y, .addr = l1_read_addr_ex_par},
-                        {.offset_bytes = write_offset});
+                    if (read_half_tiles) {
+                        noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                            remote_ep,
+                            dfb_external_obj,
+                            face_bytes,
+                            {.noc_x = coord.x, .noc_y = coord.y, .addr = l1_read_addr_ex_par},
+                            {.offset_bytes = write_offset});
+                        noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                            remote_ep,
+                            dfb_external_obj,
+                            face_bytes,
+                            {.noc_x = coord.x, .noc_y = coord.y, .addr = l1_read_addr_ex_par + 2 * face_bytes},
+                            {.offset_bytes = write_offset + 2 * face_bytes});
+#ifdef ARCH_WORMHOLE
+                        const uint32_t l1_write_addr = dfb_external_obj.get_write_ptr() + write_offset;
+                        noc_async_read(zeros_noc_addr, l1_write_addr + face_bytes, face_bytes);
+                        noc_async_read(zeros_noc_addr, l1_write_addr + 3 * face_bytes, face_bytes);
+#endif
+                    } else {
+                        noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                            remote_ep,
+                            dfb_external_obj,
+                            num_tiles_scaler * single_tile_size_bytes,
+                            {.noc_x = coord.x, .noc_y = coord.y, .addr = l1_read_addr_ex_par},
+                            {.offset_bytes = write_offset});
+                    }
                     write_offset += num_tiles_scaler * single_tile_size_bytes;
+                    ++num_read;
+                    if constexpr (split_exchange) {
+                        if (num_read % partial_push_blocks == 0 && num_read < num_blocks_first_stage) {
+                            noc.async_read_barrier();
+                            dfb_external_obj.push_back(static_cast<uint16_t>(partial_push_blocks * num_tiles_scaler));
+                            num_pushed += partial_push_blocks;
+                            write_offset = 0;
+                        }
+                    }
                 }
                 l1_read_addr_ex_par += num_tiles_scaler * single_tile_size_bytes;
                 noc.async_read_barrier();
-                dfb_external_obj.push_back(static_cast<uint16_t>(num_blocks_first_stage * num_tiles_scaler));
+                dfb_external_obj.push_back(
+                    static_cast<uint16_t>((num_blocks_first_stage - num_pushed) * num_tiles_scaler));
 
                 // ---------------------------------------------------------------------------
                 // Handle the two-stage reduce
