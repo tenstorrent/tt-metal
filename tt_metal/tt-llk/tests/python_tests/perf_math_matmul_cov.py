@@ -8,6 +8,7 @@ import perf_math_matmul as pmm
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat, is_dest_acc_needed
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
     DestSync,
     MathFidelity,
@@ -82,7 +83,7 @@ for fmt, sync in product(FMTS, (DestSync.Half, DestSync.Full)):
                     (Transpose.No,) if shape[4] == 16 else (Transpose.No, Transpose.Yes)
                 )
                 for t in tr:
-                    for mf in pmm.MATH_FIDELITIES:
+                    for mf in ALL_MATH_FIDELITIES:
                         PARAMS.append(
                             (mf, cfg(fmt, acc, sync, rt, ct, kt, shape, t), 0, 1)
                         )
@@ -91,7 +92,7 @@ for fmt, sync in product(FMTS, (DestSync.Half, DestSync.Full)):
                 continue
             tiny = ("tiny", r0, 32, 32, 32, 2, 4, 2, True, False)
             for ct in (1, 4, 8):
-                for mf in pmm.MATH_FIDELITIES:
+                for mf in ALL_MATH_FIDELITIES:
                     PARAMS.append(
                         (mf, cfg(fmt, acc, sync, 1, ct, 1, tiny, Transpose.Yes), 0, 1)
                     )

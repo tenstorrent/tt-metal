@@ -102,7 +102,7 @@
   "perf_vif_targets": 0.0,
   "perf_matmul_row_mop": 3.1,
   "perf_matmul_unpack_ttsync": 10.9,
-  "perf_math_matmul_cov": 1.0,
+  "perf_math_matmul_cov": 1.4,
   "perf_matmul_dyn0": 1.0,
   "perf_matmul_dyn1": 1.0,
   "perf_matmul_dyn2": 1.0,
