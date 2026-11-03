@@ -491,9 +491,11 @@
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
       export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-      timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # Production's 5,120-token chunk at depth 24, plus a small chunk: 2,048 at depth 5 on the TP-deduped KV
+      # cache, the layout serving uses (~5 min). 4x4 stages at 2,560 join once they land (#61481).
+      timeout -k 2m 100m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py::test_chunked_prefill_carries_kda_state -k "L24 and c5120" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py::test_chunked_prefill_carries_kda_state -k "(L24 and c5120) or (L5 and c2048)" -vvv --tb=short
       '
     )
 
@@ -513,7 +515,7 @@
 
     echo "===== [1/3] (Kimi-K3-2.8T) prefill transformer accuracy L24 vs golden trace ====="
     k3_transformer_depth || exit $?
-    echo "===== [2/3] (Kimi-K3-2.8T) chunked prefill accuracy L24 55k@5k vs golden trace ====="
+    echo "===== [2/3] (Kimi-K3-2.8T) chunked prefill accuracy L24 55k@5k + L5 55k@2k vs golden trace ====="
     k3_chunked_prefill || exit $?
     echo "===== [3/3] (Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace ====="
     k3_transformer_traced || exit $?
@@ -524,9 +526,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (70 + 90 + 45),
-      # so the time budget for this bucket is unchanged by the fold.
-      timeout: 205
+      # Exactly the sum of the per-section bounds (70 + 100 + 45).
+      timeout: 215
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
