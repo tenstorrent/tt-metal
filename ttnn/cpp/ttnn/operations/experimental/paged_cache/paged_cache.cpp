@@ -5,6 +5,7 @@
 #include "device/update_cache/paged_update_cache_device_operation.hpp"
 #include "device/fused_update_cache/paged_fused_update_cache_device_operation.hpp"
 #include "device/fill_cache/paged_fill_cache_device_operation.hpp"
+#include "device/copy_blocks/paged_copy_blocks_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -90,6 +91,10 @@ ttnn::Tensor paged_fill_cache(
         block_size_override,
         cache_position_modulo,
         valid_seq_len_tensor);
+}
+
+std::vector<ttnn::Tensor> paged_copy_blocks(const std::vector<Tensor>& caches, const Tensor& src_dst) {
+    return ttnn::prim::paged_copy_blocks(caches, src_dst);
 }
 
 }  // namespace ttnn::experimental
