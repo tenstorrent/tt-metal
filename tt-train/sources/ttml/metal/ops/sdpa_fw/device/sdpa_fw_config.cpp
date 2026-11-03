@@ -216,6 +216,12 @@ SDPAForwardChunks resolve_chunks(
     // which main always paired) a pair per core is the floor (main's one-row chunks on every core), an item
     // per core otherwise. An odd chunk count has no pairs, so it shrinks too: three four-row chunks of a
     // twelve-tile sequence would go out contiguously and unbalanced where main paired.
+    //
+    // The units >= cores rule is main's, not a measured optimum, and it misses K/V reuse at the tensor-
+    // parallel shapes: 8 query heads at S=2048 on 130 cores give 128 two-row pairs, so the pick drops to
+    // one-row chunks although two-row pairs on 128 cores do the same per-core compute with half the K/V
+    // reads; and at 110 cores and S=4096 it keeps four-row chunks with 128 pairs, so 18 cores carry two.
+    // The cost-based scheduler (https://github.com/tenstorrent/tt-metal/pull/62646) replaces this rule.
     constexpr uint32_t kDefaultSqChunkT = 4U;
     const uint32_t default_sk_chunk_t = (shape.qWt >= 4U || shape.mask_type == AttentionMaskType::Arbitrary) ? 4U : 8U;
     SDPAForwardChunks chunks{
