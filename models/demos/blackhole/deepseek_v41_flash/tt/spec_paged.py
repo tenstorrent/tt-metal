@@ -191,6 +191,45 @@ class SpecIndexer(DSV41DecodeIndexer):
         key = ("ent_cs_lists", self.R)
         if key not in st:
             U, n, cols = self.T, self.n, self.cols
+            if os.environ.get("DSV41_ENT_FUSED", "0") == "1" and U * n <= 64 and U <= 16:
+                from models.demos.blackhole.deepseek_v41_flash.tt.ent_lists import ent_lists_fused
+
+                st[key] = ent_lists_fused(
+                    self.md,
+                    st["pos"],
+                    _cs_consts(self.md, self.n_alloc)["col_u32"],
+                    U,
+                    n,
+                    self.ratio,
+                    cols,
+                    self.n_head,
+                )
+                if not getattr(type(self), "_ent_logged", False):
+                    type(self)._ent_logged = True
+                    if (
+                        os.environ.get("DSV41_ENT_CHECK", "0") == "1"
+                    ):  # first (eager) call only: compare with the op chain, all devices
+                        pass
+
+                        e = ttnn.reshape(ttnn.subtract(self._ent_matrix(st), 1.0), [1, 1, U, n])
+                        cc = _cs_consts(self.md, self.n_alloc)["col_id"]
+                        loc = ttnn.floor(ttnn.multiply(e, 1.0 / cols))
+                        own = ttnn.eq(ttnn.subtract(e, ttnn.multiply(loc, float(cols))), cc)
+                        ref_l = ttnn.where(own, loc, -1.0)
+                        ref_h = ttnn.where(ttnn.lt(e, float(self.n_head)), e, -1.0)
+                        bad = 0
+                        for j in range(n):
+                            for ref, got in ((ref_l, st[key][0][j]), (ref_h, st[key][1][j])):
+                                for dr, dg in zip(ttnn.get_device_tensors(ref), ttnn.get_device_tensors(got)):
+                                    a = ttnn.to_torch(dr).float()[0, 0, :, j].round().int()
+                                    b = ttnn.to_torch(dg).int().reshape(-1)[:U]
+                                    bad += int((a != b).sum())
+                        print(f"OVERLAP2 ent_lists CHECK mismatches={bad}", flush=True)
+                    print(
+                        f"OVERLAP2 ent_lists fused: U={U} n={n} ratio={self.ratio} cols={cols} n_head={self.n_head}",
+                        flush=True,
+                    )
+                return st[key]
             e = ttnn.reshape(ttnn.subtract(self._ent_matrix(st), 1.0), [1, 1, U, n])  # entry, -1 = skip
             cc = _cs_consts(self.md, self.n_alloc)["col_id"]
             loc = ttnn.floor(ttnn.multiply(e, 1.0 / cols))
