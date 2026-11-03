@@ -8,7 +8,7 @@ chunk after chunk). The initial state is
 the view's recurrent_state (gathered from the slot bank by _route_state); the final state
 is copied back into it, so the bank scatter and the decode hand-off are unchanged.
 Causal-conv state handling is untouched. Toggle: QWEN_PREFILL_CHUNK_GDN=0 restores the
-serial kernel exactly.
+serial kernel exactly (default on).
 """
 
 import os
@@ -23,7 +23,7 @@ CHUNK = 32
 
 
 def chunk_prefill_enabled():
-    return os.environ.get("QWEN_PREFILL_CHUNK_GDN", "0") != "0"
+    return os.environ.get("QWEN_PREFILL_CHUNK_GDN", "1") != "0"
 
 
 _CONSTS = {}
