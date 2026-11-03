@@ -324,14 +324,20 @@ def _from_flat(x, b):
     return ttnn.to_layout(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, b, 1, n)), ttnn.TILE_LAYOUT)
 
 
-def _to_sm(x):
+def _to_sm(x, memory_config=None):
     """Flat [1,1,B,2560] -> stream-major [1,4,B,640]: stream j's 640 local columns become batch j."""
-    return ttnn.concat([x[..., j * 640 : (j + 1) * 640] for j in range(4)], dim=1)
+    return ttnn.concat([x[..., j * 640 : (j + 1) * 640] for j in range(4)], dim=1, memory_config=memory_config)
 
 
-def _from_sm(x):
+def _from_sm(x, memory_config=None):
     """Stream-major [1,4,B,640] -> flat [1,1,B,2560]."""
-    return ttnn.concat([x[:, j : j + 1] for j in range(4)], dim=-1)
+    return ttnn.concat([x[:, j : j + 1] for j in range(4)], dim=-1, memory_config=memory_config)
+
+
+def _sm_prefill(x):
+    """Single-request prefill rows ([1,1,S,2560], S > 1) take the stream-major HC implementation."""
+    shape = tuple(x.shape)
+    return shape[1] == 1 and shape[2] > 1 and os.environ.get("QWEN_FLASH_HC_SM_PREFILL", "1") == "1"
 
 
 class ParallelHyperConnection:
@@ -375,6 +381,9 @@ class ParallelHyperConnection:
     def read(self, x, *, decode=False):
         if tuple(x.shape) == (1, 1, 1, 2560) or self.ops.l1_prefill:
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        if not decode and _sm_prefill(x):
+            # Bit-identical; the returned inject is stream-major [1,4,S,1], which write() recognises.
+            return self.read_sm_prefill(_to_sm(x, ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else None))
         b, s = tuple(x.shape)[1:3]
         streams = self.ops.norm(ttnn.reshape(x, (1, b * s, 4, 640)), self.norm, self.eps)
         normalized = ttnn.reshape(streams, (1, b, s, 2560))
@@ -399,6 +408,9 @@ class ParallelHyperConnection:
         return self.ops.gather(mixed), inject
 
     def write(self, x, update, inject):
+        if tuple(inject.shape)[1] == 4 and inject.shape[-1] == 1 and _sm_prefill(x):
+            mem = ttnn.L1_MEMORY_CONFIG if self.ops.l1_prefill else None
+            return _from_sm(self.write_sm_prefill(_to_sm(x, mem), update, inject), mem)
         if tuple(x.shape) == (1, 1, 1, 2560) or self.ops.l1_prefill:
             # Keep the local four-stream residual in L1 through the next HC
             # consumer. Mesh ownership remains four 640-wide hidden shards.
