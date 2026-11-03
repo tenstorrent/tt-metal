@@ -66,10 +66,12 @@ ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim)
 // factories, which supported_execution_controls() only admits when the output shares the input's
 // buffer type, so a mismatched placement keeps the TILE factory instead. The one definition both the
 // dispatch and is_demoted() read: a case this detour serves never pays the TILE factories'
-// padded-row cost that is_demoted() otherwise guards against. `transposed_copies_pending` is set by
-// is_demoted(), which asks before the dispatch has transposed the operands: the TILE copy of each
-// operand is then charged to the budget too, at its tile-padded size, so both evaluations see the
-// same frontier and cannot disagree on a unit row.
+// padded-row cost that is_demoted() otherwise guards against. `pending_tile_bytes` is what the
+// routing gates (is_demoted(), codegen_plan_fits_live_l1()), which ask before the dispatch has
+// transformed the operands, still owe for the TILE tensors those transforms cut (the transposed
+// copies, or the sliced source), each at its tile-padded size; the dispatch, asking on the
+// transformed operands, owes nothing. Every evaluation thus sees the same frontier and none can
+// disagree on a unit row.
 bool prefers_row_major_strategy(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
@@ -77,7 +79,7 @@ bool prefers_row_major_strategy(
     const ttnn::Shape& working_input,
     const ttnn::Shape& working_index,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    bool transposed_copies_pending = false);
+    uint64_t pending_tile_bytes);
 
 // Perf gate consulted only by ttnn::scatter()'s routing, and only when supported_by_codegen() is
 // true: true means fall back to native despite codegen support. `dim` is the caller's raw

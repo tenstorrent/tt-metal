@@ -18,8 +18,8 @@ namespace ttnn::prim {
 using namespace tt::tt_metal;
 namespace scatter_ns = ttnn::operations::data_movement::scatter;
 
-// ROW_MAJOR dispatches on dtype+reduction_mode alone (both already part of the default hash), so no
-// live L1 read is needed to pick between the two RM factories. TILE prefers the row-buffered
+// ROW_MAJOR dispatches on layout+reduction_mode alone (both already part of the default hash), so
+// no live L1 read is needed to pick between the two RM factories. TILE prefers the row-buffered
 // interleaved plan whenever its footprint fits the live L1 frontier, UNLESS the tile-row count
 // underfills the grid while more than one output column exists -- there, splitting by output COLUMN
 // (streaming) reaches every core instead of leaving most of them idle even though the interleaved
@@ -213,9 +213,9 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
 }
 
 // A hit re-runs the miss checks. The key pins the tensor specs through their attribute values, and
-// a Tile's leave out its transpose flags, so a transposed-tile operand hashes like a default-tile one
-// and only a re-check keeps it off the fixed-face readers; the checks also cover what no key carries
-// at all, an operand on another device. The cost is a few spec constructions and allocator reads
+// a Tile's attribute values leave out its transpose flags, so a transposed-tile operand hashes like
+// a default-tile one and only a re-check keeps it off the fixed-face readers; the checks also cover
+// what no key carries at all, an operand on another device. The cost is a few spec constructions and allocator reads
 // per call, small next to a dispatch.
 void ScatterCodegenDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
@@ -268,7 +268,17 @@ ScatterCodegenParams build_scatter_codegen_params(
     const auto page_map = compute_scatter_page_map(input_tensor.logical_shape(), index_tensor.logical_shape(), tiled);
 
     if (tiled) {
-        const auto geometry = compute_scatter_tile_geometry(input_tensor, index_tensor, src_tensor);
+        // The geometry reads the pre-last dim before validate's rank checks run (the attributes are
+        // built ahead of the program hash, which runs ahead of validate).
+        TT_FATAL(
+            input_tensor.logical_shape().rank() >= 2 && index_tensor.logical_shape().rank() >= 2 &&
+                src_tensor.logical_shape().rank() >= 2,
+            "scatter_codegen: TILE operands must have rank >= 2 (ttnn::scatter pads the rank up to 4); got input "
+            "{}, index {}, src {}.",
+            input_tensor.logical_shape(),
+            index_tensor.logical_shape(),
+            src_tensor.logical_shape());
+        const auto geometry = compute_scatter_tile_geometry(input_tensor, index_tensor);
         return ScatterCodegenParams{
             geometry.Ht,
             geometry.Wt_output,

@@ -224,7 +224,8 @@ ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim)
         const int32_t axis = dim < 0 ? dim + rank : dim;
         std::swap(dims[axis], dims[rank - 1]);
     }
-    // unsqueeze_to_4D: leading unit dims up to rank 4; a higher rank is kept as it is (#56876).
+    // unsqueeze_to_4D: leading unit dims up to rank 4; a higher rank is kept as it is (see
+    // pad_rank_up_to_4d in scatter.cpp).
     while (dims.size() < 4) {
         dims.insert(dims.begin(), 1u);
     }
@@ -265,6 +266,33 @@ uint64_t live_l1_budget(const Tensor& input_tensor, uint64_t pending_bytes) {
     return usable > pending_bytes ? usable - pending_bytes : 0;
 }
 
+// The tensors this call still cuts from its operands before any factory runs, each in `layout` and
+// its operand's own placement: off the last axis the transposed copy of each operand; on it nothing
+// is transposed, but a source wider than the index is sliced to the index's shape first, and that
+// slice is what the factory sees. A slice taken ahead of a transpose is released by it, so the two
+// are never owed together.
+uint64_t pending_operand_copies_bytes(
+    const Tensor& input_tensor,
+    const Tensor& index_tensor,
+    const Tensor& src_tensor,
+    int32_t axis,
+    const ttnn::Shape& working_input,
+    const ttnn::Shape& working_index,
+    Layout layout) {
+    const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
+    if (axis != rank - 1) {
+        return pending_l1_bytes(
+                   input_tensor, working_input, input_tensor.dtype(), layout, input_tensor.memory_config()) +
+               pending_l1_bytes(
+                   input_tensor, working_index, index_tensor.dtype(), layout, index_tensor.memory_config()) +
+               pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), layout, src_tensor.memory_config());
+    }
+    if (src_tensor.logical_shape() != index_tensor.logical_shape()) {
+        return pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), layout, src_tensor.memory_config());
+    }
+    return 0;
+}
+
 }  // namespace
 
 bool prefers_row_major_strategy(
@@ -274,7 +302,7 @@ bool prefers_row_major_strategy(
     const ttnn::Shape& working_input,
     const ttnn::Shape& working_index,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    bool transposed_copies_pending) {
+    uint64_t pending_tile_bytes) {
     if (input_tensor.layout() != Layout::TILE) {
         return false;
     }
@@ -311,22 +339,18 @@ bool prefers_row_major_strategy(
     }
     // Only take the detour when the untilized RM plan fits the L1 the factory will find: what is
     // free now, less the three untilized operands and the output this call still allocates ahead
-    // of it (each counted only if placed in L1). The TILE dispatch's own footprint is a small,
-    // fixed number of tile pages regardless of row width, so it remains the safe fallback whenever
-    // the sticks would not fit. The transposed copies the untilized operands are cut from share
-    // their working shape but are TILE tensors, so while they are still pending they are charged
-    // at their own tile-padded size.
+    // of it (each counted only if placed in L1), and less the TILE tensors the untilized operands
+    // are cut from while those are still pending (`pending_tile_bytes`, owed by the routing gates,
+    // settled by the dispatch). The TILE dispatch's own footprint is a small, fixed number of tile
+    // pages regardless of row width, so it remains the safe fallback whenever the sticks would not
+    // fit.
     const uint64_t input_page_bytes = ttnn::prim::scatter_rm_aligned_stick_bytes(input_tensor, stick_elems);
-    const auto operand_bytes = [&](Layout layout) {
-        return pending_l1_bytes(
-                   input_tensor, working_input, input_tensor.dtype(), layout, input_tensor.memory_config()) +
-               pending_l1_bytes(
-                   input_tensor, working_index, index_tensor.dtype(), layout, index_tensor.memory_config()) +
-               pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), layout, src_tensor.memory_config());
-    };
+    const Layout rm = Layout::ROW_MAJOR;
     const uint64_t pending_bytes =
-        operand_bytes(Layout::ROW_MAJOR) + (transposed_copies_pending ? operand_bytes(Layout::TILE) : 0) +
-        pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), Layout::ROW_MAJOR, output_mem_config);
+        pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), rm, input_tensor.memory_config()) +
+        pending_l1_bytes(input_tensor, working_index, index_tensor.dtype(), rm, index_tensor.memory_config()) +
+        pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), rm, src_tensor.memory_config()) +
+        pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), rm, output_mem_config) + pending_tile_bytes;
     return ttnn::prim::scatter_rm_min_plan_fits_l1(
         live_l1_budget(input_tensor, pending_bytes),
         input_page_bytes,
@@ -346,23 +370,14 @@ bool codegen_plan_fits_live_l1(
     const int32_t axis = dim < 0 ? dim + rank : dim;
     const ttnn::Shape working_input = codegen_working_shape(input_tensor.logical_shape(), axis);
     const ttnn::Shape working_index = codegen_working_shape(index_tensor.logical_shape(), axis);
-    // Still to be allocated before the factory runs, each in the caller's layout and that operand's
-    // own placement: the output, and when the scatter axis is not already last, the transposed copy
-    // of each operand. Nothing is transposed on the last axis, but a source wider than the index is
-    // sliced to the index's shape first, and that slice is what the factory sees.
+    // Still to be allocated before the factory runs: the copies the dispatch cuts from the operands,
+    // in the caller's layout, and the output.
     const Layout layout = input_tensor.layout();
-    uint64_t pending_bytes =
-        pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), layout, output_mem_config);
-    if (axis != rank - 1) {
-        pending_bytes +=
-            pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), layout, input_tensor.memory_config()) +
-            pending_l1_bytes(input_tensor, working_index, index_tensor.dtype(), layout, index_tensor.memory_config()) +
-            pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), layout, src_tensor.memory_config());
-    } else if (src_tensor.logical_shape() != index_tensor.logical_shape()) {
-        pending_bytes +=
-            pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), layout, src_tensor.memory_config());
-    }
-    const uint64_t budget = live_l1_budget(input_tensor, pending_bytes);
+    const uint64_t copies_bytes = pending_operand_copies_bytes(
+        input_tensor, index_tensor, src_tensor, axis, working_input, working_index, layout);
+    const uint64_t budget = live_l1_budget(
+        input_tensor,
+        copies_bytes + pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), layout, output_mem_config));
     if (layout == Layout::TILE) {
         // The streaming plan is the TILE floor; the interleaved plan is an upgrade the prim takes
         // only when it fits what is free then. A call whose streaming pages do not fit may still be
@@ -380,7 +395,7 @@ bool codegen_plan_fits_live_l1(
                                                 working_input,
                                                 working_index,
                                                 output_mem_config,
-                                                /*transposed_copies_pending=*/axis != rank - 1);
+                                                /*pending_tile_bytes=*/copies_bytes);
     }
     const uint64_t input_page_bytes = ttnn::prim::scatter_rm_aligned_stick_bytes(input_tensor, working_input[-1]);
     const bool bf16_reduce = reduction_mode == kReductionAdd || reduction_mode == kReductionMultiply;
@@ -419,14 +434,16 @@ bool is_demoted(
     if (input_tensor.dtype() == DataType::BFLOAT16 && input_tensor.layout() == Layout::TILE) {
         const ttnn::Shape working_input = codegen_working_shape(input_tensor.logical_shape(), axis);
         const ttnn::Shape working_index = codegen_working_shape(index_tensor.logical_shape(), axis);
-        if (working_input[-2] == 1 && !prefers_row_major_strategy(
-                                          input_tensor,
-                                          index_tensor,
-                                          src_tensor,
-                                          working_input,
-                                          working_index,
-                                          output_mem_config,
-                                          /*transposed_copies_pending=*/axis != rank - 1)) {
+        if (working_input[-2] == 1 &&
+            !prefers_row_major_strategy(
+                input_tensor,
+                index_tensor,
+                src_tensor,
+                working_input,
+                working_index,
+                output_mem_config,
+                pending_operand_copies_bytes(
+                    input_tensor, index_tensor, src_tensor, axis, working_input, working_index, Layout::TILE))) {
             return true;
         }
     }
