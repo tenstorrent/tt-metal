@@ -11,7 +11,6 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_to_device_layout
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
@@ -24,7 +23,9 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     to_device,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    QKV_HISTORY_LAYOUTS,
     qkv_device_inputs,
+    qkv_history_to_device_layout,
     qkv_reference,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
@@ -276,17 +277,24 @@ def test_sp_rectangular_recurrent_reset(mesh_device, axis, key_dim, value_dim):
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("axis", [0, 1])
-def test_sp_convolution_rebinds_histories(mesh_device, axis):
+@QKV_HISTORY_LAYOUTS
+def test_sp_convolution_rebinds_histories(mesh_device, axis, history_layout):
+    """W = 192: [1, 3, 192] in both history layouts, so only history_layout tells them apart."""
     widths = (64, 64, 64)
     previous = []
     cache_entries = None
     for actual_start_value in (0, 32, 64, 96, 32):
         (host, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(
-            mesh_device, widths=widths, sequence=64, history_rows=3, seed=2011 + actual_start_value
+            mesh_device,
+            widths=widths,
+            sequence=64,
+            history_rows=3,
+            seed=2011 + actual_start_value,
+            history_layout=history_layout,
         )
         predecessor = history + 2
         predecessor_tt = to_device(
-            convolution_tail_to_device_layout(predecessor),
+            qkv_history_to_device_layout(predecessor, history_layout),
             mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -305,7 +313,7 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
             actual_start=actual_start,
             sequence_parallel_axis=axis,
             predecessor_carry=predecessor_tt,
-            history_layout=ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS,
+            history_layout=history_layout,
         )
         ttnn.synchronize_device(mesh_device)
         if cache_entries is None:

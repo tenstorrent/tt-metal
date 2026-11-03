@@ -24,15 +24,14 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
-from models.demos.deepseek_v3_d_p.tt.kda.config import (
-    convolution_tail_from_device_layout,
-    convolution_tail_to_device_layout,
-)
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    QKV_HISTORY_LAYOUTS,
     assert_accurate,
     assert_bit_identical,
     make_actual_start,
+    qkv_history_from_device_layout,
+    qkv_history_to_device_layout,
 )
 
 pytestmark = [run_for_blackhole()]
@@ -161,8 +160,15 @@ def _coordinate(sp_rank: int, other_rank: int, sp_axis: int) -> tuple[int, int]:
 class _Exchange:
     """Device inputs, persistent exchange state and the host reference for one mesh."""
 
-    def __init__(self, mesh_device: ttnn.MeshDevice, sp_axis: int, geometry: _Geometry):
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        sp_axis: int,
+        geometry: _Geometry,
+        history_layout: ttnn.QkvCausalConv1dSiluHistoryLayout = ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS,
+    ):
         self.mesh_device = mesh_device
+        self.history_layout = history_layout
         self.sp_axis = sp_axis
         self.widths = widths = geometry.widths
         self.local_rows = local_rows = geometry.local_rows
@@ -197,7 +203,7 @@ class _Exchange:
         )
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
         self.history_tt = ttnn.from_torch(
-            convolution_tail_to_device_layout(self.history),
+            qkv_history_to_device_layout(self.history, history_layout),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
@@ -224,7 +230,7 @@ class _Exchange:
             actual_end=actual_end,
             sequence_parallel_axis=self.sp_axis,
             memory_config=self.output_memory_config,
-            history_layout=ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS,
+            history_layout=self.history_layout,
         )
 
     def to_host(self, outputs: tuple[ttnn.Tensor, ...]) -> list[list[torch.Tensor]]:
@@ -233,7 +239,7 @@ class _Exchange:
         return [
             [
                 torch.cat([ttnn.to_torch(part) for part in parts], dim=-1)[0],
-                convolution_tail_from_device_layout(ttnn.to_torch(final), _HISTORY_ROWS),
+                qkv_history_from_device_layout(ttnn.to_torch(final), self.history_layout),
             ]
             for *parts, final in zip(q, k, v, carry, strict=True)
         ]
@@ -284,11 +290,17 @@ def _release(outputs: tuple[ttnn.Tensor, ...]) -> None:
 @pytest.mark.parametrize(
     "mesh_device,sp_axis,device_params,geometry", _MESHES, indirect=["mesh_device", "device_params"]
 )
+@QKV_HISTORY_LAYOUTS
 def test_qkv_convolution_exchange_matches_single_sequence(
-    mesh_device: ttnn.MeshDevice, sp_axis: int, device_params: dict, geometry: _Geometry
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    device_params: dict,
+    geometry: _Geometry,
+    history_layout: ttnn.QkvCausalConv1dSiluHistoryLayout,
 ) -> None:
-    """Accuracy against the single-sequence reference; determinism over back-to-back calls and trace replay."""
-    exchange = _Exchange(mesh_device, sp_axis, geometry)
+    """Accuracy against the single-sequence reference; determinism over back-to-back calls and trace replay. Both
+    history layouts: intervals shorter than three rows gather the carry's head from the caller's history."""
+    exchange = _Exchange(mesh_device, sp_axis, geometry, history_layout)
     try:
         for interval in _intervals(exchange.sp_size, geometry.local_rows):
             actual_start = make_actual_start(mesh_device, interval.start)

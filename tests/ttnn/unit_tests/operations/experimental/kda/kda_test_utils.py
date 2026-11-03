@@ -5,10 +5,40 @@
 from __future__ import annotations
 from collections.abc import Callable, Sequence
 
+import pytest
 import torch
 import torch.nn.functional as F
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_to_device_layout
+from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    convolution_tail_from_device_layout,
+    convolution_tail_to_device_layout,
+)
+
+# qkv_causal_conv1d_silu's three history rows, and both layouts it stores them in.
+QKV_HISTORY_ROWS = 3
+QKV_HISTORY_LAYOUTS = pytest.mark.parametrize(
+    "history_layout",
+    [ttnn.QkvCausalConv1dSiluHistoryLayout.ROWS, ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS],
+    ids=["rows", "segments"],
+)
+
+
+def qkv_history_to_device_layout(
+    history: torch.Tensor, history_layout: ttnn.QkvCausalConv1dSiluHistoryLayout
+) -> torch.Tensor:
+    """``[1, rows, W]`` history rows as qkv_causal_conv1d_silu stores them in ``history_layout``."""
+    if history_layout == ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS:
+        return convolution_tail_to_device_layout(history)
+    return history
+
+
+def qkv_history_from_device_layout(
+    tail: torch.Tensor, history_layout: ttnn.QkvCausalConv1dSiluHistoryLayout
+) -> torch.Tensor:
+    """The ``[1, 3, W]`` rows of a qkv_causal_conv1d_silu carry stored in ``history_layout``."""
+    if history_layout == ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS:
+        return convolution_tail_from_device_layout(tail, QKV_HISTORY_ROWS)
+    return tail
 
 
 def _finiteness(name: str, tensor: torch.Tensor) -> tuple[list[str], str]:
@@ -358,6 +388,7 @@ def qkv_device_inputs(
     batch: int = 1,
     history_rows: int = 3,
     seed: int = 223,
+    history_layout: ttnn.QkvCausalConv1dSiluHistoryLayout = ttnn.QkvCausalConv1dSiluHistoryLayout.ROWS,
 ) -> tuple[
     tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]],
     tuple[ttnn.Tensor, ttnn.Tensor, tuple[ttnn.Tensor, ...]],
@@ -372,7 +403,7 @@ def qkv_device_inputs(
     inputs, history, taps = host
     return host, (
         qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
-        qkv_to_device(convolution_tail_to_device_layout(history), device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        qkv_to_device(qkv_history_to_device_layout(history, history_layout), device, layout=ttnn.ROW_MAJOR_LAYOUT),
         tuple(qkv_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps),
     )
 
