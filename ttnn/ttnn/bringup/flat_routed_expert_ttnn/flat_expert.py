@@ -100,6 +100,20 @@ READ_BATCH = int(os.environ.get("MIMO_FL_READ_BATCH", "1"))
 X_BATCH = int(os.environ.get("MIMO_FL_X_BATCH", "4"))  # x blocks per relay read barrier
 KBLK, MT_MAX, ND, R = 8, 4, 28, 4  # R gate/up cores per reader; row tiles per sub-block up to MT_MAX
 W_DTYPES = {"bf8": (ttnn.bfloat8_b, BF8_TILE), "bf4": (ttnn.bfloat4_b, 576)}
+# FlatRoutedExpert's wdtype -> (gate/up, down) weight formats. "bf8d4" (DeepSeek-V4.1 P.27, EXPERTS_IMPL=bfp8_down4):
+# bfp8 gate/up, bfp4 down (and reader-tail down) tiles; the op takes the down format from the down tensors' dtype
+# (flat_routed_expert_plan down_weights_bf4). W_DTYPES[wdtype][0] stays the gate/up dtype.
+W_PAIRS = {"bf8": ("bf8", "bf8"), "bf4": ("bf4", "bf4"), "bf8d4": ("bf8", "bf4")}
+W_DTYPES["bf8d4"] = W_DTYPES["bf8"]
+
+
+def weight_formats(wdtype):
+    """wdtype -> {"w_gu": (dtype, short name), "w_d": .., "w_rd": ..} and the plan's (weights_bf8, down_weights_bf4)."""
+    gu, dn = W_PAIRS[wdtype]
+    fm = {"w_gu": gu, "w_d": dn, "w_rd": dn}
+    return {k: (W_DTYPES[v][0], v) for k, v in fm.items()}, (gu == "bf8", gu != dn)
+
+
 H_TILE = BF8_TILE
 DN_NOC = int(os.environ.get("MIMO_FL_DN_NOC", "1"))  # NoC of the down cores' h chain / y writes (weights: the other)
 FWD_DEPTH = int(os.environ.get("MIMO_FL_FWD_DEPTH", "0"))  # > 0: pipelined forwarder (se10_fwd.cpp), chunks in flight
@@ -605,6 +619,7 @@ class FlatExpert:
             mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0) if n_dev > 1 else None,
         )
         gidx_addr = self.gidx.buffer_address()
+        assert wdtype in ("bf8", "bf4"), f"FlatExpert (research builder): one weight format, not {wdtype}"
         w_dtype, w_tile = W_DTYPES[wdtype]
         assert m % 32 == 0
         # rows per sub-block: M < 128 -> one sub-block of M rows; else 4 row tiles (MIMO_FL_MT overrides), the last
@@ -1963,6 +1978,7 @@ class FlatRoutedExpert:
         layout=None,
         weights_nk=False,
         check_exact=False,
+        max_y_writers=0,
     ):
         """``weights``: per device, per local expert (Wg [H, I], Wu [H, I], Wd [I, H]), or a callable returning that
         (only called when the weight cache misses), or ``"fake"``: uninitialised weight tensors in the right layout
@@ -1973,13 +1989,18 @@ class FlatRoutedExpert:
         are given as nn.Linear stores them, (W1 [I, H], W3 [I, H], W2 [H, I]), laid out tile by tile transposed
         (flat_weight_regions nk) and every call passes weights_nk (the matmuls transpose them back): a bfp8 tile then
         shares its exponents along K. ``check_exact``: assert the block-float dtype holds every weight value exactly
-        (each 16-value group of a tile row: integer multiples of 2^(E - 6) for bfp8, E the group's largest exponent)."""
+        (each 16-value group of a tile row: integer multiples of 2^(E - 6) for bfp8, E the group's largest exponent).
+        ``max_y_writers`` (0: off, the plan unchanged): at most this many y writers (down cores + reader tails;
+        DeepSeek-V4.1: the appended combine's L1 hand-off limit, combine_rf sparse_combine_rf.L1_MAX_WRITERS); every
+        call, replanned() and flat_routed_expert_with_program must pass ``self.max_y_writers``."""
         E, n_dev = len(gids[0]), len(gids)
         self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
         self._n_global, self._wdtype = n_global, wdtype  # (replanned)
         self.x_bf16, self.h_bf16 = x_bf16, h_bf16  # x / h tile formats (else bfp8): part of the plan
         self.layout = flat_layout(layout)
         self.weights_nk = weights_nk
+        self.max_y_writers = int(max_y_writers)
+        fmts, (bf8_gu, d4) = weight_formats(wdtype)  # (per weight tensor: its block format)
         self.plan = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
             device,
             H,
@@ -1987,14 +2008,15 @@ class FlatRoutedExpert:
             E,
             n_global,
             m,
-            weights_bf8=wdtype == "bf8",
+            weights_bf8=bf8_gu,
             pin=pin,
             x_bf16=x_bf16,
             h_bf16=h_bf16,
             layout=self.layout,
+            max_y_writers=self.max_y_writers,
+            **({"down_weights_bf4": True} if d4 else {}),
         )
         lay = dict(self.plan)
-        w_dtype = W_DTYPES[wdtype][0]
         banks = lay["banks"]
         names = ("w_gu", "w_d", "w_rd") if lay["rdown"] else ("w_gu", "w_d")
         files = dict.fromkeys(names)
@@ -2005,7 +2027,7 @@ class FlatRoutedExpert:
         if isinstance(weights, str):
             assert weights == "fake", weights
             shapes = flat_weight_shapes(H, I, E, lay)
-            cached = {n: _fake_bank_sharded(*shapes[n], banks, w_dtype, device, n_dev) for n in names}
+            cached = {n: _fake_bank_sharded(*shapes[n], banks, fmts[n][0], device, n_dev) for n in names}
         else:
             cached = {n: _load_cached(files[n], device) for n in names}
         if any(t is None for t in cached.values()):
@@ -2019,9 +2041,13 @@ class FlatRoutedExpert:
             for W_l in weights[:1] if same else weights:
                 regions, dregs, rregs = flat_weight_regions(W_l, lay, nk=weights_nk)
                 if check_exact:
-                    for nm, rs in (("gate/up", regions), ("down", dregs), ("reader-tail down", rregs or [])):
+                    for nm, rs, f_ in (
+                        ("gate/up", regions, fmts["w_gu"][1]),
+                        ("down", dregs, fmts["w_d"][1]),
+                        ("reader-tail down", rregs or [], fmts["w_rd"][1]),
+                    ):
                         for i_, r_ in enumerate(rs):
-                            assert block_float_exact(r_, wdtype), f"{wdtype} would round a {nm} weight (region {i_})"
+                            assert block_float_exact(r_, f_), f"{f_} would round a {nm} weight (region {i_})"
                 w_all.append(regions)
                 wd_all.append(dregs)
                 if lay["rdown"]:
@@ -2029,7 +2055,7 @@ class FlatRoutedExpert:
             del weights
             src = {"w_gu": w_all, "w_d": wd_all, "w_rd": wr_all}
             cached = {
-                n: _bank_sharded(src[n], banks, w_dtype, device, None if same else files[n], replicate=same)
+                n: _bank_sharded(src[n], banks, fmts[n][0], device, None if same else files[n], replicate=same)
                 for n in names
             }
             del w_all, wd_all, wr_all, src
@@ -2088,11 +2114,13 @@ class FlatRoutedExpert:
             E,
             self._n_global,
             m,
-            weights_bf8=self._wdtype == "bf8",
+            weights_bf8=weight_formats(self._wdtype)[1][0],
             pin=self.pin,
             x_bf16=self.x_bf16,
             h_bf16=self.h_bf16,
             layout=lay,
+            max_y_writers=self.max_y_writers,
+            **({"down_weights_bf4": True} if weight_formats(self._wdtype)[1][1] else {}),
         )
         assert _weight_packing(dict(plan)) == _weight_packing(
             dict(self.plan)
@@ -2154,4 +2182,5 @@ class FlatRoutedExpert:
             output=output,
             weights_nk=self.weights_nk,
             hidden=hidden,
+            max_y_writers=self.max_y_writers,
         )

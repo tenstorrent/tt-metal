@@ -45,7 +45,9 @@ nb::dict plan_dict(
     uint32_t pin,
     bool x_bf16,
     bool h_bf16,
-    const fre::FlatLayoutOptions& layout) {
+    const fre::FlatLayoutOptions& layout,
+    uint32_t max_y_writers,
+    bool down_weights_bf4) {
     const auto p = fre::flat_routed_expert_plan(
         device,
         fre::FlatRoutedExpertConfig{
@@ -59,7 +61,9 @@ nb::dict plan_dict(
             .pin = pin,
             .x_bf16 = x_bf16,
             .h_bf16 = h_bf16,
-            .layout = layout});
+            .layout = layout,
+            .max_y_writers = max_y_writers,
+            .down_weights_bf4 = down_weights_bf4});
     nb::dict d;
     d["nsg"] = p->nsg;
     d["n_rd"] = p->readers.size();
@@ -86,7 +90,7 @@ nb::dict plan_dict(
     d["rem_cols"] = p->rem_cols;
     d["banks"] = p->banks;
     d["dw_rot"] = p->dw_rot;
-    d["wd_rot_tiles"] = p->w_tile ? p->wd_rot_region / p->w_tile : 0;
+    d["wd_rot_tiles"] = p->wd_tile ? p->wd_rot_region / p->wd_tile : 0;
     d["x_slots"] = p->x_slots;
     d["hbuf"] = p->hbuf;
     d["hu"] = p->hu;
@@ -261,6 +265,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
                 every weight matmul transposes its in1 tile back.
             hidden (int): H when x's rows are wider (0: x's width x x_pages_per_row): the relays read each row's first
                 H values (x_pages_per_row 1, no token_index), e.g. a dispatch buffer with extra columns per row.
+            max_y_writers (int): at most this many y writers, down cores + reader tails (0: off, the plan unchanged;
+                DeepSeek-V4.1: an appended combine's L1 hand-off limit). As the plan the weights were laid out with.
 
         Returns:
             ttnn.Tensor: y [rows, H] bfp8 TILE, or bf16 ROW_MAJOR with y_row_major (rows: token_index's length in
@@ -292,7 +298,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("layout") = fre::FlatLayoutOptions{},
         nb::arg("output") = nb::none(),
         nb::arg("weights_nk") = false,
-        nb::arg("hidden") = 0);
+        nb::arg("hidden") = 0,
+        nb::arg("max_y_writers") = 0);
+
     ttnn::bind_function<"flat_routed_expert_with_program", "ttnn.bringup.">(
         mod,
         R"doc(
@@ -301,7 +309,13 @@ void bind_flat_routed_expert(nb::module_& mod) {
         cells) and y ([rows, H] bf16 ROW_MAJOR, DRAM), the other op's MeshProgramDescriptor (extra_key: its cache key),
         and where the y writers report each local expert (counts[e] += 1 per writer and call at counts_addr on the
         logical collector core; writers: the expected writer count). math_fidelity / weights_nk (DeepSeek-V4.1 P.8):
-        as for flat_routed_expert (defaults: LoFi, [K, N] weight tiles, the program before). Returns y.
+        as for flat_routed_expert (defaults: LoFi, [K, N] weight tiles, the program before).
+        patch_addresses (DeepSeek-V4.1 FIX.5; default False = the program before, every buffer address in its cache
+        key): no address in the key; a hit patches every buffer address (the flat program's, the writers' report and
+        L1 hand-off args, the extra program's arena CBs); extra_addrs: the addresses the extra program bakes into its
+        runtime args - when they differ from the cached program's, the call must pass extra (its args are copied in).
+        max_y_writers (DeepSeek-V4.1; default 0 = off): at most this many y writers, as flat_routed_expert's.
+        Returns y.
         )doc",
         &fre::flat_routed_expert_with_program,
         nb::arg("dispatched_buffer").noconvert(),
@@ -333,7 +347,10 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("y_l1") = nb::none(),
         nb::arg("layout") = fre::FlatLayoutOptions{},
         nb::arg("math_fidelity") = 0,
-        nb::arg("weights_nk") = false);
+        nb::arg("weights_nk") = false,
+        nb::arg("patch_addresses") = false,
+        nb::arg("extra_addrs") = std::vector<uint32_t>{},
+        nb::arg("max_y_writers") = 0);
     mod.def(
         "flat_routed_expert_plan",
         &plan_dict,
@@ -348,7 +365,12 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
         nb::arg("layout") = fre::FlatLayoutOptions{},
-        "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words).");
+        nb::arg("max_y_writers") = 0,
+        nb::arg("down_weights_bf4") = false,
+        "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words). "
+        "max_y_writers (0: off): at most this many y writers (down cores + reader tails), the rest of the down cells "
+        "idle; the op's calls must pass the same value. down_weights_bf4 (with weights_bf8): bfp4 down weights under "
+        "bfp8 gate/up ones (the op takes it from the down weights' dtype).");
     mod.def(
         "flat_drisc_stop",
         [](tt::tt_metal::distributed::MeshDevice* device) {

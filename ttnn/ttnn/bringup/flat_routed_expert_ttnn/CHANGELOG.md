@@ -425,3 +425,120 @@ shapes, mesh, row-major y).
 - Files: the whole folder; `../../../models/demos/deepseek_v41_flash_d_p/tt/{experts,shared_expert,weighted_combine,
   perf_experts}.py`, `../../../models/demos/glm53_flash_d_p/tt/experts_ag.py`,
   `../../../models/demos/glm53_flash_d_p_lb/tests/test_flat_*.py`
+
+### flat_routed_expert_with_program: patch_addresses (address-free program-cache key), 2026-10-27
+- What: new options `patch_addresses=False` / `extra_addrs=[]`. With patch_addresses the program hash holds no buffer
+  address (plan key, extra_key, writers, collector, l1_args sizes, every tensor's spec, the optional tensors'
+  presence), and `override_runtime_arguments` (a no-op before) re-applies on a hit what moved since the cached
+  program last ran: each buffer's address args (the flat program's AddrPatch list, grouped by buffer, RuntimeArgsData
+  pointers cached at the miss), the flat and appended arena-backed CBs when the arena moved, the y writers' report
+  (counts_addr) and L1 hand-off args when they changed, and the appended programs' runtime args copied from `extra`
+  when `extra_addrs` differ (TT_FATAL without `extra`). On a miss the appended descriptor's globally allocated CBs are
+  bound to the call's arena (the caller's descriptor may name a freed arena tensor of the same address); a global
+  circular buffer there is refused. `extra` is now held as a non-owning view for the call (was a deep copy of the
+  MeshProgramDescriptor per call). Default False: the program, its key and its hit path as before.
+  `FlatRoutedExpertProgramFactory::apply_addresses` split out of override_runtime_arguments (same writes).
+  tests/weighted_case.py: `patch_addresses` option (as the model wires it) and the model's DS41-118 column-barrier fix
+  (one fabric connection per direction a chip has; the padded duplicate hung the harness on 8x4's column ends).
+- Why: the address-keyed program missed the cache whenever one activation buffer landed elsewhere (DeepSeek-V4.1 on
+  8x4: the gathered x moves every call, +20..40 programs a 40-layer chunk, ~0.55 s of host each, never warm under
+  F196). Owner order 2026-10-27.
+- Measured (8x4, DeepSeek-V4.1 layer 0, chunk 5120, models/demos/deepseek_v41_flash_d_p/tt/perf_flat_program_key.py):
+  op host per hit 0.41 ms (address-keyed) vs 0.44 / 0.46 ms (patched, same / moved x), miss ~0.55 s; a new x address
+  every call: +1 program a call vs +0; outputs bit-identical to the address-keyed op on every call (24 / 24). The
+  first version (re-apply every patch on every hit) cost 2.0 ms a hit: 26496 arg / CB writes over 32 chips.
+  DeepSeek-V4.1 F196 warm wall (40 layers, one 5120 chunk): warm after 1 run (237 -> 237 entries), 10 timed runs with
+  misses refused, median 999.8 ms; address-keyed: 9 warm-up runs (+40 +36 +37 +38 +23 +34 +18 +2 +0, 316 -> 504
+  entries, 17-30 s each), then a timed run missed (refused): never warm.
+- Tests: tests/unit/test_with_program_patch.py (new; BRINGUP_TEST_MESH=8x4 PASS: bit-identical vs the address-keyed
+  op, moved x +0 programs, moved arena (extra_addrs changed, args copied) +0 programs); tests/unit/ on one Galaxy
+  chip: 38 passed, 4 skipped (the 2x2-mesh tests; FIX.2's 38 / 3 plus the new one, which defaults to 2x2).
+- Needed by: deepseek_v41_flash_d_p FIX.5
+- Files: device/flat_with_program_device_operation.{hpp,cpp}, device/flat_routed_expert_program_factory.{hpp,cpp},
+  flat_routed_expert.{hpp,cpp}, flat_routed_expert_nanobind.cpp, tests/weighted_case.py,
+  tests/unit/test_with_program_patch.py, README.md
+
+### Cap the y writers: `max_y_writers` (2026-10-27, deepseek_v41_flash_d_p galaxy_8x4-full, overseer-directed fix)
+- What: `max_y_writers=0` (plan config attribute; `flat_routed_expert_plan`, `flat_routed_expert`,
+  `flat_routed_expert_with_program`, `FlatRoutedExpert(max_y_writers=)` which passes it to the plan and every call):
+  at most this many y writers (down cores + reader tails). In the auto-shaped one-subgrid plan the kept down cores are
+  cut to the first `max_y_writers - tails` (the plan's own order) before the columns per core are chosen; other plans
+  keep each subgrid's first `cap / nsg`. The cut cells idle (free cells for the appended op). In the plan cache key and
+  flat_with_program's flat_key. Default 0: the plan, keys and programs as before.
+- Why: on a Galaxy chip whose east DRAM readers sit in column 7 (bh-glx-110-c10u02; column 6 on bh-glx-120-b06u08)
+  V4.1-Flash plans 40 down cores of 4 columns; the appended combine's L1 hand-off takes 32 writers (combine_rf
+  `L1_MAX_WRITERS`: the receivers' landed counters, MISC words 128..159 / 160..191, and their wx / hwx[32]), so the
+  model did not build. Capped at 32 the chip gets the column-6 chip's 32 x 5 down split, so the same weight-layout
+  cache key (owner: no ~75 min expert-cache rebuild when moving between Galaxies).
+- Results (bh-glx-110-c10u02, east column 7): tests/unit/test_max_y_writers.py 2 / 2 (plan unchanged at 0 and above
+  the writers; capped cores = the uncapped plan's first ones; cap 32 -> nd 32, pcds 5, col0s 0..155, the column-6
+  layout keys; capped op (27 cores) vs the bfp4 reference min PCC 0.998). Model layer 0 on 8x4: plan down=32,
+  EXPERTS_LOAD cache=hit on the b06u08 cache (lay9c3da689dd35).
+- Needed by: deepseek_v41_flash_d_p (tt/experts.py, tt/weighted_combine.py)
+- Files: device/flat_routed_expert_plan.{hpp,cpp}, flat_routed_expert.{hpp,cpp}, flat_routed_expert_nanobind.cpp,
+  flat_expert.py, tests/weighted_case.py, tests/test_flat_routed_expert_ttnn.py, tests/unit/test_with_program_patch.py,
+  tests/unit/test_max_y_writers.py, README.md
+
+### Tests: hot-expert routings through flat_routed_expert_with_program (2026-10-27, deepseek_v41_flash_d_p K.1 hang, overseer-directed fix)
+- What: tests/unit/test_hot_experts.py: the model's wiring (tests/weighted_case.py, patch_addresses, bf16 sums, multi
+  planner, LoFi, max_y_writers 32) on the box's mesh (BRINGUP_TEST_MESH), one bfp4-exact expert in every slot, the
+  call's arena and the 16 KB below it filled with random bits first; routings: pad6 (the K.1 call's PAD pattern: 128
+  real tokens, every other token on the same 6 experts, ~4900 of a column's 5120 rows each), one_chip (every token on 6
+  experts of one chip: 30720 rows, rows_cap 31104), full_column (every column's tokens on experts of that column), and
+  a captured routing (HOT_CAPTURE=<moe dump .pt>). Every chip's combine output vs the CPU model (with one expert in
+  every slot: sum of the token's weights on the column's experts x ffn(x)). No op change.
+- Why: the K.1 stand-in decode hung on its first MoE call (hot experts from PAD rows were suspected). The op passes
+  every such routing on a correctly opened mesh; the cause was the mesh's fabric payload (combine_rf CHANGELOG
+  2026-10-27, deepseek_v41_flash_d_p DS41-127). Kept as the regression test for hot routings.
+- Results (Galaxy 8x4, bh-glx-110): 3 / 3 synthetic + the captured K.1 routing, min PCC 0.99989 on every chip, ~6-9 s a
+  case; with the mesh at the router default payload the captured replay hangs with the model's triage signature.
+- Needed by: deepseek_v41_flash_d_p K.1
+- Files: tests/unit/test_hot_experts.py, README.md
+
+### Merge: patch_addresses (FIX.5), max_y_writers and the hot-expert tests on the Marko sync (2026-10-28, deepseek_v41_flash_d_p galaxy_8x4-full)
+- What: the galaxy branch's three entries above, ported onto the 856d97d5864 sync (typed layout, y_l1, DRISC):
+  patch_addresses / extra_addrs and max_y_writers after `layout` in flat_routed_expert_with_program (C++, nanobind;
+  `y_l1` and `layout.key()` stay in flat_key, max_y_writers appended); max_y_writers after `layout` in the plan config,
+  its attributes and the plan cache key; `FlatRoutedExpert.replanned` passes `max_y_writers` too. The sync's
+  setenv-free y_l1 replaces the old `MIMO_FL_Y_L1` setenv; patch mode still keeps every address out of the key (the
+  synced factory's DRISC job args go through AddrSrc as before). The non-owning `extra` view (FIX.5) replaces the
+  sync's copy. tests: test_with_program_patch.py and test_hot_experts.py run at `LEGACY` and at the model's marko
+  layout; test_max_y_writers.py pins `LEGACY` for the 40-core case and adds test_plan_cap_marko.
+- Why: keep both sides' features (owner, 2026-10-28).
+- Found: under the marko layout (even split, one subgrid) the down cores are at most 32 and the reader tails off, so the
+  y-writer cap of 32 is a no-op (plan bit-identical, test_plan_cap_marko); on this east-column-7 Galaxy chip the
+  marko plan packs the weights exactly as the capped LEGACY plan (weight key lay9c3da689dd35): no new weight cache.
+- Results (Galaxy 8x4, east column 7): test_max_y_writers 4 / 4, test_with_program_patch legacy + marko (bit-identical,
+  +0 program-cache entries on a moved x / arena), test_hot_experts 6 / 6 + the captured K.1 routing (min PCC 0.99989
+  on 32 chips), test_flat_widths 6 / 6, test_closeout_flat / plans 10 / 10. Not from the merge (the merged plain op is
+  origin's plus max_y_writers off): test_flat_routed_expert_op[mimo] (arena_tiles C++ 604 vs the Python builder 570)
+  and [tp4] ((16, 1, 6, 2), before the merge too); test_flat_expert_indexed_perf k2 / tp4 "flat" +21.7% / +8.2% at
+  LEGACY (the pre-merge run on this node: k2 indexed_rm +4.7% only).
+- Needed by: deepseek_v41_flash_d_p (flat and MOE_IMPL=block)
+- Files: device/flat_routed_expert_plan.{hpp,cpp}, device/flat_with_program_device_operation.cpp,
+  device/flat_routed_expert_program_factory.cpp, flat_routed_expert.cpp, flat_routed_expert_nanobind.cpp,
+  flat_expert.py, tests/test_flat_routed_expert_ttnn.py, tests/weighted_case.py, tests/unit/test_with_program_patch.py,
+  tests/unit/test_hot_experts.py, tests/unit/test_max_y_writers.py, README.md
+
+### 2026-11-02 deepseek_v41_flash_d_p P.27: down weights bfp4 under bfp8 gate/up (down_weights_bf4, wdtype "bf8d4")
+- What: the down weights (and the reader tails' down weights) may be bfloat4_b while gate/up are bfloat8_b. The op
+  reads the down format from the down tensors' dtype (`down_weights_bf4_of`, validated: bf8 / bf4 only, bf4 down only
+  under bf8 gate/up, reader-tail down = down); the plan (`FlatRoutedExpertConfig::down_weights_bf4`, a plan-cache and
+  program-hash field; `flat_routed_expert_plan(down_weights_bf4=False)`) has `wd_tile` for the down rings (h_off), the
+  down / rotated / reader-tail regions; the program factory gives the down rings their own CB format and tile size,
+  se6_dw its tile bytes, se9_rdown its down block bytes (define SE9_WD_TILE, only when the two differ). Python:
+  `W_PAIRS` / `weight_formats(wdtype)`, `FlatRoutedExpert(wdtype="bf8d4")` packs w_gu bfp8 and w_d / w_rd bfp4 (fake,
+  check_exact and `.replanned` too); cache files carry "bf8d4". FlatExpert (the Python builder) refuses it.
+- Why: EXPERTS_IMPL=bfp8_down4 (owner 2026-11-02): w1 / w3 exact in bfp8, w2 bfp4 (with the model's least-squares
+  exponent rounding on the host), A/B-ed against bfp4 / bfp8 / bfp4_mse by P.28 / P.29.
+- Off (default, down tiles = gate/up tiles): the plan, kernels' compile args / defines, the plan-cache key and the
+  program keys of every existing caller unchanged (the new flat_key word only when on).
+- Test: tests/unit/test_down_bf4.py (bf8d4 bit-identical to bf8 on bfp4-exact down weights, vs float64; the plan's
+  packing / down cores equal to bf8's, bfp4 gate/up refused). No fork regression run (OV-25: the suites run in F.1).
+- Results (Galaxy 8x4, BRINGUP_TEST_MESH=8x4 FABRIC_2D): test_down_bf4 2 / 2 (bf8d4 == bf8 bit for bit on 32 chips,
+  worst rel vs float64 0.0204). Model: tests/test_experts_formats.py layer 0 through the MoE block, bfp8_down4 rel
+  0.0206 vs golden (bfp8 0.0152, bfp4 0.0350).
+- Needed by: deepseek_v41_flash_d_p (EXPERTS_IMPL=bfp8_down4, flat and MOE_IMPL=block)
+- Files: device/flat_routed_expert_plan.{hpp,cpp}, device/flat_routed_expert_program_factory.cpp,
+  device/kernels/se9_rdown.cpp, flat_routed_expert.cpp, flat_routed_expert_nanobind.cpp, flat_expert.py, README.md,
+  tests/unit/test_down_bf4.py

@@ -57,15 +57,31 @@ Realistic (use by default):
   check holds, else HiFi2 (the DeepSeek-V4.1 model passes LoFi under its EXPERTS_PRECISION=glm default).
 - `weights_nk=False`: (fork addition) weights laid out from nn.Linear's [N, K]; every matmul transposes in1 back.
 - `hidden=0`: (fork addition) H when x rows are wider; relays read each row's first H values.
+- `max_y_writers=0`: (fork addition, DeepSeek-V4.1 2026-10-27) at most this many y writers (down cores + reader
+  tails); the down cores are cut in the plan's order before their column split is chosen, the rest idle. 0 = off (the
+  plan unchanged). The plan, every call and flat_routed_expert_with_program must pass the same value (plan cache and
+  program keys include it). For an appended combine's L1 hand-off (combine_rf `sparse_combine_rf.L1_MAX_WRITERS`, 32):
+  a Galaxy chip with east DRAM readers in column 7 plans 40 down cores at V4.1-Flash, column 6 plans 32; capped at 32
+  both get the 32 x 5-column down split and the same weight-layout cache key.
+- down weights bfp4 under bfp8 gate/up (fork addition, DeepSeek-V4.1 P.27, 2026-11-02): the op takes the down format from the down tensors' dtype (bfloat8_b gate/up with bfloat4_b down / reader-tail down; any other mix is refused); the plan's `down_weights_bf4=False` argument (flat_routed_expert_plan) sizes the down rings / regions in bfp4 tiles. `FlatRoutedExpert(wdtype="bf8d4")` lays them out (`flat_expert.weight_formats`). Off (default): the programs, keys and weight caches before it, unchanged.
 
-`flat_routed_expert_plan(device, hidden, intermediate, experts_per_chip, num_global_experts, max_tokens_per_expert, weights_bf8=False, pin=1, x_bf16=False, h_bf16=False, layout=FlatLayoutOptions())` -> dict.
+`flat_routed_expert_plan(device, hidden, intermediate, experts_per_chip, num_global_experts, max_tokens_per_expert, weights_bf8=False, pin=1, x_bf16=False, h_bf16=False, layout=FlatLayoutOptions(), max_y_writers=0)` -> dict.
 
 
-`flat_routed_expert_with_program(<flat args>, *, arena, y, extra, extra_key, collector, counts_addr, writers, activation=0, pin=1, token_index=None, down_fp32=False, x_bf16=False, h_bf16=False, l1_args=[], relay_words=None, y_l1=None, layout=FlatLayoutOptions(), math_fidelity=0, weights_nk=False)` -> y. `extra`: the other op's MeshProgramDescriptor (empty = "cache hit expected"); `l1_args`: per appended program, the L1 hand-off args (`sparse_combine_rf` `run.l1_args`); `y_l1` (default: with
+`flat_routed_expert_with_program(<flat args>, *, arena, y, extra, extra_key, collector, counts_addr, writers, activation=0, pin=1, token_index=None, down_fp32=False, x_bf16=False, h_bf16=False, l1_args=[], relay_words=None, y_l1=None, layout=FlatLayoutOptions(), math_fidelity=0, weights_nk=False, patch_addresses=False, extra_addrs=[], max_y_writers=0)` -> y. `extra`: the other op's MeshProgramDescriptor (empty = "cache hit expected"; passed by reference, never copied); `l1_args`: per appended program, the L1 hand-off args (`sparse_combine_rf` `run.l1_args`); `y_l1` (default: with
 l1_args) the y writers hand rows to that L1. `layout`: as for flat_routed_expert; the op re-plans per call, so pass the
 `FlatRoutedExpert`'s (`fe.layout`). `math_fidelity` / `weights_nk` (P.8; defaults LoFi / [K, N]): as for flat_routed_expert. No hidden.
+`patch_addresses` (DeepSeek-V4.1 FIX.5; default False = the program before: every buffer address it bakes is in the
+program-cache key, so a call whose x / arena / counts / ... land at a new address builds a new program, ~0.55 s of host
+on 8x4): no address in the key (plan key, extra_key, writers, collector, l1_args sizes, every tensor's spec); a hit
+writes only what moved: the flat program's address args of each buffer at a new address (its AddrPatch list, arg
+pointers cached), the arena CBs (the flat program's and the appended program's, which the op binds to the call's arena
+on a miss) when the arena moved, the writers' report / L1 hand-off args when they changed, and the appended programs'
+runtime args copied from `extra` when `extra_addrs` (the caller's list of the addresses those args bake) differ from the
+cached program's (then `extra` must be given: TT_FATAL otherwise). Pass `extra` on every call in this mode. Its
+appended programs' globally allocated CBs must live in the arena (the op's contract).
 
-`FlatRoutedExpert(device, weights, *, m, H, I, gids, n_global, wdtype="bf4", act="silu", pin=1, cache_prefix=None, x_bf16=False, h_bf16=False, layout=None, weights_nk=False, check_exact=False)`; `weights="fake"` = uninitialised weights (perf only); `layout`: a preset dict, field overrides or a FlatLayoutOptions (None: the defaults); `.replanned(m, layout=None)`: another capacity on the same weights (asserts the same packing). `__call__(x, counts, regions, token_index=None, x_pages_per_row=1, y_row_major=False, down_fp32=False, pack_stochastic_rounding=False, y_bf16=False, math_fidelity=0, output=None, hidden=0)`.
+`FlatRoutedExpert(device, weights, *, m, H, I, gids, n_global, wdtype="bf4" (bf4 | bf8 | bf8d4: bfp8 gate/up, bfp4 down), act="silu", pin=1, cache_prefix=None, x_bf16=False, h_bf16=False, layout=None, weights_nk=False, check_exact=False, max_y_writers=0)` (passes its max_y_writers to the plan, every call and `.replanned`; `fe.max_y_writers` for flat_routed_expert_with_program); `weights="fake"` = uninitialised weights (perf only); `layout`: a preset dict, field overrides or a FlatLayoutOptions (None: the defaults); `.replanned(m, layout=None)`: another capacity on the same weights (asserts the same packing). `__call__(x, counts, regions, token_index=None, x_pages_per_row=1, y_row_major=False, down_fp32=False, pack_stochastic_rounding=False, y_bf16=False, math_fidelity=0, output=None, hidden=0)`.
 (FIX.9, 2026-10-22, removed P.3's DeepSeek-only h options `routing_weights` / `fp8_act_quant` and the plan's `routed`;
 no model used them. CHANGELOG.md.)
 
@@ -108,6 +124,13 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same 
   fused call ~2.05 ms a pass (EXPERTS_PRECISION=glm) / ~2.14 ms (full: HiFi4, bf16 x / h) vs the plain flat op over
   every row 2.2 ms: weight-stream bound, so a pass costs about a whole call (../combine_rf/README.md "Measured").
 
+- patch_addresses (FIX.5, 8x4, DeepSeek-V4.1 layer 0, chunk 5120, tt/perf_flat_program_key.py): op host per call
+  on a hit 0.41 ms (address-keyed) vs 0.44 ms (patched, same buffers) / 0.46 ms (patched, x at a new address every
+  call); a miss 0.55 s. A new x address every call: address-keyed +1 program each call, patched +0. Outputs
+  bit-identical to the address-keyed op on every call. A first version that re-applied every patch on every hit cost
+  2.0 ms (26496 arg / CB writes over 32 chips, 1.5 ms of it the patch loop). Seed rung F196 warm wall: warm after 1
+  run (237 -> 237 entries) vs address-keyed 9 runs (316 -> 504, +40 / +36 / +37 / +38 / +23 / +34 / +18 / +2 / +0).
+
 ## Limits
 - Blackhole only; plan needs the BH DRAM-reader layout (TT_FATALs in device/flat_routed_expert_plan.cpp).
 - H % 256 == 0, I % 32 == 0, capacity % 32 == 0 and >= 256, 1..64 local experts (flat_routed_expert_plan.cpp:251-253).
@@ -116,7 +139,9 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same 
   subgrids have no gate/up split there) with the uneven pair split, np 1: one gate/up core per tile column.
 - Galaxy cards (12 x 10 grid, physical column 1 harvested on some): run since FIX.2 (the SE_DYN_PULL leader is found
   by its logical coordinate; it hung before on plans without reader tails, DS41-119). tests/unit/ on one Galaxy chip
-  (FIX.2 reopened, 2026-10-26): 34 pass, 0 fail (the 3 tests that need a 2x2 mesh skip on one card).
+  (FIX.2 reopened, 2026-10-26): 34 pass, 0 fail (the 3 tests that need a 2x2 mesh skip on one card); FIX.5
+  (2026-10-27): 38 pass, 4 skip (test_with_program_patch.py defaults to 2x2; it passes on 8x4 with
+  BRINGUP_TEST_MESH=8x4).
 - x: ROW_MAJOR bf16 DRAM interleaved; page width a multiple of 1 KB (or wide rows with `hidden`). counts / regions:
   [1, NG] uint32 RM DRAM. y_bf16 and y_row_major are exclusive.
 - `x_bf16` / `h_bf16` must match the plan the weights were laid out with.
@@ -132,7 +157,10 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same 
   (1710341 ns vs lower 1720090, 2026-10-18): recalibrate that class from its RT-CAL lines when run there.
 - flat_routed_expert_with_program has math_fidelity and weights_nk only (no hidden).
 - With the combine_rf L1 hand-off, rows wider than SPC_PIECE (default 7168 B) hang unless SPC_PIECE >= row bytes
-  and the fabric payload >= row + 32 B (FLAT_COMBINE_OVERLAP_WORKLOG.md; asserted in sparse_combine_rf.py).
+  and the fabric payload >= row + 32 B (FLAT_COMBINE_OVERLAP_WORKLOG.md; both asserted in sparse_combine_rf.py since
+  2026-10-27: a mesh opened without the 10880 B fabric_router_config hung DeepSeek-V4.1's first MoE call, DS41-127).
+- Hot experts: any routing completes, up to every token of a column on one expert and a chip at rows_cap
+  (tests/unit/test_hot_experts.py, 8x4).
 - GLM's experts_ag path only builds at <= 64 experts per chip; it was never run on a 2x2 (known_issues.md DS41-63).
 - Not tested on Wormhole or on meshes other than 1 chip, 2x2, LoudBox 8x1 / 2x4 (tests and worklogs), Galaxy 8x4 (deepseek_v41_flash_d_p).
 
@@ -147,7 +175,10 @@ y = fe(x_rm_bf16, counts, regions, down_fp32=True)          # y [rows, H] bfp8 T
 (deepseek_v41_flash_d_p/tt/shared_expert.py `_load_flat`; glm53_flash_d_p/tt/experts_ag.py.)
 Model cases (O.1): tests/cases.py + tests/test_flat_routed_expert_ttnn.py (deepseek_v41_flash_d_p's shared-expert
 call and its routed call with the weighted combine fused in, tests/weighted_case.py). Tests: tests/unit/ (test_flat_routed_expert_op.py, test_flat_expert_indexed_shapes.py, test_flat_expert_mesh.py,
-test_flat_expert_yrm.py, test_flat_uneven_split.py, test_weights_nk.py, test_flat_widths.py: `LEGACY`; Marko's
+test_flat_expert_yrm.py, test_flat_uneven_split.py, test_weights_nk.py, test_flat_widths.py: `LEGACY`; test_with_program_patch.py
+(patch_addresses vs the address-keyed op: bit-identity, a moved x builds no program, a moved arena),
+test_max_y_writers.py (the cap: plan unchanged when off / above, first cores kept, 32 -> the E = 6 down split on any
+chip; the capped op vs the reference), test_hot_experts.py (hot-expert routings through flat_routed_expert_with_program); Marko's
 test_closeout_plans.py / test_closeout_flat.py: the default layout), tests/test_flat_bench.py (perf, fake weights;
 `FLAT_BENCH_LAYOUT=LEGACY` for the recorded GLM-5.3 numbers), tests/microbench/; tests/source.yaml is empty. flat_routed_expert_with_program: deepseek_v41_flash_d_p tt/perf_experts.py::test_weighted /
 test_weighted_combine_routes.
@@ -158,7 +189,9 @@ wait for an A/B, marko_expert_ops_update_plan_2026-10-27.md step 12).
 - deepseek_v41_flash_d_p P.8: tt/experts.py + tt/weighted_combine.py (the only routed-expert path since FIX.9, which
   deleted the P.3 `_flat` separate-combine call with routing_weights / hidden): flat_routed_expert_with_program with
   combine_rf's sparse_combine_rf appended, token_index x (the column's gathered q(x)), math_fidelity, weights_nk,
-  down_fp32, clamped_silu, bfp4 (EXPERTS_IMPL) / bfp8.
+  down_fp32, clamped_silu, bfp4 (EXPERTS_IMPL) / bfp8; patch_addresses + extra_addrs (FIX.5, setting
+  EXPERTS_PROGRAM_KEY patch: the 40 layers share one program per pass, no rebuild when xg moves); max_y_writers =
+  the combine's L1 hand-off (32; 2026-10-27, Galaxy chips with east DRAM readers in column 7).
 - deepseek_v41_flash_d_p P.12: tt/shared_expert.py (the only shared-expert path since FIX.9): the shared expert's TP slice as one
   always-on expert (counts [S], regions [0]; the real width since FIX.1: 576 on TP 4, 1152 on TP 2, no padded lanes;
   before, zero-padded to 1280), bfp8 weights_nk, token_index into the routed experts' gathered q(x), y_bf16,

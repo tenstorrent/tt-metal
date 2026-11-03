@@ -55,7 +55,11 @@ void kernel_main() {
     constexpr uint32_t ht = get_compile_time_arg_val(19);
     constexpr uint32_t sub = get_compile_time_arg_val(20);
     constexpr uint32_t gu_bytes = gu_slot * w_tile;
+#ifdef SE9_WD_TILE  // (down_weights_bf4: bfp4 down blocks under bfp8 gate/up ones)
+    constexpr uint32_t d_bytes = d_slot * SE9_WD_TILE;
+#else
     constexpr uint32_t d_bytes = d_slot * w_tile;
+#endif
 
     uint64_t gu_src =
         get_noc_addr_from_bank_id<true>(get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(0) + get_arg_val<uint32_t>(2));
