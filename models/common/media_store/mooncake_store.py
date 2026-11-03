@@ -23,8 +23,8 @@ Every read updates ``stats`` (hits in this host's segment or another's, misses, 
 logged every minute while reads happen and when the store closes.
 
 Configuration comes from ``PREFILL_MEDIA_STORE_*`` environment variables (``MediaStoreConfig.from_env``); the store is
-on only when ``PREFILL_MEDIA_STORE_MASTER`` is set. Needs the Mooncake wheel
-(``pip install mooncake-transfer-engine-non-cuda==0.3.13.post1``), imported only when the store is opened.
+on only when ``PREFILL_MEDIA_STORE_MASTER`` is set. Needs Mooncake's Python client (``mooncake-transfer-engine-non-cuda``,
+pinned in tt_metal/python_env/requirements-dev.txt), imported only when the store is opened.
 """
 
 from __future__ import annotations
@@ -218,8 +218,9 @@ class MooncakeEmbeddingStore:
             from mooncake.store import MooncakeDistributedStore
         except ImportError as e:
             raise StoreUnavailable(
-                f"{_ENV_PREFIX}MASTER is set but the Mooncake wheel is missing: "
-                "pip install mooncake-transfer-engine-non-cuda==0.3.13.post1"
+                f"{_ENV_PREFIX}MASTER is set but this Python env has no Mooncake client "
+                "(mooncake-transfer-engine-non-cuda, pinned in tt_metal/python_env/requirements-dev.txt): "
+                "recreate python_env with ./create_venv.sh"
             ) from e
         client = MooncakeDistributedStore()
         t0 = time.perf_counter()

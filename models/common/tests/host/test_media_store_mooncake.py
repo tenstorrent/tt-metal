@@ -10,8 +10,9 @@ allow_evict_soft_pinned_objects=false):
 - ``other``: another prefill host's store (segment 127.0.0.2:<port>, a second loopback address);
 - ``writer``: the encoder service stand-in, with no segment, writing with put_from, a soft pin and preferred_segment.
 
-Needs the Mooncake wheel (pip install mooncake-transfer-engine-non-cuda==0.3.13.post1) and Linux (127.0.0.2);
-skipped otherwise.
+Runs on Linux, where tt-metal's python_env pins Mooncake's client (tt_metal/python_env/requirements-dev.txt) and
+127.0.0.2 is a loopback address. There a missing client fails the test instead of skipping it: it means the env the
+prefill runner launches from cannot start its store. Skipped on other platforms.
 """
 
 import os
@@ -24,12 +25,14 @@ import time
 import numpy as np
 import pytest
 
-mooncake_store = pytest.importorskip("mooncake.store")
-
 from models.common.media_store.mooncake_store import MediaStoreConfig, MooncakeEmbeddingStore, store_key
 from models.common.media_store.reader import Missing
 
-pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs 127.0.0.2 (Linux loopback)")
+if sys.platform.startswith("linux"):
+    # Pinned in tt_metal/python_env/requirements-dev.txt: an ImportError here is a broken env, so it fails, not skips.
+    import mooncake.store as mooncake_store
+else:
+    pytest.skip("Mooncake and the 127.0.0.2 loopback address are Linux only", allow_module_level=True)
 
 # One MiniMax-M3 image: a 64-byte header and 576 bf16 rows of width 6144.
 IMAGE_BYTES = 64 + 576 * 6144 * 2
