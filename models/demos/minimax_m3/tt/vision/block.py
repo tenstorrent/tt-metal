@@ -9,11 +9,14 @@ One MiniMax-M3 vision encoder layer, as Hugging Face's MiniMaxM3VLVisionEncoderL
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.minimax_m3.tt.vision.attention import M3VLAttention
+from models.demos.minimax_m3.tt.vision.common import DRAM_PLACEMENT, BlockPlacement
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.mlp import M3VLMLP
 
@@ -49,21 +52,31 @@ class M3VLBlock(LightweightModule):
             mlp=M3VLMLP.from_torch(mesh_device, ref_layer.mlp, dtype=dtype),
         )
 
-    def forward(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        placement: BlockPlacement = DRAM_PLACEMENT,
+        out_memory_config: Optional[ttnn.MemoryConfig] = None,
+    ) -> ttnn.Tensor:
+        """The block on x, with its activations where placement puts them (the LayerNorms write where their input
+        is) and its output in out_memory_config, or, when None, in placement.residual."""
         # Sublayer 1: pre-norm attention with residual.
         residual = x
         normed = self.layer_norm1(x)
-        attn_out = self.attention(normed, cos, sin)
+        attn_out = self.attention(normed, cos, sin, placement)
         ttnn.deallocate(normed)
-        x = ttnn.add(residual, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.add(residual, attn_out, memory_config=placement.residual)
         ttnn.deallocate(attn_out)
 
         # Sublayer 2: pre-norm MLP with residual.
         residual = x
         normed = self.layer_norm2(x)
-        mlp_out = self.mlp(normed)
+        mlp_out = self.mlp(normed, placement)
         ttnn.deallocate(normed)
-        out = ttnn.add(residual, mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out_memory_config = placement.residual if out_memory_config is None else out_memory_config
+        out = ttnn.add(residual, mlp_out, memory_config=out_memory_config)
         ttnn.deallocate(residual)
         ttnn.deallocate(mlp_out)
         return out

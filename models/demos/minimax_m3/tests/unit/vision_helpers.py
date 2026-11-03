@@ -4,11 +4,13 @@
 """Shared parts of the vision encoder's unit tests.
 
 Image grids, error bounds, copies to and from the chip, the comparison with the reference (check_close), Hugging
-Face's modules (hf_vision_modules) and a stand-in device for host tests.
+Face's modules (hf_vision_modules) and a stand-in device for host tests. Also the weight matmul's checks and circular
+buffers, for the tests of its program configs and of the L1 budget.
 """
 
 from __future__ import annotations
 
+import math
 import os
 from types import SimpleNamespace
 from typing import Mapping
@@ -46,6 +48,12 @@ CI_GRIDS = ("h16w16", "h40w54")
 # The attention test also runs h18w18 in CI. SDPA pads the keys to a multiple of its 128-key chunk and masks the padded
 # ones: 16 of 2176 at 2160 patches, too few for a broken mask to move the output past its bound, and 60 of 384 at 324.
 ATTENTION_CI_GRIDS = CI_GRIDS + ("h18w18",)
+# The tower test of activations in L1 against DRAM runs h16w16 and h36w36 in CI: both keep the activations in L1 on
+# 11x10, 12x10 and 13x10. h36w36 adds a partial tile row, one tile row on the last core of every block linear's split,
+# and on 12x10 and 13x10 splits that leave cores out.
+L1_VS_DRAM_CI_GRIDS = ("h16w16", "h36w36")
+# The grids of common.L1_GRIDS by test id, without "AxB": the 1-card leg selects "1x1", which "11x10" would contain.
+L1_GRID_IDS = {f"x{x}y{y}": (x, y) for x, y in common.L1_GRIDS}
 # Twice the largest relative L2 error per test, measured on one P150 with a 12x10 compute grid at the grids of
 # VISION_GRIDS from 256 patches up, each logged 4-place value taken at the top of its rounding (0.0059 as 0.00595).
 MAX_REL_L2 = {
@@ -179,3 +187,36 @@ def assert_close(name: str, ref: torch.Tensor, out: torch.Tensor, min_pcc: float
     line, passed = check_close(name, ref, out, min_pcc, max_rel_l2)
     logger.info(line)
     assert passed, line
+
+
+def matmul_cb_bytes(config, k_tiles: int, fp32_dest_acc: bool, bias: bool = True) -> int:
+    """The circular buffers per core of the 2D multicast matmul factory for a linear_program_config config, bf16 tiles
+    of 2 KB, with the input and output interleaved (matmul_multicore_reuse_mcast_2d_program_factory.cpp): the in0 and
+    in1 K blocks, double-buffered when K takes more than one, the output block, a bias row, and the output block's
+    partial sums, which with fp32 accumulation are fp32 tiles in a buffer of their own."""
+    depth = 2 if k_tiles > config.in0_block_w else 1
+    block = config.out_block_h * config.out_block_w
+    tiles = depth * config.in0_block_w * (config.out_block_h + config.out_block_w) + block
+    if bias:
+        tiles += config.out_block_w
+    return 2048 * tiles + (4096 * block if fp32_dest_acc else 0)
+
+
+def assert_matmul_config_valid(config, rows, in_features, out_features, grid, fp32_dest_acc):
+    """The checks the matmul device op and its 2D multicast factory make on this config, for the input and output
+    interleaved in DRAM or L1, which those checks do not tell apart (matmul_device_operation.cpp,
+    matmul_multicore_reuse_mcast_2d_program_factory.cpp), and that its circular buffers fit in LINEAR_L1_BYTES."""
+    m_tiles, k_tiles, n_tiles = (math.ceil(d / ttnn.TILE_SIZE) for d in (rows, in_features, out_features))
+    assert (config.compute_with_storage_grid_size.x, config.compute_with_storage_grid_size.y) == grid
+    assert k_tiles % config.in0_block_w == 0
+    assert config.out_block_h % config.out_subblock_h == 0 and config.out_block_w % config.out_subblock_w == 0
+    assert config.per_core_M % config.out_block_h == 0 and config.per_core_N % config.out_block_w == 0
+    assert config.out_subblock_h * config.out_subblock_w <= (4 if fp32_dest_acc else 8)  # half the dest register
+    assert config.per_core_M <= m_tiles
+    blocks_x, blocks_y = math.ceil(n_tiles / config.per_core_N), math.ceil(m_tiles / config.per_core_M)
+    if config.transpose_mcast:
+        blocks_x, blocks_y = blocks_y, blocks_x
+    assert blocks_x <= grid[0] and blocks_y <= grid[1]
+    assert blocks_x >= 2 and blocks_y >= 2  # a 2D split, as ttnn's own 2D configs for DRAM operands
+    assert not config.fuse_batch and config.fused_activation is None
+    assert matmul_cb_bytes(config, k_tiles, fp32_dest_acc) <= common.LINEAR_L1_BYTES
