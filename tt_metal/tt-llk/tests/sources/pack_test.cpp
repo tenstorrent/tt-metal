@@ -194,12 +194,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // Opt-in byte-wise destination write of the default packs (PACK_RMW_DEST, see _llk_pack_rmw_dest_init_); off, the calls are main's
 #if defined(ARCH_BLACKHOLE) && defined(PACK_RMW_DEST)
 #define PACK_RMW_TAIL , false, true
-#define PACK_RMW_CELL_OFF false
 #define PACK_RMW_INIT _llk_pack_rmw_dest_init_();
 #else
 #define PACK_RMW_TAIL
-#define PACK_RMW_CELL_OFF true
 #define PACK_RMW_INIT
+#endif
+// The per-tile pack: on Blackhole a Float32 output from a 16 bit DEST keeps main's destination write (llk_pack, llk_pack_tile_api.h), unless PACK_RMW_DEST
+// forces it on
+#if defined(ARCH_BLACKHOLE) && !defined(PACK_RMW_DEST)
+#define PACK_TILE_CALL(tile, addr)                                                                                \
+    do                                                                                                            \
+    {                                                                                                             \
+        if (!is_fp32_dest_acc_en && formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Float32))          \
+        {                                                                                                         \
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, false>((tile), (addr)); \
+        }                                                                                                         \
+        else                                                                                                      \
+        {                                                                                                         \
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>((tile), (addr));               \
+        }                                                                                                         \
+    } while (0)
+#else
+#define PACK_TILE_CALL(tile, addr) _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default PACK_RMW_TAIL>((tile), (addr))
 #endif
 #line 201
 
@@ -359,17 +375,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             ((DST_INDEX + tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        if (PACK_RMW_CELL_OFF && !is_fp32_dest_acc_en && formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Float32))
-                        {
-                            // llk_pack keeps main's destination write for a Float32 output from a 16 bit DEST
-                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, false>(
-                                DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
-                        }
-                        else
-                        {
-                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default PACK_RMW_TAIL>(
-                                DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
-                        }
+                        PACK_TILE_CALL(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
                 }
             }
@@ -413,17 +419,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             ((DST_INDEX + tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        if (PACK_RMW_CELL_OFF && !is_fp32_dest_acc_en && formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Float32))
-                        {
-                            // llk_pack keeps main's destination write for a Float32 output from a 16 bit DEST
-                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, false>(
-                                DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
-                        }
-                        else
-                        {
-                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default PACK_RMW_TAIL>(
-                                DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
-                        }
+                        PACK_TILE_CALL(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
