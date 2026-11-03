@@ -8,7 +8,9 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -21,6 +23,8 @@
 #include "dev_mem_map.h"
 #include "hostdev/cce_spa_routes.h"
 #include "umd/device/utils/error_detail.hpp"
+#include "llrt/rtoptions.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_fw_loader.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
@@ -626,5 +630,109 @@ TEST(MimirFwPreflight, FirmwareLoadPreflight) {
         }
     }
 }
+
+namespace {
+
+using namespace mimir_contract;
+
+class CceSramRoundTripThroughUnitMesh : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(CceSramRoundTripThroughUnitMesh, RoundTrip) {
+    skip_unless_programmable_dram_package();
+
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const uint32_t cce_index = GetParam();
+
+    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const uint64_t address = cce_sram_noc_addr(kCceSramTestOffset);
+    const uint32_t written = 0xC0FFEE03 + cce_index;
+    uint32_t read_back = 0;
+    write_cce_sram(device, logical_dram_core, address, &written, sizeof(written));
+    read_cce_sram(device, logical_dram_core, address, &read_back, sizeof(read_back));
+    EXPECT_EQ(read_back, written);
+}
+
+INSTANTIATE_TEST_SUITE_P(MimirEmu, CceSramRoundTripThroughUnitMesh, ::testing::ValuesIn(cce_indices()), cce_param_name);
+
+// These open a Cluster directly and use the host NOC tag instead of the contract helpers.
+bool backend_transport_configured() {
+    const bool emu = std::getenv("TT_METAL_EMU_SERVER") != nullptr && std::getenv("TT_METAL_EMU_SOC_DESC") != nullptr;
+    const bool jtag = std::getenv("TT_METAL_GRENDEL_JTAG_SERVER") != nullptr &&
+                      std::getenv("TT_METAL_GRENDEL_JTAG_SOC_DESC") != nullptr;
+    return emu || jtag;
+}
+
+class CceSramRoundTripThroughMetalCluster : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(CceSramRoundTripThroughMetalCluster, RoundTrip) {
+    if (!backend_transport_configured()) {
+        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
+    }
+
+    llrt::RunTimeOptions rtoptions;
+    Cluster cluster(rtoptions);
+
+    ASSERT_EQ(cluster.arch(), tt::ARCH::QUASAR);
+    ASSERT_EQ(cluster.all_chip_ids().size(), 1);
+
+    constexpr ChipId chip_id = 0;
+    const uint32_t cce_index = GetParam();
+    const auto& soc_desc = cluster.get_soc_desc(chip_id);
+    const CoreCoord cce = translated_dram_core(soc_desc, cce_index);
+    constexpr uint64_t address = MEM_CCE_L1_NOC_OFFSET + kCceSramTestOffset;
+    const uint32_t written = 0xC0FFEE01 + cce_index;
+    // A host-only process inherits this word from the last one, so poison it first or a dropped write passes on a
+    // rerun.
+    const uint32_t poison = ~written;
+    uint32_t read_back = 0;
+
+    cluster.write_core(&poison, sizeof(poison), {chip_id, cce}, address);
+    cluster.read_core(&read_back, sizeof(read_back), {chip_id, cce}, address);
+    ASSERT_EQ(read_back, poison);
+
+    cluster.write_core(&written, sizeof(written), {chip_id, cce}, address);
+    cluster.read_core(&read_back, sizeof(read_back), {chip_id, cce}, address);
+
+    EXPECT_EQ(read_back, written);
+}
+
+TEST(MimirEmu, CceSramChannelsDoNotAliasThroughMetalCluster) {
+    if (!backend_transport_configured()) {
+        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
+    }
+
+    llrt::RunTimeOptions rtoptions;
+    Cluster cluster(rtoptions);
+
+    ASSERT_EQ(cluster.arch(), tt::ARCH::QUASAR);
+    ASSERT_EQ(cluster.all_chip_ids().size(), 1);
+
+    constexpr ChipId chip_id = 0;
+    const auto& soc_desc = cluster.get_soc_desc(chip_id);
+    const uint32_t num_cces = num_cces_from_soc(soc_desc);
+    ASSERT_GE(num_cces, 2u);
+
+    // Every channel is written before any is read: an aliasing window only shows up once a later
+    // channel has landed on top of an earlier one.
+    constexpr uint64_t address = MEM_CCE_L1_NOC_OFFSET + kCceSramTestOffset;
+    for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
+        const uint32_t written = 0xC0FFEE01 + cce_index;
+        cluster.write_core(&written, sizeof(written), {chip_id, translated_dram_core(soc_desc, cce_index)}, address);
+    }
+    for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
+        uint32_t read_back = 0;
+        cluster.read_core(&read_back, sizeof(read_back), {chip_id, translated_dram_core(soc_desc, cce_index)}, address);
+        EXPECT_EQ(read_back, 0xC0FFEE01 + cce_index) << "CCE" << cce_index;
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu, CceSramRoundTripThroughMetalCluster, ::testing::ValuesIn(cce_indices()), cce_param_name);
+
+}  // namespace
 
 }  // namespace tt::tt_metal::mimir_test::host_tl1

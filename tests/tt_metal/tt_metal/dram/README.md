@@ -4,7 +4,7 @@
 
 ## Environment
 
-Every case starts with `skip_unless_programmable_dram_package()` (`tests/tt_metal/tt_metal/context/mimir_contract.hpp`) and runs when it passes: the selected package declares programmable DRAM cores and a transport is configured. `TT_METAL_EMU_SERVER` is not required.
+Every case starts with `skip_unless_programmable_dram_package()` (`tests/tt_metal/tt_metal/dram/mimir_contract.hpp`) and runs when it passes: the selected package declares programmable DRAM cores and a transport is configured. `TT_METAL_EMU_SERVER` is not required.
 
 Select the package, set to the descriptor for the run (see Descriptors), with one of:
 - a chippy server (`TT_METAL_EMU_SERVER` or `TT_METAL_GRENDEL_JTAG_SERVER`) and `TT_METAL_EMU_SOC_DESC` or `TT_METAL_GRENDEL_JTAG_SOC_DESC` to match
@@ -79,6 +79,26 @@ Notes on the rows:
 - Rows 4 to 16 are 2x only. Each `TEST_P` also skips at runtime from the descriptor's topology.
 - Rows 6 to 15 run one route each, so a hang in one route does not lose the others.
 - Row 16 runs last because it includes routed destinations.
+
+## Contract tests
+
+The `MimirEmu*` cases check the runtime through its public API only: they open a unit `MeshDevice`, launch Programs through the mesh command queue, and reach GDDR and TL1 through the `mimir_contract.hpp` helpers. They have no row in the run order, no preflight and no hardware-state checks, and run in one invocation:
+
+```
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/mimir_tests --gtest_filter='*MimirEmu*'
+```
+
+| File | Cases |
+|---|---|
+| `test_mimir_host_tl1.cpp` | `CceSramRoundTripThroughUnitMesh`; `CceSramRoundTripThroughMetalCluster` and `MimirEmu.CceSramChannelsDoNotAliasThroughMetalCluster`, which open a `Cluster` directly and skip without a chippy server |
+| `test_mimir_host_dram.cpp` | `AllocatedDramBufferHostLoopback`, `DramChannelsDoNotAliasThroughPublicDeviceApi` |
+| `test_mimir_fw_load.cpp` | `MimirEmu.RuntimeFirmwareInitializesThroughPublicDeviceApi` |
+| `test_mimir_kernel_load.cpp` | `HartZeroRunsDramKernel`, `AllHartsRunDramKernel` |
+| `test_mimir_local_dram.cpp` | `MimirEmuSameMimirDirect/Idma*` and `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr`: local GDDR by iDMA; `MimirEmu.AllCcesCopyLocalMimirBlock` |
+| `test_mimir_remote_dram.cpp` | `MimirEmuCrossMimirNoc/CopiesGddr*` and `MimirEmuCrossMimirNoc/AllHartsWriteGddr`: remote GDDR by hart loads and stores; `CopiesEveryMimirBlock` |
+| `test_mimir_tl1.cpp` | `WritesCrossMimirCceSram`, `PrefetchesLocalGddrToRemoteCceSram` |
+
+`is_cross_mimir_case()` picks local or remote partitions from the instantiation prefix, so keep `CrossMimir` in the prefix of any remote-partition instantiation.
 
 ## MM-7 Tensor Prefetcher
 

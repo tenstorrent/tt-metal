@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_fw_loader.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
@@ -397,5 +399,21 @@ TEST(MimirFwLoadNegative, SkipLoadNeverDone) {
 }
 
 INSTANTIATE_TEST_SUITE_P(MM2, MimirFwLaunch, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+
+namespace {
+
+using namespace mimir_contract;
+
+TEST(MimirEmu, RuntimeFirmwareInitializesThroughPublicDeviceApi) {
+    skip_unless_programmable_dram_package();
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    ASSERT_NO_THROW(mesh_device = open_unit_mesh());
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+}
+
+}  // namespace
 
 }  // namespace tt::tt_metal::mimir_test::fw_load

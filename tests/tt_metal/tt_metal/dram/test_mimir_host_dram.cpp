@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -18,6 +19,9 @@
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "umd/device/utils/error_detail.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
@@ -489,5 +493,117 @@ TEST(MimirHostDram, HostSideRejections) {
     EXPECT_TRUE(
         compare_words("6-byte write at an aligned DRAM address, readback of 12 bytes", expected_readback, readback));
 }
+
+namespace {
+
+using namespace mimir_contract;
+
+class AllocatedDramBufferHostLoopback : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
+    skip_unless_programmable_dram_package();
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const uint32_t dram_partition = GetParam();
+    GddrBackingScope gddr_backing;
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t page_size = hal.get_alignment(HalMemType::DRAM);
+    const uint32_t buffer_size = page_size * device->num_dram_channels();
+    auto buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = buffer_size},
+        {.page_size = page_size, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    ASSERT_NE(buffer, nullptr);
+    for (uint32_t partition = 0; partition < device->num_dram_channels(); ++partition) {
+        gddr_backing.tracker.note(partition, buffer->address(), page_size);
+    }
+
+    // GDDR keeps its contents across processes and the input is the same every run, so without the poison a dropped
+    // write reads the last run's data.
+    std::vector<uint32_t> poison(buffer_size / sizeof(uint32_t));
+    for (std::size_t i = 0; i < poison.size(); ++i) {
+        poison[i] = 0xDEADBEEFu ^ static_cast<uint32_t>(i);
+    }
+    slow_dispatch::WriteToBuffer(*buffer, poison);
+    std::vector<uint32_t> poison_read_back;
+    slow_dispatch::ReadFromBuffer(*buffer, poison_read_back);
+    ASSERT_EQ(poison_read_back, poison);
+
+    const std::size_t words_per_page = page_size / sizeof(uint32_t);
+    std::vector<uint32_t> input(buffer_size / sizeof(uint32_t));
+    for (uint32_t partition = 0; partition < device->num_dram_channels(); ++partition) {
+        for (std::size_t i = 0; i < words_per_page; ++i) {
+            input[partition * words_per_page + i] = 0xA1100000u | (partition << 8) | static_cast<uint32_t>(i);
+        }
+    }
+    slow_dispatch::WriteToBuffer(*buffer, input);
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(*buffer, output);
+    EXPECT_EQ(output, input);
+
+    const auto expected_begin = input.begin() + dram_partition * words_per_page;
+    const std::vector<uint32_t> expected(expected_begin, expected_begin + words_per_page);
+    std::vector<uint32_t> channel_page;
+    ASSERT_TRUE(
+        slow_dispatch::ReadFromDRAMChannel(*mesh_device, dram_partition, buffer->address(), page_size, channel_page));
+    EXPECT_EQ(channel_page, expected);
+
+    buffer.reset();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu,
+    AllocatedDramBufferHostLoopback,
+    ::testing::ValuesIn(dram_view_indices()),
+    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Partition{}", info.param); });
+
+class DramChannelsDoNotAliasThroughPublicDeviceApi : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(DramChannelsDoNotAliasThroughPublicDeviceApi, RoundTrip) {
+    skip_unless_programmable_dram_package();
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+
+    const uint32_t dram_partition = GetParam();
+    const uint32_t num_partitions = device->num_dram_channels();
+    if (num_partitions < 2) {
+        GTEST_SKIP() << "Alias check needs at least two DRAM channels; descriptor exposes " << num_partitions << ".";
+    }
+    GddrBackingScope gddr_backing;
+    const uint32_t other_partition = (dram_partition + num_partitions / 2) % num_partitions;
+    // WriteToDRAMChannel rejects the firmware-reserved region below the allocator base.
+    const uint32_t dram_offset =
+        static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::DRAM)) + kDramOffset;
+    gddr_backing.tracker.note(dram_partition, dram_offset, sizeof(uint32_t));
+    gddr_backing.tracker.note(other_partition, dram_offset, sizeof(uint32_t));
+    std::vector<uint32_t> written{0xAAAA1111 + dram_partition};
+    std::vector<uint32_t> other_written{0xBBBB2222 + other_partition};
+    ASSERT_TRUE(slow_dispatch::WriteToDRAMChannel(*mesh_device, other_partition, dram_offset, other_written));
+    ASSERT_TRUE(slow_dispatch::WriteToDRAMChannel(*mesh_device, dram_partition, dram_offset, written));
+
+    std::vector<uint32_t> read_back;
+    std::vector<uint32_t> other_read_back;
+    ASSERT_TRUE(
+        slow_dispatch::ReadFromDRAMChannel(*mesh_device, dram_partition, dram_offset, sizeof(uint32_t), read_back));
+    ASSERT_TRUE(slow_dispatch::ReadFromDRAMChannel(
+        *mesh_device, other_partition, dram_offset, sizeof(uint32_t), other_read_back));
+
+    EXPECT_EQ(read_back, written);
+    EXPECT_EQ(other_read_back, other_written);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu,
+    DramChannelsDoNotAliasThroughPublicDeviceApi,
+    ::testing::ValuesIn(dram_view_indices()),
+    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Partition{}", info.param); });
+
+}  // namespace
 
 }  // namespace tt::tt_metal::mimir_test::host_dram

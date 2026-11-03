@@ -15,9 +15,7 @@
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 #include "tt_metal/tt_metal/test_kernels/cce/cce_idma_copy_abi.h"
 
-// Host side of the cce_idma_copy kernel ABI, for the dram/ suites and context/test_mimir_emu.cpp. The context target
-// links no dram/ source file and builds without Grendel JTAG, so this header stays inline and includes no header that
-// needs either (mimir_access.hpp, mimir_hw_state.hpp, mimir_fw_loader.hpp, mimir_snoop_ctl.hpp).
+// Host side of the cce_idma_copy kernel ABI, for the dram/ suites.
 namespace tt::tt_metal::mimir_test {
 
 inline constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";

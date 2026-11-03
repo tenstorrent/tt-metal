@@ -27,7 +27,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include "tt_metal/tt_metal/context/mimir_contract.hpp"
+#include "tt_metal/tt_metal/dram/mimir_contract.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
 #include "tt_metal/tt_metal/dram/mimir_gddr_map.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"

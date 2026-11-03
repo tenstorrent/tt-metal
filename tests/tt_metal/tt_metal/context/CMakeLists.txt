@@ -12,7 +12,6 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-2xx/quasar
 )
 target_link_libraries(
     unit_tests_context_smoke

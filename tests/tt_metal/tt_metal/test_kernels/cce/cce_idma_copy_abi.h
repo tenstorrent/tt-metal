@@ -9,7 +9,7 @@
 #include "cce_test_status_abi.h"
 
 // cce_idma_copy kernel ABI. The kernels (cce_idma_copy.cpp, cce_idma_gddr_round_trip.cpp) and the host tests that run
-// them (dram/test_mimir_{atomics,dm_cache,dm_idma,local_dram,trid}.cpp, context/test_mimir_emu.cpp) include it.
+// them (dram/test_mimir_{atomics,dm_cache,dm_idma,local_dram,trid}.cpp) include it.
 // Args, modes, kinds, polls, codes and status words are append-only: a later stage adds entries after the last one and
 // never renumbers.
 namespace cce_idma_copy_abi {
