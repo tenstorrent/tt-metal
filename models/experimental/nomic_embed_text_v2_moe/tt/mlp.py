@@ -5,12 +5,25 @@
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device, transpose_linear_weight
-from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import dense_linear
+from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    compute_config_descriptor,
+    to_device,
+    transpose_linear_weight,
+)
+from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import dense_linear, output_may_use_l1
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
+
+
+# The generated linear_gelu (ttnn/ttnn/operations/linear_gelu) runs fc1 and its tanh GELU in one dispatch.
+# NOMIC_FC1_IMPL=stock selects dense_linear.
+FC1_IMPL = os.environ.get("NOMIC_FC1_IMPL", "generated")
+if FC1_IMPL not in ("generated", "stock"):
+    raise ValueError(f"NOMIC_FC1_IMPL must be 'generated' or 'stock', got {FC1_IMPL!r}")
 
 
 class TtNomicBertMLP(LightweightModule):
@@ -54,9 +67,32 @@ class TtNomicBertMLP(LightweightModule):
         Returns:
             ttnn.Tensor: (B, 1, S, H), via (B, 1, S, F) at the activation.
         """
-        activated = dense_linear(
-            x, self.fc1_weight, self.fc1_bias, OpGroup.FC1, self.tt_config, gelu=self.tt_config.dense_gelu
-        )
+        activated = self._fc1(x)
         out = dense_linear(activated, self.fc2_weight, self.fc2_bias, OpGroup.FC2, self.tt_config)
         ttnn.deallocate(activated)
         return out
+
+    def _fc1(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """gelu(x @ fc1 + b), (B, 1, S, F)."""
+        if FC1_IMPL == "generated" and self.tt_config.dense_gelu == ttnn.GeluVariant.Tanh:
+            from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+            from ttnn.operations.linear_gelu import linear_gelu
+
+            m_tiles = x.shape[0] * ttnn.core.divup(x.shape[-2], ttnn.TILE_SIZE)
+            n_tiles = ttnn.core.divup(self.fc1_weight.shape[-1], ttnn.TILE_SIZE)
+            in_l1 = output_may_use_l1(OpGroup.FC1, m_tiles, n_tiles, self.tt_config)
+            # The op refuses what its contract excludes (S > 512, > 4096 tokens, other sizes) before it
+            # allocates anything; those calls take dense_linear.
+            try:
+                return linear_gelu(
+                    x,
+                    self.fc1_weight,
+                    self.fc1_bias,
+                    compute_kernel_config=compute_config_descriptor(self.tt_config.compute_kernel_config(OpGroup.FC1)),
+                    memory_config=ttnn.L1_MEMORY_CONFIG if in_l1 else ttnn.DRAM_MEMORY_CONFIG,
+                )
+            except (UnsupportedAxisValue, ExcludedCell):
+                pass
+        return dense_linear(
+            x, self.fc1_weight, self.fc1_bias, OpGroup.FC1, self.tt_config, gelu=self.tt_config.dense_gelu
+        )

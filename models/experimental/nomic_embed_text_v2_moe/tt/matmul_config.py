@@ -262,6 +262,14 @@ def l1_bank_bytes(tiles: int, tt_config, dtype: ttnn.DataType | None = None) -> 
     return ttnn.core.divup(tiles, tt_config.l1_banks) * ttnn.tile_size(dtype or tt_config.activation_dtype)
 
 
+def output_may_use_l1(group: OpGroup, m_tiles: int, n_tiles: int, tt_config) -> bool:
+    """Whether a dense projection's (m_tiles, n_tiles) output may take L1 (see _L1_OUTPUT_SHARE)."""
+    return (
+        group in _L1_OUTPUT_GROUPS
+        and l1_bank_bytes(m_tiles * n_tiles, tt_config) <= tt_config.l1_cb_bytes // _L1_OUTPUT_SHARE
+    )
+
+
 def dense_linear(
     x: ttnn.Tensor,
     weight: ttnn.Tensor,
@@ -289,7 +297,7 @@ def dense_linear(
     n_tiles = ttnn.core.divup(weight.shape[-1], ttnn.TILE_SIZE)
     compute_kernel_config = tt_config.compute_kernel_config(group)
     out_bank = l1_bank_bytes(m_tiles * n_tiles, tt_config)
-    may_use_l1 = group in _L1_OUTPUT_GROUPS and out_bank <= tt_config.l1_cb_bytes // _L1_OUTPUT_SHARE
+    may_use_l1 = output_may_use_l1(group, m_tiles, n_tiles, tt_config)
     if m_tiles <= SMALL_M_TILES:
         out = ttnn.linear(
             x,
