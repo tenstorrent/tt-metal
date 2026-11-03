@@ -200,11 +200,9 @@ CopyDeviceOperation::tensor_return_value_t CopyDeviceOperation::create_output_te
 }
 
 std::vector<tt::tt_metal::TensorTopology> CopyDeviceOperation::compute_output_topologies(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // A copy is distributed like its source.
-    return source_output_topologies(tensor_args.input, tensor_args.preallocated_output, [&] {
-        validate_on_program_cache_miss(operation_attributes, tensor_args);
-    });
+    return source_output_topologies(tensor_args.input, tensor_args.preallocated_output);
 }
 
 CopyDeviceOperation::tensor_return_value_t copy(
