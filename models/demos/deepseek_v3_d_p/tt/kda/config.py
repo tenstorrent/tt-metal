@@ -48,9 +48,6 @@ KDA_NORM_OUTPUT_L1_BYTES_PER_CORE = 48 * 1024
 # The output projection's partial sums stay in interleaved L1 until the TP reduce-scatter reads them when each core's
 # share fits this budget (75 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
 KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
-# The gathered transforms and the chain's FP32 entry state and final carry stay in interleaved L1 when each core's share
-# fits this budget (131 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
-KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE = 160 * 1024
 # The bounded gate's FP32 logits stay in interleaved L1 between the decay projection and the offset add when each core's
 # share fits this budget (64 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
 KDA_DECAY_LOGITS_L1_BYTES_PER_CORE = 64 * 1024
