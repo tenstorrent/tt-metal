@@ -141,13 +141,15 @@ def _per_head_stride_supported(num_heads: int, head_dim: int) -> bool:
     return (head_dim * 2) % ttnn.device.get_dram_alignment() == 0
 
 
-def _num_valid_queries_case(B, Q, H, seed, packed=True):
+def _num_valid_queries_case(B, Q, H, seed, packed=True, D=32, ref_fp32=False):
     spatial_shapes = [(12, 20), (6, 10)]
-    L, P, D, Z = 2, 4, 32, 2
+    L, P, Z = 2, 4, 2
     S = sum(h * w for h, w in spatial_shapes)
     torch.manual_seed(seed)
     value = _bf16(torch.randn(B, S, H, D))
-    ref_pts = _bf16(torch.rand(B, Q, Z, 2))
+    ref_pts = torch.rand(B, Q, Z, 2)
+    if not ref_fp32:
+        ref_pts = _bf16(ref_pts)
     offsets = _bf16(torch.randn(B, Q, H, L, P, 2))
     attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
     reference = _msda_reference(
@@ -220,6 +222,158 @@ def test_fused_msda_v2_num_valid_queries_matches_reference_and_reuses_program(de
             if num_valid_queries is not None:
                 torch.testing.assert_close(full_got[b, :n], got[b, :n], rtol=0, atol=0)
     assert device.cache_entries_counter.total == 1
+
+
+def _counts_tensor(counts, device=None, layout=ttnn.ROW_MAJOR_LAYOUT) -> ttnn.Tensor:
+    return ttnn.from_torch(torch.tensor(counts, dtype=torch.int32), dtype=ttnn.uint32, layout=layout, device=device)
+
+
+def _case_to_device(tensors, device, ref_fp32=False, memory="dram"):
+    value, ref_pts, offsets, attn = tensors
+    memory_config = ttnn.L1_MEMORY_CONFIG if memory == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    ref_t = ttnn.from_torch(
+        ref_pts,
+        dtype=ttnn.float32 if ref_fp32 else ttnn.bfloat16,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=memory_config,
+    )
+    return [
+        _to_device_in(value, device, memory),
+        ref_t,
+        _to_device_in(offsets, device, memory),
+        _to_device_in(attn, device, memory),
+    ]
+
+
+def _host_list_msda(tensors, spatial_shapes, counts, Q, memory_config=None):
+    """The host-list path on the given device tensors, the tensor path's exact expectation."""
+    value_t, ref_t, off_t, attn_t = tensors
+    out = ttnn.experimental.fused_msda_from_offsets(
+        value_t,
+        ref_t,
+        off_t,
+        attn_t,
+        spatial_shapes,
+        reference_mode="pillar",
+        memory_config=memory_config,
+        num_valid_queries=[min(n, Q) for n in counts],
+    )
+    return ttnn.to_torch(out).to(torch.float32)
+
+
+def _assert_rows_match(reference, expected, got, counts, Q):
+    """Rows below each (clamped) count match the reference, and the host list's rows bit for bit."""
+    for b, n in enumerate(counts):
+        n = min(n, Q)
+        if n == 0:
+            continue
+        _assert_close(reference[b, :n], got[b, :n])
+        torch.testing.assert_close(expected[b, :n], got[b, :n], rtol=0, atol=0)
+
+
+# The host-list test's shapes, plus counts above Q, which the host list rejects and the kernels
+# clamp to Q, and a batch with no valid query. D = 48 takes the reader-only scatter, D = 32 the
+# row-major staging (split between reader and writer on Blackhole); float32 reference points
+# change the reader's defines and, packed, the tiled geometry's reference tile. D = 48 runs in
+# L1: its 96-byte head stick is not DRAM-aligned on every architecture.
+SMALL_COUNTS = (3, 70, 2, ([70, 33, 1], [5, 64, 69], [0, 71, 40]))
+LARGE_COUNTS = (2, 300, 8, ([300, 129], [17, 288], [1000, 0]))
+
+
+@pytest.mark.parametrize(
+    "B,Q,H,counts,packed,D,ref_fp32",
+    [
+        # Fewer tiles than cores, then more and not a multiple of them, each on both geometries.
+        (*SMALL_COUNTS, True, 32, False),
+        (*SMALL_COUNTS, False, 32, False),
+        (*LARGE_COUNTS, True, 32, False),
+        (*LARGE_COUNTS, False, 32, False),
+        # The reader-only scatter, and float32 reference points.
+        (*LARGE_COUNTS, True, 48, False),
+        (*LARGE_COUNTS, True, 32, True),
+    ],
+    ids=["small-packed", "small-unpacked", "large-packed", "large-unpacked", "large-d48", "large-fp32-refs"],
+)
+def test_fused_msda_v2_num_valid_queries_tensor_matches_host_list(device, B, Q, H, counts, packed, D, ref_fp32):
+    """Device counts derive the host list's tiles: rows below each count match it bit for bit.
+
+    One tensor-path program serves every call, with different counts and buffer addresses each
+    time; the host-list reference adds a second cache entry. Every call's tensors stay alive, so
+    no call can reuse a previous call's addresses and pass on a stale runtime arg.
+    """
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    memory = "dram" if _per_head_stride_supported(H, D) else "l1"
+    calls = []
+    for seed, num_valid in enumerate(counts):
+        tensors, spatial_shapes, reference = _num_valid_queries_case(
+            B, Q, H, seed=seed, packed=packed, D=D, ref_fp32=ref_fp32
+        )
+        calls.append(
+            (
+                _case_to_device(tensors, device, ref_fp32, memory),
+                _counts_tensor(num_valid, device),
+                num_valid,
+                reference,
+            )
+        )
+    assert len({counts_t.buffer_address() for _, counts_t, _, _ in calls}) == len(calls)
+
+    memory_config = ttnn.L1_MEMORY_CONFIG if memory == "l1" else None
+    for inputs, counts_t, num_valid, reference in calls:
+        out = ttnn.experimental.fused_msda_from_offsets(
+            *inputs,
+            spatial_shapes,
+            reference_mode="pillar",
+            memory_config=memory_config,
+            num_valid_queries_tensor=counts_t,
+        )
+        got = ttnn.to_torch(out).to(torch.float32)
+        expected = _host_list_msda(inputs, spatial_shapes, num_valid, Q, memory_config)
+        _assert_rows_match(reference, expected, got, num_valid, Q)
+    assert device.num_program_cache_entries() == 2
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+@pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
+def test_fused_msda_v2_num_valid_queries_tensor_follows_counts_in_trace(device, packed):
+    """A trace captured with one set of counts computes the counts written before each replay.
+
+    The first replays raise a count above the captured one, so a trace that kept the captured
+    tile list would leave their extra rows uncomputed. The last computes nothing on any core,
+    which the host list cannot express, and must still complete.
+    """
+    B, Q, H = 2, 300, 8
+    captured, *replayed = ([40, 129], [300, 129], [17, 288], [1000, 2], [0, 0])
+    tensors, spatial_shapes, _ = _num_valid_queries_case(B, Q, H, seed=0, packed=packed)
+    inputs = _case_to_device(tensors, device)
+    counts_t = _counts_tensor(captured, device)
+
+    def run():
+        return ttnn.experimental.fused_msda_from_offsets(
+            *inputs, spatial_shapes, reference_mode="pillar", num_valid_queries_tensor=counts_t
+        )
+
+    run()  # compile outside the capture
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    out = run()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        for seed, num_valid in enumerate(replayed, start=1):
+            host_tensors, _, reference = _num_valid_queries_case(B, Q, H, seed=seed, packed=packed)
+            for host, dev in zip(host_tensors, inputs):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(host.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT), dev
+                )
+            ttnn.copy_host_to_device_tensor(_counts_tensor(num_valid), counts_t)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            if not any(num_valid):
+                continue
+            got = ttnn.to_torch(out).to(torch.float32)
+            _assert_rows_match(reference, _host_list_msda(inputs, spatial_shapes, num_valid, Q), got, num_valid, Q)
+    finally:
+        ttnn.release_trace(device, trace_id)
 
 
 def _to_device(t: torch.Tensor, device) -> ttnn.Tensor:
@@ -1524,6 +1678,47 @@ def test_fused_msda_from_offsets_rejects_bad_num_valid_queries(device, expect_er
     with expect_error(RuntimeError, message):
         ttnn.experimental.fused_msda_from_offsets(
             value_t, ref_t, off_t, attn_t, shapes, reference_mode="pillar", num_valid_queries=num_valid_queries
+        )
+
+
+@pytest.mark.parametrize(
+    "counts,dtype,layout,on_device,message",
+    [
+        ([8, 8], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, True, "must be UINT32"),
+        ([8, 8], ttnn.uint32, ttnn.TILE_LAYOUT, True, "must be ROW_MAJOR"),
+        ([8, 8], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, False, "expect device tensors"),
+        ([8], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, True, "counts in the last dim"),
+        ([[8], [8]], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, True, "counts in the last dim"),
+    ],
+    ids=["int32", "tile", "host", "too-few", "not-last-dim"],
+)
+def test_fused_msda_from_offsets_rejects_bad_num_valid_queries_tensor(
+    device, expect_error, counts, dtype, layout, on_device, message
+):
+    value_t, off_t, attn_t, shapes = _valid_inputs(device, B=2)
+    ref_t = _to_device(torch.rand(2, 8, 2, 2), device)
+    counts_t = ttnn.from_torch(
+        torch.tensor(counts, dtype=torch.int32), dtype=dtype, layout=layout, device=device if on_device else None
+    )
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.fused_msda_from_offsets(
+            value_t, ref_t, off_t, attn_t, shapes, reference_mode="pillar", num_valid_queries_tensor=counts_t
+        )
+
+
+def test_fused_msda_from_offsets_rejects_both_count_forms(device, expect_error):
+    value_t, off_t, attn_t, shapes = _valid_inputs(device, B=2)
+    ref_t = _to_device(torch.rand(2, 8, 2, 2), device)
+    with expect_error(RuntimeError, "not both"):
+        ttnn.experimental.fused_msda_from_offsets(
+            value_t,
+            ref_t,
+            off_t,
+            attn_t,
+            shapes,
+            reference_mode="pillar",
+            num_valid_queries=[8, 8],
+            num_valid_queries_tensor=_counts_tensor([8, 8], device),
         )
 
 
