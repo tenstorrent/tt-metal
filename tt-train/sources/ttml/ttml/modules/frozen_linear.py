@@ -178,8 +178,11 @@ PROGRAM_CONFIG_2D: dict[tuple[int, int, int, bool], dict] = {
     (1024, 5184, 1536, False): dict(
         grid=(11, 8), in0_block_w=9, out_subblock_h=4, out_subblock_w=1, per_core_M=4, per_core_N=5
     ),
+    # Iteration 50: the qkv dX^T on 110 cores ((11, 10), per core 17 x 3, 1 x 3 subblocks): 181 us against 220 for the
+    # iteration-48 config ((10, 10), 17 x 4, 1 x 4: the iteration-46 sweep's one-shot numbers had put it ahead of a
+    # drift-inflated default) and 187 for ttnn's choice, alternating rounds (`O/iter50_qkv_dx_configs_abab.log`).
     (5184, 1536, 1024, True): dict(
-        grid=(10, 10), in0_block_w=8, out_subblock_h=1, out_subblock_w=4, per_core_M=17, per_core_N=4
+        grid=(11, 10), in0_block_w=8, out_subblock_h=1, out_subblock_w=3, per_core_M=17, per_core_N=3
     ),
     (1088, 5120, 1024, False): dict(
         grid=(11, 10), in0_block_w=16, out_subblock_h=2, out_subblock_w=1, per_core_M=4, per_core_N=3

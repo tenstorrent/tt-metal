@@ -1,0 +1,268 @@
+chip 0: 2 steps, 42.14 ms kernels per profiled step; classes: math 30.18, other 9.89, layout 1.89, glue 0.18
+   ms/step   ops  op | in0 | in1 | cores
+     5.418     4  Matmul | 1x1x16384x5184 | 1x1x1024x5184 | 110
+     5.384     4  Matmul | 1x1x5184x16384 | 1x1x16384x1024 | 110
+     3.039     1  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+     2.804     4  Matmul | 1x1x8256x5120 | 1x1x5120x1024 | 110
+     2.755     1  Matmul | 1x1x5120x32768 | 1x1x1024x32768 | 110
+     2.655     4  Matmul | 1x1x5120x8256 | 1x1x8256x1024 | 110
+     2.606     7  ReduceScatterMinimalAsync | 1x1x1024x5184 |  | 36
+     1.889     8  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+     1.045     8  AllGatherAsync | 1x1x5120x256 |  | 20
+     0.849     7  AllGatherAsync | 1x1x256x5184 |  | 20
+     0.780     4  SwigluPackedBw | 1x1x16384x1024 | 1x1x8256x1024 | 110
+     0.706     4  Matmul | 1x1x1024x5184 | 1x1x5184x1536 | 80
+     0.637     4  Matmul | 1x1x5184x1536 | 1x1x1024x1536 | 110
+     0.632     4  SDPABackwardKV | 1x8x1024x128 | 1x8x1024x128 | 110
+     0.621     3  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+     0.539     1  VpCeRowStats | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     0.514     4  Matmul | 1x1x5120x1088 | 1x1x1024x1088 | 110
+     0.508     8  TransposeSplit | 1x1x5184x1024 | 1x1x32[16]x5120 | 110
+     0.447     4  SwigluPackedFw | 1x1x16384x1024 |  | 110
+     0.434     4  SDPABackwardQ | 1x8x1024x128 | 1x8x1024x128 | 110
+     0.432     8  RMSNormBackwardRows | 1x1x256x5120 | 1x1x32[1]x5120 | 104
+     0.431     4  Matmul | 1x1x1088x5120 | 1x1x5120x1024 | 99
+     0.386     4  SDPAForward | 1x8x1024x128 | 1x2x1024x128 | 110
+     0.382     4  SkinnyContract | 1x1x32[16]x1024 | 1x1x16384x1024 | 110
+     0.333     1  VpCrossEntropyBw | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     0.324     8  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x5120x256 | 104
+     0.277     4  SkinnyMatmulPartial | 1x1x8256x1024 | 1x1x32[16]x8192 | 104
+     0.267     8  SkinnyContract | 1x1x32[16]x1024 | 1x1x5120x1024 | 110
+     0.263     1  AllBroadcast | 1x1x1024x32[1] |  | 2
+     0.251     7  SkinnyMatmulPartial | 1x1x1024x5184 | 1x1x32[16]x5120 | 104
+     0.238     2  AllGatherAsync | 1x1x256x5120 |  | 20
+     0.232     2  AllGatherAsync | 1x1x1024x1280 |  | 20
+     0.211     7  Matmul | 1x1x1024x32[16] | 1x1x1024x5184 | 88
+     0.204     4  SkinnyContract | 1x1x32x1024 | 1x1x8256x1024 | 110
+     0.187     1  VpCeRowStats | 1x1x1024x32768 |  | 110
+     0.147     1  Embeddings | 1x1x1x1024 | 1x1x32768x5120 | 32
+     0.145     1  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+     0.133     8  RotaryEmbeddingLlama | 1x8x1024x128 | 1x1x1024x128 | 110
+     0.120     4  AdamW | 1x1x16384x32[16] | 1x1x16384x32[16] | 110
+     0.119     1  RMSNormForward | 1x1x256x5120 | 1x1x32[1]x5120 | 8
+     0.116     8  Slice | 1x1x5120x128 |  | 110
+     0.109     4  SDPABackwardKVReduce | 1x8x1024x128 | 1x8x1024x128 | 110
+     0.101     8  AdamW | 1x1x5120x32[16] | 1x1x5120x32[16] | 110
+     0.101     8  AdamW | 1x1x32[16]x5120 | 1x1x32[16]x5120 | 110
+     0.087    17  BinaryNg | 1x1x256x5120 |  | 110
+     0.085     8  NLPConcatHeads | 1x8x1024x128 |  | 110
+     0.079     4  AdamW | 1x1x32[16]x8192 | 1x1x32[16]x8192 | 110
+     0.078     1  TilizeWithValPadding | 1x1x1x1024 |  | 1
+     0.073     8  RotaryEmbeddingLlama | 1x2x1024x128 | 1x1x1024x128 | 110
+     0.067     4  Matmul | 1x1x1024x32[16] | 1x1x1024x1024 | 33
+     0.066     4  Matmul | 1x1x1024x1024 | 1x1x32[16]x1024 | 33
+     0.066     4  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x1536 | 110
+     0.061     4  Concat | 1x1x1024x1024 | 1x1x1024x256 | 110
+     0.061     7  SkinnyMatmulReduce | 1x1x1024x5184 | 1x1x32[16]x5120 | 32
+     0.060     2  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+     0.060     4  TransposeSplit | 1x1x1088x1024 | 1x1x32[16]x1024 | 110
+     0.058     4  NlpCreateHeads | 1x1x1024x1536 |  | 110
+     0.054     1  BinaryNg | 1x1x1024x5120 | 1x1x1024x32[1] | 110
+     0.052     8  UntilizeWithUnpadding | 1x1x32[16]x5120 |  | 80
+     0.048     1  Concat | 1x1x1024x5120 | 1x1x1024x64 | 110
+     0.048     1  Transpose | 1x1x5120x1024 |  | 110
+     0.045     1  Concat | 1x1x5120x32[16] | 1x1x5120x32[16] | 80
+     0.045     1  ReduceScatterMinimalAsync | 1x1x5120x128 |  | 12
+     0.043     4  Concat | 1x1x1024x1024 | 1x1x1024x64 | 110
+     0.042     8  FillPad | 1x1x32[16]x5120 |  | 110
+     0.039     4  Transpose | 1x8x128x1024 |  | 110
+     0.039     4  TilizeWithValPadding | 1x1x5120x16 |  | 80
+     0.038     4  Transpose | 1x1x1024x1024 |  | 110
+     0.037     1  TilizeWithValPadding | 1x1x128x5120 |  | 108
+     0.036     5  FillPad | 1x1x1024x32[16] |  | 32
+     0.036     1  SkinnyMatmulPartial | 1x1x1024x5120 | 1x1x32[16]x5120 | 104
+     0.035     4  SkinnyMatmulReduce | 1x1x8256x1024 | 1x1x32[16]x8192 | 32
+     0.035     4  TilizeWithValPadding | 1x1x16x5120 |  | 80
+     0.034     1  Permute | 1x1x1024x32[1] |  | 110
+     0.033     4  WriteTileBlockOperation | 1x1x16384x5184 | 1x1x16384x32 | 110
+     0.031     4  FillPad | 1x1x32[16]x16384 |  | 110
+     0.031     4  UntilizeCodegen | 1x1x5120x128 |  | 110
+     0.030     1  AllGatherAsync | 1x1x5120x32 |  | 12
+     0.030     4  UntilizeCodegen | 1x1x128x5120 |  | 80
+     0.030     1  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+     0.030     1  AllGatherAsync | 1x1x128x1280 |  | 12
+     0.027     2  AllGatherAsync | 1x1x256x32[1] |  | 12
+     0.027     8  NLPConcatHeads | 1x2x1024x128 |  | 64
+     0.026     4  AdamW | 1x1x1536x32[16] | 1x1x1536x32[16] | 48
+     0.024     4  AdamW | 1x1x32[16]x1024 | 1x1x32[16]x1024 | 32
+     0.022     4  Transpose | 1x1x16384x32[16] |  | 110
+     0.022     4  Transpose | 1x1x32x16384 |  | 110
+     0.020     4  WriteTileBlockOperation | 1x1x5184x16384 | 1x1x32x16384 | 110
+     0.020     1  Reduce | 1024x1x32[1]x32[1] |  | 110
+     0.020    12  Transpose | 1x1x1024x32[16] |  | 32
+     0.020     8  Transpose | 1x1x32x5120 |  | 110
+     0.020     4  FillPad | 1x1x32[16]x1536 |  | 48
+     0.019     8  Transpose | 1x1x5120x32[16] |  | 110
+     0.018     1  Concat | 1x1x1024x32[1] | 1x1x1024x32[1] | 32
+     0.017     2  FillPad | 1x1x1024x32[1] |  | 32
+     0.016     7  Slice | 1x1x32[16]x5184 |  | 110
+     0.013     1  MeshPartition | 1x1x1024x5120 |  | 110
+     0.013     5  PadCodegen | 1x1x1024x32[16] |  | 64
+     0.013     1  Permute | 1024x1x32[1]x32[1] |  | 110
+     0.012     4  WriteTileBlockOperation | 1x1x5120x8256 | 1x1x5120x32 | 110
+     0.012     4  WriteTileBlockOperation | 1x1x5120x1088 | 1x1x5120x32 | 110
+     0.012     4  Slice | 1x1x32x8256 |  | 110
+     0.010     2  Reduce | 1x1x1024x224 |  | 32
+     0.010     4  Slice | 1x1x128x5120 |  | 110
+     0.009     1  SkinnyMatmulReduce | 1x1x1024x5120 | 1x1x32[16]x5120 | 32
+     0.008     4  Slice | 1x1x128x5120 |  | 16
+     0.008     4  WriteTileBlockOperation | 1x1x8256x5120 | 1x1x32x5120 | 110
+     0.008     2  BinaryNg | 1x1x1x1024 |  | 110
+     0.008     4  WriteTileBlockOperation | 1x1x1088x5120 | 1x1x32x5120 | 110
+     0.008     1  FillPad | 1x1x1024x32[4] |  | 32
+     0.007     4  WriteTileBlockOperation | 1x1x5184x1536 | 1x1x32x1536 | 48
+     0.007     1  Concat | 1x1x16x5120 | 1x1x16x5120 | 110
+     0.007     1  SelectTargetLogit | 1x1x1024x32768 | 1x1x1x1024 | 32
+     0.007     4  Slice | 1x1x8256x1024 |  | 32
+     0.006     4  Transpose | 1x1x1536x32[16] |  | 48
+     0.006     1  Unary | 1x1x1024x32[1] |  | 8
+     0.005     1  Reduce | 1x1x32x1 |  | 1
+     0.005     2  BinaryNg | 1x1x1x1024 | 1x1x1x1024 | 110
+     0.005     2  BinaryNg | 1x1x1024x32[1] | 1x1x1024x32[1] | 110
+     0.005     1  BinaryNg | 1x1x32[1]x32[1] |  | 110
+     0.004     1  BinaryNg | 1x1x1x1024 | 1x1x1x1 | 110
+     0.003     2  CloneOperation | 1x1x1024x32[1] |  | 32
+     0.003     3  Typecast | 1x1x1x1024 |  | 1
+     0.003     1  Full |  |  | 1
+     0.003     1  Reduce | 1x1x1024x32[4] |  | 32
+     0.002     1  Reduce | 1x1x1024x32[1] |  | 32
+     0.002     1  Transpose | 1x1x32[1]x1024 |  | 32
+     0.002     1  CloneOperation | 1x1x1024x32[4] |  | 32
+     0.002     1  RepeatCodegen | 1x1x1x32 |  | 32
+     0.002     1  Tilize | 1x1x32x32 |  | 1
+     0.001     1  UntilizeCodegen | 1x1x32[1]x32[1] |  | 1
+     0.001     1  RepeatCodegen | 1x1x1x1 |  | 1
+chip 2: 2 steps, 39.18 ms kernels per profiled step; classes: math 30.09, other 7.11, layout 1.81, glue 0.18
+   ms/step   ops  op | in0 | in1 | cores
+     5.413     4  Matmul | 1x1x16384x5184 | 1x1x1024x5184 | 110
+     5.383     4  Matmul | 1x1x5184x16384 | 1x1x16384x1024 | 110
+     3.039     1  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+     2.802     4  Matmul | 1x1x8256x5120 | 1x1x5120x1024 | 110
+     2.756     1  Matmul | 1x1x5120x32768 | 1x1x1024x32768 | 110
+     2.653     4  Matmul | 1x1x5120x8256 | 1x1x8256x1024 | 110
+     1.469     8  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+     0.909     7  ReduceScatterMinimalAsync | 1x1x1024x5184 |  | 36
+     0.882     8  AllGatherAsync | 1x1x5120x256 |  | 20
+     0.809     7  AllGatherAsync | 1x1x256x5184 |  | 20
+     0.776     4  SwigluPackedBw | 1x1x16384x1024 | 1x1x8256x1024 | 110
+     0.706     4  Matmul | 1x1x1024x5184 | 1x1x5184x1536 | 80
+     0.634     4  Matmul | 1x1x5184x1536 | 1x1x1024x1536 | 110
+     0.630     4  SDPABackwardKV | 1x8x1024x128 | 1x8x1024x128 | 110
+     0.539     1  VpCeRowStats | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     0.512     4  Matmul | 1x1x5120x1088 | 1x1x1024x1088 | 110
+     0.462     8  TransposeSplit | 1x1x5184x1024 | 1x1x32[16]x5120 | 110
+     0.442     4  SwigluPackedFw | 1x1x16384x1024 |  | 110
+     0.430     4  Matmul | 1x1x1088x5120 | 1x1x5120x1024 | 99
+     0.428     4  SDPABackwardQ | 1x8x1024x128 | 1x8x1024x128 | 110
+     0.422     8  RMSNormBackwardRows | 1x1x256x5120 | 1x1x32[1]x5120 | 104
+     0.417     3  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+     0.386     4  SDPAForward | 1x8x1024x128 | 1x2x1024x128 | 110
+     0.366     4  SkinnyContract | 1x1x32[16]x1024 | 1x1x16384x1024 | 110
+     0.344     1  VpCrossEntropyBw | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     0.316     8  AddRMSNormForwardRows | 1x1x256x5120 | 1x1x5120x256 | 104
+     0.266     4  SkinnyMatmulPartial | 1x1x8256x1024 | 1x1x32[16]x8192 | 104
+     0.255     8  SkinnyContract | 1x1x32[16]x1024 | 1x1x5120x1024 | 110
+     0.239     7  SkinnyMatmulPartial | 1x1x1024x5184 | 1x1x32[16]x5120 | 104
+     0.233     2  AllGatherAsync | 1x1x256x5120 |  | 20
+     0.228     2  AllGatherAsync | 1x1x1024x1280 |  | 20
+     0.220     1  AllBroadcast | 1x1x1024x32[1] |  | 2
+     0.202     7  Matmul | 1x1x1024x32[16] | 1x1x1024x5184 | 88
+     0.192     4  SkinnyContract | 1x1x32x1024 | 1x1x8256x1024 | 110
+     0.179     1  VpCeRowStats | 1x1x1024x32768 |  | 110
+     0.143     1  Embeddings | 1x1x1x1024 | 1x1x32768x5120 | 32
+     0.130     8  RotaryEmbeddingLlama | 1x8x1024x128 | 1x1x1024x128 | 110
+     0.123     1  RMSNormForward | 1x1x256x5120 | 1x1x32[1]x5120 | 8
+     0.120     4  AdamW | 1x1x16384x32[16] | 1x1x16384x32[16] | 110
+     0.113     8  Slice | 1x1x5120x128 |  | 110
+     0.099     8  AdamW | 1x1x5120x32[16] | 1x1x5120x32[16] | 110
+     0.099     8  AdamW | 1x1x32[16]x5120 | 1x1x32[16]x5120 | 110
+     0.096     4  SDPABackwardKVReduce | 1x8x1024x128 | 1x8x1024x128 | 110
+     0.087    17  BinaryNg | 1x1x256x5120 |  | 110
+     0.082     8  NLPConcatHeads | 1x8x1024x128 |  | 110
+     0.078     1  TilizeWithValPadding | 1x1x1x1024 |  | 1
+     0.078     4  AdamW | 1x1x32[16]x8192 | 1x1x32[16]x8192 | 110
+     0.070     8  RotaryEmbeddingLlama | 1x2x1024x128 | 1x1x1024x128 | 110
+     0.067     4  Matmul | 1x1x1024x32[16] | 1x1x1024x1024 | 33
+     0.066     4  Matmul | 1x1x1024x1024 | 1x1x32[16]x1024 | 33
+     0.065     4  SkinnyContract | 1x1x32[16]x1024 | 1x1x1024x1536 | 110
+     0.060     7  SkinnyMatmulReduce | 1x1x1024x5184 | 1x1x32[16]x5120 | 32
+     0.057     4  NlpCreateHeads | 1x1x1024x1536 |  | 110
+     0.057     4  Concat | 1x1x1024x1024 | 1x1x1024x256 | 110
+     0.054     4  TransposeSplit | 1x1x1088x1024 | 1x1x32[16]x1024 | 110
+     0.053     1  BinaryNg | 1x1x1024x5120 | 1x1x1024x32[1] | 110
+     0.051     8  UntilizeWithUnpadding | 1x1x32[16]x5120 |  | 80
+     0.047     1  Concat | 1x1x1024x5120 | 1x1x1024x64 | 110
+     0.047     2  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+     0.047     1  Concat | 1x1x5120x32[16] | 1x1x5120x32[16] | 80
+     0.046     1  Transpose | 1x1x5120x1024 |  | 110
+     0.044     4  Concat | 1x1x1024x1024 | 1x1x1024x64 | 110
+     0.042     8  FillPad | 1x1x32[16]x5120 |  | 110
+     0.037     5  FillPad | 1x1x1024x32[16] |  | 32
+     0.036     1  TilizeWithValPadding | 1x1x128x5120 |  | 108
+     0.036     4  TilizeWithValPadding | 1x1x5120x16 |  | 80
+     0.036     4  Transpose | 1x8x128x1024 |  | 110
+     0.035     1  Permute | 1x1x1024x32[1] |  | 110
+     0.035     4  SkinnyMatmulReduce | 1x1x8256x1024 | 1x1x32[16]x8192 | 32
+     0.034     1  SkinnyMatmulPartial | 1x1x1024x5120 | 1x1x32[16]x5120 | 104
+     0.034     4  Transpose | 1x1x1024x1024 |  | 110
+     0.034     4  TilizeWithValPadding | 1x1x16x5120 |  | 80
+     0.033     4  WriteTileBlockOperation | 1x1x16384x5184 | 1x1x16384x32 | 110
+     0.030     4  FillPad | 1x1x32[16]x16384 |  | 110
+     0.030     1  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+     0.029     4  UntilizeCodegen | 1x1x5120x128 |  | 110
+     0.029     4  UntilizeCodegen | 1x1x128x5120 |  | 80
+     0.028     1  AllGatherAsync | 1x1x128x1280 |  | 12
+     0.028     1  AllGatherAsync | 1x1x5120x32 |  | 12
+     0.028     1  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+     0.027     2  AllGatherAsync | 1x1x256x32[1] |  | 12
+     0.027     8  NLPConcatHeads | 1x2x1024x128 |  | 64
+     0.026     1  ReduceScatterMinimalAsync | 1x1x5120x128 |  | 12
+     0.026     4  AdamW | 1x1x1536x32[16] | 1x1x1536x32[16] | 48
+     0.024     4  AdamW | 1x1x32[16]x1024 | 1x1x32[16]x1024 | 32
+     0.022     4  Transpose | 1x1x16384x32[16] |  | 110
+     0.021     4  Transpose | 1x1x32x16384 |  | 110
+     0.020     1  Reduce | 1024x1x32[1]x32[1] |  | 110
+     0.020     4  FillPad | 1x1x32[16]x1536 |  | 48
+     0.019     8  Transpose | 1x1x32x5120 |  | 110
+     0.019     4  WriteTileBlockOperation | 1x1x5184x16384 | 1x1x32x16384 | 110
+     0.019    12  Transpose | 1x1x1024x32[16] |  | 32
+     0.018     8  Transpose | 1x1x5120x32[16] |  | 110
+     0.018     1  Concat | 1x1x1024x32[1] | 1x1x1024x32[1] | 32
+     0.017     2  FillPad | 1x1x1024x32[1] |  | 32
+     0.015     7  Slice | 1x1x32[16]x5184 |  | 110
+     0.013     5  PadCodegen | 1x1x1024x32[16] |  | 64
+     0.013     1  MeshPartition | 1x1x1024x5120 |  | 110
+     0.013     1  Permute | 1024x1x32[1]x32[1] |  | 110
+     0.012     4  WriteTileBlockOperation | 1x1x5120x1088 | 1x1x5120x32 | 110
+     0.012     4  WriteTileBlockOperation | 1x1x5120x8256 | 1x1x5120x32 | 110
+     0.011     4  Slice | 1x1x32x8256 |  | 110
+     0.010     2  Reduce | 1x1x1024x224 |  | 32
+     0.009     4  Slice | 1x1x128x5120 |  | 110
+     0.009     4  Slice | 1x1x128x5120 |  | 16
+     0.009     1  SkinnyMatmulReduce | 1x1x1024x5120 | 1x1x32[16]x5120 | 32
+     0.008     1  SelectTargetLogit | 1x1x1024x32768 | 1x1x1x1024 | 32
+     0.008     2  BinaryNg | 1x1x1x1024 |  | 110
+     0.008     4  WriteTileBlockOperation | 1x1x8256x5120 | 1x1x32x5120 | 110
+     0.008     4  WriteTileBlockOperation | 1x1x1088x5120 | 1x1x32x5120 | 110
+     0.008     1  FillPad | 1x1x1024x32[4] |  | 32
+     0.007     4  WriteTileBlockOperation | 1x1x5184x1536 | 1x1x32x1536 | 48
+     0.007     4  Slice | 1x1x8256x1024 |  | 32
+     0.006     1  Concat | 1x1x16x5120 | 1x1x16x5120 | 110
+     0.006     4  Transpose | 1x1x1536x32[16] |  | 48
+     0.006     1  Unary | 1x1x1024x32[1] |  | 8
+     0.005     1  Reduce | 1x1x32x1 |  | 1
+     0.005     2  BinaryNg | 1x1x1024x32[1] | 1x1x1024x32[1] | 110
+     0.005     2  BinaryNg | 1x1x1x1024 | 1x1x1x1024 | 110
+     0.005     1  BinaryNg | 1x1x1x1024 | 1x1x1x1 | 110
+     0.005     1  BinaryNg | 1x1x32[1]x32[1] |  | 110
+     0.003     2  CloneOperation | 1x1x1024x32[1] |  | 32
+     0.003     3  Typecast | 1x1x1x1024 |  | 1
+     0.003     1  Full |  |  | 1
+     0.003     1  Reduce | 1x1x1024x32[4] |  | 32
+     0.002     1  Reduce | 1x1x1024x32[1] |  | 32
+     0.002     1  Transpose | 1x1x32[1]x1024 |  | 32
+     0.002     1  CloneOperation | 1x1x1024x32[4] |  | 32
+     0.002     1  RepeatCodegen | 1x1x1x32 |  | 32
+     0.002     1  Tilize | 1x1x32x32 |  | 1
+     0.001     1  UntilizeCodegen | 1x1x32[1]x32[1] |  | 1
+     0.001     1  RepeatCodegen | 1x1x1x1 |  | 1

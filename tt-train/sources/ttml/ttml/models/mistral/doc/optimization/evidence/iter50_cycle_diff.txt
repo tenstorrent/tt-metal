@@ -1,0 +1,21 @@
+kernel ms per profiled 4-layer step, 49 -> 50 (iter49_tp_ranked_ops_full.txt vs iter50_tp_ranked_ops_full.txt)
+chip 0: total 44.437 -> 42.143 (-2.294); collectives 10.147 -> 8.080 (-2.067); kernels without collectives 34.290 -> 34.063 (-0.227)
+    0.787 ( 4 ops) ->   0.000 ( 0 ops) (-0.787)  Matmul | 1x1x5184x1536 | 1x1x1024x1536 | 80
+    2.615 ( 8 ops) ->   1.889 ( 8 ops) (-0.726)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    0.000 ( 0 ops) ->   0.637 ( 4 ops) (+0.637)  Matmul | 1x1x5184x1536 | 1x1x1024x1536 | 110
+    1.123 ( 3 ops) ->   0.621 ( 3 ops) (-0.502)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    0.632 ( 1 ops) ->   0.263 ( 1 ops) (-0.369)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    2.888 ( 7 ops) ->   2.606 ( 7 ops) (-0.282)  ReduceScatterMinimalAsync | 1x1x1024x5184 |  | 36
+    0.156 ( 2 ops) ->   0.060 ( 2 ops) (-0.096)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12
+    0.911 ( 7 ops) ->   0.849 ( 7 ops) (-0.062)  AllGatherAsync | 1x1x256x5184 |  | 20
+    0.261 ( 2 ops) ->   0.238 ( 2 ops) (-0.023)  AllGatherAsync | 1x1x256x5120 |  | 20
+chip 2: total 39.440 -> 39.182 (-0.258); collectives 5.441 -> 5.353 (-0.088); kernels without collectives 33.999 -> 33.829 (-0.170)
+    0.786 ( 4 ops) ->   0.000 ( 0 ops) (-0.786)  Matmul | 1x1x5184x1536 | 1x1x1024x1536 | 80
+    0.000 ( 0 ops) ->   0.634 ( 4 ops) (+0.634)  Matmul | 1x1x5184x1536 | 1x1x1024x1536 | 110
+    1.321 ( 7 ops) ->   0.909 ( 7 ops) (-0.412)  ReduceScatterMinimalAsync | 1x1x1024x5184 |  | 36
+    1.266 ( 8 ops) ->   1.469 ( 8 ops) (+0.203)  ReduceScatterMinimalAsync | 1x1x5120x1024 |  | 36
+    0.078 ( 1 ops) ->   0.220 ( 1 ops) (+0.142)  AllBroadcast | 1x1x1024x32[1] |  | 2
+    0.453 ( 3 ops) ->   0.417 ( 3 ops) (-0.036)  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+    0.066 ( 1 ops) ->   0.030 ( 1 ops) (-0.036)  ReduceScatterMinimalAsync | 1x1x128x5120 |  | 12
+    0.785 ( 7 ops) ->   0.809 ( 7 ops) (+0.024)  AllGatherAsync | 1x1x256x5184 |  | 20
+    0.024 ( 2 ops) ->   0.047 ( 2 ops) (+0.023)  ReduceScatterMinimalAsync | 1x1x1024x32[1] |  | 12

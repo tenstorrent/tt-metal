@@ -538,6 +538,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | review 14 | `95e7ebd6bd9` | the review round 14 answers: the overlap window's hazard fixed (persistent buffers), the window rejected and off by default, `--host-loss` at TP, the controls, the ranked table regenerated, the cycle diffs with op counts |
 | 48 | `a0ef2fe9a45` | the attention shards on the fused LoRA path (`TRANSPOSED_SHAPES`, three 2D configs, the out forward transposed, the overlap on qkv); evidence |
 | 49 | `a6ff2f8375b` | the fused norms' wide output (`add_rmsnorm_fw_rows(out_tail_tiles)`, `rmsnorm_bw_rows` on a wide gradient), the gathered activations on the wide LoRA path; evidence |
+| review 15 | `eaf9570e244` | the review round 15 answers: the ranked table from iteration 50's profile, iteration 48 reconciled, iteration 47's cells corrected |
 | 50 | (this commit) | the qkv dX^T program config on 110 cores; evidence |
 | 47 | `4c96f9fde82` | the gate_up dx reduce-scatter on a collective sub-device overlapped with dB / dA (`ccl_overlap.py`, `skinny_contract(grid_rows)`, the fused layer gathers the shard itself); iteration 47 scoping evidence |
 | 46 | `263dfc67576` | the attention projections' base matmuls on swept 2D configs (`ConfiguredFrozenLinear`, `PROGRAM_CONFIG_2D` x4, `_base_linear` routing, harness test); iteration 46 scoping evidence |

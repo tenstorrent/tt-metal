@@ -1,0 +1,30 @@
+=== iter50 TP=4 gradient check 2026-11-03T02:05:58Z
+tp4 rc=0
+tp 4: transposed 5, fused 4, configured 0
+PASS
+=== iter50 8 layers real weights, host loss, TP=4 2026-11-03T02:06:42Z
+rc=0
+compare rc=0
+max |diff| 0.0094 (tol 0.1), mean +0.0002, signs +4/-6
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+=== iter50 8 layers real weights, host loss, one chip 2026-11-03T02:07:54Z
+rc=0
+compare rc=0
+max |diff| 0.0234 (tol 0.1), mean +0.0050, signs +8/-2
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+=== iter50_tp TP=4 MFU after 600s cool-down 2026-11-03T02:09:02Z
+rc=0
+40 of 40 layers, tp 4: 437.2 ms/step over 6 steps (best 432.6), 220.4 TFLOP/s, MFU 37.11%
+=== iter50_tp TP=4 Tracy 4 layers 2026-11-03T02:22:25Z
+rc=0
+4 of 40 layers, tp 4: 53.9 ms/step over 2 steps (best 52.7), 224.5 TFLOP/s, MFU 37.80%
+=== done 2026-11-03T02:23:55Z
+=== iter50 TP=4 40 layers real weights 2026-11-03T02:23:56Z
+rc=0
+40 of 40 layers, tp 4: 445.5 ms/step over 8 steps (best 442.2), 216.3 TFLOP/s, MFU 36.42%
+=== iter50 harness 2026-11-03T02:33:06Z
+harness rc=0
+================== 71 passed, 2 warnings in 277.70s (0:04:37) ==================
+swiglu op tests rc=0
+============================== 35 passed in 3.52s ==============================
+=== iter50 chain finished 2026-11-03T02:37:54Z
