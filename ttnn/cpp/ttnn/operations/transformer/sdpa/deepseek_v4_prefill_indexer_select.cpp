@@ -14,7 +14,7 @@ ttnn::DeviceComputeKernelConfig kernel_config(std::optional<ttnn::DeviceComputeK
     return init_device_compute_kernel_config(
         tt::tt_metal::hal::get_arch(),
         compute_kernel_config,
-        /*default_fidelity=*/MathFidelity::HiFi2,
+        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);

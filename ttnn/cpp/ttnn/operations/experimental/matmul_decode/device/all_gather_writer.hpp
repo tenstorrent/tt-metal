@@ -126,7 +126,7 @@ inline std::vector<uint32_t> all_gather_forwarding_links(
     std::vector<uint32_t> links;
     links.reserve(route.dst_nodes.size());
     for (const auto& dst_node : route.dst_nodes) {
-        const auto valid_links = tt::tt_fabric::get_forwarding_link_indices(sender_node, dst_node);
+        const auto valid_links = tt::tt_fabric::get_forwarding_link_indices(*tensor_a.device(), sender_node, dst_node);
         TT_FATAL(!valid_links.empty(), "matmul_decode all_gather: no forwarding link to destination {}", dst_node);
         links.push_back(valid_links[core_index % valid_links.size()]);
     }
