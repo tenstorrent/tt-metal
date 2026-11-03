@@ -184,12 +184,7 @@ jobs:
       sp-config: sc4
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       resource-prefix: sc4
-      # The runner is a server that idles in an unbounded request loop until the producer
-      # connects and drives H2D, so no device op completes for tens of seconds by design.
-      # The default operation-timeout watchdog would fire mid-idle, run tt-triage (which
-      # halts the cores) and wedge the fabric; disable it so the leg matches demo-sp, which
-      # never armed the watchdog.
-      hang-detection-timeout: 0
+      hang-detection-timeout: 120
 
   Galaxy-Blaze-models-prefill-sc1-runner:
     needs: [validate-test-type, check-harbor, build-artifact]

@@ -1665,7 +1665,7 @@
     export PREFILL_STANDALONE_CHUNKED_PCC=0.85
     export PREFILL_LAYER_ACK_D2H=0
     export TABLE_WAIT_SECS=1800
-    export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # The runner idles in H2D receive between requests.
+    export TT_METAL_OPERATION_TIMEOUT_SECONDS=120  # The runner idles in H2D receive between requests.
     exec timeout -k 2m 35m bash models/demos/gpt_oss_d_p/scripts/ci/run_prefill_acceptance.sh
   test_type: gpt_oss_prefill_runner
   test_tags: [gpt_oss_prefill_runner, runner, kv_cache]
