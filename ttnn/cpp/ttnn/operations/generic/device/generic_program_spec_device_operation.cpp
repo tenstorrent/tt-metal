@@ -302,13 +302,11 @@ void check_mesh_ranges(const SpecAttributes& attributes) {
     const auto& programs = attributes.programs;
     for (std::size_t i = 0; i < programs.size(); ++i) {
         for (std::size_t j = i + 1; j < programs.size(); ++j) {
-            if (programs[i].range.has_value() && programs[j].range.has_value()) {
-                TT_FATAL(
-                    !programs[i].range->intersects(*programs[j].range),
-                    "generic_op: mesh ranges {} and {} overlap",
-                    *programs[i].range,
-                    *programs[j].range);
-            }
+            TT_FATAL(
+                !programs[i].range.intersects(programs[j].range),
+                "generic_op: mesh ranges {} and {} overlap",
+                programs[i].range,
+                programs[j].range);
         }
     }
 }
@@ -319,21 +317,12 @@ void check_tensors_on_program_devices(const SpecAttributes& attributes, const te
     if (utils::all_tensors_have_uniform_storage(tensor_args)) {
         return;
     }
-    const auto& programs = attributes.programs;
-    // The devices the programs run on. A program without a range runs where ttnn's framework places it: on the
-    // devices of one tensor, which the framework compares with the other tensors only by count. So every tensor is
-    // checked against every one of these devices here.
+    // The devices the programs run on. The ProgramSpec form's come from one tensor, which ttnn's framework compares
+    // with the other tensors only by count, so every tensor is checked against every one of these devices here.
     std::vector<ttnn::MeshCoordinate> coords;
-    for (const auto& program : programs) {
-        if (program.range.has_value()) {
-            for (const auto& coord : *program.range) {
-                coords.push_back(coord);
-            }
-        } else {
-            for (const auto& coord :
-                 utils::extract_tensor_coordinates(tensor_args, tensor_args.output_tensor.device())) {
-                coords.push_back(coord);
-            }
+    for (const auto& program : attributes.programs) {
+        for (const auto& coord : program.range) {
+            coords.push_back(coord);
         }
     }
     for (std::size_t i = 0; i < tensor_args.io_tensors.size(); ++i) {
@@ -488,17 +477,10 @@ GenericProgramSpecDeviceOperation::ProgramFactory::create_mesh_workload_artifact
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/) {
     ttnn::device_operation::MeshWorkloadArtifacts artifacts;
     for (const auto& program : operation_attributes.programs) {
-        if (program.range.has_value()) {
-            artifacts.programs.push_back(
-                {.range = *program.range, .spec = *program.spec, .run_params = *program.run_args});
-            continue;
-        }
-        for (const auto& range : tensor_coords.ranges()) {
-            artifacts.programs.push_back({.range = range, .spec = *program.spec, .run_params = *program.run_args});
-        }
+        artifacts.programs.push_back({.range = program.range, .spec = *program.spec, .run_params = *program.run_args});
     }
     return artifacts;
 }
@@ -510,7 +492,7 @@ GenericProgramSpecDeviceOperation::ProgramFactory::override_runtime_arguments(
     tensor_return_value_t& /*tensor_return_value*/,
     const ttnn::MeshCoordinateRange& range) {
     for (const auto& program : operation_attributes.programs) {
-        if (!program.range.has_value() || *program.range == range) {
+        if (program.range == range) {
             return *program.run_args;
         }
     }
@@ -543,7 +525,58 @@ GenericProgramSpecOperation::tensor_args_t make_program_spec_tensor_args(const s
     return {.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
 }
 
+// The ranges ttnn's framework gives the tensors (device_operation.hpp, on a cache miss): the whole mesh when every
+// tensor has a shard on every device, else the devices of the tensor on the fewest devices.
+ttnn::MeshCoordinateRangeSet tensor_ranges(const GenericProgramSpecOperation::tensor_args_t& tensor_args) {
+    namespace utils = ttnn::device_operation::mesh_device_operation_utils;
+    auto* mesh_device = tensor_args.output_tensor.device();
+    ttnn::MeshCoordinateRangeSet ranges;
+    if (utils::all_tensors_have_uniform_storage(tensor_args)) {
+        ranges.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
+    } else {
+        for (const auto& coord : utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
+            ranges.merge(ttnn::MeshCoordinateRange(coord, coord));
+        }
+    }
+    return ranges;
+}
+
+// The ProgramSpec form runs its program on the tensors' ranges, as a MeshProgramSpec with those ranges would, so the
+// two forms key, check and run alike. The programs point at the caller's spec and run args instead of copying them.
+GenericProgramSpecOperation::operation_attributes_t program_spec_attributes(
+    const tt::tt_metal::experimental::ProgramSpec& spec,
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    std::optional<uint64_t> custom_program_hash,
+    const GenericProgramSpecOperation::tensor_args_t& tensor_args) {
+    GenericProgramSpecOperation::operation_attributes_t attributes{.custom_program_hash = custom_program_hash};
+    const auto ranges = tensor_ranges(tensor_args);
+    for (const auto& range : ranges.ranges()) {
+        attributes.programs.push_back({.range = range, .spec = &spec, .run_args = &run_args});
+    }
+    return attributes;
+}
+
 }  // namespace
+
+Tensor generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::ProgramSpec& spec,
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    std::optional<uint64_t> custom_program_hash) {
+    const auto tensor_args = make_program_spec_tensor_args(io_tensors);
+    return ttnn::device_operation::launch<GenericProgramSpecOperation>(
+        program_spec_attributes(spec, run_args, custom_program_hash, tensor_args), tensor_args);
+}
+
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::ProgramSpec& spec,
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    std::optional<uint64_t> custom_program_hash) {
+    const auto tensor_args = make_program_spec_tensor_args(io_tensors);
+    ttnn::device_operation::prepare<GenericProgramSpecOperation>(
+        program_spec_attributes(spec, run_args, custom_program_hash, tensor_args), tensor_args);
+}
 
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,

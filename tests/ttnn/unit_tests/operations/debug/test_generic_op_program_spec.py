@@ -1009,6 +1009,21 @@ def test_mesh_form(device):
     assert device.num_program_cache_entries() == entries
 
 
+def test_the_two_forms_share_a_cache_entry(device):
+    """The ProgramSpec form runs as the MeshProgramSpec form would on the tensors' devices, so it keys the same way."""
+    expected, a, b, out = inputs(device, seed=20)
+    spec, run_args = mul_program(a, b, out)
+    entries = device.num_program_cache_entries()
+    E.generic_op([a, b, out], spec, run_args)
+    result = E.generic_op(
+        [a, b, out],
+        E.MeshProgramSpec(programs=[(mesh_range(device), spec)]),
+        E.MeshProgramRunArgs(programs=[(mesh_range(device), run_args)]),
+    )
+    assert device.num_program_cache_entries() == entries + 1
+    assert_with_pcc(expected, ttnn.to_torch(result), 0.9999)
+
+
 def test_a_mesh_run_args_subclass_setattr_cannot_drop_the_tensors(device):
     class MeshRunArgsIgnoringWrites(E.MeshProgramRunArgs):
         def __setattr__(self, name, value):
