@@ -173,7 +173,7 @@ WidthShardedAllReduceMeshWorkloadFactory::cached_program_t WidthShardedAllReduce
     auto output_cores_unused = output_cores_all.subtract(output_tensor_cores);
     auto all_cores = output_cores_all.merge(sender_worker_core_range);
 
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t num_pages_per_packet = std::max<uint32_t>(1, packet_size_bytes / face_bytes);
     uint32_t cb_num_pages = tt::div_up(output_tensor_cores.num_cores(), num_links) * output_tensor_shard_num_pages;
     uint32_t src0_cb_index = tt::CBIndex::c_0;

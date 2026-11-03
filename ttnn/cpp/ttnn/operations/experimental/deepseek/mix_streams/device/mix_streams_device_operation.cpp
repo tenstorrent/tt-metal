@@ -160,7 +160,7 @@ Tensor mix_streams(
     const auto kernel_config = init_device_compute_kernel_config(
         streams.device()->arch(),
         compute_kernel_config,
-        /*default_fidelity=*/MathFidelity::HiFi4,
+        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/true);
