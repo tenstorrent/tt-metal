@@ -14,8 +14,10 @@
 namespace ttnn {
 
 DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch) {
-    bool approx_mode = false;
-    bool fp32_acc = true;
+    // Quasar's simulator does not support fp32 accumulation of bf16 inputs yet.
+    bool quasar = arch == tt::ARCH::QUASAR;
+    bool approx_mode = quasar;
+    bool fp32_acc = !quasar;
     return init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, approx_mode, fp32_acc);
 }
 
