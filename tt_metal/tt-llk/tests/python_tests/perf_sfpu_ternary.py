@@ -4,7 +4,8 @@
 """Ternary SFPU perf, sharing sources/sfpu_ternary_test.cpp with the functional tests.
 
 LOOP_FACTOR is 16 here and 1 in the functional tests. The .post.csv divides by
-loop_factor * tile_cnt, so the two stay comparable.
+loop_factor * tile_cnt, so the two stay comparable. Both tensor shapes run here;
+the functional tests stay at [64, 64] so their ULP key keeps its old ceiling.
 """
 
 import pytest
@@ -19,6 +20,8 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
+
+_PERF_INPUT_DIMENSIONS = [[64, 64], [128, 64]]
 
 
 def _perf_formats(mathop):
@@ -46,7 +49,7 @@ def _perf_formats(mathop):
         DestAccumulation.No,
     ],
     loop_factor=[16],
-    input_dimensions=_func._INPUT_DIMENSIONS,
+    input_dimensions=_PERF_INPUT_DIMENSIONS,
 )
 def test_perf_sfpu_ternary(
     perf_report,
@@ -81,7 +84,7 @@ def test_perf_sfpu_ternary(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     loop_factor=[16],
-    input_dimensions=_func._INPUT_DIMENSIONS,
+    input_dimensions=_PERF_INPUT_DIMENSIONS,
 )
 def test_perf_sfpu_ternary_approx_after_lreg_clobber(
     perf_report,
