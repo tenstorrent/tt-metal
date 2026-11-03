@@ -1967,7 +1967,7 @@ Xielu:
 - {input: Float16_b, output: Float16_b, dest: 'No', near_zero_atol: 9.98377799987793e-07, domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', near_zero_atol: 9.98377799987793e-07, domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16_b, output: Float32, dest: 'No', near_zero_atol: 9.98377799987793e-07, domains: [{low: -.inf, high: .inf, ulp: 65536}]}
-- {input: Float16_b, output: Float32, dest: 'Yes', near_zero_atol: 9.999995427278918e-07, domains: [{low: -.inf, high: .inf, ulp: 104}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', near_zero_atol: 9.999995427278918e-07, domains: [{low: -.inf, high: .inf, ulp: 91}]}
 - {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -131072.0}, {low: -131072.0, high: 256.0, ulp: 0}, {low: 256.0, high: .inf}]}
 - {input: Float32, output: Float16_b, dest: 'No', near_zero_atol: 9.98377799987793e-07, domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float16_b, dest: 'Yes', near_zero_atol: 9.98377799987793e-07, domains: [{low: -.inf, high: .inf, ulp: 0}]}
