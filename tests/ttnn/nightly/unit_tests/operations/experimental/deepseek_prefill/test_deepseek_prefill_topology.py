@@ -5,12 +5,15 @@
 """Mesh-topology labels of the in-place deepseek_prefill ops.
 
 ``ttnn.experimental.deepseek_prefill.insert`` and ``moe_padding_config`` write into the caller's tensor and return
-it. It keeps its label unless another input is sharded along a mesh axis on which that label is replicated; every
-device then holds a different result, and the output takes the union of the labels, on the caller's handle too.
+it. It keeps its label unless another input is sharded along a mesh axis on which that label is replicated; the
+output then takes the union of the labels, on the caller's handle too. For ``insert`` that is when the devices'
+results start to differ. ``moe_padding_config`` writes each chip's row from the chip's coordinate along
+``cluster_axis``, so its rows differ on every call, and its label changes only when the metadata are sharded along a
+mesh axis on which the config is replicated.
 
   * kept: output ``{2},[Shard(0)]``, the other input ``{1,2},[Replicate, Shard(0)]`` along the same mesh axis. The
     output keeps its collapsed label, where the union is the other input's N-D label (the ``!=`` assertions).
-  * follows the data: output ``{2},[Replicate]``, the other input N-D-sharded with a different value on every
+  * takes the union: output ``{2},[Replicate]``, the other input N-D-sharded with a different value on every
     device. Both handles carry that input's label, and each device's data is checked against its own input.
 
 The label before the op is kept as a ``repr`` (readable failures) and as an independent tensor built with the same
@@ -281,13 +284,14 @@ def _read_rows(config):
 @pytest.mark.parametrize("mesh_device", [2], indirect=True)
 @pytest.mark.parametrize("config_mapper", ["replicate_1d", "shard_1d", "shard_2d"])
 def test_moe_padding_config_topology(mesh_device, config_mapper):
-    """config carries a collapsed 1-D label; the first call uses replicated metadata (production), the second
-    2-D-sharded metadata with a different ``actual_end`` per device. ``shard_1d``: the
-    metadata is sharded only where the config already is, so the config keeps its 1-D label although the union
-    would be the 2-D one; ``shard_2d``, the same split with one placement per mesh axis, keeps its label too.
-    ``replicate_1d``: every device computes a different row, so the config takes the
-    metadata's 2-D label on both handles. The per-chip rows match the host reference for each device's own
-    ``actual_end`` either way, and the second call is a program-cache hit. The SP axis is mesh axis 1.
+    """Each chip writes its own config row from its coordinate along the SP axis (mesh axis 1). The first call uses
+    replicated metadata (production), the second 2-D-sharded metadata with a different ``actual_end`` per device.
+    ``shard_1d``: the metadata are sharded only where the config already is, so the config keeps its collapsed label
+    although the union would be the 2-D one; ``shard_2d``, the same split with one placement per mesh axis, keeps its
+    label too. ``replicate_1d``: the second call's metadata are sharded along the axis on which the config is
+    replicated, so the config takes their 2-D label on both handles; after the first call it is still labelled
+    replicated although its rows differ, which is not checked. The per-chip rows match the host reference for each
+    device's own ``actual_end``, and the second call is a program-cache hit.
     """
     cluster_axis = 1
     sp_factor = int(mesh_device.shape[cluster_axis])
