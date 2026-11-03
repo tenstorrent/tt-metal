@@ -51,8 +51,9 @@ class MistralSmall4Config:
     ROUTED_EXPERT_COMBINE_OVERLAP = True
     NUM_ROUTED_EXPERTS = 128  # n_routed_experts
     NUM_EXPERTS_PER_TOKEN = 4  # num_experts_per_tok
-    # Depth of the MoE forwarding buffers. Any value would make model functional,
-    # but larger values make it faster and consume more DRAM, so it's a compromise.
+    # Pages one MoE forwarding channel holds -- see DeepSeekV3Config.MOE_FWD_VC_PAGES for what it trades and how
+    # it is picked.
+    # 32 costs combine 10% on hot_expert. Dispatch 14 MB a chip, combine 9 MB.
     MOE_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 1  # n_shared_experts
     NUM_EXPERT_GROUPS = 1  # n_group

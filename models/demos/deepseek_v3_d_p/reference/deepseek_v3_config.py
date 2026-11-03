@@ -22,9 +22,13 @@ class DeepSeekV3Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Depth of the MoE forwarding buffers. Any value would make model functional,
-    # but larger values make it faster and consume more DRAM, so it's a compromise.
-    MOE_FWD_VC_PAGES = 64
+    # Pages one MoE forwarding channel holds, for dispatch_fabric2d, combine_fabric2d and the routed expert
+    # overlapped with combine alike: their buffers come out of the same free DRAM at different times, so one
+    # value, the larger of the ops' needs, costs nothing over two. Deeper trades DRAM for throughput. Picked as
+    # the shallowest depth with both ops within 5% of their best on hot_expert traffic, measured 8x4 ring8 / 5k
+    # over 32..96 pages; balanced traffic is flat in depth.
+    # 64 costs dispatch 5.3% on hot_expert. Dispatch 35 MB a chip, combine 27 MB.
+    MOE_FWD_VC_PAGES = 80
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 8
     NUM_LIMITED_GROUPS = 4

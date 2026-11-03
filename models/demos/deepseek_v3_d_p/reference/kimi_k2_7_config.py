@@ -41,9 +41,10 @@ class KimiK27Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERTS_PER_TOKEN = 8
-    # Depth of the MoE forwarding buffers. Any value would make model functional,
-    # but larger values make it faster and consume more DRAM, so it's a compromise.
-    MOE_FWD_VC_PAGES = 48
+    # Pages one MoE forwarding channel holds -- see DeepSeekV3Config.MOE_FWD_VC_PAGES for what it trades and how
+    # it is picked.
+    # 48 costs dispatch 20% and combine 12% on hot_expert. Dispatch 30 MB a chip, combine 21 MB.
+    MOE_FWD_VC_PAGES = 64
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1

@@ -41,8 +41,9 @@ class GptOss120BConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 128
     NUM_EXPERTS_PER_TOKEN = 4
-    # Depth of the MoE forwarding buffers. Any value would make model functional,
-    # but larger values make it faster and consume more DRAM, so it's a compromise.
+    # Pages one MoE forwarding channel holds -- see DeepSeekV3Config.MOE_FWD_VC_PAGES for what it trades and how
+    # it is picked.
+    # 32 costs dispatch 6.9% and combine 10% on hot_expert. Dispatch 10 MB a chip, combine 7 MB.
     MOE_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 0
     # GPT-OSS routes with no expert groups; selection is a plain top-k over all experts.

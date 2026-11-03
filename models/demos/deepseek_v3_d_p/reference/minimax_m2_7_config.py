@@ -22,8 +22,10 @@ class MiniMaxM27Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Depth of the MoE forwarding buffers. Any value would make model functional,
-    # but larger values make it faster and consume more DRAM, so it's a compromise.
+    # Pages one MoE forwarding channel holds -- see DeepSeekV3Config.MOE_FWD_VC_PAGES for what it trades and how
+    # it is picked.
+    # 64 costs dispatch 5.5% and combine 4.6% on hot_expert; 48 costs combine 20%. Dispatch 15 MB a chip,
+    # combine 12 MB.
     MOE_FWD_VC_PAGES = 80
     NUM_SHARED_EXPERTS = 0  # shared_intermediate_size = 0
     # MiniMax routes with a single expert group -> gate collapses to plain top-k.
