@@ -122,3 +122,15 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   FPU rounds the operands anyway per the op's README); (A) a shallower fan-in (-5 us); (D) the attention post-mix and
   the FFN pre-block as one program (-8 us per layer); (B) a DST-resident SFPU Sinkhorn (-15 us) last. C + F + A + D
   = ~-35 us per wrap = -3.2 ms per step; with B -4.5 ms.
+* 21:58 pre-block attribution (chip 8, served variants, x_parts 1): Sinkhorn iterations 1 / 5 / 20 = 46.4 / 52.4 /
+  74.3 us, so the 20 iterations cost 28 us (1.4 us each: two dest passes with a CB round trip); the remaining 46 us
+  = projection (4 FPU passes), the two tree rounds (10 + 12 serial tile adds on the leaders / coordinator, twice),
+  two multicasts, the coefficient heads, mix and the write. **Design, dest-resident Sinkhorn**: the comb tile's 16
+  columns of a user row are the left face's even slot (lanes c <-> columns 2c) and odd slot (columns 2c + 1) of its
+  4-row band (`mhc_sfpu_x8.h` geometry); the 4x4 entry (i, j) sits at column 4i + j, so a row sum over j is the
+  lane pair {2i, 2i+1} of both slots and a column sum over i is the stride-2 lanes j/2 + 2i of one slot: both are
+  subvector rotate-adds (ROR1 / ROR2 / ROR4), no matmul, no pack; reciprocal by Newton on the SFPU. The kernel
+  takes the live row count and processes ceil(rows / 4) bands only (pad rows are ignored downstream already), so
+  at 4-8 users the 40 normalisations touch one or two bands: 28 -> ~3-6 us. Then round 2 (sum of h^2) as 32
+  scalars per core summed on the RISCs and the rsqrt shipped in the pre multicast (-7 us), and the FFN pre-block
+  merged with the attention post-mix (-8 us per layer). Target per wrap: 74 -> ~36 us.
