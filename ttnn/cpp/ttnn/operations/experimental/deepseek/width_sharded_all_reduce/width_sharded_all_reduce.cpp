@@ -21,8 +21,8 @@ ttnn::Tensor width_sharded_all_reduce(
     std::optional<tt::tt_fabric::Topology> topology) {
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "width_sharded_all_reduce: MeshDevice is required");
-    tt::tt_fabric::Topology topology_ = topology.value_or(
-        ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    tt::tt_fabric::Topology topology_ = topology.value_or(::ttnn::ccl::get_usable_topology(
+        input_tensor, tt::tt_fabric::get_fabric_topology(*input_tensor.device()), cluster_axis));
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
     std::optional<size_t> axis = cluster_axis.has_value() ? std::optional<size_t>(*cluster_axis) : std::nullopt;
     const uint32_t num_links_ =

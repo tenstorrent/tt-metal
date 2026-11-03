@@ -24,16 +24,6 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/sparse_sdpa_msa_device_operation.cpp
     sdpa/device/sparse_sdpa_msa_program_factory.cpp
     sdpa/sparse_sdpa_msa.cpp
-    sdpa/device/deepseek_v4_prefill_sdpa_device_operation.cpp
-    sdpa/device/deepseek_v4_prefill_sdpa_program_factory.cpp
-    sdpa/deepseek_v4_prefill_sdpa.cpp
-    sdpa/device/deepseek_v4_prefill_indexer_select_device_operation.cpp
-    sdpa/device/deepseek_v4_prefill_indexer_select_program_factory.cpp
-    sdpa/device/deepseek_v4_prefill_indexer_select_pool_program_factory.cpp
-    sdpa/deepseek_v4_prefill_indexer_select.cpp
-    sdpa/device/deepseek_v4_prefill_write_rows_device_operation.cpp
-    sdpa/device/deepseek_v4_prefill_write_rows_program_factory.cpp
-    sdpa/deepseek_v4_prefill_write_rows.cpp
     sdpa_decode/device/sdpa_decode_device_operation.cpp
     sdpa_decode/device/sdpa_decode_program_factory.cpp
     sdpa_decode/sdpa_decode.cpp
@@ -50,6 +40,16 @@ set(TTNN_OP_TRANSFORMER_SRCS
     fused_recurrent_gated_delta_rule/device/fused_recurrent_gated_delta_rule_device_operation.cpp
     fused_recurrent_gated_delta_rule/device/fused_recurrent_gated_delta_rule_program_factory.cpp
     fused_recurrent_gated_delta_rule/fused_recurrent_gated_delta_rule.cpp
+    sdpa/device/deepseek_v4_prefill_sdpa_device_operation.cpp
+    sdpa/device/deepseek_v4_prefill_sdpa_program_factory.cpp
+    sdpa/deepseek_v4_prefill_sdpa.cpp
+    sdpa/device/deepseek_v4_prefill_indexer_select_device_operation.cpp
+    sdpa/device/deepseek_v4_prefill_indexer_select_program_factory.cpp
+    sdpa/device/deepseek_v4_prefill_indexer_select_pool_program_factory.cpp
+    sdpa/deepseek_v4_prefill_indexer_select.cpp
+    sdpa/device/deepseek_v4_prefill_write_rows_device_operation.cpp
+    sdpa/device/deepseek_v4_prefill_write_rows_program_factory.cpp
+    sdpa/deepseek_v4_prefill_write_rows.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from

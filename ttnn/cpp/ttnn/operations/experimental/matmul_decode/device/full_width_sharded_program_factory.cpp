@@ -1703,8 +1703,8 @@ ProgramDescriptor create_descriptor_ring_gather_full(
             if (range == 0) {
                 continue;
             }
-            const auto valid_links =
-                tt::tt_fabric::get_forwarding_link_indices(sender_node, route.dst_nodes[dst_index++]);
+            const auto valid_links = tt::tt_fabric::get_forwarding_link_indices(
+                *input_tensor_a.device(), sender_node, route.dst_nodes[dst_index++]);
             TT_FATAL(!valid_links.empty(), "matmul_decode all_gather: no forwarding link for mux direction {}", dir);
             mux_links_by_dir[dir] = valid_links;
         }
@@ -1733,7 +1733,8 @@ ProgramDescriptor create_descriptor_ring_gather_full(
             /*num_header_only_channels=*/0,
             /*num_buffers_full_size_channel=*/2,
             /*num_buffers_header_only_channel=*/0,
-            /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+            /*buffer_size_bytes_full_size_channel=*/
+            tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*input_tensor_a.device()),
             /*base_l1_address=*/device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
         KernelDescriptor writer;
         writer.kernel_source =
