@@ -9,7 +9,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 from scaling_summary import _REF, _load
 
 _LINE = "#3987e5"
