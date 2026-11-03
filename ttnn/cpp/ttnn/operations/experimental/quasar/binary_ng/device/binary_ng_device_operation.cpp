@@ -511,6 +511,8 @@ bool noc_operand_ok(const tt::tt_metal::MemoryConfig& mc) {
 
 bool BinaryNgDeviceOperation::matches_metal_v2_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // The Metal 2.0 factory is deprecated on Quasar. The list below is what this gate admits, not what Quasar
+    // validates. Only what the native gate refuses, and the TTNN_QSR_NATIVE=0 reference arm, reach it there.
     // The Metal 2.0 / DataflowBuffer factory (binary_ng_metal_v2_factory.cpp) covers the whole
     // SubtileBroadcastType::NONE, tensor-tensor, TILE slice — FPU and SFPU, any dtype (lhs/rhs must match), full
     // lhs/rhs/post activations. Each of input_a / input_b / output may INDEPENDENTLY be interleaved (DRAM or L1,
@@ -794,6 +796,7 @@ BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_progr
         return ProgramFactoryQuasarNative{};
     }
     // DFB / Metal 2.0 for the matching slice (arch-portable: CB-backed on WH/BH, overlay-backed on Quasar).
+    // On Quasar this factory is deprecated: it takes only what the native slice refuses.
     if (matches_metal_v2_slice(attributes, tensor_args)) {
         return ProgramFactoryMetalV2{};
     }

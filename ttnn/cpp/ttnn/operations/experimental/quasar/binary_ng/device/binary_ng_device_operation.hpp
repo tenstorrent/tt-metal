@@ -143,6 +143,7 @@ struct BinaryNgDeviceOperation {
 
     // Returns ProgramFactoryQuasarNative{} when the op matches the Quasar-native slice and
     // ProgramFactoryMetalV2{} when it matches the Metal 2.0 slice. It throws for any other op.
+    // The Metal 2.0 factory is deprecated on Quasar: it takes only what the native slice refuses.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // True iff (attributes, tensor_args) match the Metal 2.0 factory's supported slice. Shared by

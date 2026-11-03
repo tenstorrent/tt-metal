@@ -38,6 +38,12 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
   because the new cases run inside existing tests. The bcast suite binds 402 native kernels and no Metal 2.0 kernel, and
   its 134 cases pass. The five other suite files keep their counts. Slide 3 gives each run, and slide 4 the planted
   defect.
+- **The Metal 2.0 factory is deprecated on Quasar.** It runs only what the native gate refuses, and the
+  `TTNN_QSR_NATIVE=0` reference arm. It gets no new work, and its removal waits for the emulator campaign, which
+  compares the two arms. No behavior changes: the fallback still runs, and `TTNN_QSR_NATIVE=0` still selects it. The
+  reason is the census above. With `maximum` and `minimum` native, 34 of the 404 cases still reach it (8%), and 10 of
+  them fail on it. The design doc (§7.5), the comment of its gate, the comment of `select_program_factory` and the
+  factory's header say so.
 
 ---
 
@@ -57,6 +63,16 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
 - **Kernel comment**: the header of the SFPU kernel lists the ops that the gate runs on it. No kernel code changed.
 - **Docs**: the design doc states the two ops in the table of what native accepts, in the row of F2, and in the oracle
   section (§6.1).
+- **Deprecation** (docs and comments only): the design doc, §7.5 item 1, no longer says that the Metal 2.0 factory stays
+  byte-identical and reachable for ever. It says that the factory is deprecated, names what still reaches it in the
+  suites, and names what it admits with no Quasar test behind it. The comment of `matches_metal_v2_slice` says that its
+  list is what the gate admits, not what Quasar validates. The comment of `select_program_factory` and the header of the
+  factory say that the factory is deprecated.
+- **Removing it later involves**: the factory (`binary_ng_metal_v2_factory.cpp`) and its gate
+  (`matches_metal_v2_slice`); the kernels in `kernels_dfb/`; the `TTNN_QSR_NATIVE` knob; the native-off controls in the
+  tests and the `_off` runs of the suites; and the 34 activation-format cases that still reach it. Those are the 24 with
+  fp32 inputs and a bf16 output, which need a native path or a decision to drop them, and the 10 BFP8 and BFP4 cases,
+  which fail on it today.
 
 ---
 

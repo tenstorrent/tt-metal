@@ -1564,11 +1564,16 @@ place those become real numbers, so the switch must still work when we get there
 
 What that capability imposes — each of these is easy to lose by accident:
 
-1. **The v2 path stays byte-identical and reachable, permanently.** This is why §3.4 is copy-then-modify
-   rather than modify-in-place. `TTNN_QSR_NATIVE=0` must route the *same* input shapes back to
-   `ProgramFactoryMetalV2` — which holds because `matches_metal_v2_slice` admits everything the native gate
-   admits, except DRAM shards and a subtile broadcast in fp32. With `TTNN_QSR_NATIVE=0` those raise an error, since
-   #62591 removed `ProgramFactory`. Never narrow the v2 gate to "make room" for the native one.
+1. **The Metal 2.0 factory is deprecated on Quasar.** It runs only what the native gate refuses, and the
+   `TTNN_QSR_NATIVE=0` reference arm. It gets no new work. Its removal waits for the emulator campaign, which captures
+   both arms (items 2 and 7). Until then,
+   `TTNN_QSR_NATIVE=0` routes the same input shapes to `ProgramFactoryMetalV2`, because `matches_metal_v2_slice` admits
+   everything the native gate admits, except DRAM shards and a subtile broadcast in fp32. With `TTNN_QSR_NATIVE=0`
+   those raise an error, since #62591 removed `ProgramFactory`.
+   - **What still reaches it in the suites**, with the native factory on: the 24 activation-format cases with fp32
+     inputs and a bf16 output, which pass on it, and the BFP8 and BFP4 cases (10), which fail on it too.
+   - **What else it admits, with no Quasar test behind it:** SFPU ops that native does not run, other mixed output
+     formats, and block-float dtypes in any other case. Their state on Quasar is unknown.
 2. **Both arms selectable in one build.** The switch is a host-side env var plus an arch check; nothing
    about it is craq-sim-specific, and nothing may become so.
 3. **Nothing platform-specific in the harness.** `debug/bench_binary_ng_shapes.py` and
