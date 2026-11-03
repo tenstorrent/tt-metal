@@ -421,16 +421,6 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
     return schemas
 
 
-UNCHECKED_SHARED_SOURCES = {"quasar/test_eltwise_unary_sfpu_quasar.py"}
-
-
-def perf_test_keys_per_source(quasar: bool = False) -> dict:
-    keys: dict = {}
-    for key, path in _perf_test_sources(quasar):
-        keys.setdefault(path.relative_to(ROOT).as_posix(), []).append(key)
-    return keys
-
-
 def _config_functions(tree):
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -511,8 +501,6 @@ def derive_perf_test_column_sets(quasar: bool = False) -> dict:
     post_init = class_post_init_copies()
     out: dict[str, dict] = {}
     for key, path in _perf_test_sources(quasar):
-        if path.relative_to(ROOT).as_posix() in UNCHECKED_SHARED_SOURCES:
-            continue
         try:
             tree = ast.parse(path.read_text())
         except SyntaxError:

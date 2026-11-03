@@ -28,7 +28,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "perf"))
 from perf_schema_derive import (  # noqa: E402
     PARAM_BASES,
     ROOT,
-    UNCHECKED_SHARED_SOURCES,
     class_field_specs,
     class_post_init_copies,
     column_sets_in_tree,
@@ -39,7 +38,6 @@ from perf_schema_derive import (  # noqa: E402
     helper_returned_param_calls,
     iter_source_files,
     load_pure_module,
-    perf_test_keys_per_source,
 )
 from tt_llk_perf import metrics as engine
 
@@ -275,14 +273,6 @@ def test_one_column_set_per_perf_test_file_qsr():
     column_sets = derive_perf_test_column_sets(quasar=True)
     assert sum(map(len, column_sets["perf_eltwise_binary_sfpu_quasar"].values())) >= 3
     _assert_one_column_set_per_file(column_sets, "Quasar")
-
-
-def test_unchecked_shared_sources_still_back_more_than_one_perf_test():
-    keys = perf_test_keys_per_source(quasar=False) | perf_test_keys_per_source(
-        quasar=True
-    )
-    stale = sorted(p for p in UNCHECKED_SHARED_SOURCES if len(keys.get(p, [])) < 2)
-    assert not stale, f"Remove from UNCHECKED_SHARED_SOURCES: {stale}"
 
 
 def _synthetic_column_sets(source):
