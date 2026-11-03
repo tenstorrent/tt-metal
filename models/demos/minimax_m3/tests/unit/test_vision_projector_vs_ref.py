@@ -5,7 +5,7 @@ Accuracy test for M3VLProjector vs the Torch reference.
 
 The projector takes the tower output (L, 1280) and makes the vision tokens (L / 4, 6144): a per-patch
 MLP, then each 2x2 block of patches folded into one row and a second MLP. Random weights and pixel
-values (conftest.py), no checkpoint.
+values (tests/conftest.py), no checkpoint.
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_projector_vs_ref.py

@@ -19,7 +19,7 @@ It asserts that the two outputs have the shape of the 576 tokens, are finite and
 ops on the same input), never a time.
 
 The model has the checkpoint's 32 layers and projector at its dimensions, with the seeded random weights of the vision
-unit tests (the vision_reference fixture of tests/unit/conftest.py): the time does not depend on the weights' values,
+unit tests (the vision_reference fixture of tests/conftest.py): the time does not depend on the weights' values,
 so the test needs no checkpoint and no HF_MODEL. It opens one card (1x1), as the vision unit tests do.
 """
 from __future__ import annotations
@@ -38,7 +38,6 @@ from models.demos.minimax_m3.tt.vision.image_input import num_tokens
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 
 from ..test_factory import parametrize_mesh_with_fabric
-from ..unit.conftest import vision_reference  # noqa: F401
 from ..unit.vision_helpers import VISION_GRIDS, to_host
 
 # A skip of the module, not a skipif mark: parametrize_mesh_with_fabric counts the chips when the test is defined, which

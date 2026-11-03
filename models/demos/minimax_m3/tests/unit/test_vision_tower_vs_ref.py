@@ -9,8 +9,9 @@ Two checks per grid, from the same pixel values:
 A second test gives one model images of several grids with the same patch count, which it runs on the programs it
 compiled for the first, each with the RoPE tables of its own grid.
 
-Random weights and pixel values (conftest.py), no checkpoint. The tests run NUM_LAYERS = 2 layers. The checkpoint has
-32; that depth is for a real-weight test, since random weights say little about error built up over 32 layers.
+Random weights and pixel values (tests/conftest.py), no checkpoint. The tests run NUM_LAYERS = 2 layers. The
+checkpoint has 32; that depth is for a real-weight test, since random weights say little about error built up over 32
+layers.
 
 Run (the second line adds the other grids of VISION_GRIDS to CI_GRIDS, both in vision_helpers.py):
     pytest models/demos/minimax_m3/tests/unit/test_vision_tower_vs_ref.py

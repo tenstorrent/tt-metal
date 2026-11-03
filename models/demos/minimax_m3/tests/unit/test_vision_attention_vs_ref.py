@@ -5,7 +5,7 @@ Accuracy test for M3VLAttention (packed QKV, 3D RoPE, full SDPA) vs the Torch re
 
 Runs layer 0's self-attention on the input it gets inside the reference tower (the layer_norm1 output).
 The RoPE cos and sin are computed on host from the image grid, as the tower does. Random weights and
-pixel values (conftest.py), no checkpoint.
+pixel values (tests/conftest.py), no checkpoint.
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_attention_vs_ref.py

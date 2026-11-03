@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Fixtures for the vision encoder unit tests (test_vision_*_vs_ref.py). tests/perf/test_vision_encoder_timing.py
-imports vision_reference from here.
+Fixtures and a hook of the vision encoder tests: the unit tests (unit/test_vision_*_vs_ref.py) and
+perf/test_vision_encoder_timing.py, which uses vision_reference.
 
 The tests compare the TT vision modules against the Torch reference in reference/vision.py, at the
 checkpoint's dimensions with seeded random weights, so they need no checkpoint and no HF_MODEL. Both
@@ -15,11 +15,25 @@ that the device gets, so the tests measure the device's arithmetic and not the r
     for one image of grid_thw = (t, h, w) patches. Keys: pixel_values and grid_thw; "<name>.in", the input
     of layer0, layer0.self_attn and layer0.mlp, each (L, hidden); tower.out (L, hidden) and final (L / 4,
     text hidden).
+
+Before each vision test that opens a device (a test_vision_* test with a mesh_device), pytest_runtest_call logs the
+device's compute grid: the program configs of the weight matmuls and of SDPA depend on it, and a CI runner's grid can
+differ from the one the bounds were measured on.
 """
 from __future__ import annotations
 
 import pytest
 import torch
+from loguru import logger
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_call(item):
+    """Logs "[<test id>] compute grid <x>x<y>" for a test_vision_* test that has a mesh_device."""
+    mesh_device = item.funcargs.get("mesh_device") if item.name.startswith("test_vision_") else None
+    if mesh_device is not None:
+        grid = mesh_device.compute_with_storage_grid_size()
+        logger.info(f"[{item.name}] compute grid {grid.x}x{grid.y}")
 
 
 @pytest.fixture(scope="session")
