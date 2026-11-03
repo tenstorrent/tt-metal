@@ -211,14 +211,35 @@ def test_actual_start_is_deterministic_and_matches_reference(
     )
 
 
-@_ON_DISTRIBUTED_MESHES
-def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int) -> None:
-    """Two replays of the complete split layer must produce identical outputs and carries."""
+@pytest.mark.parametrize(
+    "mesh_device,device_params,tensor_parallel_axis,sequence",
+    [
+        pytest.param((2, 4), kda_device_params((2, 4)), 0, SEQUENCE, id="2x4-tp0"),
+        pytest.param((2, 4), kda_device_params((2, 4)), 1, SEQUENCE, id="2x4-tp1"),
+        pytest.param((4, 4), kda_device_params((4, 4)), 0, SEQUENCE, marks=_ON_4X4_STAGE, id="4x4-torus-x-tp0"),
+        pytest.param(
+            (8, 4),
+            kda_device_params((8, 4)),
+            1,
+            5120,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="8x4-SP8xTP4-torus-xy",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_split_trace_replay_is_bit_identical(
+    mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int, sequence: int
+) -> None:
+    """Two replays of the complete split layer must produce identical outputs and carries.
+
+    Rank 1 starts mid-range, so the relay and the entry correction run inside the captured trace.
+    """
     sp_axis = 1 - tensor_parallel_axis
     sp_size = tuple(mesh_device.shape)[sp_axis]
-    local_rows = SEQUENCE // sp_size
+    local_rows = sequence // sp_size
     actual_start = local_rows + local_rows // 2
-    config, weights, hidden, expected_output, expected_state = reference_case()
+    config, weights, hidden, expected_output, expected_state = reference_case(sequence)
     layer = build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis, active_seq_len=hidden.shape[1])
     permutation = mla_row_permutation(actual_start, sp_size, local_rows)
     hidden_tt = to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
