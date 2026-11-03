@@ -61,6 +61,8 @@ constexpr bool perf_mock_mop()
 }
 
 #if defined(ARCH_WORMHOLE)
+#include "ckernel_template.h"
+
 // Wormhole isolate mocks: the partner that feeds (unpack mock) or drains (math mock) the measured thread hands its
 // source handshakes to its own MOP expander: up to 128 per MOP (template 0), or a whole burst and run pattern in a few MOPs
 // (template 1 with the burst in the replay buffer). Its RISC-V pushes a few instructions per MOP rather than looping once
@@ -73,12 +75,31 @@ constexpr std::uint32_t SRC_A  = 1;
 constexpr std::uint32_t SRC_B  = 2;
 constexpr std::uint32_t SRC_AB = SRC_A | SRC_B;
 
+constexpr std::uint32_t REPLAY_HANDSHAKES = 32 / 2;        // the replay buffer's 32 instructions, a STALLWAIT and a flip each
+constexpr std::uint32_t MOP_LOOP_MAX      = (1u << 7) - 1; // the MOP expander's 7 bit loop counters
+constexpr std::uint32_t ZMASK_BITS        = 32;            // template 0's zmask: one handshake kind per iteration
+constexpr std::uint32_t MAX_MOPS          = 32;            // template 1 MOPs one segments() pushes back to back
+
+// The producer (unpack mock) waits on TDMA for the sources to be cleared, the consumer (math mock) on MATH for them to be valid
+template <bool PRODUCE>
+constexpr std::uint32_t stall_unit()
+{
+    return PRODUCE ? ckernel::p_stall::STALL_TDMA : ckernel::p_stall::STALL_MATH;
+}
+
+template <bool PRODUCE>
+constexpr std::uint32_t src_a_condition()
+{
+    return PRODUCE ? ckernel::p_stall::SRCA_CLR : ckernel::p_stall::SRCA_VLD;
+}
+
+// SrcB's condition is SrcA's one bit up, so the SRC_A / SRC_B bits times SrcA's condition give the condition for both
+static_assert(ckernel::p_stall::SRCB_CLR == ckernel::p_stall::SRCA_CLR << 1 && ckernel::p_stall::SRCB_VLD == ckernel::p_stall::SRCA_VLD << 1);
+
 template <bool PRODUCE>
 constexpr std::uint32_t wait_op(const std::uint32_t srcs)
 {
-    using ckernel::p_stall;
-    return PRODUCE ? TT_OP_STALLWAIT(p_stall::STALL_TDMA, ((srcs & SRC_A) ? p_stall::SRCA_CLR : 0) | ((srcs & SRC_B) ? p_stall::SRCB_CLR : 0))
-                   : TT_OP_STALLWAIT(p_stall::STALL_MATH, ((srcs & SRC_A) ? p_stall::SRCA_VLD : 0) | ((srcs & SRC_B) ? p_stall::SRCB_VLD : 0));
+    return TT_OP_STALLWAIT(stall_unit<PRODUCE>(), srcs * src_a_condition<PRODUCE>());
 }
 
 template <bool PRODUCE>
@@ -92,13 +113,10 @@ constexpr std::uint32_t flip_op(const std::uint32_t srcs)
 template <bool PRODUCE>
 inline void program(const std::uint32_t kind0, const std::uint32_t kind1, const std::uint32_t mask_hi)
 {
-    volatile std::uint32_t* mop_cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_MOP_CFG_BASE);
-    ckernel::mop_sync(); // no expansion in flight while the template changes
-    mop_cfg[1] = 1;      // the B instruction, no A1-A3
-    mop_cfg[2] = flip_op<PRODUCE>(kind0);
-    mop_cfg[3] = wait_op<PRODUCE>(kind0);
-    mop_cfg[7] = wait_op<PRODUCE>(kind1);
-    mop_cfg[8] = flip_op<PRODUCE>(kind1);
+    // A0 and B one handshake, skip A and skip B the other; no A1-A3 (program() syncs on the MOPs in flight first)
+    ckernel::ckernel_unpack_template(
+        true, false, wait_op<PRODUCE>(kind0), TT_OP_NOP, TT_OP_NOP, TT_OP_NOP, wait_op<PRODUCE>(kind1), flip_op<PRODUCE>(kind0), flip_op<PRODUCE>(kind1))
+        .program();
     TT_MOP_CFG(mask_hi);
 }
 
@@ -106,12 +124,12 @@ inline void program(const std::uint32_t kind0, const std::uint32_t kind1, const 
 // factor (at most 64), times 3 when that still fits and divides
 inline std::uint32_t mop_loops(const std::uint32_t n)
 {
-    if (n <= 127)
+    if (n <= MOP_LOOP_MAX)
     {
         return n;
     }
-    std::uint32_t loops = std::min(n & (~n + 1), static_cast<std::uint32_t>(64));
-    if (loops * 3 <= 127 && (n / loops) % 3 == 0)
+    std::uint32_t loops = std::min(n & (~n + 1), (MOP_LOOP_MAX + 1) / 2);
+    if (loops * 3 <= MOP_LOOP_MAX && (n / loops) % 3 == 0)
     {
         loops *= 3;
     }
@@ -119,24 +137,27 @@ inline std::uint32_t mop_loops(const std::uint32_t n)
 }
 
 // periods x (a burst of `burst` handshakes of kind `once` and a run of `run` handshakes of kind `each`), the producer giving
-// the burst first and the consumer taking it back last, in at most 32 MOPs of template 1, pushed back to back: the mock's
-// RISC-V is done pushing long before the stream ends. A period of up to 16 handshakes is replayed whole from the replay
-// buffer by the inner loop (up to 127 x 127 periods per MOP), with SPLIT also one of up to 32 - burst as two replays of a 16
-// handshake buffer; a longer one replays the burst around the run (up to 127 periods per MOP). Returns false if it does not fit.
+// the burst first and the consumer taking it back last, in at most MAX_MOPS MOPs of template 1, pushed back to back: the
+// mock's RISC-V is done pushing long before the stream ends. A period of up to REPLAY_HANDSHAKES is replayed whole from the
+// replay buffer by the inner loop (up to 127 x 127 periods per MOP). SPLIT (the consumer only) also replays a period of up to
+// 2 x REPLAY_HANDSHAKES - burst whole: its period - REPLAY_HANDSHAKES leading `each` handshakes, then the buffer's
+// REPLAY_HANDSHAKES suffix. A longer period replays the burst around the run (up to 127 periods per MOP). Returns false if
+// it does not fit.
 template <bool PRODUCE, bool SPLIT = false>
 inline bool segments(const std::uint32_t once, const std::uint32_t burst, const std::uint32_t each, const std::uint32_t run, const std::uint32_t periods)
 {
-    constexpr std::uint32_t HALF = 16; // handshakes in half the replay buffer (two instructions each)
+    static_assert(!SPLIT || !PRODUCE, "split replays the run's head before the burst, which only the consumer takes last");
+    constexpr std::uint32_t HALF = REPLAY_HANDSHAKES;
     const std::uint32_t period   = burst + run;
-    if (run == 0 || burst == 0 || burst > HALF || periods == 0 || (period > HALF && run > 127))
+    if (run == 0 || burst == 0 || burst > HALF || periods == 0 || (period > HALF && run > MOP_LOOP_MAX))
     {
         return false;
     }
-    const bool split = SPLIT && period > HALF && period + burst <= 2 * HALF, whole = period <= HALF || split; // split: HALF + period - HALF
+    const bool split = SPLIT && period > HALF && period + burst <= 2 * HALF, whole = period <= HALF || split;
     const std::uint32_t inner = whole ? mop_loops(periods) : run;
     const std::uint32_t outer = whole ? mop_loops(periods / inner) : mop_loops(periods);
     const std::uint32_t mops  = whole ? periods / inner / outer : periods / outer;
-    if (mops > 32)
+    if (mops > MAX_MOPS)
     {
         return false;
     }
@@ -149,29 +170,20 @@ inline bool segments(const std::uint32_t once, const std::uint32_t burst, const 
         ckernel::instrn_buffer[0] = wait_op<PRODUCE>(kind);
         ckernel::instrn_buffer[0] = flip_op<PRODUCE>(kind);
     }
-    const std::uint32_t replay      = TT_OP_REPLAY(0, 2 * buffered, 0, 0);
-    volatile std::uint32_t* mop_cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_MOP_CFG_BASE);
-    ckernel::mop_sync(); // no expansion in flight while the template changes
-    mop_cfg[0] = outer;
-    mop_cfg[1] = inner;
-    mop_cfg[4] = TT_OP_NOP;
-    if (whole) // inner loop: the period, replayed (split: the run's first period - 16, then the buffer); no start or end instructions
+    const std::uint32_t replay = TT_OP_REPLAY(0, 2 * buffered, 0, 0);
+    if (whole) // inner loop: the period, replayed (split: the run's first period - HALF, then the buffer); no start or end instructions
     {
-        mop_cfg[2] = TT_OP_NOP;
-        mop_cfg[3] = TT_OP_NOP;
-        mop_cfg[5] = split ? TT_OP_REPLAY(0, 2 * (period - HALF), 0, 0) : replay;
-        mop_cfg[6] = split ? replay : TT_OP_NOP;
-        mop_cfg[7] = replay;
-        mop_cfg[8] = replay;
+        ckernel::ckernel_template tmpl(outer, inner, split ? TT_OP_REPLAY(0, 2 * (period - HALF), 0, 0) : replay, split ? replay : TT_OP_NOP);
+        tmpl.set_last_outer_loop_instr(replay);
+        tmpl.set_last_inner_loop_instr(replay);
+        tmpl.program(); // syncs on the MOPs in flight first
     }
     else // inner loop: the run, STALLWAIT and flip alternating; the burst replayed before (producer) or after (consumer) it
     {
-        mop_cfg[2] = PRODUCE ? replay : TT_OP_NOP;
-        mop_cfg[3] = PRODUCE ? TT_OP_NOP : replay;
-        mop_cfg[5] = wait_op<PRODUCE>(each);
-        mop_cfg[6] = flip_op<PRODUCE>(each);
-        mop_cfg[7] = flip_op<PRODUCE>(each); // the last inner instruction, last period
-        mop_cfg[8] = flip_op<PRODUCE>(each); // the last inner instruction, other periods
+        ckernel::ckernel_template tmpl(outer, inner, wait_op<PRODUCE>(each), flip_op<PRODUCE>(each));
+        tmpl.set_start_op(PRODUCE ? replay : TT_OP_NOP);
+        tmpl.set_end_op(PRODUCE ? TT_OP_NOP : replay);
+        tmpl.program();
     }
     for (std::uint32_t i = 0; i < mops; i++)
     {
@@ -184,10 +196,14 @@ inline bool segments(const std::uint32_t once, const std::uint32_t burst, const 
 template <bool PRODUCE>
 inline void run(const std::uint32_t kind, std::uint32_t count)
 {
-    program<PRODUCE>(kind, kind, 0);
-    for (; count >= 128; count -= 128)
+    if (count == 0)
     {
-        TTI_MOP(0, 127, 0);
+        return; // like the loop mocks: no work leaves the MOP configuration alone
+    }
+    program<PRODUCE>(kind, kind, 0);
+    for (; count >= MOP_LOOP_MAX + 1; count -= MOP_LOOP_MAX + 1)
+    {
+        TTI_MOP(0, MOP_LOOP_MAX, 0);
     }
     if (count != 0)
     {
@@ -200,7 +216,12 @@ inline void run(const std::uint32_t kind, std::uint32_t count)
 template <bool PRODUCE>
 inline void stream(const std::uint32_t kind0, const std::uint32_t kind1, const std::uint32_t pattern, const std::uint32_t period, std::uint32_t periods)
 {
-    const std::uint32_t per_mop = 32 / period;
+    LLK_ASSERT(period >= 1 && period <= ZMASK_BITS, "a period fits the zmask");
+    if (periods == 0)
+    {
+        return;
+    }
+    const std::uint32_t per_mop = ZMASK_BITS / period;
     std::uint32_t mask          = 0;
     for (std::uint32_t i = 0; i < per_mop; i++)
     {
@@ -224,6 +245,13 @@ template <bool PRODUCE>
 inline void matmul(
     const std::uint32_t loop_factor, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t ct_dim, const std::uint32_t num_blocks)
 {
+    if (loop_factor == 0 || rt_dim == 0 || kt_dim == 0 || ct_dim == 0 || num_blocks == 0)
+    {
+        return; // like the loop mocks: no work
+    }
+    LLK_ASSERT(
+        static_cast<std::uint64_t>(loop_factor) * num_blocks * kt_dim * ((std::min(ct_dim, rt_dim) + 1) / 2) <= 0xFFFFFFFFu,
+        "the handshake counts fit 32 bits");
     const std::uint32_t reuse       = ct_dim >= rt_dim ? SRC_B : SRC_A;
     const std::uint32_t reload      = ct_dim >= rt_dim ? SRC_A : SRC_B;
     const std::uint32_t reuse_loop  = std::min(ct_dim, rt_dim);
@@ -233,7 +261,7 @@ inline void matmul(
     for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter += 2)
     {
         const std::uint32_t burst = std::min(static_cast<std::uint32_t>(2), reuse_loop - reuse_iter);
-        if (period + burst + reload_loop <= 32)
+        if (period + burst + reload_loop <= ZMASK_BITS)
         {
             pattern |= ((1u << burst) - 1) << (PRODUCE ? period : period + reload_loop);
         }
@@ -245,7 +273,7 @@ inline void matmul(
     {
         return;
     }
-    if (period <= 32)
+    if (period <= ZMASK_BITS)
     {
         return stream<PRODUCE>(reload, reuse, pattern, period, steps);
     }
@@ -378,16 +406,11 @@ inline void _perf_math_clear_valid(std::uint32_t source)
 #endif
 }
 
-// RUN_TYPE: the run type the mock serves (perf_mock_mop); the default keeps the RISC-V loop
-template <bool set_a, bool set_b, PerfRunType RUN_TYPE = PerfRunType::L1_CONGESTION>
+// The source handshakes as a RISC-V loop, one per iteration. The _stream_ versions below take the run type and use the MOP
+// stream where it serves it (perf_mock_mop); a caller that stays on the loop calls these by name.
+template <bool set_a, bool set_b>
 inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
 {
-#if defined(ARCH_WORMHOLE)
-    if constexpr (perf_mock_mop<RUN_TYPE>())
-    {
-        return llk_perf_mock::run<true>((set_b ? llk_perf_mock::SRC_B : 0) | (set_a ? llk_perf_mock::SRC_A : 0), iterations);
-    }
-#endif
     while (iterations-- > 0)
     {
         constexpr std::uint32_t cond_clear_a = set_a ? ckernel::p_stall::SRCA_CLR : 0;
@@ -412,15 +435,9 @@ inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
     }
 }
 
-template <bool clear_a, bool clear_b, PerfRunType RUN_TYPE = PerfRunType::L1_CONGESTION>
+template <bool clear_a, bool clear_b>
 inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
 {
-#if defined(ARCH_WORMHOLE)
-    if constexpr (perf_mock_mop<RUN_TYPE>())
-    {
-        return llk_perf_mock::run<false>((clear_b ? llk_perf_mock::SRC_B : 0) | (clear_a ? llk_perf_mock::SRC_A : 0), iterations);
-    }
-#endif
     while (iterations-- > 0)
     {
         constexpr std::uint32_t cond_valid_a = clear_a ? ckernel::p_stall::SRCA_VLD : 0;
@@ -435,7 +452,32 @@ inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
     }
 }
 
-template <PerfRunType RUN_TYPE = PerfRunType::L1_CONGESTION>
+// iterations source handshakes for the run type RUN_TYPE: one MOP stream on Wormhole isolate runs, else the RISC-V loop
+template <bool set_a, bool set_b, PerfRunType RUN_TYPE>
+inline void _perf_unpack_stream_set_valid(std::uint32_t iterations)
+{
+#if defined(ARCH_WORMHOLE)
+    if constexpr (perf_mock_mop<RUN_TYPE>())
+    {
+        return llk_perf_mock::run<true>((set_b ? llk_perf_mock::SRC_B : 0) | (set_a ? llk_perf_mock::SRC_A : 0), iterations);
+    }
+#endif
+    _perf_unpack_loop_set_valid<set_a, set_b>(iterations);
+}
+
+template <bool clear_a, bool clear_b, PerfRunType RUN_TYPE>
+inline void _perf_math_stream_clear_valid(std::uint32_t iterations)
+{
+#if defined(ARCH_WORMHOLE)
+    if constexpr (perf_mock_mop<RUN_TYPE>())
+    {
+        return llk_perf_mock::run<false>((clear_b ? llk_perf_mock::SRC_B : 0) | (clear_a ? llk_perf_mock::SRC_A : 0), iterations);
+    }
+#endif
+    _perf_math_loop_clear_valid<clear_a, clear_b>(iterations);
+}
+
+template <PerfRunType RUN_TYPE>
 inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
 {
 #if defined(ARCH_WORMHOLE)
@@ -512,7 +554,7 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
     }
 }
 
-template <PerfRunType RUN_TYPE = PerfRunType::L1_CONGESTION>
+template <PerfRunType RUN_TYPE>
 inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim, std::uint32_t num_blocks = 1)
 {
 #if defined(ARCH_WORMHOLE)

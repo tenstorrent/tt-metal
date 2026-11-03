@@ -57,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // So we just set/clear valid bits here - which is unavoidable hardware synchronization.
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid<
+                _perf_unpack_stream_set_valid<
                     /* src A */ true,
                     /* src B */ is_fp32_dest_acc_en,
                     PERF_RUN_TYPE>(/* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
@@ -106,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream (perf.h)
         {
-            _perf_math_loop_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+            _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {

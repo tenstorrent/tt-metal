@@ -21,7 +21,7 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-template <bool Produce, ckernel::BroadcastType BType, PerfRunType RUN_TYPE = PerfRunType::L1_CONGESTION>
+template <bool Produce, ckernel::BroadcastType BType, PerfRunType RUN_TYPE>
 inline void perf_binary_mock(const std::uint32_t loop_factor, const std::uint32_t num_tiles, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
 {
     const std::uint32_t num_faces = num_faces_r * num_faces_c;
