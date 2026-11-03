@@ -214,7 +214,8 @@ bool supported_by_codegen(
         input_page_bytes,
         index_tensor.element_size(),
         src_tensor.element_size(),
-        bf16_reduce);
+        bf16_reduce,
+        ttnn::prim::scatter_cb_alignment(input_tensor));
 }
 
 ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim) {
@@ -356,7 +357,8 @@ bool prefers_row_major_strategy(
         input_page_bytes,
         index_tensor.element_size(),
         src_tensor.element_size(),
-        /*bf16_reduce=*/false);
+        /*bf16_reduce=*/false,
+        ttnn::prim::scatter_cb_alignment(input_tensor));
 }
 
 bool codegen_plan_fits_live_l1(
@@ -400,7 +402,12 @@ bool codegen_plan_fits_live_l1(
     const uint64_t input_page_bytes = ttnn::prim::scatter_rm_aligned_stick_bytes(input_tensor, working_input[-1]);
     const bool bf16_reduce = reduction_mode == kReductionAdd || reduction_mode == kReductionMultiply;
     return ttnn::prim::scatter_rm_min_plan_fits_l1(
-        budget, input_page_bytes, index_tensor.element_size(), src_tensor.element_size(), bf16_reduce);
+        budget,
+        input_page_bytes,
+        index_tensor.element_size(),
+        src_tensor.element_size(),
+        bf16_reduce,
+        ttnn::prim::scatter_cb_alignment(input_tensor));
 }
 
 bool is_demoted(

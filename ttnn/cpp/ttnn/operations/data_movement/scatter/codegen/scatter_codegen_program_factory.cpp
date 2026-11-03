@@ -167,7 +167,8 @@ CBDescriptor make_tile_cb(uint32_t cb_id, const Tensor& tensor, uint32_t depth, 
 }
 
 // CB sizes reach the device in 16 B words, so a page that is not a multiple of 16 B would leave the
-// kernel's view of the buffer short of what the host wrote into it.
+// kernel's view of the buffer short of what the host wrote into it. The budgets round each CB
+// further, to scatter_cb_alignment(), which is where the program allocator seats it.
 constexpr uint32_t kCbWordBytes = 16;
 
 CBDescriptor make_rm_cb(
@@ -284,6 +285,12 @@ uint64_t scatter_usable_l1(const Tensor& input_tensor) {
     return ttnn::operations::data_movement::get_max_l1_space(input_tensor);
 }
 
+uint32_t scatter_cb_alignment(const Tensor& input_tensor) {
+    // Program::allocate_circular_buffers() seats every CB on the DRAM alignment, so the region the
+    // frontier check measures is the sum of CBs each rounded up to it, not of their 16 B pages.
+    return input_tensor.device()->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
+}
+
 bool scatter_interleaved_fits_l1(
     uint64_t l1_budget,
     uint32_t Wt_output,
@@ -302,16 +309,24 @@ uint64_t scatter_tile_streaming_bytes(
            kStreamingIndexPages * index_page_bytes + kStreamingSrcPages * src_page_bytes;
 }
 
-uint64_t scatter_rm_fixed_bytes(uint64_t input_page_bytes, uint64_t output_page_bytes, bool bf16_reduce) {
-    return input_page_bytes + output_page_bytes + (bf16_reduce ? input_page_bytes * kFp32Bytes / kBf16Bytes : 0);
+uint64_t scatter_rm_fixed_bytes(
+    uint64_t input_page_bytes, uint64_t output_page_bytes, bool bf16_reduce, uint32_t cb_align) {
+    return tt::align(input_page_bytes, cb_align) + tt::align(output_page_bytes, cb_align) +
+           (bf16_reduce ? tt::align(input_page_bytes * kFp32Bytes / kBf16Bytes, cb_align) : 0);
 }
 
 bool scatter_rm_min_plan_fits_l1(
-    uint64_t l1_budget, uint64_t input_page_bytes, uint32_t index_elem_size, uint32_t src_elem_size, bool bf16_reduce) {
+    uint64_t l1_budget,
+    uint64_t input_page_bytes,
+    uint32_t index_elem_size,
+    uint32_t src_elem_size,
+    bool bf16_reduce,
+    uint32_t cb_align) {
     // The gate runs before the output exists; supported_execution_controls() pins the output's buffer
     // type to the input's, so the output page is the input's own.
-    const uint64_t fixed_bytes = scatter_rm_fixed_bytes(input_page_bytes, input_page_bytes, bf16_reduce);
-    const uint64_t min_chunk_bytes = static_cast<uint64_t>(kRmMinChunkElems) * (index_elem_size + src_elem_size);
+    const uint64_t fixed_bytes = scatter_rm_fixed_bytes(input_page_bytes, input_page_bytes, bf16_reduce, cb_align);
+    const uint64_t min_chunk_bytes = tt::align(static_cast<uint64_t>(kRmMinChunkElems) * index_elem_size, cb_align) +
+                                     tt::align(static_cast<uint64_t>(kRmMinChunkElems) * src_elem_size, cb_align);
     return fixed_bytes + min_chunk_bytes <= l1_budget;
 }
 
@@ -320,13 +335,15 @@ uint32_t scatter_rm_chunk_elems(
     uint64_t fixed_bytes,
     uint32_t index_stick_elems,
     uint32_t index_elem_size,
-    uint32_t src_elem_size) {
+    uint32_t src_elem_size,
+    uint32_t cb_align) {
     const uint64_t per_elem_bytes = static_cast<uint64_t>(index_elem_size) + static_cast<uint64_t>(src_elem_size);
-    // What make_rm_cb() allocates for a chunk: each page rounded up to the CB word, which only
-    // differs from the raw bytes when the chunk is the unscaled stick width.
+    // What a chunk's two CBs occupy once the program allocator has seated them: each rounded up to
+    // the placement alignment, which only differs from the raw bytes when the chunk is the unscaled
+    // stick width (a scaled chunk is a multiple of kRmChunkAlign elements).
     const auto chunk_cb_bytes = [&](uint32_t elems) {
-        return tt::align(static_cast<uint64_t>(elems) * index_elem_size, kCbWordBytes) +
-               tt::align(static_cast<uint64_t>(elems) * src_elem_size, kCbWordBytes);
+        return tt::align(static_cast<uint64_t>(elems) * index_elem_size, cb_align) +
+               tt::align(static_cast<uint64_t>(elems) * src_elem_size, cb_align);
     };
     uint32_t chunk = std::min(index_stick_elems, kRmDefaultChunkElems);
     if (fixed_bytes + chunk_cb_bytes(chunk) > usable_l1) {
@@ -531,12 +548,21 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
         scatter_output_aligned_page_size(in_t, attributes.output_mem_config, tensor_args.output_tensor));
     const uint32_t index_page_bytes = static_cast<uint32_t>(index_t.buffer()->aligned_page_size());
     const uint32_t src_page_bytes = static_cast<uint32_t>(src_t.buffer()->aligned_page_size());
+    const uint32_t cb_align = scatter_cb_alignment(in_t);
+    // The readers stride chunk boundaries by chunk_elems * element size, and every boundary offset
+    // must sit on the device's NOC alignment, which kRmChunkAlign was sized for.
+    TT_FATAL(
+        kRmChunkAlign * std::min(index_elem_size, src_elem_size) % cb_align == 0,
+        "scatter_codegen: a {}-element chunk is not NOC-aligned on this device ({} B).",
+        kRmChunkAlign,
+        cb_align);
     const uint32_t chunk_elems = scatter_rm_chunk_elems(
         scatter_usable_l1(in_t),
-        scatter_rm_fixed_bytes(input_page_bytes, output_page_bytes, /*bf16_reduce=*/false),
+        scatter_rm_fixed_bytes(input_page_bytes, output_page_bytes, /*bf16_reduce=*/false, cb_align),
         attributes.index_stick_elems,
         index_elem_size,
-        src_elem_size);
+        src_elem_size,
+        cb_align);
     const uint32_t index_chunk_bytes = chunk_elems * index_elem_size;
     const uint32_t src_chunk_bytes = chunk_elems * src_elem_size;
 
@@ -632,14 +658,21 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     const uint32_t index_page_bytes = static_cast<uint32_t>(index_t.buffer()->aligned_page_size());
     const uint32_t src_page_bytes = static_cast<uint32_t>(src_t.buffer()->aligned_page_size());
     const uint32_t fp32_temp_page_bytes = attributes.input_stick_elems * kFp32Bytes;
+    const uint32_t cb_align = scatter_cb_alignment(in_t);
+    TT_FATAL(
+        kRmChunkAlign * std::min(index_elem_size, src_elem_size) % cb_align == 0,
+        "scatter_codegen: a {}-element chunk is not NOC-aligned on this device ({} B).",
+        kRmChunkAlign,
+        cb_align);
     const uint32_t chunk_elems = scatter_rm_chunk_elems(
         scatter_usable_l1(in_t),
         // The FP32 accumulator is L1-only scratch of exactly input_stick_elems*4 bytes, not a device
         // buffer page; 2x an aligned BF16 page upper-bounds it.
-        scatter_rm_fixed_bytes(input_page_bytes, output_page_bytes, /*bf16_reduce=*/true),
+        scatter_rm_fixed_bytes(input_page_bytes, output_page_bytes, /*bf16_reduce=*/true, cb_align),
         attributes.index_stick_elems,
         index_elem_size,
-        src_elem_size);
+        src_elem_size,
+        cb_align);
     const uint32_t index_chunk_bytes = chunk_elems * index_elem_size;
     const uint32_t src_chunk_bytes = chunk_elems * src_elem_size;
 
