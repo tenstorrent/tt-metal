@@ -218,8 +218,10 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         ((user, rows),) = layouts
         return (user, rows) if rows > 1 or self.draft_plain else None
 
-    def join(self, slot: int, tokens: torch.Tensor, state) -> None:
-        super().join(slot, tokens, state)
+    def join(self, slot: int, tokens: torch.Tensor, state, segment=None) -> None:
+        """``TtV41BatchDecoder.join`` (``segment``: one prompt of a packed chunk, ``TT_V41_PACK``; its segments are
+        ratio-aligned, so it brings no compressor carry) and the multi-slot step's carry row."""
+        super().join(slot, tokens, state, segment)
         self.pending_carry.pop(slot, None)
         u, s = slot % self.users, self.slot_stride
         if s > 1 and any(c is not None for c in state.compressor_carry.values()):
