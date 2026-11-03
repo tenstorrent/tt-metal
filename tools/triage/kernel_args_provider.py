@@ -33,7 +33,7 @@ from rich.markup import escape
 
 from configuration_provider import run as get_configuration_provider
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
-from inspector_capnp import KernelData
+from inspector_capnp import KernelData, RuntimeArgs
 from triage import ScriptConfig, run_script, triage_field, triage_singleton
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
@@ -66,11 +66,7 @@ class KernelArgsData:
 
 
 def get_compile_time_args(kernel: KernelData) -> list[KernelArg]:
-    """Positional args in order, then the named ones."""
-    positional = [
-        KernelArg(name or None, value) for name, value in zip(kernel.compileTimeArgNames, kernel.compileTimeArgs)
-    ]
-    return positional + [KernelArg(arg.name, arg.value) for arg in kernel.namedCompileTimeArgs]
+    return [KernelArg(arg.name or None, arg.value) for arg in kernel.compileTimeArgs]
 
 
 class KernelArgsProvider:
@@ -88,28 +84,25 @@ class KernelArgsProvider:
         if kernel is None or core.risc_enabled_by_kernel is False:
             return KernelArgsData(None, None, None)
         location = risc_location.location
-        (x, y), _ = location.to("logical")
-        runtime_arg_count = 0
-        for group in kernel.runtimeArgCounts:
-            if any(r.start.x <= x <= r.end.x and r.start.y <= y <= r.end.y for r in group.coreRanges):
-                runtime_arg_count = group.count
         base = core.kernel_config_base + self.count_word_bytes
         return KernelArgsData(
             compile_time_args=get_compile_time_args(kernel),
-            runtime_args=self._read_args(
-                location, base + core.rta_offset, runtime_arg_count, list(kernel.runtimeArgNames)
-            ),
-            common_runtime_args=self._read_args(
-                location, base + core.crta_offset, kernel.commonRuntimeArgCount, list(kernel.commonRuntimeArgNames)
-            ),
+            runtime_args=self._read_args(location, base + core.rta_offset, kernel.runtimeArgs),
+            common_runtime_args=self._read_args(location, base + core.crta_offset, kernel.commonRuntimeArgs),
         )
 
-    def _read_args(self, location: OnChipCoordinate, address: int, count: int, names: list[str]) -> list[KernelArg]:
+    def _read_args(self, location: OnChipCoordinate, address: int, runtime_args: RuntimeArgs) -> list[KernelArg]:
+        (x, y), _ = location.to("logical")
+        count = 0
+        for group in runtime_args.counts:
+            if any(r.start.x <= x <= r.end.x and r.start.y <= y <= r.end.y for r in group.coreRanges):
+                count = group.count
         if count == 0:
             return []
         data = bytearray(4 * count)
         self.dispatcher_data.l1_memory_access(location).read(address, data)
         values = [int.from_bytes(data[i : i + 4], "little") for i in range(0, len(data), 4)]
+        names = runtime_args.names
         return [KernelArg(names[i] if i < len(names) and names[i] else None, value) for i, value in enumerate(values)]
 
 

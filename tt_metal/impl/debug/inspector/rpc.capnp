@@ -11,14 +11,20 @@ $Cxx.namespace("tt::tt_metal::inspector::rpc");
 
 # Inspector RPC interface for querying TT-Metal runtime state
 
-struct NamedArg {
-    name @0 :Text;
+struct KernelArg {
+    name @0 :Text;  # empty if unnamed
     value @1 :UInt32;
 }
 
 struct RuntimeArgCount {
-    count @0 :UInt32;  # runtime args per core, without the watcher count word
+    count @0 :UInt32;  # args per core, without the watcher count word
     coreRanges @1 :List(LogicalCoreRange);
+}
+
+# Values live in L1 at kernel_config_base + rta_offset (crta_offset for common args).
+struct RuntimeArgs {
+    names @0 :List(Text);  # by word index, empty if unnamed; words past the end are unnamed
+    counts @1 :List(RuntimeArgCount);  # kernel cores not listed have no args
 }
 
 struct KernelData {
@@ -28,14 +34,9 @@ struct KernelData {
     source @3 :Text;
     programId @4 :UInt64;
     processorElfPaths @5 :List(Text);
-    compileTimeArgs @6 :List(UInt32);
-    compileTimeArgNames @7 :List(Text);  # one per compileTimeArgs word, empty if unnamed
-    namedCompileTimeArgs @8 :List(NamedArg);
-    # Runtime arg values live in L1 at kernel_config_base + rta_offset (crta_offset for common args).
-    runtimeArgCounts @9 :List(RuntimeArgCount);  # kernel cores not listed have no runtime args
-    runtimeArgNames @10 :List(Text);  # by word index, empty if unnamed; words past the end are unnamed
-    commonRuntimeArgCount @11 :UInt32;
-    commonRuntimeArgNames @12 :List(Text);  # by word index, empty if unnamed; words past the end are unnamed
+    compileTimeArgs @6 :List(KernelArg);  # positional in order, then named
+    runtimeArgs @7 :RuntimeArgs;
+    commonRuntimeArgs @8 :RuntimeArgs;
 }
 
 enum BinaryStatus {

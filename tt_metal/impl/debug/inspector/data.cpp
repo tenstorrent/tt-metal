@@ -461,31 +461,31 @@ void Data::populate_kernel(rpc::KernelData::Builder kernel, const KernelData& ke
             list.set(i, values[i]);
         }
     };
+    auto populate_runtime_args = [&](rpc::RuntimeArgs::Builder runtime_args, const RuntimeArgs& args) {
+        fill(runtime_args.initNames(args.names.size()), args.names);
+        auto counts = runtime_args.initCounts(args.counts.size());
+        uint32_t i = 0;
+        for (const auto& [count, cores] : args.counts) {
+            auto runtime_arg_count = counts[i++];
+            runtime_arg_count.setCount(count);
+            populate_core_ranges(runtime_arg_count.initCoreRanges(cores.ranges().size()), cores);
+        }
+    };
     kernel.setWatcherKernelId(kernel_data.watcher_kernel_id);
     kernel.setName(kernel_data.name);
     kernel.setPath(kernel_data.path);
     kernel.setSource(kernel_data.source);
     kernel.setProgramId(program_id);
     fill(kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size()), kernel_data.processor_elf_paths);
-    fill(kernel.initCompileTimeArgs(kernel_data.compile_time_args.size()), kernel_data.compile_time_args);
-    fill(kernel.initCompileTimeArgNames(kernel_data.compile_time_arg_names.size()), kernel_data.compile_time_arg_names);
-    auto named_compile_time_args = kernel.initNamedCompileTimeArgs(kernel_data.named_compile_time_args.size());
+    auto compile_time_args = kernel.initCompileTimeArgs(kernel_data.compile_time_args.size());
     uint32_t i = 0;
-    for (const auto& [name, value] : kernel_data.named_compile_time_args) {
-        named_compile_time_args[i].setName(name);
-        named_compile_time_args[i++].setValue(value);
+    for (const auto& arg : kernel_data.compile_time_args) {
+        auto compile_time_arg = compile_time_args[i++];
+        compile_time_arg.setName(arg.name);
+        compile_time_arg.setValue(arg.value);
     }
-    auto runtime_arg_counts = kernel.initRuntimeArgCounts(kernel_data.runtime_arg_count_cores.size());
-    i = 0;
-    for (const auto& [count, cores] : kernel_data.runtime_arg_count_cores) {
-        runtime_arg_counts[i].setCount(count);
-        populate_core_ranges(runtime_arg_counts[i++].initCoreRanges(cores.ranges().size()), cores);
-    }
-    fill(kernel.initRuntimeArgNames(kernel_data.runtime_arg_names.size()), kernel_data.runtime_arg_names);
-    kernel.setCommonRuntimeArgCount(kernel_data.common_runtime_arg_count);
-    fill(
-        kernel.initCommonRuntimeArgNames(kernel_data.common_runtime_arg_names.size()),
-        kernel_data.common_runtime_arg_names);
+    populate_runtime_args(kernel.initRuntimeArgs(), kernel_data.runtime_args);
+    populate_runtime_args(kernel.initCommonRuntimeArgs(), kernel_data.common_runtime_args);
 }
 
 // Helper function to populate the core info

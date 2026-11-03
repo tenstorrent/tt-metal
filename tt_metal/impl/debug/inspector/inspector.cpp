@@ -199,29 +199,32 @@ void Inspector::program_kernel_compile_finished(
         }
         kernel_data.source = kernel->kernel_source().source_;
 
-        kernel_data.compile_time_args = kernel->compile_time_args();
-        kernel_data.compile_time_arg_names.assign(kernel_data.compile_time_args.size(), "");
-        const auto named_compile_time_args = kernel->named_compile_time_args();
-        kernel_data.named_compile_time_args = {named_compile_time_args.begin(), named_compile_time_args.end()};
+        auto& compile_time_args = kernel_data.compile_time_args;
+        compile_time_args.clear();
+        for (uint32_t value : kernel->compile_time_args()) {
+            compile_time_args.push_back({.value = value});
+        }
+        const auto named = kernel->named_compile_time_args();
+        std::map<std::string, uint32_t> named_compile_time_args(named.begin(), named.end());
         // Metal 2.0 names words as the kernel does: by arg name, tensor::<accessor> or scratch::<accessor>.
         // Varargs have no name.
-        auto& rta_names = kernel_data.runtime_arg_names;
+        auto& rta_names = kernel_data.runtime_args.names;
         rta_names = kernel->get_runtime_arg_names();
         rta_names.resize(kernel->get_rta_layout().vararg_section_offset);
-        auto& crta_names = kernel_data.common_runtime_arg_names;
+        auto& crta_names = kernel_data.common_runtime_args.names;
         crta_names = kernel->get_common_runtime_arg_names();
         crta_names.resize(kernel->get_crta_layout().vararg_section_offset);
         for (const auto& binding : kernel->tensor_binding_handles()) {
             const std::string name = "tensor::" + binding.accessor_name;
             // A tensor's CTA words run up to the next tensor's.
-            auto cta_end = static_cast<uint32_t>(kernel_data.compile_time_args.size());
+            auto cta_end = static_cast<uint32_t>(compile_time_args.size());
             for (const auto& other : kernel->tensor_binding_handles()) {
                 if (other.cta_offset > binding.cta_offset) {
                     cta_end = std::min(cta_end, other.cta_offset);
                 }
             }
             for (uint32_t i = binding.cta_offset; i < cta_end; i++) {
-                kernel_data.compile_time_arg_names.at(i) = fmt::format("{}[{}]", name, i - binding.cta_offset);
+                compile_time_args.at(i).name = fmt::format("{}[{}]", name, i - binding.cta_offset);
             }
             if (binding.is_per_node) {
                 rta_names.at(binding.addr_rta_offset / sizeof(uint32_t)) = name;
@@ -238,12 +241,10 @@ void Inspector::program_kernel_compile_finished(
             crta_names.at(scratchpad.addr_crta_word) = "scratch::" + scratchpad.accessor_name;
         }
 
-        ////////////////////////////////////////////////////////////
-        // Blaze-only experimental named args
-        // Removal is tracked by issue #50953
+        // Blaze-only experimental named args (removal tracked by issue #50953)
         for (const auto& [ns, fields] : kernel->named_ct_arg_namespaces()) {
             for (const auto& [field, value] : fields) {
-                kernel_data.named_compile_time_args[ns.empty() ? field : ns + "." + field] = value;
+                named_compile_time_args[ns.empty() ? field : ns + "." + field] = value;
             }
         }
         for (const auto& [ns, entries] : kernel->named_runtime_arg_namespaces()) {
@@ -256,8 +257,10 @@ void Inspector::program_kernel_compile_finished(
                 }
             }
         }
-        ////////////////////////////////////////////////////////////
 
+        for (const auto& [name, value] : named_compile_time_args) {
+            compile_time_args.push_back({.name = name, .value = value});
+        }
         data->kernel_id_to_program_id[kernel->get_watcher_kernel_id()] = program->get_id();
         data->logger.log_program_kernel_compile_finished(program_data, kernel_data);
     } catch (const std::exception& e) {
@@ -307,13 +310,17 @@ void Inspector::program_offsets_finalized(const detail::ProgramImpl* program) no
                 cores_by_count[kernel->logical_runtime_arg_count(core)].push_back(core);
             }
             // A program can be finalized more than once.
-            kernel_data.runtime_arg_count_cores.clear();
+            kernel_data.runtime_args.counts.clear();
             for (const auto& [count, cores] : cores_by_count) {
                 if (count > 0) {
-                    kernel_data.runtime_arg_count_cores.emplace(count, CoreRangeSet(cores));
+                    kernel_data.runtime_args.counts.emplace(count, CoreRangeSet(cores));
                 }
             }
-            kernel_data.common_runtime_arg_count = kernel->logical_common_runtime_arg_count();
+            // Common args are the same list on every core of the kernel.
+            kernel_data.common_runtime_args.counts.clear();
+            if (const auto count = kernel->logical_common_runtime_arg_count(); count > 0) {
+                kernel_data.common_runtime_args.counts.emplace(count, kernel->core_range_set());
+            }
         }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program offsets finalized: {}", e.what());
