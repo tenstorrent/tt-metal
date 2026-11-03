@@ -380,7 +380,7 @@ struct DFBAdvancedOptions {
     // Existing endpoint configuration and allow_instance_multi_binding restrictions still apply.
     // Cannot be combined with borrowed_from or prefetcher_pipe_relays.
     // Device configuration and slot reuse follow inferred endpoint placement, as when this field is unset.
-    // DFBs sharing a device slot on a kernel's nodes must have compatible format, tile, and unpack metadata.
+    // DFBs sharing a device slot on a kernel's nodes must have compatible format and tile metadata.
     // On Quasar, assigned device slots must be contiguous from zero on every configured node.
     //
     // Kernels can start on omitted nodes, but any DFB interaction there is undefined behavior.

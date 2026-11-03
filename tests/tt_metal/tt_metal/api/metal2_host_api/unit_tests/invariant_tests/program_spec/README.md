@@ -66,7 +66,6 @@ struct ProgramSpec {
     // - Aliased DFBs have identical effective node sets, regardless of how ranges are split.
     // - Quasar device slots are contiguous from zero on each configured node.
     // - DFBs that share a device slot on a kernel's nodes have compatible format and tile metadata.
-    // - A compute kernel's DFBs that share a slot have compatible unpack modes.
     // - All PRODUCER bindings share access_pattern, and their kernels share num_threads and kind
     //   (compute or data movement). The same holds for all CONSUMER bindings.
     // - Gen1: all data-movement PRODUCER kernels share config_1xx->processor. The same holds for

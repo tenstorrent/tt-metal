@@ -148,30 +148,6 @@ void ValidateDFBSlotFormats(
     }
 }
 
-void ValidateDFBSlotUnpackModes(const KernelSpec& kernel, const DFBNameToSlotMap& slots) {
-    if (!kernel.is_compute_kernel()) {
-        return;
-    }
-    const auto& modes = std::get<ComputeHardwareConfig>(kernel.hw_config).unpack_modes;
-    std::unordered_map<uint32_t, std::pair<DFBSpecName, UnpackMode>> modes_by_slot;
-    for (const auto& binding : kernel.dfb_bindings) {
-        const auto mode_it = modes.find(binding.dfb_spec_name);
-        if (binding.endpoint_type != DFBEndpointType::CONSUMER && mode_it == modes.end()) {
-            continue;
-        }
-        const auto mode = mode_it == modes.end() ? UnpackMode::UnpackToSrc : mode_it->second;
-        const auto slot = slots.at(binding.dfb_spec_name);
-        const auto [it, inserted] = modes_by_slot.try_emplace(slot, binding.dfb_spec_name, mode);
-        TT_FATAL(
-            inserted || it->second.second == mode,
-            "KernelSpec '{}' has conflicting unpack modes for DataflowBufferSpecs '{}' and '{}' on device slot {}",
-            kernel.unique_id,
-            it->second.first,
-            binding.dfb_spec_name,
-            slot);
-    }
-}
-
 void ValidateContiguousDFBSlots(
     const ProgramSpec& spec, const CollectedSpecData& collected, const DFBNameToSlotMap& slots) {
     std::map<NodeCoord, std::set<uint32_t>> slots_by_node;
@@ -308,7 +284,6 @@ void ValidateDFBDeviceSlots(
     }
     for (const auto& kernel : spec.kernels) {
         ValidateDFBSlotFormats(kernel, spec, collected, slots);
-        ValidateDFBSlotUnpackModes(kernel, slots);
     }
 }
 
