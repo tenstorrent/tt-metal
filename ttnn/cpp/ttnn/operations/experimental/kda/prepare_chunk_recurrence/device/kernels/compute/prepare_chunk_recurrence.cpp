@@ -235,6 +235,12 @@ void exponential_of_mask_products(DFB0& mask, DFB1& g, DFB2& o) {
             for (uint32_t tile = 0; tile < tiles; ++tile) {
                 exp_tile<false, false, InputClamping::ClampToNegative, Iterations>(tile, Mode);
             }
+            // INVESTIGATION R: + half a TF32 ulp (bit 12) so SrcB's truncation rounds to nearest.
+            binop_with_scalar_tile_init();
+#pragma GCC unroll 1
+            for (uint32_t tile = 0; tile < tiles; ++tile) {
+                add_unary_tile_int32(tile, 0x1000u);
+            }
         } else {
             expm1_tile_init<false>();
 #pragma GCC unroll 1
@@ -263,6 +269,12 @@ void reciprocal_tiles(DFB0& in, DFB1& o, uint32_t n) {
             copy_tile(in_id, block_start + tile, tile);
             recip_tile<recip_dest, ReciprocalApproxMode::Precise>(tile);
         }
+        // INVESTIGATION R: + half a TF32 ulp (bit 12) so SrcB's truncation rounds to nearest.
+        binop_with_scalar_tile_init();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            add_unary_tile_int32(tile, 0x1000u);
+        }
+        recip_tile_init<recip_dest, ReciprocalApproxMode::Precise>();
         tile_regs_commit();
         tile_regs_wait();
 #pragma GCC unroll 1
