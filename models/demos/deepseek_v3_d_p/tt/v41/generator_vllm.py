@@ -117,6 +117,10 @@ def defer_final() -> bool:
 # A ``prefill_forward`` whose whole-prompt rows begin with a listed layout's lengths packs them; every other row
 # takes the single path as before. Without the layouts the flag changes nothing in the generator.
 PACK_MAX_SEQ = "TT_V41_PACK_MAX_SEQ"  # the packed state's context (default: the first bucket rounded to the chunk)
+# ``TT_V41_PACK_CHUNK``: the chunk the packed state is built on: one of the
+# ``TT_V41_SHORT_CHUNK`` geometries, so a pack of short prompts pays that chunk's rows (a pack of four 1,028s on
+# the 5,120 geometry, as measured) and not the full chunk's; unset: the full-chunk model.
+PACK_CHUNK = "TT_V41_PACK_CHUNK"
 
 
 def _round_up(x: int, m: int) -> int:
@@ -244,19 +248,26 @@ class DeepseekV41ForCausalLM:
         self.pack_traces: dict[tuple, V41PackTrace] = {}  # layout -> its capture
         self.pack_last: dict = {}  # the last packed call (the tests read it)
         ratios = {C.compress_ratio(l) for l in model.layers}
-        layouts = parse_pack_layouts(os.environ.get(PACK_LAYOUTS), model.chunk, ratios) if pack_enabled() else []
+        pack_model = model  # the full-chunk model, or the short-chunk view TT_V41_PACK_CHUNK names
+        pack_chunk = int(os.environ.get(PACK_CHUNK, "0") or 0)
+        if pack_chunk and pack_enabled():
+            views = {chunk: view for chunk, view, _ in self.short}
+            assert pack_chunk in views, f"{PACK_CHUNK}={pack_chunk}: not one of {SHORT_CHUNK}'s {sorted(views)}"
+            pack_model = views[pack_chunk]
+        layouts = parse_pack_layouts(os.environ.get(PACK_LAYOUTS), pack_model.chunk, ratios) if pack_enabled() else []
         if layouts:
             assert self.generic, f"{PACK_LAYOUTS} needs TT_V41_PREFILL_GENERIC=1 (packed chunks run on generic states)"
             kmax = max(len(layout) for layout in layouts)
             t0, dram0 = time.time(), _dram_bytes(mesh_device)
-            max_seq = int(os.environ.get(PACK_MAX_SEQ, _round_up(V41ChunkTables.MIN_BUCKET, model.chunk)))
-            assert max_seq % model.chunk == 0 and max_seq <= model.max_seq_len, (max_seq, model.chunk)
-            self.pack_state = model.new_state(generic=True, max_seq_len=max_seq, pack_segments=kmax)
+            max_seq = int(os.environ.get(PACK_MAX_SEQ, _round_up(V41ChunkTables.MIN_BUCKET, pack_model.chunk)))
+            assert max_seq % pack_model.chunk == 0 and max_seq <= pack_model.max_seq_len, (max_seq, pack_model.chunk)
+            self.pack_state = pack_model.new_state(generic=True, max_seq_len=max_seq, pack_segments=kmax)
             self.pack_state.tables.prepare_layouts(layouts)  # the layouts' window tables: resident, before captures
             self.pack_layouts = layouts
-            self.models[id(self.pack_state)] = model
+            self.models[id(self.pack_state)] = pack_model
             logger.info(
-                f"DeepSeek-V4.1-Flash: packed prefill state (max_seq_len {max_seq}, {kmax} segments) for layouts "
+                f"DeepSeek-V4.1-Flash: packed prefill state (chunk {pack_model.chunk}, max_seq_len {max_seq}, "
+                f"{kmax} segments) for layouts "
                 f"{[[n for _, n in layout] for layout in layouts]} built in {time.time() - t0:.1f} s, "
                 f"{(_dram_bytes(mesh_device) - dram0) / 2**20:.0f} MB of DRAM a chip"
             )
@@ -1048,11 +1059,12 @@ class DeepseekV41ForCausalLM:
                 joins0, t0, trace0 = len(self.decoder.join_traces), time.time(), _trace_bytes(self.mesh_device)
                 for k, layout in enumerate(self.pack_layouts):
                     t1 = time.time()
+                    pack_model = self.models[id(self.pack_state)]
                     trace = V41PackTrace(
-                        self.model,
+                        pack_model,
                         layout,
                         self.pack_state,
-                        self.prefill_buffers[id(self.model)],
+                        self.prefill_buffers[id(pack_model)],
                         warmup=2 if k == 0 else 1,
                     )
                     self.pack_traces[layout] = trace
@@ -1159,7 +1171,8 @@ class DeepseekV41ForCausalLM:
                 prompts = [self._warmup_prompt(n) for _, n in layout]
                 t0 = time.time()
                 _l1_probe(self.mesh_device, f"before warm-up packed prefill {[n for _, n in layout]}")
-                self.model.prefill_packed(prompts, self.pack_state, self.prefill_buffers[id(self.model)])
+                pack_model = self.models[id(self.pack_state)]
+                pack_model.prefill_packed(prompts, self.pack_state, self.prefill_buffers[id(pack_model)])
                 joins = 0
                 if layout is self.pack_layouts[0]:
                     for g, (offset, n) in enumerate(layout):
