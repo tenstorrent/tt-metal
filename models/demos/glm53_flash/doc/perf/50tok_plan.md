@@ -140,3 +140,11 @@ DP discovery on the Galaxy's columns, one rank served, then four.
   `GLM53_MHC_PRE_XPARTS=1 GLM53_MHC_PRE_SINKHORN=dst`; defaults flip after the chain's decode-id gate on a (1, 8)
   column with the converted cache. Next in the wrap: round 2 as RISC scalars (-7), the fan-in (-5), the merge with
   the attention post-mix (-8 per layer).
+* 22:15 **KDA decode attribution** (chip 8, device profiler zones, the TP4 shard H = 16): kernel span 69.6 us at
+  B = 4 (256 at B = 32). Phase spans at B = 4: `kda_conv` 43 us (per-core median 30, max 43: the conv + SiLU phase
+  also absorbs the wait for the part-0 reader's multicast of the inputs; the NCRISC reader runs 33 us median / 65 max),
+  then `kda_gates` 5, `kda_derived` 2, `kda_user` 8 per user (21 span), `kda_out_norm` 9-13 on the 32 part-0 cores.
+  At B = 32 the recurrent-state traffic (2 x 2.1 MB per user) sets the slope (`kda_user` span 148 us); the fixed
+  ~45 us is the serialized input movement + the phase chain. Lever: start the state and history reads before /
+  during the conv phase on every part (today they wait on part 0's multicast), and run the out-norm on all parts:
+  69 -> ~40 us at B = 4 = -1 ms per step over 34 layers. Scheduled after the pre-block items.
