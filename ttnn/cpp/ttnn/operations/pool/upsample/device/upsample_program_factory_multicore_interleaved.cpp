@@ -226,6 +226,14 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         const std::uint32_t num_input_tiles_in_row =
             input.padded_shape()[-1] / input.tensor_spec().tile().get_tile_shape()[1];
 
+        // 32-bit data needs a 32-bit Dest and UnpackToDest, or the untilize truncates it to 16 bits (as in fold).
+        const bool fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ||
+                                      input_cb_data_format == tt::DataFormat::Int32 ||
+                                      input_cb_data_format == tt::DataFormat::UInt32;
+        metal2::ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        if (fp32_dest_acc_en) {
+            compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
+        }
         if (core_group_1.num_cores() > 0) {
             metal2::KernelSpec compute_g1{
                 .unique_id = COMPUTE_G1,
@@ -245,7 +253,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
                         {"per_core_block_cnt", work_per_core_group_1},
                         {"per_core_block_tile_cnt", num_input_tiles_in_row},
                     },
-                .hw_config = metal2::ComputeHardwareConfig{},
+                .hw_config = compute_cfg,
             };
             spec.kernels.push_back(compute_g1);
             spec.work_units.push_back(metal2::WorkUnitSpec{
@@ -274,7 +282,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
                         {"per_core_block_cnt", work_per_core_group_2},
                         {"per_core_block_tile_cnt", num_input_tiles_in_row},
                     },
-                .hw_config = metal2::ComputeHardwareConfig{},
+                .hw_config = compute_cfg,
             };
             spec.kernels.push_back(compute_g2);
             spec.work_units.push_back(metal2::WorkUnitSpec{
