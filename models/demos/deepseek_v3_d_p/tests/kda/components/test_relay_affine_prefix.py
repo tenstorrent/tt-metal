@@ -53,6 +53,13 @@ _MESH = pytest.mark.parametrize(
             "SP8xTP4-fabric-2d",
             fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
         ),
+        # FABRIC_1D: on a mesh descriptor without wrap links the last rank reaches the first sp_size - 1 hops back.
+        _mesh_case(
+            (8, 4),
+            "mesh-8x4",
+            "SP8xTP4-fabric-1d-line",
+            fabric_1d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+        ),
         _mesh_case((8, 1), "ring", "loudbox-SP8xTP1-ring"),
         _mesh_case((8, 1), "ring", "loudbox-SP8xTP1-fabric-1d-ring", _fabric_1d_ring_params()),
         _mesh_case((4, 2), "mesh-4x2", "loudbox-SP4xTP2-fabric-2d"),
