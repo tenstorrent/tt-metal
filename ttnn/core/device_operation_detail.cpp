@@ -339,6 +339,33 @@ const void* device_buffer(const ttnn::Tensor& tensor) {
     return &tensor.mesh_buffer();
 }
 
+// The input that is `output` itself, if any: of the inputs in `output`'s device buffer `buffer`, the one that shares
+// its label (another handle of the same tensor), else the first. One device tensor of a mesh tensor lives in the mesh
+// tensor's buffer under a one-device label of its own, so an op that writes such a view into the mesh tensor finds
+// both.
+std::optional<size_t> caller_input(
+    const ttnn::Tensor& output,
+    const void* buffer,
+    const std::vector<std::reference_wrapper<const ttnn::Tensor>>& inputs,
+    const ttsl::SmallVector<const void*>& buffers) {
+    if (buffer == nullptr) {
+        return std::nullopt;
+    }
+    std::optional<size_t> first;
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        if (buffers[i] != buffer) {
+            continue;
+        }
+        if (&inputs[i].get().tensor_topology() == &output.tensor_topology()) {
+            return i;
+        }
+        if (!first.has_value()) {
+            first = i;
+        }
+    }
+    return first;
+}
+
 }  // namespace
 
 std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
@@ -401,12 +428,12 @@ void apply_default_output_topologies(
     bool needs_union = false;
     for (size_t o = 0; o < outputs.size(); ++o) {
         const void* buffer = device_buffer(outputs[o].get());
-        const auto caller = buffer == nullptr ? buffers.end() : std::find(buffers.begin(), buffers.end(), buffer);
-        if (caller == buffers.end()) {
+        const std::optional<size_t> caller = caller_input(outputs[o].get(), buffer, inputs, buffers);
+        if (!caller.has_value()) {
             needs_union = true;
             continue;
         }
-        const auto caller_index = static_cast<size_t>(caller - buffers.begin());
+        const size_t caller_index = *caller;
         if (read.empty()) {
             const auto& mesh_shape = inputs[caller_index].get().device()->shape();
             mesh_dims = mesh_shape.dims();
