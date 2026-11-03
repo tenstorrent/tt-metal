@@ -25,14 +25,14 @@
 namespace topk_xl_split
 {
 
-constexpr std::uint8_t F2S                   = ckernel::semaphore::FPU_SFPU;
-constexpr std::uint8_t S2F                   = ckernel::semaphore::UNPACK_MATH_DONE;
+constexpr std::uint8_t F2S = ckernel::semaphore::FPU_SFPU;
+constexpr std::uint8_t S2F = ckernel::semaphore::UNPACK_MATH_DONE;
 // The schedule runs ahead of PACK, so the shared semaphores need more than their default depth of 1.
 constexpr std::uint8_t TOKEN_DEPTH             = 15;
 constexpr std::uint8_t DEFAULT_SEMAPHORE_DEPTH = 1;
-constexpr std::uint32_t STEPS_PER_CHUNK      = 9;
-constexpr std::uint32_t STAGES_FIRST_CHUNK   = 7;
-constexpr std::uint32_t STAGES_MERGING_CHUNK = 9;
+constexpr std::uint32_t STEPS_PER_CHUNK        = 9;
+constexpr std::uint32_t STAGES_FIRST_CHUNK     = 7;
+constexpr std::uint32_t STAGES_MERGING_CHUNK   = 9;
 
 inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std::uint32_t num_chunks, std::uint32_t& chunk, std::uint32_t& stage)
 {
@@ -580,10 +580,12 @@ inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epi
         pack_slot<K>(c1, num_chunks, mirror_last);
     }
     epilogue();
-    ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 
-    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next PACK SFPU op.
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next PACK SFPU op. Before the
+    // semaphore post: the post hands the row to MATH, whose next SFPU section re-programs
+    // the slot itself; a restore issued after the post could land inside MATH's next section.
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 }
 
 // A segmented row's later segment: after MATH's token (its unfused merge and rebuild done, or the previous segment's
