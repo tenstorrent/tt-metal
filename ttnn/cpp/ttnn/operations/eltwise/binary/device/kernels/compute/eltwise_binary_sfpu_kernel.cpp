@@ -28,6 +28,12 @@
 #include "api/compute/binary_comp.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
 void kernel_main() {
@@ -49,18 +55,12 @@ void kernel_main() {
 #endif
 
     compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out0.get_id());
-    copy_init(dfb_in0.get_id());
 
 #ifdef PACK_RELU
     pack_relu_config(ReluConfig::zero());
 #endif
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-
-#if PRE_SCALE
-        copy_init(dfb_in0.get_id());  // need to copy from CB to DST to be able to run sfpu math
-#endif
-
 #ifdef SFPU_OP_INIT_PRE_IN0_0
         dfb_in0.wait_front(per_core_block_size);
         dfb_inp0.reserve_back(per_core_block_size);
@@ -75,7 +75,7 @@ void kernel_main() {
 
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, dfb_inp0.get_id());  // DST[0]->cb
+            pack_tile(i, dfb_inp0.get_id(), 0, false, pack_relu);  // DST[0]->cb
         }
         tile_regs_release();
 
@@ -97,7 +97,7 @@ void kernel_main() {
 
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, dfb_inp1.get_id());  // DST[0]->cb
+            pack_tile(i, dfb_inp1.get_id(), 0, false, pack_relu);  // DST[0]->cb
         }
         tile_regs_release();
 
@@ -110,73 +110,11 @@ void kernel_main() {
 
         tile_regs_acquire();
         tile_regs_wait();
-        reconfig_data_format_srca(dfb_inp1.get_id(), dfb_inp0.get_id());
-        copy_init(dfb_inp0.get_id());
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(dfb_inp0.get_id(), i, i * 2);
         }
-        reconfig_data_format_srca(dfb_inp0.get_id(), dfb_inp1.get_id());
-        copy_init(dfb_inp1.get_id());
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(dfb_inp1.get_id(), i, i * 2 + 1);
-
-#ifdef BINOP_INIT
-            BINOP_INIT
-#endif
-#ifdef ADD_INT_INIT
-            ADD_INT_INIT
-#endif
-#ifdef SUB_INT_INIT
-            SUB_INT_INIT
-#endif
-#ifdef MUL_INT_INIT
-            MUL_INT_INIT
-#endif
-#ifdef LT_INT32_INIT
-            LT_INT32_INIT
-#endif
-#ifdef LT_UINT32_INIT
-            LT_UINT32_INIT
-#endif
-#ifdef LT_UINT16_INIT
-            LT_UINT16_INIT
-#endif
-#ifdef GT_INT32_INIT
-            GT_INT32_INIT
-#endif
-#ifdef GT_UINT32_INIT
-            GT_UINT32_INIT
-#endif
-#ifdef GT_UINT16_INIT
-            GT_UINT16_INIT
-#endif
-#ifdef GE_INT32_INIT
-            GE_INT32_INIT
-#endif
-#ifdef GE_UINT32_INIT
-            GE_UINT32_INIT
-#endif
-#ifdef GE_UINT16_INIT
-            GE_UINT16_INIT
-#endif
-#ifdef LE_INT32_INIT
-            LE_INT32_INIT
-#endif
-#ifdef LE_UINT32_INIT
-            LE_UINT32_INIT
-#endif
-#ifdef LE_UINT16_INIT
-            LE_UINT16_INIT
-#endif
-#ifdef BITWISE_INIT
-            BITWISE_INIT
-#endif
-#ifdef BITWISE_UINT16_INIT
-            BITWISE_UINT16_INIT
-#endif
-#ifdef SHIFT_INIT
-            SHIFT_INIT
-#endif
 
 #ifdef BINARY_SFPU_OP
             BINARY_SFPU_OP
@@ -189,7 +127,7 @@ void kernel_main() {
 #ifdef SFPU_OP_CHAIN_0
             SFPU_OP_CHAIN_0
 #endif
-            pack_tile(i * 2, dfb_out0.get_id());
+            pack_tile(i * 2, dfb_out0.get_id(), 0, false, pack_relu);
         }
         tile_regs_commit();
         tile_regs_release();

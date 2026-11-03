@@ -26,10 +26,10 @@ inline void llk_unpack_AB_scalar_block(
     SAN_HOOK(unsupported());
     const std::uint32_t operand_a_id = get_operand_id(operand_a);
     const std::uint32_t operand_b_id = get_operand_id(operand_b);
-    const std::uint32_t address_a = get_local_cb_interface(operand_a_id).fifo_rd_ptr - 1 +
-                                    get_local_cb_interface(operand_a_id).fifo_page_size * tile_a;
-    const std::uint32_t address_b = get_local_cb_interface(operand_b_id).fifo_rd_ptr - 1 +
-                                    get_local_cb_interface(operand_b_id).fifo_page_size * tile_b;
+    const std::uint32_t address_a =
+        get_local_cb_interface(operand_a_id).fifo_rd_ptr - 1 + get_operand_unpack_tile_size(operand_a_id) * tile_a;
+    const std::uint32_t address_b =
+        get_local_cb_interface(operand_b_id).fifo_rd_ptr - 1 + get_operand_unpack_tile_size(operand_b_id) * tile_b;
     _llk_unpack_AB_scalar_block_(address_a, address_b, block_size);
 }
 

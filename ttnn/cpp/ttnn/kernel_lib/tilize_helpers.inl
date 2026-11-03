@@ -84,15 +84,6 @@ ALWI void tilize(InDFB& in_dfb, OutDFB& out_dfb, uint32_t num_blocks, std::optio
     constexpr bool use_fast =
         can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
 
-    // Determine if we're doing data type reconfiguration
-    constexpr bool use_unpack_reconfig =
-        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure) ||
-        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
-
-    constexpr bool use_pack_reconfig =
-        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure) ||
-        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
-
     const bool asymmetric_dfb_pages = total_input_pages.has_value();
     if (asymmetric_dfb_pages) {
         ASSERT(*total_input_pages > (num_blocks - 1) * 32);  // at least one row in the last block
@@ -102,44 +93,6 @@ ALWI void tilize(InDFB& in_dfb, OutDFB& out_dfb, uint32_t num_blocks, std::optio
     // Tilize input must not be a block float format (Bfp8/4/2 and _b variants).
     // Block floats have shared exponents that break row-major-to-tile reinterpretation.
     UNPACK(ASSERT(!is_block_float_format(unpack_src_format[input_dfb])));
-
-    // Reconfigure register datatypes if requested
-    if constexpr (use_unpack_reconfig) {
-        // Reconfigure srcA for unpack
-        reconfig_data_format_srca(input_dfb);
-
-#ifdef ARCH_WORMHOLE
-        if constexpr (use_fast) {
-            // WH fast-tilize uses both SrcA and SrcB; reconfigure SrcB to match input.
-            // BH/Quasar fast-tilize only uses SrcA — SrcB must not be touched so matmul
-            // weights stay configured correctly.
-            reconfig_data_format_srcb(input_dfb);
-        }
-#endif
-    }
-
-    if constexpr (use_pack_reconfig) {
-        // Reconfigure output for pack
-        pack_reconfig_data_format(output_dfb);
-    }
-
-    // Compile-time initialization based on InitUninitMode
-    if constexpr (
-        init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
-        init_uninit_mode == tilize_config::InitUninitMode::InitOnly) {
-        if constexpr (use_fast) {
-#ifdef ARCH_BLACKHOLE
-            if constexpr (remap_mode == tilize_config::RemapMode::AssumeConfigured) {
-                fast_tilize_init_skip_remap(input_dfb, block_width_tiles, output_dfb);
-            } else
-#endif
-            {
-                fast_tilize_init(input_dfb, block_width_tiles, output_dfb);
-            }
-        } else {
-            tilize_init(input_dfb, block_width_tiles, output_dfb);
-        }
-    }
 
     // The caller's buffers, bound by reference; tilize() never constructs a DataflowBuffer of its own
     // (on Quasar one drains when it goes out of scope).
@@ -190,17 +143,6 @@ ALWI void tilize(InDFB& in_dfb, OutDFB& out_dfb, uint32_t num_blocks, std::optio
 
         if (asymmetric_dfb_pages) {
             pages_left -= input_pages;
-        }
-    }
-
-    // Compile-time cleanup based on InitUninitMode
-    if constexpr (
-        init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
-        init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
-        if constexpr (use_fast) {
-            fast_tilize_uninit(input_dfb, output_dfb, block_width_tiles);
-        } else {
-            tilize_uninit(input_dfb, output_dfb);
         }
     }
 }

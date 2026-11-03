@@ -59,17 +59,6 @@ void kernel_main() {
         static_assert(default_output.dest_accumulation == DestAccumulation::Disabled);
         static_assert(default_output.addressing == TileAddressing::Direct);
 
-        using SrcAOnly = BinaryFpu<
-            BinaryFpuOp::Add,
-            input(cb_a),
-            input(cb_b, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>;
-        using SrcBOnly = BinaryFpu<
-            BinaryFpuOp::Add,
-            input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-            input(cb_b)>;
-        static_assert(SrcAOnly::reconfig_srca_dfb == cb_a && SrcAOnly::reconfig_srcb_dfb == NO_PREV_DFB);
-        static_assert(SrcBOnly::reconfig_srca_dfb == NO_PREV_DFB && SrcBOnly::reconfig_srcb_dfb == cb_b);
-
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
             IterationShape::tiles(num_tiles),

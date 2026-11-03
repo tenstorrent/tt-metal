@@ -51,8 +51,14 @@ inline void _llk_unpack_A_top32_rm_(
     wait_for_next_context(2);
 
     // Set upk0/1 L1 read addr
-    const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
-    cfg[upk0_reg]                = address;
+    if (unp_cfg_context == 0)
+    {
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
+    }
+    else
+    {
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address);
+    }
 
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);

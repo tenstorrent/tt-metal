@@ -13,6 +13,8 @@
 
 namespace ckernel {
 
+ALWI void sub_int_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise sub operation with the two integer inputs: y = sub(x0,x1)
@@ -37,6 +39,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    sub_int_tile_init();
     static_assert(
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for sub_int. Supported data formats are: Int32, UInt32, UInt16");
@@ -52,6 +55,8 @@ ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 }
+
+ALWI void rsub_int_tile_init();
 
 // clang-format off
 /**
@@ -77,6 +82,7 @@ ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 // clang-format on
 template <DataFormat data_format>
 ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    rsub_int_tile_init();
     static_assert(
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for rsub_int. Supported data formats are: Int32, UInt32, UInt16");

@@ -14,6 +14,10 @@
 
 namespace ckernel {
 
+ALWI void lgamma_stirling_tile_init();
+ALWI void lgamma_stirling_float_tile_init();
+ALWI void lgamma_adjusted_tile_init();
+
 // clang-format off
 /**
  * Performs elementwise natural logarithm of the gamma function (suitable for bfloat16 inputs): out = lgamma(x). lgamma is computed using Stirling approximation.
@@ -31,6 +35,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lgamma_stirling_tile(uint32_t idst) {
+    lgamma_stirling_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_lgamma_stirling, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
@@ -64,6 +69,7 @@ ALWI void lgamma_stirling_tile_init() {
 
 // clang-format on
 ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2) {
+    lgamma_stirling_float_tile_init();
     MATH(SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -106,6 +112,7 @@ ALWI void lgamma_stirling_float_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t idst3) {
+    lgamma_adjusted_tile_init();
     MATH(SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

@@ -154,7 +154,7 @@ void kernel_main() {
             reconfig_data_format(rotated_in_interm_cb_id, sin_cb_id);
             pack_reconfig_data_format(rotated_in_interm_cb_id, sin_interm_cb_id);
             mul_bcast_rows_init(rotated_in_interm_cb_id, sin_cb_id);
-            ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+            ckl::eltwise_chain(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, rotated_input, ckl::input(sin_input, ckl::BroadcastDim::Row)>{
                     rotated_in_interm_cb_dfb, sin_cb_dfb},
@@ -162,7 +162,7 @@ void kernel_main() {
 
             reconfig_data_format(rotated_in_interm_cb_id, in_cb_id, sin_cb_id, cos_cb_id);
             pack_reconfig_data_format(sin_interm_cb_id, cos_interm_cb_id);
-            ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+            ckl::eltwise_chain(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, in_input, ckl::input(cos_input, ckl::BroadcastDim::Row)>{
                     in_cb_dfb, cos_cb_dfb},

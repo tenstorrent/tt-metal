@@ -109,16 +109,12 @@ void kernel_main() {
 
                             tile_regs_acquire();  // acquire DST registers for MATH thread, resets DST to 0
                             if (reduce_output) {
-                                copy_init(cb_interm2_id);
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                     copy_tile(cb_interm2_id, tile_id, tile_id);  // load DST
                                 }
-                                add_init(cb_interm_id, cb_input_id, true);  // DST = srcA + srcB + DST
-                            } else {
-                                add_init(cb_interm_id, cb_input_id, false);  // DST = srcA + srcB
                             }
                             for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
-                                add_tiles(cb_interm_id, cb_input_id, tile_id, tile_id, tile_id);
+                                add_tiles(cb_interm_id, cb_input_id, tile_id, tile_id, tile_id, reduce_output);
                             }
                             tile_regs_commit();  // release lock on DST by MATH thread, signal the PACK thread
 

@@ -30,15 +30,13 @@ void kernel_main() {
     // The outer loop executes reduction_dim_size / input_granularity times.
     cb_compute_input_1.wait_front(one_tile);
     for (uint32_t i = 0; i < num_output_tiles_to_process; i++) {
-        add_init(compute_input_cb_id_0, compute_input_cb_id_1, true);
-        reconfig_data_format(compute_input_cb_id_0, compute_input_cb_id_1);
         tile_regs_acquire();
 
         constexpr uint32_t num_input_tiles_iter = reduction_dim_size / input_granularity;
         for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {
             cb_compute_input_0.wait_front(input_granularity);
             for (uint32_t k = 0; k < input_granularity; ++k) {
-                add_tiles(compute_input_cb_id_0, compute_input_cb_id_1, k, first_tile, dst0);
+                add_tiles(compute_input_cb_id_0, compute_input_cb_id_1, k, first_tile, dst0, true);
             }
             cb_compute_input_0.pop_front(input_granularity);
         }

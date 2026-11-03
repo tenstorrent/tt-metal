@@ -12,6 +12,9 @@
 
 namespace ckernel {
 
+template <bool is_fp32_dest_acc_en>
+ALWI void logaddexp2_binary_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise log-sum-exp on two inputs: y = log2(2**x0 + 2**x1),
@@ -32,6 +35,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void logaddexp2_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    logaddexp2_binary_tile_init<is_fp32_dest_acc_en>();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

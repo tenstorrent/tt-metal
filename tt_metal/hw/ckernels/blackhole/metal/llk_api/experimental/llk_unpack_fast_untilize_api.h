@@ -58,8 +58,7 @@ inline void llk_unpack_fast_untilize_bfp_block_at_address(
 
 inline std::uint32_t llk_unpack_fast_untilize_tile_address(
     const std::uint32_t operand_id, const std::uint32_t tile_index) {
-    const auto& cb_interface = get_local_cb_interface(operand_id);
-    return cb_interface.fifo_rd_ptr + cb_interface.fifo_page_size * tile_index - 1;
+    return get_local_cb_interface(operand_id).fifo_rd_ptr + get_operand_unpack_tile_size(operand_id) * tile_index - 1;
 }
 
 inline void llk_unpack_fast_untilize_block(
@@ -68,8 +67,7 @@ inline void llk_unpack_fast_untilize_block(
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t address = llk_unpack_fast_untilize_tile_address(operand_id, tile_index);
     if (llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id])) {
-        llk_unpack_fast_untilize_bfp_block_at_address(
-            address, get_local_cb_interface(operand_id).fifo_page_size, unit_dim);
+        llk_unpack_fast_untilize_bfp_block_at_address(address, get_operand_unpack_tile_size(operand_id), unit_dim);
     } else {
         llk_unpack_fast_untilize_block_at_address(address, unit_dim);
     }
@@ -85,8 +83,7 @@ inline void llk_unpack_fast_untilize_block(
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t address = llk_unpack_fast_untilize_tile_address(operand_id, tile_index);
     if (llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id])) {
-        llk_unpack_fast_untilize_bfp_block_at_address(
-            address, get_local_cb_interface(operand_id).fifo_page_size, unit_dim);
+        llk_unpack_fast_untilize_bfp_block_at_address(address, get_operand_unpack_tile_size(operand_id), unit_dim);
         return;
     }
 

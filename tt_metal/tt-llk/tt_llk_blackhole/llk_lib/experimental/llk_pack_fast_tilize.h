@@ -223,7 +223,8 @@ inline void _llk_pack_fast_tilize_row_begin_(const std::uint32_t address)
     //   X wraps to 0 (SETADCXX end=FACE_C_DIM-1, 16 PACRs per tile → X=0).
     //   Y=0 (ADDR_MOD_1 fires last PACR of every tile: y_src={clr:1,cr:1}).
     // So these counters are naturally 0 at every chunk boundary after row_begin.
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1011);
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
     program_packer_destination(address);
 }
 

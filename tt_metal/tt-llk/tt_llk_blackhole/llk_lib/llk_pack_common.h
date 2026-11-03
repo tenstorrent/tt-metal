@@ -112,8 +112,16 @@ inline void _llk_init_packer_dest_offset_registers_()
     TTI_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
 
+    // Drains only the dest register select write below up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::THCON));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+#endif
     select_packer_dest_registers<Dst>();
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
 }
 
 /**
@@ -266,7 +274,12 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape = DEFA
     TTI_SETDMAREG(0, UPPER_HALFWORD(row_set_mapping_1), 0, HI_16(p_gpr_pack::TMP1));
 
     // Wait for packer to finish to avoid breaking its current configuration
+    // Drains only the config writes up to the scope end below.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::PACK));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+#endif
 
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(tensor_shape.face_r_dim);
 
@@ -274,6 +287,9 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape = DEFA
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
 
     if constexpr (pack_mode == PackMode::Default)
     {
@@ -346,7 +362,12 @@ inline void _llk_pack_reduce_mask_clear_()
     TTI_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
 
     // Wait for packer to finish to avoid breaking its current configuration
+    // Drains only the config writes up to the scope end below.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::PACK));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+#endif
 
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1);
     cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_enable_RMW>(0);
@@ -358,6 +379,9 @@ inline void _llk_pack_reduce_mask_clear_()
     // All mappings point to PCK_EDGE_OFFSET_SEC0_mask_ADDR32
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
 
     TTI_NOP;
     TTI_NOP;

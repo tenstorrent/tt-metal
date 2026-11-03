@@ -19,7 +19,9 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
     std::uint32_t input = operand;
 
-    volatile tt_l1_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+    volatile tt_l1_ptr std::uint32_t* tiles_received_ptr =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
+            STREAM_REG_ADDR(get_operand_stream_id(operand), STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
 
     std::uint16_t tiles_received;
@@ -28,7 +30,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     {
         SYNC_WAIT("SYNC-CB-WAIT", operand);
         do {
-            tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
+            tiles_received = (std::uint16_t)tiles_received_ptr[0];
             num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
         } while (num_tiles_recv < num_tiles_u);
     }
@@ -43,7 +45,7 @@ inline void llk_pop_tiles(
     // Convert the counter's byte address to a Tensix 4-byte word address, masked to 18 bits.
     const std::uint32_t tiles_acked_addr_tensix =
         static_cast<std::uint32_t>((reinterpret_cast<std::uintptr_t>(get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
-    std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
+    std::uint32_t num_words = num_tiles * get_cb_page_size(operand, cb_fifo_page_size[operand]);
 
     get_local_cb_interface(input).tiles_acked += num_tiles;
     TT_SETDMAREG(0, get_local_cb_interface(input).tiles_acked, 0, LO_16(4));

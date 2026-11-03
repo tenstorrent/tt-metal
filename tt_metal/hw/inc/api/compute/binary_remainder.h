@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void remainder_int32_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise remainder operation with the two 32-bit integer inputs: y = remainder(x0,x1)
@@ -31,6 +33,7 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
 ALWI void remainder_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    remainder_int32_tile_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -48,6 +51,8 @@ ALWI void remainder_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 ALWI void remainder_int32_tile_init() {
     MATH((SFPU_BINARY_INIT_FN(remainder_int32, sfpu::remainder_int32_init, (APPROX))));
 }
+
+ALWI void remainder_uint32_tile_init();
 
 // clang-format off
 /**
@@ -68,6 +73,7 @@ ALWI void remainder_int32_tile_init() {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
 ALWI void remainder_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    remainder_uint32_tile_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -87,6 +93,8 @@ ALWI void remainder_uint32_tile_init() {
 }
 
 // BF16, FP32
+
+ALWI void remainder_binary_tile_init();
 
 // clang-format off
 /**
@@ -109,6 +117,7 @@ ALWI void remainder_uint32_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    remainder_binary_tile_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

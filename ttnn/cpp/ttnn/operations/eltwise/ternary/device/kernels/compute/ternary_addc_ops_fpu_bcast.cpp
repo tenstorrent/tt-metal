@@ -51,7 +51,6 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // (input_b * input_c)
-        mul_init(dfb_in1.get_id(), dfb_in2.get_id());
         mul_tiles(dfb_in1.get_id(), dfb_in2.get_id(), 0, 0, 0);
 
         // Done with dfb_in1 and dfb_in2, pop them early for pipeline efficiency
@@ -64,7 +63,6 @@ ALWI void process_tile(
 
         // (input_b * input_c) * value -> DST[0]
         if (scalar_is_not_1) {
-            binop_with_scalar_tile_init();
             mul_unary_tile(0, scalar_arg);  // DST[0] * scalar -> DST[0]
         }
 
@@ -74,7 +72,6 @@ ALWI void process_tile(
 #endif
 
         // Step 3: Load A and add with result DST[0] + dfb_in0 -> DST[0]
-        add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_in0.get_id());
         add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             dfb_in0.get_id(), 0, 0);
 

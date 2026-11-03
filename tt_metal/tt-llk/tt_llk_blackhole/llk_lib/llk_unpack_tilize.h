@@ -245,11 +245,11 @@ inline void _llk_unpack_tilize_(
         // Write top-face base address to the active context's REG3
         if (0 == unp_cfg_context)
         {
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+            TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
         }
         else
         {
-            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+            TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address);
         }
         semaphore_post(semaphore::UNPACK_SYNC);
 
@@ -316,11 +316,11 @@ inline void _llk_unpack_tilize_(
         // Get tile address
         if (0 == unp_cfg_context)
         {
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+            TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
         }
         else
         {
-            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+            TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address);
         }
 
         // Trisc::SEMPOST for context acquire

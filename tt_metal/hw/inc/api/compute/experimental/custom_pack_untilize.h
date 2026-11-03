@@ -24,7 +24,7 @@ inline void configure_explicit_geometry(std::uint32_t ocb, std::uint32_t face_r_
     const std::uint32_t tile_r_dim = face_r_dim * (num_faces > 2 ? 2 : 1);
     const std::uint32_t tile_c_dim = num_faces == 1 ? FACE_C_DIM : TILE_C_DIM;
     const bool partial_face = tile_r_dim < TILE_R_DIM;
-    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
+    const std::uint32_t tile_size = get_output_pack_tile_size(output_id);
     SAN_HOOK(configure(
         StateVal<Operand<Exu::Pack>::DestWidth32>(DST_ACCUM_MODE),
         StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
@@ -66,7 +66,7 @@ inline void pack_explicit_geometry(
         get_local_cb_interface(output_id).fifo_wr_ptr - 1,
         pack_src_format[output_id],
         pack_dst_format[output_id],
-        full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
+        full_ct_dim * get_output_pack_tile_size(output_id),
         face_r_dim,
         num_faces,
         block_c_index,

@@ -14,22 +14,14 @@
  *
  * The chain owns, per call:
  *   - the dst-sync window (`tile_regs_acquire/commit/wait/release`);
- *   - per-element init and exec dispatch;
+ *   - per-element exec dispatch (each element's execute call programs its own init and data format);
  *   - CB lifecycle (input wait/pop, output reserve/push), selected by each element's policy enums;
- *   - input- and pack-side dtype reconfig, compile-time-elided when the previous CB on that side
- *     already carries the right format;
  *   - compile-time invariant checks (illegal lifecycle/index combos, duplicate upfront CBs,
- *     pack-output collisions, hoist-safety).
+ *     pack-output collisions).
  *
- * Caller-init contract
- * --------------------
- * The chain never issues engine-wide ("BIG") init. The caller owns `compute_kernel_hw_startup`
- * (plus `compute_kernel_hw_startup` / `mm_init` / `reduce_init` when the kernel mixes those
- * primitives). The chain owns only per-element init — `*_tile_init`, `bcast_init`, `copy_init`,
- * and the `reconfig_data_format_*` fold and dst-sync lifecycle.
- * Do not add a `*_with_init` wrapper that folds `compute_kernel_hw_startup`
- * into the chain: it is only correct for single-stage kernels and breaks multi-stage / mid-loop
- * ones.
+ * The caller owns `compute_kernel_hw_startup`. Do not add a wrapper that folds
+ * `compute_kernel_hw_startup` into the chain: it is only correct for single-stage kernels and
+ * breaks multi-stage / mid-loop ones.
  *
  * compute_kernel_hw_startup placement
  * -----------------------------------
@@ -47,8 +39,8 @@
  *
  * Binding DataflowBuffers
  * -----------------------
- * Each `input(...)` / `output(...)` spec names a buffer by its compile-time id (what the reconfig
- * fold and the compile-time checks reason about). The element that carries the spec also takes that
+ * Each `input(...)` / `output(...)` spec names a buffer by its compile-time id (what the
+ * compile-time checks reason about). The element that carries the spec also takes that
  * buffer's `DataflowBuffer` by reference as a leading constructor argument — one per spec, in the
  * order the specs appear in its template arguments — and the chain issues every wait/pop/reserve/push
  * through it. The chain never constructs a DataflowBuffer itself; construct each one once in the
@@ -80,10 +72,7 @@
  *       BinaryFpu<BinaryFpuOp::Add, input(dfb::a), input(dfb::b)>{a, b},
  *       PackTile<output(dfb::out)>{out});
  *
- * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
- * resolved per element at compile time (fold-driven, emitted once at element entry), so there is
- * no per-loop-iteration reconfig path; and the legacy `acquire_dst/release_dst` macros
- * (modern dst-sync only).
+ * Not supported: the legacy `acquire_dst/release_dst` macros (modern dst-sync only).
  */
 
 #include <cstdint>
@@ -96,8 +85,8 @@
 namespace compute_kernel_lib {
 
 // Buffer identities throughout the chain (the `cb_id` fields on InputSpec / OutputSpec,
-// `dfb`-named implementation accessors and ElemDesc fields, and the INVALID_DFB /
-// NO_PREV_DFB sentinels) are dataflow-buffer ids: today an integer `tt::CBIndex` value.
+// `dfb`-named implementation accessors and ElemDesc fields, and the INVALID_DFB
+// sentinel) are dataflow-buffer ids: today an integer `tt::CBIndex` value.
 // The public element aliases accept complete input(...) / output(...) specs and forward each
 // id as a separate implementation NTTP so it does not consume packed configuration bits.
 // The matching runtime `DataflowBuffer` objects are bound by reference at element construction
@@ -172,31 +161,12 @@ struct IterationShape {
     }
 };
 
-/// Who performs the chain's one-time setup — init + reconfig — the leading template arg to
-/// `eltwise_chain`. This is about *ownership*, NOT about whether inits are hoistable: which inits
-/// are hoistable is deduced from the chain's uniformity and is never a manual choice.
-///
-///   eltwise_chain(shape, elts...);                       // default: InitReconfigOwner::Chain
-///   // To hoist the setup out of your own loop: emit it ONCE before the loop yourself (e.g. the
-///   // original raw *_init call), then hand ownership to the caller so the chain skips it:
-///   <emit the chain's one-time setup once, before the loop>
-///   for (...) eltwise_chain<InitReconfigOwner::Caller>(IterationShape::one_tile(), elts...);
-///
-/// InitReconfigOwner::Caller is only valid when the chain's entire setup is boot-hoistable (uniform math
-/// MOP + SFPU init AND homogeneous pack CBs) — i.e. there's a single "once, before the loop" the
-/// caller can own. eltwise_chain static_asserts this; a chain that must re-emit setup per tile
-/// (so the caller can't pre-do it once) is a compile error pointing you back to InitReconfigOwner::Chain.
-enum class InitReconfigOwner {
-    Chain,   // this eltwise_chain call emits the one-time setup (init + reconfig)
-    Caller,  // the caller emitted it once, outside the loop — the chain emits none of it here
-};
-
 // -----------------------------------------------------------------------------
 // Skip-compute — a performance-debugging BUILD knob, NOT part of the eltwise_chain API.
 //
 // With CKL_ELTWISE_CHAIN_SKIP_COMPUTE=1, every eltwise_chain in the translation unit emits only
-// its CB lifecycle (wait/pop/reserve/push) and tile_regs synchronization. All helper-owned init,
-// reconfiguration, compute, and pack execution is compile-time-elided. CB counts are unchanged, so
+// its CB lifecycle (wait/pop/reserve/push) and tile_regs synchronization. All compute and pack
+// execution is compile-time-elided. CB counts are unchanged, so
 // the dataflow handshake remains intact, but the published output is intentionally garbage.
 //
 // Use this only for local run-versus-skip profiling to separate compute cost from the
@@ -208,8 +178,7 @@ enum class InitReconfigOwner {
 //   #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 //
 // The knob covers ordinary, L1-accumulation, and DEST-accumulation walks. It does not suppress
-// caller-owned work outside eltwise_chain, including compute_kernel_hw_startup or setup emitted for
-// InitReconfigOwner::Caller.
+// caller-owned work outside eltwise_chain, including compute_kernel_hw_startup.
 #ifndef CKL_ELTWISE_CHAIN_SKIP_COMPUTE
 #define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 0
 #endif
@@ -290,7 +259,7 @@ struct StridedTileRange {
     uint32_t row_stride;
 };
 
-/// Whether the chain updates the data format for an operand.
+/// Accepted for source compatibility and ignored: every execute programs its operand data formats.
 enum class DataFormatReconfig : bool { Disabled = false, Enabled = true };
 
 /// Whether a pack accumulates into one output tile in L1.
@@ -379,7 +348,8 @@ struct OutputSpec {
 };
 
 /// Bind one input buffer id to its configuration.
-/// Defaults: wait/pop per tile, Scalar mapping, reconfig enabled, and Direct addressing.
+/// Defaults: wait/pop per tile, Scalar mapping, and Direct addressing. `reconfig` has no effect: every
+/// execute programs its own operand data formats.
 /// `PerTile/PerTile + Col` streams one front tile per grid row; other `Col` lifecycles retain
 /// row-indexed window semantics.
 constexpr InputSpec input(
@@ -436,7 +406,7 @@ constexpr BroadcastInputSpec input(
     DataFormatReconfig reconfig) noexcept;
 
 /// Bind one output buffer id to its configuration.
-/// Defaults: reserve/push per tile, reconfig enabled, Direct addressing, no accumulation,
+/// Defaults: reserve/push per tile, Direct addressing, no accumulation,
 /// and no pack ReLU. Parameters are ordered by how often call sites set them, so the rare
 /// knobs pay the trailing-default spelling cost instead of the common ones.
 constexpr OutputSpec output(
@@ -597,9 +567,7 @@ using PackTile = detail::PackTileImpl<
 // 6. Public API — eltwise_chain
 // =============================================================================
 //
-// Caller-init contract (see the @file block): the caller owns engine-wide init
-// (compute_kernel_hw_startup as the first statement of MAIN() for any read+write chain,
-// one boot per stage for multi-stage kernels); the chain owns only per-element init.
+// The caller owns compute_kernel_hw_startup (see the @file block).
 
 /// Run the chain over an (Ht, Wt) tile grid with optional per-outer-iter block size.
 /// `IterationShape` covers both walks: `tiles(n)` (1D, Ht=1),
@@ -609,14 +577,13 @@ using PackTile = detail::PackTileImpl<
 /// `IterationShape::one_tile()` for one tile) so the iteration shape is always explicit.
 ///
 /// Compile-time validation static_asserts on: illegal (Policy × Mapping) cells,
-/// duplicate upfront CBs across CB-readers, colliding pack writes, and hoist requested on
-/// a non-hoist-safe chain.
+/// duplicate upfront CBs across CB-readers, and colliding pack writes.
 ///
 /// Index-mode (InputTileMapping) and block-mode behavior match the enum docs above: Block /
 /// Row / Col / Scalar pick the per-iter tile index; input policies that own a staged CB
 /// window take the upfront-block path; chains with per-tile input or output lifecycles clamp block_size to 1.
 /// `BlockTailSync` affects only per-block-size synchronization counts. Row/Col need a non-streaming policy.
-template <InitReconfigOwner Owner = InitReconfigOwner::Chain, class... Es>
+template <class... Es>
 ALWI void eltwise_chain(IterationShape shape, Es... elts);
 
 }  // namespace compute_kernel_lib

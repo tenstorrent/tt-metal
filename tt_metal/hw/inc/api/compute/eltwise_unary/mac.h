@@ -12,6 +12,9 @@
 
 namespace ckernel {
 
+template <DataFormat data_format>
+ALWI void mac_tile_init();
+
 // clang-format off
 /**
  * Performs elementwise multiply-accumulate (mac): out = a * b + c
@@ -36,6 +39,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void mac_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
+    mac_tile_init<data_format>();
 #ifdef ARCH_BLACKHOLE
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,

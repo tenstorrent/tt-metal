@@ -85,6 +85,9 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
 
 }  // namespace pack_untilize_detail
 
+template <bool is_fp32_dest_acc_en>
+ALWI void pack_untilize_uninit(uint32_t ocb);
+
 // clang-format off
 /**
  * Performs the necessary hardware and software initialization for the pack untilize operation. This initialization
@@ -253,6 +256,11 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
+#ifndef ARCH_QUASAR
+    reconfig_full_operand(icb, icb);
+#endif
+    pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true, is_fp32_dest_acc_en>(
+        icb, ocb, __builtin_LINE());
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         // Unpack half of the DEST section handshake: a no-op on WH/BH, and on Quasar unless UnpackToDestEn. One tile
         // row is one section.
@@ -287,6 +295,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
         PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
     }
+    pack_untilize_uninit<is_fp32_dest_acc_en>(ocb);
 }
 
 // clang-format off

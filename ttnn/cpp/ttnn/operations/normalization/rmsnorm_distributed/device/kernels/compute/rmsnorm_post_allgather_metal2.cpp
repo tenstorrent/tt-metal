@@ -110,13 +110,8 @@ void kernel_main() {
          */
         dfb_var.wait_front(1);
         dfb_recip_sqrt_var.reserve_back(1);
-        reconfig_data_format(dfb::var, dfb::eps);
-        pack_reconfig_data_format(dfb::recip_sqrt_var);
-
-        add_init(dfb::var, dfb::eps);
         ACQ();
         add_tiles(dfb::var, dfb::eps, 0, 0, 0);
-        rsqrt_tile_init();
         rsqrt_tile(0);
         pack_tile(0, dfb::recip_sqrt_var);
         REL();
@@ -127,9 +122,6 @@ void kernel_main() {
          * norm x
          * RMSNorm: X * 1/sqrt(E[X**2] + eps)
          */
-        reconfig_data_format(dfb_norm_x_input, dfb::recip_sqrt_var);
-        pack_reconfig_data_format(normed_output_dfb);
-        mul_bcast_cols_init(dfb_norm_x_input, dfb::recip_sqrt_var);
         dfb_recip_sqrt_var.wait_front(1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_norm_x.wait_front(blk);
@@ -149,10 +141,7 @@ void kernel_main() {
         /*
          * x_normed * gamma
          */
-        reconfig_data_format(dfb::x_normed, dfb::gamma);
-        pack_reconfig_data_format(dfb_times_gamma_out);
         dfb_gamma.wait_front(Wt);
-        mul_bcast_rows_init(dfb::x_normed, dfb::gamma);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_normed_output.wait_front(blk);
             dfb_times_gamma.reserve_back(blk);
@@ -171,10 +160,7 @@ void kernel_main() {
         /*
          * x_normed (* gamma) + beta
          */
-        reconfig_data_format(dfb_in_beta, dfb::beta);
-        pack_reconfig_data_format(dfb::out);
         dfb_beta.wait_front(Wt);
-        add_bcast_rows_init(dfb_in_beta, dfb::beta);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_in_beta_obj.wait_front(blk);
             dfb_out.reserve_back(blk);

@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void threshold_tile_init();
+
 // clang-format off
 /**
 * Performs element-wise threshold operation. The DST
@@ -28,6 +30,7 @@ namespace ckernel {
 */
 // clang-format on
 ALWI void threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
+    threshold_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

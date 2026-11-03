@@ -225,7 +225,12 @@ ALWI void mul_reuse_dest_init(std::uint32_t icb, std::uint32_t call_line = __bui
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_tiles(
-    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    bool acc_to_dest = true) {
     // static bool first = true; // TODO(AP): static initializer causes a hang, possibly investigate
     // if (first)
     //  one possible solution is to add a local context in the kernel, pass it around and store init flags in it
@@ -235,6 +240,8 @@ ALWI void mul_tiles(
     // mul_tiles_initf();
     // first = false;
 
+    reconfig_full_operand(icb0, icb1);
+    mul_init(icb0, icb1, acc_to_dest);
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
@@ -264,7 +271,14 @@ ALWI void mul_tiles(
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_tiles(
-    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    bool acc_to_dest = false) {
+    reconfig_full_operand(icb0, icb1);
+    add_init(icb0, icb1, acc_to_dest);
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
@@ -294,7 +308,14 @@ ALWI void add_tiles(
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_tiles(
-    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    bool acc_to_dest = false) {
+    reconfig_full_operand(icb0, icb1);
+    sub_init(icb0, icb1, acc_to_dest);
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
@@ -429,6 +450,12 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_reuse_dest_tiles(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
+    if constexpr (reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) {
+        reconfig_full_operand_srcb(in_cb_id);
+    } else {
+        reconfig_full_operand_srca(in_cb_id);
+    }
+    binary_reuse_dest_init<eltwise_binary_type, reuse_dest>(in_cb_id, __builtin_LINE());
     UNPACK(constexpr bool acc_to_dest = true);
 #else
     UNPACK(constexpr bool acc_to_dest = false);

@@ -71,6 +71,7 @@ struct ActivationApplyHelper {
         "SOFTPLUS PARAM0 (beta) must be non-zero to avoid division by zero");
 
     FORCE_INLINE static void apply(uint32_t tile_index) {
+        ActivationInitHelper<ACT, PARAM0, PARAM1>::init();
         if constexpr (ACT == KernelActivation::SILU) {
             silu_tile_pack(tile_index);
         } else if constexpr (ACT == KernelActivation::TANH) {

@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void softplus_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise computation of softplus (`1/beta * log(1 + exp(beta * x))`) on each element
@@ -31,6 +33,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
+    softplus_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -49,9 +52,12 @@ ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, 
 ALWI void softplus_tile_init() { MATH(SFPU_UNARY_INIT(softplus)); }
 
 #ifndef ARCH_QUASAR
+ALWI void softplus_tile_init_pack();
+
 // Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
+    softplus_tile_init_pack();
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

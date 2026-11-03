@@ -88,10 +88,10 @@ inline void _llk_math_compressed_custom_mm_(
     constexpr DstTileShape dst_tile_shape = tile_rows == 16 ? DstTileShape::Tile16x16 : (tile_rows == 32 ? DstTileShape::Tile32x16 : DstTileShape::Tile32x32);
     math::set_dst_write_addr<dst_tile_shape, UnpackDestination::SrcRegs>(dst_index);
 
-    const std::uint32_t* meta_ptr = reinterpret_cast<const std::uint32_t*>(base_address_meta);
-    std::uint32_t index           = 0;
-    std::uint32_t meta_index      = 0;
-    std::uint32_t meta            = meta_ptr[meta_index] >> 3;
+    const std::uint32_t tt_l1_ptr* meta_ptr = reinterpret_cast<const std::uint32_t tt_l1_ptr*>(base_address_meta);
+    std::uint32_t index                     = 0;
+    std::uint32_t meta_index                = 0;
+    std::uint32_t meta                      = meta_ptr[meta_index] >> 3;
 
     for (std::uint32_t i = 0; i < kt_dim; i++)
     {

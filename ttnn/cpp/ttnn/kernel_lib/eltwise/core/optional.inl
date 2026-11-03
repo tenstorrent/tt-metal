@@ -29,14 +29,7 @@ constexpr bool runtime_conditional_element_supported() {
     }
 }
 
-template <
-    uint32_t SlotBase,
-    uint32_t PrevA,
-    uint32_t PrevB,
-    uint32_t PrevP,
-    bool PackHetero,
-    class... Elements,
-    std::size_t... Is>
+template <uint32_t SlotBase, class... Elements, std::size_t... Is>
 ALWI void apply_runtime_branch(
     const RuntimeConditionalBranch<Elements...>& branch,
     std::index_sequence<Is...>,
@@ -47,24 +40,8 @@ ALWI void apply_runtime_branch(
     uint32_t chain_lane_width,
     uint32_t Ht,
     uint32_t Wt) {
-    // Runtime sequences cannot be boot-hoisted: the selected branch owns each
-    // element's transition + init immediately before that element executes. ChainTraits
-    // computes the branch-local previous-CB table once; a missing branch-local predecessor
-    // inherits the previous CB at the outer conditional's position.
     (elem_apply_compute(
-         select_element<
-             participates_in_compute_v<Elements>,
-             ComputeFacts<
-                 true,
-                 true,
-                 SlotBase,
-                 ChainTraits<Elements...>::prev.srca[Is] == NO_PREV_DFB ? PrevA
-                                                                        : ChainTraits<Elements...>::prev.srca[Is],
-                 ChainTraits<Elements...>::prev.srcb[Is] == NO_PREV_DFB ? PrevB
-                                                                        : ChainTraits<Elements...>::prev.srcb[Is],
-                 ChainTraits<Elements...>::prev.pack[Is] == NO_PREV_DFB ? PrevP
-                                                                        : ChainTraits<Elements...>::prev.pack[Is],
-                 PackHetero>>(std::get<Is>(branch.elements)),
+         select_element<participates_in_compute_v<Elements>, ComputeFacts<SlotBase>>(std::get<Is>(branch.elements)),
          i_flat,
          ht,
          wt,
@@ -84,7 +61,7 @@ constexpr RuntimeConditionalSequence<Branches...>::RuntimeConditionalSequence(
     selected_branch(selected_branch_), branches(branches_) {}
 
 template <class... Branches>
-template <uint32_t SlotBase, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
+template <uint32_t SlotBase>
 ALWI void RuntimeConditionalSequence<Branches...>::apply(
     uint32_t i_flat,
     uint32_t ht,
@@ -93,11 +70,11 @@ ALWI void RuntimeConditionalSequence<Branches...>::apply(
     uint32_t chain_lane_width,
     uint32_t Ht,
     uint32_t Wt) const {
-    apply_selected<0, SlotBase, PrevA, PrevB, PrevP, PackHetero>(i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
+    apply_selected<0, SlotBase>(i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
 }
 
 template <class... Branches>
-template <std::size_t BranchIndex, uint32_t SlotBase, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
+template <std::size_t BranchIndex, uint32_t SlotBase>
 ALWI void RuntimeConditionalSequence<Branches...>::apply_selected(
     uint32_t i_flat,
     uint32_t ht,
@@ -109,7 +86,7 @@ ALWI void RuntimeConditionalSequence<Branches...>::apply_selected(
     if constexpr (BranchIndex < sizeof...(Branches)) {
         if (selected_branch == BranchIndex) {
             const auto& branch = std::get<BranchIndex>(branches);
-            detail::apply_runtime_branch<SlotBase, PrevA, PrevB, PrevP, PackHetero>(
+            detail::apply_runtime_branch<SlotBase>(
                 branch,
                 std::make_index_sequence<std::tuple_size_v<decltype(branch.elements)>>{},
                 i_flat,
@@ -120,7 +97,7 @@ ALWI void RuntimeConditionalSequence<Branches...>::apply_selected(
                 Ht,
                 Wt);
         } else {
-            apply_selected<BranchIndex + 1, SlotBase, PrevA, PrevB, PrevP, PackHetero>(
+            apply_selected<BranchIndex + 1, SlotBase>(
                 i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
         }
     }

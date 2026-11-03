@@ -25,15 +25,12 @@ ALWI void preprocess_fpu_impl(
     using namespace ckernel;
 
     // Preserve the FPU operand order; same-format switches are elided.
-    reconfig_data_format_srca(/*old*/ BINARY_FPU_SRCA_FORMAT_CB, /*new*/ cb_pre.get_cb_id());
-    pack_reconfig_data_format(/*old*/ cb_out.get_cb_id(), /*new*/ cb_post.get_cb_id());
 
     cb_pre.wait_front(per_core_block_size);
     cb_post.reserve_back(per_core_block_size);
 
     tile_regs_acquire();
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
-        copy_init(cb_pre.get_cb_id());
         copy_tile(cb_pre.get_cb_id(), i, i);
         process_activations(i);
     }
@@ -48,8 +45,6 @@ ALWI void preprocess_fpu_impl(
     cb_pre.pop_front(per_core_block_size);
     cb_post.push_back(per_core_block_size);
 
-    reconfig_data_format_srca(/*old*/ cb_pre.get_cb_id(), /*new*/ BINARY_FPU_SRCA_FORMAT_CB);
-    pack_reconfig_data_format(/*old*/ cb_post.get_cb_id(), /*new*/ cb_out.get_cb_id());
 }
 
 // Dispatcher: per-operand activation lists are configured at compile time via host-side

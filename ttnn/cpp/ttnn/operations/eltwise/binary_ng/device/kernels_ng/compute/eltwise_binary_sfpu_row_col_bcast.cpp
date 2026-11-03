@@ -34,6 +34,12 @@
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs,
     tt::CBIndex cb_post_lhs,
@@ -71,28 +77,23 @@ ALWI void process_tile(
 
     // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
     // exactly once); process_tile is called per iteration, so it only re-inits the copy op here.
-    copy_init(cb_left);
     PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_raw_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
-        pack_reconfig_data_format(cb_out, cb_llk_post);
-        reconfig_data_format(cb_raw_other, cb_raw_other);
-        unary_bcast_init<BroadcastType::ROW>(cb_raw_other);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(cb_raw_other, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_llk_post);
+        pack_tile(0, cb_llk_post, 0, false, pack_relu);
         exp_cb_llk_post.push_back(num_tiles_per_cycle);
         tile_regs_release();
         exp_cb_raw_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
-        pack_reconfig_data_format(cb_llk_post, cb_out);
 
         PREPROCESS(OTHER_OP, CircularBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
@@ -102,13 +103,9 @@ ALWI void process_tile(
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        reconfig_data_format_srca(cb_right, cb_left);
-        copy_init(cb_left);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_left, i, i * 2);
         }
-        reconfig_data_format_srca(cb_left, cb_right);
-        copy_init(cb_right);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_right, i, i * 2 + 1);
 
@@ -126,7 +123,7 @@ ALWI void process_tile(
 
         tile_regs_wait();
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 2, cb_out);
+            pack_tile(i * 2, cb_out, 0, false, pack_relu);
         }
         tile_regs_release();
         exp_cb_out.push_back(num_tiles_per_cycle);
@@ -170,9 +167,6 @@ void kernel_main() {
     // inside process_tile is always cb_post_lhs, so configure the pipeline for that here.
     compute_kernel_hw_startup(cb_post_lhs, cb_out);
 
-#ifdef PACK_RELU
-    pack_relu_config(ReluConfig::zero());
-#endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT

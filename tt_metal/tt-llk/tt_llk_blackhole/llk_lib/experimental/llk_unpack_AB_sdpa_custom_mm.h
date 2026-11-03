@@ -51,7 +51,7 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
 
     if (mask_chunk)
     {
-        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = base_address_mask;
+        TT_CFG_STORE(cfg, THCON_SEC1_REG3_Base_cntx1_address_ADDR32, base_address_mask);
         if constexpr (configure_mask_extent)
         {
             LLK_ASSERT(ct_dim * 2 <= 64, "mask_chunk requires ct_dim*2 <= 64 SrcB rows");

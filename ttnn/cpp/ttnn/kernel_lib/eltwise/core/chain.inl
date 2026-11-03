@@ -20,7 +20,6 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
-#include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 
@@ -419,11 +418,7 @@ constexpr uint32_t dest_reuse_binary_config_bits(
 // Internal sentinel + type-list wrapper + chain-shape trait declarations. These are
 // implementation detail of the chain pipeline — no chain caller references them, so they
 // live here rather than on the public chain.hpp surface.
-inline constexpr uint32_t INVALID_DFB = 0xFFFFFFFFu;      // "no CB on this slot" (== NO_PREV_DFB); a real
-                                                          // tt::CBIndex is 0..31, so 0xFFFFFFFF never aliases one.
-inline constexpr uint32_t CONDITIONAL_DFB = 0xFFFFFFFEu;  // a runtime branch may leave either the old or a new
-                                                          // format programmed; force the following element to
-                                                          // re-establish its expected input-side format.
+inline constexpr uint32_t INVALID_DFB = 0xFFFFFFFFu;  // "no CB on this slot"; a real tt::CBIndex is 0..31.
 
 template <class... Es>
 struct EltwiseChain;  // typed list of elements (defined below)
@@ -432,35 +427,11 @@ template <class Chain>
 struct chain_has_duplicate_upfront_dfbs;
 template <class Chain>
 struct chain_pack_writes_collide;
-template <class Chain>
-struct chain_per_side_dfbs_consistent;
-template <class Chain>
-struct chain_math_mop_uniform;
-template <class Chain>
-struct chain_sfpu_inits_uniform;
-template <class Chain>
-struct chain_hoist_math_mop;
-template <class Chain>
-struct chain_hoist_sfpu;
-template <class Chain>
-struct chain_hoist_pack;
 
 template <class Chain>
 inline constexpr bool chain_has_duplicate_upfront_cbs_v = chain_has_duplicate_upfront_dfbs<Chain>::value;
 template <class Chain>
 inline constexpr bool chain_pack_writes_collide_v = chain_pack_writes_collide<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_per_side_cbs_consistent_v = chain_per_side_dfbs_consistent<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_math_mop_uniform_v = chain_math_mop_uniform<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_sfpu_inits_uniform_v = chain_sfpu_inits_uniform<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_hoist_math_mop_v = chain_hoist_math_mop<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_hoist_sfpu_v = chain_hoist_sfpu<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_hoist_pack_v = chain_hoist_pack<Chain>::value;
 
 // =============================================================================
 // Marker tag hierarchy (data direction → kind)
@@ -575,29 +546,9 @@ inline constexpr bool is_classified_chain_element_v =
     (uint32_t{is_cb_reader_op_v<T>} + uint32_t{is_cb_writer_op_v<T>} + uint32_t{is_dest_only_op_v<T>}) == 1 ||
     std::is_same_v<T, DisabledChainElement>;
 /// SFPU (DEST-internal, non-RNG, non-fill) element predicate. SFPU ops inherit
-/// from `DestOnlyTag` via `UnaryOp` / `BinaryOp` / `TernaryOp`;
-/// Fill / PRNG-seeding elements share the `DestOnlyTag` lineage but their init programs
-/// fill state or the shared PRNG, not the SFPU MOP / ADDR_MOD_7 lane. The hoist gate counts distinct
-/// SFPU init types — `is_sfpu_op_v` is the predicate.
+/// from `DestOnlyTag` via `UnaryOp` / `BinaryOp` / `TernaryOp`.
 template <class T>
 inline constexpr bool is_sfpu_op_v = is_dest_only_op_v<T> && !is_fill_tile_op_v<T> && !is_prng_seed_op_v<T>;
-
-/// FPU-kind (non-CopyTile, FPU-MOP-touching) element predicate. Groups
-/// `BinaryFpu`, `DestReuseBinary`, `UnaryBcast` — each programs the FPU MOP /
-/// ADDR_MOD_0..3 lane on init via the binary-op init path.
-template <class T>
-inline constexpr bool is_fpu_kind_op_v =
-    is_binary_fpu_op_v<T> || is_dest_reuse_binary_op_v<T> || is_unary_bcast_op_v<T>;
-
-/// MATH-MOP-touching element predicate. Groups every element whose init
-/// programs the MATH MOP / ADDR_MOD_0..3 lane: `CopyTile` (via `copy_init`)
-/// and the FPU-kind ops (`BinaryFpu`,
-/// `DestReuseBinary`, `UnaryBcast`). The hoist gate requires all such
-/// elements in a chain (including the CopyTile-versus-FPU init clash) to be
-/// the same instantiated type — otherwise the boot-time fold leaves only the
-/// last init's MOP programmed and earlier elements run with the wrong MOP.
-template <class T>
-inline constexpr bool is_math_mop_op_v = is_copy_tile_op_v<T> || is_fpu_kind_op_v<T>;
 
 // =============================================================================
 // tile_base_value — orthogonal tile-index offset extractor (impl helper)
@@ -625,7 +576,6 @@ ALWI uint32_t tile_base_value([[maybe_unused]] uint32_t stored) noexcept {
 //
 //   template <Approx A = Approx::Exact, Approx F = Approx::Fast, Dst Slot = Dst::D0>
 //   struct Exp : UnaryOp<Exp<A, Slot>, Slot> {
-//       static void init()                        { exp_tile_init<A == Approx::Fast, F == Approx::Fast>(); }
 //       static void exec_impl(uint32_t slot_off)  { exp_tile<A == Approx::Fast, F == Approx::Fast>(to_u32(Slot) +
 //       slot_off); }
 //   };
@@ -697,18 +647,6 @@ struct TernaryOp : TernaryOpTag {
 
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
 };
-
-// =============================================================================
-// Compile-time prev-CB tracking — drives the reconfig fold
-// =============================================================================
-//
-// Each element exposes uniform static accessors for the CB it routes to each Side
-// (SrcA / SrcB / Pack), letting the pipeline compute the most recent CB on each side
-// before a given element. NO_PREV_DFB is the "doesn't touch this side" sentinel.
-
-inline constexpr uint32_t NO_PREV_DFB = 0xFFFFFFFFu;
-
-enum class Side : uint8_t { SrcA, SrcB, Pack };
 
 namespace detail {
 
@@ -815,68 +753,6 @@ constexpr uint32_t pack_dfb_of();
 // trait wrappers (chain_lane_width etc.) can name it.
 template <class... Es>
 struct ChainTraits;
-
-// =============================================================================
-// Per-Side prev-CB SFINAE probe
-//
-// `dfb_for_side<Side, E>` reads `E::reconfig_srca_dfb` / `_srcb_cb` / `_pack_cb`
-// when present, returns `NO_PREV_DFB` otherwise. Elements that don't declare the
-// accessors still participate in the fold transparently (treated as no-prev).
-// =============================================================================
-
-template <class E, class = void>
-struct has_reconfig_srca : std::false_type {};
-template <class E>
-struct has_reconfig_srca<E, std::void_t<decltype(E::reconfig_srca_dfb)>> : std::true_type {};
-
-template <class E, class = void>
-struct has_reconfig_srcb : std::false_type {};
-template <class E>
-struct has_reconfig_srcb<E, std::void_t<decltype(E::reconfig_srcb_dfb)>> : std::true_type {};
-
-template <class E, class = void>
-struct has_reconfig_pack : std::false_type {};
-template <class E>
-struct has_reconfig_pack<E, std::void_t<decltype(E::reconfig_pack_dfb)>> : std::true_type {};
-
-template <Side S, class E>
-constexpr uint32_t dfb_for_side() {
-    if constexpr (S == Side::SrcA) {
-        if constexpr (has_reconfig_srca<E>::value) {
-            return E::reconfig_srca_dfb;
-        } else {
-            return NO_PREV_DFB;
-        }
-    } else if constexpr (S == Side::SrcB) {
-        if constexpr (has_reconfig_srcb<E>::value) {
-            return E::reconfig_srcb_dfb;
-        } else {
-            return NO_PREV_DFB;
-        }
-    } else {  // Pack
-        if constexpr (has_reconfig_pack<E>::value) {
-            return E::reconfig_pack_dfb;
-        } else {
-            return NO_PREV_DFB;
-        }
-    }
-}
-
-// True iff NO element in the pack requests any srca / srcb / pack reconfig — i.e. every element's
-// reconfig knob is None. Under InitReconfigOwner::Caller the chain emits zero reconfig, so a non-None knob
-// is inert and lies about what the helper does; eltwise_chain uses this to forbid that, forcing the
-// caller to declare None — which honestly reflects "the chain does no reconfig, I own the format."
-template <class... Es>
-constexpr bool chain_requests_no_reconfig() {
-    return (
-        (dfb_for_side<Side::SrcA, Es>() == NO_PREV_DFB && dfb_for_side<Side::SrcB, Es>() == NO_PREV_DFB &&
-         dfb_for_side<Side::Pack, Es>() == NO_PREV_DFB) &&
-        ...);
-}
-
-// Per-side prev-CB history, last opt-in pack CB, and heterogeneous-pack detection are
-// single-sweep fields on `ChainTraits` (prev / last_pack_cb / pack_hetero), computed
-// once from the reflected ElemDesc array.
 
 }  // namespace detail
 
@@ -1036,7 +912,6 @@ struct detail::CopyTileImpl : InputStream<DataflowBufferType>, CopyTileTag {
     static constexpr Dst DstSlot = Config.dst();
     static constexpr WaitPolicy Wait = Input.wait;
     static constexpr PopPolicy Pop = Input.pop;
-    static constexpr DataFormatReconfig Reconfig = Input.reconfig;
     static constexpr InputTileMapping Mapping = Input.mapping;
     static constexpr TileAddressing Addressing = Input.addressing;
     using Base = InputStream<DataflowBufferType>;
@@ -1064,10 +939,6 @@ struct detail::CopyTileImpl : InputStream<DataflowBufferType>, CopyTileTag {
     // CopyTile reads one CB front (srcA via dfb_a_id); srcB is absent.
     static constexpr InputSpec a_input() { return Input; }
 
-    // Prev-CB fold: CopyTile loads CbA only. srcb/pack sides are absent -> dfb_for_side
-    // defaults them to NO_PREV_DFB.
-    static constexpr uint32_t reconfig_srca_dfb = (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
-
     // The DataflowBuffer(s) this element binds, in spec order.
     using BoundBuffers = std::tuple<DataflowBufferType>;
     template <class... Args, std::enable_if_t<rejects_constructor_args<CopyTileImpl, BoundBuffers, Args...>(), int> = 0>
@@ -1083,8 +954,6 @@ struct detail::CopyTileImpl : InputStream<DataflowBufferType>, CopyTileTag {
     }
 
     // ---- chain pipeline hooks ----
-    static ALWI void init() { copy_init(Cb); }
-
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         const uint32_t in_idx = tile_base_value<Addressing>(tile_base) +
                                 detail::input_idx<Mapping, Wait, Pop, Addressing>(i_flat, ht, wt, row_stride);
@@ -1107,7 +976,6 @@ struct detail::PackTileImpl : OutputStream<DataflowBufferType>, PackTileTag {
     static constexpr OutputSpec Output = Config.output_spec(Cb);
     static constexpr ReservePolicy Reserve = Output.reserve;
     static constexpr PushPolicy Push = Output.push;
-    static constexpr DataFormatReconfig Reconfig = Output.reconfig;
     static constexpr PackRelu Relu = Output.relu;
     static constexpr L1Accumulation L1AccumulationMode = Output.l1_accumulation;
     static constexpr DestAccumulation DestAccumulationMode = Output.dest_accumulation;
@@ -1181,16 +1049,9 @@ struct detail::PackTileImpl : OutputStream<DataflowBufferType>, PackTileTag {
          (Push == PushPolicy::PerOuter)) ||
         (DestAccumulationMode == DestAccumulation::WholeShape && (Reserve == ReservePolicy::OneUpfront) &&
          (Push == PushPolicy::OneAtEnd));
-    static constexpr bool uses_pack_relu = Relu != PackRelu::Disabled;
     static constexpr bool uses_per_block_pack =
         ((Reserve == ReservePolicy::PerBlockSize) && (Push == PushPolicy::PerBlockSize));
     // `walk` (walk vs pinned output addressing) is derived from output policy pair above.
-
-    // Prev-CB fold: PackTile writes pack-side; mark Cb under reconfig only when
-    // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
-    // emitted — fold keeps prior pack target.
-    // srca/srcb absent -> dfb_for_side defaults them to NO_PREV_DFB; PackTile programs pack only.
-    static constexpr uint32_t reconfig_pack_dfb = (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
     // The DataflowBuffer(s) this element binds, in spec order.
     using BoundBuffers = std::tuple<DataflowBufferType>;
@@ -1204,14 +1065,6 @@ struct detail::PackTileImpl : OutputStream<DataflowBufferType>, PackTileTag {
     }
     ALWI PackTileImpl(DataflowBufferType& out, StridedTileRange range) noexcept : Base(out, range) {
         check_bound_dataflow_buffer<Cb>(out);
-    }
-
-    static ALWI void configure_relu() {
-        if constexpr (Relu == PackRelu::Zero) {
-            pack_relu_config(ReluConfig::zero());
-        } else {
-            pack_relu_config(ReluConfig::none());
-        }
     }
 
     // Pack exec — walk the reserved output window (base + i_flat) for the upfront-reserve outputs
@@ -1229,7 +1082,8 @@ struct detail::PackTileImpl : OutputStream<DataflowBufferType>, PackTileTag {
     // (addr = fifo_wr_ptr + page_size*out_idx - 1) without advancing the internal counter — exactly
     // matching the explicit tile index we pass each iteration. Direct keeps the proven
     // sequential path with zero behavior change.
-    ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
+    // `seed` marks the first pack of a seed-first L1 accumulation, which overwrites the output.
+    ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset, bool seed = false) const {
         const uint32_t base = tile_base_value<Addressing>(tile_base);
         uint32_t out_idx;
         if constexpr (Addressing == TileAddressing::Strided) {
@@ -1239,7 +1093,11 @@ struct detail::PackTileImpl : OutputStream<DataflowBufferType>, PackTileTag {
         }
         pack_tile<
             /*out_of_order_output=*/Addressing != TileAddressing::Direct || L1AccumulationMode != L1Accumulation::Disabled>(
-            to_u32(DstSlot) + slot_offset, Cb, out_idx);
+            to_u32(DstSlot) + slot_offset,
+            Cb,
+            out_idx,
+            L1AccumulationMode != L1Accumulation::Disabled && !seed,
+            Relu == PackRelu::Zero ? ReluConfig::zero() : ReluConfig::none());
     }
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
@@ -1326,17 +1184,6 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     static constexpr bool b_uses_local_idx = ((BWait == WaitPolicy::PerBlockSize) && (BPop == PopPolicy::PerBlockSize));
     static constexpr bool needs_per_side_idx = (a_uses_local_idx != b_uses_local_idx);
 
-    // Prev-CB fold: BinaryFpu touches srca (CbA) and srcb (CbB) only. Pack-side
-    // reconfig is owned by the downstream PackTile element.
-    // — BinaryFpu writes to DEST, not to a CB, so it has no pack-side responsibility.
-    //
-    // Per-side selection (Input / SrcA / SrcB) lets the caller opt into a single-side
-    // fold when the other side is already programmed (by a previous chain element on
-    // the same side, or by external init).
-    static constexpr uint32_t reconfig_srca_dfb = (AInput.reconfig == DataFormatReconfig::Enabled) ? CbA : NO_PREV_DFB;
-    static constexpr uint32_t reconfig_srcb_dfb = (BInput.reconfig == DataFormatReconfig::Enabled) ? CbB : NO_PREV_DFB;
-    // pack side absent -> dfb_for_side defaults to NO_PREV_DFB (downstream PackTile owns pack).
-
     InputStream<DataflowBufferA> a;
     InputStream<DataflowBufferB> b;
 
@@ -1385,41 +1232,6 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     // Lifecycle fan-out lives in the chain driver. When same_dfb, it emits one
     // physical wait/pop and uses max(base_a, base_b) for the shared window.
 
-    // ---- init / reconfig ----
-    // srca / srcb / pack reconfig are fold-driven (compile-time-elided
-    // when prev_*_cb == cur_*_cb). init() programs only the per-op LLK shape.
-    static ALWI void init() {
-        // Op-specific init.
-        if constexpr (Bcast == BroadcastDim::None) {
-            constexpr bool acc_to_dest = Accumulation != DestAccumulation::Disabled;
-            if constexpr (Op == BinaryFpuOp::Add) {
-                add_init(CbA, CbB, acc_to_dest);
-            } else if constexpr (Op == BinaryFpuOp::Sub) {
-                sub_init(CbA, CbB, acc_to_dest);
-            } else {
-                mul_init(CbA, CbB, static_cast<uint32_t>(acc_to_dest), __builtin_LINE());
-            }
-        } else {
-            // Use the per-op {op}_bcast_{dim}_init form from bcast.h (math init + unpack init only,
-            // no hw_configure / pack_dest_init / sync_init — the full init is undefined
-            // mid-MAIN). The operand form reads the actual tensor shape from CB metadata via
-            // get_operand_tensor_shape, matching `add_bcast_rows_init` /
-            // `sub_bcast_cols_init` etc. exactly.
-            constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
-            constexpr auto et = (Op == BinaryFpuOp::Add)   ? ckernel::EltwiseBinaryType::ELWADD
-                                : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
-                                                           : ckernel::EltwiseBinaryType::ELWMUL;
-            if constexpr (Op == BinaryFpuOp::Mul) {
-                MATH((llk_math_eltwise_binary_init<et, bt, MATH_FIDELITY>(
-                    CbA, CbB, Accumulation != DestAccumulation::Disabled)));
-            } else {
-                MATH((llk_math_eltwise_binary_init<et, bt, MathFidelity::LoFi>(
-                    CbA, CbB, Accumulation != DestAccumulation::Disabled)));
-            }
-            UNPACK((llk_unpack_AB_init<bt>(CbA, CbB)));
-        }
-    }
-
     // Per-side tile mapping. AMapping drives a_idx, BMapping drives b_idx. The canonical
     // bcast walk is A=Block (walks the tile range) + B=Scalar (pins the
     // scaler/vector operand at tile 0). AddressingA / AddressingB add a runtime or
@@ -1449,24 +1261,24 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
                                detail::input_idx<AMapping, AWait, APop, AddressingA>(a_flat, ht, a_wt, a.row_stride);
         const uint32_t b_idx = tile_base_value<AddressingB>(b.tile_base) +
                                detail::input_idx<BMapping, BWait, BPop, AddressingB>(b_flat, ht, b_wt, b.row_stride);
-        const uint32_t dst =
-            Accumulation != DestAccumulation::Disabled ? to_u32(DstSlot) : to_u32(DstSlot) + slot_offset;
+        constexpr bool acc_to_dest = Accumulation != DestAccumulation::Disabled;
+        const uint32_t dst = acc_to_dest ? to_u32(DstSlot) : to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr (Op == BinaryFpuOp::Add) {
-                add_tiles(CbA, CbB, a_idx, b_idx, dst);
+                add_tiles(CbA, CbB, a_idx, b_idx, dst, acc_to_dest);
             } else if constexpr (Op == BinaryFpuOp::Sub) {
-                sub_tiles(CbA, CbB, a_idx, b_idx, dst);
+                sub_tiles(CbA, CbB, a_idx, b_idx, dst, acc_to_dest);
             } else {
-                mul_tiles(CbA, CbB, a_idx, b_idx, dst);
+                mul_tiles(CbA, CbB, a_idx, b_idx, dst, acc_to_dest);
             }
         } else {
             constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
             if constexpr (Op == BinaryFpuOp::Add) {
-                add_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+                add_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst, 0, acc_to_dest);
             } else if constexpr (Op == BinaryFpuOp::Sub) {
-                sub_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+                sub_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst, 0, acc_to_dest);
             } else {
-                mul_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst);
+                mul_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, dst, 0, acc_to_dest);
             }
         }
     }
@@ -1536,17 +1348,6 @@ struct detail::DestReuseBinaryImpl : InputStream<DataflowBufferType>, DestReuseB
             TileAddressing::Direct};
     }
 
-    // Prev-CB fold: DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
-    // (when DEST → srca). Reconfig only fires when opted in.
-    //
-    static constexpr uint32_t reconfig_srca_dfb =
-        (InputConfig.reconfig == DataFormatReconfig::Enabled && ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb
-                                                                                                          : NO_PREV_DFB;
-    static constexpr uint32_t reconfig_srcb_dfb =
-        (InputConfig.reconfig == DataFormatReconfig::Enabled && ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb
-                                                                                                          : NO_PREV_DFB;
-    // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
-
     // The DataflowBuffer(s) this element binds, in spec order.
     using BoundBuffers = std::tuple<DataflowBufferType>;
     template <class... Args, std::enable_if_t<rejects_constructor_args<DestReuseBinaryImpl, BoundBuffers, Args...>(), int> = 0>
@@ -1559,21 +1360,6 @@ struct detail::DestReuseBinaryImpl : InputStream<DataflowBufferType>, DestReuseB
     }
     ALWI DestReuseBinaryImpl(DataflowBufferType& in, StridedTileRange range) noexcept : Base(in, range) {
         check_bound_dataflow_buffer<Cb>(in);
-    }
-
-    // srca / srcb reconfig is fold-driven; init() programs only the per-op
-    // LLK shape.
-    static ALWI void init() {
-        constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
-                                   ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
-                                   : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
-        if constexpr (Op == BinaryFpuOp::Add) {
-            add_reuse_dest_init<reuse>(Cb);
-        } else if constexpr (Op == BinaryFpuOp::Sub) {
-            sub_reuse_dest_init<reuse>(Cb);
-        } else {
-            mul_reuse_dest_init<reuse>(Cb);
-        }
     }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
@@ -1803,9 +1589,6 @@ constexpr bool b_pops_cb_front_of() {
 struct ElemDesc {
     bool is_cb_reader;
     bool is_pack;
-    uint32_t srca_cb;        // dfb_for_side<SrcA> (NO_PREV_DFB when not programmed) — per-side consistency + prev input
-    uint32_t srcb_cb;        // dfb_for_side<SrcB>
-    uint32_t pack_side_dfb;  // dfb_for_side<Pack> (reconfig_pack_dfb) — prev / last_pack / hetero input
     uint32_t dfb_a;          // dfb_a_of (INVALID_DFB when n/a) — reader-collision input
     uint32_t dfb_b;          // dfb_b_of (INVALID_DFB when n/a)
     uint32_t pack_dfb;       // pack_dfb_of (INVALID_DFB when n/a) — writer-collision input
@@ -1818,7 +1601,6 @@ struct ElemDesc {
     Dst accumulated_dst_slot;
     bool uses_dest_accumulation_lifecycle;
     bool manages_dest_accumulation_lifecycle;
-    bool uses_pack_relu;
     bool a_owns_cb_window;
     bool b_owns_cb_window;
     bool a_pops_cb_front;
@@ -1889,13 +1671,6 @@ template <class E>
 constexpr bool manages_dest_accumulation_lifecycle_of() {
     if constexpr (is_pack_tile_op_v<E>) {
         return E::manages_dest_accumulation_lifecycle;
-    }
-    return false;
-}
-template <class E>
-constexpr bool uses_pack_relu_of() {
-    if constexpr (is_pack_tile_op_v<E>) {
-        return E::uses_pack_relu;
     }
     return false;
 }
@@ -1976,9 +1751,6 @@ constexpr ElemDesc describe() {
     return ElemDesc{
         is_cb_reader_op_v<E>,
         is_pack_tile_op_v<E>,
-        dfb_for_side<Side::SrcA, E>(),
-        dfb_for_side<Side::SrcB, E>(),
-        dfb_for_side<Side::Pack, E>(),
         dfb_a_of<E>(),
         dfb_b_of<E>(),
         pack_dfb_of<E>(),
@@ -1991,7 +1763,6 @@ constexpr ElemDesc describe() {
         accumulated_dst_slot_of<E>(),
         uses_dest_accumulation_lifecycle_of<E>(),
         manages_dest_accumulation_lifecycle_of<E>(),
-        uses_pack_relu_of<E>(),
         a_owns_cb_window_of<E>(),
         b_owns_cb_window_of<E>(),
         a_pops_cb_front_of<E>(),
@@ -2034,21 +1805,6 @@ constexpr bool ct_supports_block(const ElemDesc* d, int n) {
         r = r && d[i].supports_block;
     }
     return r;
-}
-constexpr bool ct_side_consistent(const ElemDesc* d, int n, uint32_t ElemDesc::* side) {
-    uint32_t seen = NO_PREV_DFB;
-    for (int i = 0; i < n; ++i) {
-        uint32_t dfb = d[i].*side;
-        if (dfb == NO_PREV_DFB) {
-            continue;
-        }
-        if (seen == NO_PREV_DFB) {
-            seen = dfb;
-        } else if (seen != dfb) {
-            return false;
-        }
-    }
-    return true;
 }
 constexpr bool ct_reader_collide(const ElemDesc* d, int n) {
     for (int i = 0; i < n; ++i) {
@@ -2243,70 +1999,6 @@ constexpr uint32_t ct_managed_dest_accumulation_lifecycles(const ElemDesc* d, in
     }
     return count;
 }
-constexpr bool ct_any_pack_relu(const ElemDesc* d, int n) {
-    for (int i = 0; i < n; ++i) {
-        if (d[i].uses_pack_relu) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Per-side "previous programmed CB at each index" tables, built in ONE forward sweep:
-// carry a running prev per side, record it BEFORE each element, update it when the
-// element programs that side. prev.srca[I] is the most recent CB programmed on SrcA by
-// any element before index I (NO_PREV_DFB if none).
-template <int M>
-struct PrevTable {
-    uint32_t srca[M];
-    uint32_t srcb[M];
-    uint32_t pack[M];
-};
-template <int M>
-constexpr PrevTable<M> ct_build_prev(const ElemDesc* d, int n) {
-    PrevTable<M> t{};
-    uint32_t pa = NO_PREV_DFB, pb = NO_PREV_DFB, pp = NO_PREV_DFB;
-    for (int i = 0; i < n; ++i) {
-        t.srca[i] = pa;
-        t.srcb[i] = pb;
-        t.pack[i] = pp;
-        if (d[i].srca_cb != NO_PREV_DFB) {
-            pa = d[i].srca_cb;
-        }
-        if (d[i].srcb_cb != NO_PREV_DFB) {
-            pb = d[i].srcb_cb;
-        }
-        if (d[i].pack_side_dfb != NO_PREV_DFB) {
-            pp = d[i].pack_side_dfb;
-        }
-    }
-    return t;
-}
-// Last opt-in pack CB in chain order (iter-to-iter wraparound prev for pack site 0).
-constexpr uint32_t ct_last_pack_cb(const ElemDesc* d, int n) {
-    uint32_t last = NO_PREV_DFB;
-    for (int i = 0; i < n; ++i) {
-        if (d[i].pack_side_dfb != NO_PREV_DFB) {
-            last = d[i].pack_side_dfb;
-        }
-    }
-    return last;
-}
-// True iff ≥2 opt-in pack sites declare different CBs (boot can't program all).
-constexpr bool ct_pack_hetero(const ElemDesc* d, int n) {
-    uint32_t first = NO_PREV_DFB;
-    for (int i = 0; i < n; ++i) {
-        if (d[i].pack_side_dfb == NO_PREV_DFB) {
-            continue;
-        }
-        if (first == NO_PREV_DFB) {
-            first = d[i].pack_side_dfb;
-        } else if (first != d[i].pack_side_dfb) {
-            return true;
-        }
-    }
-    return false;
-}
 
 template <class... Es>
 struct ChainTraits {
@@ -2316,8 +2008,6 @@ struct ChainTraits {
     static constexpr uint32_t lane_width = ct_lane_width(d, N);
     static constexpr uint32_t transient_lane_width = ct_transient_lane_width(d, N);
     static constexpr bool supports_block = ct_supports_block(d, N);
-    static constexpr bool srca_consistent = ct_side_consistent(d, N, &ElemDesc::srca_cb);
-    static constexpr bool srcb_consistent = ct_side_consistent(d, N, &ElemDesc::srcb_cb);
     static constexpr bool reader_collide = ct_reader_collide(d, N);
     static constexpr bool writer_collide = ct_writer_collide(d, N);
     static constexpr bool any_l1_accumulation = ct_any_l1_accumulation(d, N);
@@ -2335,12 +2025,6 @@ struct ChainTraits {
     static constexpr bool all_writers_dest_accumulation_lifecycle = ct_all_writers_dest_accumulation_lifecycle(d, N);
     static constexpr bool any_dest_accumulation_lifecycle = ct_any_dest_accumulation_lifecycle(d, N);
     static constexpr uint32_t managed_dest_accumulation_lifecycles = ct_managed_dest_accumulation_lifecycles(d, N);
-    static constexpr bool any_pack_relu = ct_any_pack_relu(d, N);
-
-    // Per-side prev-CB history (one sweep), + pack-side metadata.
-    static constexpr PrevTable<N ? N : 1> prev = ct_build_prev<N ? N : 1>(d, N);
-    static constexpr uint32_t last_pack_cb = ct_last_pack_cb(d, N);
-    static constexpr bool pack_hetero = ct_pack_hetero(d, N);
 };
 
 }  // namespace detail
@@ -2404,137 +2088,6 @@ struct chain_has_duplicate_upfront_dfbs<EltwiseChain<Es...>>
 template <class... Es>
 struct chain_pack_writes_collide<EltwiseChain<Es...>> : std::bool_constant<detail::ChainTraits<Es...>::writer_collide> {
 };
-
-// `chain_hoist_math_mop` / `chain_hoist_sfpu` — per-cohort decisions on whether each
-// element's init() can run once at boot instead of per tile. The two cohorts (math-MOP =
-// ADDR_MOD_0..3 + MATH MOP; SFPU = ADDR_MOD_7 + SFPU CSR) are hardware-disjoint, so the
-// decisions are independent in principle; we constrain hoist_sfpu to imply hoist_math_mop
-// to keep the dispatcher simple. Eltwise-only scope (no matmul/reduce hazards).
-//
-// All three conditions guard the same failure mode — boot programs each lane once, so a
-// non-uniform chain leaves only the LAST init's state programmed and earlier elements run
-// with the wrong MOP/format:
-//   - Per-side CB consistency: every element programming a side (srcA/srcB) uses the same CB.
-//   - MATH-MOP uniformity: all `is_math_mop_op_v` elements (CopyTile / BinaryFpu /
-//     DestReuseBinary / UnaryBcast) are the same instantiated type.
-//   - SFPU-init uniqueness: all `is_sfpu_op_v` elements are the same type. (Caught
-//     mish FP32 Exp/Log1p/Tanh → tanh saturation PCC 0.988; logit stage-2
-//     Rsub/DivBinary/Log → ATOL 9-12.)
-//
-// "Identical" is `std::is_same_v` — rejects some safe chains (two `Exp<...>` differing only
-// in slot), but false negatives only cost a per-tile init, never correctness.
-
-namespace detail {
-
-// Per-side CB consistency is ChainTraits::srca_consistent / srcb_consistent.
-
-// Trait wrappers (Pred<E>::value form) — `is_sfpu_op_v` / `is_math_mop_op_v`
-// are `inline constexpr bool` variable templates; wrap them so they fit the
-// `Pred<E>::value` interface used by the uniformity fold.
-template <class E>
-struct is_sfpu_op_t : std::bool_constant<is_sfpu_op_v<E>> {};
-template <class E>
-struct is_math_mop_op_t : std::bool_constant<is_math_mop_op_v<E>> {};
-
-// Uniformity helper (used for both the MATH-MOP and SFPU cohorts): across all
-// `Es...` satisfying `Pred<E>`, require every instantiated type to be
-// `std::is_same_v` with every other (≤ 1 distinct).
-//
-// Strategy: find the first `E` in `Es...` with `Pred<E>::value == true`;
-// call it `Rep`. Then every other `E` with `Pred<E>::value == true` must
-// satisfy `std::is_same_v<Rep, E>`. If no element matches, the chain is
-// vacuously uniform (returns true).
-template <template <class> class Pred, class... Es>
-struct first_match {
-    using type = void;
-};
-
-template <template <class> class Pred, class First, class... Rest>
-struct first_match<Pred, First, Rest...> {
-    using type = std::conditional_t<Pred<First>::value, First, typename first_match<Pred, Rest...>::type>;
-};
-
-template <template <class> class Pred, class Rep, class... Es>
-struct all_match_rep : std::bool_constant<(((!Pred<Es>::value) || std::is_same_v<Rep, Es>) && ...)> {};
-
-// Empty `Rep == void` short-circuits to `true` (no element matched Pred at all,
-// so the "must equal Rep" condition is vacuously satisfied).
-template <template <class> class Pred, class... Es>
-constexpr bool chain_all_pred_uniform_v = []() {
-    using Rep = typename first_match<Pred, Es...>::type;
-    if constexpr (std::is_same_v<Rep, void>) {
-        return true;
-    } else {
-        return all_match_rep<Pred, Rep, Es...>::value;
-    }
-}();
-
-}  // namespace detail
-
-template <class Chain>
-struct chain_per_side_dfbs_consistent : std::true_type {};
-
-template <class... Es>
-struct chain_per_side_dfbs_consistent<EltwiseChain<Es...>>
-    : std::bool_constant<detail::ChainTraits<Es...>::srca_consistent && detail::ChainTraits<Es...>::srcb_consistent> {};
-
-template <class Chain>
-struct chain_math_mop_uniform : std::true_type {};
-
-template <class... Es>
-struct chain_math_mop_uniform<EltwiseChain<Es...>>
-    : std::bool_constant<detail::chain_all_pred_uniform_v<detail::is_math_mop_op_t, Es...>> {};
-
-template <class Chain>
-struct chain_sfpu_inits_uniform : std::true_type {};
-
-template <class... Es>
-struct chain_sfpu_inits_uniform<EltwiseChain<Es...>>
-    : std::bool_constant<detail::chain_all_pred_uniform_v<detail::is_sfpu_op_t, Es...>> {};
-
-// Math-MOP cohort hoist: per-side CB consistency + math-MOP uniformity.
-// True when CopyTile / BinaryFpu / DestReuseBinary / UnaryBcast inits can be
-// emitted once at boot instead of per tile. Independent of SFPU uniformity.
-template <class Chain>
-struct chain_hoist_math_mop : std::false_type {};
-
-template <class... Es>
-struct chain_hoist_math_mop<EltwiseChain<Es...>>
-    : std::bool_constant<
-          ((!is_runtime_conditional_sequence_op_v<Es>) && ...) &&
-          chain_per_side_cbs_consistent_v<EltwiseChain<Es...>> && chain_math_mop_uniform_v<EltwiseChain<Es...>>> {};
-
-// SFPU cohort hoist: requires math-MOP hoist AND SFPU init uniformity.
-// True when every element's init can be emitted at boot (the fully-hoisted shape).
-template <class Chain>
-struct chain_hoist_sfpu : std::false_type {};
-
-template <class... Es>
-struct chain_hoist_sfpu<EltwiseChain<Es...>>
-    : std::bool_constant<
-          chain_hoist_math_mop_v<EltwiseChain<Es...>> && chain_sfpu_inits_uniform_v<EltwiseChain<Es...>>> {};
-
-// Pack cohort hoist: pack init + reconfig are fully boot-emitted, with NO per-stage pack
-// reconfig in the loop. True iff the chain isn't pack-hetero (homogeneous opt-in pack CBs).
-// The output-reconfig leg of "all one-time setup is boot-hoistable" (with math-MOP + SFPU).
-template <class Chain>
-struct chain_hoist_pack : std::true_type {};
-
-template <class... Es>
-struct chain_hoist_pack<EltwiseChain<Es...>> : std::bool_constant<!detail::ChainTraits<Es...>::pack_hetero> {};
-
-// True iff no element requests any reconfig. InitReconfigOwner::Caller requires this so an enabled but
-// inert operand reconfig (which the helper would silently ignore) is a compile error
-// instead of a lie about what runs inside the chain.
-template <class Chain>
-struct chain_no_reconfig_requested : std::true_type {};
-
-template <class... Es>
-struct chain_no_reconfig_requested<EltwiseChain<Es...>>
-    : std::bool_constant<detail::chain_requests_no_reconfig<Es...>()> {};
-
-template <class Chain>
-inline constexpr bool chain_no_reconfig_requested_v = chain_no_reconfig_requested<Chain>::value;
 
 // =============================================================================
 // 10. Chain pipeline — per-iteration emit
@@ -2666,147 +2219,13 @@ ALWI auto& output_buffer(const E& elem) {
     return *elem.buffer;
 }
 
-// init() dispatch convention — the compute-cohort init is emitted on the element
-// *instance* (`elem.init()`), exactly like `exec`, so an init can read the struct's
-// runtime members when it needs to (e.g. Dropout seeding the SFPU with its runtime
-// `seed`). Most inits don't and are declared `static`; a static member is callable
-// through an instance, so the call site is uniform either way. PackTile is the one
-// exception — its init is dispatched by type in the indexed setup fold (no instance
-// needed), which is fine because pack init never needs runtime state.
-
-// =============================================================================
-// emit_pre_element_transitions<E, PrevA, PrevB, PrevP, PackHetero>()
-//
-// Emits srca / srcb / pack reconfig for element I, each compile-time-elided when
-// prev_*_cb == curr_*_cb. A chain that shares a CB on a side thus reconfigs it once (at
-// element 0, prev == NO_PREV_DFB) and never again. Zero run-time cost — `if constexpr`.
-//
-// srca+srcb coalesce: both-with-known-prev → 4-arg _with_dt; both-without-known-prev →
-// 2-arg combined; mixed → independent per-side. CONDITIONAL_DFB is an unknown previous
-// state, so it takes the unconditional path and is never passed to an LLK as a CB id.
-// Pack is always independent. The LLK _with_dt overloads
-// fast-path-skip on format equality, so an emitted reconfig on matching dtypes is a
-// hardware no-op (a few compares).
-//
-// Pack-side hoist: homogeneous chains (≤1 opt-in pack site, or all share a CB) emit at
-// boot via the indexed setup fold; heterogeneous chains (≥2 sites, different CBs) emit only
-// the first site at boot and defer the rest to per-stage `emit_per_stage_pack_reconfig`.
-// DEST accumulation is build-flag-driven (no per-element fp32 fold here).
-// =============================================================================
-
-// Takes only the element and the preceding CB descriptors needed to decide its transitions.
-template <class E, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
-ALWI void emit_pre_element_transitions() {
-    constexpr uint32_t curr_a = dfb_for_side<Side::SrcA, E>();
-    constexpr uint32_t curr_b = dfb_for_side<Side::SrcB, E>();
-    constexpr uint32_t curr_p = dfb_for_side<Side::Pack, E>();
-
-    constexpr uint32_t prev_a = (curr_a != NO_PREV_DFB) ? PrevA : NO_PREV_DFB;
-    constexpr uint32_t prev_b = (curr_b != NO_PREV_DFB) ? PrevB : NO_PREV_DFB;
-    constexpr uint32_t prev_p = (curr_p != NO_PREV_DFB) ? PrevP : NO_PREV_DFB;
-
-    constexpr bool reconf_a = (curr_a != NO_PREV_DFB) && (curr_a != prev_a);
-    constexpr bool reconf_b = (curr_b != NO_PREV_DFB) && (curr_b != prev_b);
-    constexpr bool reconf_p = (curr_p != NO_PREV_DFB) && (curr_p != prev_p);
-    constexpr bool known_prev_a = prev_a != NO_PREV_DFB && prev_a != CONDITIONAL_DFB;
-    constexpr bool known_prev_b = prev_b != NO_PREV_DFB && prev_b != CONDITIONAL_DFB;
-
-    // Pack-side deferral: in heterogeneous chains, only the first opt-in pack
-    // site (prev_p == NO_PREV_DFB) emits at boot. Later sites defer to per-stage
-    // via `emit_per_stage_pack_reconfig`, where the 2-arg LLK form's cache check
-    // handles intra-stage transitions cheaply and the per-iter wraparound from
-    // last-pack-cb to first-pack-cb is correctly programmed.
-    constexpr bool defer_pack_to_per_stage = PackHetero && (prev_p != NO_PREV_DFB);
-
-    // ---- srca + srcb: coalesce when both sides share prev-state ----
-    if constexpr (reconf_a && reconf_b) {
-        if constexpr (known_prev_a && known_prev_b) {
-            // both sides have prev → 4-arg _with_dt
-            reconfig_data_format(prev_a, curr_a, prev_b, curr_b);
-        } else if constexpr (!known_prev_a && !known_prev_b) {
-            // first/unknown on both sides → 2-arg combined (unconditional reprogram)
-            reconfig_data_format(curr_a, curr_b);
-        } else {
-            // mixed prev-state → independent per-side
-            if constexpr (known_prev_a) {
-                reconfig_data_format_srca(prev_a, curr_a);
-            } else {
-                reconfig_data_format_srca(curr_a);
-            }
-            if constexpr (known_prev_b) {
-                reconfig_data_format_srcb(prev_b, curr_b);
-            } else {
-                reconfig_data_format_srcb(curr_b);
-            }
-        }
-    } else if constexpr (reconf_a) {
-        if constexpr (known_prev_a) {
-            reconfig_data_format_srca(prev_a, curr_a);
-        } else {
-            reconfig_data_format_srca(curr_a);
-        }
-    } else if constexpr (reconf_b) {
-        if constexpr (known_prev_b) {
-            reconfig_data_format_srcb(prev_b, curr_b);
-        } else {
-            reconfig_data_format_srcb(curr_b);
-        }
-    }
-
-    // ---- pack: always independent; deferred to per-stage in heterogeneous chains ----
-    if constexpr (reconf_p && !defer_pack_to_per_stage) {
-        if constexpr (prev_p != NO_PREV_DFB) {
-            pack_reconfig_data_format(prev_p, curr_p);
-        } else {
-            pack_reconfig_data_format(curr_p);
-        }
-    }
-}
-
-// emit_per_stage_pack_reconfig(curr, prev, last, heterogeneous)
-//
-// Per-stage pack reconfig used only when the chain has heterogeneous opt-in
-// pack CBs (boot can't program all of them). For every opt-in pack site,
-// emit the 2-arg `pack_reconfig_data_format(prev, curr)` form before that
-// site's per-iter pack work, using wraparound `prev` for the first pack site
-// (so iter k+1's site 0 sees iter k's site N-1 as the previous descriptor
-// state). The LLK's compare-and-skip on matching formats keeps the cost to
-// a few cycles when adjacent stages happen to share a dtype.
-ALWI void emit_per_stage_pack_reconfig(uint32_t curr_p, uint32_t prev_chain, uint32_t last_pack_cb, bool pack_hetero) {
-    if (!pack_hetero || curr_p == NO_PREV_DFB) {
-        return;
-    }
-    // Wraparound: first opt-in pack site has no in-chain prev; on iter ≥ 1 the
-    // packer ended the previous iter on `last_pack_cb`. The LLK 2-arg form does
-    // the right thing on iter 0 too (cache check vs. boot-initialized state).
-    const uint32_t prev_p = (prev_chain != NO_PREV_DFB) ? prev_chain : last_pack_cb;
-    if (prev_p != NO_PREV_DFB) {
-        pack_reconfig_data_format(prev_p, curr_p);
-    }
-}
-
-// Pack-phase setup (Pack* only). Pack is its own cohort (disjoint from math-MOP / SFPU),
-// excluded from the compute-init fold and always boot-hoisted by the pack-init fold.
-// Reconfig is fold-driven (see emit_pre_element_transitions): homogeneous chains program
-// the packer once at boot; heterogeneous chains defer later sites to per-stage emission so
-// the per-iter wraparound stays correct.
-template <uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
-struct TransitionFacts {};
-
-ALWI void elem_pack_init(UnselectedElement) {}
-
-template <class E, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
-ALWI void elem_pack_init(SelectedElement<E, TransitionFacts<PrevA, PrevB, PrevP, PackHetero>>) {
-    emit_pre_element_transitions<E, PrevA, PrevB, PrevP, PackHetero>();
-}
-
 // =============================================================================
 // Two-phase per-element apply: compute / pack
 //
 // Each element owns its full lifecycle slice of the outer iteration. Per outer iter:
 //
 //   tile_regs_acquire();
-//   elem_apply_compute(...);    // per element: wait + init? + for(j) exec + pop
+//   elem_apply_compute(...);    // per element: wait + for(j) exec + pop
 //   tile_regs_commit();
 //   tile_regs_wait();
 //   elem_apply_pack(...);       // per pack element: reserve + for(j) pack_exec + push
@@ -2820,21 +2239,12 @@ ALWI void elem_pack_init(SelectedElement<E, TransitionFacts<PrevA, PrevB, PrevP,
 // held. Both are policy-guarded (no-op for upfront / no-pop / no-push policies).
 // =============================================================================
 
-// Boot-time hoist of compute-cohort init (math-MOP and/or DEST-only ops). The chain dispatcher
-// computes `HoistMath` from `chain_hoist_math_mop_v` and `HoistSfpu` from `chain_hoist_sfpu_v`,
-// then this walk emits the element's transitions + init() only when its cohort is hoisted. The
-// HoistSfpu leg covers ordinary SFPU and Fill init. PRNG seeders are emitted by the dedicated
-// final boot pass below, so they cannot be replayed by a per-block fallback.
-//
-// PackTile is intentionally excluded from this walk — pack-side reconfig is
-// emitted unconditionally at boot via the indexed pack-init fold (PACK cohort is
-// disjoint from compute cohorts and is always hoisted).
-ALWI void hoist_compute_init_one(UnselectedElement) {}
+// PRNG seeders seed once per chain call, before the walk, so the seed stays live across every tile.
+ALWI void emit_prng_seed(UnselectedElement) {}
 
-template <class E, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
-ALWI void hoist_compute_init_one(SelectedElement<E, TransitionFacts<PrevA, PrevB, PrevP, PackHetero>> selected) {
-    emit_pre_element_transitions<E, PrevA, PrevB, PrevP, PackHetero>();
-    selected.value.init();  // instance dispatch: runtime-stateful init may read element members
+template <class E>
+ALWI void emit_prng_seed(SelectedElement<E> selected) {
+    selected.value.init();
 }
 
 }  // namespace detail
@@ -2847,9 +2257,8 @@ ALWI void hoist_compute_init_one(SelectedElement<E, TransitionFacts<PrevA, PrevB
 //     unary/binary variant) as the FIRST statement of `MAIN()`.
 //   - Helper does NOT wrap any "BIG init" (`compute_kernel_hw_startup`,
 //     `compute_kernel_hw_startup`, `mm_init`, `reduce_init`).
-//   - Helper owns per-element init only — `add_init`, `*_tile_init`,
-//     `bcast_init`, `copy_init`, `reconfig_data_format_*`,
-//     `tile_regs_*` lifecycle.
+//   - Helper calls execute APIs only; each execute programs its own init and
+//     operand formats. The helper owns the `tile_regs_*` lifecycle.
 //   - Per `compute_kernel_hw_startup.h:26-30`, mid-`MAIN()` boot is undefined.
 //     Multi-stage kernels are the only exception (one boot per stage,
 //     immediately before that stage's chain call).
@@ -2868,31 +2277,15 @@ namespace detail {
 
 inline constexpr bool eltwise_chain_skip_compute_v = CKL_ELTWISE_CHAIN_SKIP_COMPUTE != 0;
 
-template <
-    bool EmitMathInit,
-    bool EmitSfpuInit,
-    uint32_t SlotBase,
-    uint32_t PrevA,
-    uint32_t PrevB,
-    uint32_t PrevP,
-    bool PackHetero>
+template <uint32_t SlotBase>
 struct ComputeFacts {};
 
 ALWI void elem_apply_compute(
     UnselectedElement, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
 
-template <
-    class ElemT,
-    bool EmitMathInit,
-    bool EmitSfpuInit,
-    uint32_t SlotBase,
-    uint32_t PrevA,
-    uint32_t PrevB,
-    uint32_t PrevP,
-    bool PackHetero>
+template <class ElemT, uint32_t SlotBase>
 ALWI void elem_apply_compute(
-    SelectedElement<ElemT, ComputeFacts<EmitMathInit, EmitSfpuInit, SlotBase, PrevA, PrevB, PrevP, PackHetero>>
-        selected,
+    SelectedElement<ElemT, ComputeFacts<SlotBase>> selected,
     [[maybe_unused]] uint32_t i_flat,
     [[maybe_unused]] uint32_t ht,
     [[maybe_unused]] uint32_t wt,
@@ -2907,7 +2300,7 @@ ALWI void elem_apply_compute(
     [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_runtime_conditional_sequence_op_v<ElemT>) {
         if constexpr (!eltwise_chain_skip_compute_v) {
-            elem.template apply<SlotBase, PrevA, PrevB, PrevP, PackHetero>(
+            elem.template apply<SlotBase>(
                 i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
         }
     } else if constexpr (is_cb_reader_op_v<ElemT>) {
@@ -2940,10 +2333,6 @@ ALWI void elem_apply_compute(
             } else if constexpr (ElemT::Wait == WaitPolicy::PerBlockSize) {
                 emit_wait<true>(input_a_buffer(elem), block_sync_count);
             }
-        }
-        if constexpr (EmitMathInit && !eltwise_chain_skip_compute_v) {
-            emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
-            elem.init();  // instance dispatch (see convention note above)
         }
         if constexpr (!eltwise_chain_skip_compute_v) {
             constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
@@ -2985,25 +2374,18 @@ ALWI void elem_apply_compute(
             }
         }
     } else if constexpr (is_dest_only_op_v<ElemT> && !eltwise_chain_skip_compute_v) {
-        if constexpr (EmitSfpuInit && !is_prng_seed_op_v<ElemT>) {
-            emit_pre_element_transitions<ElemT, PrevA, PrevB, PrevP, PackHetero>();
-            elem.init();  // instance dispatch (see convention note above)
-        }
         for (uint32_t j = 0; j < inner_count; ++j) {
             elem.exec(i_flat + j, SlotBase + j * chain_lane_width);
         }
     }
 }
 
-template <bool AnyPackRelu, uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero>
-struct PackFacts {};
-
 ALWI void elem_apply_pack(
     UnselectedElement, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
 
-template <class ElemT, bool AnyPackRelu, uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero>
+template <class ElemT>
 ALWI void elem_apply_pack(
-    SelectedElement<ElemT, PackFacts<AnyPackRelu, PrevPack, LastPackCb, PackHetero>> selected,
+    SelectedElement<ElemT> selected,
     [[maybe_unused]] uint32_t i_flat,
     [[maybe_unused]] uint32_t ht,
     [[maybe_unused]] uint32_t wt,
@@ -3015,16 +2397,10 @@ ALWI void elem_apply_pack(
     const ElemT& elem = selected.value;
     [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
-    if constexpr (!eltwise_chain_skip_compute_v) {
-        emit_per_stage_pack_reconfig(dfb_for_side<Side::Pack, ElemT>(), PrevPack, LastPackCb, PackHetero);
-    }
     if constexpr (ElemT::Reserve == ReservePolicy::PerTile) {
         emit_reserve<true>(output_buffer(elem), 1);
     } else if constexpr (ElemT::Reserve == ReservePolicy::PerBlockSize) {
         emit_reserve<true>(output_buffer(elem), block_sync_count);
-    }
-    if constexpr (AnyPackRelu && !eltwise_chain_skip_compute_v) {
-        elem.configure_relu();
     }
     if constexpr (!eltwise_chain_skip_compute_v) {
 #pragma GCC unroll 0
@@ -3053,7 +2429,7 @@ ALWI void elem_apply_seed_first_l1_pack(
     if constexpr (!eltwise_chain_skip_compute_v) {
         constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
         const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
-        selected.value.exec(i_arg, ht, wt + j, j * chain_lane_width);
+        selected.value.exec(i_arg, ht, wt + j, j * chain_lane_width, i_flat == 0 && j == 0);
     }
 }
 
@@ -3193,12 +2569,7 @@ ALWI void emit_push_per_outer(SelectedElement<E> selected, uint32_t count) {
 
 }  // namespace detail
 
-// eltwise_chain_impl — the walk. InitReconfigOwner::Chain (default) emits the chain's one-time setup
-// (pack boot init + the uniform math-MOP / SFPU init + their srca/srcb reconfig) before walking.
-// InitReconfigOwner::Caller skips ALL of it: the caller emitted the chain's whole one-time setup itself,
-// once, before its own loop, so this call is pure per-tile compute. InitReconfigOwner is about WHO emits
-// the hoistable setup — it never changes which init is hoistable (that's deduced from uniformity).
-template <InitReconfigOwner Owner = InitReconfigOwner::Chain, std::size_t... Is, class... Es>
+template <std::size_t... Is, class... Es>
 ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices, IterationShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
     static_assert(
@@ -3263,34 +2634,6 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
         !((false || ... || is_prng_seed_op_v<Es>) && (false || ... || is_sfpu_op_v<Es>)),
         "eltwise_chain: a PRNG-seeding element may be combined only with Fill and non-SFPU stages; "
         "mixed SFPU stages need a separate PRNG reconfiguration design.");
-    static_assert(
-        Owner == InitReconfigOwner::Chain || (!(false || ... || is_prng_seed_op_v<Es>)),
-        "eltwise_chain: PRNG-seeding elements require InitReconfigOwner::Chain so the helper seeds the PRNG once.");
-    // InitReconfigOwner::Caller means "the caller did the chain's whole one-time setup itself, once,
-    // before the loop." That's only achievable if EVERY part of it is boot-hoistable: uniform
-    // math MOP + SFPU init (so input/srca-srcb reconfig is boot-only) AND homogeneous pack CBs
-    // (so output/pack reconfig is boot-only — no per-stage pack reconfig in the loop). Otherwise
-    // some setup must re-emit per tile, the caller can't pre-do it once, and the knob silently
-    // skips a needed init/reconfig — a footgun. Forbid it at compile time.
-    static_assert(
-        Owner == InitReconfigOwner::Chain ||
-            (chain_hoist_math_mop_v<Chain> && chain_hoist_sfpu_v<Chain> && chain_hoist_pack_v<Chain>),
-        "InitReconfigOwner::Caller requires a chain whose entire one-time setup is boot-hoistable "
-        "(uniform math MOP + SFPU init AND homogeneous pack CBs) so that input AND output "
-        "reconfig are boot-only and nothing self-emits per tile. This chain has setup that "
-        "must re-emit per tile, so the caller cannot own it once — use InitReconfigOwner::Chain.");
-    // Honesty: under InitReconfigOwner::Caller the chain emits NO reconfig at all (the caller owns the
-    // setup), so enabled operand reconfig on any element is inert and lies about what runs inside
-    // the helper. Require each input/output spec to disable it.
-    static_assert(
-        Owner == InitReconfigOwner::Chain || chain_no_reconfig_requested_v<Chain>,
-        "InitReconfigOwner::Caller with enabled operand reconfig: under Caller the chain emits no "
-        "reconfig (the caller owns the setup), so the setting is inert and misleading. Disable "
-        "reconfig in every input/output spec — the caller's manual setup owns the format.");
-    static_assert(
-        Owner == InitReconfigOwner::Chain || ((!is_runtime_conditional_op_v<Es>) && ...),
-        "InitReconfigOwner::Caller cannot be used with runtime-conditional elements because their "
-        "selected init must execute inside each chain invocation.");
     // An empty walk is a valid no-op.  Return before any init or DFB lifecycle operation: an
     // upfront wait/reserve for zero tiles is not merely redundant, it can consume a caller-owned
     // window that the chain was asked not to touch.
@@ -3300,37 +2643,8 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     if constexpr ((detail::reserves_upfront_pushes_per_block<Es>() || ...)) {
         ASSERT(shape.tail_sync != BlockTailSync::FullBlock);
     }
-    // Per-cohort hoist decisions: math-MOP init can be hoisted at boot even when SFPU isn't
-    // uniform; the SFPU side then re-inits per tile.
-    constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
-    constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
-    if constexpr (Owner == InitReconfigOwner::Chain && !detail::eltwise_chain_skip_compute_v) {
-        (detail::elem_pack_init(detail::select_element<
-                                is_pack_tile_op_v<Es>,
-                                detail::TransitionFacts<
-                                    detail::ChainTraits<Es...>::prev.srca[Is],
-                                    detail::ChainTraits<Es...>::prev.srcb[Is],
-                                    detail::ChainTraits<Es...>::prev.pack[Is],
-                                    detail::ChainTraits<Es...>::pack_hetero>>(elts)),
-         ...);
-        (detail::hoist_compute_init_one(
-             detail::select_element < (is_math_mop_op_v<Es> && hoist_math) ||
-                 ((is_dest_only_op_v<Es> && !is_prng_seed_op_v<Es>) && hoist_sfpu),
-             detail::TransitionFacts < detail::ChainTraits<Es...>::prev.srca[Is],
-             detail::ChainTraits<Es...>::prev.srcb[Is],
-             detail::ChainTraits<Es...>::prev.pack[Is],
-             detail::ChainTraits<Es...>::pack_hetero >> (elts)),
-         ...);
-        // Seed last, after Fill and ordinary one-time setup. The seed must remain live across every
-        // block, so PRNG seeders never participate in the per-block SFPU-init fallback.
-        (detail::hoist_compute_init_one(detail::select_element<
-                                        is_prng_seed_op_v<Es>,
-                                        detail::TransitionFacts<
-                                            detail::ChainTraits<Es...>::prev.srca[Is],
-                                            detail::ChainTraits<Es...>::prev.srcb[Is],
-                                            detail::ChainTraits<Es...>::prev.pack[Is],
-                                            detail::ChainTraits<Es...>::pack_hetero>>(elts)),
-         ...);
+    if constexpr (!detail::eltwise_chain_skip_compute_v) {
+        (detail::emit_prng_seed(detail::select_element<is_prng_seed_op_v<Es>>(elts)), ...);
     }
     constexpr uint32_t chain_lane_w = detail::ChainTraits<Es...>::any_dest_accumulation
                                           ? chain_transient_lane_width_v<Chain>
@@ -3359,9 +2673,6 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     constexpr bool dest_accumulation = dest_accumulation_mode != DestAccumulation::Disabled;
     constexpr bool per_row_dest_accumulation = dest_accumulation_mode == DestAccumulation::PerRow;
     constexpr bool whole_shape_dest_accumulation = dest_accumulation_mode == DestAccumulation::WholeShape;
-    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation && !detail::eltwise_chain_skip_compute_v) {
-        pack_reconfig_l1_acc(detail::ChainTraits<Es...>::any_seed_first_l1_accumulation ? 0 : 1);
-    }
     if constexpr (whole_shape_dest_accumulation) {
         tile_regs_acquire();
     }
@@ -3391,14 +2702,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
             (detail::elem_apply_compute(
                  detail::select_element<
                      detail::participates_in_compute_v<Es>,
-                     detail::ComputeFacts<
-                         !hoist_math,
-                         !hoist_sfpu,
-                         dest_accumulation ? 1 : 0,
-                         detail::ChainTraits<Es...>::prev.srca[Is],
-                         detail::ChainTraits<Es...>::prev.srcb[Is],
-                         detail::ChainTraits<Es...>::prev.pack[Is],
-                         detail::ChainTraits<Es...>::pack_hetero>>(elts),
+                     detail::ComputeFacts<dest_accumulation ? 1 : 0>>(elts),
                  i_flat,
                  ht,
                  wt_base,
@@ -3416,21 +2720,10 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                         (detail::elem_apply_seed_first_l1_pack(
                              detail::select_element<is_pack_tile_op_v<Es>>(elts), i_flat, ht, wt_base, j, chain_lane_w),
                          ...);
-                        if constexpr (!detail::eltwise_chain_skip_compute_v) {
-                            if (i_flat == 0 && j == 0) {
-                                pack_reconfig_l1_acc(1);
-                            }
-                        }
                     }
                 } else {
                     (detail::elem_apply_pack(
-                         detail::select_element<
-                             is_pack_tile_op_v<Es>,
-                             detail::PackFacts<
-                                 detail::ChainTraits<Es...>::any_pack_relu,
-                                 detail::ChainTraits<Es...>::prev.pack[Is],
-                                 detail::ChainTraits<Es...>::last_pack_cb,
-                                 detail::ChainTraits<Es...>::pack_hetero>>(elts),
+                         detail::select_element<is_pack_tile_op_v<Es>>(elts),
                          i_flat,
                          ht,
                          wt_base,
@@ -3449,13 +2742,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
             tile_regs_commit();
             tile_regs_wait();
             (detail::elem_apply_pack(
-                 detail::select_element<
-                     is_pack_tile_op_v<Es>,
-                     detail::PackFacts<
-                         detail::ChainTraits<Es...>::any_pack_relu,
-                         detail::ChainTraits<Es...>::prev.pack[Is],
-                         detail::ChainTraits<Es...>::last_pack_cb,
-                         detail::ChainTraits<Es...>::pack_hetero>>(elts),
+                 detail::select_element<is_pack_tile_op_v<Es>>(elts),
                  row_base,
                  ht,
                  0,
@@ -3483,13 +2770,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
         tile_regs_commit();
         tile_regs_wait();
         (detail::elem_apply_pack(
-             detail::select_element<
-                 is_pack_tile_op_v<Es>,
-                 detail::PackFacts<
-                     detail::ChainTraits<Es...>::any_pack_relu,
-                     detail::ChainTraits<Es...>::prev.pack[Is],
-                     detail::ChainTraits<Es...>::last_pack_cb,
-                     detail::ChainTraits<Es...>::pack_hetero>>(elts),
+             detail::select_element<is_pack_tile_op_v<Es>>(elts),
              0,
              0,
              0,
@@ -3500,13 +2781,6 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              Wt),
          ...);
         tile_regs_release();
-    }
-    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation && !detail::eltwise_chain_skip_compute_v) {
-        pack_reconfig_l1_acc(0);
-    }
-
-    if constexpr (detail::ChainTraits<Es...>::any_pack_relu && !detail::eltwise_chain_skip_compute_v) {
-        pack_relu_config(ReluConfig::none());
     }
     (detail::emit_pop_at_end(detail::select_element<detail::pops_at_end<Es>()>(elts), Ht, Wt), ...);
     (detail::emit_push_at_end(detail::select_element<detail::pushes_at_end<Es>()>(elts), Ht, Wt), ...);
@@ -3519,21 +2793,12 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
 // tag-less `DisabledChainElement`. Every op-kind trait (is_cb_reader / is_pack / is_dest_only / is_math_mop
 // = std::is_base_of on a tag it lacks) is false for it, and every ElemDesc accessor is
 // SFINAE-guarded (dfb_* gate on the op-kind, lane_width defaults to 1, etc.), so it reflects
-// into a NEUTRAL ElemDesc — no CB, no reconfig, no pack, lane_width 1 — and every stage
-// (planner, hoist, reconfig fold, per-tile loop) treats it as inert. It is transparent to
-// the prev-CB sweep too: its NO_PREV_DFB sides never update the running prev, so a later
-// element sees the same previous CB as if the marker were absent.
-//
-// Passing the marker through the folds leaves it inert and transparent to neighboring elements.
+// into a NEUTRAL ElemDesc (no CB, no pack, lane_width 1), and every stage treats it as inert.
 // =============================================================================
 
-// Public entry. `InitReconfigOwner Owner` (default Chain) says who emits the chain's one-time setup:
-// Chain = this call emits it; Caller = the caller emitted it once, outside its loop (see the
-// InitReconfigOwner enum doc). It never changes which init is hoistable. (default lives on the
-// declaration in chain.hpp.)
-template <InitReconfigOwner Owner, class... Es>
+template <class... Es>
 ALWI void eltwise_chain(IterationShape shape, Es... elts) {
-    eltwise_chain_impl<Owner>(std::index_sequence_for<Es...>{}, shape, elts...);
+    eltwise_chain_impl(std::index_sequence_for<Es...>{}, shape, elts...);
 }
 
 // =============================================================================

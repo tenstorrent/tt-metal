@@ -18,6 +18,8 @@
 
 namespace ckernel {
 
+ALWI void clamped_silu_glu_tile_init();
+
 // clang-format off
 /**
  * Performs the element-wise clamped-SwiGLU activation over the tiles at idst0 (gate) and idst1
@@ -50,6 +52,7 @@ namespace ckernel {
 // clang-format on
 ALWI void clamped_silu_glu_tile(
     uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+    clamped_silu_glu_tile_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

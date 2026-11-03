@@ -81,8 +81,11 @@ template <
     bool approx = false,
     bool scale_en = false,
     InputClamping input_clamping = InputClamping::ClampToNegative,
-    int iterations = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    int iterations = 8,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    uint32_t init_scale = 0x3F800000>
 ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    exp_tile_init<approx, init_scale, input_clamping, is_fp32_dest_acc_en>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -117,9 +120,12 @@ template <
     bool approx = false,
     bool scale_en = false,
     InputClamping input_clamping = InputClamping::ClampToNegative,
-    int iterations = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    int iterations = 8,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    uint32_t init_scale = 0x3F800000>
 ALWI void exp_packthread_tile(
     uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+    exp_packthread_tile_init<approx, init_scale, input_clamping, is_fp32_dest_acc_en>();
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

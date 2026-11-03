@@ -52,7 +52,7 @@ inline void llk_pack_block_contiguous(std::uint32_t tile_index, std::uint32_t ou
 
     // Advance the CB write pointer by num_tiles pages (so subsequent
     // pack calls or cb_push_back see the correct position).
-    get_local_cb_interface(output_id).fifo_wr_tile_ptr += get_local_cb_interface(output_id).fifo_page_size * num_tiles;
+    get_local_cb_interface(output_id).fifo_wr_tile_ptr += get_output_pack_tile_size(output_id) * num_tiles;
 
     _llk_pack_block_contiguous_<DST_SYNC_MODE, is_fp32_dest_acc_en>(tile_index, pack_tile_addr, num_tiles);
 }

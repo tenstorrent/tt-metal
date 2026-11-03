@@ -25,7 +25,6 @@ void kernel_main() {
     DataflowBuffer dfb_out(tt::CBIndex::c_3);
 
     compute_kernel_hw_startup(dfb_pre_in1.get_id(), dfb_out.get_id());
-    copy_init(dfb_pre_in1.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         dfb_pre_in1.wait_front(num_tiles_per_cycle);
@@ -35,12 +34,9 @@ void kernel_main() {
         tile_regs_acquire();
 
         // Always copy condition to dst reg 0
-        copy_init(dfb_pre_in1.get_id());
         copy_tile(dfb_pre_in1.get_id(), 0, 0);  // Copy condition to dst reg 0
 
         // Copy tensor to appropriate dst register based on variant
-        reconfig_data_format_srca(dfb_pre_in1.get_id(), dfb_pre_in2.get_id());
-        copy_init(dfb_pre_in2.get_id());
         if constexpr (scalar_is_true) {
             // TST: tensor is false value, goes to dst reg 2
             copy_tile(dfb_pre_in2.get_id(), 0, 2);  // Copy false tensor to dst reg 2
@@ -48,10 +44,8 @@ void kernel_main() {
             // TTS: tensor is true value, goes to dst reg 1
             copy_tile(dfb_pre_in2.get_id(), 0, 1);  // Copy true tensor to dst reg 1
         }
-        reconfig_data_format_srca(dfb_pre_in2.get_id(), dfb_pre_in1.get_id());
 
         // Fill scalar value to appropriate dst register
-        fill_tile_init();
         const auto scalar_val = reinterpret_cast<const float*>(&scalar_value);
         if constexpr (scalar_is_true) {
             // TST: scalar is true value, goes to dst reg 1
@@ -71,7 +65,6 @@ void kernel_main() {
 #endif
         }
 
-        TERNARY_SFPU_OP_INIT();
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
 
         tile_regs_commit();

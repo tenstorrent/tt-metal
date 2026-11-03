@@ -9,6 +9,12 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
@@ -43,13 +49,7 @@ void kernel_main() {
 #endif
 
     compute_kernel_hw_startup(cb_op_a.get_cb_id(), cb_op_b.get_cb_id(), cb_out.get_cb_id());
-#ifdef PACK_RELU
-    pack_relu_config(ReluConfig::zero());
-#endif
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
-    binary_tiles_init<true, BINARY_OP_TYPE>(cb_op_a.get_cb_id(), cb_op_b.get_cb_id());
-#endif
 
     PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, 1);
     cb_post_rhs.wait_front(1);
@@ -61,9 +61,6 @@ void kernel_main() {
 
         cb_out.reserve_back(n);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
-        binary_tiles_init<true, BINARY_OP_TYPE>(cb_op_a.get_cb_id(), cb_op_b.get_cb_id());
-#endif
         tile_regs_acquire();
         for (uint32_t i = 0; i < n; ++i) {
 #if SCALAR_IS_LHS
@@ -77,7 +74,7 @@ void kernel_main() {
 
         tile_regs_wait();
         for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, cb_out.get_cb_id());
+            pack_tile(i, cb_out.get_cb_id(), 0, false, pack_relu);
         }
         tile_regs_release();
 

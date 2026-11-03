@@ -12,6 +12,9 @@
 
 namespace ckernel {
 
+ALWI void hardtanh_tile_init();
+ALWI void hardtanh_tile_init_pack();
+
 // clang-format off
  /**
  * Performs element-wise hardtanh operation. The DST
@@ -29,6 +32,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void hardtanh_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
+    hardtanh_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -41,6 +45,7 @@ ALWI void hardtanh_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
 }
 
 ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
+    hardtanh_tile_init_pack();
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

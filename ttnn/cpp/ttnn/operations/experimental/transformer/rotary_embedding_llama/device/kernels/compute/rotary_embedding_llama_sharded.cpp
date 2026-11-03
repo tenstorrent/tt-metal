@@ -126,7 +126,7 @@ void kernel_main() {
         pack_init(dfb::sin_interm);
 #endif
         // sin_interim = rotated * sin
-        ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+        ckl::eltwise_chain(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
@@ -143,7 +143,7 @@ void kernel_main() {
         pack_init(dfb::cos_interm);
 #endif
         // cos_interim = x * cos
-        ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+        ckl::eltwise_chain(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,

@@ -36,13 +36,12 @@
 //      math metas | iters | address words | index words, the first section for the math thread and the
 //      rest for unpack. in1_cb_id is there only to keep the (in0, in1) pair normalized and to let the
 //      uninit restore the tile descriptor the init changed.
-//   3. Each thread records a code sequence into its replay buffer at init and then pushes two REPLAY
-//      handles per meta, so the per-face decision is a table index rather than a branch.
+//   3. The math thread records a code sequence into its replay buffer at init and then pushes two REPLAY
+//      handles per meta. The unpack thread decodes the index words on the RISC and pushes one UNPACR per face.
 //
-// The details live with the code they describe: the index-word bit layout and the unpack code sequence
-// above the decode tables in llk_unpack_AB_face_compressed_mm.h, the math code sequence and the addrmods
-// it names in llk_math_face_compressed_mm.h, the replay and table machinery in ckernel_code_sequence.h,
-// and the producer that builds the meta buffer in encode_meta in
+// The details live with the code they describe: the index-word bit layout and the per-face unpack in
+// llk_unpack_AB_face_compressed_mm.h, the math code sequence and the addrmods it names in
+// llk_math_face_compressed_mm.h, and the producer that builds the meta buffer in encode_meta in
 // tt_metal/tt-llk/tests/python_tests/test_matmul_face_compressed.py.
 // =============================================================================================
 

@@ -28,10 +28,8 @@ void kernel_main() {
         dfb_in.wait_front(1);
         dfb_out.reserve_back(1);
         tile_regs_acquire();
-        copy_init(dfb::in);
         copy_tile(dfb::in, 0, 0);  // a -> dst[0]
 
-        fill_tile_init();
         fill_tile(1, *multiplier);  // b (scalar) -> dst[1]
         fill_tile(2, *addend);      // c (scalar) -> dst[2]
 

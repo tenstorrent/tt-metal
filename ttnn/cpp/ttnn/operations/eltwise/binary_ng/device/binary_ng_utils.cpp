@@ -442,92 +442,79 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
     switch (sfpu_binary_op) {
         case ADD:
             if (int_data_format) {
-                return {"add_int_tile_init();", fmt::format("add_int_tile<DataFormat::{}>", *int_data_format)};
+                return {"", fmt::format("add_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"add_binary_tile_init();", fmt::format("add_binary_tile<{}>", kRneDstRoundingMode)};
+            return {"", fmt::format("add_binary_tile<{}>", kRneDstRoundingMode)};
         case SUB:
             if (int_data_format) {
-                return {"sub_int_tile_init();", fmt::format("sub_int_tile<DataFormat::{}>", *int_data_format)};
+                return {"", fmt::format("sub_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"sub_binary_tile_init();", fmt::format("sub_binary_tile<{}>", kRneDstRoundingMode)};
+            return {"", fmt::format("sub_binary_tile<{}>", kRneDstRoundingMode)};
         case MUL:
             if (int_data_format) {
-                return {
-                    fmt::format("mul_int_tile_init<DataFormat::{}>();", *int_data_format),
-                    fmt::format("mul_int_tile<DataFormat::{}>", *int_data_format)};
+                return {"", fmt::format("mul_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"mul_binary_tile_init();", "mul_binary_tile"};
+            return {"", "mul_binary_tile"};
         case DIV:
             if (dtype == DataType::INT32) {
-                return {"div_int32_tile_init();", "div_int32_tile"};
+                return {"", "div_int32_tile"};
             } else {
-                return {"div_binary_tile_init();", "div_binary_tile"};
+                return {"", "div_binary_tile"};
             }
-        case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
-        case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
+        case DIV_FLOOR: return {"", "div_int32_floor_tile"};
+        case DIV_TRUNC: return {"", "div_int32_trunc_tile"};
         case REMAINDER:
             if (dtype == DataType::INT32) {
-                return {"remainder_int32_tile_init();", "remainder_int32_tile"};
+                return {"", "remainder_int32_tile"};
             } else if (dtype == DataType::UINT32) {
-                return {"remainder_uint32_tile_init();", "remainder_uint32_tile"};
+                return {"", "remainder_uint32_tile"};
             } else {
-                return {"remainder_binary_tile_init();", "remainder_binary_tile"};
+                return {"", "remainder_binary_tile"};
             }
         case FMOD:
             if (dtype == DataType::INT32) {
-                return {"fmod_int32_tile_init();", "fmod_int32_tile"};
+                return {"", "fmod_int32_tile"};
             } else {
-                return {"fmod_binary_tile_init();", "fmod_binary_tile"};
+                return {"", "fmod_binary_tile"};
             }
-        case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
+        case POWER: return {"", "power_binary_tile"};
         case RSUB:
             if (int_data_format) {
-                return {"rsub_int_tile_init();", fmt::format("rsub_int_tile<DataFormat::{}>", *int_data_format)};
+                return {"", fmt::format("rsub_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"rsub_binary_tile_init();", fmt::format("rsub_binary_tile<{}>", kRneDstRoundingMode)};
-        case GCD: return {"gcd_tile_init();", "gcd_tile"};
-        case LCM: return {"lcm_tile_init();", "lcm_tile"};
-        case LOGADDEXP: return {"logaddexp_binary_tile_init();", "logaddexp_binary_tile"};
-        case LOGADDEXP2: return {"logaddexp2_binary_tile_init();", "logaddexp2_binary_tile"};
+            return {"", fmt::format("rsub_binary_tile<{}>", kRneDstRoundingMode)};
+        case GCD: return {"", "gcd_tile"};
+        case LCM: return {"", "lcm_tile"};
+        case LOGADDEXP: return {"", "logaddexp_binary_tile"};
+        case LOGADDEXP2: return {"", "logaddexp2_binary_tile"};
         case LEFT_SHIFT:
-            return {
-                "binary_shift_tile_init();",
-                fmt::format("binary_left_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
+            return {"", fmt::format("binary_left_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
         case RIGHT_SHIFT:
-            return {
-                "binary_shift_tile_init();",
-                fmt::format("binary_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
+            return {"", fmt::format("binary_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
         case LOGICAL_RIGHT_SHIFT:
             return {
-                "binary_shift_tile_init();",
-                fmt::format("binary_logical_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
+                "", fmt::format("binary_logical_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
         case BITWISE_AND:
-            return {
-                "binary_bitwise_tile_init();",
-                fmt::format("bitwise_and_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
+            return {"", fmt::format("bitwise_and_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
         case BITWISE_OR:
-            return {
-                "binary_bitwise_tile_init();",
-                fmt::format("bitwise_or_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
+            return {"", fmt::format("bitwise_or_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
         case BITWISE_XOR:
-            return {
-                "binary_bitwise_tile_init();",
-                fmt::format("bitwise_xor_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
+            return {"", fmt::format("bitwise_xor_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
         case MAXIMUM:
             if (dtype == DataType::INT32) {
-                return {"binary_max_int32_tile_init();", "binary_max_int32_tile"};
+                return {"", "binary_max_int32_tile"};
             } else if (dtype == DataType::UINT32) {
-                return {"binary_max_uint32_tile_init();", "binary_max_uint32_tile"};
+                return {"", "binary_max_uint32_tile"};
             } else {
-                return {"binary_max_tile_init();", "binary_max_tile"};
+                return {"", "binary_max_tile"};
             }
         case MINIMUM:
             if (dtype == DataType::INT32) {
-                return {"binary_min_int32_tile_init();", "binary_min_int32_tile"};
+                return {"", "binary_min_int32_tile"};
             } else if (dtype == DataType::UINT32) {
-                return {"binary_min_uint32_tile_init();", "binary_min_uint32_tile"};
+                return {"", "binary_min_uint32_tile"};
             } else {
-                return {"binary_min_tile_init();", "binary_min_tile"};
+                return {"", "binary_min_tile"};
             }
         case QUANT: return {"quant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "quant_tile"};
         case REQUANT:
@@ -537,67 +524,55 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 "requant_tile"};
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
-        case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
-        case ATAN2: return {"atan2_binary_tile_init();", "atan2_binary_tile"};
+        case XLOGY: return {"", "xlogy_binary_tile"};
+        case ATAN2: return {"", "atan2_binary_tile"};
         case NEXTAFTER:
             // One ULP of bfloat16 is a wider step in the fp32 dest register than one ULP of
             // float32, so the destination format picks the entry point.
             if (dtype == DataType::FLOAT32) {
-                return {"nextafter_binary_tile_init();", "nextafter_binary_tile"};
+                return {"", "nextafter_binary_tile"};
             } else {
-                return {"nextafter_bf16_binary_tile_init();", "nextafter_bf16_binary_tile"};
+                return {"", "nextafter_bf16_binary_tile"};
             }
         case LT:
             if (int_data_format) {
-                return {
-                    fmt::format("lt_int_tile_init<DataFormat::{}>();", *int_data_format),
-                    fmt::format("lt_int_tile<DataFormat::{}>", *int_data_format)};
+                return {"", fmt::format("lt_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"lt_binary_tile_init();", "lt_binary_tile"};
+            return {"", "lt_binary_tile"};
         case GT:
             if (int_data_format) {
-                return {
-                    fmt::format("gt_int_tile_init<DataFormat::{}>();", *int_data_format),
-                    fmt::format("gt_int_tile<DataFormat::{}>", *int_data_format)};
+                return {"", fmt::format("gt_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"gt_binary_tile_init();", "gt_binary_tile"};
+            return {"", "gt_binary_tile"};
         case GE:
             if (int_data_format) {
-                return {
-                    fmt::format("ge_int_tile_init<DataFormat::{}>();", *int_data_format),
-                    fmt::format("ge_int_tile<DataFormat::{}>", *int_data_format)};
+                return {"", fmt::format("ge_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"ge_binary_tile_init();", "ge_binary_tile"};
+            return {"", "ge_binary_tile"};
         case LE:
             if (int_data_format) {
-                return {
-                    fmt::format("le_int_tile_init<DataFormat::{}>();", *int_data_format),
-                    fmt::format("le_int_tile<DataFormat::{}>", *int_data_format)};
+                return {"", fmt::format("le_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"le_binary_tile_init();", "le_binary_tile"};
+            return {"", "le_binary_tile"};
         case EQ:
             if (int_data_format) {
-                return {
-                    fmt::format("eq_int_tile_init<DataFormat::{}>();", *int_data_format),
-                    fmt::format("eq_int_tile<DataFormat::{}>", *int_data_format)};
+                return {"", fmt::format("eq_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"eq_binary_tile_init();", "eq_binary_tile"};
+            return {"", "eq_binary_tile"};
         case NE:
             if (int_data_format) {
-                return {
-                    fmt::format("ne_int_tile_init<DataFormat::{}>();", *int_data_format),
-                    fmt::format("ne_int_tile<DataFormat::{}>", *int_data_format)};
+                return {"", fmt::format("ne_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"ne_binary_tile_init();", "ne_binary_tile"};
+            return {"", "ne_binary_tile"};
         case WHERE: {
             const char* data_format = (dtype == DataType::INT32)     ? "Int32"
                                       : (dtype == DataType::UINT32)  ? "UInt32"
                                       : (dtype == DataType::FLOAT32) ? "Float32"
                                                                      : "Float16_b";
-            return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
+            return {"", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
-        case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
-        case SITU_GLU: return {"situ_glu_tile_init();", "situ_glu_tile"};
+        case ISCLOSE: return {"", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
+        case SITU_GLU: return {"", "situ_glu_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }

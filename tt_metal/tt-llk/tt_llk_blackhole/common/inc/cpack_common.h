@@ -342,7 +342,12 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TT_SETDMAREG(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
     TT_SETDMAREG(0, LOWER_HALFWORD((z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP1));
     TT_SETDMAREG(0, UPPER_HALFWORD((w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT)), 0, HI_16(p_gpr_pack::TMP1));
+    // Drains only the stride writes below up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::THCON));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+#endif
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
     // Channel-1 (L1 output) strides are zero for every pack mode: output placement comes from
@@ -350,15 +355,25 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     // channel-1 (Y) stride, in its own init.
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
     TTI_NOP;
     TTI_NOP;
 }
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
-    // Stall to avoid clobbering current packer configuration, then enable/disable L1 accumulation
+    // Drains the packer so the L1 accumulation write cannot clobber its current configuration, up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::PACK));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+#endif
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
 }
 
 /**
@@ -461,8 +476,8 @@ inline void set_packer_config(
     // THCON_SEC0_REG1_Unused1 = cfg_reg_array[1][117 +: 3];
     // THCON_SEC0_REG1_Exp_threshold = cfg_reg_array[1][120 +: 8];
     // for (uint i=0; i<4; i++) cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+i]=config.val[i];
-    cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-    cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2] = config.val[2];
+    TT_CFG_STORE(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0, config.val[0]);
+    TT_CFG_STORE(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2, config.val[2]);
     // cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+3]=config.val[3];
 
     // Reset L1 accumulation flag
@@ -489,7 +504,7 @@ inline void set_packer_config(
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
-    cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
+    TT_CFG_STORE(cfg, PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, dest_rd_ctrl.val);
 
     // Save to GPR for quick data format reconfig
     regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP] = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
@@ -502,7 +517,7 @@ inline void set_packer_config(
 __attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count = 10);
 
 template <bool is_fp32_dest_acc_en>
-__attribute__((noinline)) inline void reconfig_packer_data_format(
+__attribute__((always_inline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
@@ -529,6 +544,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     config.f.out_data_format = pack_output_dst_format;
     config.f.in_data_format  = pack_hw_src_format;
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[2]), 0, LO_16(p_gpr_pack::TMP_LO));
+    TT_SETDMAREG(0, UPPER_HALFWORD(config.val[2]), 0, HI_16(p_gpr_pack::TMP_LO));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2);
 
@@ -664,16 +680,16 @@ inline void configure_pack(
     pack_counters.f.pack_reads_per_xy_plane = 1;
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
     {
-        cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
+        TT_CFG_STORE(cfg, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i, pack_counters.val); // disable auto last generation
     }
 
     pck_edge_offset_u pck_edge_offset;
     pck_edge_offset.val    = 0;
     pck_edge_offset.f.mask = 0xffff;
 
-    cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
-    cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
-    cfg[PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32]     = 0x0;
+    TT_CFG_STORE(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, pck_edge_offset.val);
+    TT_CFG_STORE(cfg, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32, 0x0); // All packers use row set mapping 0, edge offset 0 mask
+    TT_CFG_STORE(cfg, PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32, 0x0);
 
     regfile[p_gpr_pack::TILE_HEADER]     = tile_size;
     regfile[p_gpr_pack::TILE_HEADER + 1] = 0;
@@ -766,8 +782,16 @@ inline void program_packer_dest_offset_registers(std::uint32_t dest_tile_offset)
 {
     TT_SETDMAREG(0, LOWER_HALFWORD(dest_tile_offset), 0, LO_16(p_gpr_pack::TEMP_TILE_OFFSET));
     TT_SETDMAREG(0, UPPER_HALFWORD(dest_tile_offset), 0, HI_16(p_gpr_pack::TEMP_TILE_OFFSET));
+    // Drains only the tile offset write below up to the scope end.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::THCON | p_stall::PACK));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON | p_stall::PACK);
+#endif
     TTI_WRCFG(p_gpr_pack::TEMP_TILE_OFFSET, p_cfg::WRCFG_32b, PCK0_ADDR_BASE_REG_0_Base_ADDR32);
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
     TTI_DMANOP;
     TTI_DMANOP;
 }

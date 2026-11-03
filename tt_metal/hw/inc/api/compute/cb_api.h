@@ -147,7 +147,7 @@ ALWI uint32_t get_tile_l1_byte_address(uint32_t operand_id, uint32_t tile_index)
     uint32_t offset_address = static_cast<uint32_t>(local_dfb.stride_size) * tile_index;
 #else
     uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
-    uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+    uint32_t offset_address = get_operand_unpack_tile_size(operand_id) * tile_index;
 #endif
     return (base_address + offset_address) << 4;  // Convert to byte address
 }
@@ -205,7 +205,7 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
     UNPACK({
         uint32_t byte_address = get_tile_l1_byte_address(get_operand_id(cb_id), tile_index);
 
-        value = reinterpret_cast<volatile uint32_t*>(byte_address)[element_offset];
+        value = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(byte_address)[element_offset];
 
         mailbox_write(ckernel::ThreadId::MathThreadId, value);
         mailbox_write(ckernel::ThreadId::PackThreadId, value);

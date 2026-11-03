@@ -161,12 +161,11 @@ void kernel_main() {
     // unpredicated L1->DST path — the standard layernorm_large_tensor_welford fuse_pre_add trick.
     {
         tile_regs_acquire();
-        welford_init();
+        welford_clear();
         welford_save_state(mean_dst);  // LREG4/5 (cleared) -> mean_dst / var_dst
         tile_regs_commit();
         cb_welford_zero.reserve_back(2);
         tile_regs_wait();
-        pack_reconfig_data_format(welford_zero_cb);
         pack_tile(mean_dst, welford_zero_cb);
         pack_tile(var_dst, welford_zero_cb);
         tile_regs_release();
@@ -188,22 +187,15 @@ void kernel_main() {
         // -------- PHASE 1: PRE — local per-token Welford (mean, var) over the shard --------
         {
             tile_regs_acquire();
-            // welford_init() programs the SFPU replay buffer + address mods (needed every row).
-            // Its SFPLOADI accumulator clear is UNRELIABLE here: a prior row's combine (SFPU rsqrt
+            // The SFPLOADI accumulator clear (welford_clear) is UNRELIABLE here: a prior row's combine (SFPU rsqrt
             // with data-dependent predication) can leave the condition code predicated, so the
             // clear skips some token lanes -> stale ~1e36 mean -> M2 overflow -> inf var -> token
             // collapse on warm rows. So reset the accumulator via the UNPREDICATED
             // L1->DST path instead: copy the cold-captured zero state and welford_restore_state
             // (mirrors layernorm_large_tensor_welford's fuse_pre_add reload).
-            welford_init();
-            reconfig_data_format_srca(welford_zero_cb);
-            copy_init(welford_zero_cb);
             copy_tile(welford_zero_cb, 0, mean_dst);
             copy_tile(welford_zero_cb, 1, var_dst);
             welford_restore_state(mean_dst);
-            // Reconfigure the unpacker back to the bf16 input for the transpose-fed welford.
-            reconfig_data_format_srca(welford_zero_cb, input_cb);
-            transpose_init(input_cb);
             uint32_t start_n = 0;
             if constexpr (streaming_low_l1 != 0) {
                 // Streamed 1st pass: wait + Welford + pop each block; LREG4/5 accumulate
@@ -232,9 +224,7 @@ void kernel_main() {
                 cb_mean.reserve_back(1);
                 cb_invstd.reserve_back(1);
                 tile_regs_wait();
-                pack_reconfig_data_format(mean_cb);
                 pack_tile(mean_dst, mean_cb);
-                pack_reconfig_data_format(invstd_cb);
                 pack_tile(var_dst, invstd_cb);
                 tile_regs_release();
                 cb_mean.push_back(1);
@@ -244,7 +234,6 @@ void kernel_main() {
                 // ring-gather. stats_local_cb holds [mean, var] for this shard.
                 cb_stats_local.reserve_back(2);
                 tile_regs_wait();
-                pack_reconfig_data_format(stats_local_cb);
                 pack_tile(mean_dst, stats_local_cb);
                 pack_tile(var_dst, stats_local_cb);
                 tile_regs_release();
@@ -259,14 +248,10 @@ void kernel_main() {
             // Transpose row 0 -> col 0; 1/std = rsqrt(var + eps).
             cb_mean.wait_front(1);
             cb_invstd.wait_front(1);
-            reconfig_data_format_srca(mean_cb);
-            transpose_init(mean_cb);
             tile_regs_acquire();
             transpose_tile(mean_cb, 0, mean_dst);
             transpose_tile(invstd_cb, 0, var_dst);
-            binop_with_scalar_tile_init();
             add_unary_tile(var_dst, eps_bits);
-            rsqrt_tile_init();
             rsqrt_tile(var_dst);
             tile_regs_commit();
 
@@ -275,9 +260,7 @@ void kernel_main() {
             cb_mean.reserve_back(1);
             cb_invstd.reserve_back(1);
             tile_regs_wait();
-            pack_reconfig_data_format(mean_cb);
             pack_tile(mean_dst, mean_cb);
-            pack_reconfig_data_format(invstd_cb);
             pack_tile(var_dst, invstd_cb);
             tile_regs_release();
             cb_mean.push_back(1);
@@ -300,47 +283,32 @@ void kernel_main() {
             constexpr uint32_t two_ring = 2u * ring_size;
             constexpr uint32_t recip_k_bits = __builtin_bit_cast(uint32_t, 1.0f / static_cast<float>(ring_size));
             cb_stats_gathered.wait_front(two_ring);
-            reconfig_data_format(stats_gathered_cb, stats_gathered_cb);
-            pack_reconfig_data_format(combine_cb);
             tile_regs_acquire();
             // Σ mean_i (even tile indices) via FPU pairwise add + dst-accumulate.
-            binary_tiles_init<true, EltwiseBinaryType::ELWADD>(stats_gathered_cb, stats_gathered_cb, false);
             add_tiles(stats_gathered_cb, stats_gathered_cb, 0, 2, DM);
-            binary_tiles_init<false, EltwiseBinaryType::ELWADD>(stats_gathered_cb, stats_gathered_cb, true);
             for (uint32_t k = 4; k < two_ring; k += 4) {
-                add_tiles(stats_gathered_cb, stats_gathered_cb, k, k + 2, DM);
+                add_tiles(stats_gathered_cb, stats_gathered_cb, k, k + 2, DM, true);
             }
             // Σ var_i (odd tile indices).
-            binary_tiles_init<true, EltwiseBinaryType::ELWADD>(stats_gathered_cb, stats_gathered_cb, false);
             add_tiles(stats_gathered_cb, stats_gathered_cb, 1, 3, DV);
-            binary_tiles_init<false, EltwiseBinaryType::ELWADD>(stats_gathered_cb, stats_gathered_cb, true);
             for (uint32_t k = 5; k < two_ring; k += 4) {
-                add_tiles(stats_gathered_cb, stats_gathered_cb, k, k + 2, DV);
+                add_tiles(stats_gathered_cb, stats_gathered_cb, k, k + 2, DV, true);
             }
             // mean_g = (1/K) Σ mean_i  (needed before the deviation form below).
-            binop_with_scalar_tile_init();
             mul_unary_tile(DM, recip_k_bits);  // DM = mean_g
             // Between-shard term via the STABLE deviation form: Σ (mean_i - mean_g)^2. Squares
             // only the small deviations, so no catastrophic cancellation (unlike Σmean^2-mean_g^2).
-            fill_tile_init();
             fill_tile(DMM, 0.f);
             for (uint32_t i = 0; i < ring_size; i++) {
-                copy_init(stats_gathered_cb);
                 copy_tile(stats_gathered_cb, 2u * i, DT);  // DT = mean_i
-                sub_binary_tile_init();
                 sub_binary_tile(DT, DM, DT);  // DT = mean_i - mean_g
-                square_tile_init();
                 square_tile(DT);  // DT = (mean_i - mean_g)^2
-                add_binary_tile_init();
                 add_binary_tile(DMM, DT, DMM);  // Σ (mean_i - mean_g)^2
             }
             // var_g = (1/K) Σ var_i + (1/K) Σ (mean_i - mean_g)^2 = (Σvar + Σdev^2) / K
-            add_binary_tile_init();
             add_binary_tile(DV, DMM, DV);  // DV = Σvar + Σdev^2
-            binop_with_scalar_tile_init();
             mul_unary_tile(DV, recip_k_bits);  // DV = var_g
             add_unary_tile(DV, eps_bits);      // var_g + eps
-            rsqrt_tile_init();
             rsqrt_tile(DV);  // DV = 1/std
             tile_regs_commit();
             cb_combine.reserve_back(2);
@@ -353,8 +321,6 @@ void kernel_main() {
 
             // Transpose merged mean / 1/std row 0 -> col 0.
             cb_combine.wait_front(2);
-            reconfig_data_format_srca(combine_cb);
-            transpose_init(combine_cb);
             tile_regs_acquire();
             transpose_tile(combine_cb, 0, mean_dst);
             transpose_tile(combine_cb, 1, var_dst);
@@ -363,9 +329,7 @@ void kernel_main() {
             cb_mean.reserve_back(1);
             cb_invstd.reserve_back(1);
             tile_regs_wait();
-            pack_reconfig_data_format(mean_cb);
             pack_tile(mean_dst, mean_cb);
-            pack_reconfig_data_format(invstd_cb);
             pack_tile(var_dst, invstd_cb);
             tile_regs_release();
             cb_mean.push_back(1);
@@ -385,9 +349,6 @@ void kernel_main() {
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 // (x - mean) -> xmm_cb
                 cb_input.wait_front(block_size);
-                reconfig_data_format(input_cb, mean_cb);
-                pack_reconfig_data_format(xmm_cb);
-                sub_bcast_cols_init(input_cb, mean_cb);
                 cb_xmm.reserve_back(block_size);
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < block_size; i++) {
@@ -404,9 +365,6 @@ void kernel_main() {
 
                 // (x - mean) * (1/std) -> norm_result_cb
                 cb_xmm.wait_front(block_size);
-                reconfig_data_format(xmm_cb, invstd_cb);
-                pack_reconfig_data_format(norm_result_cb);
-                mul_bcast_cols_init(xmm_cb, invstd_cb);
                 cb_norm_result.reserve_back(block_size);
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < block_size; i++) {
@@ -425,13 +383,6 @@ void kernel_main() {
                 if constexpr (has_weight != 0) {
                     cb_weight.wait_front(col_tile + block_size);
                     cb_norm_result.wait_front(block_size);
-                    reconfig_data_format(norm_result_cb, weight_cb);
-                    pack_reconfig_data_format(weight_result_cb);
-                    if constexpr (per_token_weight != 0) {
-                        mul_init(norm_result_cb, weight_cb);
-                    } else {
-                        mul_bcast_rows_init(norm_result_cb, weight_cb);
-                    }
                     cb_weight_result.reserve_back(block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size; i++) {
@@ -455,13 +406,6 @@ void kernel_main() {
                 if constexpr (has_bias != 0) {
                     cb_bias.wait_front(col_tile + block_size);
                     cb_weight_result.wait_front(block_size);
-                    reconfig_data_format(weight_result_cb, bias_cb);
-                    pack_reconfig_data_format(output_cb);
-                    if constexpr (per_token_bias != 0) {
-                        add_init(weight_result_cb, bias_cb);
-                    } else {
-                        add_bcast_rows_init(weight_result_cb, bias_cb);
-                    }
                     cb_output.reserve_back(block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size; i++) {
@@ -502,9 +446,6 @@ void kernel_main() {
             // cumulative (col + n) wait_front. CBs are sized div_up(num_tile_cols, block_size).
             // Sub-phase A: x - mean (broadcast mean over feature cols) -> xmm_cb.
             {
-                reconfig_data_format(input_cb, mean_cb);
-                pack_reconfig_data_format(xmm_cb);
-                sub_bcast_cols_init(input_cb, mean_cb);
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
                     cb_xmm.reserve_back(block_size);
@@ -524,9 +465,6 @@ void kernel_main() {
 
             // Sub-phase B: (x - mean) * (1/std) -> norm_result_cb.
             {
-                reconfig_data_format(xmm_cb, invstd_cb);
-                pack_reconfig_data_format(norm_result_cb);
-                mul_bcast_cols_init(xmm_cb, invstd_cb);
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
                     cb_xmm.wait_front(block_size);
@@ -548,13 +486,6 @@ void kernel_main() {
 
             // Sub-phase C: * weight (gamma).
             if constexpr (has_weight != 0) {
-                reconfig_data_format(norm_result_cb, weight_cb);
-                pack_reconfig_data_format(weight_result_cb);
-                if constexpr (per_token_weight != 0) {
-                    mul_init(norm_result_cb, weight_cb);
-                } else {
-                    mul_bcast_rows_init(norm_result_cb, weight_cb);
-                }
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
                     // whole-row weight: cumulative wait_front; per-batch offsets into this batch's
@@ -589,13 +520,6 @@ void kernel_main() {
 
             // Sub-phase D: + bias (beta).
             if constexpr (has_bias != 0) {
-                reconfig_data_format(weight_result_cb, bias_cb);
-                pack_reconfig_data_format(output_cb);
-                if constexpr (per_token_bias != 0) {
-                    add_init(weight_result_cb, bias_cb);
-                } else {
-                    add_bcast_rows_init(weight_result_cb, bias_cb);
-                }
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
                     // whole-row bias: cumulative wait_front; per-batch offsets into this batch's slice.

@@ -137,8 +137,6 @@ void kernel_main() {
             if constexpr (unpack_fp32_active) {
                 copy_init(dfb::x2_merge);
                 add_binary_tile_init();
-            } else {
-                add_init(dfb::x2_merge, dfb::zero, true);
             }
 
             tile_regs_acquire();
@@ -150,7 +148,7 @@ void kernel_main() {
                 }
             } else {
                 for (uint32_t i = 0; i < num_cores_y; i++) {
-                    add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0);
+                    add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0, true);
                 }
             }
             tile_regs_commit();

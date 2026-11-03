@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void binary_shift_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise shift operation to the left on the input at idst0, by input at idst1: y = x0 << x1
@@ -38,6 +40,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    binary_shift_tile_init();
     static_assert(
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for left shift. Supported data formats are: Int32, UInt32, UInt16");
@@ -83,6 +86,7 @@ ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
 // clang-format on
 template <DataFormat data_format>
 ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    binary_shift_tile_init();
     static_assert(
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for right shift. Supported data formats are: Int32, UInt32, UInt16");
@@ -140,6 +144,7 @@ ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
 // clang-format on
 template <DataFormat data_format>
 ALWI void binary_logical_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    binary_shift_tile_init();
     static_assert(
         data_format == DataFormat::Int32 || is_uint32_format(data_format) || data_format == DataFormat::UInt16,
         "Unsupported data format for logical right shift. Supported data formats are: Int32, UInt32, UInt16");

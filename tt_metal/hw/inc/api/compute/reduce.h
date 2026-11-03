@@ -125,7 +125,7 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
  * The templates take `reduce_type` which can be `ReduceFunc::Sum`, `ReduceFunc::Avg`, or `ReduceFunc::Max` and `reduce_dim` which can be `Reduce::R`, `Reduce::C`, or
  * `Reduce::RC`. They can also be specified by defines REDUCE_OP and REDUCE_DIM.
  *
- * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer state to default.
+ * NOTE: This call reconfigures the data formats, runs `reduce_init` and `reduce_uninit` itself.
  * NOTE: For SUM and AVG operations, the value in `icb_scaler` is a scaling factor of the final sum of values across rows/columns/both, so there is no real constraint in terms
  * of it's value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in `icb_scaler`. In any case, it is recommended to use the
  * above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details.
@@ -141,8 +141,34 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
  * | Function   | itile                     | The index of the tile within the first CB                                               | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | itile_scaler              | The index of the tile within the scaling factor CB.                                     | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
+ * | Function   | ocb                       | The identifier of the output circular buffer (CB) the result is packed to               | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void reduce_tile(
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
+    std::uint32_t itile,
+    std::uint32_t itile_scaler,
+    std::uint32_t idst,
+    std::uint32_t ocb) {
+    if constexpr ((reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX)) {
+        reconfig_full_operand(icb_scaler, icb);
+    } else {
+        reconfig_full_operand(icb, icb_scaler);
+    }
+    reduce_init<reduce_type, reduce_dim, is_fp32_dest_acc_en>(icb, icb_scaler, ocb);
+#ifndef ARCH_QUASAR
+    MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler, idst)));
+    UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
+#else
+    MATH((llk_math_reduce<reduce_type, reduce_dim>(icb, icb_scaler, idst)));
+    UNPACK((llk_unpack_AB_reduce(icb, icb_scaler, itile, itile_scaler)));
+#endif
+    reduce_uninit(icb);
+}
+
+// Unfolded form: the caller runs reconfig, reduce_init and reduce_uninit.
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_tile(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
@@ -158,16 +184,14 @@ ALWI void reduce_tile(
 /**
  * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing each
  * partial result to a consecutive DST register slot. This is the uniform block entry point for the reduce op
- * group: its body is a simple loop over `reduce_tile`, so it inherits `reduce_tile`'s semantics and requires the
- * same initialization (`reduce_init`) to have been called first. The scaling-factor tile (`itile_scaler`) is reused
+ * group: its body is a simple loop over `reduce_tile`, so it inherits `reduce_tile`'s semantics, including its
+ * own reconfig, init and uninit. The scaling-factor tile (`itile_scaler`) is reused
  * for every tile in the block. The DST register buffer must be in acquired state via *acquire_dst* call.
  *
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
  * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
  * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
  * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47478.
- * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer
- * state to default.
  *
  * Return value: None
  *
@@ -181,8 +205,25 @@ ALWI void reduce_tile(
  * | Function   | itile_scaler | The index of the tile within the scaling factor CB               | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | start_idst   | The index of the first tile in DST REG for the result            | uint32_t  | Must be less than the acquired size of DST REG | True     |
  * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + ntiles <= acquired DST REG size   | True     |
+ * | Function   | ocb          | The identifier of the output circular buffer (CB)                | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void reduce_block(
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
+    std::uint32_t start_itile,
+    std::uint32_t itile_scaler,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles,
+    std::uint32_t ocb) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en>(
+            icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i, ocb);
+    }
+}
+
+// Unfolded form: the caller runs reconfig, reduce_init and reduce_uninit.
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block(
     std::uint32_t icb,

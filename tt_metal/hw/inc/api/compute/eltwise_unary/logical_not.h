@@ -11,6 +11,9 @@
 #endif
 
 namespace ckernel {
+
+ALWI void logical_not_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise computation of the logical not operation on each element of a tile
@@ -30,6 +33,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat DATA_FORMAT>
 ALWI void logical_not_tile(uint32_t idst) {
+    logical_not_tile_init();
     static_assert(
         DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||
             DATA_FORMAT == DataFormat::Int32 || is_uint32_format(DATA_FORMAT) || DATA_FORMAT == DataFormat::UInt16 ||

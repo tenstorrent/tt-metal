@@ -70,6 +70,9 @@ ALWI void matmul_block_math_dynamic_throttle(
             throttled_mop_status = 1;
         }
         MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
+        // Leave the unthrottled state behind, so the next block's init is redundant.
+        MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+        throttled_mop_status = 0;
     } else {
         if (throttled_mop_status != 0) {
             MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
@@ -267,6 +270,12 @@ ALWI void matmul_block(
     std::uint32_t kt_dim,
     std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
+#ifndef ARCH_QUASAR
+    reconfig_full_operand<SrcOrder::Reverse>(in0_cb_id, in1_cb_id);
+#else
+    reconfig_data_format<SrcOrder::Reverse>(in0_cb_id, in1_cb_id);
+#endif
+    matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));

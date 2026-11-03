@@ -13,7 +13,7 @@
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_mode.hpp"
 
-void kernel_main() {
+__attribute__((flatten)) void kernel_main() {
     constexpr uint32_t Skt = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
@@ -93,7 +93,6 @@ void kernel_main() {
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
     CircularBuffer cb_mask_in_obj(cb_mask_in);
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_out);
-    matmul_init(cb_q_in, cb_k_in);
 
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {

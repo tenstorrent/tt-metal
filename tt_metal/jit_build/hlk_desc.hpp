@@ -39,6 +39,7 @@ public:
     std::vector<uint32_t> buf_tile_r_dim_arr;
     std::vector<uint32_t> buf_tile_c_dim_arr;
     std::vector<uint32_t> buf_tile_size_arr;
+    std::vector<uint32_t> buf_page_size_arr;
 
     tt_hlk_desc(uint32_t max_dfbs) :
         buf_dataformat_arr(max_dfbs, DataFormat::Invalid),
@@ -48,7 +49,8 @@ public:
         buf_narrow_tile_arr(max_dfbs, 0),
         buf_tile_r_dim_arr(max_dfbs, constants::TILE_HEIGHT),
         buf_tile_c_dim_arr(max_dfbs, constants::TILE_WIDTH),
-        buf_tile_size_arr(max_dfbs, tile_size(DataFormat::Bfp8_b)) {}
+        buf_tile_size_arr(max_dfbs, tile_size(DataFormat::Bfp8_b)),
+        buf_page_size_arr(max_dfbs, 0) {}
 
     DataFormat get_buf_dataformat(int buf_idx) const { return buf_dataformat_arr[buf_idx]; }
 
@@ -113,6 +115,7 @@ inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
         hasher.update(static_cast<uint64_t>(obj.get_buf_tile_c_dim(i)));
         hasher.update(static_cast<uint64_t>(obj.get_buf_face_r_dim(i)));
         hasher.update(static_cast<uint64_t>(obj.get_buf_num_faces(i)));
+        hasher.update(static_cast<uint64_t>(obj.buf_page_size_arr[i]));
     }
     hasher.update(static_cast<uint64_t>(obj.get_hlk_math_fidelity()));
     hasher.update(obj.get_hlk_math_approx_mode() ? 1u : 0u);

@@ -51,13 +51,9 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Copy predicate to destination register 0
-        copy_init(predicate_dfb.get_id());
         copy_tile(predicate_dfb.get_id(), 0, 0);
 
         // Fill scalar and copy tensor based on variant
-        fill_tile_init();
-        reconfig_data_format_srca(predicate_dfb.get_id(), tensor_dfb.get_id());
-        copy_init(tensor_dfb.get_id());
 
         // TTS: scalar=false (reg 2), tensor=true (reg 1)
         // TST: scalar=true (reg 1), tensor=false (reg 2)
@@ -84,10 +80,8 @@ ALWI void process_tile(
             // Copy false tensor to reg 2
             copy_tile(tensor_dfb.get_id(), 0, 2);
         }
-        reconfig_data_format_srca(tensor_dfb.get_id(), predicate_dfb.get_id());
 
         // Perform the ternary operation
-        TERNARY_SFPU_OP_INIT();
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
 
         tile_regs_commit();
@@ -138,7 +132,6 @@ void kernel_main() {
     constexpr auto cb_out_id = tt::CBIndex::c_3;
 
     compute_kernel_hw_startup(predicate_cb_id, cb_out_id);
-    copy_init(predicate_cb_id);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

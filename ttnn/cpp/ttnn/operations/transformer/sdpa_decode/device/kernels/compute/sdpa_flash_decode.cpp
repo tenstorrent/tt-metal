@@ -253,19 +253,8 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
-        matmul_init(cb_q_in, cb_k_in);
-        // #49266: the Q tilize runs on SrcA, and on galaxy Q is a half-tile (num_faces=2).
-        // tilize_uninit leaves SrcA at Q's geometry, but the QK matmul reads operands reversed
-        // (SrcA <- cb_k_in, num_faces=4) and the per-chunk reconfig below is format-only.
-        // Reprogram SrcA/SrcB geometry once here so K is unpacked with the right num_faces.
-        // One-time, not per-chunk: nothing after this re-establishes Q's geometry on SrcA (K and V
-        // are both full tiles), so the per-chunk reconfig can stay IGNORE. Without this, SrcA stays
-        // at num_faces=2 and the matmul reads K wrong -> Top-1 0%. (Full-tile Q: this is a no-op
-        // re-assert of num_faces=4.)
-        reconfig_full_operand(cb_k_in, cb_q_in);
     } else {
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
-        matmul_init(cb_q_in, cb_k_in);
     }
     CircularBuffer(cb_q_in).wait_front(q_chunk_tiles);
 
@@ -370,10 +359,6 @@ void kernel_main() {
 
         // Loop through all K chunks
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
-            // Reconfig register DF
-            reconfig_data_format(cb_k_in, cb_q_in);
-            pack_reconfig_data_format(cb_qk_im);
-
             // Spec mode mask predicate, evaluated by EVERY core for EVERY chunk it owns: a
             // chunk needs the per-row-tile mask iff its last covered position is past this
             // batch row's smallest candidate bound. Since a group's Tg bounds span <= Tg-1
@@ -434,7 +419,6 @@ void kernel_main() {
                 // Uses <false> to NOT pop the mask CB so it can be reused for subsequent chunks.
                 // Applied outside mask_fusion conditional since it's always needed independently.
                 if constexpr (has_block_padding) {
-                    reconfig_data_format(cb_qk_im, cb_block_pad_mask);
                     add_block_inplace<false>(cb_qk_im, cb_block_pad_mask, qk_chunk_tiles_dynamic);
                 }
 
@@ -443,25 +427,21 @@ void kernel_main() {
                         // One mask block per qualifying chunk, popped after use so the next
                         // masked chunk's block can be produced into the same CB.
                         if (spec_chunk_needs_mask) {
-                            reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                         }
                     } else if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode
                         if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
-                            reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                         }
                     } else {
                         if constexpr (use_attention_mask) {
-                            reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                         }
                     }
 
                     // Apply sliding window mask to the first chunk (only on the core that processes it)
                     if (sliding_window_size > 0 && k_chunk == window_start_chunk && window_start_unaligned > 0) {
-                        reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
                         add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
                     }
                 }
@@ -472,9 +452,6 @@ void kernel_main() {
                  * where the scaling is fused into exp both in exp(x - max) and exp(prev_max - cur_max).
                  * This gives us scaling for free on the performance-critical exp(x - max) computation.
                  */
-
-                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                pack_reconfig_data_format(cb_cur_max);
 
                 /**
                  * OPTIMIZATION
@@ -488,9 +465,6 @@ void kernel_main() {
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
-                reconfig_data_format(cb_qk_im, cb_cur_max);
-                pack_reconfig_data_format(cb_qk_im);
-
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
@@ -498,17 +472,11 @@ void kernel_main() {
                     cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
                 CircularBuffer(cb_qk_im).wait_front(qk_chunk_tiles_dynamic);
 
-                // Reconfig register DF
-                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                pack_reconfig_data_format(cb_cur_sum);
-
                 /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
 
                 /* OUT_IM = QK @ V_CHUNK */
-                reconfig_data_format(cb_v_in, cb_qk_im);  // DEBUG
-                pack_reconfig_data_format(cb_out_im);
                 matmul_blocks(
                     cb_qk_im,
                     cb_v_in,
@@ -526,8 +494,6 @@ void kernel_main() {
                     cb_mask_in,
                     cb_zero_in);
 
-                // Reconfig register DF
-                reconfig_data_format_srca(cb_out_im);
                 CircularBuffer(cb_qk_im).pop_front(qk_chunk_tiles_dynamic);
 
                 /* OUT_ACC += OUT_IM */
@@ -535,10 +501,6 @@ void kernel_main() {
                     cb_out_mm = cb_out_im;
                 } else if constexpr (!single_local_chunk) {
                     // When there is more than 1 chunk, we perform Lazy Softmax
-                    // Reconfig register DF
-                    reconfig_data_format(cb_prev_max, cb_cur_max);
-                    pack_reconfig_data_format(cb_exp_max_diff);
-
                     /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
                     sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
@@ -547,26 +509,17 @@ void kernel_main() {
                     mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                     /* OUT_ACC *= EXP_MAX_DIFF */
-                    reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);
-                    pack_reconfig_data_format(cb_out_accumulate_im);
                     mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
                         cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im);
 
                     /* CUR_SUM += PREV_SUM */
-                    reconfig_data_format(cb_cur_sum, cb_prev_sum);
-                    pack_reconfig_data_format(cb_cur_sum);
                     add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
 
                     /* OUT_ACC += OUT_IM */
-                    reconfig_data_format(cb_out_accumulate_im, cb_out_im);
-                    pack_reconfig_data_format(cb_out_accumulate_im);
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
                 }
 
                 // More local chunks to process - move intermediate sum and max values to ping-pong buffers
-                reconfig_data_format(cb_cur_max, cb_cur_max);
-                pack_reconfig_data_format(cb_prev_max);
-
                 // PREV_MAX <- CUR_MAX
                 move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
 
@@ -656,8 +609,6 @@ void kernel_main() {
             // If single core (no children with data), results are in cb_cur_sum/cb_cur_max from FA loop
 
             /* SUM = 1.0 / SUM */
-            reconfig_data_format(cb_prev_sum, cb_prev_sum);
-            pack_reconfig_data_format(cb_prev_sum);
 
             // Handle attention sink here
             if constexpr (use_attention_sink) {
@@ -684,17 +635,11 @@ void kernel_main() {
                 mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
             }
 
-            reconfig_data_format(cb_prev_sum, cb_prev_sum);
-            pack_reconfig_data_format(cb_prev_sum);
             recip_block_inplace(cb_prev_sum, Sq_chunk_t);
 
             /* OUT_ACC *= 1/SUM */
-            reconfig_data_format(cb_out_accumulate_im, cb_prev_sum);
-            pack_reconfig_data_format(cb_out_accumulate_im);
-
             // cb_prev_sum is consumed and popped by mul_block_bcast_cols_inplace
             mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_prev_sum);
-            pack_reconfig_data_format(cb_out_final);
 
             // Pop the max buffer that still has data
             CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);

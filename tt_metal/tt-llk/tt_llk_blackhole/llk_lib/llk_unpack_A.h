@@ -438,13 +438,25 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     // Set upk0/1 L1 read addr
     if constexpr (_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())
     {
-        const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
-        cfg[upk0_reg]                = address;
+        if (unp_cfg_context == 0)
+        {
+            TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
+        }
+        else
+        {
+            TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address);
+        }
     }
     else
     {
-        const std::uint32_t upk1_reg = (unp_cfg_context == 0) ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32;
-        cfg[upk1_reg]                = address;
+        if (unp_cfg_context == 0)
+        {
+            TT_CFG_STORE(cfg, THCON_SEC1_REG3_Base_address_ADDR32, address);
+        }
+        else
+        {
+            TT_CFG_STORE(cfg, THCON_SEC1_REG3_Base_cntx1_address_ADDR32, address);
+        }
     }
 
     // Trisc::SEMPOST for context acquire

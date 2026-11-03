@@ -32,6 +32,12 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs_id,
     tt::CBIndex cb_post_lhs_id,
@@ -73,12 +79,9 @@ ALWI void process_tile(
 #endif
         tile_regs_acquire();
         // Startup and preprocessing preserve the LHS-format SrcA invariant.
-        copy_init(cb_post_lhs.get_cb_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
         }
-        reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
-        copy_init(cb_post_rhs.get_cb_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
 
@@ -92,12 +95,11 @@ ALWI void process_tile(
 #endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
-        reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
         tile_regs_commit();
 
         tile_regs_wait();
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 2, cb_out.get_cb_id());
+            pack_tile(i * 2, cb_out.get_cb_id(), 0, false, pack_relu);
         }
         tile_regs_release();
 
@@ -133,10 +135,6 @@ void kernel_main() {
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
-    copy_init(cb_post_lhs_id);
-#ifdef PACK_RELU
-    pack_relu_config(ReluConfig::zero());
-#endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT

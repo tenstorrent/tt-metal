@@ -83,7 +83,7 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * row_start_index;
+    std::uint32_t offset_address_a = get_operand_unpack_tile_size(operandA_id) * row_start_index;
     std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 

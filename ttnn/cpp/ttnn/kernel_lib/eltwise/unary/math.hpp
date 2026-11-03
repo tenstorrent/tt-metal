@@ -7,7 +7,7 @@
  * @file math.hpp
  * @brief Math SFPU op structs for the eltwise chain — Exp, Log, Sqrt, Rsqrt, Power, ...
  *
- * Each op derives from `UnaryOp<Self, Slot>` (CRTP) and supplies static `init()` + `exec_impl()`.
+ * Each op derives from `UnaryOp<Self, Slot>` (CRTP) and supplies a static `exec_impl()`.
  * Template parameters carry approximation mode + DEST slot at compile time.
  * Runtime-param ops (Power, Rpow) override `exec(uint32_t)` directly to capture instance state.
  */

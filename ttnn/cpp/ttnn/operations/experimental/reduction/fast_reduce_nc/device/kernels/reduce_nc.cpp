@@ -32,13 +32,11 @@ void kernel_main() {
     // input_granularity. The outer loop executes num_input_tiles / input_granularity
     // times.
     for (uint32_t i = 0; i < num_output_tiles; i++) {
-        add_init(dfb::in0, dfb::in1, true);
-        reconfig_data_format(dfb::in0, dfb::in1);
         tile_regs_acquire();
         for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {
             cb_in0_obj.wait_front(input_granularity);
             for (uint32_t k = 0; k < input_granularity; k++) {
-                add_tiles(dfb::in0, dfb::in1, k, first_tile, dst0);
+                add_tiles(dfb::in0, dfb::in1, k, first_tile, dst0, true);
             }
             cb_in0_obj.pop_front(input_granularity);
         }

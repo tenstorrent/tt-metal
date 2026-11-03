@@ -42,7 +42,6 @@ constexpr auto no_op = []() {};
  * @param scalar The scalar to scale the destination tile by
  */
 inline void scale_dest(uint32_t dst, uint32_t scalar) {
-    binop_with_scalar_tile_init();
     mul_unary_tile(dst, scalar);
 }
 
@@ -75,11 +74,6 @@ inline void accumulate_compute_loop(
     constexpr bool sync_full_block = input_policy::sync_full_block;
 
     auto accumulate_cb = [dfb_scalar, block_size, dfb_out, num_tiles, last_tile_partial](auto& dfb) {
-        constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
-        if constexpr (swap_operands) {
-            reconfig_data_format(dfb_scalar.get_id(), dfb.get_id());
-        }
-        reduce_init<reduce_type, reduce_dim>(dfb.get_id(), dfb_scalar.get_id(), dfb_out.get_id());
         for (auto block : generic::blocks(num_tiles, block_size)) {
             const auto num_previous_tiles = pop_input ? 0 : block.start();
             const auto curr_block_size = sync_full_block ? block.full_block_size() : block.size();
@@ -89,7 +83,12 @@ inline void accumulate_compute_loop(
                 // If it's the last tile and it's partial, use the second tile in dfb_scalar
                 const uint32_t scaler_tile_idx = block.to_global(j) == num_tiles - 1 && last_tile_partial ? 1 : 0;
                 reduce_tile<reduce_type, reduce_dim>(
-                    dfb.get_id(), dfb_scalar.get_id(), num_previous_tiles + j, scaler_tile_idx, detail::dst0);
+                    dfb.get_id(),
+                    dfb_scalar.get_id(),
+                    num_previous_tiles + j,
+                    scaler_tile_idx,
+                    detail::dst0,
+                    dfb_out.get_id());
             }
             if constexpr (pop_input) {
                 dfb.pop_front(static_cast<uint16_t>(curr_block_size));
@@ -105,9 +104,6 @@ inline void accumulate_compute_loop(
     if constexpr (num_additional_dfbs > 0) {
         (accumulate_cb(dfb_additional), ...);
     }
-
-    reduce_uninit();
-    reconfig_data_format(dfb_in.get_id(), dfb_scalar.get_id());
 }
 
 }  // namespace detail
@@ -172,7 +168,6 @@ inline void row_wise_accumulate_with_epilogue(
     const auto last_tile_partial = N % tile_width > 0;
     const uint32_t num_scaler_tiles_needed = last_tile_partial ? 2 : 1;
     dfb_scalar.wait_front(static_cast<uint16_t>(num_scaler_tiles_needed));
-    reconfig_data_format(dfb_in.get_id(), dfb_scalar.get_id());
     tile_regs_acquire();
 
     detail::accumulate_compute_loop<reduce_type, reduce_dim, FLOAT32_REDUCTION, input_policy>(
@@ -184,7 +179,6 @@ inline void row_wise_accumulate_with_epilogue(
     tile_regs_wait();
 
     dfb_out.reserve_back(1);
-    pack_reconfig_data_format(dfb_out.get_id());
 #ifdef ARCH_QUASAR
     pack_init(dfb_out.get_id());  // Quasar: reconfig is gasket-only; retarget the packer ring (see layernorm.cpp)
 #endif

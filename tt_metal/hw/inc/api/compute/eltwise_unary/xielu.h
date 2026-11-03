@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void xielu_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise xIELU computation on input x , where x is each element of a tile
@@ -30,6 +32,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void xielu_tile(uint32_t idst, uint32_t alpha_p, uint32_t alpha_n) {
+    xielu_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

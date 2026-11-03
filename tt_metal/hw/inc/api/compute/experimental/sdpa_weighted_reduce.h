@@ -115,7 +115,7 @@ inline void weighted_reduce_unpack_impl(
     const std::uint32_t qk_id = get_operand_id(qk_cb);            // operandA -> SrcA
     const std::uint32_t weights_id = get_operand_id(weights_cb);  // operandB -> SrcB
     const std::uint32_t address_a =
-        get_local_cb_interface(qk_id).fifo_rd_ptr - 1 + qk_tile_index * get_local_cb_interface(qk_id).fifo_page_size;
+        get_local_cb_interface(qk_id).fifo_rd_ptr - 1 + qk_tile_index * get_operand_unpack_tile_size(qk_id);
     const std::uint32_t address_b = get_local_cb_interface(weights_id).fifo_rd_ptr - 1;
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();

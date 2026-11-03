@@ -205,11 +205,19 @@ def test_dit_rms_norm_unary_fused_basic_shapes(device, shape, name, layout):
 @pytest.mark.parametrize(
     "shape, config_name",
     [
+        ((8192, 5120), "wan2.2_14b-480p-loudbox"),
+        ((16384, 5120), "wan2.2_14b-480p-2x2"),
         ((9472, 5120), "wan2.2_14b-720p-full"),
         ((2368, 5120), "wan2.2_14b-720p-single"),
         ((1, 384, 1, 90, 160), "wan.decoder.up_blocks.3.resnets.0.norm1"),
     ],
-    ids=["wan2.2_14b-720p-full", "wan2.2_14b-720p-single", "wan.decoder.up_blocks.3.resnets.0.norm1"],
+    ids=[
+        "wan2.2_14b-480p-loudbox",
+        "wan2.2_14b-480p-2x2",
+        "wan2.2_14b-720p-full",
+        "wan2.2_14b-720p-single",
+        "wan.decoder.up_blocks.3.resnets.0.norm1",
+    ],
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
 def test_dit_rms_norm_unary_fused_wan2_shapes(device, shape, config_name, layout):

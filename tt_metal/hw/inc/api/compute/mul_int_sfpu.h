@@ -17,6 +17,9 @@
 
 namespace ckernel {
 
+template <DataFormat data_format>
+ALWI void mul_int_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise mul operation with the two integer inputs: y = mul(x0,x1)
@@ -41,6 +44,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    mul_int_tile_init<data_format>();
 #if defined(ARCH_QUASAR)
     static_assert(data_format == DataFormat::Int32, "Unsupported data format for mul_int on Quasar. Supported: Int32");
     // Int8 copy_tile + fp32_dest_acc FPU writes sign-magnitude Int32 into dest.

@@ -133,7 +133,12 @@ inline void _llk_unpack_reconfig_tile_shape_srca_(
 
     if constexpr (issue_stall)
     {
+        // Drains only the config writes up to the scope end below.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+        __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::UNPACK0));
+#else
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
+#endif
     }
 
     // Tile size (bytes) tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcA L1 base.
@@ -146,6 +151,12 @@ inline void _llk_unpack_reconfig_tile_shape_srca_(
 
     // Set Z-dim to number of faces
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (unpack_num_faces << 16));
+    if constexpr (issue_stall)
+    {
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+        __builtin_rvtt_stall_scope_end();
+#endif
+    }
 }
 
 /**
@@ -172,7 +183,12 @@ inline void _llk_unpack_reconfig_tile_shape_srcb_(
 
     if constexpr (issue_stall)
     {
+        // Drains only the config writes up to the scope end below.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+        __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::UNPACK1));
+#else
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
+#endif
     }
 
     // Tile size (bytes) tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcB L1 base.
@@ -183,6 +199,12 @@ inline void _llk_unpack_reconfig_tile_shape_srcb_(
 
     // Set Z-dim to number of faces
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (unpack_num_faces << 16));
+    if constexpr (issue_stall)
+    {
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+        __builtin_rvtt_stall_scope_end();
+#endif
+    }
 }
 
 /**
@@ -222,7 +244,12 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
             static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), is_fp32_dest_acc_en),
         "Unsupported unpacker to register conversion.");
 
+    // Drains only the config writes up to the scope end at the end of this function.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::UNPACK0));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
+#endif
     if constexpr (!skip_int8)
     {
         // Always re-derive SrcAUnsigned from the new format so a reconfig cannot leave a stale signedness bit
@@ -258,6 +285,9 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
         // (tile_size is re-written here; it is the same value stored just above -- a harmless duplicate.)
         _llk_unpack_reconfig_tile_shape_srca_<false /*issue_stall*/>(tile_size, unpack_face_r_dim, unpack_num_faces);
     }
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
 }
 
 /**
@@ -297,7 +327,12 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
             static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), is_fp32_dest_acc_en),
         "Unsupported unpacker to register conversion.");
 
+    // Drains only the config writes up to the scope end at the end of this function.
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __instrn_buffer[0] = __builtin_rvtt_stallwait_scoped((unsigned)(p_stall::STALL_CFG), (unsigned)(p_stall::UNPACK1));
+#else
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
+#endif
     if constexpr (!skip_int8)
     {
         // Always re-derive SrcBUnsigned from the new format so a reconfig cannot leave a stale signedness bit
@@ -326,6 +361,9 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
         // Reprogram tile size + face geometry. issue_stall=false: the STALL_CFG/UNPACK1 above already drained.
         _llk_unpack_reconfig_tile_shape_srcb_<false /*issue_stall*/>(tile_size, unpack_face_r_dim, unpack_num_faces);
     }
+#if __has_builtin(__builtin_rvtt_stallwait_scoped)
+    __builtin_rvtt_stall_scope_end();
+#endif
 }
 
 /**
@@ -365,13 +403,13 @@ inline void _llk_unpack_configure_addresses_(const std::uint32_t address_a, cons
 
     if (0 == unp_cfg_context)
     {
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address_a);
+        TT_CFG_STORE(cfg, THCON_SEC1_REG3_Base_address_ADDR32, address_b);
     }
     else
     {
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
-        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address_a);
+        TT_CFG_STORE(cfg, THCON_SEC1_REG3_Base_cntx1_address_ADDR32, address_b);
     }
 }
 
@@ -390,10 +428,10 @@ inline void _llk_unpack_configure_single_address_(const std::uint32_t address, v
 
     if (0 == unp_cfg_context)
     {
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
     }
     else
     {
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address);
     }
 }

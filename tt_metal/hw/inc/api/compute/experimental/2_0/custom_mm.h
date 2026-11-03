@@ -109,7 +109,7 @@ ALWI void custom_mm_block_init(
             S1.total_num_faces(),
             get_operand_num_faces(in0_id),
             experimental::tile_stride_words(F1, S1),
-            get_local_cb_interface(in0_id).fifo_page_size);
+            get_operand_unpack_tile_size(in0_id));
         _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
             get_operand_face_r_dim(in0_id), static_cast<std::uint32_t>(in1_register_format), ct_dim);
     }));
@@ -273,7 +273,7 @@ ALWI void custom_mm_block(
             in1_tile_index,
             in0_tile_index,
             in1_tile_size,
-            in0.fifo_page_size,
+            get_operand_unpack_tile_size(in0_id),
             kt_dim,
             ct_dim);
     }));

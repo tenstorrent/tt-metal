@@ -25,7 +25,6 @@ void kernel_main() {
     CircularBuffer cb_output(output_cb);
 
     compute_kernel_hw_startup(input_cb_id, intermediate_cb, output_cb);
-    add_init(input_cb_id, intermediate_cb, false);
 
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice

@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void snake_beta_tile_init();
+
 // clang-format off
 /**
  * Performs elementwise SnakeBeta fused activation: out = x + sin(alpha * x)^2 / beta
@@ -26,6 +28,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void snake_beta_tile(uint32_t idst_x, uint32_t idst_alpha, uint32_t idst_beta, uint32_t idst_out) {
+    snake_beta_tile_init();
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

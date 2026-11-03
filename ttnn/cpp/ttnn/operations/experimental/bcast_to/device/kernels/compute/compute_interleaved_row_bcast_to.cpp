@@ -30,7 +30,6 @@ void kernel_main() {
     DataflowBuffer dfb_src(dfb::src);
     DataflowBuffer dfb_dst(dfb::dst);
     compute_kernel_hw_startup(dfb::src, dfb::dst);
-    unary_bcast_init<BroadcastType::ROW>(dfb::src);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;
@@ -38,9 +37,8 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
-                    ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                    ckl::eltwise_chain(
                         ckl::IterationShape::one_tile(),
-                        // The caller owns setup, so the chain must not reconfigure formats.
                         ckl::UnaryBcast<
                             ckl::BroadcastDim::Row,
                             ckl::input(

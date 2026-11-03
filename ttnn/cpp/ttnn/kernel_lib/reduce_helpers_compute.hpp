@@ -333,7 +333,7 @@ struct NoOp {
  *                       unless Accurate fp32 is requested. SFPU covers REDUCE_ROW/REDUCE_COL only;
  *                       fast-mode float/bf16 MIN is dispatched via reduce_{h,w}_neg.cpp.
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
- * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
+ * @tparam reconfig_mode Unused. The folded reduce_tile and pack_tile reconfigure the unpacker and packer themselves.
  * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 through the
  *                   SFPU at full fp32; see ReduceFp32Mode.
  *

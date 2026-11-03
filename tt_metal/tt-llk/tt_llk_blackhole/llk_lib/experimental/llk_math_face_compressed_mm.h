@@ -403,11 +403,13 @@ inline void _llk_math_face_compressed_mm_(
     constexpr std::uint32_t metas_per_word   = 5;
     static_assert((metas_per_word - 1) * meta_stride_bits + meta_index_bits <= 32, "five 6-bit metas at a 6-bit stride must fit one 32-bit word");
 
-    const std::uint32_t iters      = kt_dim * ct_dim;
-    const std::uint32_t full_iters = iters / metas_per_word; // whole meta words
-    const std::uint32_t rem_iters  = iters % metas_per_word; // metas in the trailing word
-    const std::uint32_t* meta_ptr  = reinterpret_cast<const std::uint32_t*>(base_address_meta);
+    const std::uint32_t iters               = kt_dim * ct_dim;
+    const std::uint32_t full_iters          = iters / metas_per_word; // whole meta words
+    const std::uint32_t rem_iters           = iters % metas_per_word; // metas in the trailing word
+    const std::uint32_t tt_l1_ptr* meta_ptr = reinterpret_cast<const std::uint32_t tt_l1_ptr*>(base_address_meta);
 
+    // A table entry is a whole instruction word and the entries are not all the same instruction (MOP,
+    // REPLAY, ZEROACC, SETRWC, NOP), so these have no intrinsic form: the opcode is data here.
     constexpr auto tables                   = _llk_math_face_compressed_mm_tables_<ct_dim>();
     constexpr const std::uint32_t* l1_table = tables[0];
     constexpr const std::uint32_t* l2_table = tables[1];

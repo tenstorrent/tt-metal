@@ -49,7 +49,7 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const bool partial_face = get_output_partial_face(output_id);
 
-    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
+    const std::uint32_t tile_size = get_output_pack_tile_size(output_id);
 
     SAN_HOOK(configure(
         StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
@@ -93,7 +93,7 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
     std::uint32_t pack_tile_addr;
     if constexpr (out_of_order_output) {
         pack_tile_addr = get_local_cb_interface(output_id).fifo_wr_ptr +
-                         (std::uint32_t)(get_local_cb_interface(output_id).fifo_page_size) * output_tile_index - 1;
+                         (std::uint32_t)(get_output_pack_tile_size(output_id))*output_tile_index - 1;
     } else {
         if constexpr (pack_addr_mode == PackMode::Untilize) {
             static_assert(pack_addr_mode != PackMode::Untilize, "Use llk_pack_untilize APIs for pack-untilize.");
@@ -101,7 +101,7 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
         } else {
             pack_tile_addr =
                 get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
-            get_local_cb_interface(output_id).fifo_wr_tile_ptr += get_local_cb_interface(output_id).fifo_page_size;
+            get_local_cb_interface(output_id).fifo_wr_tile_ptr += get_output_pack_tile_size(output_id);
         }
     }
     return pack_tile_addr;
@@ -176,12 +176,12 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
         StateVal<Operand<Exu::Pack>::PartialFace>(false),
-        StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
+        StateDiscard<std::uint32_t>(get_output_pack_tile_size(output_id))));
     LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
-        get_local_cb_interface(output_id).fifo_page_size,
+        get_output_pack_tile_size(output_id),
         tile_c_dim,
         num_faces,
         false /* partial_face */);

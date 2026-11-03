@@ -160,9 +160,9 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
     wait_for_next_context(1);
     reset_config_context();
 
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-    cfg[SCRATCH_SEC0_val_ADDR32]             = block_increment;
-    cfg[SCRATCH_SEC1_val_ADDR32]             = inner_increment;
+    TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address_a);
+    TT_CFG_STORE(cfg, SCRATCH_SEC0_val_ADDR32, block_increment);
+    TT_CFG_STORE(cfg, SCRATCH_SEC1_val_ADDR32, inner_increment);
 
     semaphore_post(semaphore::UNPACK_SYNC);
 

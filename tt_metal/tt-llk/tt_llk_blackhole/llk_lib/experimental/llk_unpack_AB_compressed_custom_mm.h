@@ -113,9 +113,9 @@ inline void _llk_unpack_AB_compressed_custom_mm_init_(const std::uint32_t unpB_f
     // tilize whose CFGSHIFTMASK reads SCRATCH_SEC0); wait for its contexts to retire first.
     wait_for_next_context(1);
 
-    cfg[SCRATCH_SEC0_val_ADDR32]                   = 68;
-    cfg[SCRATCH_SEC1_val_ADDR32]                   = 36;
-    cfg[SCRATCH_SEC2_val_ADDR32]                   = 20;
+    TT_CFG_STORE(cfg, SCRATCH_SEC0_val_ADDR32, 68);
+    TT_CFG_STORE(cfg, SCRATCH_SEC1_val_ADDR32, 36);
+    TT_CFG_STORE(cfg, SCRATCH_SEC2_val_ADDR32, 20);
     regfile[p_gpr_unpack::PERF_UNPACK_NUM_TILES_3] = 0x10 | static_cast<std::uint32_t>(DataFormat::Bfp8_b);
     regfile[p_gpr_unpack::PERF_UNPACK_NUM_TILES_2] = 0x10 | static_cast<std::uint32_t>(DataFormat::Bfp4_b);
     regfile[p_gpr_unpack::PERF_UNPACK_NUM_TILES_1] = 0x10 | static_cast<std::uint32_t>(DataFormat::Bfp2_b);
@@ -233,17 +233,17 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
 
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
-    const std::uint32_t address_a  = base_address_a;
-    const std::uint32_t address_b  = base_address_b;
-    const std::uint32_t full_iters = (kt_dim * ct_dim) / 10;
-    const std::uint32_t rem_iters  = (kt_dim * ct_dim) % 10;
-    const std::uint32_t* meta_ptr  = reinterpret_cast<const std::uint32_t*>(base_address_meta);
+    const std::uint32_t address_a           = base_address_a;
+    const std::uint32_t address_b           = base_address_b;
+    const std::uint32_t full_iters          = (kt_dim * ct_dim) / 10;
+    const std::uint32_t rem_iters           = (kt_dim * ct_dim) % 10;
+    const std::uint32_t tt_l1_ptr* meta_ptr = reinterpret_cast<const std::uint32_t tt_l1_ptr*>(base_address_meta);
 
     wait_for_next_context(1);
     reset_config_context();
 
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-    cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
+    TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address_a);
+    TT_CFG_STORE(cfg, THCON_SEC1_REG3_Base_address_ADDR32, address_b);
 
     semaphore_post(semaphore::UNPACK_SYNC);
 

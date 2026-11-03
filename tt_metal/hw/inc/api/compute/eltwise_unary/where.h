@@ -16,6 +16,8 @@
 
 namespace ckernel {
 
+ALWI void where_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise where operation with the three inputs: y = where(x0,x1,x2)
@@ -37,6 +39,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void where_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
+    where_tile_init();
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, data_format>(idst0, idst1, idst2, odst)));
 #elif defined(ARCH_BLACKHOLE)

@@ -99,13 +99,13 @@ template <typename MmPartialsDFB, typename MmPartialsReloadDFB>
 FORCE_INLINE void reload_from_dfb_to_dst(
     MmPartialsDFB& mm_partials_dfb,
     MmPartialsReloadDFB& mm_partials_reload_dfb,
-    uint32_t in0_dfb_id,
-    uint32_t in1_dfb_id,
-    bool in1_transpose_tile,
+    [[maybe_unused]] uint32_t in0_dfb_id,
+    [[maybe_unused]] uint32_t in1_dfb_id,
+    [[maybe_unused]] bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_w,
-    uint32_t out_subblock_h,
-    uint32_t in0_block_w) {
+    [[maybe_unused]] uint32_t out_subblock_w,
+    [[maybe_unused]] uint32_t out_subblock_h,
+    [[maybe_unused]] uint32_t in0_block_w) {
     const uint32_t mm_partials_dfb_id = mm_partials_dfb.get_id();
     const uint32_t mm_partials_reload_dfb_id = mm_partials_reload_dfb.get_id();
     // mm_partials_reload_dfb_id is the buffer view the reload copies through. It equals
@@ -115,9 +115,11 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     // reload copies through that alias while the FPU consumer keeps the original view. The alias
     // has its own read pointer, so align it with the partials buffer's current read position
     // before copying.
-    // Reconfigure input
+#ifdef ARCH_QUASAR
+    // Quasar: copy_block does not reconfigure or init for its operand. WH/BH copy_block does.
     reconfig_data_format_srca(in1_dfb_id, mm_partials_reload_dfb_id);
     copy_init(mm_partials_reload_dfb_id);
+#endif
     mm_partials_dfb.wait_front(static_cast<uint16_t>(out_subblock_num_tiles));
 
 #ifdef MM_PARTIALS_RELOAD_ALIAS
@@ -132,10 +134,12 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     copy_block(mm_partials_reload_dfb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
     mm_partials_dfb.pop_front(static_cast<uint16_t>(out_subblock_num_tiles));
+#ifdef ARCH_QUASAR
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
     matmul_block_init(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
+#endif
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w, typename IntermDFB, typename OutDFB>
@@ -305,7 +309,8 @@ void kernel_main() {
     constexpr auto activation_param0 = get_arg(args::activation_param0);
     constexpr auto activation_param1 = get_arg(args::activation_param1);
     constexpr auto activation_param2 = get_arg(args::activation_param2);
-
+#endif
+#if defined SFPU_ACTIVATION and defined ARCH_QUASAR
     ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
 #endif
 
@@ -318,7 +323,9 @@ void kernel_main() {
     constexpr bool spill = num_blocks_inner_dim > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
+#ifdef ARCH_QUASAR
     matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -349,6 +356,10 @@ void kernel_main() {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 bool enable_reload = false;
 
+                // WH/BH: matmul_block, copy_block, add_tiles*, pack_tile and pack_block reconfigure and init
+                // for their own operands (pack_block/pack_tile also take l1_acc and ReLU), so the explicit
+                // reconfig/init calls below are kept only for Quasar.
+#ifdef ARCH_QUASAR
 #ifdef PACK_RELU
                 // for each batch we start with relu disabled so that intermediate results are not relu'd
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
@@ -368,35 +379,37 @@ void kernel_main() {
                     pack_init(mm_partials_dfb_id);
 #endif
                 }
+#endif  // ARCH_QUASAR
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     const bool last_out = block == (num_blocks_inner_dim - 1);
 
                     if constexpr (in0_transpose_tile) {
+#ifdef ARCH_QUASAR
                         reconfig_data_format_srca(in1_dfb_id, in0_transpose_dfb_id);
                         transpose_init(in0_transpose_dfb_id);
                         PACK((pack_reconfig_data_format(in0_dfb_id)));
-#ifdef ARCH_QUASAR
                         // Quasar (§7): transpose_tile_block packs into in0_dfb_id -> re-init pack for it.
                         pack_init(in0_dfb_id);
-#endif
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
+#endif  // ARCH_QUASAR
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb, in0_dfb);
+#ifdef ARCH_QUASAR
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
                         matmul_block_init(
                             in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
-#ifdef ARCH_QUASAR
                         // Quasar (§7): switch the pack BFD back to partials after the transpose pack above.
                         pack_init(mm_partials_dfb_id);
-#endif
+#endif  // ARCH_QUASAR
                     }
 
 // Enable packer ReLU only after the in0 transpose pack above, so it governs
 // matmul output packs only (not the transpose stage that packs in0_dfb).
-#if not defined FUSE_BIAS and defined PACK_RELU
+// WH/BH: pack_block below takes the ReLU config instead.
+#if not defined FUSE_BIAS and defined PACK_RELU and defined ARCH_QUASAR
                     if (last_out) {
                         PACK((llk_pack_relu_config(ReluConfig::zero())));
                     }
@@ -489,23 +502,31 @@ void kernel_main() {
                                 tile_regs_wait();
 #endif
 
+#if defined FUSE_BIAS and defined PACKER_L1_ACC
+                                constexpr bool pack_accumulate = true;
+#else
+                                constexpr bool pack_accumulate = false;
+#endif
+#if not defined FUSE_BIAS and defined PACK_RELU
+                                constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+                                constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+#ifdef ARCH_QUASAR
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                                 PACK((pack_reconfig_data_format(mm_out_dfb_id)));
 #endif
-
 #ifdef PACKER_L1_ACC
-#ifdef FUSE_BIAS
-                                if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
-                                } else {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                }
-#else
-                                PACK((llk_pack_reconfig_l1_acc(0)));
+                                PACK((llk_pack_reconfig_l1_acc(pack_accumulate && block != 0)));
 #endif
-#endif
+#endif  // ARCH_QUASAR
                                 const uint32_t start_dst_index = 0;
-                                pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+                                pack_block(
+                                    start_dst_index,
+                                    mm_out_dfb_id,
+                                    out_subblock_num_tiles,
+                                    pack_accumulate && block != 0,
+                                    pack_relu);
 
                                 tile_regs_release();
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
@@ -516,19 +537,19 @@ void kernel_main() {
                                 tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
-                                if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
-                                } else if (block == 1) {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                } else if (in0_transpose_tile) {
-                                    // For each block, l1_acc would have been enabled during the
-                                    // transpose stage. So let us put it back here.
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                }
+                                constexpr bool partial_accumulate = true;
+#else
+                                constexpr bool partial_accumulate = false;
 #endif
-
+#if defined ARCH_QUASAR and defined PACKER_L1_ACC
+                                PACK((llk_pack_reconfig_l1_acc(partial_accumulate && block != 0)));
+#endif
                                 const uint32_t start_dst_index = 0;
-                                pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+                                pack_block(
+                                    start_dst_index,
+                                    mm_partials_dfb_id,
+                                    out_subblock_num_tiles,
+                                    partial_accumulate && block != 0);
 
                                 tile_regs_release();
                                 mm_partials_dfb.push_back(out_subblock_num_tiles);
@@ -592,6 +613,12 @@ void kernel_main() {
 
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
+                constexpr ReluConfig bias_pack_relu = ReluConfig::zero();
+#else
+                constexpr ReluConfig bias_pack_relu = ReluConfig::none();
+#endif
+#ifdef ARCH_QUASAR
+#ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
                 PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
@@ -607,6 +634,7 @@ void kernel_main() {
                 } else {
                     add_init(mm_partials_dfb_id, bias_dfb_id);
                 }
+#endif  // ARCH_QUASAR
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the buffer for reuse across bh/batch iterations.
                 // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
@@ -689,7 +717,7 @@ void kernel_main() {
                         tile_regs_wait();
 #endif
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, untilize_mode_out_dfb_id);
+                            pack_tile(i, untilize_mode_out_dfb_id, 0, false, bias_pack_relu);
                         }
                         tile_regs_release();
                         untilize_mode_out_dfb.push_back(out_subblock_num_tiles);
@@ -722,6 +750,7 @@ void kernel_main() {
                     }
                     pack_untilize_uninit(mm_partials_dfb_id);
                 }
+#ifdef ARCH_QUASAR
                 if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
 #ifdef FUSE_BIAS
                     // reconfigure unpacker df for src A and src B
@@ -734,6 +763,7 @@ void kernel_main() {
                     matmul_block_init(
                         in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                 }
+#endif  // ARCH_QUASAR
             }
         }
     }

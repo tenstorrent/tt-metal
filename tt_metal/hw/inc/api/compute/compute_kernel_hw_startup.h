@@ -78,6 +78,10 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     PACK((llk_pack_init<PackMode::Default>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
 
+    // Lands the RISC config and GPR stores above before any later Tensix instruction of this
+    // thread (tt-isa-documentation STALLWAIT.md, TRISC_CFG with every block bit set).
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::TRISC_CFG);
+
     ComputeKernelSentinel::instance().set_srca(src_a_cb).set_srcb(src_b_cb).set_pack(ocb);
 #else
     UNPACK((llk_unpack_hw_configure(src_a_cb, src_b_cb)));

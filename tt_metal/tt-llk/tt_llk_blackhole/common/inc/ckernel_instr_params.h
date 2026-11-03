@@ -155,13 +155,6 @@ struct p_setadc
 
     constexpr static std::uint32_t CH_0 = 0;
     constexpr static std::uint32_t CH_1 = 1;
-
-    // Thread-id override for the *_THREAD_OVERRIDE macros in ckernel_common_ops.h: picks whose ADC set
-    // the write lands on. 0 means the issuing thread.
-    constexpr static std::uint32_t THREAD_OVRD_NONE   = 0;
-    constexpr static std::uint32_t THREAD_OVRD_UNPACK = 1;
-    constexpr static std::uint32_t THREAD_OVRD_MATH   = 2;
-    constexpr static std::uint32_t THREAD_OVRD_PACK   = 3;
 };
 
 struct p_pacr

@@ -59,12 +59,12 @@ void kernel_main() {
             tile_regs_wait();
             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                 // Pack tiles onto each other in the intermediate_cb
-                pack_tile<true>(i /*index into DST*/, intermediate_cb, 0 /*index into intermediate CB*/);
-
-                if (col_tile == 0 && i == 0) {
-                    // After packing the first tile in this row, enable L1 accumulation
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
+                // L1 accumulation is on after the first tile of the row
+                pack_tile<true>(
+                    i /*index into DST*/,
+                    intermediate_cb,
+                    0 /*index into intermediate CB*/,
+                    col_tile != 0 || i != 0);
             }
             tile_regs_release();
 

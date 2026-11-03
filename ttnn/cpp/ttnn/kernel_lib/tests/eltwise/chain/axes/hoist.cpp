@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Equivalent exp(x) chains under three setup placements:
-//   0: one multi-tile call, so the chain hoists uniform setup;
-//   1: one single-tile call per tile, so each call emits setup;
-//   2: raw LLK setup followed by InitReconfigOwner::Caller.
+// Equivalent exp(x) chains under three call shapes:
+//   0: one multi-tile call;
+//   1: one single-tile call per tile;
+//   2: raw LLK setup followed by one multi-tile call.
 //
 // CT args: [n, mode].
 
@@ -41,7 +41,7 @@ void kernel_main() {
     } else {
         copy_init(cb_in);
         exp_tile_init();
-        eltwise_chain<InitReconfigOwner::Caller>(
+        eltwise_chain(
             IterationShape::tiles(n),
             CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{cb_in_obj},
             Exp<>{},

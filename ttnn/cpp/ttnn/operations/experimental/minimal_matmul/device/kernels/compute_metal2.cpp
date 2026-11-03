@@ -28,6 +28,10 @@
 // on Quasar. So every switch of the pack destination (intermediate <-> out) must be followed by an
 // explicit pack_init, or the tiles land in the previous destination's ring. WH/BH: their inits /
 // pack_reconfig_data_format retarget the packer themselves, so this is a no-op there.
+//
+// WH/BH: every *_tile / matmul_block / pack_tile call below reconfigures and inits for its own operands
+// (pack_tile also takes the L1-accumulate flag), so the explicit reconfig/init calls are kept only for
+// Quasar, whose calls do not do that.
 inline void retarget_packer([[maybe_unused]] uint32_t ocb) {
 #ifdef ARCH_QUASAR
     pack_init(ocb);
@@ -35,12 +39,14 @@ inline void retarget_packer([[maybe_unused]] uint32_t ocb) {
 }
 
 template <typename InTok, typename OutTok>
-void copy_and_pack_block(InTok in_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+ALWI void copy_and_pack_block(InTok in_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
+#ifdef ARCH_QUASAR
     reconfig_data_format_srca(in_dfb);
     pack_reconfig_data_format(out_dfb);
     retarget_packer(out_dfb);
     copy_init(in_dfb);
+#endif
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
@@ -79,7 +85,7 @@ template <
     typename BiasTok,
 #endif
     typename OutTok>
-void swiglu_block(
+ALWI void swiglu_block(
     InTok in_dfb,
 #ifdef FUSE_BIAS
     BiasTok bias_dfb,
@@ -88,6 +94,7 @@ void swiglu_block(
     uint32_t M_block_tiles,
     uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
+#ifdef ARCH_QUASAR
 #ifdef FUSE_BIAS
     reconfig_data_format(in_dfb, bias_dfb);
 #else
@@ -95,6 +102,7 @@ void swiglu_block(
 #endif
     pack_reconfig_data_format(out_dfb);
     retarget_packer(out_dfb);
+#endif
 
     constexpr uint32_t GATE_DST = 0;
     constexpr uint32_t UP_DST = 1;
@@ -110,17 +118,25 @@ void swiglu_block(
 
             tile_regs_acquire();
 #ifdef FUSE_BIAS
+#ifdef ARCH_QUASAR
             add_bcast_rows_init(in_dfb, bias_dfb);
-            add_tiles_bcast<BroadcastType::ROW>(in_dfb, bias_dfb, gate_tile_id, gate_n, GATE_DST);
-            add_tiles_bcast<BroadcastType::ROW>(in_dfb, bias_dfb, up_tile_id, up_n, UP_DST);
+#endif
+            add_tiles_bcast_rows(in_dfb, bias_dfb, gate_tile_id, gate_n, GATE_DST);
+            add_tiles_bcast_rows(in_dfb, bias_dfb, up_tile_id, up_n, UP_DST);
 #else
+#ifdef ARCH_QUASAR
             copy_init(in_dfb);
+#endif
             copy_tile(in_dfb, gate_tile_id, GATE_DST);
             copy_tile(in_dfb, up_tile_id, UP_DST);
 #endif
+#ifdef ARCH_QUASAR
             silu_tile_init();
+#endif
             silu_tile(GATE_DST);
+#ifdef ARCH_QUASAR
             mul_binary_tile_init();
+#endif
             mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
             tile_regs_commit();
 
@@ -150,12 +166,15 @@ void swiglu_block(
  *   - false: Pushes all tiles at end (for final output)
  */
 template <typename InTok, typename BiasTok, typename OutTok>
-void add_bias_block(InTok in_dfb, BiasTok bias_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+ALWI void add_bias_block(
+    InTok in_dfb, BiasTok bias_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
+#ifdef ARCH_QUASAR
     reconfig_data_format(in_dfb, bias_dfb);
     pack_reconfig_data_format(out_dfb);
     retarget_packer(out_dfb);
     add_bcast_rows_init(in_dfb, bias_dfb);
+#endif
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
@@ -163,7 +182,7 @@ void add_bias_block(InTok in_dfb, BiasTok bias_dfb, OutTok out_dfb, uint32_t M_b
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
             tile_regs_wait();
-            add_tiles_bcast<BroadcastType::ROW>(in_dfb, bias_dfb, tile_id, n, fused_act_dst_id /*dst*/);
+            add_tiles_bcast_rows(in_dfb, bias_dfb, tile_id, n, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
@@ -185,7 +204,7 @@ template <
     typename TernaryATok,
     typename TernaryBTok,
     typename OutTok>
-void add_bias_and_addcmul_block(
+ALWI void add_bias_and_addcmul_block(
     IntermediateTok intermediate_dfb,
 #ifdef FUSE_BIAS
     BiasTok bias_dfb,
@@ -217,10 +236,12 @@ void add_bias_and_addcmul_block(
     // Read from intermediate_dfb and write back to intermediate_dfb
     // ============================================
 
+#ifdef ARCH_QUASAR
     reconfig_data_format(intermediate_dfb, bias_dfb);
     pack_reconfig_data_format(intermediate_dfb);
     retarget_packer(intermediate_dfb);
     add_bcast_rows_init(intermediate_dfb, bias_dfb);
+#endif
 
     // Wait for ALL input data ONCE at the beginning
     dfb_bias.wait_front(N_block_tiles);
@@ -233,7 +254,7 @@ void add_bias_and_addcmul_block(
             uint32_t tile_id = m * N_block_tiles + n;
 
             tile_regs_acquire();
-            add_tiles_bcast<BroadcastType::ROW>(intermediate_dfb, bias_dfb, tile_id, n, DST_ID);
+            add_tiles_bcast_rows(intermediate_dfb, bias_dfb, tile_id, n, DST_ID);
 
             tile_regs_commit();
             tile_regs_wait();
@@ -269,6 +290,7 @@ void add_bias_and_addcmul_block(
         // === BROADCAST: single row, wait/pop once ===
         dfb_ternary_b.wait_front(N_block_tiles);
 
+#ifdef ARCH_QUASAR
         reconfig_data_format(intermediate_dfb, ternary_b_dfb);
         pack_reconfig_data_format(intermediate_dfb);
         retarget_packer(intermediate_dfb);
@@ -281,6 +303,7 @@ void add_bias_and_addcmul_block(
 #endif  // TERNARY_B_IS_FLOAT32
 
         binop_with_scalar_tile_init();
+#endif  // ARCH_QUASAR
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -288,18 +311,24 @@ void add_bias_and_addcmul_block(
                 tile_regs_acquire();
 
 #ifndef TERNARY_B_IS_FLOAT32
-                mul_tiles_bcast<BroadcastType::ROW>(intermediate_dfb, ternary_b_dfb, tile_id, n, DST_ID);
+                mul_tiles_bcast_rows(intermediate_dfb, ternary_b_dfb, tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
+#ifdef ARCH_QUASAR
                 // copy_init below retargets the unpacker, so re-init per tile.
                 unary_bcast_init<BroadcastType::ROW>(ternary_b_dfb);
+#endif
                 unary_bcast<BroadcastType::ROW>(ternary_b_dfb, n, TERNARY_B_DST_ID);
 
+#ifdef ARCH_QUASAR
                 reconfig_data_format_srca(intermediate_dfb);
                 copy_init(intermediate_dfb);
+#endif
                 copy_tile(intermediate_dfb, tile_id, DST_ID);
 
+#ifdef ARCH_QUASAR
                 mul_binary_tile_init();
+#endif
                 mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
 #endif  // TERNARY_B_IS_FLOAT32
 
@@ -316,6 +345,7 @@ void add_bias_and_addcmul_block(
         dfb_ternary_b.pop_front(N_block_tiles);
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
+#ifdef ARCH_QUASAR
         reconfig_data_format(intermediate_dfb, ternary_b_dfb);
         pack_reconfig_data_format(intermediate_dfb);
         retarget_packer(intermediate_dfb);
@@ -323,6 +353,7 @@ void add_bias_and_addcmul_block(
         mul_init(intermediate_dfb, ternary_b_dfb);
 #endif
         binop_with_scalar_tile_init();
+#endif  // ARCH_QUASAR
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -334,15 +365,21 @@ void add_bias_and_addcmul_block(
                 mul_tiles(intermediate_dfb, ternary_b_dfb, tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
+#ifdef ARCH_QUASAR
                 reconfig_data_format_srca(ternary_b_dfb);
                 copy_init(ternary_b_dfb);
+#endif
                 copy_tile(ternary_b_dfb, n, TERNARY_B_DST_ID);
 
+#ifdef ARCH_QUASAR
                 reconfig_data_format_srca(intermediate_dfb);
                 copy_init(intermediate_dfb);
+#endif
                 copy_tile(intermediate_dfb, tile_id, DST_ID);
 
+#ifdef ARCH_QUASAR
                 mul_binary_tile_init();
+#endif
                 mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
 #endif  // TERNARY_B_IS_FLOAT32
 
@@ -367,10 +404,12 @@ void add_bias_and_addcmul_block(
 
     dfb_intermediate.wait_front(out_block_num_tiles);
 
+#ifdef ARCH_QUASAR
     reconfig_data_format(intermediate_dfb, ternary_a_dfb);
     pack_reconfig_data_format(out_dfb);
     retarget_packer(out_dfb);
     add_init(intermediate_dfb, ternary_a_dfb);
+#endif
 
     tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -399,7 +438,7 @@ void add_bias_and_addcmul_block(
 
 // Slightly modified from compute_common.hpp
 template <typename In0Tok, typename In1Tok, typename OutTok>
-void matmul_blocks(
+ALWI void matmul_blocks(
     const In0Tok in0_dfb,
     const In1Tok in1_dfb,
     const OutTok out_dfb,
@@ -408,7 +447,8 @@ void matmul_blocks(
     const uint32_t full_N_block_tiles,
     const uint32_t K_block_tiles,
     const uint32_t subblock_h,
-    const uint32_t subblock_w) {
+    const uint32_t subblock_w,
+    const bool l1_acc) {
     uint32_t in0_index_offset = 0;
 
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
@@ -442,7 +482,7 @@ void matmul_blocks(
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     uint32_t w_tile_id = N_start + w;
                     uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
-                    pack_tile<true>(write_dst_index, out_dfb, out_tile_id);
+                    pack_tile<true>(write_dst_index, out_dfb, out_tile_id, l1_acc);
                     write_dst_index++;
                     dst_index++;
                 }
@@ -591,8 +631,8 @@ void kernel_main() {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    matmul_init(dfb::in0, dfb::in1);
 #ifdef ARCH_QUASAR
+    matmul_init(dfb::in0, dfb::in1);
     static_assert(!swiglu_in_k_loop, "fused SwiGLU (matmul_blocks_swiglu) is not ported to Quasar");
 #endif
     if constexpr (swiglu_in_k_loop) {
@@ -625,6 +665,7 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
+#ifdef ARCH_QUASAR
             // Reconfig before init: on all but the first block the unpackers are still
             // configured for the previous output stage's operands (see #55052).
             reconfig_data_format(dfb::in1, dfb::in0);
@@ -637,6 +678,7 @@ void kernel_main() {
                 current_subblock_w /*ct_dim*/,
                 current_subblock_h /*rt_dim*/,
                 K_block_tiles /*kt_dim*/);
+#endif
             // Accumulation buffer
             dfb_intermediate.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
@@ -649,8 +691,6 @@ void kernel_main() {
                         dfb_intermediate.push_back(out_block_num_tiles);
                         dfb_intermediate.wait_front(out_block_num_tiles);
                     }
-                    pack_reconfig_l1_acc(0);
-                    pack_reconfig_data_format(dfb::out);
                     // SwiGLU collapses the interleaved gate/up block to half its N width.
                     dfb_out.reserve_back(out_block_num_tiles >> 1);
                     matmul_blocks_swiglu<swiglu_block_float_output>(
@@ -681,7 +721,8 @@ void kernel_main() {
                         N_block_tiles,
                         K_block_tiles,
                         current_subblock_h,
-                        current_subblock_w);
+                        current_subblock_w,
+                        k_block > 0);
                 }
 
                 if (k_block == K_num_blocks - 1) {
@@ -699,15 +740,19 @@ void kernel_main() {
                 }
                 dfb_in1.pop_front(in1_block_num_tiles);
                 reuse_in0_block = false;
-                if (k_block == 0) {
+#ifdef ARCH_QUASAR
+                if (k_block == 0) {  // Quasar pack_tile does not take the L1-accumulate flag
                     pack_reconfig_l1_acc(1);
                 }
+#endif
             }
 
             if constexpr (!swiglu_in_k_loop) {
                 dfb_intermediate.push_back(out_block_num_tiles);
             }
+#ifdef ARCH_QUASAR
             pack_reconfig_l1_acc(0);
+#endif
 
             if constexpr (swiglu_in_k_loop) {
                 // SwiGLU was applied in the last K block (matmul_blocks_swiglu).

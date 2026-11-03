@@ -86,8 +86,8 @@ inline void _llk_unpack_hadamard_h128_init_(const std::uint32_t h16_address)
     TT_SETADCXX(p_setadc::UNP_B, kFaceXEnd, 0x0);
 
     // ── Context-1 H_16 preprogram ─────────────────────────────────────
-    volatile std::uint32_t tt_reg_ptr *cfg         = get_cfg_pointer();
-    cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = h16_address;
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+    TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, h16_address);
 
     // Start on context 0 so the first tile's phase-1 unpack runs there.
     reset_config_context();

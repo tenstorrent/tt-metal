@@ -80,8 +80,14 @@ inline void _llk_unpack_fast_untilize_block_(const std::uint32_t address, const 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
     wait_for_next_context(2);
 
-    const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
-    cfg[upk0_reg]                = address;
+    if (unp_cfg_context == 0)
+    {
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
+    }
+    else
+    {
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address);
+    }
 
     semaphore_post(semaphore::UNPACK_SYNC);
     // The base-address store above is a RISCV write to Tensix backend config,
@@ -108,9 +114,15 @@ inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, co
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
     wait_for_next_context(2);
 
-    const bool use_context_0     = unp_cfg_context == 0;
-    const std::uint32_t upk0_reg = use_context_0 ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
-    cfg[upk0_reg]                = address;
+    const bool use_context_0 = unp_cfg_context == 0;
+    if (use_context_0)
+    {
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address);
+    }
+    else
+    {
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, address);
+    }
 
     // SCRATCH_SEC0_val is not context-double-buffered and is consumed by the per-tile
     // CFGSHIFTMASK updates below. Program it with an ordered Tensix WRCFG (as in

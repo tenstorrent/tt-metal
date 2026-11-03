@@ -95,7 +95,6 @@ void kernel_main() {
     const uint32_t tok_count = get_arg_val<uint32_t>(1);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_src, cb_qk_im);
-    matmul_init(cb_q_in, cb_k_src);  // one-time matmul init; the no_mop matmuls reinit off this
 
     scale_cb.wait_front(1);  // persistent reduce scaler; the streaming reduce assumes it is ready
     if constexpr (CAUSAL_MASK_ENABLED) {
@@ -105,8 +104,6 @@ void kernel_main() {
     for (uint32_t tok = 0; tok < tok_count; ++tok) {
         // tilize Q rows -> [Sqt, DHt]
         compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
-        // fp8 Q tilize leaves the packer in bfp8 format; restore bf16 before QK writes scores.
-        pack_reconfig_data_format(cb_qk_im);
 
         // Per-token control from the reader: active block count, and (causal) the diagonal block's chunk
         // index + within-block mask boundary.
@@ -131,9 +128,6 @@ void kernel_main() {
         CircularBuffer out_prev(cb_out_a), out_cur(cb_out_b);
 
         for (uint32_t chunk = 0; chunk < num_active_chunks; ++chunk) {
-            // K/V are already tiled. Set source formats for QK; scores remain bf16.
-            reconfig_data_format(cb_k_src, cb_q_in);
-
             const bool is_first = (chunk == 0);
             const bool is_last = (chunk == num_active_chunks - 1);
 
@@ -166,14 +160,8 @@ void kernel_main() {
             for (uint32_t qg = 0; qg < q_groups; ++qg) {
                 const uint32_t row_base = qg * qsb;  // first query tile-row of this group
 
-                // Set exp to the softmax scale; salad's correction below re-inits it to unit scale.
-                exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
-
                 // Phase 1: Q@K^T -> scores and running row max.
                 {
-                    // Use pack width 1 because Q tilize changes packer addrmods; wider packs need extra reinit.
-                    mm_no_mop_init_short(cb_q_in, cb_k_src, /*transpose=*/true, 1, qsb, DHt);
-                    configure_row_pack_width(cb_qk_im, 1);
                     for (uint32_t kt = 0; kt < Skt; ++kt) {
                         blocked_matmul_and_pack<true, /*in1_stride=*/1, /*out_num_cols=*/KT_stride>(
                             cb_q_in,
@@ -186,8 +174,7 @@ void kernel_main() {
                             /*subblock_w=*/1,
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/DHt,
-                            /*matmul_stride=*/DHt,
-                            /*skip_pack_configure=*/true);
+                            /*matmul_stride=*/DHt);
                     }
                     // Publish the band to UNPACK while holding wr_ptr for in-place sub_exp.
                     cb_push_back_hold_wr_ptr(cb_qk_im, qsb * KT_stride);
@@ -214,11 +201,8 @@ void kernel_main() {
                 }
 
                 {
-                    // Reduce/sub_exp read scores and bf16 scalers.
-                    reconfig_data_format(cb_qk_im, cb_scale);
                     // running row-max (MAX-only; eltwise-max against prev on chunk>0)
                     max_cur.reserve_back(qsb);
-                    configure_single_tile_pack(max_cur.get_cb_id());
                     reduce_c_row_group<cb_qk_im, cb_scale, KT_stride>(
                         max_cur.get_cb_id(),
                         max_prev.get_cb_id(),
@@ -247,10 +231,6 @@ void kernel_main() {
                 // Phase 2: probs@V -> current output band.
                 {
                     qk_cb.wait_front((qg + 1) * qsb * KT_stride);
-                    // PV reads V as srcA and probabilities as srcB.
-                    reconfig_data_format(cb_v_src, cb_qk_im);
-                    mm_no_mop_init_short(cb_qk_im, cb_v_src, /*transpose=*/false, 1, qsb, Skt);
-                    configure_row_pack_width(out_cur.get_cb_id(), 1);
                     for (uint32_t vd = 0; vd < vDHt; ++vd) {
                         blocked_matmul_and_pack<false, /*in1_stride=*/vDHt, /*out_num_cols=*/vDHt>(
                             cb_qk_im,
@@ -263,25 +243,18 @@ void kernel_main() {
                             /*subblock_w=*/1,
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/Skt,
-                            /*matmul_stride=*/KT_stride,
-                            /*skip_pack_configure=*/true);
+                            /*matmul_stride=*/KT_stride);
                     }
-                    pack_to_unpack_sync();                // publish held out_cur packs before flash combine
-                    reconfig_data_format_srca(cb_qk_im);  // PV left srcA in cb_v_in's format; restore bf16
+                    pack_to_unpack_sync();  // publish held out_cur packs before flash combine
                 }
 
                 // ===== SALAD flash combine (skip on the first chunk) =====
                 if (!is_first) {
                     // correction = exp((prev_max - cur_max) * scale)
-                    exp_packthread_tile_init<EXP_APPROX_MODE>();
                     corr_cb.reserve_back(qsb);
                     sub_exp_first_col_blocks<false, scale_fp32>(
                         max_prev.get_cb_id(), max_cur.get_cb_id(), cb_corr, /*q_subblock=*/qg, qsb);
                     corr_cb.push_back(qsb);
-                    // Restore default packer geometry before the fused flash correction.
-                    PACK((
-                        llk_pack_init<ckernel::PackMode::Default, false, false, false>(out_cur.get_cb_id(), dst_size)));
-                    pack_reconfig_l1_acc(1);
                     // out_prev and corr are consumed per group; sum_prev is indexed by group.
                     salad_correct_fused<qsb, vDHt, dst_size>(
                         out_prev.get_cb_id(),
@@ -292,7 +265,6 @@ void kernel_main() {
                         /*ob_q_subblock=*/0,
                         /*sum_q_subblock=*/qg,
                         /*write_q_subblock=*/qg);
-                    pack_reconfig_l1_acc(0);
                     corr_cb.pop_front(qsb);
                     out_prev.pop_front(qsb * vDHt);  // this band's prev.out consumed into cur
                 }

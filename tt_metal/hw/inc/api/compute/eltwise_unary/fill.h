@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void fill_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise fill operation. The value to be filled in the tile is provided as const param0. The DST
@@ -27,6 +29,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void fill_tile(uint32_t idst, float param0) {
+    MATH(SFPU_UNARY_INIT(fill));
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
 }
@@ -49,6 +52,7 @@ ALWI void fill_tile(uint32_t idst, float param0) {
  */
 template <DataFormat DATA_FORMAT>
 ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
+    fill_tile_init();
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || is_uint32_format(DATA_FORMAT) || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for fill_tile_int. Supported: Int32, UInt32, UInt16");
@@ -79,6 +83,7 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
+    fill_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

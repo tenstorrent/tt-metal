@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -13,7 +12,7 @@ inline void llk_unpack_A_custom(const std::uint32_t operand, const std::uint32_t
     SAN_HOOK(unsupported());
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+    std::uint32_t offset_address = get_operand_unpack_tile_size(operand_id) * tile_index;
     std::uint32_t address = base_address + offset_address;
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, tile_index, 1), "Indexed tile read exceeds CB boundary");

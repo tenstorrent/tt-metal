@@ -98,7 +98,7 @@ void kernel_main() {
         rotated_in_interm_dfb_obj.push_back(Wt);
         mul_bcast_rows_init(rotated_in_interm_dfb, sin_dfb);
         // sin_interim = rotated * sin
-        ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+        ckl::eltwise_chain(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,

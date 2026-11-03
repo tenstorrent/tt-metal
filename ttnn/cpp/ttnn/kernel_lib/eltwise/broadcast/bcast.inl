@@ -62,8 +62,6 @@ struct detail::UnaryBcastImpl : InputStream<DataflowBufferType>, UnaryBcastTag {
     static constexpr uint32_t dfb_a_id() { return Cb; }
     static constexpr InputSpec a_input() { return Input; }
 
-    static constexpr uint32_t reconfig_srca_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
-    static constexpr uint32_t reconfig_srcb_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
 
     // The DataflowBuffer(s) this element binds, in spec order.
     using BoundBuffers = std::tuple<DataflowBufferType>;
@@ -77,11 +75,6 @@ struct detail::UnaryBcastImpl : InputStream<DataflowBufferType>, UnaryBcastTag {
     }
     ALWI UnaryBcastImpl(DataflowBufferType& in, StridedTileRange range) noexcept : Base(in, range) {
         check_bound_dataflow_buffer<Cb>(in);
-    }
-
-    static ALWI void init() {
-        constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        ::unary_bcast_init<bt>(Cb);
     }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {

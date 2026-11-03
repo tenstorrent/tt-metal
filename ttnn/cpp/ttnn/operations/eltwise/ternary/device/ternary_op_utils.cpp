@@ -593,7 +593,6 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
 
     switch (op_type) {
         case TernaryOpType::WHERE:
-            defines["TERNARY_SFPU_OP_INIT"] = "where_tile_init";
             if (dtype == DataType::FLOAT32) {
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Float32>";
             } else if (dtype == DataType::INT32) {
@@ -605,28 +604,22 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             }
             break;
         case TernaryOpType::LERP:
-            defines["TERNARY_SFPU_OP_INIT"] = "lerp_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] =
                 (dtype == DataType::FLOAT32) ? "lerp_tile<DataFormat::Float32>" : "lerp_tile<DataFormat::Float16_b>";
             break;
         case TernaryOpType::ADDCMUL:
-            defines["TERNARY_SFPU_OP_INIT"] = "addcmul_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcmul_tile<DataFormat::Float32>"
                                                                            : "addcmul_tile<DataFormat::Float16_b>";
             break;
         case TernaryOpType::ADDCDIV:
-            defines["TERNARY_SFPU_OP_INIT"] = "addcdiv_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcdiv_tile<DataFormat::Float32>"
                                                                            : "addcdiv_tile<DataFormat::Float16_b>";
             break;
         case TernaryOpType::SNAKE_BETA:
-            defines["TERNARY_SFPU_OP_INIT"] = "snake_beta_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "snake_beta_tile<DataFormat::Float32>"
                                                                            : "snake_beta_tile<DataFormat::Float16_b>";
             break;
         case TernaryOpType::MAC:
-            defines["TERNARY_SFPU_OP_INIT"] = (dtype == DataType::FLOAT32) ? "mac_tile_init<DataFormat::Float32>"
-                                                                          : "mac_tile_init<DataFormat::Float16_b>";
             defines["TERNARY_SFPU_OP_FUNC"] =
                 (dtype == DataType::FLOAT32) ? "mac_tile<DataFormat::Float32>" : "mac_tile<DataFormat::Float16_b>";
             break;

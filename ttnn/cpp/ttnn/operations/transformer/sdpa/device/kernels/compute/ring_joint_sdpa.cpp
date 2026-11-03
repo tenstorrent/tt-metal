@@ -7,10 +7,6 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
-// This kernel reconfigs ~30x; inlining the LLK Src zero-flag DEFAULT configurator at each site pushes
-// the program over the kernel-config buffer. Force it out-of-line here.
-#define LLK_ZEROFLAG_OUTLINE 1
-
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
@@ -285,7 +281,6 @@ void kernel_main() {
     }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
-    matmul_init(cb_q_in, cb_k_in);
 
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
     CircularBuffer cb_mask_in_obj(cb_mask_in);

@@ -15,8 +15,10 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/circular_buffer.h"
 
-// Need these headers for running SFPU on PACK thread
-#ifdef TRISC_PACK
+// SFPU work runs on PACK (the activations) and on MATH (fill). Both threads compile both, so that
+// __builtin_rvtt_peer_ran on one can name what the other ran.
+#if defined(TRISC_PACK) || defined(TRISC_MATH)
+#include "sfpu/ckernel_sfpu_fill.h"
 #include "ckernel_sfpu_exp.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
 #include "ckernel_sfpu_silu.h"
@@ -37,23 +39,39 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     WAYPOINT("NSMD");
 }
 
+#ifdef TRISC_MATH
+// The pack thread has released every dest half, so its activation is done with the SFPU.
+ALWI void wait_packs_done() {
+    tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0) {
+    }
+}
+#endif
+
+#if defined(TRISC_PACK) || defined(TRISC_MATH)
+ALWI void moe_fill_sfpu(uint32_t idst, float value) {
+    SFPU_UNARY_INIT(fill);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, value);
+}
+
 // Note GELU gets init'd at each iteration in its PackActivation specialization
 template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
 inline void pack_init_activation() {};
 
 template <>
 inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU>() {
-    PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+    llk_math_eltwise_binary_sfpu_swiglu_init();
 };
 
 template <>
 inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::CLAMPED_SILU>() {
-    PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+    llk_math_eltwise_binary_sfpu_swiglu_init();
 };
 
 template <>
 inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
+    SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/));
 };
 
 // Activation on the packer's SFPU over DEST: dst 0 = act(W0 x) * (W1 x) for the first (W0, W1) pair, dst 2 for the
@@ -67,24 +85,24 @@ struct PackActivation {
 template <uint32_t kPairs>
 struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU, kPairs> {
     static inline void compute() {
-        PACK(SFPU_UNARY_CALL(
+        SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_silu,
             (DST_ACCUM_MODE, 8 /*ITERATIONS*/),
             0 /*DST_IDX*/,
-            ::ckernel::VectorMode::RC));
+            ::ckernel::VectorMode::RC);
         if constexpr (kPairs == 2) {
-            PACK(SFPU_UNARY_CALL(
+            SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_silu,
                 (DST_ACCUM_MODE, 8 /*ITERATIONS*/),
                 2 /*DST_IDX*/,
-                ::ckernel::VectorMode::RC));
+                ::ckernel::VectorMode::RC);
         }
 
-        PACK((SFPU_BINARY_CALL(
+        SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_sfpu_binary,
@@ -92,9 +110,9 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::S
             0 /*DST_IN0*/,
             1 /*DST_IN1*/,
             0 /*DST_OUT*/,
-            ::ckernel::VectorMode::RC)));
+            ::ckernel::VectorMode::RC);
         if constexpr (kPairs == 2) {
-            PACK((SFPU_BINARY_CALL(
+            SFPU_BINARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_sfpu_binary,
@@ -102,7 +120,7 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::S
                 2 /*DST_IN0*/,
                 3 /*DST_IN1*/,
                 2 /*DST_OUT*/,
-                ::ckernel::VectorMode::RC)));
+                ::ckernel::VectorMode::RC);
         }
     }
 };
@@ -110,9 +128,9 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::S
 template <uint32_t kPairs>
 struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU, kPairs> {
     static inline void compute() {
-        PACK((llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(0, 1, 0)));
+        llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(0, 1, 0);
         if constexpr (kPairs == 2) {
-            PACK((llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(2, 3, 2)));
+            llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(2, 3, 2);
         }
     }
 };
@@ -127,10 +145,9 @@ struct ClampedSiluConfig {
 template <uint32_t kPairs>
 struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::CLAMPED_SILU, kPairs> {
     static inline void compute() {
-        PACK((llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE, ClampedSiluConfig, /*AddUpBias=*/false>(0, 1, 0)));
+        llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE, ClampedSiluConfig, /*AddUpBias=*/false>(0, 1, 0);
         if constexpr (kPairs == 2) {
-            PACK(
-                (llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE, ClampedSiluConfig, /*AddUpBias=*/false>(2, 3, 2)));
+            llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE, ClampedSiluConfig, /*AddUpBias=*/false>(2, 3, 2);
         }
     }
 };
@@ -143,25 +160,25 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::G
         // for ring sizes where ceil(Nt/ring) is odd — e.g. gemma at ring=8) the next iteration's
         // gelu reads a stale LUT and produces garbage. Re-init the LUT here so every gelu is valid.
         // SILU/SWIGLU don't use this LUT, so they keep their cheaper once-per-chunk init.
-        PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, DST_ACCUM_MODE>)));
-        PACK(SFPU_UNARY_CALL(
+        llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, DST_ACCUM_MODE>);
+        SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_gelu,
             (true /*APPROXIMATE*/, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
             0 /*DST_IDX*/,
-            ::ckernel::VectorMode::RC));
+            ::ckernel::VectorMode::RC);
         if constexpr (kPairs == 2) {
-            PACK(SFPU_UNARY_CALL(
+            SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_gelu,
                 (true /*APPROXIMATE*/, DST_ACCUM_MODE, 8 /*ITERATIONS*/),
                 2 /*DST_IDX*/,
-                ::ckernel::VectorMode::RC));
+                ::ckernel::VectorMode::RC);
         }
 
-        PACK((SFPU_BINARY_CALL(
+        SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_sfpu_binary,
@@ -169,9 +186,9 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::G
             0 /*DST_IN0*/,
             1 /*DST_IN1*/,
             0 /*DST_OUT*/,
-            ::ckernel::VectorMode::RC)));
+            ::ckernel::VectorMode::RC);
         if constexpr (kPairs == 2) {
-            PACK((SFPU_BINARY_CALL(
+            SFPU_BINARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 calculate_sfpu_binary,
@@ -179,10 +196,12 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::G
                 2 /*DST_IN0*/,
                 3 /*DST_IN1*/,
                 2 /*DST_OUT*/,
-                ::ckernel::VectorMode::RC)));
+                ::ckernel::VectorMode::RC);
         }
     }
 };
+
+#endif
 
 // in @ {W0, W1} for one gate/up block-column, then the activation, packed to the in2 tiles
 // [out_tile, out_tile + kPairs). kPairs = 2: a full block-column, 4 tiles wide (W0 c, W1 c, W0 c+1, W1 c+1);
@@ -262,7 +281,7 @@ FORCE_INLINE void compute_w0_w1_block_column(
     // Make SFPU access the appropriate half of the destination registers
     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
-    PackActivation<activation, kPairs>::compute();
+    PACK((PackActivation<activation, kPairs>::compute()));
 
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
@@ -383,11 +402,11 @@ void kernel_main() {
         pack_reconfig_data_format(cb_c2c_ones_tile_id);
         copy_init(cb_c2c_ones_tile_id);
         tile_regs_acquire();
-        fill_tile_init();
         constexpr uint32_t dst0 = 0;
-        fill_tile(dst0, 1.f);
+        MATH((::detail::moe_fill_sfpu(dst0, 1.f)));
         tile_regs_commit();
         tile_regs_wait();
+        PACK((__builtin_rvtt_peer_ran(reinterpret_cast<void*>(&::detail::moe_fill_sfpu))));
         cb_c2c_ones_tile.reserve_back(1);
         pack_tile(dst0, cb_c2c_ones_tile_id);
         tile_regs_release();
@@ -444,7 +463,7 @@ void kernel_main() {
             // trailing MUL there clobbers it), so it's its own initializer — skip the per-chunk
             // init for GELU to avoid a redundant gelu_init. SILU/SWIGLU init once here.
             if constexpr (activation_type != ttnn::experimental::prim::detail::MoEActivationFunction::GELU) {
-                ::detail::pack_init_activation<activation_type>();
+                PACK((::detail::pack_init_activation<activation_type>()));
             }
 
             // Initialize matmul for W0
@@ -506,10 +525,17 @@ void kernel_main() {
             // walk takes shard_tiles(src) tiles from each source's slice).
             if (prod_tiles_per_step < num_w0_w1_tiles_w) {
                 tile_regs_acquire();
-                fill_tile_init();
-                fill_tile(0, 0.0f);
+                MATH((::detail::wait_packs_done()));
+                MATH((__builtin_rvtt_peer_ran(
+                    reinterpret_cast<void*>(&::detail::pack_init_activation<activation_type>))));
+                MATH((__builtin_rvtt_peer_ran(
+                    reinterpret_cast<void*>(&::detail::PackActivation<activation_type, 2>::compute))));
+                MATH((__builtin_rvtt_peer_ran(
+                    reinterpret_cast<void*>(&::detail::PackActivation<activation_type, 1>::compute))));
+                MATH((::detail::moe_fill_sfpu(0, 0.0f)));
                 tile_regs_commit();
                 tile_regs_wait();
+                PACK((__builtin_rvtt_peer_ran(reinterpret_cast<void*>(&::detail::moe_fill_sfpu))));
                 for (uint32_t tile_id = prod_tiles_per_step; tile_id < num_w0_w1_tiles_w; ++tile_id) {
                     pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/tile_id);
                 }

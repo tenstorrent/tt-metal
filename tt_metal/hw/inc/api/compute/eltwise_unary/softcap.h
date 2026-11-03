@@ -18,6 +18,8 @@
 
 namespace ckernel {
 
+ALWI void softcap_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise computation of softcap(x) = beta * tanh(x / beta) on
@@ -44,6 +46,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void softcap_tile(uint32_t idst, uint32_t beta, uint32_t beta_recip) {
+    softcap_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

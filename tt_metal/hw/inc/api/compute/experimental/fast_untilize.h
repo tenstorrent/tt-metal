@@ -94,7 +94,11 @@ ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
 }
 
 template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void fast_untilize_block(
+ALWI void fast_untilize_uninit(uint32_t ocb);
+
+namespace fast_untilize_detail {
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void fast_untilize_block_body(
     uint32_t icb, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
@@ -150,8 +154,27 @@ ALWI void fast_untilize_block(
     pack_untilize_block<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, 1, ocb, 0);
 #endif
 }
+}  // namespace fast_untilize_detail
 
 template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void fast_untilize_block(
+    uint32_t icb, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
+#ifdef ARCH_BLACKHOLE
+    if constexpr (full_ct_dim > 1) {
+        reconfig_full_operand(icb, icb);
+        pack_reconfig_data_format(ocb);
+        fast_untilize_init_impl<full_ct_dim, true, is_fp32_dest_acc_en>(icb, ocb, __builtin_LINE());
+        fast_untilize_detail::fast_untilize_block_body<full_ct_dim, is_fp32_dest_acc_en>(
+            icb, ocb, input_tile_index, output_tile_index);
+        fast_untilize_uninit<full_ct_dim, is_fp32_dest_acc_en>(ocb);
+    } else
+#endif
+    {
+        pack_untilize_block<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, 1, ocb, 0);
+    }
+}
+
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en>
 ALWI void fast_untilize_uninit(uint32_t ocb) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 

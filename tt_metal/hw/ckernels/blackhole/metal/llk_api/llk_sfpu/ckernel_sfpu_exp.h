@@ -861,13 +861,13 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             ADDR_MOD_7,
             14);  // MACRO Sequence Register 0: LD, MAD, ROUND, SHIFT and STORE - uses LREG[3] for loading and
                   // intermediate results - Dest offset 14 is targeting the even columns for rows  15:12
-        // NOP needed to allow time for the final Computation Loadmacro to complete before returning to the Sanitation
-        // Loadmacro at the top for the next iteration
-        //  - to be completely safe, use 3 NOP; in practice 1 seems to be enough, probably because the overhead of the
-        //  DEST INCRW stuff introduces 2 cycles of delay
+        // exp_init sets UnitDelayKind=0xF, so the delays of the macro's scheduled ops count issued SFPU
+        // instructions rather than cycles. The Store runs 4 instructions after its LOADMACRO and stays pending
+        // until 4 more issue; anything that follows, including the next exp_init, must not land in its place.
         TTI_SFPNOP;
-        // TTI_SFPNOP;
-        // TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
 #endif
     }
 #ifdef DISABLE_SFPLOADMACRO
@@ -953,7 +953,7 @@ template <
     uint32_t scale,
     bool CLAMP_NEGATIVE,
     bool is_fp32_dest_acc_en>
-void exp_init() {
+inline void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
     // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
@@ -1101,8 +1101,8 @@ void exp_init() {
                       // using staging flop as src ;     using                  : 8'b0_______1_______100_____011 = 0x63
         TTI_SFPCONFIG(0, 4, 0);  // Load it into macro sequence register 0 (destination = 4)
 
-        // Reset LoadMacroConfig[Lane].Misc for all lanes, in case it has been previously set by another use of macros.
-        TTI_SFPCONFIG(0, 8, 1);
+        // Reset LoadMacroConfig[Lane].Misc for all lanes: StoreMod0=0, UsesLoadMod0ForStore=0, UnitDelayKind=0xF.
+        TTI_SFPCONFIG(0xF00, 8, 1);
 #endif
     } else if constexpr (APPROXIMATION_MODE) {
         // ===================================================================
@@ -1165,20 +1165,14 @@ void exp_init() {
         constexpr float A_scaled = A * scale_fp32;
 
         // Load constant A into LREG[12]
-        TTI_SFPLOADI(0, 0xA, Converter::lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, Converter::hi16(A_scaled));
-        TTI_SFPCONFIG(0, 12, 0);
+        __builtin_rvtt_sfpconfig_value(12, __builtin_bit_cast(unsigned, A_scaled));
 
         // Load constant (B-C) into LREG[13]
-        TTI_SFPLOADI(0, 0xA, Converter::lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, Converter::hi16(B_minus_C));
-        TTI_SFPCONFIG(0, 13, 0);
+        __builtin_rvtt_sfpconfig_value(13, __builtin_bit_cast(unsigned, B_minus_C));
 
         // Load shift amount (15) into LREG[14] for SFPSHFT2
         // SFPSHFT2 mode 5 reads shift amount from VC register
-        TTI_SFPLOADI(0, 0xA, 15);  // Lower 16 bits = 15
-        TTI_SFPLOADI(0, 0x8, 0);   // Upper 16 bits = 0
-        TTI_SFPCONFIG(0, 14, 0);   // Store in LREG[14]
+        __builtin_rvtt_sfpconfig_value(14, 15);
 
 #ifndef DISABLE_SFPLOADMACRO
         // ===================================================================
@@ -1212,9 +1206,7 @@ void exp_init() {
         //   - STOCHRND delay 3: 0x1E
         //   - SETSGN delay 5: 0xEF
         //   - STORE delay 6: 0x73
-        TTI_SFPLOADI(0, 0xA, 0x85EF);  // Slots 1-2: Simple=0xEF (delay 5), MAD=0x85
-        TTI_SFPLOADI(0, 0x8, 0x731E);  // Slots 3-4: Round=0x1E (delay 3), Store=0x73 (delay 6)
-        TTI_SFPCONFIG(0, 4, 0);        // Load into Macro Sequence Register 0 (dest=4)
+        __builtin_rvtt_sfpconfig_value(4, 0x731E85EF);  // Macro Sequence Register 0
 
         // Reset LoadMacroConfig[Lane].Misc for all lanes
         // Sets StoreMod0=0 (SRCB), UsesLoadMod0ForStore=0, UnitDelayKind=0xF
@@ -1288,14 +1280,10 @@ void exp_init() {
                 .set(ADDR_MOD_6);
 
             // LREG12 = 1/ln2
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
-            TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+            __builtin_rvtt_sfpconfig_value(p_sfpu::LREG12, 0x3fb8aa3b);
 
             // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
-            TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+            __builtin_rvtt_sfpconfig_value(p_sfpu::LREG13, 0x27aca418);
         } else {
 #ifdef DISABLE_SFPLOADMACRO
             // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar

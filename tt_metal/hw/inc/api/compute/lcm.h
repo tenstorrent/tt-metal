@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void lcm_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise LCM operation on two inputs: y = lcm(x0, x1).
@@ -31,6 +33,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void lcm_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    lcm_tile_init();
     MATH((SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_lcm, idst0, idst1, odst, VectorMode::RC)));
 }

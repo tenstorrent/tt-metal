@@ -29,6 +29,12 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
 FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n,
@@ -51,12 +57,9 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 
     tile_regs_acquire();
     // Startup and preprocessing preserve the LHS-format SrcA invariant.
-    copy_init(cb_post_lhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
-    reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
-    copy_init(cb_post_rhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
 #if HAS_ACTIVATIONS(POST)
@@ -73,12 +76,11 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
-    reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
     tile_regs_commit();
 
     tile_regs_wait();
     for (uint32_t i = 0; i < n; ++i) {
-        pack_tile(i * 2, cb_out.get_cb_id());
+        pack_tile(i * 2, cb_out.get_cb_id(), 0, false, pack_relu);
     }
     tile_regs_release();
 
@@ -107,10 +109,6 @@ void kernel_main() {
     CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
-    copy_init(cb_post_lhs_id);
-#ifdef PACK_RELU
-    pack_relu_config(ReluConfig::zero());
-#endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT

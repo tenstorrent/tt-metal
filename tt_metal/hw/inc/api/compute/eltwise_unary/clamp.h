@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void clamp_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise clamp operation for float. The DST
@@ -28,6 +30,7 @@ namespace ckernel {
 */
 // clang-format on
 ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
+    clamp_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -56,6 +59,7 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
  */
 // clang-format on
 ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
+    clamp_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

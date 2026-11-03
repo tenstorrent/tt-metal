@@ -12,6 +12,9 @@
 
 namespace ckernel {
 
+ALWI void left_shift_tile_init();
+ALWI void right_shift_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise left_shift computation on input x by param0 bits, where x is each element of a tile
@@ -31,6 +34,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
+    left_shift_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
 }
@@ -56,6 +60,7 @@ ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
 // clang-format on
 template <DataFormat data_format>
 ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
+    right_shift_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
 }

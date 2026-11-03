@@ -9,6 +9,12 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+#ifdef PACK_RELU
+constexpr ReluConfig pack_relu = ReluConfig::zero();
+#else
+constexpr ReluConfig pack_relu = ReluConfig::none();
+#endif
+
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
 void kernel_main() {
@@ -63,7 +69,7 @@ void kernel_main() {
 
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, dfb_inp0.get_id());  // DST[0]->cb
+            pack_tile(i, dfb_inp0.get_id(), 0, false, pack_relu);  // DST[0]->cb
         }
         tile_regs_release();
 
@@ -96,7 +102,7 @@ void kernel_main() {
 
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, dfb_inp1.get_id());  // DST[0]->cb
+            pack_tile(i, dfb_inp1.get_id(), 0, false, pack_relu);  // DST[0]->cb
         }
         tile_regs_release();
 
@@ -131,7 +137,7 @@ void kernel_main() {
 
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, dfb_out0.get_id());
+            pack_tile(i, dfb_out0.get_id(), 0, false, pack_relu);
         }
         tile_regs_release();
 

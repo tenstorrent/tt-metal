@@ -67,6 +67,7 @@ template <
     ReciprocalApproxMode approximation = ReciprocalApproxMode::Default>
 ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
     [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
+    recip_tile_init<dest_acc, approximation>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

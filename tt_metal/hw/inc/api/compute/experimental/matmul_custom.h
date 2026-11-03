@@ -91,6 +91,12 @@ ALWI void matmul_block_no_mop(
     uint32_t ct_dim,
     uint32_t rt_dim,
     uint32_t kt_dim) {
+#ifndef ARCH_QUASAR
+    reconfig_full_operand<SrcOrder::Reverse>(in0_cb_id, in1_cb_id);
+#else
+    reconfig_data_format<SrcOrder::Reverse>(in0_cb_id, in1_cb_id);
+#endif
+    mm_no_mop_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Pass the operand cb ids so the math execute can re-derive the tile geometry and replay the
     // geometry-correct length (16x32 tiny tiles use a shorter replay than full 32x32 tiles).

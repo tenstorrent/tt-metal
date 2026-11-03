@@ -1214,6 +1214,13 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     emit_math_scalar_descriptors(out, desc);
     out << "#endif\n\n";
 
+    emit_formats_array(
+        out,
+        "constexpr uint32_t",
+        "cb_fifo_page_size",
+        max_dfbs,
+        desc.buf_page_size_arr | std::views::transform([](uint32_t bytes) { return bytes >> 4; }));
+
     out << "#if !defined(UCK_CHLKC_PACK)\n";
     emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_dfbs);
     emit_unpack_tile_dims(out, desc, max_dfbs);

@@ -79,6 +79,7 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
 // `_sfpu_binary_check_`.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
+    sfpu_sub_bcast_col_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -92,6 +93,7 @@ ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
+    sfpu_add_bcast_col_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -105,6 +107,7 @@ ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
+    sfpu_mul_bcast_col_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -336,6 +339,7 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
+    sfpu_sub_bcast_row_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -349,6 +353,7 @@ ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
+    sfpu_add_bcast_row_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -362,6 +367,7 @@ ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_mul_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
+    sfpu_mul_bcast_row_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

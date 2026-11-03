@@ -5,9 +5,14 @@
 #pragma once
 #include <cstdint>
 
+#include "llk_io.h"
 #include "tensor_shape.h"
 
 inline uint32_t get_operand_id(uint32_t operand) { return (operand); }
+
+inline uint32_t get_operand_unpack_tile_size(const uint32_t operand_id) {
+    return get_cb_page_size(operand_id, cb_fifo_page_size[operand_id]);
+}
 
 inline const uint32_t get_operand_src_format(const std::uint32_t operand_id) { return unpack_src_format[operand_id]; }
 

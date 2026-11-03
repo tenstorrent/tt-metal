@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_io.h"
 
 #include "tensor_shape.h"
 
@@ -49,4 +50,8 @@ inline ckernel::TensorShape get_output_tensor_shape(const std::uint32_t output_i
         ckernel::MAX_FACE_C_DIM,
         pack_num_faces_r_dim[output_id],
         pack_num_faces_c_dim[output_id]};
+}
+
+inline uint32_t get_output_pack_tile_size(const uint32_t output_id) {
+    return get_cb_page_size(output_id, cb_fifo_page_size[output_id]);
 }

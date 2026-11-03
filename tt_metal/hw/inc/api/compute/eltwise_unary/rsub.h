@@ -13,6 +13,10 @@
 #endif
 
 namespace ckernel {
+
+ALWI void rsub_tile_init();
+ALWI void rsub_unary_int32_tile_init();
+
 // RSUB : rsub(x,y) = y-x
 
 // clang-format off
@@ -32,6 +36,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
+    rsub_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -63,6 +68,7 @@ ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
  */
 // clang-format on
 ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
+    rsub_unary_int32_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

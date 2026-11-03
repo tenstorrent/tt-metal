@@ -27,7 +27,7 @@ constexpr bool EXP_APPROX_MODE = get_compile_time_arg_val(sparse_sdpa::compute_c
 #include "api/tile_constants.h"            // tt::constants::TILE_HEIGHT
 
 // In-place scores[tile] += row-broadcast of mask row 0. cb_qk_im is held (hold_wr_ptr), so re-pack at the
-// absolute position. Caller has init'd the bcast-rows op + single-tile pack.
+// absolute position.
 ALWI void add_bcast_row_mask_tile(uint32_t scores_cb, uint32_t mask_cb, uint32_t score_tile) {
     tile_regs_acquire();
     add_tiles_bcast_rows(scores_cb, mask_cb, score_tile, 0, 0);
@@ -69,24 +69,19 @@ ALWI void tilize_packed_field() {
     }
     out.reserve_back(field_ct_dim);
 
-    reconfig_data_format_srca(input_cb);
-    pack_reconfig_data_format(output_cb);
-    tilize_init(input_cb, physical_ct_dim, output_cb);
-
     uint32_t saved_rd_ptr = 0;
     UNPACK({
         auto& iface = get_local_cb_interface(input_cb);
         saved_rd_ptr = iface.fifo_rd_ptr;
         iface.fifo_rd_ptr = saved_rd_ptr + field_offset_16b;
     });
-    tilize_block(input_cb, field_ct_dim, output_cb);
+    tilize_block(input_cb, field_ct_dim, output_cb, 0, 0, physical_ct_dim);
     UNPACK(get_local_cb_interface(input_cb).fifo_rd_ptr = saved_rd_ptr;);
 
     out.push_back(field_ct_dim);
     if constexpr (manage_input_lifecycle) {
         in.pop_front(tt::constants::TILE_HEIGHT);
     }
-    tilize_uninit(input_cb, output_cb);
 }
 
 void kernel_main() {
@@ -209,9 +204,6 @@ void kernel_main() {
                     {
                         latent_tile_cb.wait_front(latent_DHt);
                         scale_bcast_cb.wait_front(scale_blocks);
-                        reconfig_data_format(cb_k_latent_tile, cb_k_scale_bcast);
-                        pack_reconfig_data_format(cb_k_in);
-                        mul_bcast_cols_init(cb_k_latent_tile, cb_k_scale_bcast);
                         for (uint32_t block = 0; block < scale_blocks; ++block) {
                             for (uint32_t tile = 0; tile < tiles_per_scale_block; ++tile) {
                                 tile_regs_acquire();
@@ -248,14 +240,6 @@ void kernel_main() {
                 compute_kernel_lib::tilize<DHt, cb_k_rm, cb_k_in>(
                     /*num_blocks=*/Skt, /*total_input_pages=*/Skt * tt::constants::TILE_HEIGHT);
             }
-            // fp8 K tilize leaves srcA in fp8. QK reads K (transposed -> srcA) and Q (srcB), so restore
-            // srcA=cb_k_in (bfp8 for fp8 K), srcB=cb_q_in. Reconfigure the tiled descriptor geometry/strides;
-            // mm_no_mop_init_short only programs the matmul MOP.
-            reconfig_full_operand(cb_k_in, cb_q_in);
-            // K tilize also leaves the packer in cb_k_in's format+strides (bfp8 for fp8). Restore bf16 once per
-            // chunk for the downstream packs (cb_qk_im/max/sum/out share its geometry); configure_pack_width in
-            // the qg loop refreshes only the MOP. No-op for bf16.
-            pack_reconfig_data_format(cb_qk_im);
 
             const bool is_first = (chunk == 0);
             const bool is_last = (chunk == num_active_chunks - 1);
@@ -287,9 +271,6 @@ void kernel_main() {
             for (uint32_t qg = 0; qg < q_groups; ++qg) {
                 const uint32_t row_base = qg * qsb;  // first query tile-row of this group
 
-                // Set exp to the softmax scale; salad's correction below re-inits it to unit scale.
-                exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
-
                 // ===== Phase 1: Q@Kᵀ -> cb_qk_im band, mask, running row-max =====
                 {
                     if constexpr (scaled_kv) {
@@ -298,9 +279,6 @@ void kernel_main() {
                         // therefore remain DHt even though their contraction widths are vDHt and rope_DHt.
                         constexpr uint32_t q_row_stride = DHt;
                         // Latent contribution from the scaled mixed-format cache.
-                        reconfig_data_format(cb_k_in, cb_q_in);
-                        mm_no_mop_init_short(cb_q_in, cb_k_in, /*transpose=*/true, 1, qsb, q_row_stride);
-                        configure_row_pack_width(cb_qk_im, 1);
                         for (uint32_t kt = 0; kt < Skt; ++kt) {
                             blocked_matmul_and_pack<true, /*in1_stride=*/1, /*out_num_cols=*/KT_stride>(
                                 cb_q_in,
@@ -313,14 +291,9 @@ void kernel_main() {
                                 /*subblock_w=*/1,
                                 /*subblock_h=*/qsb,
                                 /*inner_dim=*/vDHt,
-                                /*matmul_stride=*/q_row_stride,
-                                /*skip_pack_configure=*/true);
+                                /*matmul_stride=*/q_row_stride);
                         }
                         // Unscaled BF16 RoPE contribution, accumulated into the same held score tiles.
-                        reconfig_data_format(cb_k_rope_tile, cb_q_in);
-                        mm_no_mop_init_short(cb_q_in, cb_k_rope_tile, /*transpose=*/true, 1, qsb, q_row_stride);
-                        configure_row_pack_width(cb_qk_im, 1);
-                        pack_reconfig_l1_acc(1);
                         for (uint32_t kt = 0; kt < Skt; ++kt) {
                             blocked_matmul_and_pack<true, /*in1_stride=*/1, /*out_num_cols=*/KT_stride>(
                                 cb_q_in,
@@ -334,13 +307,10 @@ void kernel_main() {
                                 /*subblock_h=*/qsb,
                                 /*inner_dim=*/rope_DHt,
                                 /*matmul_stride=*/q_row_stride,
-                                /*skip_pack_configure=*/true);
+                                /*accumulate_l1=*/true);
                         }
-                        pack_reconfig_l1_acc(0);
                     } else {
                         // scores[q,sk]=ΣQ·K. in1=K, transpose=true (within-tile transpose => Kᵀ).
-                        mm_no_mop_init_short(cb_q_in, cb_k_in, /*transpose=*/true, 1, qsb, DHt);
-                        configure_row_pack_width(cb_qk_im, 1);
                         for (uint32_t kt = 0; kt < Skt; ++kt) {
                             blocked_matmul_and_pack<true, /*in1_stride=*/1, /*out_num_cols=*/KT_stride>(
                                 cb_q_in,
@@ -353,8 +323,7 @@ void kernel_main() {
                                 /*subblock_w=*/1,
                                 /*subblock_h=*/qsb,
                                 /*inner_dim=*/DHt,
-                                /*matmul_stride=*/DHt,
-                                /*skip_pack_configure=*/true);
+                                /*matmul_stride=*/DHt);
                         }
                     }
                     // Publish the band to UNPACK while holding wr_ptr (for the in-place mask/sub_exp).
@@ -362,17 +331,12 @@ void kernel_main() {
                 }
 
                 {
-                    // QK left srcA=cb_k_in, srcB=cb_q_in. The mask/reduce/sub_exp read cb_qk_im (srcA) + bf16
-                    // scalers (srcB); restore both to bf16. No-op for bf16 Q/K.
-                    reconfig_data_format(cb_qk_im, cb_scale);
                     if (has_mask) {
                         qk_cb.wait_front((qg + 1) * qsb * KT_stride);  // band visible before the in-place mask
                         // Same mask for every query row: stamp each masked key tile across this group's rows
                         // (cb_qk_im row row_base+r, key tile t = (row_base+r)*Skt + t).
                         if (full_start < Skt) {
                             neginf_cb.wait_front(1);
-                            add_bcast_rows_init(cb_qk_im, cb_neginf);
-                            configure_single_tile_pack(cb_qk_im);
                             for (uint32_t r = 0; r < qsb; ++r) {
                                 for (uint32_t t = full_start; t < Skt; ++t) {
                                     add_bcast_row_mask_tile(cb_qk_im, cb_neginf, (row_base + r) * Skt + t);
@@ -381,8 +345,6 @@ void kernel_main() {
                         }
                         if (has_part_mask) {
                             mask_part_cb.wait_front(1);  // persistent until popped after the group loop
-                            add_bcast_rows_init(cb_qk_im, cb_mask_part);
-                            configure_single_tile_pack(cb_qk_im);
                             for (uint32_t r = 0; r < qsb; ++r) {
                                 add_bcast_row_mask_tile(cb_qk_im, cb_mask_part, (row_base + r) * Skt + part_t);
                             }
@@ -391,7 +353,6 @@ void kernel_main() {
                     }
                     // running row-max (MAX-only; eltwise-max against prev on chunk>0)
                     max_cur.reserve_back(qsb);
-                    configure_single_tile_pack(max_cur.get_cb_id());
                     reduce_c_row_group<cb_qk_im, cb_scale, KT_stride>(
                         max_cur.get_cb_id(),
                         max_prev.get_cb_id(),
@@ -422,10 +383,7 @@ void kernel_main() {
                 {
                     qk_cb.wait_front((qg + 1) * qsb * KT_stride);
                     // out[q,vd]=Σprobs·K, V = the latent feature cols. PV reads V into srcA and
-                    // probs (cb_qk_im) into srcB (operands swap); set srcA=cb_k_in, srcB=cb_qk_im.
-                    reconfig_data_format(cb_k_in, cb_qk_im);
-                    mm_no_mop_init_short(cb_qk_im, cb_k_in, /*transpose=*/false, 1, qsb, Skt);
-                    configure_row_pack_width(out_cur.get_cb_id(), 1);
+                    // probs (cb_qk_im) into srcB (operands swap).
                     for (uint32_t vd = 0; vd < vDHt; ++vd) {
                         blocked_matmul_and_pack<false, /*in1_stride=*/scaled_kv ? vDHt : DHt, /*out_num_cols=*/vDHt>(
                             cb_qk_im,
@@ -438,29 +396,21 @@ void kernel_main() {
                             /*subblock_w=*/1,
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/Skt,
-                            /*matmul_stride=*/KT_stride,
-                            /*skip_pack_configure=*/true);
+                            /*matmul_stride=*/KT_stride);
                     }
-                    pack_to_unpack_sync();                // flush PV's HELD out_cur packs (push_back deferred to
-                                                          // after the group loop) so SALAD's L1-accumulate (!is_first)
-                                                          // reads them; normalize reads post-push_back, so covered
-                    reconfig_data_format_srca(cb_qk_im);  // PV left srcA in cb_k_in's format; restore bf16
+                    pack_to_unpack_sync();  // flush PV's HELD out_cur packs (push_back deferred to
+                                            // after the group loop) so SALAD's L1-accumulate (!is_first)
+                                            // reads them; normalize reads post-push_back, so covered
                 }
 
                 // ===== SALAD flash combine (skip on the first chunk) =====
                 if (!is_first) {
-                    // correction = exp((prev_max - cur_max)*scale) -> cb_corr col 0. Re-init exp at unit scale
-                    // (sub_exp_first_col_blocks applies scale itself; the group's init baked scale_fp32).
-                    exp_packthread_tile_init<EXP_APPROX_MODE>();
+                    // correction = exp((prev_max - cur_max)*scale) -> cb_corr col 0.
                     corr_cb.reserve_back(qsb);
                     sub_exp_first_col_blocks<false, scale_fp32>(
                         max_prev.get_cb_id(), max_cur.get_cb_id(), cb_corr, /*q_subblock=*/qg, qsb);
                     corr_cb.push_back(qsb);
-                    // cur.out += prev.out*corr ; cur.sum += prev.sum*corr (L1-acc). salad packs width=dst_size,
-                    // so restore Default packer geometry first (the per-chunk tilize left it in Tilize layout).
-                    PACK((
-                        llk_pack_init<ckernel::PackMode::Default, false, false, false>(out_cur.get_cb_id(), dst_size)));
-                    pack_reconfig_l1_acc(1);
+                    // cur.out += prev.out*corr ; cur.sum += prev.sum*corr (L1-acc).
                     // out_prev & cb_corr consumed front-first per group (popped below); sum_prev cumulative (qg).
                     salad_correct_fused<qsb, vDHt, dst_size>(
                         out_prev.get_cb_id(),
@@ -471,7 +421,6 @@ void kernel_main() {
                         /*ob_q_subblock=*/0,
                         /*sum_q_subblock=*/qg,
                         /*write_q_subblock=*/qg);
-                    pack_reconfig_l1_acc(0);
                     corr_cb.pop_front(qsb);
                     out_prev.pop_front(qsb * vDHt);  // this band's prev.out consumed into cur
                 }

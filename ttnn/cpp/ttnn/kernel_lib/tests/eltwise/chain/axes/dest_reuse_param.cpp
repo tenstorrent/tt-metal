@@ -26,17 +26,6 @@ void kernel_main() {
     constexpr DestReuseType R = (reuse == 0) ? DestReuseType::DEST_TO_SRCA : DestReuseType::DEST_TO_SRCB;
     constexpr BinaryFpuOp OP = (op == 0) ? BinaryFpuOp::Add : ((op == 1) ? BinaryFpuOp::Sub : BinaryFpuOp::Mul);
 
-    using CbOnSrcA = DestReuseBinary<BinaryFpuOp::Add, input(cb_c), DestReuseType::DEST_TO_SRCB>;
-    using CbOnSrcB = DestReuseBinary<BinaryFpuOp::Add, input(cb_c), DestReuseType::DEST_TO_SRCA>;
-    using ReconfigDisabled = DestReuseBinary<
-        BinaryFpuOp::Add,
-        input(cb_c, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-        DestReuseType::DEST_TO_SRCA>;
-    static_assert(CbOnSrcA::reconfig_srca_dfb == cb_c && CbOnSrcA::reconfig_srcb_dfb == NO_PREV_DFB);
-    static_assert(CbOnSrcB::reconfig_srca_dfb == NO_PREV_DFB && CbOnSrcB::reconfig_srcb_dfb == cb_c);
-    static_assert(
-        ReconfigDisabled::reconfig_srca_dfb == NO_PREV_DFB && ReconfigDisabled::reconfig_srcb_dfb == NO_PREV_DFB);
-
     DataflowBuffer cb_a_obj(cb_a);
     DataflowBuffer cb_b_obj(cb_b);
     DataflowBuffer cb_c_obj(cb_c);

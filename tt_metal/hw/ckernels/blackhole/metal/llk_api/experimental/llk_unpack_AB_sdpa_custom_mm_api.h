@@ -27,8 +27,8 @@ inline void llk_unpack_AB_sdpa_custom_mm(
     const std::uint32_t base_address_B = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
     const std::uint32_t tile_index_A = tile_index_1;
     const std::uint32_t tile_index_B = tile_index_0;
-    const std::uint32_t tile_size_A = get_local_cb_interface(operandA_id).fifo_page_size;
-    const std::uint32_t tile_size_B = get_local_cb_interface(operandB_id).fifo_page_size;
+    const std::uint32_t tile_size_A = get_operand_unpack_tile_size(operandA_id);
+    const std::uint32_t tile_size_B = get_operand_unpack_tile_size(operandB_id);
     std::uint32_t base_address_mask =
         mask_chunk ? get_local_cb_interface(get_operand_id(operand_mask)).fifo_rd_ptr - 1 : 0;
     _llk_unpack_AB_sdpa_custom_mm_<read_transposed, configure_mask_extent>(

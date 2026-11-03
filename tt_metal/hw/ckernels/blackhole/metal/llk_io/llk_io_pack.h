@@ -21,8 +21,12 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
     std::uint32_t output = operand;
 
-    volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-    volatile tt_reg_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+    volatile tt_l1_ptr std::uint32_t* tiles_acked_ptr =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
+            STREAM_REG_ADDR(get_operand_stream_id(operand), STREAM_REMOTE_DEST_BUF_START_REG_INDEX));
+    volatile tt_l1_ptr std::uint32_t* tiles_received_ptr =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
+            STREAM_REG_ADDR(get_operand_stream_id(operand), STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -36,7 +40,7 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     {
         SYNC_WAIT("SYNC-CB-RESERVE", operand);
         do {
-            std::uint16_t tiles_acked = (std::uint16_t)reg_read((std::uint32_t)tiles_acked_ptr);
+            std::uint16_t tiles_acked = (std::uint16_t)tiles_acked_ptr[0];
             // Perform 16-bit subtractions because inputs are 16 bits and may wrap due to overflow.
             std::uint16_t free_tiles_wrap =
                 get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked);
@@ -78,7 +82,7 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
     std::uint32_t output = operand;
 
     auto& cb = get_local_cb_interface(output);
-    std::uint32_t num_words = num_tiles * cb.fifo_page_size;
+    std::uint32_t num_words = num_tiles * get_cb_page_size(output, cb_fifo_page_size[output]);
 
     LLK_ASSERT(cb.fifo_wr_ptr < cb.fifo_limit, "CB push_back: fifo_wr_ptr already at or past fifo_limit");
 

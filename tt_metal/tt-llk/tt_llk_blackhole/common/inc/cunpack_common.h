@@ -170,14 +170,15 @@ inline void wait_for_next_context(const std::uint32_t num_contexts)
 inline void switch_config_context(std::uint32_t &unp_cfg_context)
 {
     // Switch config context
-    unp_cfg_context = 1 - unp_cfg_context;
     if (unp_cfg_context == 0)
     {
-        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+        unp_cfg_context = 1;
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0101);
     }
     else
     {
-        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0101);
+        unp_cfg_context = 0;
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
     }
 }
 
@@ -803,13 +804,17 @@ inline void configure_unpack_AB(
     std::uint32_t exp_width         = (static_cast<std::uint32_t>(unpA_dst_format_masked) >> 2) & 0x1; // 0=5-bit, 1=8-bit
 
     // Strides for incrementing ch1 address to srcA and srcB
-    cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
+    TT_CFG_STORE(
+        cfg,
+        UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32,
         (0 << UNP0_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
-        (unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
+            (unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)); // Z and W(not used) stride for dest address (ch1)
 
-    cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
+    TT_CFG_STORE(
+        cfg,
+        UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32,
         (0 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
-        (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
+            (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)); // Z and W(not used) stride for dest address (ch1)
 
     // Establish the canonical Y-stride baseline for srcA (ch1) here, so per-op inits and
     // uninits that touch the Y stride (e.g. tilizeA_B) set and re-assert this baseline
@@ -867,14 +872,14 @@ inline void configure_unpack_AB(
     // tile_descriptor.f.blobs_y_start = 0;
     for (std::uint32_t i = 0; i < TILE_DESC_SIZE; i++)
     {
-        cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
+        TT_CFG_STORE(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32 + i, tile_descriptor.val[i]);
     }
     tile_descriptor.f.in_data_format = row_pool ? to_underlying(DataFormat::Float32) : unpB_src_format_masked;
     tile_descriptor.f.x_dim          = unpB_face_r_dim * FACE_C_DIM;
     tile_descriptor.f.z_dim          = unpB_num_faces;
     for (std::uint32_t i = 0; i < TILE_DESC_SIZE; i++)
     {
-        cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
+        TT_CFG_STORE(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32 + i, tile_descriptor.val[i]);
     }
 
     // Set unpacker config
@@ -896,7 +901,7 @@ inline void configure_unpack_AB(
     // config.f.fifo_size = 0; // Set dynamically
     for (std::uint32_t i = 0; i < CONFIG_SIZE; i++)
     {
-        cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + i] = config.val[i];
+        TT_CFG_STORE(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32 + i, config.val[i]);
     }
 
     config.f.out_data_format = row_pool ? (to_underlying(DataFormat::Float16) | (exp_width << 2)) : unpB_dst_format_masked;
@@ -904,19 +909,19 @@ inline void configure_unpack_AB(
 
     for (std::uint32_t i = 0; i < CONFIG_SIZE; i++)
     {
-        cfg[THCON_SEC1_REG2_Out_data_format_ADDR32 + i] = config.val[i];
+        TT_CFG_STORE(cfg, THCON_SEC1_REG2_Out_data_format_ADDR32 + i, config.val[i]);
     }
 
     // Program base address for all 2 sections (each section address is loaded to corresponding context)
     // Load dummy data to unused location if face height is 0
     const std::uint32_t Dest_cntx0_address         = unpA_face_r_dim == 0 ? 22 * 16 : 4 * 16;
     const std::uint32_t Dest_cntx1_address         = unpA_face_r_dim == 0 ? 22 * 16 : 4 * 16;
-    cfg[THCON_SEC0_REG5_Dest_cntx0_address_ADDR32] = Dest_cntx0_address | (Dest_cntx1_address << 16);
+    TT_CFG_STORE(cfg, THCON_SEC0_REG5_Dest_cntx0_address_ADDR32, Dest_cntx0_address | (Dest_cntx1_address << 16));
 
     // Program unpacker0 per context x_dim (face size in l1)
     // Overrides value set by tile descriptor when thread override bit is set in unpack instruction
     const std::uint32_t face_dim                 = unpA_face_r_dim * FACE_C_DIM;
-    cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = face_dim | (face_dim << 16);
+    TT_CFG_STORE(cfg, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, face_dim | (face_dim << 16));
 
     constexpr std::uint32_t face_dim_16x16 = FACE_R_DIM * FACE_C_DIM;
     regfile[p_gpr_unpack::FACE_DIM_16x16]  = (face_dim_16x16 / 1) | ((face_dim_16x16 / 1) << 16);
@@ -931,7 +936,7 @@ inline void configure_unpack_AB(
     // Enable address counter for unpacker ch1/dst address
     // final address is calculated as: Dest_cntx0/1_address + address_counter_ch1
     // used for face by face unpacking of entire tile into srcA
-    cfg[UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_ADDR32] = 0x1 << UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_SHAMT;
+    TT_CFG_STORE(cfg, UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_ADDR32, 0x1 << UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_SHAMT);
 
     // Clear context ID
     reset_config_context();

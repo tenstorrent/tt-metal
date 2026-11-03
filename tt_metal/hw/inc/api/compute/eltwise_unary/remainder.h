@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void remainder_tile_uint32_init();
+
 // clang-format off
 /**
  * Performs element-wise remainder computation on input x by y , where x is each element of a tile
@@ -54,6 +56,7 @@ ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
  */
 // clang-format on
 ALWI void remainder_tile_uint32(uint32_t idst, uint32_t param0) {
+    remainder_tile_uint32_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

@@ -12,6 +12,9 @@
 
 namespace ckernel {
 
+template <bool is_fp32_dest_acc_en>
+ALWI void atan2_binary_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise atan2 operation on two inputs: y = atan2(x0, x1).
@@ -31,6 +34,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan2_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    atan2_binary_tile_init<is_fp32_dest_acc_en>();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

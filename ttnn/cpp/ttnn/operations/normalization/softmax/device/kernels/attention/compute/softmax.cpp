@@ -49,8 +49,7 @@ void calc_numeric_stable(
         dfb_in,
         dfb_max_scaler,
         dfb_max,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
     // calculate x-max(x)
     ckl::eltwise_chain(
@@ -285,14 +284,7 @@ void kernel_main() {
         }
 #endif  // CAUSAL_MASK
 
-        reconfig_data_format(dfb_exps, dfb_sum_scaler);
 #else  // !FUSED_SCALE_MASK
-        reconfig_data_format(dfb_in0, dfb_in0);
-        pack_reconfig_data_format(dfb_exps);
-        copy_init(dfb_in0);  // need to copy from CB to DST to be able to run sfpu math
-#ifndef NUMERIC_STABLE
-        exp_tile_init<EXP_APPROX>();
-#endif
 #ifdef MASK_PADDED_DATA
         {
             if (Wt > 1) {
@@ -370,10 +362,8 @@ void kernel_main() {
             [](std::uint32_t) {
                 // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
                 if constexpr (DST_ACCUM_MODE) {
-                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
                     recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
                 } else {
-                    recip_tile_init();
                     recip_tile(0);
                 }
             });

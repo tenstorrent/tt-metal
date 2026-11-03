@@ -140,12 +140,11 @@ void sum_top_experts_per_group(
     CircularBuffer cb_group_summed(cb_group_summed_scores);
     // sum the top experts_per_group rows for each group
     reconfig_data_format(cb_top_experts_per_group, cb_top_experts_per_group);
-    add_init(cb_top_experts_per_group, cb_top_experts_per_group, true);
     cb_top_experts.wait_front(summed_experts_per_group);
 
     tile_regs_acquire();
     for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
-        add_tiles(cb_top_experts_per_group, cb_top_experts_per_group, i, i + 1, 0);
+        add_tiles(cb_top_experts_per_group, cb_top_experts_per_group, i, i + 1, 0, true);
     }
     tile_regs_commit();
 

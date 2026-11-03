@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void addcmul_tile_init();
+
 // clang-format off
 /**
  * Performs elementwise addcmul (add with constant multiply) operation.
@@ -39,6 +41,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void addcmul_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst, uint32_t value) {
+    addcmul_tile_init();
 #ifdef ARCH_BLACKHOLE
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,

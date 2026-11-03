@@ -2885,6 +2885,7 @@ void detail::ProgramImpl::set_cb_data_fmt_and_tile(
                 const auto& tile_opt = circular_buffer->tile(buffer_index);
                 const auto& unpack_geom = circular_buffer->unpack_face_geometry(buffer_index);
                 build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
+                build_options.hlk_desc.buf_page_size_arr[buffer_index] = circular_buffer->page_size(buffer_index);
             }
         }
     }
@@ -3311,6 +3312,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         }
         this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
         this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
+        for (const auto& logical_cr : kernel->logical_coreranges()) {
+            for (const auto& dfb : this->dataflow_buffers_on_corerange(logical_cr)) {
+                build_options.hlk_desc.buf_page_size_arr[dfb->device_slot] = dfb->config.entry_size;
+            }
+        }
 
         // Blackhole and Quasar: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated
         // compute kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp

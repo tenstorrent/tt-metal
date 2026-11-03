@@ -167,8 +167,6 @@ void kernel_main() {
             dfb_x_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_exps_obj);
 #endif
 
-        reconfig_data_format(dfb::exps, dfb::sum_scaler);
-
 #else
 
 #if defined(MASK_PADDED_DATA) && defined(NUMERIC_STABLE) && !defined(ARCH_QUASAR)
@@ -309,10 +307,8 @@ void kernel_main() {
             [](std::uint32_t) {
                 // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
                 if constexpr (DST_ACCUM_MODE) {
-                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
                     recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
                 } else {
-                    recip_tile_init();
                     recip_tile(0);
                 }
             });
