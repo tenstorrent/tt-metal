@@ -1519,7 +1519,7 @@ const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64},
 // uniform few-percent rescale error through.
 constexpr float kCrossChunkingMeanAbsTol = 5e-4F;
 
-void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep = kChunkKnobSweep) {
+void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep) {
     if (!base.seed.has_value()) {
         base.seed = ttml::autograd::ctx().get_generator()();  // every row sees the same inputs
     }
@@ -1548,217 +1548,205 @@ void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sw
     }
 }
 
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal) {
+// Each row sweeps one shape through its chunkings; one TEST_P table so the shards spread the kernel
+// compiles (as GateShapes above), with the full sweeps NIGHTLY_ and one blocking row per compiled variant
+// (causal, causal + gate without intermediates, arbitrary, no mask + gate).
+struct ChunkKnobCase {
+    SDPATestConfig base;
+    std::vector<ChunkKnobs> sweep;
+};
+
+class SDPAForwardChunkKnobTest : public ::testing::TestWithParam<ChunkKnobCase> {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_P(SDPAForwardChunkKnobTest, MatchesDefaultChunking) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // Few items: most cores get one.
-    run_chunk_knob_sweep(SDPATestConfig{
-        .batch_size = 1U,
-        .sequence_length = 256U,
-        .query_dim = 128U,
-        .key_value_dim = 128U,
-        .num_query_heads = 2U,
-        .num_key_heads = 2U,
-        .mask_type = ttml::metal::AttentionMaskType::Causal,
-        .test_name = "ChunkKnobs_Causal"});
+    run_chunk_knob_sweep(GetParam().base, GetParam().sweep);
 }
 
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // 144 sequences, GQA: many items per core at every chunking.
-    run_chunk_knob_sweep(SDPATestConfig{
-        .batch_size = 9U,
-        .sequence_length = 256U,
-        .query_dim = 1024U,     // 16 heads * 64
-        .key_value_dim = 256U,  // 4 kv heads * 64
-        .num_query_heads = 16U,
-        .num_key_heads = 4U,
-        .mask_type = ttml::metal::AttentionMaskType::Causal,
-        .test_name = "ChunkKnobs_Causal_GQA_ManySeqs"});
-}
-
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal_NonPow2) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // S = 12 tiles: 3-tile chunks give odd sub-blocks and a causal step count that is not a power of two.
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 384U,
-            .query_dim = 128U,
-            .key_value_dim = 128U,
-            .num_query_heads = 2U,
-            .num_key_heads = 2U,
-            .mask_type = ttml::metal::AttentionMaskType::Causal,
-            .test_name = "ChunkKnobs_Causal_NonPow2"},
-        {{96, 96}, {32, 96}, {96, 32}, {128, 96}, {96, 384}});
-}
-
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal_HeadStacking) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // GQA with 4 heads per group: stacks of 2 and 4 heads, with 1..4 Q rows each.
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 2U,
-            .sequence_length = 256U,
-            .query_dim = 512U,      // 8 heads * 64
-            .key_value_dim = 128U,  // 2 kv heads * 64
-            .num_query_heads = 8U,
-            .num_key_heads = 2U,
-            .mask_type = ttml::metal::AttentionMaskType::Causal,
-            .test_name = "ChunkKnobs_Causal_HeadStacking"},
-        {{32, 64, 4}, {128, 256, 2}, {64, 32, 4}, {128, 64, 4}, {0, 0, 2}});
-}
-
-// One blocking row per compiled variant (causal, arbitrary, no mask + gate), each its own test so the
-// shards spread the kernel compiles; the full sweeps are nightly.
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke_Causal) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // GQA (two heads per K/V head): whole-sequence chunks (one item per sequence, Sk_chunk_t = St), and two
-    // stacked heads, the causal stamp at a nonzero row_base.
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 256U,
-            .query_dim = 256U,      // 4 heads * 64
-            .key_value_dim = 128U,  // 2 kv heads * 64
-            .num_query_heads = 4U,
-            .num_key_heads = 2U,
-            .mask_type = ttml::metal::AttentionMaskType::Causal,
-            .test_name = "ChunkKnobs_Smoke_Causal"},
-        {{256, 256, 1}, {64, 64, 2}});
-}
-
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke_Arbitrary) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 256U,
-            .query_dim = 128U,
-            .key_value_dim = 64U,
-            .num_query_heads = 2U,
-            .num_key_heads = 1U,
-            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
-            .test_name = "ChunkKnobs_Smoke_Arbitrary"},
-        {{64, 64, 2}});
-}
-
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke_NoneGate) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 256U,
-            .query_dim = 256U,
-            .key_value_dim = 256U,
-            .value_dim = 128U,
-            .num_query_heads = 2U,
-            .num_key_heads = 2U,
-            .mask_type = ttml::metal::AttentionMaskType::None,
-            .use_gate = true,
-            .test_name = "ChunkKnobs_Smoke_None_Gate"},
-        {{64, 128, 1}});
-}
-
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NoIntermediates) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // The RETURN_INTERMEDIATES-less compile with the gate and an explicit chunking, checked against the
-    // references (ValidationTest_IntermediateReturnModes covers it without the gate at the default pick). The
-    // chunking is the one the pick reaches at D=512 (four rows, two K/V tiles), which the sweeps do not run
-    // blocking: a causal row with Sq > Sk has rows fully masked inside a later K step.
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 256U,
-            .query_dim = 128U,
-            .key_value_dim = 128U,
-            .num_query_heads = 2U,
-            .num_key_heads = 2U,
-            .mask_type = ttml::metal::AttentionMaskType::Causal,
-            .use_gate = true,
-            .return_intermediates = false,
-            .test_name = "ChunkKnobs_NoIntermediates_Gate"},
-        {{128, 64, 1}});  // Sq > Sk: rows fully masked inside a later K step, with the gate
-}
-
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Arbitrary_NonPow2) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // 3 x 2 mask tiles per step: the mask stamp's last DST pass is a 2-tile tail.
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 384U,
-            .query_dim = 128U,
-            .key_value_dim = 128U,
-            .num_query_heads = 2U,
-            .num_key_heads = 2U,
-            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
-            .test_name = "ChunkKnobs_Arbitrary_NonPow2"},
-        {{96, 64, 1}, {96, 96, 1}});
-}
-
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Arbitrary_HeadStacking) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // The (1, 1, S, S) mask is read once per step and shared by the stacked heads; the blocking case of
-    // this is the {64, 64, 2} row of ChunkKnobs_Smoke_Arbitrary.
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 256U,
-            .query_dim = 256U,     // 4 heads * 64
-            .key_value_dim = 64U,  // 1 kv head * 64
-            .num_query_heads = 4U,
-            .num_key_heads = 1U,
-            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
-            .test_name = "ChunkKnobs_Arbitrary_HeadStacking"},
-        {{64, 64, 2}, {32, 128, 4}});
-}
-
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_None_Gate_HeadStacking) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // No mask, vWt < qWt, gate: the gate rows are stacked like the Q rows.
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 256U,
-            .query_dim = 512U,      // 4 heads * 128
-            .key_value_dim = 256U,  // 2 kv heads * 128
-            .value_dim = 128U,      // 2 kv heads * 64
-            .num_query_heads = 4U,
-            .num_key_heads = 2U,
-            .mask_type = ttml::metal::AttentionMaskType::None,
-            .use_gate = true,
-            .test_name = "ChunkKnobs_None_Gate_HeadStacking"},
-        {{64, 128, 2}, {128, 64, 2}});
-}
-
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Arbitrary) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    run_chunk_knob_sweep(SDPATestConfig{
-        .batch_size = 1U,
-        .sequence_length = 256U,
-        .query_dim = 128U,
-        .key_value_dim = 128U,
-        .num_query_heads = 2U,
-        .num_key_heads = 2U,
-        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
-        .test_name = "ChunkKnobs_Arbitrary"});
-}
-
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_None_DiffVDim_Gate) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // No mask, vWt < qWt, gate: non-square PV geometry.
-    run_chunk_knob_sweep(SDPATestConfig{
-        .batch_size = 1U,
-        .sequence_length = 256U,
-        .query_dim = 256U,
-        .key_value_dim = 256U,
-        .value_dim = 128U,
-        .num_query_heads = 2U,
-        .num_key_heads = 2U,
-        .mask_type = ttml::metal::AttentionMaskType::None,
-        .use_gate = true,
-        .test_name = "ChunkKnobs_None_DiffVDim_Gate"});
-}
+INSTANTIATE_TEST_SUITE_P(
+    ChunkKnobs,
+    SDPAForwardChunkKnobTest,
+    ::testing::Values(
+        // Few items: most cores get one.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .test_name = "NIGHTLY_Causal"},
+            kChunkKnobSweep},
+        // 144 sequences, GQA: many items per core at every chunking.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 9U,
+                .sequence_length = 256U,
+                .query_dim = 1024U,     // 16 heads * 64
+                .key_value_dim = 256U,  // 4 kv heads * 64
+                .num_query_heads = 16U,
+                .num_key_heads = 4U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .test_name = "NIGHTLY_Causal_GQA_ManySeqs"},
+            kChunkKnobSweep},
+        // S = 12 tiles: 3-tile chunks give odd sub-blocks and a causal step count that is not a power of two.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 384U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .test_name = "NIGHTLY_Causal_NonPow2"},
+            {{96, 96}, {32, 96}, {96, 32}, {128, 96}, {96, 384}}},
+        // GQA with 4 heads per group: stacks of 2 and 4 heads, with 1..4 Q rows each.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 2U,
+                .sequence_length = 256U,
+                .query_dim = 512U,      // 8 heads * 64
+                .key_value_dim = 128U,  // 2 kv heads * 64
+                .num_query_heads = 8U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .test_name = "NIGHTLY_Causal_HeadStacking"},
+            {{32, 64, 4}, {128, 256, 2}, {64, 32, 4}, {128, 64, 4}, {0, 0, 2}}},
+        // Blocking, GQA (two heads per K/V head): whole-sequence chunks (one item per sequence,
+        // Sk_chunk_t = St), and two stacked heads, the causal stamp at a nonzero row_base.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 256U,      // 4 heads * 64
+                .key_value_dim = 128U,  // 2 kv heads * 64
+                .num_query_heads = 4U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .test_name = "Smoke_Causal"},
+            {{256, 256, 1}, {64, 64, 2}}},
+        // Blocking: the mask tensor shared by two stacked heads.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 128U,
+                .key_value_dim = 64U,
+                .num_query_heads = 2U,
+                .num_key_heads = 1U,
+                .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+                .test_name = "Smoke_Arbitrary"},
+            {{64, 64, 2}}},
+        // Blocking: no mask, vWt < qWt, gate.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 256U,
+                .key_value_dim = 256U,
+                .value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::None,
+                .use_gate = true,
+                .test_name = "Smoke_None_Gate"},
+            {{64, 128, 1}}},
+        // Blocking: the RETURN_INTERMEDIATES-less compile with the gate and an explicit chunking, checked
+        // against the references (ValidationTest_IntermediateReturnModes covers it without the gate at the
+        // default pick). The chunking is the one the pick reaches at D=512 (four rows, two K/V tiles), which
+        // the sweeps do not run blocking: a causal row with Sq > Sk has rows fully masked inside a later K
+        // step.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .use_gate = true,
+                .return_intermediates = false,
+                .test_name = "NoIntermediates_Gate"},
+            {{128, 64, 1}}},
+        // 3 x 2 mask tiles per step: the mask stamp's last DST pass is a 2-tile tail.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 384U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+                .test_name = "NIGHTLY_Arbitrary_NonPow2"},
+            {{96, 64, 1}, {96, 96, 1}}},
+        // The (1, 1, S, S) mask is read once per step and shared by the stacked heads; the blocking case of
+        // this is the {64, 64, 2} row of Smoke_Arbitrary.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 256U,     // 4 heads * 64
+                .key_value_dim = 64U,  // 1 kv head * 64
+                .num_query_heads = 4U,
+                .num_key_heads = 1U,
+                .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+                .test_name = "NIGHTLY_Arbitrary_HeadStacking"},
+            {{64, 64, 2}, {32, 128, 4}}},
+        // No mask, vWt < qWt, gate: the gate rows are stacked like the Q rows.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 512U,      // 4 heads * 128
+                .key_value_dim = 256U,  // 2 kv heads * 128
+                .value_dim = 128U,      // 2 kv heads * 64
+                .num_query_heads = 4U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::None,
+                .use_gate = true,
+                .test_name = "NIGHTLY_None_Gate_HeadStacking"},
+            {{64, 128, 2}, {128, 64, 2}}},
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+                .test_name = "NIGHTLY_Arbitrary"},
+            kChunkKnobSweep},
+        // No mask, vWt < qWt, gate: non-square PV geometry.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 256U,
+                .key_value_dim = 256U,
+                .value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::None,
+                .use_gate = true,
+                .test_name = "NIGHTLY_None_DiffVDim_Gate"},
+            kChunkKnobSweep}),
+    [](const ::testing::TestParamInfo<ChunkKnobCase>& info) { return info.param.base.test_name; });
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     // With the knobs at 0 the shape rule picks the chunking: larger than main's one Q row / four K tiles
