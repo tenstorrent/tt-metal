@@ -27,8 +27,8 @@ void GridSampleOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
     TT_FATAL(grid_tensor.storage_type() == StorageType::DEVICE, "Grid tensor must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffer on device!");
-    TT_FATAL(grid_tensor.buffer() != nullptr, "Grid tensor must be allocated in buffer on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in buffer on device!");
+    TT_FATAL(grid_tensor.is_allocated(), "Grid tensor must be allocated in buffer on device!");
 
     // Shape validation
     TT_FATAL(

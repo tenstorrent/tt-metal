@@ -17,6 +17,7 @@ void kernel_main() {
 
     DataflowBuffer dfb_sum_obj(dfb::sum);
     DataflowBuffer dfb_mask_obj(dfb::mask);
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
     DataflowBuffer dfb_ydy_obj(dfb::ydy);
     DataflowBuffer dfb_dy_m_sum_obj(dfb::dy_m_sum);
     DataflowBuffer dfb_dx_obj(dfb::dx);
@@ -25,6 +26,9 @@ void kernel_main() {
 
     uint32_t N = get_arg(args::N);
     uint32_t Wt = get_arg(args::Wt);
+
+    dfb_mask_obj.wait_front(onetile);
+    dfb_scaler_obj.wait_front(onetile);
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
@@ -41,7 +45,7 @@ void kernel_main() {
                 /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::dy_m_sum, dfb::scaler, dfb::sum>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
+                dfb_dy_m_sum_obj, dfb_scaler_obj, dfb_sum_obj, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // On this path the y*dy and sum buffers hold two partial sums instead; the second
             // names below are handle aliases for those same two FIFOs, not extra buffers.
@@ -53,7 +57,7 @@ void kernel_main() {
                 dfb::scaler,
                 dfb_inter0_id,
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
+                dfb_dy_obj, dfb_scaler_obj, dfb_ydy_obj, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
             static constexpr auto dfb_inter1_id = dfb::sum;
             mask_tile_to_dfb<dfb::dy, dfb::mask, dfb_inter1_id>(
@@ -66,7 +70,7 @@ void kernel_main() {
                 /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb_inter1_id, dfb::scaler, dfb::dy_m_sum>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
+                dfb_sum_obj, dfb_scaler_obj, dfb_dy_m_sum_obj, compute_kernel_lib::ReduceInputBlockShape::single());
 
             add_tiles_to_dfb<dfb_inter0_id, dfb::dy_m_sum, dfb::sum>(dfb_ydy_obj, dfb_dy_m_sum_obj, dfb_sum_obj);
         }
@@ -108,7 +112,8 @@ void kernel_main() {
             dfb::ydy,
             dfb::scaler,
             dfb::sum,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+            dfb_ydy_obj, dfb_scaler_obj, dfb_sum_obj, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {
@@ -132,4 +137,9 @@ void kernel_main() {
         dfb_y_obj.pop_front(Wt);
 #endif
     }
+    // The mask and the reduce scaler are each a single tile pushed once by the reader and re-read on
+    // every iteration, so they are waited once up front. Pop them here to leave the buffers balanced:
+    // on Quasar the reader's DataflowBuffers wait for these pops when they go out of scope.
+    dfb_mask_obj.pop_front(onetile);
+    dfb_scaler_obj.pop_front(onetile);
 }

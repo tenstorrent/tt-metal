@@ -372,6 +372,15 @@ def test_bw_gelu_sharded_matches_interleaved(variant, approximate, dtype, torch_
             _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, (37, 50), _core_range(1, 0)),
             id="width_sharded_unaligned",
         ),
+        # Split a row into several chunks such that a chunk can begin part-way into a page
+        pytest.param((1, 1, 32, 2100), ttnn.DRAM_MEMORY_CONFIG, id="interleaved_chunked"),
+        # 1036 = 28 pages of 37 elements, so the chunk boundary at element 1024 lands 25 elements
+        # into page 27.
+        pytest.param(
+            (1, 1, 32, 1036),
+            _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, (32, 37), _core_range(6, 3)),
+            id="width_sharded_chunked",
+        ),
     ),
 )
 def test_bw_gelu_row_major_matches_tile(variant, approximate, dtype, torch_dtype, shape, memory_config, device):

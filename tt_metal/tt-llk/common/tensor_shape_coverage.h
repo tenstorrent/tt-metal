@@ -57,6 +57,22 @@ __attribute__((noinline, cold)) inline void assert_tensor_shape_coverage_unobser
     LLK_ASSERT(false, "TensorShape not observed before, please add it to the coverage table.");
 }
 
+// Walks a coverage table out of line, so it is emitted once per ELF instead of at every call site with a runtime
+// shape. Kernel text counts against the kernel config buffer, and asserts must not grow it per call site.
+template <bool (*Checker)(const TensorShape&)>
+__attribute__((noinline)) bool is_tensor_shape_covered_outlined_(const TensorShape tensor_shape)
+{
+    return Checker(tensor_shape);
+}
+
+// For tables that list DEFAULT_TENSOR_SHAPE (math, unpack): accept it inline, so a call site with a compile-time
+// default shape compiles to nothing and the common 32x32 path skips the call.
+template <bool (*Checker)(const TensorShape&)>
+inline bool is_tensor_shape_covered_default_inline_(const TensorShape& tensor_shape)
+{
+    return tensor_shape_eq(tensor_shape, DEFAULT_TENSOR_SHAPE) || is_tensor_shape_covered_outlined_<Checker>(tensor_shape);
+}
+
 } // namespace ckernel::coverage
 
 #ifdef DEBUG_PRINT_ENABLED
@@ -83,18 +99,25 @@ __attribute__((noinline, cold)) inline void assert_tensor_shape_coverage_unobser
 #define LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn_name, ts) ((void)0)
 #endif
 
-#define LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(checker, fn_name, ts)         \
+#define LLK_VALIDATE_TENSOR_SHAPE_WITH_PREDICATE_(covered, fn_name, ts)      \
     do                                                                       \
     {                                                                        \
-        if (!checker(ts))                                                    \
+        if (!(covered))                                                      \
         {                                                                    \
             LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn_name, ts);                    \
             ::ckernel::coverage::assert_tensor_shape_coverage_unobserved_(); \
         }                                                                    \
     } while (0)
 
-#define LLK_VALIDATE_TENSOR_SHAPE_UNPACK(fn_name, ts) LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_unpack_tensor_shape_covered, fn_name, ts)
-#define LLK_VALIDATE_TENSOR_SHAPE_MATH(fn_name, ts)   LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_math_tensor_shape_covered, fn_name, ts)
+#define LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(checker, fn_name, ts) \
+    LLK_VALIDATE_TENSOR_SHAPE_WITH_PREDICATE_(::ckernel::coverage::is_tensor_shape_covered_outlined_<checker>(ts), fn_name, ts)
+#define LLK_VALIDATE_TENSOR_SHAPE_WITH_DEFAULT_CHECKER_(checker, fn_name, ts) \
+    LLK_VALIDATE_TENSOR_SHAPE_WITH_PREDICATE_(::ckernel::coverage::is_tensor_shape_covered_default_inline_<checker>(ts), fn_name, ts)
+
+#define LLK_VALIDATE_TENSOR_SHAPE_UNPACK(fn_name, ts) \
+    LLK_VALIDATE_TENSOR_SHAPE_WITH_DEFAULT_CHECKER_(::ckernel::coverage::is_unpack_tensor_shape_covered, fn_name, ts)
+#define LLK_VALIDATE_TENSOR_SHAPE_MATH(fn_name, ts) \
+    LLK_VALIDATE_TENSOR_SHAPE_WITH_DEFAULT_CHECKER_(::ckernel::coverage::is_math_tensor_shape_covered, fn_name, ts)
 #define LLK_VALIDATE_TENSOR_SHAPE_PACK(fn_name, ts)   LLK_VALIDATE_TENSOR_SHAPE_WITH_CHECKER(::ckernel::coverage::is_pack_tensor_shape_covered, fn_name, ts)
 
 #else

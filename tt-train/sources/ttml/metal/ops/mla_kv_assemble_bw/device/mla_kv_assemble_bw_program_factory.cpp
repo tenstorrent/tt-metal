@@ -70,7 +70,7 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
     auto& dk_pe = output[1];
 
     auto* device = dK.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     // ── Tile geometry ──
     const auto dK_shape = dK.padded_shape();

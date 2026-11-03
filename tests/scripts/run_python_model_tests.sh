@@ -42,7 +42,7 @@ run_python_model_tests_wormhole_b0() {
 
     # Run all Llama3 tests for 8B - dummy weights with tight PCC check
     tt_cache=$TT_CACHE_HOME/$llama8b
-    HF_MODEL=$llama8b TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+    HF_MODEL=$llama8b TT_CACHE_PATH=$tt_cache pytest models/ttt_compat/tests/test_model.py -k "quick" ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama8b completed"
 
 }
@@ -59,7 +59,7 @@ run_python_model_tests_blackhole() {
     # Run all Llama3 tests for 8B - dummy weights with tight PCC check
     for hf_model in "$llama8b"; do
         tt_cache=$TT_CACHE_HOME/$hf_model
-        HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k "quick" --timeout 360 ; fail+=$?
+        HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/ttt_compat/tests/test_model.py -k "quick" --timeout 360 ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $hf_model completed"
     done
 

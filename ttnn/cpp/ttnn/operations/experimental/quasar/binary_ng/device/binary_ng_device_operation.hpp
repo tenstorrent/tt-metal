@@ -11,7 +11,6 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tuple>
-#include <tt-metalium/program_descriptors.hpp>
 namespace ttnn::operations::experimental::quasar::binary_ng {
 
 enum class SubtileBroadcastType {
@@ -116,19 +115,9 @@ struct BinaryNgDeviceOperation {
         std::optional<Tensor> output_tensor;
     };
 
-    struct ProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& c);
-    };
-
-    // Metal 2.0 / DataflowBuffer factory. Emits a ProgramSpec + ProgramRunArgs (instead of a
-    // ProgramDescriptor) for the slice that matches_metal_v2_slice() admits: ADD, no broadcast,
-    // TILE 32x32, fully height/block-sharded L1, bf8/bf16, optional fused RELU, in-place (the
-    // ResNet50 residual config). The DFB path is arch-portable: CB-backed on Wormhole/Blackhole,
-    // overlay-backed on Quasar. `select_program_factory` routes a matching op here; every other case
-    // falls through to `ProgramFactory`. See binary_ng_metal_v2_factory.cpp.
+    // Metal 2.0 / DataflowBuffer factory. Emits a ProgramSpec + ProgramRunArgs for the slice that
+    // matches_metal_v2_slice() admits. The DFB path is arch-portable: CB-backed on Wormhole/Blackhole,
+    // overlay-backed on Quasar. See binary_ng_metal_v2_factory.cpp.
     struct ProgramFactoryMetalV2 {
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
@@ -148,11 +137,12 @@ struct BinaryNgDeviceOperation {
             tensor_return_value_t& c);
     };
 
-    // APPEND-ONLY: the index is persisted per cache entry, so reordering mis-resolves existing entries.
-    using program_factory_t = std::variant<ProgramFactory, ProgramFactoryMetalV2, ProgramFactoryQuasarNative>;
+    // The program cache keeps each entry's index into this variant in memory only, so the order may change
+    // between builds.
+    using program_factory_t = std::variant<ProgramFactoryMetalV2, ProgramFactoryQuasarNative>;
 
-    // Returns ProgramFactoryQuasarNative{} when the op matches the Quasar-native slice,
-    // ProgramFactoryMetalV2{} when it matches the Metal 2.0 slice, and ProgramFactory{} otherwise.
+    // Returns ProgramFactoryQuasarNative{} when the op matches the Quasar-native slice and
+    // ProgramFactoryMetalV2{} when it matches the Metal 2.0 slice. It throws for any other op.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // True iff (attributes, tensor_args) match the Metal 2.0 factory's supported slice. Shared by
@@ -160,7 +150,7 @@ struct BinaryNgDeviceOperation {
     static bool matches_metal_v2_slice(const operation_attributes_t&, const tensor_args_t&);
 
     // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards, which
-    // that slice sends to the descriptor. Off when TTNN_QSR_NATIVE=0. Checked first; its leading tests are the
+    // that slice does not. Off when TTNN_QSR_NATIVE=0. Checked first; its leading tests are the
     // arch and the cached env bool, so off Quasar it costs one arch read and a branch.
     static bool matches_quasar_native_slice(const operation_attributes_t&, const tensor_args_t&);
 

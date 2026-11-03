@@ -7,7 +7,6 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::operations::experimental::moe_gpt {
 

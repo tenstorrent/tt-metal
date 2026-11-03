@@ -131,6 +131,10 @@ void kernel_main() {
 
     Scratchpad<volatile uint16_t> input_page(scratch::input);
     Scratchpad<volatile float> fp32_temp(scratch::fp32_temp);
+    // The fp32 accumulator is CPU-only scratch, but on Quasar DM its stores go through the cache. Keep it under a
+    // scoped_lock so its dirty lines are written back before the kernel ends; otherwise a later program's flush or
+    // an eviction writes them over whatever buffer it put at this address. No-op on WH/BH.
+    const auto fp32_temp_lock = fp32_temp.scoped_lock(0, fp32_temp.size());
     DataflowBuffer output_dfb(dfb::output);
     Scratchpad<volatile index_std_type> index_page(scratch::index);
     Scratchpad<volatile uint16_t> source_page(scratch::source);

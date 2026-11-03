@@ -50,7 +50,7 @@ void async_read_row_to_tile(
         // barriered, so relocate the bytes with a scalar copy instead (see local_l1_copy).
         local_l1_copy(L1_dst_addr + face_bytes, L1_dst_addr + half_row_bytes, row_bytes);
 #else
-        UnicastEndpoint self;
+        const UnicastEndpoint self;
         noc.async_read(
             self,
             CoreLocalMem<uint32_t>(L1_dst_addr + face_bytes),
@@ -84,7 +84,7 @@ void kernel_main() {
     const auto src_a = TensorAccessor(tensor::src);
     const auto src_stats = TensorAccessor(tensor::stats_src);
 
-    Noc noc;
+    const Noc noc;
     // Input tiles and the per-device statistics, both consumed by the compute kernel.
     DataflowBuffer dfb_inp_buf(dfb::inp);
     DataflowBuffer dfb_stats_buf(dfb::stats);
@@ -155,7 +155,7 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
                 for (uint32_t j = 0; j < dfb_length; j++) {
                     dfb_gamma_buf.reserve_back(1);
-                    uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
+                    const uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
                     async_read_row_to_tile<gamma_is_row_major>(
                         noc, addrg, gamma_tile_count, l1_write_addr, gamma_datum_bytes);
                     gamma_tile_count++;
@@ -189,7 +189,7 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
             for (uint32_t i = 0; i < dfb_leftovers; i++) {
                 dfb_gamma_buf.reserve_back(1);
-                uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
+                const uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
                 async_read_row_to_tile<gamma_is_row_major>(
                     noc, addrg, gamma_tile_count, l1_write_addr, gamma_datum_bytes);
                 gamma_tile_count++;

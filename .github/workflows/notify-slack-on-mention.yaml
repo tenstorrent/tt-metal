@@ -21,12 +21,67 @@ jobs:
     steps:
       - name: Check for @ mentions
         id: check-mention
+        env:
+          # Org-read PAT, as in on-community-issue.yaml: it sees private org members too. github.token only
+          # sees public ones, so it is kept as a fallback for events that get no secrets.
+          ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          BODY=$(jq -r '(.comment.body // .issue.body // .pull_request.body // "")' "$GITHUB_EVENT_PATH")
+          # Org members can reach each other on Slack directly, so only mentions written by someone outside
+          # the org, or by a bot, are relayed. The person classified is the sender, who wrote the comment or
+          # made the edit.
+          SENDER=$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")
+          SENDER_TYPE=$(jq -r '.sender.type // ""' "$GITHUB_EVENT_PATH")
+          if [ "$SENDER_TYPE" != "Bot" ]; then
+            # author_association describes the comment, issue or PR author. It settles a public member
+            # without an API call, but only when the sender is that author.
+            AUTHOR=$(jq -r '(.comment.user.login // .issue.user.login // .pull_request.user.login // "")' "$GITHUB_EVENT_PATH")
+            ASSOCIATION=""
+            if [ "$SENDER" = "$AUTHOR" ]; then
+              ASSOCIATION=$(jq -r '(.comment.author_association // .issue.author_association // .pull_request.author_association // "")' "$GITHUB_EVENT_PATH")
+            fi
+            if [ "$ASSOCIATION" != "MEMBER" ] && [ "$ASSOCIATION" != "OWNER" ]; then
+              # A private member reads as CONTRIBUTOR above, and an editor who is not the author has no
+              # association at all, so ask the org. 204 means member.
+              MEMBER_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+                -H "Authorization: Bearer ${ORG_READ_GITHUB_TOKEN:-$GH_TOKEN}" \
+                "https://api.github.com/orgs/${{ github.repository_owner }}/members/$SENDER" || echo "000")
+              [ "$MEMBER_STATUS" = "204" ] && ASSOCIATION="MEMBER"
+            fi
+            if [ "$ASSOCIATION" = "MEMBER" ] || [ "$ASSOCIATION" = "OWNER" ]; then
+              echo "Skipping: $SENDER is an org $ASSOCIATION"
+              echo "has_mention=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
 
-          if echo "$BODY" | grep -qP '(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*'; then
+          MENTION_RE='(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*'
+          # GitHub does not notify mentions inside code, so fenced blocks and inline code are dropped first.
+          # A fence that is never closed runs to the end of the body, as Markdown renders it.
+          # Otherwise a pasted `@pytest.mark.parametrize` would ping a GitHub user called pytest.
+          extract_mentions() {
+            perl -0pe 's/^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1[^\n]*$//gms; s/^[ \t]*(`{3,}|~{3,}).*\z//ms; s/(`+).+?\1//gs' |
+              { grep -oP "$MENTION_RE" || true; } | sed 's/^@//' | sort -u
+          }
+
+          BODY=$(jq -r '(.comment.body // .issue.body // .pull_request.body // "")' "$GITHUB_EVENT_PATH")
+          MENTIONED=$(echo "$BODY" | extract_mentions)
+
+          # An edited issue or PR only pings the mentions the edit added to its description. An edit that
+          # leaves the description alone (title, base branch) carries no changes.body and pings nobody.
+          ACTION=$(jq -r '.action // ""' "$GITHUB_EVENT_PATH")
+          if [ "$ACTION" = "edited" ]; then
+            if jq -e '.changes.body' "$GITHUB_EVENT_PATH" > /dev/null; then
+              PREVIOUS=$(jq -r '.changes.body.from // ""' "$GITHUB_EVENT_PATH" | extract_mentions)
+              MENTIONED=$(comm -23 <(echo "$MENTIONED") <(echo "$PREVIOUS"))
+            else
+              MENTIONED=""
+            fi
+          fi
+
+          MENTIONED=$(echo "$MENTIONED" | sed '/^$/d' | paste -sd ',')
+          if [ -n "$MENTIONED" ]; then
             echo "has_mention=true" >> "$GITHUB_OUTPUT"
-            MENTIONED=$(echo "$BODY" | grep -oP '(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*' | sed 's/^@//' | sort -u | paste -sd ',')
             echo "mentioned=$MENTIONED" >> "$GITHUB_OUTPUT"
           else
             echo "has_mention=false" >> "$GITHUB_OUTPUT"
@@ -148,7 +203,10 @@ jobs:
             fi
           }
 
-          SLACK_MENTIONS=""
+
+          # Resolve every tagged login to a Slack ID, or keep the GitHub login when there is no match.
+          MENTION_TOKENS=()
+          SLACK_IDS=()
           IFS=',' read -ra MENTIONED_ARRAY <<< "$MENTIONED_CSV"
           for gh_user in "${MENTIONED_ARRAY[@]}"; do
             gh_user=$(echo "$gh_user" | xargs)
@@ -161,114 +219,112 @@ jobs:
 
             SLACK_ID=$(find_slack_user_id "$USER_NAME" "$gh_user" "$SLACK_USERS_FILE")
 
+            # Only people with a Slack account are pinged. A login with no match (a bot such as @copilot,
+            # an outside user, a stray word after @) would only post a line that notifies nobody.
             if [ -n "$SLACK_ID" ]; then
-              SLACK_MENTIONS="$SLACK_MENTIONS <@$SLACK_ID>"
+              MENTION_TOKENS+=("<@$SLACK_ID>")
+              SLACK_IDS+=("$SLACK_ID")
               echo "Resolved @$gh_user -> Slack <@$SLACK_ID>"
             else
-              SLACK_MENTIONS="$SLACK_MENTIONS @$gh_user"
-              echo "Could not resolve @$gh_user to Slack, using GitHub username fallback"
+              echo "Skipping @$gh_user: no matching Slack user"
             fi
           done
-          SLACK_MENTIONS=$(echo "$SLACK_MENTIONS" | xargs)
 
-          # Resolve author: fetch full name and Slack ID
-          SENDER_DATA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/users/$SENDER" 2>/dev/null || echo "{}")
-          SENDER_FULL_NAME=$(echo "$SENDER_DATA" | jq -r '.name // empty' 2>/dev/null)
-          [ -z "$SENDER_FULL_NAME" ] || [ "$SENDER_FULL_NAME" = "null" ] && SENDER_FULL_NAME="$SENDER"
+          # A Slack mention of someone outside the channel does not notify them, so add the tagged people
+          # who are not in it yet. Failures only warn: the ping still reaches everyone already there.
+          if [ ${#SLACK_IDS[@]} -gt 0 ]; then
+            CHANNEL_MEMBERS=$(mktemp)
+            CURSOR=""
+            LISTED=true
+            while true; do
+              MEMBERS_URL="https://slack.com/api/conversations.members?channel=${SLACK_CHANNEL_ID}&limit=1000"
+              [ -n "$CURSOR" ] && MEMBERS_URL="${MEMBERS_URL}&cursor=${CURSOR}"
+              MEMBERS_RESPONSE=$(curl -s --max-time 30 -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" "$MEMBERS_URL" \
+                || echo '{"ok":false,"error":"request failed"}')
+              if [ "$(echo "$MEMBERS_RESPONSE" | jq -r '.ok')" != "true" ]; then
+                echo "::warning::Slack conversations.members failed: $(echo "$MEMBERS_RESPONSE" | jq -r '.error // "unknown error"')"
+                LISTED=false
+                break
+              fi
+              echo "$MEMBERS_RESPONSE" | jq -r '.members[]' >> "$CHANNEL_MEMBERS"
+              CURSOR=$(echo "$MEMBERS_RESPONSE" | jq -r '.response_metadata.next_cursor // ""')
+              [ -z "$CURSOR" ] && break
+            done
 
-          AUTHOR_DISPLAY="$SENDER_FULL_NAME [$SENDER]"
+            if [ "$LISTED" = "true" ]; then
+              MISSING=$(printf '%s\n' "${SLACK_IDS[@]}" | sort -u | grep -vxF -f "$CHANNEL_MEMBERS" | paste -sd ',' || true)
+              if [ -n "$MISSING" ]; then
+                # force invites the valid IDs even when one of them cannot be (a guest, a deactivated account).
+                INVITE_RESPONSE=$(curl -s --max-time 30 -X POST \
+                  -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+                  -H "Content-type: application/json" \
+                  -d "$(jq -n --arg channel "$SLACK_CHANNEL_ID" --arg users "$MISSING" '{channel: $channel, users: $users, force: true}')" \
+                  "https://slack.com/api/conversations.invite" || echo '{"ok":false,"error":"request failed"}')
+                if [ "$(echo "$INVITE_RESPONSE" | jq -r '.ok')" = "true" ]; then
+                  echo "Invited $MISSING to the channel"
+                else
+                  echo "::warning::Slack conversations.invite failed for $MISSING: $(echo "$INVITE_RESPONSE" | jq -r '.error // "unknown error"')"
+                fi
+              fi
+            fi
+            rm -f "$CHANNEL_MEMBERS"
+          fi
 
-          NL=$'\n'
-
-          # Safely read event data via jq from GITHUB_EVENT_PATH
           EVENT_JSON="$GITHUB_EVENT_PATH"
-
-          if [ "$EVENT_NAME" = "issue_comment" ]; then
-            BODY_TEXT=$(jq -r '.comment.body // ""' "$EVENT_JSON")
-            ISSUE_TITLE=$(jq -r '.issue.title // ""' "$EVENT_JSON")
-            ISSUE_NUMBER=$(jq -r '.issue.number // ""' "$EVENT_JSON")
-            COMMENT_URL=$(jq -r '.comment.html_url // ""' "$EVENT_JSON")
-            HAS_PR=$(jq -r '.issue.pull_request // empty' "$EVENT_JSON")
-
-            if [ -n "$HAS_PR" ]; then
-              CONTEXT_TYPE="PR"
-            else
-              CONTEXT_TYPE="Issue"
-            fi
-
-            HEADER=":speech_balloon: *New mention on ${CONTEXT_TYPE}* <${COMMENT_URL}|#${ISSUE_NUMBER} - ${ISSUE_TITLE}>"
-
-          elif [ "$EVENT_NAME" = "issues" ]; then
-            ACTION=$(jq -r '.action // ""' "$EVENT_JSON")
-            BODY_TEXT=$(jq -r '.issue.body // ""' "$EVENT_JSON")
-            ISSUE_TITLE=$(jq -r '.issue.title // ""' "$EVENT_JSON")
-            ISSUE_NUMBER=$(jq -r '.issue.number // ""' "$EVENT_JSON")
-            ISSUE_URL=$(jq -r '.issue.html_url // ""' "$EVENT_JSON")
-
-            if [ "$ACTION" = "opened" ]; then
-              HEADER=":memo: *New issue with mention* <${ISSUE_URL}|#${ISSUE_NUMBER} - ${ISSUE_TITLE}>"
-            else
-              HEADER=":pencil2: *Issue edited with mention* <${ISSUE_URL}|#${ISSUE_NUMBER} - ${ISSUE_TITLE}>"
-            fi
-
-          elif [ "$EVENT_NAME" = "pull_request_target" ]; then
-            ACTION=$(jq -r '.action // ""' "$EVENT_JSON")
-            BODY_TEXT=$(jq -r '.pull_request.body // ""' "$EVENT_JSON")
-            PR_TITLE=$(jq -r '.pull_request.title // ""' "$EVENT_JSON")
-            PR_NUMBER=$(jq -r '.pull_request.number // ""' "$EVENT_JSON")
-            PR_URL=$(jq -r '.pull_request.html_url // ""' "$EVENT_JSON")
-
-            if [ "$ACTION" = "opened" ]; then
-              HEADER=":twisted_rightwards_arrows: *New PR with mention* <${PR_URL}|#${PR_NUMBER} - ${PR_TITLE}>"
-            else
-              HEADER=":pencil2: *PR edited with mention* <${PR_URL}|#${PR_NUMBER} - ${PR_TITLE}>"
-            fi
-
-          elif [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
-            BODY_TEXT=$(jq -r '.comment.body // ""' "$EVENT_JSON")
-            PR_TITLE=$(jq -r '.pull_request.title // ""' "$EVENT_JSON")
-            PR_NUMBER=$(jq -r '.pull_request.number // ""' "$EVENT_JSON")
-            COMMENT_URL=$(jq -r '.comment.html_url // ""' "$EVENT_JSON")
-
-            HEADER=":speech_balloon: *New review comment with mention* on PR <${COMMENT_URL}|#${PR_NUMBER} - ${PR_TITLE}>"
-          fi
-
-          # Escape Slack special sequences in user-supplied body to prevent injection
-          BODY_TEXT=$(echo "$BODY_TEXT" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
-          BODY_TEXT=$(echo "$BODY_TEXT" | sed 's/<!here>/&lt;!here&gt;/g; s/<!channel>/&lt;!channel&gt;/g; s/<!everyone>/&lt;!everyone&gt;/g')
-
-          # Trim body text if too long
-          if [ ${#BODY_TEXT} -gt 2000 ]; then
-            BODY_TEXT="${BODY_TEXT:0:1990}... _(truncated)_"
-          fi
-
-          # Build the full message with real newlines
-          TEXT="${HEADER}${NL}*Author:* ${AUTHOR_DISPLAY}${NL}*Tagged:* ${SLACK_MENTIONS}${NL}${NL}${BODY_TEXT}"
-
-          # Write payload to a temp file to avoid ARG_MAX issues with curl -d
-          PAYLOAD_FILE=$(mktemp)
-          jq -n \
-            --arg channel "$SLACK_CHANNEL_ID" \
-            --arg text "$TEXT" \
-            '{
-              channel: $channel,
-              text: $text,
-              unfurl_links: false,
-              unfurl_media: false
-            }' > "$PAYLOAD_FILE"
-
-          SLACK_RESPONSE=$(curl -s --max-time 30 -X POST \
-            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H "Content-type: application/json" \
-            -d @"$PAYLOAD_FILE" \
-            "https://slack.com/api/chat.postMessage")
-          rm -f "$PAYLOAD_FILE"
-
-          if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
-            echo "Slack notification sent successfully"
+          if [ "$EVENT_NAME" = "issue_comment" ] || [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
+            LINK=$(jq -r '.comment.html_url // ""' "$EVENT_JSON")
           else
-            ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "unknown error"')
-            echo "::error::Failed to send Slack notification: $ERROR"
-            exit 1
+            LINK=$(jq -r '(.issue.html_url // .pull_request.html_url // "")' "$EVENT_JSON")
           fi
+          NUMBER=$(jq -r '(.issue.number // .pull_request.number // "")' "$EVENT_JSON")
+          TITLE=$(jq -r '(.issue.title // .pull_request.title // "")' "$EVENT_JSON")
+          if [ ${#TITLE} -gt 60 ]; then
+            TITLE="${TITLE:0:57}..."
+          fi
+          # Escape Slack control characters in the user-supplied title.
+          TITLE=$(echo "$TITLE" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+
+          # One short line per tagged person, so each person can find their own pings by name.
+          FAILED=0
+          for MENTION in "${MENTION_TOKENS[@]}"; do
+            TEXT=":speech_balloon: ${MENTION} — mentioned by ${SENDER} on <${LINK}|#${NUMBER} ${TITLE}>"
+
+            # Write payload to a temp file to avoid ARG_MAX issues with curl -d
+            PAYLOAD_FILE=$(mktemp)
+            jq -n \
+              --arg channel "$SLACK_CHANNEL_ID" \
+              --arg text "$TEXT" \
+              '{
+                channel: $channel,
+                text: $text,
+                unfurl_links: false,
+                unfurl_media: false
+              }' > "$PAYLOAD_FILE"
+
+            # Slack allows about one message per second per channel. Pace the posts and retry a rate-limited
+            # one after its Retry-After, up to 3 attempts, before moving to the next person.
+            for ATTEMPT in 1 2 3; do
+              HEADERS_FILE=$(mktemp)
+              SLACK_RESPONSE=$(curl -s --max-time 30 -X POST -D "$HEADERS_FILE" \
+                -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+                -H "Content-type: application/json" \
+                -d @"$PAYLOAD_FILE" \
+                "https://slack.com/api/chat.postMessage" || echo '{"ok":false,"error":"request failed"}')
+              RETRY_AFTER=$(grep -i '^retry-after:' "$HEADERS_FILE" | tr -dc '0-9' || true)
+              rm -f "$HEADERS_FILE"
+              [ "$(echo "$SLACK_RESPONSE" | jq -r '.error // ""')" != "ratelimited" ] && break
+              echo "Rate limited, retrying ${MENTION} in ${RETRY_AFTER:-1}s"
+              sleep "${RETRY_AFTER:-1}"
+            done
+            rm -f "$PAYLOAD_FILE"
+
+            if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
+              echo "Slack notification sent for ${MENTION}"
+            else
+              ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "unknown error"')
+              echo "::error::Failed to send Slack notification for ${MENTION}: $ERROR"
+              FAILED=1
+            fi
+            sleep 1
+          done
+          exit $FAILED

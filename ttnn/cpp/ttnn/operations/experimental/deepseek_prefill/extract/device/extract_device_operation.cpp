@@ -23,7 +23,7 @@ bool is_dram_interleaved(const ttnn::Tensor& tensor) {
 
 void validate_index_tensor(const ttnn::Tensor& tensor, const std::string& name) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
-    TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
+    TT_FATAL(tensor.is_allocated(), "{} must have a buffer", name);
     TT_FATAL(tensor.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32, got {}", name, tensor.dtype());
     TT_FATAL(
         tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout, got {}", name, tensor.layout());
@@ -68,7 +68,7 @@ void ExtractDeviceOperation::validate_on_program_cache_miss(
     // The CB and output tensor both derive their format from global_tensor.dtype(). Production
     // uses BFLOAT8_B; BFLOAT16 is needed for the PCC-comparison test path (bf16 everywhere).
     TT_FATAL(global_tensor.storage_type() == ttnn::StorageType::DEVICE, "global_tensor must be on device");
-    TT_FATAL(global_tensor.buffer() != nullptr, "global_tensor must have a buffer");
+    TT_FATAL(global_tensor.is_allocated(), "global_tensor must have a buffer");
     TT_FATAL(
         global_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
             global_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,

@@ -47,7 +47,7 @@ void measure_latency(const std::string& kernel_name) {
         {"WORKER_NOC_Y", std::to_string(first_worker_physical_core.y)},
     };
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/noc/kernels/" + kernel_name + ".cpp",

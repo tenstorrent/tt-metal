@@ -26,16 +26,20 @@ import math
 
 import ttnn
 
+_PREFIX_REUSE_HALOS = 2
+
 
 def _gather_seq_len(sliding_window_size, k_chunk_size, full_seq):
-    """Ring gather-buffer seq length. Pavle's GPT-OSS sliding op requires a COMPACT halo buffer (not the
-    full sequence) — halo = ceil((window-1)/k_chunk)*k_chunk, floored at one tile (per his test). Full
-    layers (sliding_window_size=None) gather the whole sequence. Buffers are keyed by this length so a
-    sliding layer (compact) and a full layer (full) get distinct CCL-manager buffers."""
+    """Reserve two compact predecessor halos for sliding attention.
+
+    Prefix reuse can rotate Q at most one ring group before the halo, so the
+    current and predecessor halos must both fit. Full attention instead gathers
+    the entire sequence. The CCL buffer key includes this size.
+    """
     if sliding_window_size is None:
         return full_seq
     halo = math.ceil((sliding_window_size - 1) / k_chunk_size) * k_chunk_size
-    return max(halo, ttnn.TILE_SIZE)
+    return min(_PREFIX_REUSE_HALOS * max(halo, ttnn.TILE_SIZE), full_seq)
 
 
 def dense_sp_attention(
@@ -79,7 +83,7 @@ def dense_sp_attention(
         "KV_CACHE_DTYPE=bf16 is not supported for chunked prefill (the sliding RingJointSDPA path "
         "and its gather buffers are bf8)."
     )
-    # Ring gather-buffer seq: full cache for full-attn layers; compact halo for sliding layers.
+    # Ring gather-buffer seq: full cache for full-attn layers; two bounded halos for sliding layers.
     _bufseq = _gather_seq_len(sliding_window_size, program_config.k_chunk_size, cache_global)
     # Full-attn layers pass sliding_window_size=None -> non-sliding full-causal ring path (sinks now
     # allowed after the device-op assert relax). Sliding layers pass 128. Buffer handles None (full).
@@ -91,8 +95,8 @@ def dense_sp_attention(
         None,
         None,
         # Persistent ring-gather scratch (once per key/size, reused across layers/chunks). Full-attn
-        # layers gather the entire per-device shard (cache_global); sliding layers use a compact halo
-        # (_bufseq). logical_n / kv_actual_isl drive causal masking. dtype MUST match the bf8 KV cache.
+        # layers gather the entire per-device shard (cache_global); sliding layers use two bounded
+        # halos (_bufseq). logical_n / kv_actual_isl drive causal masking. dtype MUST match bf8 KV.
         persistent_output_buffer_k=ccl_manager.get_ring_gather_buffer(
             f"dense_k_{_bufseq}", n_kv, _bufseq, head_dim, ttnn.bfloat8_b
         ),

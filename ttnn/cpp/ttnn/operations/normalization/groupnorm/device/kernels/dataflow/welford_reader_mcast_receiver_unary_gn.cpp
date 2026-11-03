@@ -43,12 +43,12 @@ void kernel_main() {
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
 
-    const std::uint32_t src_addr = get_arg_val<std::uint32_t>(0);
-    const std::uint32_t start_id = get_arg_val<std::uint32_t>(2);
-    const std::uint32_t num_channels_tiles = get_arg_val<std::uint32_t>(4);
+    const auto src_addr = get_arg_val<std::uint32_t>(0);
+    const auto start_id = get_arg_val<std::uint32_t>(2);
+    const auto num_channels_tiles = get_arg_val<std::uint32_t>(4);
 
-    const std::uint32_t mcast_sender_noc_x = get_arg_val<std::uint32_t>(5);
-    const std::uint32_t mcast_sender_noc_y = get_arg_val<std::uint32_t>(6);
+    const auto mcast_sender_noc_x = get_arg_val<std::uint32_t>(5);
+    const auto mcast_sender_noc_y = get_arg_val<std::uint32_t>(6);
 
     constexpr std::uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr std::uint32_t dfb_ex_global_id = tt::CBIndex::c_15;

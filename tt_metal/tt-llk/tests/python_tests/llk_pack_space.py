@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The pack LLK conversion matrix of Blackhole (cpack_common.h is_packer_to_L1_early_conversion_supported and is_packer_to_L1_late_conversion_supported, asserted
-by configure_pack) as the pack_src and output pairs the LLK accepts, and the format pairs the pack sweeps of perf_pack_llkx and test_pack_llkx run."""
+by configure_pack) as the pack_src and output pairs the LLK accepts, and the format pairs the pack sweeps of perf_pack_llkx and test_pack_llkx run.
+"""
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import get_valid_dest_accumulation_modes
@@ -21,8 +22,31 @@ _EARLY = {
     F.Int32: {F.Float32, F.Tf32, F.Float16_b, F.Int32, F.Int8, F.UInt8},
     F.UInt16: {F.UInt16},
 }
-_FP32_LATE = {F.Float32, F.Float16_b, F.Float16, F.Lf8, F.Fp8_e4m3, F.Bfp8, F.Bfp4, F.Bfp2, F.Bfp8_b, F.Bfp4_b, F.Bfp2_b}
-_COMBINED_SRC = {F.Tf32, F.Float16_b, F.Bfp8_b, F.Bfp4_b, F.Bfp2_b, F.Float16, F.Bfp8, F.Bfp4, F.Bfp2, F.Lf8}
+_FP32_LATE = {
+    F.Float32,
+    F.Float16_b,
+    F.Float16,
+    F.Lf8,
+    F.Fp8_e4m3,
+    F.Bfp8,
+    F.Bfp4,
+    F.Bfp2,
+    F.Bfp8_b,
+    F.Bfp4_b,
+    F.Bfp2_b,
+}
+_COMBINED_SRC = {
+    F.Tf32,
+    F.Float16_b,
+    F.Bfp8_b,
+    F.Bfp4_b,
+    F.Bfp2_b,
+    F.Float16,
+    F.Bfp8,
+    F.Bfp4,
+    F.Bfp2,
+    F.Lf8,
+}
 
 
 def llk_accepts(pack_src: DataFormat, out: DataFormat) -> bool:
@@ -48,30 +72,78 @@ def pack_src_of(formats, dest_acc) -> DataFormat:
     """The packer input format the test configures (test_pack: Float32 for a 32-bit DEST of a float input on Blackhole)."""
     fi, fo = formats.input_format, formats.output_format
     d = infer_data_formats(
-        input_format=fi, output_format=fo, is_fp32_dest_acc_en=dest_acc, unpacking_to_dest=fi.is_32_bit() and dest_acc == DestAccumulation.Yes
+        input_format=fi,
+        output_format=fo,
+        is_fp32_dest_acc_en=dest_acc,
+        unpacking_to_dest=fi.is_32_bit() and dest_acc == DestAccumulation.Yes,
     )
     src = d.pack_src
-    if dest_acc == DestAccumulation.Yes and get_chip_architecture() == ChipArchitecture.BLACKHOLE and not fi.is_integer():
+    if (
+        dest_acc == DestAccumulation.Yes
+        and get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        and not fi.is_integer()
+    ):
         src = F.Float32
     return src
 
 
 # Bfp8 (A exponent) is an output only: the stimuli generator has no Bfp8 input
 # Tf32 is not an input either: the unpacker configuration rejects srcA Tf32 (helpers/test_config.py)
-LLKX_INPUTS = [F.Float32, F.Float16_b, F.Float16, F.Int32, F.UInt16, F.Int8, F.UInt8, F.UInt32, F.Bfp8_b, F.Bfp8, F.Bfp4, F.Bfp2, F.Lf8]
-LLKX_OUTPUTS = [F.Float32, F.Tf32, F.Float16_b, F.Float16, F.Bfp8_b, F.Bfp8, F.Bfp4, F.Bfp4_b, F.Bfp2, F.Bfp2_b, F.Lf8, F.Int32, F.Int8, F.UInt8, F.UInt16, F.UInt32, F.Fp8_e4m3]
+LLKX_INPUTS = [
+    F.Float32,
+    F.Float16_b,
+    F.Float16,
+    F.Int32,
+    F.UInt16,
+    F.Int8,
+    F.UInt8,
+    F.UInt32,
+    F.Bfp8_b,
+    F.Bfp8,
+    F.Bfp4,
+    F.Bfp2,
+    F.Lf8,
+]
+LLKX_OUTPUTS = [
+    F.Float32,
+    F.Tf32,
+    F.Float16_b,
+    F.Float16,
+    F.Bfp8_b,
+    F.Bfp8,
+    F.Bfp4,
+    F.Bfp4_b,
+    F.Bfp2,
+    F.Bfp2_b,
+    F.Lf8,
+    F.Int32,
+    F.Int8,
+    F.UInt8,
+    F.UInt16,
+    F.UInt32,
+    F.Fp8_e4m3,
+]
 
 # pairs the cov2, cov3 and grid modules already run (all the pairs of the six cov3 formats, the grid pairs)
 _SIX = [F.Float16_b, F.Float16, F.Float32, F.Int32, F.Bfp8_b, F.Bfp4_b]
 COVERED = (
     {(i, o) for i in _SIX for o in _SIX}
-    | {(F.Float16_b, F.Bfp8_b), (F.Float32, F.Bfp8_b), (F.Float16_b, F.Bfp4_b), (F.Float32, F.Bfp4_b), (F.Float16_b, F.Float32), (F.Float32, F.Float16_b)}
+    | {
+        (F.Float16_b, F.Bfp8_b),
+        (F.Float32, F.Bfp8_b),
+        (F.Float16_b, F.Bfp4_b),
+        (F.Float32, F.Bfp4_b),
+        (F.Float16_b, F.Float32),
+        (F.Float32, F.Float16_b),
+    }
     | {(n, n) for n in (F.UInt16, F.UInt32, F.UInt8, F.Int8)}
 )
 
 
 def llkx_formats():
-    return [IO(i, o) for i in LLKX_INPUTS for o in LLKX_OUTPUTS if (i, o) not in COVERED]
+    return [
+        IO(i, o) for i in LLKX_INPUTS for o in LLKX_OUTPUTS if (i, o) not in COVERED
+    ]
 
 
 def dest_format_of(input_format, dest_acc) -> DataFormat:
@@ -85,11 +157,14 @@ def dest_format_of(input_format, dest_acc) -> DataFormat:
 
 def llkx_accs(formats):
     """DEST accumulation modes of the pair for which the LLK accepts the packer conversion from the format DEST holds, and the harness configures the packer for that format
-    (the format inference takes pack_src from the output for integers, which would misread a float DEST)."""
+    (the format inference takes pack_src from the output for integers, which would misread a float DEST).
+    """
     out = []
     for a in get_valid_dest_accumulation_modes(formats):
         src = pack_src_of(formats, a)
-        if llk_accepts(src, formats.output_format) and src == dest_format_of(formats.input_format, a):
+        if llk_accepts(src, formats.output_format) and src == dest_format_of(
+            formats.input_format, a
+        ):
             out.append(a)
     return out
 
@@ -103,7 +178,8 @@ def hw_undefined_reason(formats, dest_acc):
 
     The matrix (cpack_common.h) is a software assertion and is wider than the packer: the RTL simulation assertions (blackhole_tensix_core_architecture.md, Formats) take a
     5-bit exponent block float or FP8 e4m3 only from FP16A, and integer outputs only from integers. Measured on the card: the listed pairs return the same bytes on main and
-    on the pack head, and the bytes are no function of the datum, so no golden can hold them. test_pack_llkx runs them and records the mismatch as an expected failure."""
+    on the pack head, and the bytes are no function of the datum, so no golden can hold them. test_pack_llkx runs them and records the mismatch as an expected failure.
+    """
     src = pack_src_of(formats, dest_acc)
     out = formats.output_format
     if out in _A_BFP and src not in _A_SRC:
@@ -112,6 +188,10 @@ def hw_undefined_reason(formats, dest_acc):
         return "Lf8 (e5m2) output from the packer reads back as zeros and fixed patterns, not the datum"
     if out == F.Int8 and src in (F.Float16, F.Float16_b):
         return "float datum of a 16-bit DEST into Int8: the result is not a function of the datum (same bits give different bytes)"
-    if out in (F.Int8, F.UInt8) and formats.input_format in (F.Int8, F.UInt8) and out != formats.input_format:
+    if (
+        out in (F.Int8, F.UInt8)
+        and formats.input_format in (F.Int8, F.UInt8)
+        and out != formats.input_format
+    ):
         return "Int8 and UInt8 into each other in a 16-bit DEST: the low 3 magnitude bits are lost and unsigned into signed reads back 0"
     return None

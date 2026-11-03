@@ -30,6 +30,31 @@ void kernel_main() {
     const auto input = TensorAccessor(tensor::input);
     const auto output = TensorAccessor(tensor::output);
     const auto concat_prefix = TensorAccessor(tensor::concat_prefix);
+#if ROW_MAJOR_OUTPUT
+    // Row-major output: compute hands over each tile row as 32 untilized full-width rows; each row is one output page.
+    DataflowBuffer rows(dfb::rows);
+    constexpr uint32_t tile_height = 32;
+    // A tile row of output_Wt tiles holds tile_height rows.
+    const uint32_t row_bytes = rows.get_entry_size() * output_Wt / tile_height;
+    for (uint32_t batch = batch_start; batch < batch_end; ++batch) {
+        for (uint32_t head = head_start; head < head_end; ++head) {
+            for (uint32_t seq_tile = seq_t_start; seq_tile < seq_t_end; ++seq_tile) {
+                const uint32_t first_page = ((batch * n_heads + head) * Ht + seq_tile) * tile_height;
+                rows.wait_front(output_Wt);
+                uint32_t rows_l1_addr = rows.get_read_ptr();
+                for (uint32_t row = 0; row < tile_height; ++row) {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(rows_l1_addr), output, row_bytes, {}, {.page_id = first_page + row});
+                    rows_l1_addr += row_bytes;
+                }
+                // The rows' L1 can be handed back once the writes have left it.
+                noc.async_writes_flushed();
+                rows.pop_front(output_Wt);
+            }
+        }
+    }
+    noc.async_write_barrier();
+#else
     DataflowBuffer rotated(dfb::out);
     // "copy" is a writer-private passthrough-tile staging buffer (NoC-read tiles in, NoC-write them out):
     // a Scratchpad, not a self-loop DFB. Its former FIFO reserve/push/wait/pop each spanned the whole
@@ -105,4 +130,5 @@ void kernel_main() {
             }
         }
     }
+#endif
 }

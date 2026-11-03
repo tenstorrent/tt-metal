@@ -10,6 +10,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "row_major_pages.hpp"
 
@@ -36,8 +37,10 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
+    Noc noc;
     DataflowBuffer dfb_dst(cb_id_dst);
-    const uint32_t scratch = aligned_scratch(cb_id_scratch, dst_paging.alignment);
+    DataflowBuffer dfb_scratch(cb_id_scratch);
+    const uint32_t scratch = aligned_scratch(dfb_scratch, dst_paging.alignment);
 
     const uint32_t end_block = start_block + num_blocks;
     for (uint32_t block = start_block; block < end_block; ++block) {
@@ -50,7 +53,7 @@ void kernel_main() {
             const uint32_t last = (first + chunk_elements < row_elements) ? first + chunk_elements : row_elements;
 
             dfb_dst.wait_front(onepage);
-            const uint32_t cb = get_read_ptr(cb_id_dst);
+            const uint32_t cb = dfb_dst.get_read_ptr();
             for (uint32_t r = 0; r < actual_rows; ++r) {
                 const uint32_t cb_base = r * (last - first);
                 for_each_row_piece(
@@ -60,12 +63,12 @@ void kernel_main() {
                     last,
                     cb_base,
                     [&](uint32_t page, uint32_t dst_offset, uint32_t src, uint32_t bytes) {
-                        write_piece(dst, dst_paging, page, dst_offset, cb + src, bytes, scratch);
+                        write_piece(noc, dst, dst_paging, page, dst_offset, cb + src, bytes, scratch);
                     });
             }
-            noc_async_writes_flushed();
+            noc.async_writes_flushed();
             dfb_dst.pop_front(onepage);
         }
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

@@ -23,6 +23,7 @@ import torch
 import ttml
 import ttnn
 from safetensors.numpy import save_file
+from ttml.common.schedulers import LambdaScheduler, linear_warmup_lambda
 from ttml.common.utils import create_optimizer, no_grad
 
 from .callback import TrainerCallback
@@ -734,6 +735,7 @@ def save_checkpoint(
     grpo_config: Optional[GRPOConfig] = None,
     optimizer: Any = None,
     model_source: Optional[str] = None,
+    scheduler: Any = None,
 ) -> None:
     ckpt_dir = os.path.join(output_dir, "checkpoints", f"grpo_step_{step}")
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -766,16 +768,12 @@ def save_checkpoint(
 
     trainer_state = {"global_step": step}
     if optimizer is not None:
-        trainer_state["learning_rate"] = optimizer.get_lr()
+        trainer_state["learning_rate"] = optimizer.get_group_lrs()
     with open(os.path.join(ckpt_dir, "trainer_state.json"), "w") as f:
         json.dump(trainer_state, f, indent=2)
 
-    scheduler_state = {
-        "base_lr": optimizer.get_lr() if optimizer else None,
-        "warmup_steps": grpo_config.warmup_steps if grpo_config else 0,
-        "last_step": step,
-    }
-    torch.save(scheduler_state, os.path.join(ckpt_dir, "scheduler.pt"))
+    if scheduler is not None:
+        torch.save(scheduler.get_state_dict(), os.path.join(ckpt_dir, "scheduler.pt"))
 
     rng_state = {
         "python": random.getstate(),
@@ -957,7 +955,7 @@ class GRPOTrainer:
         self.model = tt_model
 
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
-        base_lr = optimizer.get_lr()
+        scheduler = None
 
         # Device-parallelism state. The trainer currently only handles either
         # single-device or DDP; tensor parallelism is not supported here. We
@@ -1181,9 +1179,6 @@ class GRPOTrainer:
 
                     _deallocate_tensors([nlog_probs_new, mask_new, adv_ttml, loss])
 
-                warmup_factor = 1.0 if grpo_cfg.warmup_steps == 0 else min(1.0, (num_steps + 1) / grpo_cfg.warmup_steps)
-                optimizer.set_lr(base_lr * warmup_factor)
-
                 if fsdp_enabled:
                     ttml.sync_gradients(tt_model.parameters(), axis_names=fsdp_sync_axes)
                 elif ddp_context_enabled:
@@ -1208,6 +1203,12 @@ class GRPOTrainer:
                 # ``self._callback_times`` so a callback's cost lands in the row
                 # for the step in which it ran, not the row after.
                 self._callback_times = {}
+                # LR for the step about to run: applied when the scheduler is built, then by each step().
+                if scheduler is None:
+                    scheduler = LambdaScheduler(optimizer, linear_warmup_lambda(grpo_cfg.warmup_steps))
+                else:
+                    scheduler.step()
+                lr = scheduler.get_last_lrs()[0]  # logged like HF's lr_scheduler.get_last_lr()[0]
                 for cb in self.callbacks:
                     self._time_callback(cb, "on_before_optimizer_step", self)
                 optimizer.step()
@@ -1243,7 +1244,7 @@ class GRPOTrainer:
                     "mean_completion_len": mean_completion_len,
                     "min_completion_len": min_completion_len,
                     "max_completion_len": max_completion_len,
-                    "lr": base_lr * warmup_factor,
+                    "lr": lr,
                     "generation_time_s": generation_time_s_for_step,
                     **self._callback_times,
                     **self._reward_component_means,
@@ -1271,6 +1272,7 @@ class GRPOTrainer:
                         grpo_config=grpo_cfg,
                         optimizer=optimizer,
                         model_source=self.model_source,
+                        scheduler=scheduler,
                     )
                     for cb in self.callbacks:
                         if cb is monitor_cb:

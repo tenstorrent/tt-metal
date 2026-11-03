@@ -113,8 +113,8 @@ bool supported_by_codegen(const Tensor& input_tensor, int8_t dim, const Tensor& 
     // for anything else. Measured against the device's static L1 window, never its live occupancy,
     // which is what keeps this predicate's answer identical at the router and at validate.
     const bool on_device = input_tensor.storage_type() == StorageType::DEVICE &&
-                           input_index_tensor.storage_type() == StorageType::DEVICE &&
-                           input_tensor.buffer() != nullptr && input_index_tensor.buffer() != nullptr;
+                           input_index_tensor.storage_type() == StorageType::DEVICE && input_tensor.is_allocated() &&
+                           input_index_tensor.is_allocated();
     return !on_device || ttnn::prim::gather_min_plan_fits_l1(input_tensor, input_index_tensor);
 }
 

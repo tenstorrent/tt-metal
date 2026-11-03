@@ -27,15 +27,25 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    PACK_SRC_FROM_OUTPUT,
     DEST_SYNC,
+    PACK_SRC_FROM_OUTPUT,
     TILE_COUNT,
     TemplateParameter,
     generate_input_dim,
 )
 from helpers.utils import passed_test
 
-KINDS = {"PT": 0, "PB1": 1, "PBW": 2, "PBC": 3, "PBCW": 4, "ROWS": 5, "UNT": 6, "FU": 7, "PTC": 8}
+KINDS = {
+    "PT": 0,
+    "PB1": 1,
+    "PBW": 2,
+    "PBC": 3,
+    "PBCW": 4,
+    "ROWS": 5,
+    "UNT": 6,
+    "FU": 7,
+    "PTC": 8,
+}
 NT = 4
 ROWS_R = 50
 TILE_ELEMS = 1024
@@ -109,7 +119,10 @@ BFP_FORMATS = [B8]
 
 
 def _acc_modes(formats):
-    if formats.output_format == DataFormat.Float32 or formats.input_format == DataFormat.Float32:
+    if (
+        formats.output_format == DataFormat.Float32
+        or formats.input_format == DataFormat.Float32
+    ):
         return [DestAccumulation.Yes]
     return [DestAccumulation.No, DestAccumulation.Yes]
 
@@ -120,17 +133,33 @@ def _step_golden(kind, src, formats, step, dest_acc):
     base = step * NT * TILE_ELEMS
     if kind in ("UNT", "FU"):
         gen = get_golden_generator(UntilizeGolden)
-        g = gen(tiles, formats.output_format, [32, 32 * NT], input_format=formats.input_format)
+        g = gen(
+            tiles,
+            formats.output_format,
+            [32, 32 * NT],
+            input_format=formats.input_format,
+        )
         return [(base, g)]
     if kind == "ROWS":
         gen = get_golden_generator(PackRowsGolden)
-        g = gen(tiles, formats.output_format, [32, 32 * NT], num_rows_to_pack=ROWS_R, tile_count=NT)
+        g = gen(
+            tiles,
+            formats.output_format,
+            [32, 32 * NT],
+            num_rows_to_pack=ROWS_R,
+            tile_count=NT,
+        )
         per_tile = ROWS_R * 16
-        return [(base + t * TILE_ELEMS, g[t * per_tile : (t + 1) * per_tile]) for t in range(NT)]
+        return [
+            (base + t * TILE_ELEMS, g[t * per_tile : (t + 1) * per_tile])
+            for t in range(NT)
+        ]
     gen = get_golden_generator(PackGolden)
     g = gen(tiles, formats.output_format, input_dimensions=[32, 32 * NT])
     if formats.output_format in QUANTIZE_TO_FORMAT:
-        g = QUANTIZE_TO_FORMAT[formats.output_format](g).to(format_dict[formats.output_format])
+        g = QUANTIZE_TO_FORMAT[formats.output_format](g).to(
+            format_dict[formats.output_format]
+        )
     return [(base, g)]
 
 
@@ -168,7 +197,9 @@ def run_chain(formats, dest_acc, dest_sync, steps, fu_pack_uninit):
         dest_acc=dest_acc,
         compile_time_formats=True,
     )
-    res = torch.tensor(configuration.run().result, dtype=format_dict[formats.output_format])
+    res = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    )
     assert len(res) == tile_cnt_A * TILE_ELEMS, f"result has {len(res)} datums"
     bad = []
     for s, kind in enumerate(steps):

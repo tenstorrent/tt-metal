@@ -65,7 +65,7 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     auto& offsets = std::get<4>(outputs);
     auto& plan = std::get<5>(outputs);
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     const uint32_t h = attrs.h;
     const uint32_t e_local = attrs.e_local;

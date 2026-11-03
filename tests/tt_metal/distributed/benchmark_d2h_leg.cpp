@@ -223,7 +223,7 @@ BENCHMARK_DEFINE_F(D2HLegFixture, Bandwidth)(benchmark::State& state) {
     const uint32_t page = tt_uva_frame_page_size(page_bytes_);
 
     for ([[maybe_unused]] auto _ : state) {
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_);
         // sig_addr 0 selects the unsignalled tt_uva_put: no receiver kernel.
         auto sender = CreateKernel(
             program,

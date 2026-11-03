@@ -70,7 +70,7 @@ MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::c
     auto& v = output[1];
 
     auto* device = kv_up.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     // ── Tile geometry ──
     const auto kv_up_shape = kv_up.padded_shape();

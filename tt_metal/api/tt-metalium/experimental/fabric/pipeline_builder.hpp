@@ -16,6 +16,10 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+}  // namespace tt::tt_metal::distributed
+
 namespace tt::tt_fabric {
 
 // ------------------------------------------------------------------
@@ -25,10 +29,16 @@ namespace tt::tt_fabric {
 /// Return the direction in which data should be forwarded from *src* to reach *dst*.
 /// Returns std::nullopt if *dst* is not reachable from *src*.
 std::optional<RoutingDirection> pipeline_get_forwarding_direction(FabricNodeId src, FabricNodeId dst);
+/// Same, in *mesh_device*'s context.
+std::optional<RoutingDirection> pipeline_get_forwarding_direction(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, FabricNodeId src, FabricNodeId dst);
 
 /// Return the chips directly connected to *src* via an ethernet cable in *direction*.
 /// Result maps mesh_id (uint32_t) -> list of chip_ids (uint32_t).
 std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(FabricNodeId src, RoutingDirection direction);
+/// Same, in *mesh_device*'s context.
+std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, FabricNodeId src, RoutingDirection direction);
 
 // ------------------------------------------------------------------
 // Graph layout resolution

@@ -229,7 +229,7 @@ inline PrefetcherPipe PipeSpaceOwner::MakeOtherPipe(distributed::MeshDevice& dev
 }
 
 // The participant record for `prefetcher_pipe_id` on `core`, or nullptr when the core has no slot.
-inline const detail::ProgramImpl::PrefetcherPipeParticipant* ParticipantOn(
+inline const tt::tt_metal::detail::ProgramImpl::PrefetcherPipeParticipant* ParticipantOn(
     const Program& program, const CoreCoord& core, uint8_t prefetcher_pipe_id) {
     const auto& per_core = program.impl().get_per_core_prefetcher_pipes();
     auto it = per_core.find(core);

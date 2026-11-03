@@ -4,6 +4,7 @@
 
 #include <fmt/base.h>
 #include <string>
+#include <utility>
 
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
@@ -52,6 +53,32 @@ TEST_P(SlidingWindowTestFixture, SlidingWindowHash) {
     log_info(tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
     EXPECT_NE(sliding_window_a.get_hash(), sliding_window_b.get_hash());
     sliding_window_b.ceil_mode = !sliding_window_a.ceil_mode;
+}
+
+// The pool DRAM slicer overrides ceil_pad_hw per slice. That override changes the output shape, the halo
+// tables and the pool CTAs, so it must reach the hash (#59914).
+TEST(SlidingWindowHash, ExplicitCeilPadSeparatesKeys) {
+    const SlidingWindowConfig computed{
+        .batch_size = 1,
+        .input_hw = {32, 32},
+        .window_hw = {3, 3},
+        .stride_hw = {2, 2},
+        .padding = {1, 1, 1, 1},
+        .num_cores_nhw = 1,
+        .num_cores_c = 1,
+        .core_range_set = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {7, 7})),
+        .ceil_mode = true};
+    ASSERT_EQ(computed.get_ceil_pad_hw(), std::make_pair(1u, 1u));
+
+    auto overridden = computed;
+    overridden.ceil_pad_hw = std::make_pair(0u, 0u);
+    ASSERT_NE(computed.get_output_shape(), overridden.get_output_shape());
+    EXPECT_NE(computed.get_hash(), overridden.get_hash());
+
+    // An override equal to the computed value builds the same program, so it should share the key.
+    auto same_as_computed = computed;
+    same_as_computed.ceil_pad_hw = computed.get_ceil_pad_hw();
+    EXPECT_EQ(computed.get_hash(), same_as_computed.get_hash());
 }
 
 INSTANTIATE_TEST_SUITE_P(

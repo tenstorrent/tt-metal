@@ -7,6 +7,7 @@ import time
 import pytest
 import torch
 from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
+from huggingface_hub import constants as hf_constants
 from loguru import logger
 
 import ttnn
@@ -16,6 +17,7 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.golden import load_golden, save_golden
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
@@ -24,7 +26,7 @@ from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_
 # ---------------------------------------------------------------------------
 # Wan2.2-T2V-14B model configuration
 # ---------------------------------------------------------------------------
-MODEL_NAME = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+CHECKPOINT_NAME = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 DIM = 5120
 FFN_DIM = 13824
 NUM_HEADS = 40
@@ -49,15 +51,20 @@ def _load_model_and_golden(test_name, param_id):
     Returns ``(commit_hash, golden, torch_model)`` where ``golden`` is None if no cached
     golden data exists for this commit/test/param.
     """
+    ensure_cached(CHECKPOINT_NAME)
     _, commit_hash = TorchWanTransformer3DModel.load_config(
-        MODEL_NAME, subfolder="transformer", return_commit_hash=True
+        CHECKPOINT_NAME, subfolder="transformer", return_commit_hash=True
     )
-    logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
+    logger.info(f"Loaded {CHECKPOINT_NAME} (subfolder=transformer) at commit: {commit_hash}")
 
     golden = load_golden(commit_hash, test_name, param_id)
 
     torch_model = TorchWanTransformer3DModel.from_pretrained(
-        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+        CHECKPOINT_NAME,
+        subfolder="transformer",
+        torch_dtype=torch.float32,
+        trust_remote_code=True,
+        local_files_only=hf_constants.HF_HUB_OFFLINE,  # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints
     )
     return commit_hash, golden, torch_model
 

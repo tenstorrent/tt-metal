@@ -15,13 +15,11 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
-from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import (
-    Qwen3VlCheckpoint,
-    Qwen3VlVisionCheckpoint,
-    mrope_position_ids,
-)
-from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
+from models.tt_dit.encoders.mrope import mrope_position_ids
+from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import Qwen3VlCheckpoint, Qwen3VlVisionCheckpoint
+from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp
 from models.tt_dit.encoders.transformer import GenerationOutput
+from models.tt_dit.encoders.vision import vision_cu_seqlens
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor

@@ -25,12 +25,11 @@ struct AffineExclusiveScanParams {
 };
 
 struct AffineExclusiveScanInputs {
-    Tensor a;
-    Tensor b;
+    // Packed [S, B*H*G, K, K+V] summaries: slot 0 head transforms; slot 1 tail transforms, present iff S = 2.
+    Tensor summaries;
     Tensor initial_state;
-    Tensor tail_a;
-    Tensor tail_b;
-    Tensor tail_entry_states;
+    // The tail seed, required exactly when the summaries hold a tail slot.
+    std::optional<Tensor> tail_entry_states;
 
     Tensor actual_start;
     std::optional<Tensor> actual_end;

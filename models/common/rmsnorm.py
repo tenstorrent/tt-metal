@@ -4,7 +4,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import copy_to_buffer
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
@@ -59,6 +59,7 @@ class RMSNorm(LightweightModule):
         super().__init__()
         self.device = device
         self.eps = eps
+        self._short_prefill_configs = {}
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl
@@ -192,6 +193,21 @@ class RMSNorm(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 output_memory_config=distributed_out_mc,
             )
+        elif mode == Mode.PREFILL and not in_sharded and (block_config := self._short_prefill_block_config(x)):
+            # The interleaved norm splits by tile rows only, so a short prompt runs on <= 4 cores.
+            block_mem_config, block_program_config = block_config
+            x_block = ttnn.to_memory_config(x, block_mem_config)
+            y_block = ttnn.rms_norm(
+                x_block,
+                epsilon=self.eps,
+                weight=weight,
+                program_config=block_program_config,
+                memory_config=block_mem_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
+            ttnn.deallocate(x_block)
+            x = ttnn.to_memory_config(y_block, x.memory_config())
+            ttnn.deallocate(y_block)
         else:
             x = ttnn.rms_norm(
                 x,
@@ -208,6 +224,41 @@ class RMSNorm(LightweightModule):
             if output_mem_config is not None:
                 x = ttnn.to_memory_config(x, output_mem_config)
             return x
+
+    def _short_prefill_block_config(self, x):
+        if x.is_sharded() or x.layout != ttnn.TILE_LAYOUT or x.shape[0] * x.shape[1] != 1:
+            return None
+        key = (x.shape[-2], x.shape[-1])
+        if key not in self._short_prefill_configs:
+            self._short_prefill_configs[key] = self._build_short_prefill_block_config(x)
+        return self._short_prefill_configs[key]
+
+    def _build_short_prefill_block_config(self, x):
+        seq, dim = x.shape[-2], x.shape[-1]
+        if seq % ttnn.TILE_SIZE or dim % ttnn.TILE_SIZE or seq // ttnn.TILE_SIZE > 4:
+            return None
+        grid = x.device().compute_with_storage_grid_size()
+        rows, width_tiles = seq // ttnn.TILE_SIZE, dim // ttnn.TILE_SIZE
+        if width_tiles < 16:
+            return None
+        cols = max(c for c in range(1, min(8, grid.x) + 1) if width_tiles % c == 0)
+        if cols <= 1:
+            return None
+        block_w = width_tiles // cols
+        mem_config = ttnn.create_sharded_memory_config(
+            (seq, dim),
+            core_grid=ttnn.CoreGrid(y=rows, x=cols),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(cols, rows),
+            subblock_w=max(b for b in range(1, 5) if block_w % b == 0),
+            block_h=1,
+            block_w=block_w,
+            inplace=False,
+        )
+        return mem_config, program_config
 
     def _distributed_rmsnorm(
         self,

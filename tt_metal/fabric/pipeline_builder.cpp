@@ -15,6 +15,10 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/mesh_device.hpp>
+
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt-metalium/experimental/fabric/control_plane.hpp"
 
@@ -24,8 +28,9 @@ namespace tt::tt_fabric {
 // Low-level control-plane wrappers
 // ------------------------------------------------------------------
 
-std::optional<RoutingDirection> pipeline_get_forwarding_direction(FabricNodeId src, FabricNodeId dst) {
-    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+namespace {
+
+std::optional<RoutingDirection> forwarding_direction(const ControlPlane& cp, FabricNodeId src, FabricNodeId dst) {
     auto dir_opt = cp.get_forwarding_direction(src, dst);
     if (!dir_opt) {
         return std::nullopt;
@@ -37,8 +42,8 @@ std::optional<RoutingDirection> pipeline_get_forwarding_direction(FabricNodeId s
     return dir_opt;
 }
 
-std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(FabricNodeId src, RoutingDirection direction) {
-    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+std::map<uint32_t, std::vector<uint32_t>> chip_neighbors(
+    const ControlPlane& cp, FabricNodeId src, RoutingDirection direction) {
     auto raw = cp.get_chip_neighbors(src, direction);
     std::map<uint32_t, std::vector<uint32_t>> result;
     for (const auto& [mesh_id, chip_ids] : raw) {
@@ -46,6 +51,30 @@ std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(FabricNode
         vec.insert(vec.end(), chip_ids.begin(), chip_ids.end());
     }
     return result;
+}
+
+const ControlPlane& mesh_control_plane(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return mesh_device.impl().metal_env().get_control_plane();
+}
+
+}  // namespace
+
+std::optional<RoutingDirection> pipeline_get_forwarding_direction(FabricNodeId src, FabricNodeId dst) {
+    return forwarding_direction(tt::tt_metal::MetalContext::instance().get_control_plane(), src, dst);
+}
+
+std::optional<RoutingDirection> pipeline_get_forwarding_direction(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, FabricNodeId src, FabricNodeId dst) {
+    return forwarding_direction(mesh_control_plane(mesh_device), src, dst);
+}
+
+std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(FabricNodeId src, RoutingDirection direction) {
+    return chip_neighbors(tt::tt_metal::MetalContext::instance().get_control_plane(), src, direction);
+}
+
+std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, FabricNodeId src, RoutingDirection direction) {
+    return chip_neighbors(mesh_control_plane(mesh_device), src, direction);
 }
 
 // ------------------------------------------------------------------

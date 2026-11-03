@@ -86,19 +86,25 @@ class Gemma4Precision:
         # helper so both key on one name.
         model_key = checkpoint_name(model_path)
         mesh_key = f"{mesh_shape[0]}x{mesh_shape[1]}"
+        # A line viewed in the other orientation (the 4-chip line as the (4,1) column mesh for the dispatch
+        # prefill, tt/mesh_orientation.py) holds the same per-chip weights: its entry is the transposed key.
+        # Without this the (4,1) build missed the 26B "1x4" {"experts": "bfp8"} entry, loaded both expert copies
+        # in bf16 and OOM'd the served KV pool (2026-10-23).
+        transposed_key = f"{mesh_shape[1]}x{mesh_shape[0]}"
 
         try:
             with open(_PATH) as f:
                 table = json.load(f)
         except FileNotFoundError:
-            return cls({})
+            table = {}
 
-        model_entry = table.get(model_key)
-        if not model_entry:
-            return cls({})
+        # A model without a table entry (the 26B) still takes the GEMMA4_PRECISION_* env overrides below: the
+        # old early return here silently ignored them, so GEMMA4_PRECISION_EXPERTS=bfp8 loaded bf16 experts
+        # under the bf16 cache identity with no log line.
+        model_entry = table.get(model_key) or {}
 
         # Mesh-specific override wins over "default"
-        raw = model_entry.get(mesh_key) or model_entry.get("default") or {}
+        raw = model_entry.get(mesh_key) or model_entry.get(transposed_key) or model_entry.get("default") or {}
         resolved = {}
         for k, v in raw.items():
             if k not in KNOWN_MODULES:
@@ -144,7 +150,7 @@ class Gemma4Precision:
         # 262144 does not fit on four chips. A mesh with no entry keeps bfp8,
         # which is what main did before the ceiling existed.
         if isinstance(limits, dict) and limits and all(re.fullmatch(r"\d+x\d+|default", str(k)) for k in limits):
-            limits = limits.get(mesh_key, limits.get("default"))
+            limits = limits.get(mesh_key, limits.get(transposed_key, limits.get("default")))
         env_limit = os.environ.get("GEMMA4_BFP8_MAX_CONTEXT")
         if env_limit is not None:
             try:
@@ -168,4 +174,18 @@ class Gemma4Precision:
                     f"{model_key}; downgrading {detail} bfp8 -> bf16 (bfp8 degenerates at very long "
                     "context). Costs memory/throughput; set GEMMA4_BFP8_MAX_CONTEXT=0 to disable."
                 )
+        # Per-module env override (``GEMMA4_PRECISION_EXPERTS=bfp8``, ``GEMMA4_PRECISION_ATTENTION=bf16``, ...):
+        # applied last, so it wins over the table and the context ceiling. Unset -> no change. The value lands
+        # in the cache identity and the tensorbin filenames like a table entry, so a flipped module never reuses
+        # a cache file of another precision.
+        for mod in KNOWN_MODULES:
+            env_val = os.environ.get(f"GEMMA4_PRECISION_{mod.upper()}", "").strip().lower()
+            if not env_val:
+                continue
+            if env_val not in _DTYPE_BY_NAME:
+                raise ValueError(
+                    f"GEMMA4_PRECISION_{mod.upper()}={env_val!r}: unknown dtype; expected one of {sorted(_DTYPE_BY_NAME)}"
+                )
+            resolved[mod] = _DTYPE_BY_NAME[env_val]
+            logger.info(f"Gemma4 precision: {mod} -> {env_val} (GEMMA4_PRECISION_{mod.upper()})")
         return cls(resolved)

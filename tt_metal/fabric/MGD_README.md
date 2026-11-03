@@ -44,6 +44,38 @@ link on a config-torused direction could face a peer that labels the axis
 differently and hang (issue #54650). An axis the MGD itself declares as `RING`
 keeps its boundary ports.
 
+### Per-mesh fabric config
+
+Each mesh's fabric config is derived from its `device_topology.dim_types`, so one
+MGD can mix routing configs across meshes (e.g. a `RING,LINE` mesh on
+`FABRIC_2D_TORUS_Y` next to a `LINE,LINE` mesh on `FABRIC_2D`):
+
+```proto
+mesh_descriptors {
+  name: "ring"
+  device_topology { dims: [ 4, 8 ] dim_types: [ RING, LINE ] }   # -> FABRIC_2D_TORUS_Y
+}
+mesh_descriptors {
+  name: "line"
+  device_topology { dims: [ 4, 2 ] dim_types: [ LINE, LINE ] }   # -> FABRIC_2D
+}
+```
+
+Resolution is **per mesh**, in precedence order:
+
+1. the process-wide override (`set_fabric_config`), else
+2. a default derived from `device_topology.dim_types`.
+
+The derived default is **always a 2D-family config** — `FABRIC_2D`, or the matching
+`FABRIC_2D_TORUS_X/Y/XY` per the declared ring axes (dim 0 → `TORUS_Y`, dim 1 →
+`TORUS_X`). **1D is never auto-derived**; a `FABRIC_1D` / `FABRIC_1D_RING` config
+can only be set in code, and such a 1D config may not span more than one mesh.
+
+An override is validated against **each mesh's own** topology and may only
+restrict connectivity (e.g. `torus → mesh`), never request more than the topology
+provides — so a torus override on a mesh whose real axis is `LINE` is rejected.
+The derived default is always topology-compatible by construction.
+
 
 ## Minimal workflow
 > This is currently TBD

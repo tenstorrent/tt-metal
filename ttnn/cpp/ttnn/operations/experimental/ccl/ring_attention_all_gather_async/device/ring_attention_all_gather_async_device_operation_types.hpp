@@ -72,10 +72,9 @@ struct RingAttentionAllGatherAsyncParams {
         route_plan_hash(route_plan_hash) {}
 
     // Restrict program-cache hashing and the canonical key to structure-affecting fields only.
-    // Excludes `semaphore` (GlobalSemaphore objects whose addresses are passed to runtime args) and
-    // `core_allocation_strategy` (effectively constant; not part of the historical custom hash).
+    // Excludes `semaphore` (GlobalSemaphore objects whose addresses are passed to runtime args).
     // `sub_device_id` is the structural source of the worker-core range set the previous custom hash
-    // encoded.
+    // encoded, and `core_allocation_strategy` picks the worker cores within it (row- vs column-major).
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
         "num_links",
@@ -84,6 +83,7 @@ struct RingAttentionAllGatherAsyncParams {
         "topology",
         "sub_device_id",
         "cluster_axis",
+        "core_allocation_strategy",
         "full_mesh",
         "snake_orientation",
         "mesh_rows",
@@ -98,6 +98,7 @@ struct RingAttentionAllGatherAsyncParams {
             topology,
             sub_device_id,
             cluster_axis,
+            core_allocation_strategy,
             full_mesh,
             snake_orientation,
             mesh_rows,

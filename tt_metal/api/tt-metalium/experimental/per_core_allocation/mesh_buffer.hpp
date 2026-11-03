@@ -6,12 +6,18 @@
 
 #include <memory>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/per_core_allocation/device_memory_span.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal::experimental::per_core_allocation {
+
+// Return a non-owning view; the caller retains storage and guarantees the supplied spans are backed.
+// Spans must cover the padded tensor footprint on every configured data core of each selected device.
+distributed::MeshBuffer create_sram_buffer_view(
+    distributed::MeshDevice& mesh, const TensorSpec& spec, const PerNodeMeshDeviceMemorySpan& memory);
 
 // Per-core address for a core on a specific device. A per-core-allocated MeshBuffer allocates
 // each device independently, so the address is only defined once a device is named: there is

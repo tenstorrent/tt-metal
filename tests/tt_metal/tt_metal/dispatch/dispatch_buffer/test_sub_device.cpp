@@ -27,7 +27,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
@@ -520,7 +520,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerTagsLazyProgramBuffers
     distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
 
     distributed::MeshWorkload workload;
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",

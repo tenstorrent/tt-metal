@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# FPU matmul vs TRISC3 SFPU dequant cost per quantization group. K is fixed at 256 and
+# the group count varies (group 256/128/64 -> 1/2/4 groups), so per-group SFPU cost and
+# the one-off s_a epilogue separate as slope and intercept.
+
+import pytest
+from helpers.format_config import DataFormat
+from helpers.llk_params import (
+    PERF_LOOP_FACTOR_QUASAR,
+    PERF_RUN_TYPES_QUASAR_4_TRISC,
+)
+from helpers.param_config import parametrize
+from quasar.test_matmul_int4_dequant_quasar import (
+    PERF_GROUP_DIMS,
+    dequant_register_format_hints,
+)
+from quasar.test_matmul_int4_dequant_quasar import (
+    test_matmul_int4_dequant_quasar as run_matmul_int4_dequant,
+)
+
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@parametrize(
+    matmul_dims=PERF_GROUP_DIMS,
+    register_format_hint=dequant_register_format_hints(),
+    run_types=PERF_RUN_TYPES_QUASAR_4_TRISC,
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
+)
+def test_perf_matmul_int4_dequant_quasar(
+    perf_report,
+    matmul_dims,
+    register_format_hint,
+    run_types,
+    loop_factor,
+):
+    run_matmul_int4_dequant(
+        DataFormat.Int4,
+        matmul_dims,
+        register_format_hint,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=True,
+        perf_report=perf_report,
+    )

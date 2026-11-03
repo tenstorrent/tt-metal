@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <optional>

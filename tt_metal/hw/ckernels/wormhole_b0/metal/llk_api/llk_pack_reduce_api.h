@@ -11,12 +11,16 @@
  * LLK PACK REDUCE
  *************************************************************************/
 
-// Use the runtime face_r_dim of the output CB. Required for narrow tiles
-// (e.g. tile_dimensions=[1,32]) where face_r_dim differs from FACE_R_DIM.
+// Pass the output geometry through one shared LLK mask configuration path.
+template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
+inline void llk_pack_reduce_mask_config_impl(const ckernel::TensorShape& tensor_shape) {
+    _llk_pack_reduce_mask_config_<dim, pack_mode>(tensor_shape);
+}
+
+// Get the output shape from the output CB.
 template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_reduce_mask_config(std::uint32_t ocb) {
-    const std::uint32_t output_id = get_output_id(ocb);
-    _llk_pack_reduce_mask_config_<dim, pack_mode>(get_output_face_r_dim(output_id));
+    llk_pack_reduce_mask_config_impl<dim, pack_mode>(get_output_tensor_shape(get_output_id(ocb)));
 }
 
 inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }

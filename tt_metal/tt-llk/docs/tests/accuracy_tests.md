@@ -27,8 +27,8 @@ CHIP_ARCH=wormhole pytest accuracy/test_examples_accuracy.py -s
 ## Run modes
 
 The same op/format matrix can run in three modes, selected with `--mode`. All
-three run the one merged kernel (`sources/eltwise_unary_sfpu_perf.cpp`), but they
-differ in workload as well as in what they measure: `accuracy` sweeps 2048 points
+three run the shared unary kernel (`sources/eltwise_unary_sfpu_test.cpp`), built by
+`build_eltwise_unary_sfpu_config` in `test_eltwise_unary_sfpu.py`, but they differ in workload as well as in what they measure: `accuracy` sweeps 2048 points
 with a single loop, while `perf` and `both` use 8192 points and loop 16× for
 stable timings. So the numbers are not directly comparable across modes:
 

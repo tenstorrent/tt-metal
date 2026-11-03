@@ -807,3 +807,50 @@ def test_rotary_embedding_indexed_logical_frequency_width(device, cos_width, sin
     ttnn.deallocate(warmed)
     with expect_error(RuntimeError, "rotary_dim must match logical cos and sin head dims"):
         rope(x, cos, sin, trans, 0, 0, rotary_dim=64)
+
+
+@pytest.mark.parametrize("rows", [32, 96], ids=["one_tile_row", "three_tile_rows"])
+@pytest.mark.parametrize("prefix_width", [512, 192], ids=["prefix512", "prefix192"])
+def test_rotary_embedding_indexed_row_major_output(device, rows, prefix_width, expect_error):
+    """row_major_output writes [concat_prefix | rotated] row-major: the same values as the tiled fused output."""
+    torch.manual_seed(7)
+
+    def upload(x):
+        return ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    heads = 2
+    x = upload(torch.randn(1, heads, rows, ROPE_HEAD_DIM, dtype=torch.bfloat16))
+    prefix = upload(torch.randn(1, heads, rows, prefix_width, dtype=torch.bfloat16))
+    cos, sin = _make_cos_sin(rows, ROPE_HEAD_DIM)
+    cos, sin, trans = upload(cos), upload(sin), upload(get_rot_transformation_mat())
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+
+    tiled = rope(x, cos, sin, trans, 0, 0, concat_prefix=prefix)
+    row_major = rope(x, cos, sin, trans, 0, 0, concat_prefix=prefix, row_major_output=True)
+    assert row_major.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert tuple(row_major.shape) == (1, heads, rows, prefix_width + ROPE_HEAD_DIM)
+    assert torch.equal(ttnn.to_torch(row_major), ttnn.to_torch(tiled))
+
+    with expect_error(RuntimeError, "row_major_output needs"):
+        rope(x, cos, sin, trans, 0, 0, row_major_output=True)  # no concat_prefix
+
+
+def test_rotary_embedding_indexed_row_major_output_whole_seq_per_core(device):
+    """One batch per core puts all 3 tile rows of a head on one core, where compute waits for every row's sin/cos
+    before it takes any prefix: the prefix buffer must hold all 3 rows."""
+    torch.manual_seed(7)
+
+    def upload(x):
+        return ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    grid = device.compute_with_storage_grid_size()
+    batch, heads, rows, prefix_width = grid.x * grid.y, 2, 96, 512
+    x = upload(torch.randn(batch, heads, rows, ROPE_HEAD_DIM, dtype=torch.bfloat16))
+    prefix = upload(torch.randn(batch, heads, rows, prefix_width, dtype=torch.bfloat16))
+    cos, sin = _make_cos_sin(rows, ROPE_HEAD_DIM)
+    cos, sin, trans = upload(cos), upload(sin), upload(get_rot_transformation_mat())
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+
+    tiled = rope(x, cos, sin, trans, 0, 0, concat_prefix=prefix)
+    row_major = rope(x, cos, sin, trans, 0, 0, concat_prefix=prefix, row_major_output=True)
+    assert torch.equal(ttnn.to_torch(row_major), ttnn.to_torch(tiled))

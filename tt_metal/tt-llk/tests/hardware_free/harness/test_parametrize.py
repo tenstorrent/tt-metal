@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import (
     CircularDependencyError,
     UnknownDependenciesError,
@@ -12,6 +13,7 @@ from helpers.param_config import (
     _param_dependencies,
     _params_solve_dependencies,
     _verify_dependency_map,
+    max_dest_tiles,
 )
 
 
@@ -407,3 +409,31 @@ def test_params_solve_dependencies_multiple_chain_constraints_shuffled():
 
     assert len(result) == len(expected)
     assert set(result) == set(expected)
+
+
+@pytest.mark.parametrize(
+    "dest_acc, dest_sync, expected",
+    [
+        (DestAccumulation.No, DestSync.Half, 8),
+        (DestAccumulation.Yes, DestSync.Half, 4),
+        (DestAccumulation.No, DestSync.Full, 16),
+        (DestAccumulation.Yes, DestSync.Full, 8),
+        (False, DestSync.Half, 8),
+        (True, DestSync.Full, 8),
+    ],
+)
+def test_max_dest_tiles(dest_acc, dest_sync, expected):
+    assert max_dest_tiles(dest_acc, dest_sync) == expected
+
+
+def test_max_dest_tiles_defaults_to_half_sync():
+    assert max_dest_tiles(DestAccumulation.Yes) == 4
+
+
+@pytest.mark.parametrize("bad", [1, 0, None, "Yes"])
+def test_max_dest_tiles_rejects_non_flags(bad):
+    """DestAccumulation.No is truthy, so the flag is never read with bool()."""
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        TypeError
+    ):
+        max_dest_tiles(bad)

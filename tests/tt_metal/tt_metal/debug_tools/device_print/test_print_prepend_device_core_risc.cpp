@@ -118,7 +118,8 @@ void RunTest(
 
     // The ethernet variant still needs the legacy API (Metal 2.0 places kernels on Tensix only), and
     // a Program cannot mix the two APIs -- so that variant keeps the whole program on the old path.
-    Program program = add_active_eth_kernel ? Program() : MakeTensixPrependProgram(*mesh_device, cores);
+    Program program =
+        add_active_eth_kernel ? CreateProgram(*mesh_device) : MakeTensixPrependProgram(*mesh_device, cores);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 

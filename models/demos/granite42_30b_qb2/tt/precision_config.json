@@ -1,0 +1,50 @@
+{
+  "config_id": "combined_k8_head8_lofi",
+  "weight_groups": {
+    "qkv": "bfloat4_b",
+    "o": "bfloat4_b",
+    "gate": "bfloat4_b",
+    "up": "bfloat4_b",
+    "down": "bfloat4_b",
+    "embedding": "bfloat16",
+    "lm_head": "bfloat8_b"
+  },
+  "layer_exceptions": {},
+  "compute_fidelities": {
+    "qkv": "LoFi",
+    "o": "LoFi",
+    "gate": "LoFi",
+    "up": "LoFi",
+    "down": "LoFi",
+    "norm": "HiFi4",
+    "sdpa": "LoFi",
+    "lm_head": "LoFi",
+    "sdpa_prefill": "LoFi"
+  },
+  "fp32_accumulation": {
+    "qkv": false,
+    "o": false,
+    "gate": false,
+    "up": false,
+    "down": false,
+    "norm": true,
+    "sdpa": false,
+    "lm_head": true,
+    "sdpa_prefill": false
+  },
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "norm_dtype": "bfloat16",
+  "decode_matmul_input_dtype": "bfloat16",
+  "ccl_dtype": "bfloat16",
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16",
+  "token_dtype": "uint32",
+  "supported_context": 131072,
+  "matmul_geometry": {
+    "down": {
+      "block": 8
+    }
+  }
+}

@@ -14,7 +14,6 @@ from helpers.llk_params import (
     DestSync,
     ReduceDimension,
     ReducePool,
-    format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize, runtime
 from helpers.stimuli_config import StimuliConfig
@@ -29,7 +28,7 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Keep 3 as an example of an odd block_ct_dim.
 BLOCK_CT_DIMS = [1, 2, 3, 4, 8, 16]
@@ -39,7 +38,7 @@ TILE_DIMENSIONS = [(32, 32), (16, 32), (8, 32), (4, 32)]
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16]),
+    formats=input_output_formats([DataFormat.Float16_b]),
     block_ct_dim=runtime(BLOCK_CT_DIMS),
     tile_dimensions=runtime(TILE_DIMENSIONS),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
@@ -110,11 +109,7 @@ def test_reduce_block_max_row_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

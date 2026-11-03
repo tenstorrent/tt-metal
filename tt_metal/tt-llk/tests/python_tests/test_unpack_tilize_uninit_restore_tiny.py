@@ -28,7 +28,6 @@ operand with the wrong per-row datum count and the result diverges from the
 tilized golden.
 """
 
-import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
@@ -36,8 +35,8 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import NUM_FACES, TEST_FACE_DIMS
-from helpers.tilize_untilize import tilize
-from helpers.utils import passed_test
+from helpers.tilize_untilize import tilize_block
+from helpers.utils import passed_test, result_tensor
 
 # Tiny tiles are always 2 horizontal faces ([face_r_dim, 32] => f0 | f1).
 TINY_NUM_FACES = 2
@@ -73,11 +72,12 @@ def test_unpack_tilize_uninit_restore_tiny(
     # Golden: the run-1 datacopy is an identity copy of the run-0 tilized tile,
     # so a correct restore yields exactly the tilized tiny operand A. tile_dimensions
     # drives the horizontal 2-face (Nx32) tilize layout for face_r_dim < 16.
-    golden_tensor = tilize(
+    golden_tensor = tilize_block(
         src_A,
+        input_dimensions,
         stimuli_format=formats.output_format,
         tile_dimensions=input_dimensions,
-    ).to(torch_format)
+    ).flatten()
 
     L1_to_L1_iterations = 2
     configuration = TestConfig(
@@ -108,11 +108,7 @@ def test_unpack_tilize_uninit_restore_tiny(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

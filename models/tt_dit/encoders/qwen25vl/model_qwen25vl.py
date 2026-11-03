@@ -4,13 +4,18 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from pathlib import Path
 
+import huggingface_hub
+import safetensors
 import torch
 import transformers
 
 import ttnn
 from models.tt_dit.blocks.rope import RopeConfig
+from models.tt_dit.encoders.qwen25vl.vision_qwen25vl import Qwen25VlVisionModel
 from models.tt_dit.encoders.transformer import (
     WEIGHT_CACHE_DTYPE,
     StateConversion,
@@ -30,7 +35,7 @@ class Qwen25VlEncoder(TransformerEncoder):
 
         # The checkpoint's multimodal rope splits the head across three position axes. Without
         # images all three carry the same sequence positions, so it reduces to plain rope.
-        rope_theta = text_config.rope_parameters["rope_theta"]
+        rope = text_config.rope_parameters
 
         return TransformerEncoderConfig(
             vocab_size=text_config.vocab_size,
@@ -46,7 +51,7 @@ class Qwen25VlEncoder(TransformerEncoder):
             attn_out_bias=False,
             # At bfloat8 the QKV projection alone costs the prompt embeddings two points of PCC.
             attn_qkv_dtype=ttnn.bfloat16,
-            rope_config=RopeConfig(theta=rope_theta),
+            rope_config=RopeConfig(theta=rope["rope_theta"], mrope_section=list(rope["mrope_section"])),
         )
 
     @staticmethod
@@ -71,12 +76,15 @@ STATE_CONVERSION = StateConversion(
 
 
 class Qwen25VlCheckpoint:
-    """A Qwen2.5-VL checkpoint: fetches weights and builds a loaded ``Qwen25VlEncoder``.
+    """A Qwen2.5-VL checkpoint: fetches weights and builds the loaded language model and vision tower.
 
-    Reads only ``config.json`` in ``__init__``; the actual torch weights are loaded lazily, on
-    ``build()`` cache-miss only. Only the language model is kept, so the vision tower is never
-    instantiated.
+    ``build`` builds the language model (``Qwen25VlEncoder``) and ``build_vision`` the vision tower
+    (``Qwen25VlVisionModel``), each with its own weight cache, so a text-only user never loads the
+    tower. Reads only ``config.json`` in ``__init__``; the torch weights are loaded lazily, on a
+    cache miss only.
     """
+
+    VISION_PREFIX = "visual."
 
     def __init__(self, name: str, *, subfolder: str = "") -> None:
         hf_config = transformers.AutoConfig.from_pretrained(name, subfolder=subfolder)
@@ -84,6 +92,7 @@ class Qwen25VlCheckpoint:
         self._name = name
         self._subfolder = subfolder
         self.config = Qwen25VlEncoder.config_from_hf(hf_config)
+        self.vision_config = hf_config.vision_config
 
     def build(
         self,
@@ -128,3 +137,62 @@ class Qwen25VlCheckpoint:
             torch_dtype=torch.bfloat16,
         )
         return Qwen25VlEncoder.convert_state(torch_model.state_dict())
+
+    def build_vision(
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        parallel_config: EncoderParallelConfig,
+        ccl_manager: CCLManager | None = None,
+    ) -> Qwen25VlVisionModel:
+        """Construct a ``Qwen25VlVisionModel`` for this checkpoint and load its weights.
+
+        The tower is tensor parallel as ``parallel_config`` says.
+        """
+        model = Qwen25VlVisionModel.from_hf_config(
+            self.vision_config,
+            mesh_device=device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+        )
+        self.load_vision_weights(model, device=device, parallel_config=parallel_config)
+        return model
+
+    def load_vision_weights(
+        self,
+        model: Qwen25VlVisionModel,
+        *,
+        device: ttnn.MeshDevice,
+        parallel_config: EncoderParallelConfig,
+    ) -> None:
+        """Load the weights of a tower built by ``build_vision``, e.g. again after ``deallocate_weights``."""
+        cache.load_model(
+            model,
+            get_torch_state_dict=self._load_vision_state_dict,
+            model_name=self._name,
+            subfolder=f"{self._subfolder}/vision" if self._subfolder else "vision",
+            parallel_config=parallel_config,
+            mesh_shape=tuple(device.shape),
+            mesh_device=device,
+        )
+
+    def _load_vision_state_dict(self) -> dict[str, torch.Tensor]:
+        """Reads only the safetensors shards that hold the tower, not the whole vision-language model."""
+        index = json.loads(self._file("model.safetensors.index.json").read_text())
+        prefix = self.VISION_PREFIX
+        shards = sorted({shard for key, shard in index["weight_map"].items() if key.startswith(prefix)})
+
+        state = {}
+        for shard in shards:
+            with safetensors.safe_open(self._file(shard), framework="pt") as f:
+                for key in f.keys():  # noqa: SIM118
+                    if key.startswith(prefix):
+                        state[key.removeprefix(prefix)] = f.get_tensor(key)
+        return state
+
+    def _file(self, filename: str) -> Path:
+        """The path of a checkpoint file, from a local checkpoint directory or the Hugging Face cache."""
+        local = Path(self._name) / self._subfolder / filename
+        if local.is_file():
+            return local
+        return Path(huggingface_hub.hf_hub_download(self._name, filename, subfolder=self._subfolder or None))

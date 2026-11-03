@@ -4,14 +4,6 @@
 """
 PyTorch reference implementation of Multi-Scale Deformable Attention for BEVFormer.
 
-This module provides the reference PyTorch implementation of multi-scale deformable attention
-used for validating and comparing against the TTNN implementation. It follows the standard
-PyTorch patterns and serves as the ground truth for correctness verification.
-
-Key components:
-- multi_scale_deformable_attn: Core attention computation function
-- MSDeformableAttention: PyTorch attention module class
-
 Based on the original BEVFormer and MMCV implementations.
 """
 
@@ -21,7 +13,7 @@ import torch.nn.functional as F
 from typing import Optional
 
 
-from ..config import DeformableAttentionConfig
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
 
 
 def multi_scale_deformable_attn(
@@ -63,13 +55,13 @@ def multi_scale_deformable_attn(
         value_l_ = value_list[level].flatten(2).transpose(1, 2).reshape(bs * num_heads, head_dim, H_, W_)
         # bs, num_queries, num_heads, num_points, 2 -> bs*num_heads, num_queries, num_points, 2
         sampling_grid_l_ = sampling_grids[:, :, :, level].transpose(1, 2).flatten(0, 1)
-        # bs*num_heads, embed_dims, num_queries, num_points
+        # bs*num_heads, head_dim, num_queries, num_points
         sampling_value_l_ = F.grid_sample(
             value_l_, sampling_grid_l_, mode="bilinear", padding_mode="zeros", align_corners=False
         )
         sampling_value_list.append(sampling_value_l_)
 
-    # (bs, num_queries, num_heads, num_levels, num_points) -> (bs, num_heads, num_queries, num_levels, num_points)
+    # (bs, num_queries, num_heads, num_levels, num_points) -> (bs*num_heads, 1, num_queries, num_levels*num_points)
     attention_weights = attention_weights.transpose(1, 2).reshape(
         bs * num_heads, 1, num_queries, num_levels * num_points
     )
@@ -82,67 +74,44 @@ def multi_scale_deformable_attn(
 
 
 class MSDeformableAttention(nn.Module):
-    """
-    PyTorch implementation of Multi-Scale Deformable Attention.
-    """
+    """mmcv's MultiScaleDeformableAttention, inference only."""
 
-    def __init__(self, config: DeformableAttentionConfig, device=None):
+    def __init__(self, config: DeformableAttentionConfig):
         """
-        Initialize PyTorch Multi-Scale Deformable Attention module.
-
         Args:
             config (DeformableAttentionConfig): Configuration object containing:
                 - embed_dims (int): Feature embedding dimensions
                 - num_heads (int): Number of attention heads
                 - num_levels (int): Number of feature pyramid levels
-                - num_points (int): Number of sampling points per head
+                - num_points (int): Sampling points per head and level
                 - batch_first (bool): Whether batch dimension comes first
-                - im2col_step (int): Step size for im2col operation
-            device: PyTorch device for computations (optional)
 
         Raises:
             ValueError: If embed_dims is not divisible by num_heads
         """
-        # Validate configuration
         if config.embed_dims % config.num_heads != 0:
             raise ValueError(f"embed_dims ({config.embed_dims}) must be divisible by num_heads ({config.num_heads})")
 
         super(MSDeformableAttention, self).__init__()
 
-        # Set attributes before calling parent __init__
         self.embed_dims = config.embed_dims
         self.num_heads = config.num_heads
         self.num_levels = config.num_levels
         self.num_points = config.num_points
-        self.im2col_step = config.im2col_step
         self.batch_first = config.batch_first
 
         self.head_dim = self.embed_dims // self.num_heads
         self.config = config
-        self.device = device
 
         self._setup_layers()
 
     def _setup_layers(self):
-        """
-        Setup the linear projection layers following MMCV approach.
-
-        Creates the following layers:
-        - value_proj: Projects input features to values
-        - sampling_offsets: Generates sampling offset coordinates
-        - attention_weights: Computes attention weights for sampling points
-        - output_proj: Final output projection
-        """
-        # Value projection
         self.value_proj = nn.Linear(self.embed_dims, self.embed_dims)
 
-        # Sampling offsets projection
         self.sampling_offsets = nn.Linear(self.embed_dims, self.num_heads * self.num_levels * self.num_points * 2)
 
-        # Attention weights projection
         self.attention_weights = nn.Linear(self.embed_dims, self.num_heads * self.num_levels * self.num_points)
 
-        # Output projection
         self.output_proj = nn.Linear(self.embed_dims, self.embed_dims)
 
     def forward(
@@ -157,7 +126,8 @@ class MSDeformableAttention(nn.Module):
         **kwargs,
     ) -> torch.Tensor:
         """
-        Forward pass following MMCV's approach.
+        Shapes are batch-first; with ``batch_first=False``, ``query``, ``value`` and ``identity``
+        are ``(num_queries or num_keys, bs, embed_dims)``.
 
         Args:
             query: [bs, num_queries, embed_dims] Query features
@@ -172,18 +142,15 @@ class MSDeformableAttention(nn.Module):
             output: [bs, num_queries, embed_dims]
         """
 
-        # Handle input defaults
         if value is None:
             value = query
 
         if identity is None:
             identity = query
 
-        # Add query positional encoding
         if query_pos is not None:
             query = query + query_pos
 
-        # Handle batch_first format
         if not self.batch_first:
             query = query.permute(1, 0, 2)
             value = value.permute(1, 0, 2)
@@ -193,41 +160,33 @@ class MSDeformableAttention(nn.Module):
         bs, num_keys, _ = value.shape
         bs, num_queries, D, _ = reference_points.shape
 
-        # Validate required inputs
         assert spatial_shapes is not None, "spatial_shapes is required"
         assert reference_points is not None, "reference_points is required"
 
-        # Verify spatial shapes consistency
         total_keys = spatial_shapes.prod(dim=1).sum()
         assert total_keys == num_keys, f"Inconsistent keys: {total_keys} != {num_keys}"
 
-        # Project value and reshape to multi-head format
         value = self.value_proj(value)
 
-        # Apply key padding mask if provided
         if key_padding_mask is not None:
             mask = key_padding_mask[..., None]
             value = value.masked_fill(mask, 0.0)
 
         value = value.view(bs, num_keys, self.num_heads, self.head_dim)
 
-        # Generate sampling offsets
         sampling_offsets = self.sampling_offsets(query)
         sampling_offsets = sampling_offsets.view(bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2)
 
-        # Generate attention weights
         attention_weights = self.attention_weights(query)
         attention_weights = attention_weights.view(bs, num_queries, self.num_heads, self.num_levels * self.num_points)
         attention_weights = F.softmax(attention_weights, dim=-1)
         attention_weights = attention_weights.view(bs, num_queries, self.num_heads, self.num_levels, self.num_points)
 
-        # Handle different reference point formats
         if reference_points.shape[-1] == 2:
-            # 2D reference points: [bs, num_queries, num_levels, 2]
+            # 2D reference points: [bs, num_queries, num_points_in_pillar, 2]
             offset_normalizer = torch.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], dim=-1)
-            offset_normalizer = offset_normalizer[None, None, None, :, None, :]  # Broadcasting shape
+            offset_normalizer = offset_normalizer[None, None, None, :, None, :]
 
-            # Add reference points to sampling offsets
             reference_points = reference_points[:, :, None, None, None, :, :]  # Add head, level and point dimensions
             sampling_offsets = sampling_offsets / offset_normalizer
 
@@ -241,12 +200,10 @@ class MSDeformableAttention(nn.Module):
             )
 
         elif reference_points.shape[-1] == 4:
-            # 4D reference points format - not commonly used
             raise NotImplementedError("4D reference points not implemented")
         else:
             raise ValueError(f"Reference points must have 2 or 4 dimensions, got {reference_points.shape[-1]}")
 
-        # Apply multi-scale deformable attention
         output = multi_scale_deformable_attn(
             value=value,
             value_spatial_shapes=spatial_shapes,
@@ -254,22 +211,18 @@ class MSDeformableAttention(nn.Module):
             attention_weights=attention_weights,
         )
 
-        # Apply output projection
         output = self.output_proj(output)
 
-        # Add residual connection
         output = output + identity
 
-        # Handle batch_first format for output
         if not self.batch_first:
             output = output.permute(1, 0, 2)
 
         return output
 
     def extra_repr(self) -> str:
-        """String representation for debugging"""
         return (
             f"embed_dims={self.embed_dims}, num_heads={self.num_heads}, "
             f"num_levels={self.num_levels}, num_points={self.num_points}, "
-            f"im2col_step={self.im2col_step}, batch_first={self.batch_first}"
+            f"batch_first={self.batch_first}"
         )

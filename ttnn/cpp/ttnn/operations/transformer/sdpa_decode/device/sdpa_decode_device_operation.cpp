@@ -38,7 +38,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     }
     for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
-        TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
+        TT_FATAL(input_tensor.is_allocated(), "Operands to SDPA need to be allocated in buffers on device!");
         TT_FATAL(
             input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B ||
                 input_tensor.dtype() == DataType::BFLOAT4_B,

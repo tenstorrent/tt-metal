@@ -32,25 +32,17 @@ namespace experimental {
 
 class GlobalCircularBufferImpl;
 
-// Forward declarations for the experimental DRAM-sender extension defined in
-// tt-metalium/experimental/global_circular_buffer.hpp. The DRAM-sender feature is an
-// opt-in mode that is not part of the public GlobalCircularBuffer API surface; existing
-// callers continue to see the original public interface unchanged.
-class GlobalCircularBuffer;
-enum class SenderCoreType : uint8_t;
-namespace global_circular_buffer_dram_sender {
-struct GlobalCircularBufferDramSenderInternals;
-}  // namespace global_circular_buffer_dram_sender
-
 class GlobalCircularBuffer {
 public:
     explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
 
+    // `cq_id` is the command queue used for the config write.
     GlobalCircularBuffer(
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type = BufferType::L1);
+        BufferType buffer_type = BufferType::L1,
+        uint8_t cq_id = 0);
 
     GlobalCircularBuffer(const GlobalCircularBuffer& other);
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer& other);
@@ -77,8 +69,6 @@ public:
 
 private:
     std::unique_ptr<GlobalCircularBufferImpl> impl_;
-
-    friend struct global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals;
 };
 
 /**
@@ -88,13 +78,15 @@ private:
  * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular buffer.
  * @param size Size of the global circular buffer per core in bytes.
  * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
+ * @param cq_id Command queue used for the config write.
  * @return The allocated global circular buffer.
  */
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     distributed::MeshDevice& device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    uint8_t cq_id = 0);
 
 /**
  * @brief Creates a Circular Buffer in L1 memory of specified cores using the address space of the

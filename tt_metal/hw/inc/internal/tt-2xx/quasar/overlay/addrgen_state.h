@@ -77,8 +77,12 @@ struct AddrgenPosition {
 // Address-generator register reads (rd_reg) must not be in flight together: two value-returning RoCC instructions
 // outstanding at once can hang the core (AIHWE-6506). The hardware workaround is a no-result RoCC
 // instruction between them (rocc_nop); a fence after each read also works but costs more.
+// Quasar/Trinity: an addrgen register-file read past 0xC8 bytes returns X; reg_offset <= 0xC0.
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t read_reg_addrgen(uint32_t reg_offset) {
+#if WATCHER_ASSERT_ENABLED
+    ASSERT(reg_offset / 8 < TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_REG_FILE_SIZE / 8);
+#endif
     return __builtin_riscv_ttrocc_addrgen_rd_reg(ADDRGEN, reg_offset / 8);
 }
 

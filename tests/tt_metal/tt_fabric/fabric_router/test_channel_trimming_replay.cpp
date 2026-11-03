@@ -708,7 +708,10 @@ protected:
         const FabricNodeId dst = nodes_.at(Role::Dst);
         const auto direction = control_plane.get_forwarding_direction(transit, dst);
         ASSERT_TRUE(direction.has_value());
-        const auto links = get_forwarding_link_indices(transit, dst);
+        const auto links = get_forwarding_link_indices(
+            *BaseFabricFixture::devices_map_.at(control_plane.get_physical_chip_id_from_fabric_node_id(transit)),
+            transit,
+            dst);
         ASSERT_FALSE(links.empty());
         const chan_id_t transit_chan =
             control_plane.get_active_fabric_eth_channels_in_direction(transit, *direction)[links[0]];

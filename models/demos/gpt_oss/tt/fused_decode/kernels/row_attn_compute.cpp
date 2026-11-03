@@ -54,7 +54,7 @@ void kernel_main() {
     cb_wait_front(cb_q, 2);
     // Qs = Q * scale
     tile_regs_acquire();
-    copy_tile_init(cb_q);
+    copy_init(cb_q);
     copy_tile(cb_q, 0, 0);
     copy_tile(cb_q, 1, 1);
     binop_with_scalar_tile_init();
@@ -93,7 +93,7 @@ void kernel_main() {
     }
     compute_kernel_hw_startup(cb_aux, cb_aux, cb_s);
     tile_regs_acquire();
-    copy_tile_init(cb_aux);
+    copy_init(cb_aux);
     copy_tile(cb_aux, 5, 0);
     binop_with_scalar_tile_init();
     mul_unary_tile(0, scale_bits);

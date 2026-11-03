@@ -158,7 +158,7 @@ IDevice* DeviceAt(
 void ClearScratchpadReport(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const distributed::MeshCoordinate& coordinate) {
     std::vector<uint32_t> report(1, 0u);
-    detail::WriteToDeviceL1(DeviceAt(mesh_device, coordinate), NodeCoord{0, 0}, kReportAddr, report);
+    tt::tt_metal::detail::WriteToDeviceL1(DeviceAt(mesh_device, coordinate), NodeCoord{0, 0}, kReportAddr, report);
 }
 
 void CheckScratchpad(
@@ -169,13 +169,13 @@ void CheckScratchpad(
     IDevice* device = DeviceAt(mesh_device, coordinate);
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
+    tt::tt_metal::detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     const uint32_t scratch_base = reported[0];
     EXPECT_NE(scratch_base, 0u) << "Kernel reported a 0 scratchpad base address";
 
     std::vector<uint32_t> scratch_contents;
-    detail::ReadFromDeviceL1(device, node, scratch_base, scratchpad_bytes, scratch_contents);
+    tt::tt_metal::detail::ReadFromDeviceL1(device, node, scratch_base, scratchpad_bytes, scratch_contents);
     EXPECT_EQ(scratch_contents, ExpectedScratchpadContents(scratchpad_bytes));
 }
 

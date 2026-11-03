@@ -63,14 +63,14 @@ def kda_conv_prefill(
     taps,
     widths,
     actual_start,
-    xin_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     emit_state=True,
     predecessor_fn=None,
     chunk_cap=512,
 ):
     """Depthwise causal conv (K=4) + SiLU + q/k/v split in ONE program (ttnn.experimental.kda.qkv_causal_conv1d_silu).
 
-    qkv:          [1, T, C] bf16 TILE, the projection's conv columns (q | k | v).
+    qkv:          [1, T, C] bf16, TILE or ROW_MAJOR, T a multiple of 32. TILE is read in place by the op;
+                  ROW_MAJOR is tilized inside the op first. The caller keeps ownership of qkv and frees it.
     history:      [1, 3, C] bf16, the three rows preceding this chunk (zeros from scratch). TILE or ROW_MAJOR;
                   the op reads ROW_MAJOR, so a TILE carry is converted here (three rows).
     taps:         four [1, 1, C] bf16 TILE tensors in kernel-position order, tap j multiplying row t-3+j
@@ -80,20 +80,21 @@ def kda_conv_prefill(
     Returns q [1,T,Q], k [1,T,K], v [1,T,V] bf16 TILE DRAM, and new_state [1, 3, C] bf16 TILE DRAM: the chunk's
     last three INPUT rows, i.e. the next chunk's history (the op does not emit it).
     emit_state=False skips new_state (returned as None), for callers that keep their own carry (the spec verify).
-    predecessor_fn: sequence parallelism (sp.py): called with the row-major conv input, returns the [1, 3, C] row-major
-    history of the preceding mesh row; `history` then only seeds the row holding the first token. None: local execution.
+    predecessor_fn: sequence parallelism (sp.py): called with the conv input's last tile row, [1, 32, C] bf16
+    ROW_MAJOR (its last three rows are handed over to the next mesh row), returns the [1, 3, C] row-major history of the
+    preceding mesh row; `history` then only seeds the row holding the first token. None: local execution.
     chunk_cap: cap (channels) for the op's channel_chunk_size, see kda_channel_chunk_size (smaller = more cores).
     """
     C = qkv.shape[-1]
     n_hist = history.shape[1]  # K - 1 = 3 rows, the op's fixed history depth
     assert qkv.shape[1] == T, f"kda_conv_prefill: T={T} but qkv has {qkv.shape[1]} rows"
     _dram = ttnn.DRAM_MEMORY_CONFIG
-    # The op's input contract is row-major: one untilize of the conv columns.
-    xin = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=xin_memory_config)
     hist = history if history.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(history, ttnn.ROW_MAJOR_LAYOUT)
-    pred = None if predecessor_fn is None else predecessor_fn(xin)
+    # The next chunk's history and the sequence-parallel carry need the input's last three rows in ROW_MAJOR.
+    tail = _kda_last_tile_row_rm(qkv, T, C) if emit_state or predecessor_fn is not None else None
+    pred = None if predecessor_fn is None else predecessor_fn(tail)
     q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-        xin,
+        qkv,
         hist,
         *taps,
         *widths,
@@ -114,15 +115,32 @@ def kda_conv_prefill(
     if pred is not None:
         ttnn.deallocate(pred)
     if not emit_state:
-        ttnn.deallocate(xin)
+        if tail is not None:
+            ttnn.deallocate(tail)
         return q, k, v, None
-    # Next chunk's history: the last three input rows, taken from the row-major copy (page reads, no
-    # untilize), then re-tiled because the layer-wide carry (conv_carry, decode seeding, per-user assembly)
-    # is TILE.
-    new_state = ttnn.slice(xin, (0, T - n_hist, 0), (1, T, C), memory_config=_dram)
-    ttnn.deallocate(xin)
+    # The next chunk's history: the tail's last three rows, re-tiled because the layer keeps its carry in TILE.
+    rows = tail.shape[1]
+    new_state = ttnn.slice(tail, (0, rows - n_hist, 0), (1, rows, C), memory_config=_dram)
+    ttnn.deallocate(tail)
     new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT, memory_config=_dram)
     return q, k, v, new_state
+
+
+def _kda_last_tile_row_rm(qkv, T, C):
+    """The conv input's last tile row as a new [1, 32, C] bf16 ROW_MAJOR DRAM tensor (the caller frees it).
+    TILE input: a tile-aligned slice, then an untilize of those 32 rows alone. ROW_MAJOR input: a row slice."""
+    rows = tpc.TILE_SIZE
+    assert T % rows == 0, f"kda_conv_prefill: T={T} is not a multiple of {rows}"
+    _dram = ttnn.DRAM_MEMORY_CONFIG
+    if qkv.layout == ttnn.ROW_MAJOR_LAYOUT:
+        if T == rows:
+            return ttnn.clone(qkv, memory_config=_dram)
+        return ttnn.slice(qkv, (0, T - rows, 0), (1, T, C), memory_config=_dram)
+    last = qkv if T == rows else ttnn.slice(qkv, (0, T - rows, 0), (1, T, C), memory_config=_dram)
+    tail = ttnn.to_layout(last, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+    if last is not qkv:
+        ttnn.deallocate(last)
+    return tail
 
 
 def kda_pack_gather(n_users, T, kc, rows_padded):
@@ -592,7 +610,6 @@ class TPGatedDeltaNet:
             xp = ttnn.pad(x, [(0, 0), (0, Lp - B * L), (0, 0)], 0.0)
             ttnn.deallocate(x)
             x = xp
-        # x is already ROW_MAJOR, so kda_conv_prefill's to_layout is a no-op and it frees x itself.
         q, k, v, _ = kda_conv_prefill(
             x,
             Lp,
@@ -602,6 +619,7 @@ class TPGatedDeltaNet:
             self._kda_actual_start,
             emit_state=False,
         )
+        ttnn.deallocate(x)
         G = self._kda_gather.get((B, T))
         if G is None:
             G = ttnn.from_torch(

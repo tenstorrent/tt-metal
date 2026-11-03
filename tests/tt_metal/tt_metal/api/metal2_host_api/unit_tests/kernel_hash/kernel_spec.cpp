@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -19,8 +20,10 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
+using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
 // ----------------------------------------------------------------------------
@@ -62,6 +65,33 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBindingAffectsKernelHash) {
     auto hash_unbound = prog_unbound.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     EXPECT_NE(hash_bound, hash_unbound)
         << "A kernel that binds a scratchpad must not share a JIT cache slot with one that doesn't.";
+}
+
+ProgramSpec MakeRuntimeArgNameSpec(std::vector<std::string> rta_names, std::vector<std::string> crta_names) {
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.runtime_arg_schema.runtime_arg_names = std::move(rta_names);
+    dm_kernel.runtime_arg_schema.common_runtime_arg_names = std::move(crta_names);
+    ProgramSpec spec;
+    spec.name = "runtime_arg_name_hash";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel"})};
+    return spec;
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_RuntimeArgNamePartitionAffectsKernelHash) {
+    Program prog_left = MakeProgramFromSpec(*mesh_device_, MakeRuntimeArgNameSpec({"a", "bc"}, {}));
+    Program prog_right = MakeProgramFromSpec(*mesh_device_, MakeRuntimeArgNameSpec({"ab", "c"}, {}));
+    EXPECT_NE(
+        prog_left.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        prog_right.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_CommonRuntimeArgNamePartitionAffectsKernelHash) {
+    Program prog_left = MakeProgramFromSpec(*mesh_device_, MakeRuntimeArgNameSpec({}, {"a", "bc"}));
+    Program prog_right = MakeProgramFromSpec(*mesh_device_, MakeRuntimeArgNameSpec({}, {"ab", "c"}));
+    EXPECT_NE(
+        prog_left.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        prog_right.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
 }
 
 }  // namespace

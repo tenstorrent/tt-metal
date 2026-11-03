@@ -17,6 +17,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
@@ -87,7 +88,7 @@ distributed::MeshWorkload BuildMeshCoordWorkload(const std::shared_ptr<distribut
     const experimental::KernelSpecName kKernel{"mesh_coord_print"};
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        auto [row, col] = GetGlobalCoord(mesh_device->get_device(coord)->id());
+        auto [row, col] = GetGlobalCoord(internal::get_device(*mesh_device, coord)->id());
 
         experimental::ProgramSpec spec{
             .name = "dprint_mesh_coord",

@@ -175,8 +175,9 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
                                 cb_data_format == tt::DataFormat::UInt32;
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
-        // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
-        if (cb_data_format == tt::DataFormat::Float32) {
+        // Compute consumes SRC0 (c_0). Int32/UInt32 also unpack to Dest: Quasar's transpose needs it
+        // for 32-bit data and rejects a 32-bit integer unpack into SrcA (#59515).
+        if (fp32_dest_acc_en) {
             compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
         }
         kernels.push_back(KernelSpec{
@@ -478,8 +479,9 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
                                 cb_data_format == tt::DataFormat::UInt32;
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
-        // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
-        if (cb_data_format == tt::DataFormat::Float32) {
+        // Compute consumes SRC0 (c_0). Int32/UInt32 also unpack to Dest: Quasar's transpose needs it
+        // for 32-bit data and rejects a 32-bit integer unpack into SrcA (#59515).
+        if (fp32_dest_acc_en) {
             compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
         }
         kernels.push_back(KernelSpec{
@@ -739,7 +741,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_page_size = detail::tile_size(tensor_return_value) + misalignment;
+    // Each cb_in entry has misalignment spare bytes for the reader to bounce a misaligned source line into place.
+    // Quasar's unpacker steps through a DFB one whole tile per entry, so there the reader bounces through a scratchpad.
+    const bool bounce_in_scratchpad = (misalignment > 0) && (input_tensor.device()->arch() == tt::ARCH::QUASAR);
+    uint32_t input_page_size = detail::tile_size(tensor_return_value) + (bounce_in_scratchpad ? 0 : misalignment);
+    const ScratchpadSpecName BOUNCE_SP{"bounce"};
 
     // ---- Resource names ----
     const TensorParamName INPUT{"input"};
@@ -789,8 +795,9 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     // Keep both the tilize input (c_0 = SRC_CB) and its output (c_1 = TILIZE_CB, which feeds the transpose)
     // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32 and drops the
     // low mantissa bits. UnpackToDest is the Metal 2.0 equivalent of the legacy UnpackToDestFp32.
-    // (Float32-only; Int32/UInt32 deferred, #49936.)
-    if (cb_data_format == tt::DataFormat::Float32) {
+    // Int32/UInt32 take the same route: Quasar's tilize and transpose unpack to Dest only when
+    // UnpackToDest is requested, and Quasar rejects a 32-bit integer unpack into SrcA (#59515).
+    if (fp32_dest_acc_en) {
         compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
     }
 
@@ -811,6 +818,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
         writer_rta_names.push_back("end_padding_tile_idx");
     }
 
+    Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
+    if (bounce_in_scratchpad) {
+        reader_scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = BOUNCE_SP, .accessor_name = "bounce"});
+    }
     KernelSpec reader{
         .unique_id = READER,
         .source =
@@ -818,6 +830,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
             "reader_permute_interleaved_tiled_generic.cpp",
         .compiler_options = {.defines = pad_defines},
         .dfb_bindings = reader_dfb,
+        .scratchpad_bindings = reader_scratchpad_bindings,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args =
             {{"rank", rank},
@@ -845,7 +858,8 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
              {"needs_x_padding", needs_x_padding},
              {"rows_per_x", non_x_rows},
              {"misalignment", misalignment},
-             {"read_alignment", read_alignment}},
+             {"read_alignment", read_alignment},
+             {"bounce_in_scratchpad", bounce_in_scratchpad}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * rank},
@@ -969,6 +983,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     // ---- Assemble ----
     ProgramSpec spec;
     spec.name = "permute_tiled_generic";
+    if (bounce_in_scratchpad) {
+        spec.scratchpads = {
+            ScratchpadSpec{.unique_id = BOUNCE_SP, .size_per_node = 2 * read_alignment + subtile_line_bytes}};
+    }
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     spec.dataflow_buffers = std::move(dataflow_buffers);
     spec.tensor_parameters = {

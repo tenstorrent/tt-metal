@@ -53,23 +53,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res    = params.buffer_Res;
 #endif
 
-    llk_sfpu_srcs_unary_init(
-        L1_ADDRESS(buffer_A[0]),
-        static_cast<DataFormat>(formats.unpack_S_src),
+    // The SrcS layout is known only at runtime; one dispatch picks the op type for init and run.
+    dispatch_sfpu_srcs_op<SquareSrcs>(
         static_cast<DataFormat>(formats.unpack_S_dst),
-        L1_ADDRESS(buffer_Res[0]),
         static_cast<DataFormat>(formats.pack_S_src),
-        static_cast<DataFormat>(formats.pack_S_dst),
-        false /*implied_math_format*/);
-
-    const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
-    LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS square requires matching unpack destination and pack source formats");
-    dispatch_sfpu_srcs_format(
-        srcs_format,
-        [&](auto layout)
+        [&](auto op)
         {
-            using Layout = decltype(layout);
-            llk_sfpu_srcs_unary(TILE_CNT, srcs_format, [](int, int, int) { calculate_square_srcs<Layout::layout>(); });
+            using Op = decltype(op);
+            Op::init(
+                L1_ADDRESS(buffer_A[0]), static_cast<DataFormat>(formats.unpack_S_src), L1_ADDRESS(buffer_Res[0]), static_cast<DataFormat>(formats.pack_S_dst));
+            Op::run(TILE_CNT);
         });
 
     wait_sfpu_idle();

@@ -295,9 +295,34 @@ constexpr ResolvedTile resolve(const MapData& map, Address address) {
     }
 }
 
+constexpr bool same_window(const Window& a, const Window& b) {
+    return a.compare == b.compare && a.mask_bits == b.mask_bits && a.endpoint_shift == b.endpoint_shift &&
+           a.endpoint_size == b.endpoint_size && a.endpoint_table_offset == b.endpoint_table_offset;
+}
+
+/// @brief Find @p endpoint in the DRAM table. Word 0 means an unused row unless a logical bank
+/// is bound to it, since tile (0,0) also packs to word 0.
+constexpr ResolvedTile resolve_dram_endpoint(
+    const MapData& map, std::uint16_t endpoint, std::uint32_t noc_x, std::uint32_t noc_y) {
+    for (std::uint32_t selector = 0; selector < map.dram_endpoint_words.size(); ++selector) {
+        if (map.dram_endpoint_words[selector] != endpoint) {
+            continue;
+        }
+        bool bound = false;
+        for (std::uint32_t bank = 0; bank < map.dram_selectors.size(); ++bank) {
+            bound = bound || map.dram_selectors[bank] == selector;
+        }
+        if (endpoint != 0 || bound) {
+            return {selector, noc_x, noc_y, true, WindowClass::Dram};
+        }
+    }
+    return INVALID_TILE;
+}
+
 /// @brief This initiator's identity from its NOC_NODE_ID coordinates, via the
 /// generated inverse endpoint tables (physical layout is irregular; this is a
-/// table lookup by nature).
+/// table lookup by nature). On a map whose DRAM window is its own, a DRAM tile
+/// resolves through that window even when the full-tile table also lists it.
 constexpr ResolvedTile resolve_current(const MapData& map, std::uint32_t noc_x, std::uint32_t noc_y) {
     const std::uint16_t endpoint = static_cast<std::uint16_t>((noc_y << 6) | noc_x);
     for (std::uint32_t selector = 0; selector < map.worker_endpoint_words.size(); ++selector) {
@@ -305,15 +330,21 @@ constexpr ResolvedTile resolve_current(const MapData& map, std::uint32_t noc_x, 
             return {selector, noc_x, noc_y, true, WindowClass::Worker};
         }
     }
+    const Window& dram = map_window(map, WindowClass::Dram);
+    const bool dram_first = !is_no_window(dram) && !same_window(dram, map_window(map, WindowClass::FullTile));
+    if (dram_first) {
+        const ResolvedTile tile = resolve_dram_endpoint(map, endpoint, noc_x, noc_y);
+        if (tile.valid) {
+            return tile;
+        }
+    }
     for (std::uint32_t selector = 0; selector < map.full_tile_endpoint_words.size(); ++selector) {
         if (map.full_tile_endpoint_words[selector] == endpoint) {
             return {selector, noc_x, noc_y, true, WindowClass::FullTile};
         }
     }
-    for (std::uint32_t selector = 0; selector < map.dram_endpoint_words.size(); ++selector) {
-        if (map.dram_endpoint_words[selector] != 0 && map.dram_endpoint_words[selector] == endpoint) {
-            return {selector, noc_x, noc_y, true, WindowClass::Dram};
-        }
+    if (!dram_first) {
+        return resolve_dram_endpoint(map, endpoint, noc_x, noc_y);
     }
     return INVALID_TILE;
 }
@@ -559,11 +590,6 @@ struct OperandTarget {
     std::uint32_t bank;
 };
 
-constexpr bool same_window(const Window& a, const Window& b) {
-    return a.compare == b.compare && a.mask_bits == b.mask_bits && a.endpoint_shift == b.endpoint_shift &&
-           a.endpoint_size == b.endpoint_size && a.endpoint_table_offset == b.endpoint_table_offset;
-}
-
 /// @brief Say what a unicast operand reaches (multicast descriptors go through
 /// decode_multicast_descriptor instead). Windows can overlap, so the order of
 /// the checks matters: Self first (selector 0 of the local window is the core
@@ -593,9 +619,11 @@ constexpr OperandTarget classify_operand(const MapData& map, NocAddress address)
                 break;
             }
         }
-        // Find the DRAM tile's endpoint word: in the DRAM table (0 = not programmed), or
-        // in the full-tile table on maps where DRAM shares that window.
-        bool known = selector < map.dram_endpoint_words.size() && map.dram_endpoint_words[selector] != 0;
+        // Find the DRAM tile's endpoint word: in the DRAM table (0 = not programmed, unless a
+        // logical bank is bound to the selector: then the word is tile (0,0)), or in the
+        // full-tile table on maps where DRAM shares that window.
+        const bool bound = bank != DRAM_BANK_UNKNOWN;
+        bool known = selector < map.dram_endpoint_words.size() && (map.dram_endpoint_words[selector] != 0 || bound);
         std::uint32_t word = known ? map.dram_endpoint_words[selector] : 0;
         if (!known && bank != DRAM_BANK_UNKNOWN && !is_no_window(tile) && same_window(dram, tile) &&
             selector < map.full_tile_endpoint_words.size()) {

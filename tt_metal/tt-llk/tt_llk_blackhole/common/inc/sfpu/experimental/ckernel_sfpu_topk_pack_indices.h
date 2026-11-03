@@ -49,30 +49,36 @@ inline void _topk_xl_pack_supplied_indices_(const std::uint32_t scores, const st
     static_assert(K == 512 || K == 1024 || K == 2048);
     // Each SFPI slot addresses 32 elements (two physical DEST rows).
     constexpr std::uint32_t elements_per_slot = 32;
-    constexpr std::uint32_t tile_slots = 32;
-    constexpr auto score_mask                 = 0xffff0000u;
-    constexpr auto index_mask                 = 0xffffu;
+    constexpr std::uint32_t tile_slots        = 32;
     constexpr auto sentinel_id                = -1;
-    constexpr std::int32_t padding            = static_cast<std::int32_t>(0xff80ffffu);
-    constexpr std::uint32_t half_slots = tile_slots / 2;
-    const std::uint32_t score_offset   = scores * tile_slots + (K == 512 ? score_half * half_slots : 0);
+    constexpr std::uint32_t half_slots        = tile_slots / 2;
+    const std::uint32_t score_offset          = scores * tile_slots + (K == 512 ? score_half * half_slots : 0);
+    const std::uint32_t index_offset          = indices * tile_slots;
+    const std::uint32_t output_offset         = output * tile_slots;
+    // Load the masks and padding once instead of per slot (four SFPLOADIs per slot).
+    // The sentinel needs no register: the compare folds it into an immediate add.
+    const sfpi::vInt score_mask(0xffff0000u);
+    const sfpi::vInt index_mask(0xffffu);
+    const sfpi::vInt padding(static_cast<std::int32_t>(0xff80ffffu));
+#pragma GCC unroll 8
     for (std::uint32_t i = 0; i < K / elements_per_slot; ++i)
     {
         sfpi::vInt score  = sfpi::dst_reg[score_offset].mode<sfpi::DataLayout::I32>();
-        sfpi::vInt id     = sfpi::dst_reg[indices * tile_slots].mode<sfpi::DataLayout::I32>();
+        sfpi::vInt id     = sfpi::dst_reg[index_offset].mode<sfpi::DataLayout::I32>();
         sfpi::vInt packed = (score & score_mask) | (id & index_mask);
         v_if (id == sentinel_id)
         {
             packed = padding;
         }
         v_endif;
-        sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>(ADDR_MOD_0) = packed;
+        sfpi::dst_reg[output_offset].mode<sfpi::DataLayout::I32>(ADDR_MOD_0) = packed;
     }
     if constexpr (K == 512)
     {
+#pragma GCC unroll 8
         for (std::uint32_t i = 0; i < half_slots; ++i)
         {
-            sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>(ADDR_MOD_0) = sfpi::vInt(padding);
+            sfpi::dst_reg[output_offset].mode<sfpi::DataLayout::I32>(ADDR_MOD_0) = padding;
         }
     }
 }

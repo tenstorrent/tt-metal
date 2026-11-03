@@ -17,9 +17,9 @@ from helpers.param_config import parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    PACK_SRC_FROM_OUTPUT,
     DEST_SYNC,
     LOOP_FACTOR,
+    PACK_SRC_FROM_OUTPUT,
     TILE_COUNT,
     generate_input_dim,
 )

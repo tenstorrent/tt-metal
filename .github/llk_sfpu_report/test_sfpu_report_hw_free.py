@@ -71,7 +71,7 @@ WH, BH = "wormhole", "blackhole"
         (["tt_metal/tt-llk/tests/sources/eltwise_unary_sfpu_test.cpp"], [WH, BH]),
         (["tt_metal/tt-llk/tt_llk_wormhole_b0/a.h", "tt_metal/tt-llk/common/b.h"], [WH, BH]),
         # Quasar is not measured, even under a shared directory.
-        (["tt_metal/tt-llk/tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_sqrt.h"], []),
+        (["tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_sqrt.h"], []),
         (["tt_metal/tt-llk/tests/sources/quasar/sfpu_test.cpp"], []),
         (["tt_metal/hw/inc/internal/tt-2xx/quasar/cfg_defines.h"], []),
         (["tt_metal/tt-llk/tt_llk_quasar/a.h", "tt_metal/tt-llk/tt_llk_blackhole/b.h"], [BH]),
@@ -231,12 +231,15 @@ def test_binary_ops_are_their_own_family():
 def test_detection_compiles_modules_and_kernels_that_exist(family):
     module = runner.PYTHON_TESTS / detect.MODULES[family]
     assert module.is_file()
+    source_users = [
+        module,
+        runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py",
+        runner.PYTHON_TESTS / "test_eltwise_unary_sfpu.py",
+        runner.PYTHON_TESTS / "test_eltwise_unary_typecast.py",
+    ]
     for source in detect.SOURCES[family]:
         assert (runner.TOOL_LLK / "tests" / "sources" / source).is_file()
-        assert (
-            f"sources/{source}"
-            in module.read_text() + (runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py").read_text()
-        )
+        assert any(f"sources/{source}" in user.read_text() for user in source_users)
 
 
 def test_the_accuracy_driver_is_in_the_harness_only_while_it_runs(monkeypatch, tmp_path):
@@ -290,10 +293,48 @@ def test_the_binary_accuracy_driver_hooks_names_that_exist():
     assert hooked | builders <= module_names(runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py")
 
 
-@pytest.mark.parametrize("exit_code, builds", [(0, True), (5, True), (1, False)])
-def test_the_skew_probe_reads_the_compile_exit_code(monkeypatch, exit_code, builds):
-    monkeypatch.setattr(detect, "compile_all", lambda *args, **kwargs: exit_code)
+@pytest.mark.parametrize(
+    "unary_exit,typecast_exit,builds",
+    [
+        (0, 0, True),
+        (runner.NO_TESTS_COLLECTED, 0, True),
+        (1, 0, False),
+        (0, runner.NO_TESTS_COLLECTED, False),
+        (0, 1, False),
+    ],
+)
+def test_the_skew_probe_reads_both_compile_exit_codes(monkeypatch, unary_exit, typecast_exit, builds):
+    calls = []
+
+    def compile_all(side, arch, family, log, jobs, **kwargs):
+        calls.append((family, kwargs))
+        return unary_exit if family == "unary" else typecast_exit
+
+    monkeypatch.setattr(detect, "compile_all", compile_all)
     assert cli._harness_compiles(None, "wormhole", None, 1) is builds
+    assert calls[0] == ("unary", {"only_ops": ("neg",)})
+    if unary_exit in (0, runner.NO_TESTS_COLLECTED):
+        assert calls[1] == ("typecast", {"extra_pytest_args": ("-k", "Float16_b and UInt16")})
+    else:
+        assert len(calls) == 1
+
+
+def test_typecast_harness_skew_falls_back_to_rebase_mode(monkeypatch):
+    monkeypatch.setattr(
+        detect,
+        "compile_all",
+        lambda side, arch, family, log, jobs, **kwargs: 0 if family == "unary" else 1,
+    )
+    seen = []
+    monkeypatch.setattr(cli, "_sides", lambda plan, work, mode: (seen.append(mode), ("base", "head"))[1])
+    notes = []
+    assert cli._choose_sides(None, None, "merge-base", "wormhole", None, 1, notes) == (
+        "rebase",
+        "base",
+        "head",
+    )
+    assert seen == ["merge-base", "rebase"]
+    assert notes
 
 
 @pytest.mark.parametrize(

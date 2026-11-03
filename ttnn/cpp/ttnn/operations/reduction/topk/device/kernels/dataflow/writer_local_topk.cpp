@@ -11,7 +11,7 @@
 
 void kernel_main() {
     // Runtime args
-    const std::uint32_t start_wt = get_arg_val<std::uint32_t>(0);
+    const auto start_wt = get_arg_val<std::uint32_t>(0);
 
     // Compile time args
     constexpr std::uint32_t receiver_sem_id = get_compile_time_arg_val(0);           // Final core readiness signal
@@ -43,15 +43,15 @@ void kernel_main() {
     const std::uint32_t final_values_dfb_addr = final_values_dfb.get_write_ptr();
 
     // Base addresses in final core's L1 memory with offset for this core's contribution
-    const std::uint32_t final_values_base = final_values_dfb_addr + start_wt * tile_bytes_values * Kt;
+    const std::uint32_t final_values_base = final_values_dfb_addr + (start_wt * tile_bytes_values * Kt);
 
 #if !defined(TOPK_FUSED_STABLE_KEYS)
     // Fused-key mode has no separate index stream (and the index CBs may not exist on this core).
     DataflowBuffer indices_dfb(output_ind_dfb_index);
-    DataflowBuffer final_indices_dfb(final_indices_dfb_index);
+    const DataflowBuffer final_indices_dfb(final_indices_dfb_index);
     const std::uint32_t tile_bytes_ind = indices_dfb.get_entry_size();
     const std::uint32_t final_indices_dfb_addr = final_indices_dfb.get_write_ptr();
-    const std::uint32_t final_indices_base = final_indices_dfb_addr + start_wt * tile_bytes_ind * Kt;
+    const std::uint32_t final_indices_base = final_indices_dfb_addr + (start_wt * tile_bytes_ind * Kt);
 #endif
 
     // Send local TopK results to final core

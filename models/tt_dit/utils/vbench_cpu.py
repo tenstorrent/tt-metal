@@ -3,9 +3,23 @@
 
 """CPU VBench scoring with original appearance inputs and bounded temporal resolution.
 
-All frames and seeds remain in the gate. Only RAFT/AMT receive a spatially reduced
-copy; this is a distinct temporal evaluation policy, not full-resolution VBench.
-The copy is losslessly encoded so compression does not introduce a second change.
+Used as a bundle scorer when a test sets VBENCH_TEMPORAL_WIDTH > 0 (LTX-2.3 Fast T2V in CI), so large
+clips score within the leg's time. The metrics are split by input:
+
+- subject_consistency, background_consistency and imaging_quality score the original clip, with
+  VBench's normal preprocessing.
+- motion_smoothness (AMT) and dynamic_degree (RAFT) score a copy downscaled to ``temporal_width``
+  pixels wide, keeping every frame and the original frame rate.
+
+The copy is made in-process with PyAV (area downsampling, lossless RGB encoding, source timestamps
+preserved; no OS command is launched), and the resize fails if the frame count or frame rate changes.
+Lossless encoding keeps compression from adding a second change. Scoring motion at reduced width is
+less sensitive to small spatial motion artifacts: it is a distinct temporal policy, not equivalent to
+full-resolution VBench. Every seed, frame and metric stays in the gate.
+
+dynamic_degree uses VBench 0.1.5's RAFT model, frame sampling, flow threshold and required count of
+moving pairs, but stops once the remaining pairs cannot change the binary result. Unlike the resize,
+that early exit reproduces the reference result exactly.
 """
 
 import tempfile
@@ -33,6 +47,7 @@ def motion_decision(scores, *, pairs, threshold, required):
 
 
 def dynamic_degree(video_path):
+    """VBench's dynamic_degree for one clip: 1.0 if enough frame pairs show motion, else 0.0."""
     import torch
     from easydict import EasyDict
     from vbench.dynamic_degree import DynamicDegree
@@ -119,9 +134,14 @@ def temporal_video(path, max_width):
         yield reduced
 
 
-def score_clip_ci(path, *, prompt, temporal_width=960):
-    scores = score_vbench(str(path), prompt=prompt, dimensions=APPEARANCE_METRICS)
+def score_clip_ci(path, *, prompt, dimensions, temporal_width=960):
+    """Score ``dimensions`` for one clip: appearance metrics on the original, temporal metrics on a copy
+    downscaled to ``temporal_width`` pixels wide (see the module docstring)."""
+    appearance = [metric for metric in APPEARANCE_METRICS if metric in dimensions]
+    scores = score_vbench(str(path), prompt=prompt, dimensions=appearance) if appearance else {}
     with temporal_video(path, temporal_width) as reduced:
-        scores.update(score_vbench(str(reduced), prompt=prompt, dimensions=["motion_smoothness"]))
-        scores["dynamic_degree"] = dynamic_degree(reduced)
+        if "motion_smoothness" in dimensions:
+            scores.update(score_vbench(str(reduced), prompt=prompt, dimensions=["motion_smoothness"]))
+        if "dynamic_degree" in dimensions:
+            scores["dynamic_degree"] = dynamic_degree(reduced)
     return scores

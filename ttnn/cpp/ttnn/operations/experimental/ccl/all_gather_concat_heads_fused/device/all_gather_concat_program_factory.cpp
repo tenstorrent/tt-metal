@@ -158,9 +158,9 @@ ProgramDescriptor build_program_descriptor(
     const auto& temp_tensor = tensor_args.buffer_tensor;
     auto& output_tensor = tensor_return_value;
 
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in a device buffer");
-    TT_FATAL(temp_tensor.buffer() != nullptr, "Buffer tensor must be allocated in a device buffer");
-    TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in a device buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in a device buffer");
+    TT_FATAL(temp_tensor.is_allocated(), "Buffer tensor must be allocated in a device buffer");
+    TT_FATAL(output_tensor.is_allocated(), "Output tensor must be allocated in a device buffer");
 
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor must be on a MeshDevice");
@@ -285,7 +285,7 @@ ProgramDescriptor build_program_descriptor(
     auto in_cores = in_shard_spec.grid;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =

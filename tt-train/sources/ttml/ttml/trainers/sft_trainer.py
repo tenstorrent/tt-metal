@@ -10,6 +10,7 @@ import logging
 import os
 import pickle
 import sys
+import warnings
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 import ttml
 from ttml.common.profiler_utils import profiler_marker
+from ttml.common.schedulers import LambdaScheduler, linear_warmup_lambda
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
 from ttml.trainers.callback import TrainerCallback
@@ -47,8 +49,10 @@ class SFTConfig:
         seed: Optional RNG seed for reproducibility.
         max_seq_len: Maximum sequence length (currently unused; kept for
             backward compatibility).
-        learning_rate: Peak learning rate, also used to initialise the default
-            AdamW optimizer when no explicit optimizer is provided.
+        learning_rate: Used only when ``optimizer`` is ``None``: the lr of the
+            default AdamW the trainer creates. With an explicit optimizer, its own
+            ``lr`` (per param group) is the peak LR and this field is ignored,
+            because the schedule multiplies the optimizer's initial LRs.
         warmup_steps: Linear warmup steps for the default schedule.
         max_grad_norm: Maximum gradient norm for clipping (0 to disable).
         log_interval: Update the progress bar / fire ``on_step_end``
@@ -124,6 +128,8 @@ class SFTTrainer:
         attention_mask: Any = None,
         checkpoint_saver: Optional[Callable[["SFTTrainer", str], None]] = None,
         checkpoint_loader: Optional[Callable[["SFTTrainer", str], int]] = None,
+        *,
+        lr_lambda: Optional[Callable[[int], float]] = None,
     ) -> None:
         """
         Args:
@@ -140,7 +146,9 @@ class SFTTrainer:
             peft_config: Optional PEFT configuration (e.g. :class:`LoraConfig`).
                 When provided the model is automatically wrapped with the
                 appropriate adapter (currently :class:`LoraModel`).
-            lr_schedule: Optional callable ``step -> lr``.
+            lr_schedule: Deprecated, use ``lr_lambda``. Callable ``step -> LR``:
+                the first param group's LR, with the other groups keeping their
+                ratio to it (like the deprecated ``optimizer.set_lr``).
             callbacks: Optional list of :class:`TrainerCallback` instances.
             compute_loss_func: Optional callable ``(model_output, batch) -> loss``
                 that replaces the default masked cross-entropy.  Must return a
@@ -164,6 +172,11 @@ class SFTTrainer:
                 restores ``model.parameters()`` from ``path`` and returns
                 the step the checkpoint was taken at.  Called by
                 :meth:`load_checkpoint` to support resume.
+            lr_lambda: Optional callable ``step -> factor``. Every step, each
+                param group's LR is set to ``factor`` times that group's initial
+                LR (PyTorch's ``LambdaLR``), so param groups keep their ratios.
+                ``None`` (default) -- linear warmup over
+                ``config.warmup_steps``, then a constant factor of 1.
 
         Note:
             When ``config.gradient_checkpointing`` is ``True`` the model's
@@ -191,7 +204,20 @@ class SFTTrainer:
         self._validate_clip_grad_norm()
 
         self._optimizer = self._build_optimizer(optimizer)
-        self._lr_schedule = lr_schedule if lr_schedule is not None else self._build_lr_schedule()
+        if lr_schedule is not None:
+            if lr_lambda is not None:
+                raise ValueError("pass lr_lambda or the deprecated lr_schedule, not both")
+            warnings.warn(
+                "SFTTrainer(lr_schedule=...) is deprecated; pass lr_lambda (step -> factor of each param group's "
+                "initial LR) instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            initial_lr = self._optimizer.get_initial_lr()
+            if initial_lr == 0.0:
+                raise ValueError("lr_schedule needs a non-zero initial LR to scale from; pass lr_lambda instead")
+            lr_lambda = lambda step: lr_schedule(step) / initial_lr
+        self._lr_lambda = lr_lambda if lr_lambda is not None else linear_warmup_lambda(config.warmup_steps)
         self._attention_mask = attention_mask
         self._loss_fn = self._build_loss_fn()
         self._callbacks = callbacks or []
@@ -233,12 +259,17 @@ class SFTTrainer:
         # Compilation finishes after the first iteration of THIS run; track the starting step so the
         # marker fires on resume too, not only when self.step happens to equal 1.
         start_step = self.step
+        # self.step (restored by load_checkpoint) is the step count of record, so the scheduler is not checkpointed:
+        # it is built on the first step, offset to start at self.step. lr_lambda gets the 0-based step index.
+        scheduler = None
         bar = tqdm(range(self.step, cfg.max_steps), desc="SFTTrainer", disable=cfg.disable_progress_bar)
         for _ in bar:
-            # self.step is 0-based so external lr_schedule callables (e.g.
-            # SpeedrunScheduler.lr_at) receive the expected step index.
-            lr = self._lr_schedule(self.step)
-            self._optimizer.set_lr(lr)
+            # LR for the step about to run: applied when the scheduler is built, then by each step().
+            if scheduler is None:
+                scheduler = LambdaScheduler(self._optimizer, lambda step: self._lr_lambda(start_step + step))
+            else:
+                scheduler.step()
+            lr = scheduler.get_last_lrs()[0]  # logged, like HF's ``lr_scheduler.get_last_lr()[0]``
             self._optimizer.zero_grad()
 
             micro_losses = []
@@ -476,18 +507,6 @@ class SFTTrainer:
             {"type": "AdamW", "lr": self.config.learning_rate},
             self.model.parameters(),
         )
-
-    def _build_lr_schedule(self):
-        """Return a callable ``step -> lr`` implementing linear warmup then constant."""
-        peak_lr = self.config.learning_rate
-        warmup = max(0, self.config.warmup_steps)
-
-        def schedule(step: int) -> float:
-            if warmup > 0 and step < warmup:
-                return peak_lr * (step + 1) / warmup
-            return peak_lr
-
-        return schedule
 
     def _build_loss_composer(self, loss_composer: Optional[Any] = None):
         """Create a mesh composer for aggregating loss across devices."""

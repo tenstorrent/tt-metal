@@ -125,9 +125,11 @@ def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimize
 # above for what is intentionally excluded and why.
 _PY_BOUND_OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD", "MuonComposite", "NoOp"]
 
-# Optimizers that store and restore lr in their state dict. NoOp is excluded
-# because its get_lr() returns a hardcoded 0.0 and set_lr() is a no-op.
+# Optimizers whose lr is a constructor argument (NoOp's single group has a fixed, unused lr of 0).
 _LR_OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD", "MuonComposite"]
+
+# State dict key of the lr (of the first, here the only, param group).
+_LR_KEY = "param_groups.0.lr"
 
 
 @pytest.mark.requires_device
@@ -138,12 +140,11 @@ def test_adamw_get_state_dict_keys():
 
     state = opt.get_state_dict()
 
+    # Hyperparameters live in the param groups
     assert "steps" in state
-    assert "lr" in state
-    assert "beta1" in state
-    assert "beta2" in state
-    assert "epsilon" in state
-    assert "weight_decay" in state
+    assert state["num_param_groups"] == 1
+    for key in ("lr", "beta1", "beta2", "epsilon", "weight_decay", "initial_lr", "params"):
+        assert f"param_groups.0.{key}" in state, key
     assert "amsgrad" in state
     assert "stochastic_rounding" in state
     assert "exp_avg" in state
@@ -232,10 +233,9 @@ def test_lr_present_in_state_dict(optimizer_name):
     opt = _make_optimizer(optimizer_name, params)
 
     state = opt.get_state_dict()
-
-    assert "lr" in state, f"{optimizer_name}.get_state_dict() missing 'lr' key"
-    assert isinstance(state["lr"], float), f"{optimizer_name}: expected float lr, got {type(state['lr'])}"
-    assert state["lr"] == pytest.approx(1e-3)
+    assert _LR_KEY in state, f"{optimizer_name}.get_state_dict() missing '{_LR_KEY}' key"
+    assert isinstance(state[_LR_KEY], float), f"{optimizer_name}: expected float lr, got {type(state[_LR_KEY])}"
+    assert state[_LR_KEY] == pytest.approx(1e-3)
 
 
 @pytest.mark.requires_device
@@ -244,29 +244,45 @@ def test_lr_restored_after_set_state_dict(optimizer_name):
     """``set_state_dict`` correctly restores a mutated lr value.
 
     Constructs an optimizer with lr=1e-3, then round-trips a state dict with
-    lr overridden to 5e-4. Verifies that ``get_lr()`` reflects the restored
+    lr overridden to 5e-4. Verifies that ``get_group_lrs()`` reflects the restored
     value, exercising the ``float`` variant routing through the schema.
     """
     params = _make_simple_params()
     opt = _make_optimizer(optimizer_name, params)
 
     state = dict(opt.get_state_dict())
-    state["lr"] = 5e-4
+    state[_LR_KEY] = 5e-4
 
     opt.set_state_dict(state)
 
-    assert opt.get_lr() == pytest.approx(
-        5e-4
-    ), f"{optimizer_name}: expected lr=5e-4 after set_state_dict, got {opt.get_lr()}"
+    assert opt.get_group_lrs() == pytest.approx(
+        [5e-4]
+    ), f"{optimizer_name}: expected lr=5e-4 after set_state_dict, got {opt.get_group_lrs()}"
 
 
 # Per-optimizer hyperparameter keys (excluding lr which is tested separately)
 # and the mutated values to round-trip through set_state_dict.
 _HYPERPARAMS_BY_OPTIMIZER = {
-    "AdamW": {"beta1": 0.8, "beta2": 0.99, "epsilon": 1e-6, "weight_decay": 1e-2, "stochastic_rounding": False},
-    "AdamWFullPrecision": {"beta1": 0.8, "beta2": 0.99, "epsilon": 1e-6, "weight_decay": 1e-2},
-    "SGD": {"momentum_factor": 0.9, "dampening": 0.1, "weight_decay": 1e-4, "nesterov": False},
-    "MuonComposite": {"momentum": 0.85, "ns_steps": 3},
+    "AdamW": {
+        "param_groups.0.beta1": 0.8,
+        "param_groups.0.beta2": 0.99,
+        "param_groups.0.epsilon": 1e-6,
+        "param_groups.0.weight_decay": 1e-2,
+        "stochastic_rounding": False,
+    },
+    "AdamWFullPrecision": {
+        "param_groups.0.beta1": 0.8,
+        "param_groups.0.beta2": 0.99,
+        "param_groups.0.epsilon": 1e-6,
+        "param_groups.0.weight_decay": 1e-2,
+    },
+    "SGD": {
+        "param_groups.0.momentum": 0.9,
+        "param_groups.0.dampening": 0.1,
+        "param_groups.0.weight_decay": 1e-4,
+        "nesterov": False,
+    },
+    "MuonComposite": {"param_groups.0.momentum": 0.85, "ns_steps": 3},
 }
 
 
@@ -294,3 +310,77 @@ def test_hyperparams_restored_after_set_state_dict(optimizer_name):
             assert actual == pytest.approx(expected), f"{optimizer_name}['{key}']: expected {expected}, got {actual}"
         else:
             assert actual == expected, f"{optimizer_name}['{key}']: expected {expected}, got {actual}"
+
+
+@pytest.mark.requires_device
+def test_adamw_param_groups_roundtrip_through_python():
+    """Param groups go in and come out as dicts, with missing options filled from defaults."""
+    params = _make_simple_params()
+    (name,) = list(params.keys())
+    defaults = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.1)
+    opt = ttml.optimizers.AdamW(params, defaults, param_groups=[{"params": [name], "lr": 2e-3, "weight_decay": 0.0}])
+
+    ungrouped, group = opt.get_param_groups()
+    assert ungrouped["params"] == []
+    assert group["params"] == [name]
+    assert group["lr"] == pytest.approx(2e-3)
+    assert group["weight_decay"] == 0.0
+    assert group["beta1"] == pytest.approx(0.9)
+    assert opt.get_defaults()["weight_decay"] == pytest.approx(0.1)
+
+    opt.set_param_group_option(1, "weight_decay", 0.05)
+    assert opt.get_param_groups()[1]["weight_decay"] == pytest.approx(0.05)
+
+
+def test_adamw_group_options_get_and_set_every_group(expect_error):
+    """``get_group_options`` / ``set_group_options`` read and write one option across all param groups."""
+    defaults = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.1)
+    opt = ttml.optimizers.AdamW(ttml.NamedParameters(), defaults, param_groups=[{"params": [], "weight_decay": 0.0}])
+    assert opt.get_group_options("weight_decay") == pytest.approx([0.1, 0.0])
+
+    opt.set_group_options("weight_decay", [0.05, 0.01])
+    assert [group["weight_decay"] for group in opt.get_param_groups()] == pytest.approx([0.05, 0.01])
+    opt.set_group_options("lr", [2e-3, 4e-3])
+    assert opt.get_group_lrs() == pytest.approx([2e-3, 4e-3])
+
+    with expect_error(ValueError, "Unknown param group option 'weight_dacay'"):
+        opt.get_group_options("weight_dacay")
+    with expect_error(ValueError, "Unknown param group option 'weight_dacay'"):
+        opt.set_group_options("weight_dacay", [0.0, 0.0])
+    with expect_error(ValueError, "has 2 param groups, but got 1 values for 'beta1'"):
+        opt.set_group_options("beta1", [0.8])
+
+
+_GROUPED_OPTIMIZERS = {
+    "AdamWFullPrecision": lambda groups: ttml.optimizers.AdamWFullPrecision(
+        ttml.NamedParameters(),
+        ttml.optimizers.AdamWFullPrecisionConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.1),
+        param_groups=groups,
+    ),
+    "SGD": lambda groups: ttml.optimizers.SGD(
+        ttml.NamedParameters(),
+        ttml.optimizers.SGDConfig.make(lr=1e-3, momentum=0.9, dampening=0.0, weight_decay=0.1, nesterov=False),
+        param_groups=groups,
+    ),
+    "MuonComposite": lambda groups: ttml.optimizers.MuonComposite(
+        ttml.NamedParameters(), ttml.optimizers.MuonConfig.make(lr=1e-3, momentum=0.95, ns_steps=5), param_groups=groups
+    ),
+}
+
+
+@pytest.mark.parametrize("optimizer_name", list(_GROUPED_OPTIMIZERS))
+def test_param_groups_roundtrip_for_every_optimizer_with_param_groups(optimizer_name):
+    """Every optimizer with param groups restores its options and initial LRs from its state dict."""
+    make = _GROUPED_OPTIMIZERS[optimizer_name]
+    groups = [{"params": [], "lr": 2e-3}]
+    src = make(groups)
+    assert src.get_group_lrs() == pytest.approx([1e-3, 2e-3])
+    assert src.get_initial_group_lrs() == pytest.approx([1e-3, 2e-3])  # recorded, as a scheduler attaching would
+    src.set_group_lrs([5e-4, 7e-4])
+
+    dst = make(groups)
+    dst.set_state_dict(src.get_state_dict())
+    assert dst.get_group_lrs() == pytest.approx([5e-4, 7e-4])
+    assert dst.get_initial_group_lrs() == pytest.approx([1e-3, 2e-3])
+    for got, want in zip(dst.get_param_groups(), src.get_param_groups()):
+        assert got == pytest.approx(want)

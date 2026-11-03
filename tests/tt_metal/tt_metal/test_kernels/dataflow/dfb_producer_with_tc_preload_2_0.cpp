@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Metal 2.0 (declarative API) D1 DM producer.
-// Variant of dfb_producer.cpp that pre-increments the TC posted counter to a
-// near-wrap value before the main producer loop.
+// Variant of dfb_producer.cpp that fast-forwards the TC posted and acked counters
+// to a near-wrap value, in lock-step, before the main producer loop.
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -33,14 +33,12 @@ void kernel_main() {
     if constexpr (kPreloadPostedValue > 0) {
 #ifdef ARCH_QUASAR
         if (producer_idx == 0) {
-            preload_posted_counter(dfb, kPreloadPostedValue);
-            // Cross-kernel rendezvous: this kernel preloads POSTED; the consumer kernel
-            // preloads ACKED. They run on separate DM RISCs with no implicit ordering, so
-            // without a barrier this producer could start issuing async_reads (advancing
-            // posted) before the consumer has bumped acked — leaving occupancy != 0 and
-            // corrupting the first entry. Signal "producer ready", then wait for the
-            // consumer's "ready" so neither side enters its data loop until both counters
-            // are preloaded (occupancy == 0).
+            // Preload both hardware counters from this hart, raising POSTED and ACKED together in
+            // small steps so the counter never goes out of range; the consumer only sets its cursor.
+            preload_counters_lockstep(dfb, kPreloadPostedValue);
+            preload_posted_cursor(dfb, kPreloadPostedValue);
+            // Tell the consumer the counters are preloaded, then wait until its cursor is set so
+            // both sides start together.
             Semaphore prod_ready(sem::prod_ready);
             Semaphore cons_ready(sem::cons_ready);
             prod_ready.set(1);

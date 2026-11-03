@@ -11,7 +11,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 #include <cstdint>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
@@ -96,7 +96,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
         num_tile_per_core);
 
     const std::uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
 
     const std::uint32_t num_input_tiles = (b.padded_shape()[-1] * output.element_size() + TILE_HW - 1) / TILE_HW;
 

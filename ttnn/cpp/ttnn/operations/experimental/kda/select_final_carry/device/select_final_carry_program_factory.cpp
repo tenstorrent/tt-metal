@@ -146,6 +146,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     desc.kernels.push_back(std::move(writer));
     tt::tt_metal::KernelHandle reader_id = 0;
     tt::tt_metal::KernelHandle writer_id = 1;
+    // Every core reads the same buffers, so they are bound once per kernel.
+    desc.kernels[reader_id].emplace_common_runtime_args(
+        {in.rank_final.buffer(), in.prefix_final.buffer(), in.actual_start.buffer(), end_tensor.buffer()});
+    desc.kernels[writer_id].emplace_common_runtime_args({output.buffer()});
 
     const auto drain_core =
         fabric_cores.empty() ? CoreCoord{} : mesh->worker_core_from_logical_core(fabric_cores.front());
@@ -159,18 +163,9 @@ tt::tt_metal::ProgramDescriptor build_program(
                                        : TileRange{};
             const TileRange send = fabric_worker ? split_range(state_tiles, attrs.num_links, link) : TileRange{};
 
-            tt::tt_metal::KernelDescriptor::RTArgList reader_rt;
-            reader_rt.push_back(in.rank_final.buffer());
-            reader_rt.push_back(in.prefix_final.buffer());
-            reader_rt.push_back(in.actual_start.buffer());
-            reader_rt.push_back(end_tensor.buffer());
-            for (uint32_t value : {copy.begin, copy.end, send.begin, send.end}) {
-                reader_rt.push_back(value);
-            }
-            desc.kernels[reader_id].emplace_runtime_args(core, reader_rt);
+            desc.kernels[reader_id].emplace_runtime_args(core, {copy.begin, copy.end, send.begin, send.end});
 
-            // Index 0 is replaced with the output buffer binding below.
-            std::vector<uint32_t> writer_rt = {0, copy.begin, copy.end, send.begin, send.end, fabric_worker};
+            std::vector<uint32_t> writer_rt = {copy.begin, copy.end, send.begin, send.end, fabric_worker};
             if (fabric_worker) {
                 const auto worker = mesh->worker_core_from_logical_core(core);
                 const uint32_t connections = uint32_t(forward.has_value()) + uint32_t(backward.has_value());
@@ -201,11 +196,7 @@ tt::tt_metal::ProgramDescriptor build_program(
                     writer_rt);
             }
             tt::tt_metal::KernelDescriptor::RTArgList writer_list;
-            writer_list.reserve(writer_rt.size());
-            writer_list.push_back(output.buffer());
-            for (size_t index = 1; index < writer_rt.size(); ++index) {
-                writer_list.push_back(writer_rt[index]);
-            }
+            writer_list.append(writer_rt);
             desc.kernels[writer_id].emplace_runtime_args(core, writer_list);
         }
     }

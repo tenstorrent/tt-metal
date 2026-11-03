@@ -37,6 +37,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -59,12 +60,12 @@ tt::tt_metal::IDevice* device_at(
     if (!coord.has_value()) {
         for (const auto& c : tt::tt_metal::distributed::MeshCoordinateRange(mesh->shape())) {
             if (mesh->is_local(c)) {
-                return mesh->get_device(c);
+                return tt::tt_metal::internal::get_device(*mesh, c);
             }
         }
         TT_THROW("Mesh of shape {} has no local devices", mesh->shape());
     }
-    tt::tt_metal::IDevice* device = mesh->get_device(*coord);
+    tt::tt_metal::IDevice* device = tt::tt_metal::internal::get_device(*mesh, *coord);
     TT_FATAL(device != nullptr, "MeshCoordinate {} is outside the mesh of shape {}", *coord, mesh->shape());
     return device;
 }
@@ -294,7 +295,7 @@ void py_module(nb::module_& mod) {
         .def(
             "get_device_id",
             [](MeshDevice& self, const MeshCoordinate& coord) {
-                auto* device = self.get_device(coord);
+                auto* device = tt::tt_metal::internal::get_device(self, coord);
                 TT_FATAL(device, "Device ID requested for MeshCoord {} not found.", coord);
                 return device->id();
             })

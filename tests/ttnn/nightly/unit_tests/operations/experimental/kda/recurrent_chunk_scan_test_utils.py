@@ -88,6 +88,16 @@ def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torc
     return affine_a.float(), affine_b.float()
 
 
+def pack_summary(affine_a: torch.Tensor, affine_b: torch.Tensor) -> torch.Tensor:
+    """Rows of [A | B], the layout of one summary slot."""
+    return torch.cat([affine_a, affine_b], dim=-1)
+
+
+def unpack_summary(packed: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    key_dim = packed.shape[-2]
+    return packed[..., :key_dim], packed[..., key_dim:]
+
+
 def segmented_summary_oracle(
     host_inputs: tuple[torch.Tensor, ...], groups_per_head: int, chunks_per_group: int, wrap_chunk: int
 ) -> tuple[torch.Tensor, ...]:
@@ -178,21 +188,22 @@ def run_summary(
     groups_per_head: int = 1,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
-) -> list[ttnn.Tensor]:
+    tail: bool = False,
+    init: bool = True,
+) -> ttnn.Tensor:
+    """Run the summary; return its packed [S, N, K, K+V] output."""
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        outputs = ttnn.experimental.kda.summarize_chunk_recurrence(
+        summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
             *protocol,
             actual_start=actual_start,
             groups_per_head=groups_per_head,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
+            tail=tail,
+            init=init,
         )
-
-    assert len(outputs) == 4
-    assert all(t.dtype == ttnn.bfloat16 for t in outputs)
-    for tensor in outputs[2:]:
-        ttnn.deallocate(tensor)
-    return outputs[:2]
+    assert summaries.dtype == ttnn.bfloat16
+    return summaries
 
 
 def assert_runtime_contract(
@@ -271,16 +282,16 @@ def one_core_height_sharded(shape: tuple[int, int]) -> ttnn.MemoryConfig:
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def group_summary_height_sharded(device: ttnn.Device, batch_heads: int, dim: int) -> ttnn.MemoryConfig:
-    cores = ttnn.num_cores_to_corerangeset(
-        batch_heads,
-        device.compute_with_storage_grid_size(),
-        row_wise=True,
-    )
-    return ttnn.create_sharded_memory_config(
-        (batch_heads, dim, dim),
-        core_grid=cores,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
+def group_summary_nd_sharded(
+    device: ttnn.Device, slots: int, transforms: int, key_dim: int, value_dim: int
+) -> ttnn.MemoryConfig:
+    """L1 ND shards of one transform's [slots, 1, K, K+V] summary rows, one per core in row-major order."""
+    cores = ttnn.num_cores_to_corerangeset(transforms, device.compute_with_storage_grid_size(), row_wise=True)
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[slots, 1, key_dim, key_dim + value_dim],
+            grid=cores,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
     )

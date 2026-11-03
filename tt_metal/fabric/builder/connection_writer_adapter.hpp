@@ -78,6 +78,11 @@ public:
     // Pack destination routers' absolute sender channel IDs by compact 2D downstream slot.
     virtual uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const = 0;
 
+    // Every downstream connection of a VC represented as downstream router's (direction, NoC x/y), in the
+    // order they were added.
+    virtual const std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>& get_downstream_connections(
+        uint32_t vc_idx) const = 0;
+
 protected:
     ~ChannelConnectionWriterAdapter() = default;
 
@@ -132,6 +137,11 @@ public:
     }
 
     uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const override;
+
+    const std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>& get_downstream_connections(
+        uint32_t vc_idx) const override {
+        return downstream_edms_connected_by_vc.at(vc_idx);
+    }
 
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {

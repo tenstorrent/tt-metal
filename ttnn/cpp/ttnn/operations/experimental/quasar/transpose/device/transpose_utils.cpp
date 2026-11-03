@@ -141,12 +141,15 @@ ShardSpec generate_transpose_shard_spec(
     const ttnn::Shape& padded_out_shape,
     TensorMemoryLayout memory_layout,
     std::optional<ShardOrientation> orientation_hint,
-    OutputTiling output_tiling) {
+    OutputTiling output_tiling,
+    BufferType buffer_type) {
     auto* device = input_tensor.device();
+    const CoreCoord grid_size =
+        buffer_type == BufferType::DRAM ? device->dram_grid_size() : device->compute_with_storage_grid_size();
     // Default preserves pre-existing tile-aligned synth; only RowMajor unlocks RM synth.
     const bool is_tile = output_tiling != OutputTiling::RowMajor;
     auto spec = ttnn::operations::data_movement::common::synthesize_output_shard_spec(
-        device->compute_with_storage_grid_size(),
+        grid_size,
         padded_out_shape,
         memory_layout,
         {.is_tile = is_tile,
@@ -162,7 +165,7 @@ ShardSpec generate_transpose_shard_spec(
             input_tensor.layout(),
             input_tensor.element_size(),
             static_cast<uint64_t>(padded_out_shape[-1]),
-            device->compute_with_storage_grid_size(),
+            grid_size,
             memory_layout,
             ttnn::operations::data_movement::common::RmPageAlignmentMode::Lenient);
     }

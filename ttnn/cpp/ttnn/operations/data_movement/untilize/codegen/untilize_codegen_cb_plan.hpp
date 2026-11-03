@@ -26,6 +26,28 @@ struct CbPlan {
 std::optional<CbPlan> plan_cb_depths(
     uint64_t usable_l1, uint32_t pages_per_unit, uint32_t page_size, uint32_t block_units);
 
+// How a dtype is planned, shared by the routing gate (supported_by_codegen), this planner and the
+// program factory so the three cannot disagree: the gate's static L1 bound, the CB tier the program
+// hash keys on, and the CBs the factory allocates all derive from these.
+//
+// 32-bit datums need the 32-bit DEST in pack_untilize, which also halves the block width: a 32-bit
+// tile takes twice the DEST of a 16-bit one. float32 is listed to match the builder's rule but is
+// outside supported_by_codegen's scope (see there).
+bool needs_dst_accum(tt::tt_metal::DataType dtype);
+uint32_t max_block_ct(bool fp32);
+// Both CBs are planned at the larger of the input and output tile sizes: 2048 B for bf16 and for
+// bf8_b's bf16 RM output, 4096 B for the 32-bit dtypes.
+uint32_t planning_tile_size(tt::tt_metal::DataType in_dtype, tt::tt_metal::DataType out_dtype);
+
+// The physical tile grid every builder works over: Wt and the tile-row count come from the PADDED
+// shape (always tile-rounded), tile_aligned from the logical one.
+struct PaddedGrid {
+    uint32_t wt;
+    uint32_t total_tile_rows;
+    bool tile_aligned;
+};
+PaddedGrid padded_grid(const Tensor& input);
+
 uint32_t compute_block_ct_dim(uint32_t wt, bool fp32);
 uint32_t choose_2d_ncol(uint32_t total_tile_rows, uint32_t wt, uint32_t valid_cores);
 

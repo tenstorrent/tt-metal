@@ -54,7 +54,7 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
 
     auto check = [&](const Tensor& t, const char* name, std::initializer_list<uint32_t> expected) {
         TT_FATAL(
-            t.storage_type() == StorageType::DEVICE && t.buffer() != nullptr,
+            t.storage_type() == StorageType::DEVICE && t.is_allocated(),
             "fused_recurrent_gated_delta_rule: {} must be allocated on device",
             name);
         TT_FATAL(t.device() == device, "fused_recurrent_gated_delta_rule: {} must be on the same device as q", name);
@@ -104,7 +104,7 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
             "fused_recurrent_gated_delta_rule: initial_state_block_idx requires output_per_token_state");
         const Tensor& idx = *in.initial_state_block_idx;
         TT_FATAL(
-            idx.storage_type() == StorageType::DEVICE && idx.buffer() != nullptr,
+            idx.storage_type() == StorageType::DEVICE && idx.is_allocated(),
             "fused_recurrent_gated_delta_rule: initial_state_block_idx must be allocated on device");
         TT_FATAL(
             idx.device() == device,

@@ -4,6 +4,7 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, L1Accumulation, PerfRunType, Tilize
 from helpers.param_config import (
@@ -13,13 +14,13 @@ from helpers.param_config import (
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    PACK_SRC_FROM_OUTPUT,
     DEST_INDEX,
     L1_ACC,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    PACK_SRC_FROM_OUTPUT,
     TILE_COUNT,
     TILIZE,
 )
@@ -106,11 +107,7 @@ def test_perf_pack_dest_bank(
     src_B = torch.zeros_like(src_A)
     tile_cnt_B = tile_cnt
 
-    unpack_to_dest = (
-        False
-        if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
-        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc, tilize)
 
     configuration = PerfConfig(
         "sources/pack_dest_bank_perf.cpp",

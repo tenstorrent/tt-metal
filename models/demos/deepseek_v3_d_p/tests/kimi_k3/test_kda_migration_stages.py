@@ -92,8 +92,25 @@ def test_missing_slabs_or_mismatched_slabs_are_refused(expect_error):
     caches.kda_states.layer_ids = caches.kda_states.layer_ids[:-1]
     with expect_error(RuntimeError, "cover layers"):
         _runtime(24, 24).kv_migration_stages(caches)
-    with expect_error(RuntimeError, "DFlash"):
-        _runtime(0, 24, dflash=True).kv_migration_stages(_caches(0, 24))
+
+
+def test_dspark_drafter_rows_match_its_layer_completions():
+    """The drafter's K and V follow the three stages, on the rows its layer completions are numbered by."""
+    from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
+
+    tail = _runtime(72, 21, dflash=True)
+    tail._dflash_k_cache, tail._dflash_v_cache = _tensor(0x4000, ()), _tensor(0x5000, ())
+    tail.drafter = SimpleNamespace(config=SimpleNamespace(num_hidden_layers=5))
+    *_, k, v = tail.kv_migration_stages(_caches(72, 21))
+    assert [(s.base_addr, s.first_layer, s.count) for s in (k, v)] == [(0x4000, 93, 5), (0x5000, 93, 5)]
+    layout = layer_completion_layout(SPLITS, 3, extra_layers=5)
+    records = range(layout.rank_first_record, layout.rank_first_record + layout.rank_record_count)
+    assert list(records[-5:]) == list(range(k.first_layer, k.first_layer + k.count))
+
+    upstream = _runtime(0, 24, dflash=True)
+    upstream._dflash_k_cache = None
+    stages = upstream.kv_migration_stages(_caches(0, 24))
+    assert [(s.base_addr, s.count) for s in stages[3:]] == [(0, 0), (0, 0)]
 
 
 def test_table_layer_rows_follow_the_gathered_stages():

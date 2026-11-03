@@ -11,6 +11,7 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_SRCS
     attn_matmul/device/attn_matmul_device_operation.cpp
     attn_matmul/device/attn_matmul_program_factory.cpp
     ccl_fusion/device/ccl_fusion_mcast_1d.cpp
+    ccl_fusion/device/ccl_fusion_gather_in0.cpp
     ccl_fusion/device/ccl_fusion_mcast_2d.cpp
     group_attn_matmul/device/group_attn_matmul_device_operation.cpp
     group_attn_matmul/device/group_attn_matmul_program_factory.cpp

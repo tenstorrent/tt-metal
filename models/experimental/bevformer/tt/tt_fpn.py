@@ -5,18 +5,18 @@
 """FPN neck for BEVFormer.
 
 Lateral 1x1 convs, a top-down upsample-and-add, then the output convs. Extra
-convs, when the reference FPN has them, run on the lowest output.
+convs, when the reference FPN has them, run on the last (coarsest) output.
 """
 
 import ttnn
-from models.experimental.bevformer.tt.tt_common import TtnnConv2D
+from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
 
 
-class TtConvModule:
+class TTConvModule:
     """One FPN convolution.
 
-    Accumulates in an fp32 destination register. The call returns the output tensor;
-    output height and width stay on the conv, which the top-down pass reads.
+    Accumulates in an fp32 destination register. The call returns the output tensor only; the
+    top-down pass reads a lateral conv's input height and width, which a 1x1 conv keeps.
     """
 
     def __init__(
@@ -29,13 +29,15 @@ class TtConvModule:
         dealloc_act=True,
         dram_activation=False,
         dram_conv_slices=None,
+        weights_dtype=ttnn.bfloat8_b,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
     ):
-        self.conv = TtnnConv2D(
+        self.conv = TTConv2D(
             conv_args.conv,
             conv_pth.conv,
             device=device,
+            weights_dtype=weights_dtype,
             dealloc_act=dealloc_act,
             fp32_dest_acc_en=True,
             is_blk=is_blk,
@@ -51,26 +53,27 @@ class TtConvModule:
         return x[0]
 
 
-class TtFPN:
-    """Feature pyramid over the backbone levels.
+class TTFPN:
+    """Feature pyramid over the backbone levels, built from ``create_fpn_parameters``' ``params``,
+    whose ``tt_kwargs`` holds the memory and precision arguments below, the ones the weights were
+    prepared for.
 
     ``input_dtypes`` are the dtypes of the backbone levels the FPN reads, in order.
     ``dram_activation_levels`` lists the pyramid levels whose lateral and output convs
     keep their activations in DRAM, for levels too large for L1; their 3x3 convs run in
     ``dram_conv_slices`` width slices. ``block_sharded_levels`` lists the levels whose
-    output conv is block sharded with act_block_h 128.
+    output conv is block sharded, with act_block_h ``block_sharded_act_block_h``, None for
+    conv2d's own. ``weights_dtype`` is the convs' weight dtype.
     """
 
-    def __init__(
-        self,
-        conv_args,
-        conv_pth,
-        device,
-        input_dtypes,
-        dram_activation_levels=(),
-        dram_conv_slices=None,
-        block_sharded_levels=(),
-    ):
+    def __init__(self, params, device, input_dtypes):
+        conv_args, conv_pth = params.conv_args, params
+        config = params.tt_kwargs
+        dram_activation_levels = config["dram_activation_levels"]
+        dram_conv_slices = config["dram_conv_slices"]
+        block_sharded_levels = config["block_sharded_levels"]
+        block_sharded_act_block_h = config["block_sharded_act_block_h"]
+        weights_dtype = config["weights_dtype"]
         assert conv_args.add_extra_convs == "on_output", f"extra convs {conv_args.add_extra_convs!r} are not supported"
         self.lateral_convs = []
         self.fpn_convs = []
@@ -84,43 +87,46 @@ class TtFPN:
         output_conv_dtypes = [input_dtypes[0]] + [ttnn.bfloat16] * (num_levels - 1)
         for i in range(num_levels):
             self.lateral_convs.append(
-                TtConvModule(
+                TTConvModule(
                     conv_args.lateral_convs[i],
                     conv_pth.fpn.lateral_convs[str(i)],
                     device=device,
                     dram_activation=i in dram_activation_levels,
                     dram_conv_slices=dram_conv_slices,
+                    weights_dtype=weights_dtype,
                     input_dtype=input_dtypes[i],
                 )
             )
         for i in range(num_levels):
             block_sharded = i in block_sharded_levels
             self.fpn_convs.append(
-                TtConvModule(
+                TTConvModule(
                     conv_args.fpn_convs[i],
                     conv_pth.fpn.fpn_convs[str(i)],
                     device=device,
                     is_blk=block_sharded,
-                    # From the UniAD port, not re-tuned for 928x1600.
-                    act_block_h=128 if block_sharded else None,
+                    act_block_h=block_sharded_act_block_h if block_sharded else None,
                     dram_activation=i in dram_activation_levels,
                     dram_conv_slices=dram_conv_slices,
+                    weights_dtype=weights_dtype,
                     input_dtype=output_conv_dtypes[i],
                     input_layout=output_conv_layouts[i],
                 )
             )
         for i in range(num_levels, len(conv_args.fpn_convs)):
             self.fpn_convs.append(
-                TtConvModule(
+                TTConvModule(
                     conv_args.fpn_convs[i],
                     conv_pth.fpn.fpn_convs[str(i)],
                     device=device,
                     dealloc_act=False,
+                    weights_dtype=weights_dtype,
                     input_dtype=output_conv_dtypes[-1],
                 )
             )
 
     def __call__(self, input_tensor):
+        signpost(header="TTNN FPN Forward Start")
         laterals = []
         for i, lateral_conv in enumerate(self.lateral_convs):
             output = lateral_conv(input_tensor[i])
@@ -164,4 +170,5 @@ class TtFPN:
             if i > used_backbone_levels and self.relu_before_extra_convs:
                 extra_source = ttnn.relu(extra_source)
             outs.append(self.fpn_convs[i](extra_source))
+        signpost(header="TTNN FPN Forward End")
         return tuple(outs)

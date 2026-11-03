@@ -93,6 +93,9 @@ MATH_FUNCTIONS = (
     "eltwise_binary_configure_mop_with_dest_reuse",
     "_llk_math_reduce_",
     "_llk_math_reduce_init_",
+    "_llk_math_eltwise_unary_datacopy_",
+    "_llk_math_eltwise_unary_datacopy_init_",
+    "eltwise_unary_configure_mop",
 )
 
 UNPACK_FUNCTIONS = (

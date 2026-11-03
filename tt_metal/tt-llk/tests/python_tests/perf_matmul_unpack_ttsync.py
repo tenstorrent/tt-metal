@@ -27,6 +27,11 @@ from helpers.test_variant_parameters import (
 )
 from perf_matmul import matmul_combos
 
+pytestmark = (
+    pytest.mark.llk_sweep
+)  # exhaustive sweep: CI keeps a thin subset (LLK_SWEEP_ALL=1 for all)
+
+
 # The blocks the bmm kernel unpacks with the ttsync form: one or two streamed tiles per row (rt and ct at most 2).
 TTSYNC_MAX_STREAM = 2
 

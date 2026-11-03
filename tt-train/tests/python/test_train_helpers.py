@@ -30,7 +30,7 @@ for _name in ("train", "callbacks"):
 from callbacks import EpochCallback  # noqa: E402
 from train import (  # noqa: E402
     TrainingConfig,
-    build_lr_schedule,
+    build_lr_lambda,
     resolve_data_parallel_axes,
     resolve_effective_max_steps,
     resolve_warmup_steps,
@@ -69,15 +69,14 @@ def test_negative_warmup_steps_clamps_to_zero():
     assert resolve_warmup_steps(_config(warmup_steps=-5), 1000) == 0
 
 
-# ── build_lr_schedule ─────────────────────────────────────────────────────────
+# ── build_lr_lambda ───────────────────────────────────────────────────────────
 
 _PEAK_LR = 1.0
 
 
 def _schedule(total_steps: int = 1000, **training_config):
     training_config.setdefault("scheduler_type", "warmup_linear")
-    optimizer = types.SimpleNamespace(get_lr=lambda: _PEAK_LR)
-    return build_lr_schedule(_config(**training_config), optimizer, total_steps)
+    return build_lr_lambda(_config(**training_config), total_steps)
 
 
 def test_warmup_ramps_to_peak_over_the_warmup_window():

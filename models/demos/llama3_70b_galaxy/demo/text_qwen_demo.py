@@ -25,7 +25,7 @@ from models.demos.utils.llm_demo_utils import verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 # Use common functions from demo_common.py
 # load_and_cache_context and load_inputs are now imported from demo_common
@@ -35,7 +35,7 @@ class TokenAccuracy:
     def __init__(self, model_name):
         self.gt_pos = -1
         self.store_predicted_tokens = []
-        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
+        reference_data_file = os.path.join("models/ttt_compat/tests/reference_outputs/", model_name) + ".refpt"
         assert os.path.exists(reference_data_file), f"Reference data file {reference_data_file} does not exist"
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)

@@ -25,10 +25,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
-import torch
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, deallocate_state, device_scalar
 
 
 def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> None:
@@ -43,51 +43,33 @@ def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> Non
         raise ValueError("K3 KDA requires actual_end > actual_start")
 
 
-def _device_bound(value: int, device) -> ttnn.Tensor:
-    """A replicated 1-element UINT32 bound, the form ttKDA takes."""
-    return ttnn.from_torch(
-        torch.tensor([value], dtype=torch.int64),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
+def build_kda_scalars(
+    device, metadata: Optional[tuple], cache_user_id: int, actual_start: Optional[int], actual_end: Optional[int]
+) -> tuple[tuple, tuple]:
+    """The `(slot, actual_start, actual_end)` device scalars every KDA layer of one chunk reads, and the ones to free.
 
-
-class K3KdaChunk:
-    """What every KDA layer of one eager chunk shares: the device bounds.
-
-    They depend only on the chunk, so building them per layer repeated two host-to-device writes on every layer.
-    They are built by the first KDA layer that asks, so a rank with no KDA layer uploads nothing, and the
-    transformer releases them after its last layer. Traced calls bring their bounds in `metadata` and do not use
-    this.
+    A traced chunk carries them in `metadata`, borrowed as they are: replay rewrites those tensors in place
+    and nothing is freed. An eager chunk uploads its host ints once, after validating them, and the second
+    element lists what the caller frees after its last KDA layer. An absent end means full capacity and
+    uploads nothing. Built once per chunk, not per layer, so a rank's KDA layers share the uploads.
     """
-
-    def __init__(self, actual_start: int | None, actual_end: int | None):
-        self._host_bounds = (0 if actual_start is None else actual_start, actual_end)
-        self._bounds = None
-
-    def bounds(self, device) -> tuple:
-        if self._bounds is None:
-            start, end = self._host_bounds
-            self._bounds = (_device_bound(start, device), None if end is None else _device_bound(end, device))
-        return self._bounds
-
-    def release(self) -> None:
-        if self._bounds is not None:
-            for bound in self._bounds:
-                if bound is not None:
-                    ttnn.deallocate(bound)
-            self._bounds = None
+    if metadata is not None:
+        return tuple(metadata[0:3]), ()
+    validate_kda_bounds(actual_start, actual_end)
+    slot = device_scalar(device, cache_user_id)
+    start = device_scalar(device, 0 if actual_start is None else actual_start)
+    end = None if actual_end is None else device_scalar(device, actual_end)
+    owned = (slot, start) if end is None else (slot, start, end)
+    return (slot, start, end), owned
 
 
 @dataclass(frozen=True)
 class K3AttnContext:
     """Everything an attention module needs from the caller for one chunk.
 
-    MLA consumes the KV and rotary inputs. KDA uses the user ID to select its carry
-    and both bounds to order its sequence-parallel segments and stop at the last real token.
+    MLA consumes the KV and rotary inputs, the host ints when eager and `metadata` when traced.
+    KDA reads only `kda_scalars` and `kda_states`: the slot selects its carry in the slabs on
+    device, the bounds order its sequence-parallel segments and stop it at the last real token.
     """
 
     rope_tensors: Optional[dict] = None
@@ -104,8 +86,14 @@ class K3AttnContext:
     # KDA requires a 32-token aligned start on every replay; the end may be unaligned. Device-only
     # values are caller preconditions; do not round real lengths or read them back.
     metadata: Optional[tuple] = None
-    # Eager calls only: the KDA inputs shared by every layer of this chunk. `None` builds them per layer.
-    kda_chunk: Optional[K3KdaChunk] = None
+    # What the KDA layers read: the `(slot, actual_start, actual_end)` device scalars from
+    # `build_kda_scalars`, the same objects for every KDA layer of the chunk. `actual_end` may be
+    # `None` (full capacity). The caller owns them; a KDA layer never uploads or frees a scalar.
+    kda_scalars: Optional[tuple] = None
+    # The engine-owned `KdaStates` slabs, the one store of every KDA carry: a KDA layer loads its
+    # slot's carry from them and stores the replacement back, inside the captured region. The
+    # runtime hands them to the model at `compile()`; a test that builds the model allocates its own.
+    kda_states: Optional[KdaStates] = None
 
 
 class K3Attention(Protocol):
@@ -178,38 +166,42 @@ class TtK3MlaAttention(LightweightModule):
 
 
 class TtK3KdaAttention(LightweightModule):
-    """`ttKDA` under the protocol, with its carry.
+    """`ttKDA` under the protocol, reading and writing its carry in the engine's `KdaStates` slabs.
 
-    The carry lives in a `KdaStateCache` keyed by global layer index, not on the layer: `ttKDA` is
-    purely functional and retains nothing, and the cache is what keeps one address per carry so a
-    captured trace can advance the recurrence with no host in the loop. `commit` is a device copy
-    and belongs inside the captured region, which is why it happens here in `forward` rather than
-    being left to the caller.
+    `ttKDA` is purely functional and retains nothing, so the carry has to live somewhere with one
+    address for the life of the run, or a captured trace could not advance the recurrence with no
+    host in the loop. That somewhere is the migration slab itself, the way MLA's KV cache is its own
+    migration format: per chunk the layer loads its slot's carry into the model's one scratch carry,
+    runs, and stores the replacement back, every copy a device program that reads the slot on
+    device and belongs inside the captured region. That is why load and store happen here in
+    `forward` rather than being left to the caller.
     """
 
     writes_kv = False
 
-    def __init__(self, kda, layer_idx: int, tp_axis: int, num_links: int, tp_topology, state_cache=None):
+    def __init__(self, kda, layer_idx: int, tp_axis: int, num_links: int, tp_topology, scratch: KdaState):
         self.kda = kda
         self.layer_idx = layer_idx
-        self._states = state_cache
+        # BORROWED from the model and shared by its KDA layers: the only state `ttKDA.forward` reads.
+        self._scratch = scratch
         self._tp_axis = tp_axis
         self._num_links = num_links
         self._tp_topology = tp_topology
 
-    def bind_state_cache(self, state_cache) -> None:
-        """Give this layer its carry.
-
-        Deferred on purpose: `KdaStateCache` allocates from the `ttKDA` instances, so the cache
-        cannot exist until the layers do, and the layers must not each allocate their own — the
-        whole point of the cache is one address per carry for the life of the run. So construction
-        is two-phase, and this is the seam rather than an attribute someone reaches into.
-        """
-        self._states = state_cache
-
     def forward(self, normed: ttnn.Tensor, ctx: K3AttnContext) -> ttnn.Tensor:
-        if ctx.metadata is None:
-            validate_kda_bounds(ctx.actual_start, ctx.actual_end)
+        if ctx.kda_scalars is None:
+            raise ValueError(
+                f"KDA layer {self.layer_idx} has no kda_scalars; the caller builds them once per chunk "
+                "with build_kda_scalars"
+            )
+        if ctx.kda_states is None:
+            raise ValueError(
+                f"KDA layer {self.layer_idx} has no KDA state slabs; the runtime hands kv_caches.kda_states "
+                "to the model at compile()"
+            )
+        # The slot is a device tensor on every path, so the carry a capture touches is chosen when it
+        # replays, not when it is recorded; the bounds likewise change per replay without a host read.
+        slot, actual_start, actual_end = ctx.kda_scalars
         gathered = ttnn.all_gather(
             normed,
             dim=-1,
@@ -221,37 +213,11 @@ class TtK3KdaAttention(LightweightModule):
         # The squeeze is a view over `gathered`'s buffer, so `gathered` must stay allocated until the
         # forward is done; the `ttnn.deallocate(hidden)` below frees it.
         hidden = ttnn.squeeze(gathered, dim=0)
-
-        if self._states is None:
-            raise ValueError(
-                f"KDA layer {self.layer_idx} has no state cache; call bind_state_cache() before the first forward"
-            )
-
-        # Reuse both caller-owned scalars during capture: replay changes the
-        # interval without rebuilding the graph or reading bounds on the host.
-        owns_bounds = False
-        if ctx.metadata is not None:
-            actual_start, actual_end = ctx.metadata[1:3]
-        elif ctx.kda_chunk is not None:
-            actual_start, actual_end = ctx.kda_chunk.bounds(self.kda.device)
-        else:
-            actual_start = _device_bound(0 if ctx.actual_start is None else ctx.actual_start, self.kda.device)
-            actual_end = None if ctx.actual_end is None else _device_bound(ctx.actual_end, self.kda.device)
-            owns_bounds = True
-        try:
-            output, new_state = self.kda.forward(
-                hidden,
-                self._states.read(self.layer_idx, ctx.cache_user_id),
-                actual_start=actual_start,
-                actual_end=actual_end,
-            )
-        finally:
-            if owns_bounds:
-                ttnn.deallocate(actual_start)
-                if actual_end is not None:
-                    ttnn.deallocate(actual_end)
+        ctx.kda_states.import_layer(self._scratch, slot, self.layer_idx)
+        output, new_state = self.kda.forward(hidden, self._scratch, actual_start=actual_start, actual_end=actual_end)
         ttnn.deallocate(hidden)
-        self._states.commit(self.layer_idx, new_state, ctx.cache_user_id)
+        ctx.kda_states.export_layer(new_state, slot, self.layer_idx)
+        deallocate_state(new_state)
 
         # `_project_output` reduce-scatters on the TP axis and returns `[B, T, d/tp]`, so the only
         # thing left is the leading axis the block's residual expects.
@@ -267,7 +233,7 @@ def build_attention(
     schedule,
     *,
     seq_len: int,
-    state_cache=None,
+    kda_scratch: Optional[KdaState] = None,
     sp_axis: int = 0,
     tp_axis: int = 1,
     num_links: int = 1,
@@ -321,9 +287,8 @@ def build_attention(
             )
         )
 
-    # `state_cache` may be None here: the cache allocates from the ttKDA instances, so it is built
-    # once every layer exists and bound with `bind_state_cache`. `forward` raises if that never
-    # happened, rather than silently starting each chunk from a fresh zero state.
+    if kda_scratch is None:
+        raise ValueError(f"layer {layer_idx} is KDA and needs the model's scratch carry (kda_scratch)")
     return TtK3KdaAttention(
         ttKDA(
             mesh_device,
@@ -343,5 +308,5 @@ def build_attention(
         tp_axis=tp_axis,
         num_links=num_links,
         tp_topology=tp_topology,
-        state_cache=state_cache,
+        scratch=kda_scratch,
     )

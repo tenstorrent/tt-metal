@@ -20,25 +20,27 @@ from .perf.schema import (
 
 
 class _DfCounterView:
-    """CounterView over the counters.py long-form frame; count/cycles average over the per-thread/core rows."""
+    """CounterView over the counters.py long-form frame; count/cycles average over the per-thread/core rows.
+    Grouped once: a boolean mask per counter made post-processing, not the readout, the cost of a counter run.
+    """
 
     def __init__(self, df: pd.DataFrame):
-        self._df = df
         self._names = set(df["counter_name"]) if not df.empty else set()
+        if df.empty:
+            self._count, self._cycles_named, self._cycles_bank = {}, {}, {}
+            return
+        by_counter = df.groupby(["bank", "counter_name"], sort=False)
+        self._count = by_counter["count"].mean().to_dict()
+        self._cycles_named = by_counter["cycles"].mean().to_dict()
+        self._cycles_bank = df.groupby("bank", sort=False)["cycles"].mean().to_dict()
 
     def count(self, bank: str, counter_name: str) -> float:
-        mask = (self._df["bank"] == bank) & (self._df["counter_name"] == counter_name)
-        result = self._df.loc[mask, "count"]
-        return float(result.mean()) if len(result) > 0 else 0.0
+        return float(self._count.get((bank, counter_name), 0.0))
 
     def cycles(self, bank: str, counter_name: "str | None" = None) -> float:
-        mask = self._df["bank"] == bank
-        if counter_name is not None:
-            named = mask & (self._df["counter_name"] == counter_name)
-            if named.any():
-                mask = named
-        result = self._df.loc[mask, "cycles"]
-        return float(result.mean()) if len(result) > 0 else 0.0
+        if counter_name is not None and (bank, counter_name) in self._cycles_named:
+            return float(self._cycles_named[(bank, counter_name)])
+        return float(self._cycles_bank.get(bank, 0.0))
 
     def has(self, counter_name: str) -> bool:
         return counter_name in self._names
@@ -197,48 +199,43 @@ def export_counters(
         marker_name = zone_to_marker.get(zone, zone)
         row = {MARKER: marker_name}
 
-        # Get unique counters in this zone (preserving discovery order)
-        counter_keys = (
-            zone_df[["bank", "counter_name"]].drop_duplicates().values.tolist()
-        )
+        # One grouping per zone (discovery order kept), not one boolean mask per counter.
+        keys = ["bank", "counter_name"]
+        if has_runs:
+            per_run = zone_df.groupby(keys + ["run_index"], sort=False)[
+                ["count", "cycles"]
+            ].mean()
+            if not per_run.index.droplevel(2).duplicated().any():
+                # One run per counter (the default run_count): its per-run mean is the value.
+                for (bank, counter_name, _), count, cycles in zip(
+                    per_run.index, per_run["count"], per_run["cycles"]
+                ):
+                    col_name = counter_base(bank, counter_name)
+                    row[metric_column(run_type_name, col_name)] = float(count)
+                    row[metric_column(run_type_name, cycles_of(col_name))] = float(
+                        cycles
+                    )
+                rows.append(row)
+                continue
+            groups = per_run.groupby(level=[0, 1], sort=False)
+        else:
+            groups = zone_df.groupby(keys, sort=False)[["count", "cycles"]]
 
-        for bank, counter_name in counter_keys:
-            mask = (zone_df["bank"] == bank) & (zone_df["counter_name"] == counter_name)
+        for (bank, counter_name), g in groups:
             col_name = counter_base(bank, counter_name)
-
-            if has_runs:
-                per_run = zone_df.loc[mask].groupby("run_index")["count"].mean()
-                if len(per_run) >= 2:
-                    row[metric_column(run_type_name, stat_column(col_name, MEAN))] = (
-                        float(per_run.mean())
+            for field, base in (("count", col_name), ("cycles", cycles_of(col_name))):
+                values = g[field]
+                if not has_runs:
+                    row[metric_column(run_type_name, base)] = float(values.mean())
+                elif len(values) >= 2:
+                    row[metric_column(run_type_name, stat_column(base, MEAN))] = float(
+                        values.mean()
                     )
-                    row[metric_column(run_type_name, stat_column(col_name, STD))] = (
-                        float(per_run.std())
+                    row[metric_column(run_type_name, stat_column(base, STD))] = float(
+                        values.std()
                     )
-                elif len(per_run) == 1:
-                    row[metric_column(run_type_name, col_name)] = float(per_run.iloc[0])
-            else:
-                values = zone_df.loc[mask, "count"]
-                row[metric_column(run_type_name, col_name)] = float(values.mean())
-
-            # Also export cycles for this counter
-            col_cycles = cycles_of(col_name)
-            if has_runs:
-                per_run_cyc = zone_df.loc[mask].groupby("run_index")["cycles"].mean()
-                if len(per_run_cyc) >= 2:
-                    row[metric_column(run_type_name, stat_column(col_cycles, MEAN))] = (
-                        float(per_run_cyc.mean())
-                    )
-                    row[metric_column(run_type_name, stat_column(col_cycles, STD))] = (
-                        float(per_run_cyc.std())
-                    )
-                elif len(per_run_cyc) == 1:
-                    row[metric_column(run_type_name, col_cycles)] = float(
-                        per_run_cyc.iloc[0]
-                    )
-            else:
-                cyc_values = zone_df.loc[mask, "cycles"]
-                row[metric_column(run_type_name, col_cycles)] = float(cyc_values.mean())
+                else:
+                    row[metric_column(run_type_name, base)] = float(values.iloc[0])
 
         rows.append(row)
 

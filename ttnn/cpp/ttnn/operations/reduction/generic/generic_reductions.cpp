@@ -5,10 +5,12 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
@@ -561,6 +563,49 @@ Tensor reduce(
         TT_FATAL(
             dt != DataType::INT32 && dt != DataType::UINT32, "ttnn.mean does not support integer inputs - got {}.", dt);
     }
+
+    // UINT32 has no exact reduce path of its own. Sum/Max/Min typecast UINT32 -> INT32, reduce and typecast back.
+    // Since the typecast keeps the bits, values >= 2^31 are read as negative. So int32 addition wraps mod 2^32.
+    // Min XORs the sign bit. That maps the unsigned order onto the signed order.
+    // Max XORs every bit except the sign bit. That maps the unsigned order onto the reversed signed order.
+    // Max then runs as an INT32 Min. UINT32 0 becomes INT32_MAX, which is the Min pad value.
+    // An INT32 Max would not work here. UINT32 0 would become INT32_MIN, below the Max pad value INT32_MIN + 1.
+    // A padded row of zeros would then return 1.
+    // UINT32 requires scalar == 1 since XOR cannot undo a multiply and the INT32 path multiplies in float32.
+    if constexpr (
+        reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Max ||
+        reduce_type == reduction_common::ReduceType::Min) {
+        if (input_tensor_arg.dtype() == DataType::UINT32) {
+            TT_FATAL(scalar == 1.0f, "UINT32 sum/max/min do not support scalar != 1, got {}.", scalar);
+            constexpr bool flip_bits = reduce_type != reduction_common::ReduceType::Sum;
+            constexpr auto int32_reduce_type =
+                flip_bits ? reduction_common::ReduceType::Min : reduction_common::ReduceType::Sum;
+            constexpr int32_t xor_mask = reduce_type == reduction_common::ReduceType::Max
+                                             ? std::numeric_limits<int32_t>::max()
+                                             : std::numeric_limits<int32_t>::min();
+            Tensor as_int32 =
+                ttnn::typecast(input_tensor_arg, DataType::INT32, std::nullopt, std::nullopt, sub_core_grids);
+            if constexpr (flip_bits) {
+                as_int32 =
+                    ttnn::bitwise_xor(as_int32, xor_mask, std::nullopt, std::nullopt, {}, {}, {}, sub_core_grids);
+            }
+            Tensor result = reduce<int32_reduce_type>(
+                as_int32,
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout);
+            if constexpr (flip_bits) {
+                result = ttnn::bitwise_xor(result, xor_mask, std::nullopt, std::nullopt, {}, {}, {}, sub_core_grids);
+            }
+            return ttnn::typecast(result, DataType::UINT32, std::nullopt, std::nullopt, sub_core_grids);
+        }
+    }
+
     ttsl::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type, input_tensor_arg.dtype());
     // TODO: generalize to support all types, parameters, and formats. Issue #18566

@@ -16,6 +16,11 @@ import torch
 
 import ttnn
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 # BT.601 coefficients for input ∈ [-1, 1] → limited-range uint8.
 # These must match rgb_to_yuv.hpp::yuv_coefficients(BT601, MinusOneToOne, Limited).
 _Y_COEFF = (32.74, 64.28, 12.48, 125.5)

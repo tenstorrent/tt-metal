@@ -37,7 +37,7 @@ using namespace ckernel;
 // - in0 (SrcB) tile shape: [{1, 2, 4, 8}, 32]; in1 (SrcA) tile shape: [32, 32]
 // - rt_dim: 1
 // - nt_dim: 1 to 16
-// - kt_dim: even number from 2 to 256 (inclusive)
+// - kt_dim: any integer from 1 to 256 (inclusive)
 // - fidelity: LoFi only
 
 inline void custom_mm_reuse_dest_srcb_configure_addrmod()

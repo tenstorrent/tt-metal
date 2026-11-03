@@ -8,6 +8,11 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 
 def _to_device(t, device, dtype=ttnn.bfloat16):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)

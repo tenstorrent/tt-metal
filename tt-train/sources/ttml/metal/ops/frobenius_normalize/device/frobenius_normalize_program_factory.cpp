@@ -48,7 +48,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     const auto& input = tensor_args.input;
     auto* device = input.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
 
     // -------------------------------------------------------------------------
     // 1) Data formats and tile sizes and compute split

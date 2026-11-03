@@ -151,7 +151,6 @@ $ROOT_DIR/tests/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0/riscv-tt-elf
 $ROOT_DIR/tests/sfpi/include
 -I$ROOT_DIR/common
 -I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc
--I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc/sfpu
 -I$ROOT_DIR/$ARCH_LLK_ROOT/llk_lib
 -I$ROOT_DIR/$ARCH_LLK_ROOT/llk_lib/hal
 -I$ROOT_DIR/tests/helpers/include
@@ -165,6 +164,7 @@ EOF
 -I$METAL_DIR/tt_metal/hw/inc/internal/tt-1xx/wormhole
 -I$METAL_DIR/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines
 -I$METAL_DIR/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api
+-I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc/sfpu
 
 -DLLK_BOOT_MODE_BRISC
 EOF
@@ -173,6 +173,7 @@ EOF
             cat >> "$ROOT_DIR/compile_flags.txt" <<EOF
 -I$METAL_DIR/tt_metal/hw/inc/internal/tt-1xx/blackhole
 -I$METAL_DIR/tt_metal/hw/ckernels/blackhole/metal/llk_api
+-I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc/sfpu
 
 -DLLK_BOOT_MODE_BRISC
 EOF

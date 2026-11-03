@@ -10,7 +10,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "program_with_kernel_created_from_string_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
@@ -36,7 +36,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         CreateKernelFromString(
             program,
             kernel_src_code,
@@ -67,7 +67,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         CreateKernelFromString(
             program,
             kernel_src_code,
@@ -108,7 +108,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         tt_metal::CreateKernelFromString(
             program,
             kernel_src_code,
