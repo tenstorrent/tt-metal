@@ -1,0 +1,15 @@
+# Verifier canary: run with TT_FABRIC_TEST_CORRUPT_PAYLOAD=1, 2 or 3; must fail with DATA_MISMATCH.
+Tests:
+  - name: "CanaryTail15232"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 15232
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [15232]
+    defaults:
+      ftype: unicast
+      num_packets: 100
+    patterns:
+      - type: all_to_all
