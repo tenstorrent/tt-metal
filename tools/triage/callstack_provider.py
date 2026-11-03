@@ -91,6 +91,7 @@ def get_callstack(
     if dispatcher_core_data.kernel_path is not None:
         elfs.append(elfs_cache[dispatcher_core_data.kernel_path])
         offsets.append(dispatcher_core_data.kernel_offset)
+    pc: int | None = None
     try:
         if not full_callstack:
             pc = risc_debug.get_pc() - (4 if rewind_pc_for_ebreak else 0)
@@ -141,7 +142,7 @@ def get_callstack(
                     raise
                 except Exception as e:
                     # If top callstack failed too, print both error messages
-                    return KernelCallstackWithMessage(callstack=[], message="\n".join([error_message, str(e)]), pc=None)
+                    return KernelCallstackWithMessage(callstack=[], message="\n".join([error_message, str(e)]), pc=pc)
     except TimeoutDeviceRegisterError:
         raise
     except Exception as e:
