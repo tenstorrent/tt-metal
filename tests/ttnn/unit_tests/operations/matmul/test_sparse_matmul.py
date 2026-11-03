@@ -1533,12 +1533,22 @@ def test_sparse_matmul_zero_init_output(device, num_experts):
             **kwargs,
         )
 
-    reference = ttnn.to_torch(run())
     fill = 7.0
-    prefilled = to_tt(
-        torch.full(reference.shape, fill, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, output_tile
+    shape = list(ttnn.to_torch(run()).shape)
+    # the default call into a caller-supplied output, then the same call with zero_init_output=False: identical
+    # programs, so the second reuses the first's cache entry
+    reference = ttnn.to_torch(
+        run(
+            optional_output_tensor=to_tt(
+                torch.full(shape, fill, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, output_tile
+            )
+        )
     )
+    entries = device.num_program_cache_entries()
+    prefilled = to_tt(torch.full(shape, fill, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, output_tile)
     skipped = ttnn.to_torch(run(optional_output_tensor=prefilled, zero_init_output=False))
+    # zero_init_output is not part of the program: the second call reuses the first call's program
+    assert device.num_program_cache_entries() == entries, "zero_init_output=False compiled a second program"
 
     for b_i, s_i, e_i in itertools.product(range(b), range(s), range(num_experts)):
         got = skipped[b_i, s_i, 0, e_i]

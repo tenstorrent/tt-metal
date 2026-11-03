@@ -671,8 +671,12 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     return output_tensors;
 }
 
-// static ttsl::hash::hash_t SparseMatmulDeviceOperation::compute_program_hash(
-//     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+ttsl::hash::hash_t SparseMatmulDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto program_attributes = operation_attributes;
+    program_attributes.zero_init_output = true;
+    return ttsl::hash::hash_objects_with_default_seed(program_attributes, tensor_args);
+}
 
 std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation_args(
     const Tensor& input_tensor_a,
