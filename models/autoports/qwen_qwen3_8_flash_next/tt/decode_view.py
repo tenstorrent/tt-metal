@@ -77,6 +77,8 @@ def _decoder(owner, batch, pool):
         attention.pooled_keys = _shared_zero(
             pool, "pooled_keys", owner.attention.pooled_keys, owner.attention.pooled_keys.shape, owner.mesh
         )
+        # All lanes' RoPE in one pass (fused_decoder._batched_rope) instead of per-lane kernels.
+        attention.batched_rope = batch <= MAX_ROWS and os.environ.get("QWEN_FLASH_DECODE_B4_ROPE", "1") != "0"
     if owner.ple is not None:
         result.ple = _clone(owner.ple, ops)
         result.ple.workspaces = {}

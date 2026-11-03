@@ -877,7 +877,7 @@ class FusedQSA(QSA):
         )
         cos = ttnn.reshape(ttnn.embedding(indices, self.cos, layout=ttnn.TILE_LAYOUT), (batch, 1, seq, 64))
         sin = ttnn.reshape(ttnn.embedding(indices, self.sin, layout=ttnn.TILE_LAYOUT), (batch, 1, seq, 64))
-        if seq == 1 and batch > 1 and os.environ.get("QWEN_FLASH_BATCHED_ROPE", "0") == "1":
+        if seq == 1 and batch > 1 and (os.environ.get("QWEN_FLASH_BATCHED_ROPE", "0") == "1" or getattr(self, "batched_rope", False)):
             return _batched_rope(self, x, cos, sin)
         lanes = [
             ttnn.experimental.rotary_embedding(
@@ -1554,7 +1554,7 @@ def _batched_rope(self, x, cos, sin):
 
 def _shared_apply_rope(self, x, cos, sin):
     batch, _, seq, _ = x.shape
-    if seq == 1 and batch > 1 and os.environ.get("QWEN_FLASH_BATCHED_ROPE", "0") == "1":
+    if seq == 1 and batch > 1 and (os.environ.get("QWEN_FLASH_BATCHED_ROPE", "0") == "1" or getattr(self, "batched_rope", False)):
         return _batched_rope(self, x, cos, sin)
     if seq == 1 and batch > 1 and os.environ.get("QWEN_FLASH_ROPE_ALLOC_ONLY") == "1":
         _rope_rotation(self)  # allocation-perturbation experiment only
