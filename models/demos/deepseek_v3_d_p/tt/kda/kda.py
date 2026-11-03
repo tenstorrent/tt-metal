@@ -128,6 +128,42 @@ class _HistoryExchange:
 _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
 
 
+def _fused_output_staging(
+    mesh_device: ttnn.MeshDevice,
+    rows: int,
+    output_projection: ttnn.Tensor,
+    input_memory_config: ttnn.MemoryConfig,
+    ccl_kwargs: dict,
+) -> ttnn.Tensor:
+    """L1 staging for the fused output projection, allocated once and shared by layers of one geometry."""
+    weight_k, weight_n = tuple(output_projection.shape)[-2:]
+    key = (
+        mesh_device.id(),
+        rows,
+        weight_k,
+        weight_n,
+        output_projection.dtype,
+        input_memory_config.buffer_type,
+        tuple(sorted((name, str(value)) for name, value in ccl_kwargs.items())),
+    )
+    if key not in _fused_output_stagings:
+        activation = ttnn.empty(
+            (1, rows, weight_k),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=input_memory_config,
+        )
+        _fused_output_stagings[key] = ttnn.experimental.matmul_reduce_scatter_prefill_staging(
+            activation, output_projection, **ccl_kwargs
+        )
+        ttnn.deallocate(activation)
+    return _fused_output_stagings[key]
+
+
+_fused_output_stagings: dict[tuple, ttnn.Tensor] = {}
+
+
 @dataclass(frozen=True)
 class KdaState:
     """Caller-owned KDA carries.
@@ -241,6 +277,11 @@ class ttKDA:
             self.active_seq_len_local * self.config.v_dim * output_element_bytes,
             KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
         )
+        self._fused_output_reduce_scatter = (
+            program_config.fused_output_reduce_scatter
+            and self.tensor_parallel_size > 1
+            and self.gated_rms_output_dtype == ttnn.bfloat16
+        )
         # The partial sums only feed the reduce-scatter; a single TP rank returns the projection itself.
         self.partial_output_memory_config = (
             l1_when_it_fits(
@@ -318,7 +359,24 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.fused_output_projection_compute_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=program_config.output_projection_math_fidelity
+        )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
+        if self._fused_output_reduce_scatter:
+            self._fused_output_ccl_kwargs = dict(
+                cluster_axis=self.tensor_parallel_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=min(self._tp_num_links, 2),
+            )
+            self._fused_output_staging = _fused_output_staging(
+                mesh_device,
+                self.active_seq_len_local,
+                self.weights.output_projection,
+                self.norm_output_memory_config,
+                self._fused_output_ccl_kwargs,
+            )
 
     @property
     def _convolution_width(self) -> int:
@@ -466,6 +524,15 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
+        if self._fused_output_reduce_scatter:
+            return ttnn.experimental.matmul_reduce_scatter_prefill(
+                output,
+                weights.output_projection,
+                **self._fused_output_ccl_kwargs,
+                compute_kernel_config=self.fused_output_projection_compute_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                staging_tensor=self._fused_output_staging,
+            )
         output = ttnn.linear(
             output,
             weights.output_projection,
