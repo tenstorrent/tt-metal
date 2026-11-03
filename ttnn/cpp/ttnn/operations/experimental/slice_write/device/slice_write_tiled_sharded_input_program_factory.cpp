@@ -128,8 +128,9 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         output_tensor_start[-1]);
 
     log_debug(tt::LogOp, "Output Buffer address: {}", output_buffer->address());
+    // RTA 9 is the writer's per-page byte offset; this factory folds its width offset into start_id instead.
     std::vector<uint32_t> common_writer_kernel_args = {
-        0u, input_single_tile_size, input_single_tile_size, input_single_tile_size, num_dims, 0, 0, 0, 0};
+        0u, input_single_tile_size, input_single_tile_size, input_single_tile_size, num_dims, 0, 0, 0, 0, 0u};
 
     common_writer_kernel_args.insert(
         common_writer_kernel_args.end(), num_input_tiles_per_dim.begin(), num_input_tiles_per_dim.end());
