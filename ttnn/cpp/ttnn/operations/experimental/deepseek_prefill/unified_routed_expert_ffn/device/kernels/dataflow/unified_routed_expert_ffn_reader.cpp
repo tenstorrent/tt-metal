@@ -193,8 +193,9 @@ void kernel_main() {
     constexpr bool x_indexed = get_compile_time_arg_val(36) != 0;
     constexpr uint32_t cb_x_row_idx = get_compile_time_arg_val(37);
     constexpr uint32_t x_rows = get_compile_time_arg_val(38);
+    constexpr uint32_t x_row_index_len = get_compile_time_arg_val(39);  // entries in the x_row_index vector
 
-    constexpr uint32_t x_accessor_offset = 39;
+    constexpr uint32_t x_accessor_offset = 40;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -553,17 +554,24 @@ void kernel_main() {
 
         // x_indexed: this M-row's x-row ids for the chunk, read once and reused by every gate/up K-block. Only the
         // in0 sender reads x. Only the expert's own tile rows are read: the tail chunk's last core may own fewer than
-        // per_core_M of them, and past the last expert's rows the index vector ends.
+        // per_core_M of them, and past the last expert's rows the index vector ends. The slice is also clipped to the
+        // vector's length: a region offset + count past it is a caller bug, and the rows it would cover keep stale
+        // ids (checked against x_rows below, and their output tiles fall outside the output).
         if constexpr (x_indexed) {
-            if (is_in0_sender && this_core_first_row < count_tiles) {
+            const uint32_t first_entry = x_start_stick + this_core_first_row * TILE_HEIGHT;
+            if (is_in0_sender && this_core_first_row < count_tiles && first_entry < x_row_index_len) {
                 const uint32_t remaining_tile_rows = count_tiles - this_core_first_row;
                 const uint32_t index_tile_rows = remaining_tile_rows < per_core_M ? remaining_tile_rows : per_core_M;
+                const uint32_t wanted_entries = index_tile_rows * TILE_HEIGHT;
+                const uint32_t left_entries = x_row_index_len - first_entry;
+                ASSERT(wanted_entries <= left_entries);
+                const uint32_t entries = wanted_entries < left_entries ? wanted_entries : left_entries;
                 read_x_row_idx<x_indexed, idx_rows_accessor_offset>(
                     noc_read,
                     get_common_arg_val<uint32_t>(COMMON_ROW_IDX),
                     row_idx_l1,
-                    index_tile_rows * TILE_HEIGHT * static_cast<uint32_t>(sizeof(uint32_t)),
-                    (x_start_stick + this_core_first_row * TILE_HEIGHT) * static_cast<uint32_t>(sizeof(uint32_t)));
+                    entries * static_cast<uint32_t>(sizeof(uint32_t)),
+                    first_entry * static_cast<uint32_t>(sizeof(uint32_t)));
             }
         }
 
