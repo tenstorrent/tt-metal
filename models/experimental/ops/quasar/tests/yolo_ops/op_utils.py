@@ -112,15 +112,6 @@ def on_emulator() -> bool:
     return bool(sim) and os.path.isdir(sim)
 
 
-def on_ttsim() -> bool:
-    """True when running on the TTSim shared-library backend (``TT_METAL_SIMULATOR`` is a ``.so``).
-
-    Defers to ``on_emulator()`` so a ``TTNN_YOLO_OPS_EMULATOR=1`` override is never also tt-sim.
-    """
-    sim = os.environ.get("TT_METAL_SIMULATOR", "")
-    return sim.endswith(".so") and not on_emulator()
-
-
 def skip_on_emulator(reason: str):
     """Skip a case that cannot complete on the Quasar RTL emulator (passes on craq-sim and silicon).
 

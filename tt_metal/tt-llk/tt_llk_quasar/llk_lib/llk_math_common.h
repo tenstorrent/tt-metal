@@ -156,15 +156,14 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
  * Default ALU data format config state used for all operations which are not proven to need special handling.
  * en_int32_dest_format is set to true if 32bit Dest register mode is enabled and the source register formats are
  * integers compatible with Int32 Dest register format.
+ *
+ * The formats are written on every call, also when this config set is already active: each op init passes its own
+ * operands' formats, which are the formats the FPU uses (implied formats are disabled) and the ones
+ * math_fidelity_schedule picks the phases from.
  */
 template <bool EN_32BIT_DEST>
 inline void _configure_default_alu_data_format_state_(DataFormat srcA_format, DataFormat srcB_format)
 {
-    if (data_format_config_set == DataFormatConfigSet::DEFAULT)
-    {
-        return;
-    }
-
     const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
     // Regular compute path: keep the saved/implied DEST format — no dest-format override.
     _configure_alu_formats_<EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid);

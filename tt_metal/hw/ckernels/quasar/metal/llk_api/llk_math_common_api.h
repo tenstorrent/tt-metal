@@ -160,7 +160,8 @@ inline void llk_math_pack_sync_init() {
     }
 }
 
-// Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
+// On Quasar each math op init programs the ALU Src formats from its own operands, and an op init must follow
+// any operand change (see reconfig_data_format.h), so math-side format reconfig has nothing to do.
 // The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h
 // can issue MATH((...)) uniformly across arches.
 template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
