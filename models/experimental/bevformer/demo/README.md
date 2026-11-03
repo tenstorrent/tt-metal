@@ -54,16 +54,15 @@ on Blackhole only.
 These runs were performed on a BH P100 with tt-metal commit
 `db2aaa185fd74cfc81676ce1fc829b6bcf894b68`, with the commands above:
 
-| Variant | BEV size | Encoder layers | Device FPS | E2E FPS |
-| --- | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 52.44 | 10.51 |
-| small | 150 | 3 | 13.93 | 2.51 |
-| base | 200 | 6 | 5.21 | 1.62 |
+| Variant | BEV size | Encoder layers | Device FPS |
+| --- | ---: | ---: | ---: |
+| tiny | 50 | 3 | 52.44 |
+| small | 150 | 3 | 13.93 |
+| base | 200 | 6 | 5.21 |
 
-Compare runs by Device FPS (see [Output](#output)). E2E FPS is informative: it depends on the host's
-CPU and host-side preparation is slower than device execution for all three variants. These come
-from one ten-frame run per variant with random weights and validate end-to-end execution only; they
-are not statistically characterized benchmark results.
+Compare runs by Device FPS (see [Output](#output)). These come from one ten-frame run per variant
+with random weights and validate end-to-end execution only; they are not statistically characterized
+benchmark results.
 
 ## Model configuration
 
