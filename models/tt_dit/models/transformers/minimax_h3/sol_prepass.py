@@ -542,7 +542,7 @@ class SolPrepass(Module):
         # (MODE 0) assembles whole rows from every shard in the writer's L1 row buffer (their per-shard word ranges
         # are not NoC-aligned), so it keeps the (head, Q-chunk tile row) unit with H*NQCT units; the kernels
         # static_assert the same rule.
-        units_per_shard = 1 if mode == 1 else 0
+        units_per_shard = int(mode == 1 and H * S <= nx * ny) # True if the block mask units fit the core grid else false for Wormhole
         units = H * S if units_per_shard else H * NQCT
         self.route_units = (units, units_per_shard)
         ct += [nx, ny, units, units_per_shard]  # grid + unit count + unit kind; kernels derive their range per core
