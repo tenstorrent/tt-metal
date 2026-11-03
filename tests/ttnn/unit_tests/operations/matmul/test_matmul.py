@@ -2315,26 +2315,40 @@ def test_matmul_with_core_grid(device, batch_size):
 
 @pytest.mark.parametrize("transpose_b", [False, True])
 @pytest.mark.parametrize(
-    "batch_size, m_size, k_size, n_size",
+    "a_shape, b_shape, memory_config, expect_split",
     [
-        (130, 32, 64, 32),  # more batches than cores
-        (16, 64, 4096, 64),  # long K, 2-tile K block
-        (32, 64, 96, 32),  # odd K tile count, 1-tile K block
+        ((130, 32, 64), (130, 64, 32), ttnn.DRAM_MEMORY_CONFIG, True),  # more batches than cores
+        ((16, 64, 4096), (16, 4096, 64), ttnn.DRAM_MEMORY_CONFIG, True),  # long K
+        ((32, 64, 96), (32, 96, 32), ttnn.DRAM_MEMORY_CONFIG, True),  # odd K tile count
+        ((16, 128, 64), (16, 64, 128), ttnn.DRAM_MEMORY_CONFIG, True),  # batches == tiles per batch
+        ((32, 64, 2048), (32, 2048, 160), ttnn.DRAM_MEMORY_CONFIG, False),  # K > 1024 with > 8 tiles per batch
+        ((64, 64, 64), (64, 64, 64), ttnn.L1_MEMORY_CONFIG, False),  # L1 inputs
+        ((64, 64, 64), (64, 64), ttnn.DRAM_MEMORY_CONFIG, False),  # B broadcast over the batch
     ],
 )
-def test_matmul_split_by_batch(device, batch_size, m_size, k_size, n_size, transpose_b):
-    """Default-config batched matmuls whose per-batch output has fewer tiles than cores are split by batch."""
+def test_matmul_split_by_batch(device, a_shape, b_shape, memory_config, expect_split, transpose_b):
+    """Default-config batched matmuls are split by batch only when every should_split_by_batch condition holds."""
     torch.manual_seed(0)
-    torch_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
-    torch_b = torch.randn((batch_size, k_size, n_size), dtype=torch.bfloat16)
+    torch_a = torch.randn(a_shape, dtype=torch.bfloat16)
+    torch_b = torch.randn(b_shape, dtype=torch.bfloat16)
     torch_output = torch_a.float() @ torch_b.float()
 
-    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     b_input = torch_b.transpose(-1, -2).contiguous() if transpose_b else torch_b
-    b = ttnn.from_torch(b_input, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(b_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
 
-    output = ttnn.to_torch(ttnn.matmul(a, b, transpose_b=transpose_b))
-    assert_with_pcc(torch_output, output.float(), 0.999)
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        output = ttnn.matmul(a, b, transpose_b=transpose_b)
+    finally:
+        captured = ttnn.graph.end_graph_capture()
+    # Only the batched config (MatmulMultiCoreReuseProgramConfig) runs the reuse-optimized factory.
+    factories = [
+        node["params"].get("program_factory_type") for node in captured if node["node_type"] == "function_start"
+    ]
+    assert ("ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory" in factories) == expect_split, factories
+
+    assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])

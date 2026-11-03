@@ -484,10 +484,28 @@ MatmulProgramConfig create_matmul_program_config(
             n_tiles_per_core = div_up(n_size, ttnn::TILE_SIZE);
             k_tiles_per_core = 1;  // TODO(arakhmati): Can it be more than 1 without
                                    // running out of memory?
-            // Default matmuls split by batch use the simple config's K block: a 1-tile block doubles the bf16
-            // partial-sum roundings. If the CBs do not fit in L1, the check below falls back to the simple config.
-            if (split_by_batch && (k_size / ttnn::TILE_SIZE) % 2 == 0) {
-                k_tiles_per_core = 2;
+            // Preserve the simple config's K block to avoid extra partial-sum rounding.
+            if (split_by_batch) {
+                auto simple_config = create_simple_matmul_program_config(
+                    input_tensor_a,
+                    input_tensor_b,
+                    transpose_a,
+                    transpose_b,
+                    bias_single_tile_size,
+                    compute_kernel_config,
+                    core_coord,
+                    mem_config,
+                    output_dtype);
+                if (const auto* mcast_config =
+                        std::get_if<MatmulMultiCoreReuseMultiCastProgramConfig>(&simple_config)) {
+                    k_tiles_per_core = mcast_config->in0_block_w;
+                } else if (
+                    const auto* mcast_1d_config =
+                        std::get_if<MatmulMultiCoreReuseMultiCast1DProgramConfig>(&simple_config)) {
+                    k_tiles_per_core = mcast_1d_config->in0_block_w;
+                } else {
+                    return simple_config;
+                }
             }
             if (!can_cbs_fit_in_l1(
                     input_tensor_a,
@@ -928,6 +946,7 @@ inline bool should_split_by_batch(
     const uint32_t bias_single_tile_size,
     const MemoryConfig& mem_config,
     const std::optional<unary::UnaryWithParam>& fused_activation,
+    const bool untilize_out,
     const CoreCoord& compute_with_storage_grid_size) {
     // Measured only for plain matmuls on interleaved DRAM; with L1 inputs the simple config already uses every core.
     const auto is_dram_interleaved = [](const MemoryConfig& config) {
@@ -936,7 +955,8 @@ inline bool should_split_by_batch(
     const bool all_dram_interleaved = is_dram_interleaved(input_tensor_a.memory_config()) &&
                                       is_dram_interleaved(input_tensor_b.memory_config()) &&
                                       is_dram_interleaved(mem_config);
-    const bool plain_matmul = bias_single_tile_size == 0 && !fused_activation.has_value() &&
+    // untilize_out is only supported by the 1D mcast config.
+    const bool plain_matmul = bias_single_tile_size == 0 && !fused_activation.has_value() && !untilize_out &&
                               input_tensor_a.tensor_spec().tile() == tt::tt_metal::Tile() &&
                               input_tensor_b.tensor_spec().tile() == tt::tt_metal::Tile();
     if (!all_dram_interleaved || !plain_matmul) {
@@ -969,6 +989,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<unary::UnaryWithParam>& user_fused_activation,
     const bool user_run_batched,
+    const bool untilize_out,
     const tt::tt_metal::DataType output_dtype) {
     // For sharded A, derive config from the tensor's shard_spec (not user core_grid).
     if (input_tensor_a.is_sharded()) {
@@ -1010,6 +1031,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
             bias_single_tile_size,
             mem_config,
             user_fused_activation,
+            untilize_out,
             compute_with_storage_grid_size)) {
         return create_matmul_program_config(
             input_tensor_a,
@@ -1101,6 +1123,7 @@ MatmulProgramConfig get_program_config(
         attributes.user_core_coord,
         attributes.user_fused_activation,
         attributes.user_run_batched,
+        attributes.untilize_out,
         attributes.output_dtype.value_or(input_tensor_a.dtype()));
     log_debug(tt::LogOp, "Auto generated program config: {}", config);
 
