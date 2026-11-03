@@ -4,9 +4,10 @@
 
 #pragma once
 
-// Once-per-round and rare work, shared by every loop: termination, router commands, the heartbeat and the context
-// switch. Each is a small function of its own, called out of line between rounds, so editing it never changes a loop's
-// per-pass code (per-round work inlined into a loop lets an unrelated edit re-lay out the whole loop).
+// Once-per-round and rare work, shared by every loop: termination, router commands, the heartbeat, the streaming
+// profiler's clock sync and the context switch. Each is a small function of its own, called out of line between rounds,
+// so editing it never changes a loop's per-pass code (per-round work inlined into a loop lets an unrelated edit re-lay
+// out the whole loop).
 //
 // Context switch. The context-switch master (the ERISC with enable_context_switch, ERISC 0) hands the core to the base
 // firmware when idle, and runs router commands (PAUSE, DRAIN, RETRAIN). On a two-ERISC router the other ERISC must not
@@ -14,6 +15,9 @@
 // other's INTENT_ACK; the other parks until RETRAIN_COMPLETE, acks it, and resumes at NORMAL_EXECUTION.
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+#include "tt_metal/impl/streaming_profiler/kernels/link_sync.hpp"
+#endif
 
 #include "router_common.hpp"
 
@@ -104,14 +108,21 @@ struct RoundCounters {
     uint32_t idle_rounds = 0;
 };
 
-// The heartbeat, then the context switch: with IDLE_CONTEXT_SWITCHING the master hands the core to the base firmware
-// after SWITCH_INTERVAL rounds in a row without a send attempt (`send_attempted`: a send went out or yielded this
-// round), otherwise every SWITCH_INTERVAL rounds; the other ERISC follows. Returns whether the base firmware ran on
-// this ERISC (the master's context switch), which may have used its command buffers.
+// The heartbeat and the streaming profiler's clock sync, then the context switch: with IDLE_CONTEXT_SWITCHING the
+// master hands the core to the base firmware after SWITCH_INTERVAL rounds in a row without a send attempt
+// (`send_attempted`: a send went out or yielded this round), otherwise every SWITCH_INTERVAL rounds; the other ERISC
+// follows. Returns whether the base firmware ran on this ERISC (the master's context switch), which may have used its
+// command buffers.
 __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_attempted) {
     if ((++counters.heartbeat & (HEARTBEAT_INTERVAL - 1)) == 0) {
         *reinterpret_cast<volatile uint32_t*>(heartbeat_addr) = HEARTBEAT_SIGNATURE | counters.heartbeat;
     }
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+    // The streaming profiler's clock sync port on this link (link_sync.hpp): the host gives one ERISC of a synced link
+    // a role (ERISC 0, whatever router program it runs) and every other ERISC a hook that does nothing. The port sends
+    // on a TX queue of its own; it serves a round of stamped frames when one is due, checked every few rounds.
+    link_sync::RouterHook::step(counters.heartbeat);
+#endif
     if constexpr (is_context_switch_master) {
         if (IDLE_CONTEXT_SWITCHING && send_attempted) {
             counters.idle_rounds = 0;
