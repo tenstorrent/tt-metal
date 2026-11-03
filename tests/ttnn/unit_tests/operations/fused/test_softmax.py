@@ -917,8 +917,19 @@ SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES = [
 ]
 
 
-# numeric_stable and fp32 acc on every geometry, plus (16, causal, Wt=13) with both off.
-# #58691 counted 9 geometries; this list has 13, so the gate is 14.
+# #58691: both flags on for the eight unpadded geometries still in this list
+# (1001 moved to nightly), plus (16, causal, Wt=13, pad=0) with both off.
+# The pad != 0 rows were added later and are not gated.
+_SCALE_MASK_FP32_STABLE_MERGE_GATE = {
+    (64, False, 5, 0),
+    (64, False, 7, 0),
+    (64, False, 13, 0),
+    (64, False, 47, 0),
+    (16, True, 5, 0),
+    (16, True, 7, 0),
+    (16, True, 13, 0),
+    (1, False, 637, 0),
+}
 _SCALE_MASK_BOTH_OFF_MERGE_GATE = (16, True, 13, 0, False, False)
 
 
@@ -927,7 +938,7 @@ _SCALE_MASK_BOTH_OFF_MERGE_GATE = (16, True, 13, 0, False, False)
     [
         (
             pytest.param(*case, fp32_acc_en, numeric_stable, marks=pytest.mark.merge_gate)
-            if (fp32_acc_en, numeric_stable) == (True, True)
+            if (case in _SCALE_MASK_FP32_STABLE_MERGE_GATE and (fp32_acc_en, numeric_stable) == (True, True))
             or (*case, fp32_acc_en, numeric_stable) == _SCALE_MASK_BOTH_OFF_MERGE_GATE
             else (*case, fp32_acc_en, numeric_stable)
         )

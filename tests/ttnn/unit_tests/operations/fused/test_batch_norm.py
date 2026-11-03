@@ -1167,11 +1167,9 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=(
-            ttnn.MathFidelity.LoFi
-            if not fp32_dest_acc_en
-            else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4)
-        ),
+        math_fidelity=ttnn.MathFidelity.LoFi
+        if not fp32_dest_acc_en
+        else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4),
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_dest_acc_en,
     )
