@@ -1409,3 +1409,13 @@ https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR.
   length) in the header, the writer's pull-back generalised to >= 2688 tokens for a short last chunk and for a
   prefix hit (128 for replay128), and the KV manager / launch_harness validation not shipping or checking decoder
   window rows outside the tail.
+- 16:30 P.28 A/B (bfp4_mse on / bfp4 off, rung last, 50k): device +1.9 ms (170.7 / 168.9), wall -1.0 (195.5 / 196.5),
+  same bytes. Accuracy: err_final_hidden 0.140 / 0.190 (share 0.58 / 0.79; bfp8 0.101), L09 0.101 / 0.126, L29 0.111 /
+  0.149, window KV L28 0.115 / 0.159; top-5 1.0. ACCEPTED as a switch (owner's order). F241 installed first
+  (c728b6ff076 keep_default; b6e5957a818: keep_default not in the A/B report key: adding it to P.28 after its A/B
+  had orphaned the report); P.28 / P.29 / P.30 / P.31 carry ab.keep_default. P.28 gate PASS cc99613f8bc ("accepted as
+  a switch", reused the on side); its agent had set EXPERTS_IMPL back to bfp4 itself. P.28's first ladder hit pytest's
+  3600 s timeout during the cold bfp4_mse conversion (layer 19, ~195 s a layer); the agent added
+  tests/perf/test_experts_cache_warm.py (framework gap F243: a new weight format's cache must be warmed before timed
+  tests). OV note to P.29: warm the bfp8_down4 cache first. Also seen: the full selftest run printed UMD cluster
+  open / close lines at its end (some selftest touches the device; F244, to find). Resumed --until P.29 at 16:31.
