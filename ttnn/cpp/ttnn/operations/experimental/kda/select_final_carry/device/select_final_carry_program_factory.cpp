@@ -178,6 +178,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         std::vector<uint32_t> peer_args;
         if (unicast_peers) {
             std::vector<CoreCoord> connection_eth_cores;
+            connection_eth_cores.reserve(max_fabric_connections);
             for (const auto& destination : destinations) {
                 connection_eth_cores.push_back(
                     tt::tt_fabric::get_forwarding_eth_core(*mesh, source, destination, link));
