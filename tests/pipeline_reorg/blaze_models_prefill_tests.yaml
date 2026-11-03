@@ -2000,10 +2000,11 @@
   sp_config: sc4
 
 
-# Kimi-K3 with RadixArk's DSpark drafter, through the same launcher. Traced at 1M with 34 slots, the ceiling the
-# drafter's K/V leaves on the last rank. Slot 0 is PCC'd on 55k, where the drafter golden stops; the request is
-# timed to 1M.
-- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, traced 34 users, 55k@5k + perf 1M@5k, SC4"
+# Kimi-K3 with RadixArk's DSpark drafter, through the same launcher and the same 8 stages of [4,4]. Traced at 1M
+# with 24 slots: the drafter's K/V on the last stage leaves room for 26 (it fails at 27 in the per-stage
+# capacity probe, PR #61481), and 24 keeps two of margin as the trunk leg does. Slot 0 is PCC'd on 55k, where
+# the drafter golden stops; the request is timed to 1M.
+- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, traced 24 users, 55k@2.5k + perf 1M@2.5k, 8x[4,4] SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2017,7 +2018,9 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      timeout: 20
+      # 20 on the 8x4 layout. The 4x4 trunk leg's job takes 19 min, and the drafter adds its own load and KV,
+      # so 30 until a 4x4 run measures it.
+      timeout: 30
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -2125,21 +2128,26 @@
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
 
-# 4-galaxy (SC4) disaggregated prefill for Kimi-K3: all 93 layers as 24/24/24/21. Four ranks, not
-# two: ~717 MiB/chip/layer against 31.85 GiB/chip OOMs during weight load at 46/47 per rank, and
-# MLA's static CBs become unplaceable past ~36 layers on a rank (#54876). Every boundary is a
-# multiple of ATTN_RES_BLOCK_SIZE=12, or a rank inherits a partial sealed set and its local layer 0
-# seals a block that is not there; the adapter's layer_split_boundaries snaps the even split there,
-# so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
-# Fabric comes from the manifest and the descriptor from run_multirank_pcc.sh, so this leg carries
-# no fabric_profile -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it.
-# 100 slots (manifest), traced: the KDA layers select their slot on device (#60496). The request runs
-# to 1M like GLM-5.3's: only the 55k the golden spans is PCC'd, the tail is timed. Its throughput lands
-# on the run page through the "(Kimi-K3-2.8T) disaggregated prefill SC4 perf" summary job.
+# 4-galaxy (SC4) disaggregated prefill for Kimi-K3: all 93 layers as 8 stages of [4,4], SP on mesh axis 1,
+# two ranks per galaxy (one per tray half), 12 layers each and 9 on the last, chained along the hosts'
+# cabled ring. Every boundary is a multiple of ATTN_RES_BLOCK_SIZE=12, or a rank inherits a partial
+# sealed set and its local layer 0 seals a block that is not there; the adapter's layer_split_boundaries
+# snaps the even split there, so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
+# run_multirank_pcc.sh checks the 4x4 weight cache (kimi_k3_bh_16dev/4x4_sp1) on every host, then tt-run
+# discovery binds the ranks against the 8-mesh descriptor: it finds the ring order from the cabling, so
+# the hosts can come in any order. The stage shape, 2560-token chunks (640 tokens per chip), the TP-deduped
+# KV, tracing and the slot count all come from the kimi_k3 manifest, so this leg carries no fabric_profile
+# -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it. 127 slots at the 1M window: the per-stage
+# capacity probe (two stages per Galaxy via PREFILL_PP_LAYER_OFFSET, a full 1M request at each N) fits 129
+# traced on every stage. Stage 1, the tightest, runs out at 130. 127 keeps two slots of margin, as #63502
+# did on 8x4 (PR #61481). The request runs to 1M like GLM-5.3's: only the 55k the golden spans is PCC'd,
+# the tail is timed. Its throughput lands on the run page through the "(Kimi-K3-2.8T) disaggregated
+# prefill SC4 perf" summary job. run_multirank_pcc.sh's sc4_8x4 keeps the 4 stages of 8x4 for hand
+# comparisons; no leg runs it.
 # Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.3 pairs that share prefill_runner_kv_pcc:
 # four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
 # also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
-- name: "(Kimi-K3-2.8T) disaggregated prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
+- name: "(Kimi-K3-2.8T) disaggregated prefill 8x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2153,19 +2161,11 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # Weight load dominates and it is NFS-bandwidth-bound, not compute-bound: the TTNN cache is
-      # 1.5 TB of tensorbins on the models share and all four ranks stream their slice of it at once,
-      # so the phase runs at roughly line rate and its cost swings with whatever else is on the mount.
-      # Two measurements, both from test-step start to all four ranks serving: 42.6 min on run
-      # 34648535999, 65.9 min on run 34659612357 (rank 0 alone spent 54.2 min loading its 24 layers).
-      # After that comes the producer connect, 11 chunks of 5120, the KV read-back and a ~7 min mesh
-      # unwind. 45 min cut this off mid-bringup and 70 min cut it off six minutes after bringup.
-      # 100 was still too tight: run 34831600450 was killed at 106 min with the leg live. Doubled,
-      # matching the 2x pass #56135 applied to the rest of this pipeline. Since then the whole job has
-      # taken 24-27 min (runs 40798487584 and 40813119749, 2026-10-29), so 110 keeps 4x of that and frees
-      # 90 for the 4x4 leg below. shield/demo bh_sc4 is a SUM over the team's legs on that SKU, not a
-      # per-leg cap: 40 (Kimi-K2.7) + 60 (GLM-5.3) + 60 (DFlash) + 20 (DSpark) + 110 + 90 (4x4).
-      timeout: 110
+      # Run 41533146872 (2026-11-03): 12 min for this step and 19 min for the job, against 24-27 min for
+      # the 8x4 layout this replaced, with the same 1.5 TB of weights. 90 keeps over 4x of the job for a
+      # cold Weka cache. shield/demo bh_sc4 is a SUM over the team's legs on that SKU, not a per-leg cap:
+      # 60 (GLM-5.3) + 30 (DSpark) + 90 of 380.
+      timeout: 90
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -2174,47 +2174,14 @@
   sp_config: sc4
 
 
-# The same 93 layers as 8 stages of [4,4], SP on mesh axis 1: two ranks per galaxy, one per tray half,
-# 12 layers each (9 on the last), chained along the hosts' cabled ring. run_multirank_pcc.sh checks the
-# 4x4 weight cache (kimi_k3_bh_16dev/4x4_sp1) on every host, then tt-run discovery binds the ranks: it
-# finds the ring order from the cabling, so the hosts can come in any order. Chunks are 2560 tokens,
-# half the 8x4 leg's, so each chip still prefills 640 per chunk. KV is deduped over SP*TP and the leg is
-# traced, both from the kimi_k3 manifest like the 8x4 leg. 127 slots at the 1M window: the per-stage
-# capacity probe (two stages per Galaxy via PREFILL_PP_LAYER_OFFSET, a full 1M request at each N) fits 129
-# traced on every stage. Stage 1, the tightest, runs out at 130. 127 keeps two slots of margin, as #63502
-# did on 8x4 (PR #61481).
-- name: "(Kimi-K3-2.8T) disaggregated prefill 8x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC4"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    export PREFILL_NUM_USERS=127
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc4_4x4
-  test_type: k3_prefill_runner_93l_4x4
-  test_tags: [kimi_k3, runner, kv_cache]
-  test_group: disagg_prefill
-  skus:
-    bh_sc4:
-      # Run 41533146872 (2026-11-03): 12 min for this step and 19 min for the job, against 24-27 min for the
-      # 8x4 leg above with the same 1.5 TB of weights. 90 keeps over 4x of the job for a cold Weka cache.
-      timeout: 90
-      tier: 1
-      release_ready: false
-  owner_id: U084DDYSWCW # Adrian Morrison
-  team: shield
-  budget_type: demo
-  sp_config: sc4
-
-
-# Single-galaxy rung of the same launcher. 93 layers do not fit one galaxy, so the sc1 arm overrides
-# the manifest depth to 24 -- which ends on an MLA layer and is the deepest depth the golden's
-# decoder-output stream covers, making this a real accuracy gate rather than a smaller copy of sc4.
-# sc4's 100 slots, traced like sc4, and timed to sc4's 1M request; 24 layers are no baseline for 93,
-# so its numbers are gated and reported in this job's summary but kept out of the sc4 summary.
-- name: "(Kimi-K3-2.8T) disaggregated prefill L24 KV accuracy 55k@5k + perf 1M@5k, SC1"
+# Single-galaxy rung of the same launcher: sc4's first two stages, one per tray half, 12 layers each.
+# 93 layers do not fit one galaxy, so the sc1 arm overrides the manifest depth to 24 -- which ends on an
+# MLA layer and is the deepest depth the golden's decoder-output stream covers, making this a real
+# accuracy gate rather than a smaller copy of sc4. sc4's 127 slots, traced like sc4, and timed to sc4's
+# 1M request (the capacity probe ran exactly this: stages 0+1 on one Galaxy, 129 traced); 24 layers are
+# no baseline for 93, so its numbers are gated and reported in this job's summary but kept out of the
+# sc4 summary.
+- name: "(Kimi-K3-2.8T) disaggregated prefill L24 2x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"

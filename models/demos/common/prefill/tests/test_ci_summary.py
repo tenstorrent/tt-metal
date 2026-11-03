@@ -31,7 +31,7 @@ def test_metrics_sidecar_splits_the_config_suffix_with_its_layout(tmp_path, monk
 
     monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
     for name, model, config in (
-        ("kimi_k3_sc4_4x4", "kimi_k3", "sc4_4x4"),
+        ("kimi_k3_sc4_8x4", "kimi_k3", "sc4_8x4"),
         ("kimi_k3_sc4", "kimi_k3", "sc4"),
         ("glm53_mtp_kv_share_sc1", "glm53_mtp_kv_share", "sc1"),
     ):
