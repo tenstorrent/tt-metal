@@ -37,7 +37,9 @@ for ax, key in zip(axes[:4], ("aiclk", "tdp", "tdc", "temp")):
     ax.set_ylabel(labels[key])
     ax.grid(alpha=0.3)
 ax = axes[4]
-for name, color in (("HiFi4", "tab:purple"), ("HiFi2", "tab:brown")):
+load_phases = [p["name"] for p in run["phases"] if any(x["phase"] == p["name"] for x in run["batches"])]
+palette = ["tab:purple", "tab:brown", "tab:olive", "tab:cyan", "tab:pink"]
+for name, color in zip(load_phases, palette):
     b = [x for x in run["batches"] if x["phase"] == name]
     ax.plot(
         [x["t"] - t0 for x in b], [x["tflops_per_chip"] for x in b], color=color, lw=1.2, label=f"{name} matmul rate"
@@ -47,13 +49,19 @@ ax.set_ylabel("achieved TFLOP/s per chip\n(slowest chip, host-timed)")
 ax.set_xlabel("seconds since start")
 ax.grid(alpha=0.3)
 # phases shaded, checkpoints marked on the clock axis
-shade = {"idle": "0.92", "HiFi4": "#e8d8f5", "cool-down": "0.92", "HiFi2": "#f3e3d3", "idle (end)": "0.92"}
+shade = {"HiFi4": "#e8d8f5", "HiFi2": "#f3e3d3"}
 for p in run["phases"]:
     for a in axes:
-        a.axvspan(p["start"] - t0, p["end"] - t0, color=shade.get(p["name"], "0.95"), alpha=0.6, lw=0)
+        a.axvspan(
+            p["start"] - t0,
+            p["end"] - t0,
+            color=shade.get(p["name"], "#e8e8f5" if p["name"] in load_phases else "0.92"),
+            alpha=0.6,
+            lw=0,
+        )
     axes[0].text((p["start"] + p["end"]) / 2 - t0, 1390, p["name"], ha="center", va="bottom", fontsize=10)
 for p in run["phases"]:
-    if p["name"] not in ("HiFi4", "HiFi2"):
+    if p["name"] not in load_phases:
         continue
     s, e = p["start"] - t0, p["end"] - t0
     axes[0].axvline(s, color="k", lw=0.8)
@@ -79,9 +87,12 @@ for a in axes:
     a.legend(loc="upper right", fontsize=8, ncol=2)
 M, K, N = run["shape"]
 fig.suptitle(
-    f"Power-cap repro: [{M}, {K}] x [{N}, {K}]^T bf16 HiFi4 then HiFi2 on the 4-chip QB2 mesh (p300c, TDP 125 W per chip)",
+    run.get(
+        "title",
+        f"Power-cap repro: [{M}, {K}] x [{N}, {K}]^T bf16 HiFi4 then HiFi2 on the 4-chip QB2 mesh (p300c, TDP 125 W per chip)",
+    ),
     fontsize=12,
 )
 fig.tight_layout()
-fig.savefig(prefix + ".png", dpi=80)
+fig.savefig(prefix + ".png", dpi=int(sys.argv[2]) if len(sys.argv) > 2 else 80)
 print("wrote", prefix + ".png")
