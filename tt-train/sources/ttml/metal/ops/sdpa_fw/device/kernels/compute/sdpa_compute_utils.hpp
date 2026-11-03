@@ -26,6 +26,17 @@
 
 constexpr uint32_t onetile = 1U;
 
+// The packer is reconfigured only when the CB it packs to has another format: a reconfig stalls the packer
+// (it waits on PACK and THCON and rewrites the config), and most of a step's packs go to fp32 CBs in a row.
+// pack_to tracks the CB the packer was last set to and uses the (old, new) form, which skips equal formats;
+// every pack site in the kernel goes through it. The kernel seeds it with the ocb of compute_kernel_hw_startup
+// and keeps it right after a helper that sets the packer itself (ttnn's apply_causal_mask_lightweight).
+inline uint32_t packer_cb = 0;
+inline void pack_to(uint32_t cb) {
+    pack_reconfig_data_format(packer_cb, cb);
+    packer_cb = cb;
+}
+
 // SFPU intrinsics for first-column-only operations.
 // Column vectors (from row-reduce) only have meaningful data in column 0,
 // so we process 4 SFPU iterations (half-face) instead of the standard 8,
@@ -105,7 +116,7 @@ void update_row_max_values(
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_reconfig_data_format(cb_cur_max);
+    pack_to(cb_cur_max);
     for (uint32_t i = 0; i < n; ++i) {
         pack_tile</* out_of_order */ true>(i, cb_cur_max, /* offset */ row0 + i);
     }
@@ -140,14 +151,15 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_reconfig_data_format(cb_attention_weights);
-        pack_reconfig_l1_acc(false);
+        // L1-accumulate is off here: every user of it turns it off before it returns, and so does this
+        // loop; toggling it again would stall the packer for nothing.
+        pack_to(cb_attention_weights);
         for (uint32_t i = 0; i < n; ++i) {
             pack_tile</* out_of_order */ true>(i, cb_attention_weights, /* offset */ t0 + i);
         }
 
         // row sums: a row's first tile overwrites its slot, the rest add onto it
-        pack_reconfig_data_format(cb_cur_exp_sum);
+        pack_to(cb_cur_exp_sum);
         bool accumulate = false;
         for (uint32_t i = 0; i < n; ++i) {
             const uint32_t t = t0 + i;
@@ -205,7 +217,7 @@ void matmul_qk_by_v(
 
     // matmul maps: in0(attention_weights)->SrcB, in1(value)->SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
-    pack_reconfig_data_format(cb_cur_mm_out);
+    pack_to(cb_cur_mm_out);
     matmul_block_init(
         cb_attention_weights,
         cb_value,
@@ -290,7 +302,7 @@ void update_exp_max_diffs(
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_reconfig_data_format(cb_exp_max_diff);
+    pack_to(cb_exp_max_diff);
     for (uint32_t i = 0; i < n; ++i) {
         pack_tile</* out_of_order */ true>(i, cb_exp_max_diff, /* offset */ row0 + i);
     }
@@ -318,7 +330,7 @@ void update_cur_exp_sums_inplace(
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_reconfig_data_format(cb_cur_sum_exp);
+    pack_to(cb_cur_sum_exp);
     for (uint32_t i = 0; i < n; ++i) {
         pack_tile</* out_of_order */ true>(i, cb_cur_sum_exp, /* offset */ row0 + i);
     }
@@ -337,7 +349,7 @@ void row_reduce_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_reconfig_data_format(cb_in_idx);
+    pack_to(cb_in_idx);
     for (uint32_t i = 0; i < n; ++i) {
         pack_tile</* out_of_order */ true>(i, cb_in_idx, /* offset */ row0 + i);
     }
@@ -359,7 +371,7 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_reconfig_data_format(cb_in_idx);
+    pack_to(cb_in_idx);
     for (uint32_t i = 0; i < n; ++i) {
         pack_tile</* out_of_order */ true>(i, cb_in_idx, /* offset */ row0 + i);
     }
@@ -409,7 +421,7 @@ void compute_and_pack_lse(
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_reconfig_data_format(cb_out_lse);
+    pack_to(cb_out_lse);
     pack_tile</* out_of_order */ true>(lse_reg, cb_out_lse, /* offset */ row);
     tile_regs_release();
 }

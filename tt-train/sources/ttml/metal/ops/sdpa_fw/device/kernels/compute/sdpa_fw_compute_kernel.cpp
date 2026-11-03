@@ -132,7 +132,7 @@ FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t c
 #ifdef HAS_GATE
     cb_wait_front(cb_gate, out_tiles);
 #endif
-    pack_reconfig_data_format(cb_output);
+    pack_to(cb_output);
     for (uint32_t r = 0; r < rows; ++r) {
         for (uint32_t tile_idx = 0; tile_idx < vWt; tile_idx += block_size) {
             tile_regs_acquire();
@@ -210,7 +210,7 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
         cb_wait_front(cb_key, k_tiles);
 
         reconfig_data_format(cb_query, cb_key);
-        pack_reconfig_data_format(cb_attention_weights);
+        pack_to(cb_attention_weights);
 
         // S = Q @ K^T, one qk_block_h x qk_block_w rectangle of score tiles per DST pass, packed to its
         // row-major slot. A mask is added afterwards by the packer (see below).
@@ -280,6 +280,7 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
                     /* straddle_jump */ 0U,
                     /* row_base */ h * Sq_chunk_t);
             }
+            packer_cb = cb_attention_weights;  // the helper set the packer itself
             cb_push_back(cb_attention_weights, score_tiles);
         }
 #endif
@@ -413,6 +414,7 @@ void kernel_main() {
     // One-time HW config; each matmul site sets its own state with reconfig_data_format +
     // matmul_block_init (or matmul_init for the per-tile paths).
     compute_kernel_hw_startup(cb_query, cb_key, cb_value);
+    packer_cb = cb_value;  // hw_startup set the packer to its ocb
 
     cb_wait_front(cb_reduction_scaler, onetile);
 
