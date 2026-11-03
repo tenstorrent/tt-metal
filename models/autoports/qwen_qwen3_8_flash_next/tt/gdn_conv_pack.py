@@ -17,10 +17,11 @@ WIDTHS = (512, 512, 1536)
 def flat_gdn_batches():
     """Row counts that use the packed history convolution (and the flat GDN decode path).
 
-    The 4-row view (one to four users) is included unless QWEN_FLASH_GDN_FLAT_B4=0; the one-row view
+    The 4-row view (one to four users) is included unless QWEN_FLASH_GDN_FLAT_B4=0, and the 2-row
+    view (two users, decode_view.DECODE_BUCKETS) whenever the 4-row view is; the one-row view
     (decode_forward_b1) unless QWEN_FLASH_GDN_B1=0.
     """
-    rows = (4, 8, 16, 32) if os.environ.get("QWEN_FLASH_GDN_FLAT_B4", "1") == "1" else (8, 16, 32)
+    rows = (2, 4, 8, 16, 32) if os.environ.get("QWEN_FLASH_GDN_FLAT_B4", "1") == "1" else (8, 16, 32)
     return (1, *rows) if os.environ.get("QWEN_FLASH_GDN_B1", "1") == "1" else rows
 
 
