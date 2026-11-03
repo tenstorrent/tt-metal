@@ -24,7 +24,7 @@ from safetensors import safe_open
 
 import ttnn
 
-from ...experimental.lora.h3_adapter_loader import h3_host_deltas, iter_h3_host_deltas
+from ...experimental.lora.h3_adapter_loader import h3_host_deltas, iter_h3_dense_edits, iter_h3_host_deltas
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3TimestepEmbedding, MiniMaxH3TwoTime
 from .hyperflow_minimax_h3 import MiniMaxH3HyperFlow
 from .pipeline_minimax_h3 import AUDIO_SHIFT, VIDEO_SHIFT, MiniMaxH3Pipeline
@@ -71,8 +71,10 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         ).lora_path
         self.lora_strength = float(lora_strength)
         self._lora_digest = _file_digest(self.lora_path)
-        # Stays None when the transformer loads from the weight cache, which skips `_read_safetensors`.
+        # Stay None when the transformer loads from the weight cache, which skips `_read_safetensors`.
         self.merged_targets: int | None = None
+        self.merged_dense: int | None = None
+        self.merged_sets: int | None = None
         self._time_embedder_states: dict[str, dict[str, torch.Tensor]] | None = None
         with safe_open(str(self.lora_path), framework="pt", device="cpu") as handle:
             metadata = handle.metadata()
@@ -138,21 +140,44 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         for key, delta in iter_h3_host_deltas(str(self.lora_path), ("",), scale=self.lora_strength):
             if key.startswith(host_prefixes):
                 continue
-            weight = state.get(key)
-            if weight is None:
-                raise KeyError(f"turbo adapter target {key} is not in the {self.transformer_subfolder} checkpoint")
-            if weight.shape != delta.shape:
-                raise ValueError(f"turbo adapter target {key}: delta {tuple(delta.shape)} != {tuple(weight.shape)}")
-            if weight.dtype == torch.bfloat16:
-                state[key] = _round_bf16_stochastic(weight.float() + delta, generator)
-            else:
-                state[key] = weight + delta.to(weight.dtype)
+            self._add_delta(state, key, delta, generator)
             merged += 1
         if merged == 0:
             raise RuntimeError(f"turbo adapter {self.lora_path} has no LoRA targets to merge")
-        self.merged_targets = merged
-        logger.info(f"turbo adapter {self.lora_path.name}: merged {merged} targets, strength {self.lora_strength:g}")
+
+        # Dense edits follow the LoRA delta (the FastVideo rule) and ignore `lora_strength`.
+        dense = sets = skipped = 0
+        for key, kind, tensor in iter_h3_dense_edits(str(self.lora_path), ("",)):
+            if kind == "add":
+                self._add_delta(state, key, tensor.float(), generator)
+                dense += 1
+                continue
+            # Sets are VSA gates, which the checkpoint lacks; without `vsa_config` nothing consumes them.
+            if self.vsa_config is None:
+                skipped += 1
+                continue
+            state[key] = tensor
+            sets += 1
+
+        self.merged_targets, self.merged_dense, self.merged_sets = merged, dense, sets
+        logger.info(
+            f"turbo adapter {self.lora_path.name}: merged {merged} targets, strength {self.lora_strength:g}; "
+            f"{dense} dense adds, {sets} sets, {skipped} sets skipped without vsa_config"
+        )
         return state
+
+    def _add_delta(
+        self, state: dict[str, torch.Tensor], key: str, delta: torch.Tensor, generator: torch.Generator
+    ) -> None:
+        weight = state.get(key)
+        if weight is None:
+            raise KeyError(f"turbo adapter target {key} is not in the {self.transformer_subfolder} checkpoint")
+        if weight.shape != delta.shape:
+            raise ValueError(f"turbo adapter target {key}: delta {tuple(delta.shape)} != {tuple(weight.shape)}")
+        if weight.dtype == torch.bfloat16:
+            state[key] = _round_bf16_stochastic(weight.float() + delta, generator)
+        else:
+            state[key] = weight + delta.to(weight.dtype)
 
     def _prepare_transformer(self):
         transformer = super()._prepare_transformer()

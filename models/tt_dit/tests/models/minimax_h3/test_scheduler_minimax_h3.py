@@ -7,11 +7,13 @@ x0 = x_t + sigma*v (a plus), and a sigma grid whose terminal 0 counts toward the
 Golden digests come from a run verified bit-exact against the minimax-h3 diffusers branch."""
 
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 import torch
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_KEYFRAME_NOISE_AUG
+from ....pipelines.minimax_h3.pipeline_minimax_h3_fast import MiniMaxH3FastPipeline
 from ....pipelines.minimax_h3.scheduler import MiniMaxH3Scheduler
 
 # shift -> (num sigmas, model evaluations, sha256[:16] of sigmas) at 50 grid points
@@ -124,3 +126,16 @@ def test_matches_diffusers_reference():
             sample_ours = ours.step(velocity, timestep, sample_ours)
             sample_theirs = theirs.step(velocity, theirs.timesteps[index], sample_theirs, return_dict=False)[0]
         assert torch.equal(sample_ours, sample_theirs)
+
+
+def test_fasth3_grid_is_the_shifted_dmd_ladder():
+    """FastVideo's [999, 749, 500, 250] / 1000 plus the terminal 0, shifted per modality."""
+    stub = SimpleNamespace(_warming=False, video_shift=VIDEO_SHIFT, audio_shift=AUDIO_SHIFT)
+    video, audio = MiniMaxH3FastPipeline._build_schedulers(stub, 5)
+
+    expected_video = torch.tensor([11.988 / 11.989, 8.988 / 9.239, 12 / 13, 0.8, 0.0])
+    torch.testing.assert_close(video.sigmas, expected_video, rtol=0, atol=1e-6)
+    assert video.num_inference_steps == 4
+    expected_audio = torch.tensor([2.997 / 2.998, 2.247 / 2.498, 0.75, 0.5, 0.0])
+    torch.testing.assert_close(audio.sigmas, expected_audio, rtol=0, atol=1e-6)
+    assert audio.num_inference_steps == 4
