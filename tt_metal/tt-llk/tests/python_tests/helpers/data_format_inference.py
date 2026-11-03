@@ -286,7 +286,12 @@ def infer_unpack_out(
     # BFP2/BFP4/BFP8 inputs keep matching InDataFormat/OutDataFormat values;
     # the unpacker internally normalizes the datum into the BF16 source-register
     # representation before math consumes it.
-    if input_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b, DataFormat.Bfp4, DataFormat.Bfp2]:
+    if input_format in [
+        DataFormat.Bfp4_b,
+        DataFormat.Bfp2_b,
+        DataFormat.Bfp4,
+        DataFormat.Bfp2,
+    ]:
         return input_format
 
     if (
@@ -455,7 +460,9 @@ def infer_pack_in(
         and is_fp32_dest_acc_en == DestAccumulation.No
         and not unpacking_to_dest
         and unpack_out in (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
-        and (output_format == DataFormat.Float16_b or output_format == DataFormat.Float32)
+        and (
+            output_format == DataFormat.Float16_b or output_format == DataFormat.Float32
+        )
     ):
         return DataFormat.Float16_b
 

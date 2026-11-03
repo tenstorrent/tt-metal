@@ -14,13 +14,13 @@ from helpers.param_config import (
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    PACK_SRC_FROM_OUTPUT,
     DEST_INDEX,
     L1_ACC,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    PACK_SRC_FROM_OUTPUT,
     TILE_COUNT,
     TILIZE,
 )

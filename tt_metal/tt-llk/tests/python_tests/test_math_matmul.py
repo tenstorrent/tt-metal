@@ -25,12 +25,12 @@ from helpers.llk_params import (
 )
 from helpers.logger import logger
 from helpers.matmul_sweep import (
-    matmul_pack_form,
     ODD_REUSE_KT_DIMS,
     ODD_REUSE_RT_CT,
     MatmulConfig,
     generate_face_layout_config_sweep,
     generate_tile_dims,
+    matmul_pack_form,
     sweep_matmul,
     sweep_tiny_tiles_matmul,
 )

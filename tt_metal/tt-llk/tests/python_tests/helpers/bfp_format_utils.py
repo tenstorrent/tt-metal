@@ -156,7 +156,9 @@ def _quantize_bfp_a(operand: torch.Tensor, magnitude_bits: int) -> torch.Tensor:
         mants.view(-1, BFP_BLOCK), exps.view(-1, BFP_BLOCK)
     )
     trunc_mants = bfp8_mants >> (7 - magnitude_bits)
-    values = trunc_mants.float() * torch.exp2((shared_exps - 14 - magnitude_bits).float())
+    values = trunc_mants.float() * torch.exp2(
+        (shared_exps - 14 - magnitude_bits).float()
+    )
     values = torch.where(signs.view(-1, BFP_BLOCK).bool(), -values, values)
     return values.flatten()[:n].to(torch.float16)
 

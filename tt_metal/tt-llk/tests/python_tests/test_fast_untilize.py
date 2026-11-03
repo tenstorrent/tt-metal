@@ -37,10 +37,10 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    PACK_SRC_FROM_OUTPUT,
     DEST_SYNC,
     LOOP_FACTOR,
     NUM_GUARD_TILES,
+    PACK_SRC_FROM_OUTPUT,
     PERF_RUN_TYPE,
     TILE_COUNT,
     generate_input_dim,

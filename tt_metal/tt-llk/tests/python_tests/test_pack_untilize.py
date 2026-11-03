@@ -28,10 +28,10 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    PACK_SRC_FROM_OUTPUT,
     DEST_SYNC,
     LOOP_FACTOR,
     NUM_FACES,
+    PACK_SRC_FROM_OUTPUT,
     PACK_UNTILIZE_BENCHMARK,
     TILE_DST_CT_OFFSET,
     generate_input_dim,

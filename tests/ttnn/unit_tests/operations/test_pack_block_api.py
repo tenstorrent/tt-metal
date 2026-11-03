@@ -108,11 +108,15 @@ def run_case(device, in_dt, out_dt, fp32_dest, full_sync, ntiles, nblocks, reini
 
     def mem(dt):
         return ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(core, (32, 32 * total), ttnn.ShardOrientation.ROW_MAJOR)
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(core, (32, 32 * total), ttnn.ShardOrientation.ROW_MAJOR),
         )
 
     t_in = ttnn.from_torch(x, dtype=in_dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(in_dt))
-    t_out = ttnn.from_torch(torch.zeros_like(x), dtype=out_dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(out_dt))
+    t_out = ttnn.from_torch(
+        torch.zeros_like(x), dtype=out_dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(out_dt)
+    )
     in_cb = ttnn.cb_descriptor_from_sharded_tensor(0, t_in, core_ranges=core)
     out_cb = ttnn.cb_descriptor_from_sharded_tensor(16, t_out, core_ranges=core)
     dm = ttnn.KernelDescriptor(
@@ -120,7 +124,9 @@ def run_case(device, in_dt, out_dt, fp32_dest, full_sync, ntiles, nblocks, reini
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=core,
         compile_time_args=[0, total],
-        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default),
+        config=ttnn.DataMovementConfigDescriptor(
+            processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default
+        ),
     )
     cc = ttnn.ComputeConfigDescriptor()
     cc.fp32_dest_acc_en = fp32_dest

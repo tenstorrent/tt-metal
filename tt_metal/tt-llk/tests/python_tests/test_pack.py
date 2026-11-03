@@ -13,12 +13,12 @@ Tests the LLK pack kernel with:
 import pytest
 import torch
 from conftest import skip_for_wormhole
+from helpers.bfp_format_utils import QUANTIZE_TO_FORMAT
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
     get_valid_dest_indices,
 )
-from helpers.bfp_format_utils import QUANTIZE_TO_FORMAT
 from helpers.data_format_inference import infer_data_formats, unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -45,7 +45,6 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
-    PACK_SRC_FROM_OUTPUT,
     DEST_INDEX,
     DEST_SYNC,
     LOOP_FACTOR,
@@ -54,6 +53,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     PACK_BLOCK,
     PACK_RMW_DEST,
+    PACK_SRC_FROM_OUTPUT,
     RELU_CONFIG,
     TILE_COUNT,
     TILIZE,
@@ -67,6 +67,7 @@ PACK_BLOCK_MIN_TILES = 4
 def golden_src_f32(src_A):
     """The stimuli as the Float32 bit patterns a 32-bit DEST holds, as int32."""
     return src_A.to(torch.float32).contiguous().view(torch.int32)
+
 
 PACK_FORMATS = input_output_formats(
     [
@@ -152,7 +153,9 @@ def test_pack(
         elif formats.output_format == DataFormat.UInt8:
             wide = wide.abs().clamp(0, 255)
         golden_tensor = wide.to(format_dict[formats.output_format])
-        golden_tensor = golden_tensor.view(tile_cnt_A, -1)[:, : FACES_PER_TILE * 16 * 16].reshape(-1)
+        golden_tensor = golden_tensor.view(tile_cnt_A, -1)[
+            :, : FACES_PER_TILE * 16 * 16
+        ].reshape(-1)
 
     if formats.output_format in QUANTIZE_TO_FORMAT:
         # block float and FP8 outputs the packer narrows: the golden carries the same quantization
@@ -224,10 +227,16 @@ def test_pack(
 
     if block_tiles is not None:
         # A block of block_tiles tiles from dest index dest_index, the call a kernel makes with a tile index (welford groupnorm packs two tiles from index 1).
-        dest_wide = effective_dest_acc(formats.input_format, formats.output_format, dest_acc) == DestAccumulation.Yes or formats.input_format.is_32_bit()
+        dest_wide = (
+            effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
+            == DestAccumulation.Yes
+            or formats.input_format.is_32_bit()
+        )
         section_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // (2 if dest_wide else 1)
         if tile_cnt_A % block_tiles != 0 or dest_index + block_tiles > section_tiles:
-            pytest.skip(f"A block of {block_tiles} tiles from dest index {dest_index} does not fit tile count {tile_cnt_A} and {section_tiles} tiles per section.")
+            pytest.skip(
+                f"A block of {block_tiles} tiles from dest index {dest_index} does not fit tile count {tile_cnt_A} and {section_tiles} tiles per section."
+            )
         num_tiles_in_block = block_tiles
         num_blocks = tile_cnt_A // block_tiles
     elif dest_index != 0:
@@ -240,7 +249,11 @@ def test_pack(
 
     # llk_pack_block (LLK_PACK_BLOCK_MIN_TILES in llk_pack_tile_api.h) packs shorter blocks one tile at a time
     # (negated in the report: its own key, the build is the per-tile one)
-    pack_block_arg = -int(pack_block) if pack_block and num_tiles_in_block < PACK_BLOCK_MIN_TILES else pack_block
+    pack_block_arg = (
+        -int(pack_block)
+        if pack_block and num_tiles_in_block < PACK_BLOCK_MIN_TILES
+        else pack_block
+    )
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
