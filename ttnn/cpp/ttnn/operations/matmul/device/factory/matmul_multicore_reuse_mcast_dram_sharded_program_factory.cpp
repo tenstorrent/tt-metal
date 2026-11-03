@@ -1918,10 +1918,16 @@ ttnn::device_operation::ProgramArtifacts create_dram_sharded_artifacts(
 }  // namespace
 
 namespace {
-// Whether every chip of the workload has the same DRAM-bank-to-worker placement on both NoCs (one chip, a mesh of
-// identically harvested chips): one program then serves them all.
+// Whether every chip of the workload gets the same reader placement (one chip, a mesh of identically harvested
+// chips): one program then serves them all. The primary readers (each bank's NOC-optimal worker, on both NoCs) must
+// agree, and with several readers per bank so must the secondary ones: those are picked by each chip's own NoC hop
+// distances, which can differ between chips whose primary readers agree. The multi-core pipeline's cores depend only
+// on the primary readers.
 bool same_dram_bank_workers(
-    const tt::tt_metal::distributed::MeshDevice& device, const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::distributed::MeshDevice& device,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    uint32_t workers_per_bank,
+    const CoreRangeSet& input_storage_cores) {
     const auto coords = tensor_coords.coords();
     if (coords.empty()) {
         return true;
@@ -1930,6 +1936,23 @@ bool same_dram_bank_workers(
         const auto reference = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, coords.front());
         for (const auto& coord : coords) {
             if (device.get_optimal_dram_bank_to_logical_worker_assignment(noc, coord) != reference) {
+                return false;
+            }
+        }
+    }
+    if (workers_per_bank > 1 && device.arch() != tt::ARCH::QUASAR) {
+        const tt::tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
+        const auto readers = [&](const tt::tt_metal::distributed::MeshCoordinate& coord) {
+            std::vector<CoreCoord> cores;
+            for (const auto& reader : dram_sharded_helpers::get_dram_bank_reader_assignments(
+                     device, in1_noc, workers_per_bank, input_storage_cores, coord)) {
+                cores.push_back(reader.worker_core);
+            }
+            return cores;
+        };
+        const auto reference = readers(coords.front());
+        for (const auto& coord : coords) {
+            if (readers(coord) != reference) {
                 return false;
             }
         }
@@ -1950,8 +1973,12 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_art
     std::vector<ttnn::Tensor>& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     ttnn::device_operation::MeshWorkloadArtifacts artifacts;
-    const auto& device = *tensor_args.input_tensors.at(0).device();
-    if (same_dram_bank_workers(device, tensor_coords)) {
+    const auto& a = tensor_args.input_tensors.at(0);
+    auto& device = *a.device();
+    const auto& program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
+        operation_attributes.program_config.value());
+    if (same_dram_bank_workers(
+            device, tensor_coords, program_config.num_workers_per_dram_bank, a.shard_spec().value().grid)) {
         for (const auto& range : tensor_coords.ranges()) {
             const auto& coord = range.start_coord();
             auto shared = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, coord);
