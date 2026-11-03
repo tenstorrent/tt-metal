@@ -12,7 +12,8 @@
   eager-only;
 * a non-first rank receives the packed fp32 residual streams, not a bf16 hidden state.
 
-There is no KV migration: nothing reads the attention state out of a V4 rank yet.
+What migrates is the model's compressed caches and CSA index keys (``tt/v4/kv_caches.py``); the per-slot
+carries do not.
 """
 
 from __future__ import annotations
@@ -22,7 +23,9 @@ import inspect
 import torch
 
 import ttnn
+from models.demos.common.prefill.runners.migration import allgather_kv_stage_layouts
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+from models.demos.deepseek_v3_d_p.tt.v4.kv_caches import build_v4_kv_chunk_table
 from models.demos.deepseek_v3_d_p.tt.v4.transformer import TtV4Transformer
 
 
@@ -68,4 +71,23 @@ class TtV4Runtime(TtPrefillRuntime):
         )
 
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
-        return []
+        """The model's own caches, three stages in table-config order (``tt/v4/kv_caches.py``). The engine's
+        ``kv_caches`` is the adapter's empty handle: the model allocates what migrates."""
+        return self.model.kv_caches.migration_stages(self.hf_config)
+
+    def build_kv_chunk_table(self, kv_caches, path, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None):
+        """The three-config table over the model's caches; ``stage_layouts`` is gathered here when the
+        caller (a single-rank test) passes none."""
+        if stage_layouts is None:
+            stages = self.kv_migration_stages(kv_caches)
+            stage_layouts = allgather_kv_stage_layouts(self.mesh_device, stages, self.config.mesh_shape)
+        return build_v4_kv_chunk_table(
+            self.hf_config,
+            stage_layouts=stage_layouts,
+            mesh_shape=self.config.mesh_shape,
+            sp_axis=self.config.sp_axis,
+            num_users=self.config.num_users,
+            max_seq_len=self.config.max_seq_len,
+            chunk=self.config.chunk_size,
+            path=path,
+        )

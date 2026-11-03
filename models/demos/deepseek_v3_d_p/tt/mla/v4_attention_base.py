@@ -20,6 +20,39 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCompressorUtils
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+
+
+def alloc_compressed_cache(
+    mesh_device, *, rows, head_dim, sp_axis, slot_num, layer_num, layout=ttnn.TILE_LAYOUT, memory_config=None
+):
+    """A zeroed, replicated ``[slot_num * layer_num, 1, rows, head_dim]`` bf16 cache, user-major like the MLA
+    KVPE cache: user ``u``'s layer ``l`` is row ``u * layer_num + l``. One tensor holds every slot of every
+    layer of a kind, so a migration table can name it by one base address.
+
+    ``init_kvpe_cache`` SP-shards its sequence axis; pre-multiplying by the SP extent cancels that, so every
+    chip holds all ``rows`` (TtSWA's carry does the same)."""
+    return init_kvpe_cache(
+        kvpe_cache_head_dim=head_dim,
+        mesh_device=mesh_device,
+        seq_len=rows * mesh_device.shape[sp_axis],
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=layer_num,
+        num_users=slot_num,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+
+def check_shared_cache(cache, *, slot_num, layer_num, rows, head_dim, what):
+    """Reject a caller-owned cache sized for another layout: it would be written, just into another
+    layer's or user's rows."""
+    shape = tuple(cache.shape)
+    assert (
+        shape[0] == slot_num * layer_num and shape[2] >= rows and shape[3] == head_dim
+    ), f"{what} is {shape}, expected [{slot_num} slots x {layer_num} layers, 1, >= {rows}, {head_dim}]"
 
 
 class TtV4AttentionBase(LightweightModule):
