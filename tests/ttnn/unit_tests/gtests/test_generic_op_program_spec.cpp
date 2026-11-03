@@ -333,6 +333,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMeshProgramSpec) {
     ttnn::experimental::generic_op({input, output}, mesh_spec, mesh_run_args);
     EXPECT_TRUE(ttnn::allclose<bfloat16>(ttnn::exp(input).cpu(), output.cpu()));
 
+    // The ProgramSpec form runs as the mesh form does on the tensors' devices, so it reuses the mesh form's program.
+    const auto entries = this->device_->num_program_cache_entries();
+    ttnn::experimental::generic_op({input, output}, program.spec, program.run_args);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), entries);
+
     const ttnn::experimental::MeshProgramSpec overlapping{
         .programs = {{whole_mesh, program.spec}, {whole_mesh, program.spec}}};
     const ttnn::experimental::MeshProgramRunArgs overlapping_run_args{
