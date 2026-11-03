@@ -188,10 +188,18 @@ class TtCodePredictor:
         return x
 
     def logits(self, hidden, position):
-        """Codebook logits from one position: `lm_head[position - 1]` reads position."""
-        length = hidden.shape[1]
+        """Codebook logits from one position: `lm_head[position - 1]` reads position.
+
+        Packed in fp32. The matmul already accumulates in fp32, and a bfloat16 pack
+        flips argmax wherever the top two logits sit inside one rounding step.
+        """
         row = ttnn.slice(hidden, [0, position, 0], [1, position + 1, hidden.shape[2]])
-        return ttnn.linear(row, self.p["lm_head"][position - 1], compute_kernel_config=self.compute_config)
+        return ttnn.linear(
+            row,
+            self.p["lm_head"][position - 1],
+            compute_kernel_config=self.compute_config,
+            dtype=ttnn.float32,
+        )
 
     def teacher_forced_logits(self, embeddings, cos, sin, mask):
         """All 15 codebook logits in one pass: [1, 15, 2048]."""
@@ -224,7 +232,7 @@ class TtCodePredictor:
         """
         pick = pick or (lambda row: int(row.argmax()))
         codes = [int(first_code)]
-        for step in range(self.groups - 1):
+        for _step in range(self.groups - 1):
             embeddings = self.build_embeddings(talker_hidden, codes)
             length = embeddings.shape[1]
             cos, sin, mask = self.host_inputs(length)
@@ -233,7 +241,6 @@ class TtCodePredictor:
             )
             hidden = self(to_device(embeddings), to_device(cos), to_device(sin), to_device(mask))
             # The newest position is the last one, and step k reads it with lm_head[k].
-            row = ttnn.slice(hidden, [0, length - 1, 0], [1, length, hidden.shape[2]])
-            logits = ttnn.linear(row, self.p["lm_head"][step], compute_kernel_config=self.compute_config)
+            logits = self.logits(hidden, length - 1)
             codes.append(int(pick(ttnn.to_torch(logits).float().reshape(-1))))
         return codes[1:]

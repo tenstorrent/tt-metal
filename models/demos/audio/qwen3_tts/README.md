@@ -221,6 +221,10 @@ time), a streaming codec for latency, and batch above 1.
 - **The talker's `codec_head` runs HiFi4 with fp32 accumulation and fp32 logits.** With ttnn's
   defaults its worst sampling distance was 0.035 at 1.7B and 0.081 at 0.6B; now 0.003 and 0.0008,
   for about 4 us a call.
+- **The code predictor's 15 codebook heads return fp32 logits too.** They already accumulate
+  in fp32; packing that `[1024, 2048]` result to bfloat16 flipped top-1 on ties narrower than
+  one rounding step. The head is one matmul beside five layers, the same cost profile as
+  `codec_head`. MLP weights stay `bfloat8_b`.
 - **The codec encoder runs in fp32**, alone among the blocks: in bf16 the latents drop to PCC
   0.9984 and a rounding error becomes a different code. It runs once per reference clip.
 - **The 0.6B code predictor is less exact.** Without the projection its bf16 residual stream runs

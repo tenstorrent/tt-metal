@@ -252,8 +252,7 @@ def test_cached_predictor_tracks_the_uncached_graph(device):
         count = embeddings.shape[1]
         cos, sin, mask = plain.host_inputs(count)
         hidden = plain(*(to_device(device, tensor) for tensor in (embeddings, cos, sin, mask)))
-        row = ttnn.slice(hidden, [0, count - 1, 0], [1, count, hidden.shape[2]])
-        logits = ttnn.to_torch(ttnn.linear(row, plain.p["lm_head"][step])).float().reshape(-1)
+        logits = ttnn.to_torch(plain.logits(hidden, count - 1)).float().reshape(-1)
         reference_logits.append(logits)
         reference_codes.append(int(logits.argmax()))
         codes.append(reference_codes[-1])
