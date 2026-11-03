@@ -265,9 +265,9 @@ inline void _llk_unpack_A_mop_config_(
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Asserted unsupported: COL broadcast on tiles other than 32x32; transpose_of_faces on faces
- *       shorter than 16 rows or on 2-face tiles; within-face transpose on faces shorter than 16 rows or
- *       with unpack to dest (any tile, tt-llk#1702); ROW broadcast with unpack to dest on 32x16;
- *       ROW broadcast with acc_to_dest on tiles other than 32x32.
+ *       shorter than 16 rows or on 2-face tiles; within-face transpose (SrcA, no broadcast) on faces
+ *       shorter than 16 rows or with unpack to dest (any tile, tt-llk#1702); ROW broadcast with unpack
+ *       to dest on 32x16; ROW broadcast with acc_to_dest on tiles other than 32x32.
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
@@ -297,8 +297,10 @@ inline void _llk_unpack_A_init_(
     LLK_ASSERT(
         within_face_16x16_transpose == 0 || !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format),
         "Within-face transpose is not supported with unpack to dest; use transpose_dest on the math thread (tt-llk#1702)");
-    // Within-face transpose swaps rows and columns of a 16x16 face; a face with fewer rows gives wrong output.
-    LLK_ASSERT(within_face_16x16_transpose == 0 || face_r_dim == MAX_FACE_R_DIM, "Within-face transpose requires 16-row faces");
+    // Within-face transpose swaps rows and columns of a 16x16 face; a face with fewer rows gives wrong
+    // output. Haloize only runs on unpacker 0 (SrcA), and the non-dest broadcast MOPs read L1 through
+    // SrcB only, so broadcast callers that set the within-face flag (e.g. softmax_k's SCALAR) keep working.
+    LLK_ASSERT(BType == BroadcastType::NONE || within_face_16x16_transpose == 0 || face_r_dim == MAX_FACE_R_DIM, "Within-face transpose requires 16-row faces");
     // The ROW acc_to_dest MOP always unpacks SrcB faces 0, 1, 0, 1, as for a 32x32 tile. (Scalar broadcast
     // with acc_to_dest is rejected by a static_assert in _llk_unpack_A_mop_config_.)
     LLK_ASSERT(BType != BroadcastType::ROW || !acc_to_dest || num_faces == MAX_NUM_FACES, "Row broadcast with acc_to_dest supports only 32x32 tiles");

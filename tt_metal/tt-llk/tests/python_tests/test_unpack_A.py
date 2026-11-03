@@ -740,10 +740,12 @@ def test_unpack_A_targeted_tensor_shape_coverage(
     ), "Assert against golden failed"
 
 
-# Face transpose alone with Float32 unpack to dest: the path the compute API's transpose_wh_init
+# Face transpose alone with Float32 unpack to dest: the path the compute API's transpose_init
 # uses for 32-bit data (it transposes within faces on the math thread). Within-face transpose with
 # unpack to dest is wrong on every tile shape, so _llk_unpack_A_init_ asserts it (tt-llk#1702).
 # Only 16x16 and 32x32: _llk_unpack_A_init_ asserts transpose_of_faces on 2-face tiles.
+# 32x32 is the only shape where the unpack-to-dest MOP reorders faces (num_faces == 4); 16x16 is a
+# single face, so there it is an identity copy that only checks the assert accepts the mode.
 @pytest.mark.parametrize(
     "tile_dimensions",
     [[16, 16], [32, 32]],
