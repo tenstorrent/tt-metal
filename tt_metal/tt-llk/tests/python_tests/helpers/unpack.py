@@ -13,6 +13,7 @@ from helpers.format_config import (
     DataFormat,
 )
 
+from .bfp_format_utils import BFP_BLOCK
 from .llk_params import format_dict, format_tile_sizes
 from .tile_constants import (
     FACE_C_DIM,
@@ -105,7 +106,7 @@ def unpack_uint8(packed_list):
 # shared 8-bit exponent and per-element sign-magnitude datums. They differ only
 # in datum width (8/4/2 bits → 7/3/1 magnitude bits) and how datums are packed
 # into bytes. The helpers below capture that shared structure; see the matching
-# pack-side helpers in pack.py (float_to_bfp{8,4,2}_block / pack_bfp{8,4,2}_b).
+# pack-side helpers in pack.py (_bfp_collect_blocks / pack_bfp{8,4,2}_b).
 # ============================================================================
 
 
@@ -127,36 +128,15 @@ def _expand_bfp_datums(packed_mantissas, bits_per_datum):
     return datums
 
 
-def _bfp_to_float_block(exponent, datums, magnitude_bits, cache, exp_bias=127):
-    """Decode one 16-element BFP block to a list of float values.
-
-    Each datum is sign-magnitude with ``magnitude_bits`` magnitude bits and the
-    sign in the next bit up. The dequantized magnitude is
-    ``mag * 2^(exp - 127 - (magnitude_bits - 1))`` so that the format's leading
-    magnitude bit carries weight ``2^(exp - 127)``. A zero magnitude yields a
-    signed zero (the sign is preserved via the signed product), matching the
-    hardware unpacker / blockfloat_common.cpp reference.
-    """
-    exp_adj = exponent - exp_bias
-    scale = 2.0 ** (exp_adj - (magnitude_bits - 1))
-    sign_mask = 1 << magnitude_bits
-    mag_mask = sign_mask - 1
-
-    values = []
-    for datum in datums:
-        key = (exp_adj, int(datum))
-        cached = cache.get(key)
-        if cached is not None:
-            values.append(cached)
-            continue
-        sign = -1.0 if datum & sign_mask else 1.0
-        value = sign * (datum & mag_mask) * scale
-        values.append(value)
-        cache[key] = value
-    return values
-
-
-def _unpack_bfp_b(bfp_block, magnitude_bits, sfpu=False, num_faces=4, face_r_dim=16, exp_bias=127, dtype=torch.bfloat16):
+def _unpack_bfp_b(
+    bfp_block,
+    magnitude_bits,
+    sfpu=False,
+    num_faces=4,
+    face_r_dim=16,
+    exp_bias=127,
+    dtype=torch.bfloat16,
+):
     """Unpack a BFP8_b / BFP4_b / BFP2_b tile to a bfloat16 tensor.
 
     ``magnitude_bits`` selects the format: 7 (BFP8), 3 (BFP4), or 1 (BFP2).
@@ -173,22 +153,22 @@ def _unpack_bfp_b(bfp_block, magnitude_bits, sfpu=False, num_faces=4, face_r_dim
     else:
         # SFPU layout: 16 exponents followed by 16 blocks of 16 datums.
         exponents = bfp_block[:16]
-        sfpu_mantissa_bytes = 16 * 16 * bits_per_datum // 8
+        sfpu_mantissa_bytes = 16 * BFP_BLOCK * bits_per_datum // 8
         packed_mantissas = bfp_block[16 : 16 + sfpu_mantissa_bytes]
 
     datums = _expand_bfp_datums(packed_mantissas, bits_per_datum)
 
-    cache = {}
-    bfloat16_values = []
-    for i, exponent in enumerate(exponents):
-        block_datums = datums[i * 16 : (i + 1) * 16]
-        bfloat16_values.extend(
-            _bfp_to_float_block(
-                exponent, block_datums, magnitude_bits, cache, exp_bias
-            )
-        )
-
-    return torch.tensor(bfloat16_values, dtype=dtype)
+    blocks = datums[: len(exponents) * BFP_BLOCK].reshape(len(exponents), BFP_BLOCK)
+    sign_mask = 1 << magnitude_bits
+    magnitudes = (blocks & (sign_mask - 1)).astype(np.float64)
+    signed = np.where(blocks & sign_mask, -magnitudes, magnitudes)
+    shifts = (
+        np.frombuffer(bytes(exponents), dtype=np.uint8).astype(np.int32)
+        - exp_bias
+        - (magnitude_bits - 1)
+    )
+    values = np.ldexp(signed, shifts[:, None])
+    return torch.from_numpy(values.reshape(-1)).to(dtype)
 
 
 def unpack_bfp8_b(bfp8_block, sfpu=False, num_faces=4, face_r_dim=16):
@@ -767,6 +747,8 @@ def unpack_res_tiles(
         else:
             unpacked_tile = unpack_func(tile_data)
 
+        if isinstance(unpacked_tile, torch.Tensor):
+            unpacked_tile = unpacked_tile.tolist()
         unpacked_data.extend(unpacked_tile)
 
     return torch.tensor(unpacked_data, dtype=output_dtype)

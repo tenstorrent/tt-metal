@@ -28,8 +28,11 @@ inline std::string get_generic_reduction_doc(
     bool has_fast_approximate_mode = false) {
     // INT32 (TILE only) is supported for sum/min/max via the SFPU reduce path, but not for mean:
     // the average (sum / N) is usually fractional, so there is no canonical INT32 result to return.
+    // UINT32 follows INT32. sum/min/max convert it to INT32 and reduce it on the same path.
     const char* int32_row = int32_supported ? R"doc(
                 * - INT32
+                  - TILE
+                * - UINT32 (scalar=1.0 only)
                   - TILE)doc"
                                             : "";
     // All four generic reductions (sum/mean/max/min) expose fast_and_approximate_mode. std/var do

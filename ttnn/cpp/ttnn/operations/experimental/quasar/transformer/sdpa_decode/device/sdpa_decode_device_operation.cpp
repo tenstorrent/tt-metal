@@ -36,7 +36,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     }
     for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
-        TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
+        TT_FATAL(input_tensor.is_allocated(), "Operands to SDPA need to be allocated in buffers on device!");
         const bool is_quasar = input_tensor.device()->arch() == tt::ARCH::QUASAR;
         TT_FATAL(
             input_tensor.dtype() == DataType::BFLOAT16 || (!is_quasar && (input_tensor.dtype() == DataType::BFLOAT8_B ||

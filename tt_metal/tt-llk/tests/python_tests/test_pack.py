@@ -18,8 +18,8 @@ from helpers.constraints import (
     get_valid_dest_accumulation_modes,
     get_valid_dest_indices,
 )
-from helpers.data_format_inference import infer_data_formats
 from helpers.bfp_format_utils import QUANTIZE_TO_FORMAT
+from helpers.data_format_inference import infer_data_formats, unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     FACES_PER_TILE,
@@ -33,7 +33,6 @@ from helpers.llk_params import (
     DestSync,
     PackerReluType,
     PerfRunType,
-    format_dict,
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
@@ -60,7 +59,7 @@ from helpers.test_variant_parameters import (
     TILIZE,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 PACK_BLOCK_MIN_TILES = 4
 
@@ -138,9 +137,7 @@ def test_pack(
         input_dimensions=input_dimensions,
     )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
     if (
         formats.output_format in (DataFormat.Int32, DataFormat.Int8, DataFormat.UInt8)
         and not formats.input_format.is_integer()
@@ -296,12 +293,7 @@ def test_pack(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     test_passed = passed_test(
         golden_tensor, res_tensor, formats.output_format, print_errors=False

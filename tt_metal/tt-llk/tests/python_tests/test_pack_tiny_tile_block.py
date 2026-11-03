@@ -22,7 +22,7 @@ from helpers.llk_params import (
     format_dict,
     format_tile_sizes,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import max_dest_tiles, parametrize
 from helpers.perf.core import PerfRunType, create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -40,7 +40,7 @@ from helpers.test_variant_parameters import (
     TINY_PACK_MODE,
 )
 from helpers.tile_constants import calculate_tile_size_bytes, get_tile_params
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 FORMATS_F32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
@@ -80,12 +80,9 @@ def _make_config(
     golden_tensor = src_A.to(torch_format)
 
     # Determine DEST capacity (SyncHalf: 8 tiles FP16, 4 tiles FP32)
-    capacity_divisor = (
-        2
-        if (dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit())
-        else 1
+    max_tiles_in_dest = max_dest_tiles(
+        dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit()
     )
-    max_tiles_in_dest = 8 // capacity_divisor
 
     # For tiny tiles with fewer faces, more tiles fit in DEST
     # Scale by the ratio of faces: a 2-face tile uses half the DEST of a 4-face tile
@@ -177,17 +174,13 @@ def test_pack_tiny_tile_block(
 ):
     if pack_mode == 3 and tile_dims == (32, 32):
         pytest.skip("The dense block pack records at most eight PACRs per tile")
-    configuration, golden_tensor, torch_format = _make_config(
+    configuration, golden_tensor, _ = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
     )
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Length mismatch: got {len(res_from_L1)}, expected {len(golden_tensor)}"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
 
@@ -300,12 +293,9 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
     torch_format = format_dict[formats.output_format]
     golden_tensor = src_A.to(torch_format)
 
-    capacity_divisor = (
-        2
-        if (dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit())
-        else 1
+    max_tiles_in_dest = max_dest_tiles(
+        dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit()
     )
-    max_tiles_in_dest = 8 // capacity_divisor
     if num_faces < 4:
         max_tiles_in_dest = max_tiles_in_dest * (4 // num_faces)
 
@@ -350,9 +340,5 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Length mismatch: got {len(res_from_L1)}, expected {len(golden_tensor)}"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

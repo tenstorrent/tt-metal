@@ -49,9 +49,9 @@ the two tests below use it deliberately:
 entirely, so "the stride was restored" cannot be confused with "nothing needed restoring".
 """
 
-import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
@@ -143,8 +143,7 @@ def _run(
 
 
 def _skip_unsupported(formats, dest_acc):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
 
 @parametrize(

@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import ClassVar
 
 import torch
+from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
-from .device_io import read_from_device, write_to_device
 from .format_config import DataFormat
 from .golden_generators import GeneratorProxy, ProxyMode
 from .llk_params import format_tile_sizes
@@ -25,6 +25,7 @@ from .pack import (
     pack_bfp4_b,
     pack_bfp8_b,
     pack_bfp16,
+    pack_dense_tiles,
     pack_fp8_e4m3,
     pack_fp16,
     pack_fp32,
@@ -191,18 +192,19 @@ class StimuliConfig:
             self._operand_tile_size_bytes(name),
             self.num_faces,
             self.face_r_dim,
-            location,
         )
         if dense:
             StimuliConfig.write_matrix_w_tile_dimensions(
                 *common_args,
                 self.tile_dimensions,
+                location,
                 use_srcs=self._operand_use_srcs(name),
                 twos_complement=self.twos_complement,
             )
         else:
             StimuliConfig.write_matrix(
                 *common_args,
+                location,
                 self.write_full_tiles,
                 use_srcs=self._operand_use_srcs(name),
                 twos_complement=self.twos_complement,
@@ -471,6 +473,18 @@ class StimuliConfig:
         return True
 
     @staticmethod
+    def _write_packed_tiles(location, base_address, tile_size, packed_tiles):
+        if len(packed_tiles) > 1 and all(
+            len(data) == tile_size for data in packed_tiles
+        ):
+            write_to_device(
+                location, base_address, b"".join(bytes(data) for data in packed_tiles)
+            )
+            return
+        for index, data in enumerate(packed_tiles):
+            write_to_device(location, base_address + index * tile_size, data)
+
+    @staticmethod
     def write_matrix(
         buffer,
         tile_count: int,
@@ -494,7 +508,6 @@ class StimuliConfig:
         ):
             return
 
-        addresses = []
         packed_data_list = []
 
         # Elements to pack per tile:
@@ -539,11 +552,11 @@ class StimuliConfig:
             start_idx = MAX_TILE_ELEMENTS * ind
             tile_data = buffer[start_idx : start_idx + tile_elements]
             packed_data = _pack_tile(tile_data)
-            addresses.append(base_address + ind * tile_size)
             packed_data_list.append(packed_data)
 
-        for addr, data in zip(addresses, packed_data_list):
-            write_to_device(location, addr, data)
+        StimuliConfig._write_packed_tiles(
+            location, base_address, tile_size, packed_data_list
+        )
 
     @staticmethod
     def write_matrix_w_tile_dimensions(
@@ -569,11 +582,18 @@ class StimuliConfig:
         ):
             return
 
-        addresses = []
         packed_data_list = []
 
         tile_r, tile_c = tile_dimensions
         tile_elements = tile_r * tile_c  # Dense: use actual tile dimensions
+
+        if not use_srcs and tile_elements == num_faces * face_r_dim * FACE_C_DIM:
+            packed_data = pack_dense_tiles(
+                buffer, tile_count, pack_function, num_faces, face_r_dim
+            )
+            if packed_data is not None and len(packed_data) == tile_count * tile_size:
+                write_to_device(location, base_address, packed_data)
+                return
 
         def _pack_tile(buffer_tile):
             if pack_function in (
@@ -608,11 +628,11 @@ class StimuliConfig:
             start_idx = tile_elements * ind
             tile_data = buffer[start_idx : start_idx + tile_elements]
             packed_data = _pack_tile(tile_data)
-            addresses.append(base_address + ind * tile_size)
             packed_data_list.append(packed_data)
 
-        for addr, data in zip(addresses, packed_data_list):
-            write_to_device(location, addr, data)
+        StimuliConfig._write_packed_tiles(
+            location, base_address, tile_size, packed_data_list
+        )
 
     def write(self, location: str = "0,0"):
         """

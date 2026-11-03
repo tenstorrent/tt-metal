@@ -200,9 +200,9 @@ ALWI void dequant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  *
  * Return value: None
  *
- * | Argument   | Description                           | Data type | Valid range | Required |
- * |------------|---------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument   | Description                            | Data type | Valid range              | Required |
+ * |------------|----------------------------------------|-----------|--------------------------|----------|
+ * | zero_point | The zero point, as an fp32 bit pattern | uint32_t  | Integer in [-2^24, 2^24] | Yes      |
  * */
 // clang-format on
 ALWI void quant_tile_init(const uint32_t zero_point) {
@@ -216,9 +216,9 @@ ALWI void quant_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument   | Description                           | Data type | Valid range | Required |
- * |------------|---------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument   | Description                            | Data type | Valid range              | Required |
+ * |------------|----------------------------------------|-----------|--------------------------|----------|
+ * | zero_point | The zero point, as an fp32 bit pattern | uint32_t  | Integer in [-2^24, 2^24] | Yes      |
  * */
 // clang-format on
 ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
@@ -231,9 +231,9 @@ ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument   | Description                           | Data type | Valid range | Required |
- * |------------|---------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument   | Description                            | Data type | Valid range              | Required |
+ * |------------|----------------------------------------|-----------|--------------------------|----------|
+ * | zero_point | The zero point, as an fp32 bit pattern | uint32_t  | Integer in [-2^24, 2^24] | Yes      |
  * */
 // clang-format on
 ALWI void quant_int8_tile_init(const uint32_t zero_point) {
@@ -245,15 +245,19 @@ ALWI void quant_int8_tile_init(const uint32_t zero_point) {
  * Initialize the sfpu with the zero point argument of the re-quantization Op.
  * To be called once at beginning of a kernel.
  *
+ * Both zero points are passed as fp32 bit patterns. zero_point is precomputed by the caller as
+ * -z_in * (s_in / s_out), where z_in is the input zero point.
+ *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                    | Data type | Valid range              | Required |
+ * |----------------|------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -z_in * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern  | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
-ALWI void requant_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX), zero_point)));
+ALWI void requant_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX), zero_point, out_zero_point)));
 }
 
 // clang-format off
@@ -261,30 +265,40 @@ ALWI void requant_tile_init(const uint32_t zero_point) {
  * Initialize the sfpu with the zero point argument of the re-quantization Op, rounding into the
  * unsigned uint8 range [0, 255]. To be called once at beginning of a kernel.
  *
+ * Both zero points are passed as fp32 bit patterns. zero_point is precomputed by the caller as
+ * -z_in * (s_in / s_out), where z_in is the input zero point.
+ *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                    | Data type | Valid range              | Required |
+ * |----------------|------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -z_in * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern  | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
-ALWI void requant_uint8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8), zero_point)));
+ALWI void requant_uint8_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8), zero_point, out_zero_point)));
 }
 
 // clang-format off
 /**
  * Initialize the sfpu for requantize with int8 output.
  *
+ * Both zero points are passed as fp32 bit patterns. zero_point is precomputed by the caller as
+ * -z_in * (s_in / s_out), where z_in is the input zero point.
+ *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                    | Data type | Valid range              | Required |
+ * |----------------|------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -z_in * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern  | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
-ALWI void requant_int8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8), zero_point)));
+ALWI void requant_int8_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8), zero_point, out_zero_point)));
 }
 
 // clang-format off
@@ -292,16 +306,20 @@ ALWI void requant_int8_tile_init(const uint32_t zero_point) {
  * Initialize the sfpu for requantize reading an int8 input tensor. Must be called before using the requant
  * int8-input tile op. Some binary_ng kernels invoke this init inside the per-tile loop. Repeated calls are redundant.
  *
+ * Both zero points are passed as fp32 bit patterns. zero_point is precomputed by the caller as
+ * -(z_in + 128) * (s_in / s_out), where z_in is the input zero point.
+ *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                            | Data type | Valid range              | Required |
+ * |----------------|--------------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -(z_in + 128) * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern          | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
-ALWI void requant_int8_in_tile_init(const uint32_t zero_point) {
+ALWI void requant_int8_in_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int32, true), zero_point)));
+        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int32, true), zero_point, out_zero_point)));
 }
 
 // clang-format off
@@ -310,16 +328,20 @@ ALWI void requant_int8_in_tile_init(const uint32_t zero_point) {
  * int8-input handling of requant_int8_in_tile_init (see that function). Must be called before using the op.
  * Repeated calls are redundant.
  *
+ * Both zero points are passed as fp32 bit patterns. zero_point is precomputed by the caller as
+ * -(z_in + 128) * (s_in / s_out), where z_in is the input zero point.
+ *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                            | Data type | Valid range              | Required |
+ * |----------------|--------------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -(z_in + 128) * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern          | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
-ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point) {
+ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8, true), zero_point)));
+        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8, true), zero_point, out_zero_point)));
 }
 
 // clang-format off
@@ -328,16 +350,20 @@ ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point) {
  * int8-input handling of requant_int8_in_tile_init and additionally packs the result into the signed int8 range.
  * Must be called before using the op. Repeated calls are redundant.
  *
+ * Both zero points are passed as fp32 bit patterns. zero_point is precomputed by the caller as
+ * -(z_in + 128) * (s_in / s_out), where z_in is the input zero point.
+ *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                            | Data type | Valid range              | Required |
+ * |----------------|--------------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -(z_in + 128) * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern          | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
-ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point) {
+ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8, true), zero_point)));
+        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8, true), zero_point, out_zero_point)));
 }
 
 // clang-format off
@@ -345,11 +371,14 @@ ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point) {
  * Initialize the sfpu with the zero point argument of the de-quantization Op.
  * To be called once at beginning of a kernel.
  *
+ * zero_point is passed as an fp32 bit pattern. It is precomputed by the caller as -z_in,
+ * where z_in is the input zero point.
+ *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the de-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument   | Description                   | Data type | Valid range | Required |
+ * |------------|-------------------------------|-----------|-------------|----------|
+ * | zero_point | -z_in, as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
 ALWI void dequant_tile_init(const uint32_t zero_point) {
@@ -361,11 +390,14 @@ ALWI void dequant_tile_init(const uint32_t zero_point) {
  * Initialize the sfpu for dequantize reading an int8 input tensor. Must be called before using the dequant
  * int8-input tile op. Some binary_ng kernels invoke this init inside the per-tile loop. Repeated calls are redundant.
  *
+ * zero_point is passed as an fp32 bit pattern. It is precomputed by the caller as -(z_in + 128),
+ * where z_in is the input zero point.
+ *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the de-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument   | Description                           | Data type | Valid range | Required |
+ * |------------|---------------------------------------|-----------|-------------|----------|
+ * | zero_point | -(z_in + 128), as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
  * */
 // clang-format on
 ALWI void dequant_int8_tile_init(const uint32_t zero_point) {

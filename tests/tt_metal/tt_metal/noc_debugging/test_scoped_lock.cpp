@@ -43,7 +43,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessIssue) {
 
         const CoreCoord locker_core = {0, 0};
         const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -138,7 +138,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockMultipleL1Issues) {
 
         const CoreCoord locker_core = {0, 0};
         const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -252,7 +252,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessNoIssue) {
 
         const CoreCoord locker_core = {0, 0};
         const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -338,7 +338,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        workload.add_program(device_range, CreateProgram());
+        workload.add_program(device_range, CreateProgram(*mesh_device));
 
         Program& program = workload.get_programs().at(device_range);
         auto& mc = MetalContext::instance();
@@ -444,7 +444,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        workload.add_program(device_range, CreateProgram());
+        workload.add_program(device_range, CreateProgram(*mesh_device));
 
         Program& program = workload.get_programs().at(device_range);
         auto& mc = MetalContext::instance();
@@ -704,7 +704,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToOwnLockNoIssue) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
 
         const CoreCoord core = {0, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -754,7 +754,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToUnlockedNoIssue) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
 
         const CoreCoord core = {0, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -804,7 +804,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockNoWritesNoIssue) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
 
         const CoreCoord core = {0, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1766,7 +1766,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBIssue) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        workload.add_program(device_range, CreateProgram());
+        workload.add_program(device_range, CreateProgram(*mesh_device));
         Program& program = workload.get_programs().at(device_range);
 
         constexpr uint32_t remote_cb_index = 31;
@@ -1878,7 +1878,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBNoIssue) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        workload.add_program(device_range, CreateProgram());
+        workload.add_program(device_range, CreateProgram(*mesh_device));
         Program& program = workload.get_programs().at(device_range);
 
         constexpr uint32_t remote_cb_index = 31;
@@ -1968,7 +1968,7 @@ void RunScopedLockStatefulWriteTest(
 
     const CoreCoord locker_core = {0, 0};
     const CoreCoord writer_core = {1, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     distributed::MeshWorkload workload;
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -2129,7 +2129,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockStatefulWriteLargeDestinationAddressRecord
 
         const CoreCoord locker_core = {0, 0};
         const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
