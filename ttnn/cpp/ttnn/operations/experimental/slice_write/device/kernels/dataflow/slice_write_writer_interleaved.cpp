@@ -39,7 +39,15 @@ void kernel_main() {
 #endif
     tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
+    volatile tt_l1_ptr uint32_t* id_per_dim_args = num_padded_sticks + num_dims;
+    // id_per_dim is this core's running position; keep it in a local copy rather than mutating the runtime-arg
+    // region. Sized to ttnn::MAX_NUM_DIMENSIONS; the program factories reject higher ranks.
+    constexpr uint32_t max_num_dims = 8;
+    ASSERT(num_dims <= max_num_dims);
+    uint32_t id_per_dim[max_num_dims];
+    for (uint32_t j = 0; j < num_dims; j++) {
+        id_per_dim[j] = id_per_dim_args[j];
+    }
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t page_offset = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();

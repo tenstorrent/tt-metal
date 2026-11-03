@@ -32,8 +32,16 @@ void kernel_main() {
 #endif
     tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* rev_stride = id_per_dim + num_dims;
+    volatile tt_l1_ptr uint32_t* id_per_dim_args = num_padded_sticks + num_dims;
+    volatile tt_l1_ptr uint32_t* rev_stride = id_per_dim_args + num_dims;
+    // id_per_dim is this core's running position; keep it in a local copy rather than mutating the runtime-arg
+    // region. Sized to ttnn::MAX_NUM_DIMENSIONS; the program factories reject higher ranks.
+    constexpr uint32_t max_num_dims = 8;
+    ASSERT(num_dims <= max_num_dims);
+    uint32_t id_per_dim[max_num_dims];
+    for (uint32_t j = 0; j < num_dims; j++) {
+        id_per_dim[j] = id_per_dim_args[j];
+    }
 
 #ifdef DEBUG
     DPRINT("num_input_sticks_per_dim: ");
@@ -68,7 +76,10 @@ void kernel_main() {
 
     Noc noc;
     experimental::CB cb_in(cb_id_in);
+#ifdef LAST_DIM_STRIDED
+    // cb_id_out is only allocated (and only used) when the last dim is strided.
     experimental::CB cb_out(cb_id_out);
+#endif
 
     uint32_t dst_stick_id = start_id;
     uint32_t src_stick_id = start_id;
@@ -80,8 +91,6 @@ void kernel_main() {
         cb_out.reserve_back(num_read_per_barrier);
         uint32_t read_offset = 0;
         // Read-back must not consume the write loop's id_per_dim.
-        // Sized to ttnn::MAX_NUM_DIMENSIONS; the program factory rejects higher ranks.
-        constexpr uint32_t max_num_dims = 8;
         uint32_t src_id_per_dim[max_num_dims];
         for (uint32_t j = 0; j < num_dims; j++) {
             src_id_per_dim[j] = id_per_dim[j];
