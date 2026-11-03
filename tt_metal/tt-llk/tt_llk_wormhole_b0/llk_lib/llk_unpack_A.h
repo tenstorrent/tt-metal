@@ -267,7 +267,8 @@ inline void _llk_unpack_A_mop_config_(
  * @note Asserted unsupported: COL broadcast on tiles other than 32x32; transpose_of_faces on faces
  *       shorter than 16 rows or on 2-face tiles; within-face transpose (SrcA, no broadcast) on faces
  *       shorter than 16 rows or with unpack to dest (any tile, tt-llk#1702); ROW broadcast with unpack
- *       to dest on 32x16; ROW broadcast with acc_to_dest on tiles other than 32x32.
+ *       to dest on 32x16; ROW broadcast with acc_to_dest on tiles other than 32x32 (WH MOP limit,
+ *       tt-metal#47328).
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
@@ -301,8 +302,10 @@ inline void _llk_unpack_A_init_(
     // output. Haloize only runs on unpacker 0 (SrcA), and the non-dest broadcast MOPs read L1 through
     // SrcB only, so broadcast callers that set the within-face flag (e.g. softmax_k's SCALAR) keep working.
     LLK_ASSERT(BType == BroadcastType::NONE || within_face_16x16_transpose == 0 || face_r_dim == MAX_FACE_R_DIM, "Within-face transpose requires 16-row faces");
-    // The ROW acc_to_dest MOP always unpacks SrcB faces 0, 1, 0, 1, as for a 32x32 tile. (Scalar broadcast
-    // with acc_to_dest is rejected by a static_assert in _llk_unpack_A_mop_config_.)
+    // The ROW acc_to_dest MOP always unpacks SrcB faces 0, 1, 0, 1, as for a 32x32 tile (the BH MOP
+    // follows the face grid, so only WH asserts). Teaching the WH MOP the face grid is tracked by
+    // tt-metal#47328. (Scalar broadcast with acc_to_dest is rejected by a static_assert in
+    // _llk_unpack_A_mop_config_.)
     LLK_ASSERT(BType != BroadcastType::ROW || !acc_to_dest || num_faces == MAX_NUM_FACES, "Row broadcast with acc_to_dest supports only 32x32 tiles");
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
