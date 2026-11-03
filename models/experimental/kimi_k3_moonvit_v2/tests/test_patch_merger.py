@@ -12,6 +12,7 @@ import torch
 from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import tpool_patch_merger
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    random_tensor,
     assert_pcc,
     device_config,
     row_grid,
@@ -33,7 +34,7 @@ def test_patch_merger(mesh_device, sp_axis, num_links, config, size):
     tt = TT_Patch_Merger(config)
 
     _, h, w = grid[0]
-    x = torch.randn(h * w, config.hidden_size, dtype=torch.bfloat16)
+    x = random_tensor(h * w, config.hidden_size)
     (golden,) = tpool_patch_merger(x, torch.tensor(grid), merge_kernel_size=config.merge_kernel_size)
     golden = golden.reshape(-1, config.merged_dim)
 

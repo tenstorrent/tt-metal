@@ -38,6 +38,8 @@ class TT_Patch_Embed(Module):
             bias=config.patch_embed_proj_bias,
             mesh_device=mesh_device,
             compute_kernel_config=compute_kernel_config,
+            # fp32 out: the start of the encoder's fp32 residual stream (vision_block.py).
+            output_dtype=ttnn.float32,
         )
         self.pos_emb_weight: torch.Tensor | None = None
 
@@ -60,11 +62,12 @@ class TT_Patch_Embed(Module):
         self.pos_emb_weight = torch.load(Path(directory) / f"{prefix}pos_emb.weight.pt")
 
     def forward(self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor) -> ttnn.Tensor:
-        """patches [1, 1, S/sp, padded_patch_dim], pos_emb [1, 1, S/sp, hidden] -> [1, 1, S/sp, hidden].
+        """patches [1, 1, S/sp, padded_patch_dim] bf16, pos_emb [1, 1, S/sp, hidden] fp32 ->
+        [1, 1, S/sp, hidden] fp32, the encoder's fp32 residual stream.
 
         `patches` and `pos_emb` are left allocated: they are the caller's (per-image `DeviceInput`s
         in the full model)."""
         x = self.proj(patches)
-        out = ttnn.add(x, pos_emb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.add(x, pos_emb, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
         return out

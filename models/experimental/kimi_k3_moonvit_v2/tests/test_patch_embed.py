@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import torch
 
+import ttnn
+
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     assert_pcc,
     device_config,
@@ -41,6 +43,6 @@ def test_patch_embed(mesh_device, sp_axis, num_links, config, reference, size):
     pos_emb = host_prep.pos_embeds(tt.pos_emb_weight, h, w, config.pos_emb_interpolation_mode)
     out = tt(
         sp_shard(host_prep.patch_rows(config, pixels), mesh_device, sp_axis, config.max_patches),
-        sp_shard(pos_emb, mesh_device, sp_axis, config.max_patches),
+        sp_shard(pos_emb, mesh_device, sp_axis, config.max_patches, ttnn.float32),
     )
     assert_pcc(golden, sp_gather(out, mesh_device, sp_axis, h * w))

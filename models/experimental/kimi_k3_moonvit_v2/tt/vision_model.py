@@ -48,11 +48,13 @@ class TT_MoonViT_Encoder(Module):
             )
             for _ in range(config.num_hidden_layers)
         )
+        # Reads the fp32 residual stream, hands bf16 to the merger.
         self.final_layernorm = RMSNorm(
             config.hidden_size,
             eps=config.norm_eps,
             mesh_device=mesh_device,
             compute_kernel_config=compute_kernel_config,
+            output_dtype=ttnn.bfloat16,
         )
 
     def forward(self, x: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor) -> ttnn.Tensor:
@@ -112,7 +114,10 @@ class TT_MoonViT_Vision_Model(Module):
         sp_axis = self.parallel.sp_axis
         rows = config.max_patches
         self.patches = DeviceInput((1, 1, rows, config.padded_patch_dim), mesh_device=mesh_device, sp_axis=sp_axis)
-        self.pos_emb = DeviceInput((1, 1, rows, config.hidden_size), mesh_device=mesh_device, sp_axis=sp_axis)
+        # fp32: added into the fp32 residual stream (patch_embed.py).
+        self.pos_emb = DeviceInput(
+            (1, 1, rows, config.hidden_size), mesh_device=mesh_device, sp_axis=sp_axis, dtype=ttnn.float32
+        )
         self.logical_n = DeviceInput(
             (1, 1, 1, 1), mesh_device=mesh_device, sp_axis=None, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
         )

@@ -14,6 +14,7 @@ import pytest
 import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    random_tensor,
     assert_pcc,
     device_config,
     row_grid,
@@ -36,7 +37,7 @@ def check_rms_norm(mesh_device, sp_axis, torch_norm, eps: float, n: int, rows: i
     tt = RMSNorm(dim, eps=eps, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config(mesh_device))
     tt.load_torch_state_dict(torch_norm.state_dict())
 
-    x = torch.randn(n, dim, dtype=torch.bfloat16)
+    x = random_tensor(n, dim)
     with torch.no_grad():
         golden = torch_norm(x)
 

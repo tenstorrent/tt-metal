@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    random_tensor,
     assert_pcc,
     device_config,
     row_grid,
@@ -42,7 +43,7 @@ def check_linear(mesh_device, sp_axis, config, torch_linear, n: int, rows: int) 
     )
     tt.load_torch_state_dict(torch_linear.state_dict())
 
-    x = torch.randn(n, torch_linear.in_features, dtype=torch.bfloat16)
+    x = random_tensor(n, torch_linear.in_features)
     with torch.no_grad():
         golden = torch_linear(x)
 

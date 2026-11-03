@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device: `TT_Vision_Attention` (ring attention over the 1x4 mesh) against the reference
+"""Device: `TT_Vision_Attention` (ring attention over the 4-chip ring) against the reference
 `blocks[layer].attention_qkvpacked`. The device runs window-ordered rows; the output is put back in
 raster order to compare."""
 
@@ -12,6 +12,7 @@ import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    random_tensor,
     assert_pcc,
     ATTENTION_GRIDS,
     REFERENCE_LAYERS,
@@ -45,7 +46,7 @@ def test_vision_attention(mesh_device, sp_axis, num_links, config, reference, gr
 
     grid_thws = torch.tensor(grid)
     h, w = check_grid(grid_thws, config)
-    x = torch.randn(h * w, config.hidden_size, dtype=torch.bfloat16)
+    x = random_tensor(h * w, config.hidden_size)
     cu_seqlens, max_seqlen, rope_freqs_cis = reference_rope(reference, grid_thws)
     with torch.no_grad():
         golden = block.attention_qkvpacked(x, cu_seqlens, max_seqlen, rope_freqs_cis)

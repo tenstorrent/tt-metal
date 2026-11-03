@@ -18,6 +18,9 @@ class Linear(Module):
 
     `activation_fn` is a `ttnn.linear` activation name such as `"gelu_tanh"`. Without a `core_grid`,
     ttnn applies it as an eltwise op after the matmul, not inside the matmul kernel.
+
+    `output_dtype` sets the output's dtype (default: ttnn's, the input's). fp32 keeps the fp32
+    accumulator instead of rounding it to bf16; the layers that write the fp32 residual stream use it.
     """
 
     def __init__(
@@ -29,12 +32,14 @@ class Linear(Module):
         mesh_device: ttnn.MeshDevice,
         compute_kernel_config,
         activation_fn: str | None = None,
+        output_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.compute_kernel_config = compute_kernel_config
         self.activation_fn = activation_fn
+        self.output_dtype = output_dtype
         self.weight = Parameter(shape=(in_features, out_features), device=mesh_device)
         self.bias = Parameter(shape=(1, out_features), device=mesh_device) if bias else None
 
@@ -50,6 +55,7 @@ class Linear(Module):
             self.weight.data,
             bias=self.bias.data if self.bias is not None else None,
             activation=self.activation_fn,
+            dtype=self.output_dtype,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

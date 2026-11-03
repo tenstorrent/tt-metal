@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import torch
 
+import ttnn
+
 from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    random_tensor,
     assert_pcc,
     ATTENTION_GRIDS,
     REFERENCE_LAYERS,
@@ -39,7 +42,7 @@ def test_vision_block(mesh_device, sp_axis, num_links, config, reference, grid, 
 
     grid_thws = torch.tensor(grid)
     h, w = check_grid(grid_thws, config)
-    x = torch.randn(h * w, config.hidden_size, dtype=torch.bfloat16)
+    x = random_tensor(h * w, config.hidden_size)
     cu_seqlens, max_seqlen, rope_freqs_cis = reference_rope(reference, grid_thws)
     with torch.no_grad():
         golden = block(x, cu_seqlens, max_seqlen, rope_freqs_cis=rope_freqs_cis)
@@ -47,6 +50,6 @@ def test_vision_block(mesh_device, sp_axis, num_links, config, reference, grid, 
     rope = TT_Rope(config, mesh_device=mesh_device, parallel=parallel).write(*host_prep.rope_tables(config, h, w))
     x_window = host_prep.to_window_order(x, h, w, config.merge_kernel_size)
     logical_n = logical_length_tensor(mesh_device, h * w)
-    out = tt(sp_shard(x_window, mesh_device, sp_axis, config.max_patches), rope, logical_n)
+    out = tt(sp_shard(x_window, mesh_device, sp_axis, config.max_patches, ttnn.float32), rope, logical_n)
     out = sp_gather(out, mesh_device, sp_axis, h * w)
     assert_pcc(golden, host_prep.from_window_order(out, h, w, config.merge_kernel_size))
