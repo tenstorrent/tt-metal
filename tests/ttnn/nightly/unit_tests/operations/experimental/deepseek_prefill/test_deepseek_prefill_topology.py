@@ -312,7 +312,11 @@ def test_moe_padding_config_topology(mesh_device, config_mapper):
         counts, sides = _read_rows(config)
         assert counts == _sequential_counts(isl_1, sp_factor, tokens_per_chip)
         assert sides == [pad_side] * sp_factor
-        assert repr(config.tensor_topology()) == topology_before
+        # A replicated config keeps {2},[Replicate] here, although each chip writes its own row from its coordinate
+        # along cluster_axis: the op has no compute_output_topologies, and the framework default checks the config
+        # against the metadata only, which are replicated. The label is checked for a sharded config only.
+        if config_mapper != "replicate_1d":
+            assert repr(config.tensor_topology()) == topology_before
 
         # The metadata now carries a 2-D shard label, with a different actual_end on every device.
         isl_per_device = [40, 72][:sp_factor]
