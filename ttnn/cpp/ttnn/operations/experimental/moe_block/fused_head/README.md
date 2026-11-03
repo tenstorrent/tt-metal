@@ -41,6 +41,10 @@ Differences from the reference, none in what the kernels compute or in their NoC
 - the routing planner splits torus ties by the source's parity (the reference's RAP_YT 2, now the only rule: no
   RAP_YT define) and the gather's ring ties follow the fabric, as main's routing tables (parity since #63501); the
   references for the tests are dumped with the reference tree's default (parity).
+- the routing exchange's Y hello (ra_y_send) waits for the hellos that actually land on the chip (one more runtime
+  arg, after the fabric connection's: `HeadModel::y_hellos_in`), not for one: on an unwrapped SP axis (a Y line,
+  e.g. FABRIC_2D 8x4 or a 4x4 tray half) every row says hello Y+ except the far end, so the near end gets none (the
+  reference waits there forever) and the row before the far end two. A ring or 2 rows: one each, as the reference.
 
 ## Host plan
 

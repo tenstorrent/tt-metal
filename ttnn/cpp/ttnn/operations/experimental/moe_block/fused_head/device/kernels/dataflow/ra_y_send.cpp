@@ -23,6 +23,9 @@ void kernel_main() {
         const uint32_t hello = get_arg_val<uint32_t>(a++), pc = get_arg_val<uint32_t>(a++),
                        pm = get_arg_val<uint32_t>(a++);
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
+        // the hellos that land here a call (the rows whose first Y direction points at this row): one on a ring; on a
+        // line none at the near end, two at the row before the far end
+        const uint32_t hellos = get_arg_val<uint32_t>(a++);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::allocate_header();
         conn.open();
         // measurement only: "started" to the Y neighbour's watcher; the neighbour's landing here is stamped when seen
@@ -33,7 +36,7 @@ void kernel_main() {
         conn.wait_for_empty_write_slot();
         conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
         volatile tt_l1_ptr uint32_t* hw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hello);
-        bool seen = false;
+        bool seen = hellos == 0;
         while (!rs.done) {
             invalidate_l1_cache();
             if (!seen && *hw) {
@@ -42,12 +45,14 @@ void kernel_main() {
             }
             rs.poll(conn, hdr, false, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
         }
-        noc_semaphore_wait_min(hw, 1);
-        if (!seen) {
-            DeviceTimestampedData("SE-YHELLO", 0);  // (late: after the sends)
+        if (hellos) {
+            noc_semaphore_wait_min(hw, hellos);
+            if (!seen) {
+                DeviceTimestampedData("SE-YHELLO", 0);  // (late: after the sends)
+            }
+            noc_semaphore_inc(get_noc_addr(hello), 0u - hellos);  // (re-arm)
+            noc_async_atomic_barrier();
         }
-        noc_semaphore_inc(get_noc_addr(hello), 0u - 1u);  // (re-arm)
-        noc_async_atomic_barrier();
         rs.poll(conn, hdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
         conn.close();
     } else {

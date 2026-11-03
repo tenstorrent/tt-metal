@@ -279,6 +279,30 @@ public:
         TT_THROW("fused_head: no chip at position {}", pos);
     }
     uint32_t pos(const Coord& c) const { return chips.at(c).rg.p; }
+    // the Y hello (ra_y_send): a chip with a remote Y destination sends one to its first Y direction's neighbour (the
+    // row the BRISC's fabric connection reaches) and waits for the ones that land on it. The row it sends to, if any:
+    std::optional<uint32_t> y_hello_to(const Coord& c) const {
+        const uint32_t me = c.first * C + c.second;
+        for (const auto& [k, ds] : serves.at(me)) {
+            if (k.y) {
+                if (ds.size() == (ds.back() == me ? 1u : 0u)) {
+                    return std::nullopt;  // (no remote destination: no connection, no hello)
+                }
+                return u32(pmod(int64_t(c.first) + (k.a == 2 ? 1 : -1), R));
+            }
+        }
+        return std::nullopt;
+    }
+    // the hellos landing on chip c a call: the rows of its column whose hello goes to its row. A ring (and R 2): one
+    // each. A line (R > 2, no wrap): every row's first Y direction is Y+ except the far end's (Y- only) - the near
+    // end gets none, the row before the far end two, the others one
+    uint32_t y_hellos_in(const Coord& c) const {
+        uint32_t n = 0;
+        for (uint32_t r = 0; r < R; ++r) {
+            n += r != c.first && y_hello_to({r, c.second}) == c.first;
+        }
+        return n;
+    }
     CoreRangeSet engine_cores() const {
         return CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(eng->GX - 1, eng->GY - 1)));
     }
@@ -859,6 +883,13 @@ std::shared_ptr<const HeadModel> make_head_model(
     h.NF = h.fslots;
     for (const auto& [coord, _] : h.chips) {
         h.serves[coord.first * h.C + coord.second] = h.serve(coord);
+    }
+    for (const auto& [coord, _] : h.chips) {  // (ra_y_send waits only when it sends: no hello may land elsewhere)
+        TT_FATAL(
+            h.y_hello_to(coord) || !h.y_hellos_in(coord),
+            "fused_head: chip ({}, {}): a Y hello lands on a chip that sends none",
+            coord.first,
+            coord.second);
     }
     for (const auto& [_, sv] : h.serves) {
         for (const auto& [k, v] : sv) {
@@ -2290,6 +2321,9 @@ Args ChipProgram::y_args(const SendKey& k, const CoreCoord& core, const std::str
         TT_FATAL(!links.empty(), "fused_head: no link toward the Y neighbour");
         fabric_starts.emplace_back(file, core, u32(args.size()));
         add(args, fabric(peer, links[0], core));
+        // (after the connection's args: the hellos to wait for - ra_y_send's, the first Y direction's; the watcher's
+        // second direction sends none and ignores it)
+        add(args, h.y_hellos_in(coord));
     }
     return args;
 }

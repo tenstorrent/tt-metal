@@ -81,14 +81,16 @@ enum XgCt : uint32_t {
 //   watcher: [NCH, XREADY sem id, G - 1 (0 with xdram), nc engine cores, ncnt] + (counter addr, final) x ncnt
 //            + (x, y) x nc + per rank (nreq, (counter addr, entry index, entries a chunk) x nreq)
 //            [+ at W_RA0: RoutingStream._y_args of the second Y key: send_block + [remote] + [hello, peer chip,
-//            peer mesh] + fabric connection args]
+//            peer mesh] + fabric connection args + [hellos] (unused here)]
 // No common runtime args.
 
 // ---------------------------------------------------------------------------------------------------------------------
 // routing_stream Y sender (ra_y_send): no compile-time args. Defines: the routing defines (above). Runtime args
 // (RoutingStream._y_args): send_block(coord, key) (RASend: [nd, nr, self, buffer, PCAP, slots addr, c0, c1, planner
 // core 0 x, y, calls sem, ready sem, mesh id, fslots addr, flags] + per destination next_hop (5 words)) + [remote]
-// + (remote:) [yhello addr, peer chip id, peer mesh id] + fabric connection args. No common runtime args.
+// + (remote:) [yhello addr, peer chip id, peer mesh id] + fabric connection args + [hellos: how many Y hellos land on
+// this chip a call - HeadModel::y_hellos_in: 1 on a ring / R 2; a Y line: 0 at the near end, 2 at the row before the
+// far end]. No common runtime args.
 
 // ---------------------------------------------------------------------------------------------------------------------
 // se_engine3 matmul-core kernels. BRISC compile-time args (`bct`), then x's TensorAccessorArgs at SE_B_CT_COUNT
