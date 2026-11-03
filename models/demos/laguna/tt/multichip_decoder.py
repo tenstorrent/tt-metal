@@ -45,6 +45,7 @@ import torch
 import ttnn
 
 from . import colpage, moe_decode1, tile_regroup
+from .l1_budget import lowest_occupied_l1_address
 from .optimized_decoder import (
     TILE,
     LayerConfig,
@@ -1055,6 +1056,9 @@ class MultichipDecoder(OptimizedDecoder):
 
         # dispatch/combine "links" = sender cores (max 4); local-only dispatch sends nothing over fabric
         dc_links = int(os.environ.get("TT_LAGUNA_DISPATCH_LINKS", "3"))
+        # ttnn's local-only (0-link) dispatch requires every routed expert on its one chip; Laguna shards them.
+        if dc_links < 1:
+            raise ValueError(f"TT_LAGUNA_DISPATCH_LINKS must be >= 1 (Laguna shards its experts), got {dc_links}")
         # row-major dispatch input (ttnn dispatch's row-major path); TT_LAGUNA_DISPATCH_RM=0 sends tiles
         self._dispatch_rm = os.environ.get("TT_LAGUNA_DISPATCH_RM", "1") == "1"
         bucket_modules = {}
@@ -1247,7 +1251,7 @@ class MultichipDecoder(OptimizedDecoder):
             seq_len,
             compute_kernel_config=self._ck_moe,
             # fit the op's circular buffers below L1 buffers kept resident across prefills (DFlash's)
-            l1_end=int(self.device.lowest_occupied_compute_l1_address() or 0),
+            l1_end=lowest_occupied_l1_address(self.device) or 0,
         )
         ttnn.deallocate(dispatched)
 
@@ -1284,7 +1288,7 @@ class MultichipDecoder(OptimizedDecoder):
             expert_dim=3,
             output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             residual=shared_partial if fold else None,
-            l1_end=int(self.device.lowest_occupied_compute_l1_address() or 0),
+            l1_end=lowest_occupied_l1_address(self.device) or 0,
         )
         local_output = ttnn.reshape(local_output, (1, 1, seq_len, cfg.hidden))
         ttnn.deallocate(combined_slots)

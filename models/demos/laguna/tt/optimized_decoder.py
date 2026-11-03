@@ -34,6 +34,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+from .l1_budget import l1_allocator_base, lowest_occupied_l1_address
 from .prefill_page_table import single_shot_fill_page_table
 
 TILE = 32
@@ -1023,9 +1024,9 @@ class OptimizedDecoder(LightweightModule):
 
         out_b = pm * pn * tile_bytes(out_dtype or x.dtype)
         budget = self._L1_CB_BUDGET
-        lowest = self.device.lowest_occupied_compute_l1_address()
+        lowest = lowest_occupied_l1_address(self.device)
         if lowest:  # end below L1 buffers kept resident (DFlash's), less a margin for CBs this estimate leaves out
-            budget = min(budget, int(lowest) - int(self.device.l1_allocator_base()) - 32 * 1024)
+            budget = min(budget, int(lowest) - l1_allocator_base(self.device) - 32 * 1024)
         bw = None
         for d in (8, 6, 4, 3, 2, 1):
             if kt % d == 0 and out_b + 2 * pm * d * tile_bytes(x.dtype) + 2 * d * pn * tile_bytes(w.dtype) <= budget:

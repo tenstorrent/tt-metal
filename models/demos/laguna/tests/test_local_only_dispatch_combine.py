@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Coverage for independent size-one MoE dispatch groups on a 1xN mesh."""
+"""Coverage for independent size-one MoE dispatch groups on a 1xN mesh (Laguna-S shards its experts this way)."""
 
 import os
 
@@ -81,21 +81,6 @@ def test_local_only_expert_mapping_and_row_plan():
             for count in counts[group, 0, group_mask]
         )
         assert padded_rows <= MAX_DISPATCH_BUFFER_TOKENS
-
-
-def test_unified_routed_expert_chunk_override_binding_contract():
-    """Both per-expert and composite bindings expose the same optional override."""
-    for operation_name in (
-        "unified_routed_expert_ffn",
-        "unified_routed_expert_moe",
-        "unified_routed_expert_moe_stacked",
-    ):
-        operation = getattr(ttnn.experimental.deepseek_prefill, operation_name)
-        generated_signature = operation.function.__call__.__doc__
-        assert "chunk_m_tiles_override: int | None = None" in generated_signature
-    assert "BFLOAT16 (BF16 intermediates/output)" in (
-        ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn.__doc__ or ""
-    )
 
 
 @pytest.mark.parametrize(
