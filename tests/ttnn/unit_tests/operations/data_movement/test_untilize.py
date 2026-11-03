@@ -2932,6 +2932,43 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, shard_core_grid",
+    [
+        # Even: two shards per core. The shard spans 2 batches, so it has no 2D shard-spec equivalent.
+        (
+            [4, 128, 256],
+            ttnn.Shape([2, 64, 128]),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+        # Uneven: several shards per core, unequal across cores, partial edge shards.
+        (
+            [3, 192, 160],
+            ttnn.Shape([2, 64, 64]),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))}),
+        ),
+    ],
+)
+def test_untilize_nd_shard_to_same_shard_spec_32bit_dest(device, dtype, tensor_shape, shard_shape, shard_core_grid):
+    # 32-bit input dtypes turn on fp32_dest_acc_en, which unpacks the input straight to Dest.
+    torch.manual_seed(0)
+    tensor_spec = ttnn.TensorSpec(
+        shape=tensor_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+    ).sharded(shard_shape, shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
+
+    if dtype == ttnn.float32:
+        input_torch_tensor = torch.randn(tensor_shape, dtype=torch.float32)
+    else:
+        input_torch_tensor = torch.randint(0, 1 << 20, tensor_shape, dtype=torch.int32)
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, spec=tensor_spec, device=device)
+
+    ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor)
+
+    assert ttnn_output_tensor.memory_config() == input_ttnn_tensor.memory_config()
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor).to(input_torch_tensor.dtype))
+
+
 # --- Codegen-path coverage ---
 #
 # ttnn.untilize routes gate-supported cases to codegen and the rest to native, and offers no way to
