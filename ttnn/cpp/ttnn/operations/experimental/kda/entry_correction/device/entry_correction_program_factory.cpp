@@ -29,8 +29,6 @@ constexpr uint32_t cb_final = 7;
 constexpr uint32_t cb_ctl = 8;
 constexpr uint32_t cb_ctl_writer = 9;
 constexpr uint32_t cb_diff = 10;
-// On every core: the head's seeds have landed.
-constexpr uint32_t seed_semaphore_id = 0;
 constexpr const char* kernel_dir = "ttnn/cpp/ttnn/operations/experimental/kda/entry_correction/device/kernels/";
 
 tt::tt_metal::ProgramDescriptor build_program(
@@ -67,8 +65,6 @@ tt::tt_metal::ProgramDescriptor build_program(
         return cb;
     };
     tt::tt_metal::ProgramDescriptor desc;
-    desc.semaphores.push_back(
-        tt::tt_metal::SemaphoreDescriptor{.id = seed_semaphore_id, .core_ranges = cores, .initial_value = 0});
     desc.cbs = {
         kda_factory_detail::cb_descriptor(cb_seed, state_tiles, fp32_tile, tt::DataFormat::Float32, cores),
         kda_factory_detail::cb_descriptor(cb_tail, state_tiles, fp32_tile, tt::DataFormat::Float32, cores),
@@ -93,7 +89,6 @@ tt::tt_metal::ProgramDescriptor build_program(
         cb_b,
         cb_ctl,
         cb_ctl_writer,
-        seed_semaphore_id,
         sp_rank,
         sp_size,
         attrs.local_rows,
@@ -146,18 +141,9 @@ tt::tt_metal::ProgramDescriptor build_program(
         const uint32_t first = part * per_core;
         const auto& core = attrs.cores[index];
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt;
-        // The first final-state tile row this core forms (kt: none), then whether it sends the head's seeds.
-        for (uint32_t value :
-             {head, first, first + per_core, part < kt ? part : kt, static_cast<uint32_t>(part == 0)}) {
+        // The first final-state tile row this core forms (kt: none).
+        for (uint32_t value : {head, first, first + per_core, part < kt ? part : kt}) {
             reader_rt.push_back(value);
-        }
-        // The seed receivers (NoC x | y << 16 each).
-        reader_rt.push_back(part == 0 ? cores_per_head - 1 : 0);
-        if (part == 0) {
-            for (uint32_t other = 1; other < cores_per_head; ++other) {
-                const auto noc = mesh->worker_core_from_logical_core(attrs.cores[index + other]);
-                reader_rt.push_back(static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16));
-            }
         }
         reader.emplace_runtime_args(core, reader_rt);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
