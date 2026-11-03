@@ -166,7 +166,11 @@ constexpr bool TILED_GEOMETRY = get_compile_time_arg_val(33) != 0;
 constexpr uint32_t geom_rm_cb_index = get_compile_time_arg_val(34);
 constexpr uint32_t ref_tile_cb_index = get_compile_time_arg_val(35);
 constexpr uint32_t const_cb_index = get_compile_time_arg_val(36);
-constexpr uint32_t MSDA_LAST_SCALAR_CT_ARG = 36;
+// Heads-packed locations, (B, Q, H*L*P*2): one page per (b, q), head h's stick at byte offset
+// h * loc_stick_nbytes. derive_shapes has checked that the stick fills whole alignment units, so
+// the aligned loc_stick_nbytes is the unpadded stick.
+constexpr bool LOC_HEADS_IN_PAGE = get_compile_time_arg_val(37) != 0;
+constexpr uint32_t MSDA_LAST_SCALAR_CT_ARG = 37;
 constexpr uint32_t MSDA_TENSOR_ACCESSOR_ARG_BASE = MSDA_LAST_SCALAR_CT_ARG + 1;
 
 // ---------------------------------------------------------------------------
@@ -190,14 +194,6 @@ static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
 constexpr uint32_t ATTN_STICKS_PER_ROW = ATTN_PACKED ? 1u : NUM_LEVELS;
 constexpr uint32_t LOC_STICKS_PER_ROW = LOC_PACKED ? 1u : (NUM_LEVELS * NUM_POINTS);
 
-// Heads-packed locations, (B, Q, H*L*P*2): one page per (b, q), head h's stick at byte offset
-// h * loc_stick_nbytes. derive_shapes has checked that the stick fills whole alignment units, so
-// the aligned loc_stick_nbytes is the unpadded stick.
-#ifdef LOC_HEADS_PACKED
-constexpr bool LOC_HEADS_IN_PAGE = true;
-#else
-constexpr bool LOC_HEADS_IN_PAGE = false;
-#endif
 static_assert(!LOC_HEADS_IN_PAGE || LOC_PACKED, "heads-packed locations are packed");
 constexpr uint32_t loc_page_nbytes = LOC_HEADS_IN_PAGE ? NUM_HEADS * loc_stick_nbytes : loc_stick_nbytes;
 
