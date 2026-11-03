@@ -5,7 +5,7 @@
 #   multi-user           DEFAULT: 1-16 users on the rows-mode resident engine (shared 29,440-block KV pool, prefill
 #                        gangs + one pipelined PP pass per prefill step, device sampling); TTFT-first scheduling is an
 #                        option of it (prefill_gang_tokens 0)
-# (batch, 17-32 users on the previous package's ttnn decode path, is a separate change, gated on a hardware check.)
+#   batch                17-32 users on the previous package's ttnn decode path (plain batched decode, full sampling)
 # Dropped from the earlier draft: plain single-user, single-user-mtp, multi-user-long (now multi-user's sizing).
 # Replaces the ttnn-path manifest of the same repo (branch qwen36-p300x2-pkg, tt-metal b220c901dec, plugin 96d4416,
 # image f6edb50771ac: profiles plain / batch8-dflash2 / single-user-dflash2). tt-model.yaml on this branch is the p150x2
@@ -132,6 +132,30 @@ serve_profiles:
         # up to 2048 tokens, longer ones split between decode steps. 0 = the interleaved (TTFT-first) policy.
         prefill_gang_tokens: 2048
         sample_on_device_mode: decode_only   # the rows-mode hub feed (WP7)
+  - name: batch
+    description: 17-32 concurrent requests on the ttnn decode path of the previous package (plain batched decode, full sampling).
+    # The old package's `plain` profile (b220c901dec, plugin 96d4416), unchanged, on this image's plugin (every feature
+    # it needs is upstream, plugin-fallback-deps.md). fix-b32hang's batch32 (qwen38-b32-hang-fix 1a92e3e09b5), renamed;
+    # in the package once the user's card-1 hardware check passes (profiles/resident/b32fix: one card dropped off PCIe
+    # about once per 20 heavy c=32 / 8K prefill waves on the test box, the old stack included).
+    max_num_seqs: 32
+    additional_config:
+      tt:                                  # deep-merged over serve.additional_config.tt
+        trace_region_size: 1073741824
+        l1_small_size: 24576
+    env:
+      # the image's bundle main_class is the resident class: the override selects the ttnn class. Keyed on the
+      # TT-prefixed arch ONLY: this plugin (resident-mu) also registers an entry's bare name, so the old package's
+      # second, bare-arch key replaced vLLM's own Qwen3_5ForConditionalGeneration and ModelConfig refused the checkpoint
+      # ("This model does not support `--runner generate`"). The TT worker resolves "TT" + arch, so this key suffices.
+      TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
+      TT_QWEN35_TEXT_VER: qwen36_blackhole
+      QWEN36_MAX_TOKENS_ALL_USERS: "525312"   # bf8 paged KV pool (as published)
+      QWEN36_MTP: "0"
+      QWEN36_PLAIN_GDN_SLOT_FAST: "1"
+      QWEN36_DRAFTER: mtp                     # (backstop, as published: the plain class never speculates)
+    args:
+      - [--max-num-batched-tokens, "262144"]
 default_profile: multi-user              # user decision 2026-11-02
 
 card:
@@ -145,7 +169,7 @@ card:
     - Weights: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) @ `1d4bf0f`; drafter
       [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) @ `dedf8df`
     - Hardware: P300x2 (QuietBox 2), one (1, 4) Blackhole mesh
-    - Profiles: `multi-user` (default), `single-user`
+    - Profiles: `multi-user` (default), `single-user`, `batch`
     - `single-user` is **greedy only**: every request is decoded greedily (the server logs one warning for a request with
       temperature > 0). Speculation is lossless against the model's own greedy output; tokens can differ from plain
       decoding at bf16 near-ties.
@@ -156,6 +180,7 @@ card:
     - One user, greedy (temperature 0): `single-user`.
     - Sampling, or 2 to 16 users: `multi-user`. One user on it gets about 70 t/s/u (plain decode in a launch of 8
       rows).
+    - 17 to 32 users: `batch`.
     - If the time to the first token matters more than decode speed: `multi-user` with the TTFT-first option below.
 
     ### Get the drafter (`single-user`)
@@ -227,6 +252,23 @@ card:
     | 8,192 / 1,024 | 22.1 / 12.5 s | 11.7 / 8.8 s |
     | 10,000 / 1,024 | 20.6 / 15.6 s | 11.0 / 10.6 s |
 
+    ### More than 16 users (`batch`)
+    `batch` serves up to 32 concurrent requests on a different engine: the ttnn decode path of the previous package, all
+    users in one decode batch, full sampling. 32 concurrent users (tt-inference-server; each cell t/s / t/s/u / TTFT).
+    The run on this image had chip 1 throttling (800-900 MHz) from 4K-token prompts on; the 2026-09-12 run of the same
+    profile on the previous package did not:
+
+    | prompt / new tokens | this image | previous package, 2026-09-12 |
+    |---|---|---|
+    | 128 / 128 | 376 / 20.8 / 4.8 s | 492 / 22.7 / 2.7 s |
+    | 2,048 / 128 | 252 / 19.6 / 9.8 s | 298 / 21.4 / 7.8 s |
+    | 8,192 / 128 | 74 / 11.5 / 44.4 s | 107 / 17.7 / 31.0 s |
+    | 8,192 / 1,024 | 268 / 13.7 / 47.3 s | 413 / 21.1 / 30.9 s |
+    | 10,000 / 1,024 | 238 / 11.9 / 51.5 s | 361 / 18.4 / 35.0 s |
+
+    Known issue: on the test machine, one card dropped off PCIe about once per 20 heavy waves of 32 requests with
+    8K-token prompts, on the previous package as well; `tt-smi -r` or a reboot brings it back.
+
     ### Benchmarks (tt-inference-server `--workflow benchmarks`)
     | profile | users | ISL / OSL | t/s | t/s/u | TTFT |
     |---|---|---|---|---|---|
@@ -258,5 +300,8 @@ card:
 verify:
   - "from qwen36_resident.generator_vllm import Qwen36ResidentForCausalLM, Qwen36ResidentDFlashForCausalLM; assert Qwen36ResidentDFlashForCausalLM"
   - "from qwen36_resident.dflash import ResidentDFlash, DRAFTER_WEIGHTS; assert DRAFTER_WEIGHTS.endswith('dedf8df68adfb1afeaf7b7480c0a0243108177b4')"
+  - "from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM; assert Qwen36ForCausalLM"   # batch
+  # batch: the override parses to the TT-prefixed key alone (a bare-arch key would shadow vLLM's own class)
+  - "import os, vllm; os.environ['TT_MODEL_CLASS_OVERRIDES']='TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM'; from vllm_tt_plugin.platform import _tt_model_class_overrides as f; o=f(); assert list(o) == ['TTQwen3_5ForConditionalGeneration'], o"
   # multi-user's chunk list reaches the adapter (ae776ee280c); without it the build keeps the 128 chunk and OOMs
   - "import os; os.environ['RESIDENT_PREFILL_CHUNKS'] = '256,512,1024'; from qwen36_resident.generator_vllm import PREFILL_CHUNKS; assert PREFILL_CHUNKS == (256, 512, 1024), PREFILL_CHUNKS"
