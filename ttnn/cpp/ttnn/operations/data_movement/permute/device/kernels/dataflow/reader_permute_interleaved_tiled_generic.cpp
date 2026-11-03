@@ -79,8 +79,9 @@ void kernel_main() {
     // An aligned window of read_alignment bytes plus room for one line past its end.
     [[maybe_unused]] uint32_t bounce_window = 0;
     if constexpr (bounce_in_scratchpad) {
+        const Scratchpad<uint32_t> bounce(*scratch::get_token_if_present<"bounce">());
         const uint32_t bounce_base =
-            Scratchpad<uint32_t>(*scratch::get_token_if_present<"bounce">()).get_base_address();
+            static_cast<uint32_t>(local_mem::detail::AddressAccess::address(bounce.local_mem()));
         bounce_window = (bounce_base + read_alignment_minus_one) & ~read_alignment_minus_one;
     }
 
