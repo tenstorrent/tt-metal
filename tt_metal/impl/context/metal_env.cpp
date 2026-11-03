@@ -166,7 +166,7 @@ void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
 
 // Quasar CCE / DRAM-core firmware is opt-in per dram_view.programmable in the SoC YAML, so
 // Tensix Quasar descriptors without the key stay GDDR-only.
-bool should_enable_cce_programmable_cores(const Cluster& cluster) {
+bool should_enable_quasar_dram_programmable_cores(const Cluster& cluster) {
     if (cluster.arch() != tt::ARCH::QUASAR) {
         return false;
     }
@@ -180,7 +180,7 @@ bool should_enable_cce_programmable_cores(const Cluster& cluster) {
 
 // Package ATT uses the real CCE SRAM window as the DRAM-core l1_noc_offset. A Mimir-local package
 // keeps the 0x2000000000 tag, which create_dram_mem_map applies when this returns 0.
-uint64_t cce_l1_noc_offset_for_hal(const Cluster& cluster) {
+uint64_t quasar_drisc_l1_noc_offset_for_hal(const Cluster& cluster) {
     bool saw_package = false;
     bool saw_mimir_local = false;
     for (ChipId chip_id : cluster.all_chip_ids()) {
@@ -199,6 +199,17 @@ uint64_t cce_l1_noc_offset_for_hal(const Cluster& cluster) {
         return 0;
     }
     return tt::umd::GrendelAddressWindows{}.dram_l1_noc_offset;
+}
+
+// True when any chip's soc descriptor lists ethernet cores. Quasar uses this to replace the
+// on-package ethernet image; an empty eth list keeps that image, which loads nothing.
+bool should_enable_ethernet_cores(const Cluster& cluster) {
+    for (ChipId chip_id : cluster.all_chip_ids()) {
+        if (!cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map.empty()) {
+            return true;
+        }
+    }
+    return false;
 }
 }  // namespace
 
@@ -249,8 +260,9 @@ void MetalEnvImpl::initialize_base_objects() {
         this->rtoptions_->get_eth_ptp_trace(),
         // just take the descriptor of the first device
         this->cluster_->get_quasar_ip_variant(),
-        should_enable_cce_programmable_cores(*this->cluster_),
-        cce_l1_noc_offset_for_hal(*this->cluster_));
+        should_enable_quasar_dram_programmable_cores(*this->cluster_),
+        quasar_drisc_l1_noc_offset_for_hal(*this->cluster_),
+        should_enable_ethernet_cores(*this->cluster_));
     if (platform_arch == tt::ARCH::QUASAR) {
         log_info(tt::LogMetal, "Quasar IP variant: {}", this->cluster_->get_quasar_ip_variant());
     }

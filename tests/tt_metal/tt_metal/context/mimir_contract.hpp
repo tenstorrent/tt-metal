@@ -116,8 +116,31 @@ inline bool package_has_tensix_cores() {
     return !configured_soc_desc().get_cores(tt::CoreType::TENSIX).empty();
 }
 
+inline bool package_has_ethernet_cores() {
+    if (selected_soc_desc_path() == nullptr) {
+        return false;
+    }
+    return !configured_soc_desc().get_cores(tt::CoreType::ETH, tt::CoordSystem::LOGICAL).empty();
+}
+
 // GTEST_SKIP returns from the function that invokes it, so this has to be a macro. Contract tests
 // run for any selected package that declares programmable DRAM cores and has a transport to open it.
+// Same gate as the DRAM contract, for a package that lists ethernet cores. mimir_1x1.yaml and
+// mimir_2x_package.yaml have none, so those runs skip before the mesh opens.
+#define skip_unless_ethernet_package()                                                                                \
+    do {                                                                                                              \
+        if (!::tt::tt_metal::mimir_contract::package_has_ethernet_cores()) {                                          \
+            GTEST_SKIP() << "Selected package has no ethernet cores.";                                                \
+        }                                                                                                             \
+        if (!::tt::tt_metal::mimir_contract::device_transport_configured()) {                                         \
+            GTEST_SKIP() << "Selected package has ethernet cores, but no device transport is configured.";            \
+        }                                                                                                             \
+        if (!::tt::tt_metal::mimir_contract::package_has_tensix_cores() &&                                            \
+            !::tt::tt_metal::mimir_contract::slow_dispatch_requested()) {                                             \
+            GTEST_SKIP() << "This package has no Tensix cores for fast dispatch. Set TT_METAL_SLOW_DISPATCH_MODE=1."; \
+        }                                                                                                             \
+    } while (0)
+
 #define skip_unless_programmable_dram_package()                                                                     \
     do {                                                                                                            \
         if (!::tt::tt_metal::mimir_contract::package_has_programmable_dram()) {                                     \
@@ -437,6 +460,17 @@ inline void write_cce_sram(
 inline void read_cce_sram(IDevice* device, CoreCoord logical_dram_core, uint64_t noc_addr, void* data, uint32_t size) {
     const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
     MetalContext::instance().get_cluster().read_core(data, size, {device->id(), virtual_core}, noc_addr);
+}
+
+inline void read_eth_sram(IDevice* device, CoreCoord logical_eth_core, uint64_t noc_addr, void* data, uint32_t size) {
+    const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_eth_core, CoreType::ETH);
+    MetalContext::instance().get_cluster().read_core(data, size, {device->id(), virtual_core}, noc_addr);
+}
+
+inline void write_eth_sram(
+    IDevice* device, CoreCoord logical_eth_core, uint64_t noc_addr, const void* data, uint32_t size) {
+    const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_eth_core, CoreType::ETH);
+    MetalContext::instance().get_cluster().write_core(data, size, {device->id(), virtual_core}, noc_addr);
 }
 
 inline uint64_t cce_sram_noc_addr(uint64_t offset) {

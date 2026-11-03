@@ -44,10 +44,10 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
 uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __attribute__((used));
 
-// Uncached SRAM alias so hart 0's .data init and subordinate_sync are visible to the other harts.
-tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_DRISC_MAILBOX_BASE);
+// Uncached alias. MEM_DRISC_MAILBOX_BASE is the cached offset; host SRAM reads need the uncached address.
+tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_DRISC_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync =
-    (subordinate_map_t*)(MEM_DRISC_MAILBOX_BASE + offsetof(mailboxes_t, subordinate_sync));
+    (subordinate_map_t*)(MEM_DRISC_MAILBOX_BASE + MEM_L1_UNCACHED_BASE + offsetof(mailboxes_t, subordinate_sync));
 
 inline void invalidate_kernel_binary_l2_cache(
     uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {

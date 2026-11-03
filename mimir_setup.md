@@ -79,8 +79,12 @@ cmake --build build --target install
 ```
 cd /proj_sw/user_dev/$USER
 git clone git@yyz-gitlab.local.tenstorrent.com:tensix/soc/grendelemulation.git
+cd grendelemulation
+git checkout kstevens/metal_bringup
 export GRENDELEMU_DIR=/proj_sw/user_dev/$USER/grendelemulation
 ```
+
+`tests/test_metal_server.py` is on the `kstevens/metal_bringup` branch, not on `main`.
 
 1. Log into one of the soc machines (e.g. `soc-l-#`)
 2. Setup your environment. Choose either the `mimir` directory (single mimir chiplet - 1 emulation module) or `mmk` (2 mimir chiplets + 1 keraunos - 4 emulation modules) directory depending on your needs.
@@ -91,7 +95,7 @@ source bin/setup_env.sh
 ```
 3. Launch the emulation server
 ```
-emu run -t 3600 -- -sv tests/test_sival_server.py --disable-dpi
+emu run -t 3600 -- -sv tests/test_metal_server.py --disable-dpi
 ```
 
 **_NOTE:_** Sometimes just re-launching the server doesn't work properly (it exits immediately thinking there is no design) and the setup commands must be re-run before re-launching the server.
