@@ -339,10 +339,9 @@ const void* device_buffer(const ttnn::Tensor& tensor) {
     return &tensor.mesh_buffer();
 }
 
-// The input that is `output` itself, if any: of the inputs in `output`'s device buffer `buffer`, the one that shares
-// its label (another handle of the same tensor), else the first. One device tensor of a mesh tensor lives in the mesh
-// tensor's buffer under a one-device label of its own, so an op that writes such a view into the mesh tensor finds
-// both.
+// The index of the input that is `output` itself (in place or output_tensor=), or nullopt for a fresh output. A
+// get_device_tensors view lives in its parent's buffer under a label of its own, so among the inputs in `buffer` this
+// picks the one that shares `output`'s label object (a handle of the same tensor), or the first one if none does.
 std::optional<size_t> caller_input(
     const ttnn::Tensor& output,
     const void* buffer,
