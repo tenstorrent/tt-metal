@@ -2236,3 +2236,105 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_RingChunking_SingleDevice) {
         }
     }
 }
+
+// =============================================================================
+// Long rows: the online softmax state against an fp64 reference.
+// =============================================================================
+
+namespace {
+
+// Unmasked single-head attention in double, row by row: out (S, D) as float, lse (S) as double.
+std::pair<xt::xarray<float>, std::vector<double>> sdpa_single_head_fp64(
+    const xt::xarray<float>& q, const xt::xarray<float>& k, const xt::xarray<float>& v) {
+    const std::size_t S = q.shape()[2], D = q.shape()[3], Dv = v.shape()[3];
+    const std::vector<double> qd(q.begin(), q.end()), kd(k.begin(), k.end()), vd(v.begin(), v.end());
+    const double scale = 1.0 / std::sqrt(static_cast<double>(D));
+    xt::xarray<float> out = xt::zeros<float>({1UL, 1UL, S, Dv});
+    std::vector<double> lse(S);
+    std::vector<double> scores(S), acc(Dv);
+    for (std::size_t i = 0; i < S; ++i) {
+        double row_max = -INFINITY;
+        for (std::size_t j = 0; j < S; ++j) {
+            double dot = 0.0;
+            for (std::size_t t = 0; t < D; ++t) {
+                dot += qd[i * D + t] * kd[j * D + t];
+            }
+            scores[j] = dot * scale;
+            row_max = std::max(row_max, scores[j]);
+        }
+        double sum = 0.0;
+        std::fill(acc.begin(), acc.end(), 0.0);
+        for (std::size_t j = 0; j < S; ++j) {
+            const double p = std::exp(scores[j] - row_max);
+            sum += p;
+            for (std::size_t t = 0; t < Dv; ++t) {
+                acc[t] += p * vd[j * Dv + t];
+            }
+        }
+        lse[i] = row_max + std::log(sum);
+        for (std::size_t t = 0; t < Dv; ++t) {
+            out(0, 0, i, t) = static_cast<float>(acc[t] / sum);
+        }
+    }
+    return {out, lse};
+}
+
+}  // namespace
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_LongRows_Fp64Reference) {
+    // O and the LSE against an fp64 reference on unmasked rows, at step counts the tests above never reach
+    // (they stay at <= 8). The kernel carries a bias per K/V step: measured on p150b (D=128, V in [0, 1]),
+    // O comes out high by about 0.037% per step and the LSE by about 0.00057 per step, linear in the step
+    // count and independent of S: at 64 steps O is 2.4% high and the LSE 0.037 high, at 8 steps 0.3% and
+    // 0.0024, at one step 0.003% and 0.0004. With Q = 0 (every score zero, the max never moves, alpha = exp(0))
+    // the LSE still grows by 0.00065 per step, so the bias is alpha, the Blackhole SFPU exp returning
+    // slightly more than 1 at 0, applied to the sum and to the accumulator every step, with the TF32
+    // truncation of the running sum in the Src registers (which the reviewer's host emulation put at
+    // about 1% low at 64 steps) partly cancelling on the sum. Pre-existing, main has the same loop; the
+    // bounds here hold the current error so a fix (or a regression) shows. See the TODO at step (2) of
+    // process_q_chunk in sdpa_fw_compute_kernel.cpp.
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml;
+    constexpr std::size_t D = 128U;
+    constexpr double kMeanRatioTol = 0.04;  // 64 steps: 2.4% measured
+    constexpr double kLseAbsTol = 0.06;     // 64 steps: 0.040 measured
+    struct Row {
+        std::size_t S;
+        uint32_t k_chunk_size;  // 0 = the pick
+    };
+    for (const Row row : {Row{2048U, 32U}, Row{2048U, 256U}, Row{8192U, 0U}}) {  // 64, 8 and (at the pick) 64 steps
+        const std::array<std::size_t, 4> shape{1U, 1U, row.S, D};
+        const xt::xarray<float> q = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 11U));
+        const xt::xarray<float> k = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 12U));
+        const xt::xarray<float> v = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, 13U));
+        const auto [out_ref, lse_ref] = sdpa_single_head_fp64(q, k, v);
+        auto* device = &autograd::ctx().get_device();
+        const metal::SDPAForwardProgramConfig cfg{
+            .q_chunk_size = row.k_chunk_size == 0U ? 0U : 32U, .k_chunk_size = row.k_chunk_size};
+        auto result = metal::sdpa_fw(
+            core::from_xtensor(q, device),
+            core::from_xtensor(k, device),
+            core::from_xtensor(v, device),
+            metal::AttentionMaskType::None,
+            std::nullopt,
+            0.0F,
+            /*return_intermediates=*/true,
+            std::nullopt,
+            cfg);
+        const xt::xarray<float> out = core::to_xtensor(result[0].value());
+        const xt::xarray<float> interm = core::to_xtensor(result[1].value());
+        // The sum error is a scale error on every element of a row, so the mean ratio to the reference shows
+        // it where an elementwise or L2 check would mix it with the bf16 rounding of the output.
+        double ratio_sum = 0.0, lse_diff_max = 0.0;
+        for (std::size_t i = 0; i < row.S; ++i) {
+            lse_diff_max = std::max(lse_diff_max, std::abs(static_cast<double>(interm(0, 0, i, 0)) - lse_ref[i]));
+            for (std::size_t t = 0; t < D; ++t) {
+                ratio_sum += static_cast<double>(out(0, 0, i, t)) / out_ref(0, 0, i, t);
+            }
+        }
+        const double mean_ratio = ratio_sum / static_cast<double>(row.S * D);
+        const std::string what = fmt::format("S={} k_chunk_size={}", row.S, row.k_chunk_size);
+        EXPECT_NEAR(mean_ratio, 1.0, kMeanRatioTol) << "mean O / O_ref at " << what;
+        EXPECT_LT(lse_diff_max, kLseAbsTol) << "max |LSE - LSE_ref| at " << what;
+    }
+}
