@@ -38,9 +38,9 @@ STORE_PACED = True
 MAX_TOKENS = 4096
 MAX_ROWS = TILE * (-(-2 * MAX_TOKENS // TILE) + NUM_EXPERTS - 1)
 # CBs sit below the L1 buffers: at R = MAX_ROWS = 8416, x (about 250 KB per bank) and y (about 118 KB per bank) leave
-# about 1.1 MB above the unreserved base on p100a (base 112,000 B, y's lowest address measured at 1,204,352 B). This
-# budget assumes both in L1 and keeps about 90 KB of that free; cb_budget_bytes() adds back the per-bank share of
-# whichever lives in DRAM. It must fit the paced store's whole-wave output CB at 2 waves (993,856 B at t = 4096): 3
+# about 1.1 MB above the unreserved base on p100a (y's lowest address measured at 1,204,352 B). This budget assumes
+# both in L1 and keeps about 0.1 MB of that free; cb_budget_bytes() adds back the per-bank share of whichever lives
+# in DRAM. It must fit the paced store's whole-wave output CB at 2 waves (993,856 B at t = 4096): 3
 # waves measured 8x512 172 -> 179-188 us.
 CB_BUDGET_BYTES = 976 * 1024
 

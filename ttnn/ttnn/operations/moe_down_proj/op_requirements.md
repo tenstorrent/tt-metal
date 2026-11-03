@@ -101,7 +101,7 @@ Bullet 2 FAIL: acceptance/refinement tests failing:
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
 
 **Outcome**: not a kernel bug. The inline precompile collect pass (`run_safe_pytest.sh` on a whole file/dir) runs bodies with stand-in `torch.randn` / shape-only `from_torch`, and `host_weight()`'s `lru_cache` carried that stand-in weight into the real pass (constant output and reference, pcc nan). The conftest now clears module-level caches per pass via a module-scoped autouse fixture. Unit dir 72/72 with precompile on; golden 93/93 (graded mode, no hangs).
-### [ ] Refinement 2 - Cut the multicast scaffold on the t = 4096 rows
+### [x] Refinement 2 - Cut the multicast scaffold on the t = 4096 rows
 
 **Type**: perf
 
@@ -134,6 +134,19 @@ order changes the fp32 summation order. LoFi rel RMS is 1.90e-2 against a 2.0e-2
 inputs, the golden suite is green, and there is no regression across the config-spanning guard set: t = 1, 37,
 1858, 4096 one_expert and zeros_between, plus each placement combination from Refinement 1, on both layouts via
 `layout_override`.
+
+**Outcome**: t4096 layers 0-5 172.2 / 174.7 / 172.8 / 174.1 / 171.3 / 171.5 -> 163.3 / 162.2 / 162.9 / 164.7 / 163.3 /
+161.6 us (L1 / L1); DRAM x 221 -> 214, DRAM y 220 -> 205, DRAM both 259 -> 244 us; t <= 3072 rows unchanged. The win is
+the paced wave store (whole-wave `cb_output_rows`, store drained a quota per round of the next wave, CB budget
+960 -> 976 KiB to stay at 2 waves). Ablations at 163 us: removing all w saves 3 us, sending one w chunk 2.5 us, the x
+strip copy 7 us, both 17 us, x L1 reads 13 us, x send bytes 18 us. The x chain binds: one sender per m-group step
+injects 260 KB (row multicast + strip copy) on NoC1 at about link rate. R2 range-pruned w was not built: it cuts
+receive bytes, not the line sender's injection, and its measured upper bound is 2.5 us while x binds. Layout re-solve:
+rect measured 218 vs L 175 us (w-bound at 8 lines), so L stays. Strip copy off the sender measured worse in every form:
+strip core self-fetch from L1 400 us (single-core reads about 9 GB/s); strip copy issued by the sender's writer RISC on
+NoC0 219 / 249 / 369 us across three schedules (NoC0 column contention with w, strip cores starve). Next: take the x L1
+prefetch reads off NoC1 (writer RISC reads into a stage CB handed to the reader, up to 13 us), then a geometry that
+delivers the strip core's x without a second injection from the row sender; R2 only after x stops binding.
 
 ### [ ] Refinement 3 - Speed up the DRAM-bound rows (t = 1024 / 2048 / 3072)
 

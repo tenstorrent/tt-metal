@@ -70,3 +70,31 @@
   does not affect grading.
 - **Issues encountered**: see above. Not a kernel or program-cache issue.
 - **Tests added**: none. conftest.py gains `_fresh_module_caches`. Unit dir: 72/72 with precompile on.
+
+## Refinement 2 - Cut the multicast scaffold on the t = 4096 rows
+- Date: 2026-11-03
+- What was done: paced wave store. With `num_waves >= 2`, `cb_output_rows` holds the whole wave block
+  (`out_depth_blocks()`), so compute untilizes wave p without waiting on the store. The storing RISC drains it
+  `store_blocks_per_round` blocks per round of wave p + 1 (`moe_store_wave` takes a block range), instead of one burst
+  that stalled compute and the w channel. `CB_BUDGET_BYTES` 960 -> 976 KiB keeps t = 4096 at 2 waves (993,856 B); the
+  3-wave solve this would otherwise pick measured 179-188 us. Reused: the store helper, both RISCs' store schedule,
+  `cb_plan()`. Added: `STORE_PACED`, `out_depth_blocks()`, `store_blocks_per_round()`, one CT arg per dataflow kernel.
+  Device kernel time (us), t4096 L0-L5 L1 / L1: 172.2 / 174.7 / 172.8 / 174.1 / 171.3 / 171.5 -> 163.3 / 162.2 /
+  162.9 / 164.7 / 163.3 / 161.6. DRAM x / DRAM y / DRAM both at t4096: 221 / 220 / 259 -> 214 / 205 / 244. t3072 /
+  t2048 / t1024 138.4 / 113.8 / 103.3 -> 138.2 / 112.2 / 101.7.
+- Measured and not kept: x strip core self-fetch from L1 (400 us; one core reads about 9 GB/s); x strip copy issued by
+  the sender core's writer RISC on NoC0 via a stage CB handoff (219 us after-w, 369 us before-w, 249 us deferred;
+  t1024 133-138 us); y store on the reader RISC with pacing (190-206 us); one-packet store writes (flat); x / w prefetch
+  quota sweeps (16 stays best); rect layout (218 vs 175 us at t4096 layer 3).
+- Not built: R2 range-pruned w. With the store paced, sending a single w chunk per round (an upper bound on pruning)
+  saves 2.5 us and removing w entirely 3 us, because the x chain binds. Pruning also leaves the line sender's
+  injection bytes unchanged.
+- Bottleneck now: the x chain. Each m-group step injects 130 KB row multicast plus 130 KB strip copy from one sender on
+  NoC1. Ablations: strip copy -7 us, x send bytes -18 us, x L1 reads -13 us, compute -11 us.
+- Accuracy achieved: unchanged summation order. PCC=0.99991, rel_rms=1.90e-2 (LoFi default); precision baseline file
+  passes.
+- Golden test progress: 55/55 on the slice run (all t4096 and t3072 cells across the four placements, plus t1 and
+  t37); unit dir 72/72.
+- Issues encountered: multi-id `--profile` runs under inline precompile hit the known stand-in weight leak (pcc nan),
+  so measurements used `--no-precompile`.
+- Tests added: none (the perf rows in test_moe_down_proj_perf.py cover the change).

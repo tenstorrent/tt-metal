@@ -11,7 +11,7 @@ Every CB has the same index and size on every core of the layout (multicast slot
 | `cb_x_round` | `X_DEPTH * core_row_tiles_max * k_block_tiles` | 2 rounds: the round being computed plus the round landing (`2 * core_row_tiles * k_block_tiles` filled pages; capacity is nominal `core_row_tiles_max`) | `{m: spans -> core_row_tiles_max, k: spans -> k_block_tiles, n: streams (one x round serves every sub-block of the core's n-slice), e: streams (sub-blocks of all experts share the round), wave: streams}` | Bfp8_b | reader | compute | whole kernel, recycled per round | none: concurrent with `cb_w_round` and `cb_partials` in every round. Capacity above live set only on ragged cores (nominal pushes keep the ring aligned to whole rounds). Depth 2 is the overlap mechanism. |
 | `cb_w_round` | `W_DEPTH * NUM_EXPERTS * core_n_tiles * k_block_tiles` | 2 rounds of in-wave expert chunks; empty / out-of-wave slots are pushed but hold no data | `{e: spans -> NUM_EXPERTS slots, n: spans -> core_n_tiles, k: spans -> k_block_tiles, m: streams (one chunk serves every row of the core's sub-block), wave: streams}` | Bfp8_b | writer RISC (w channel, see Implementation note) | compute | whole kernel, recycled per round | none: concurrent with `cb_x_round` and `cb_partials`. Gap between capacity and live set: unused slots of experts that are empty, outside the wave, or not touching this core. Slots stay nominal because the multicast landing address must be identical on every line core (R2 does not change this). |
 | `cb_partials` | `core_row_tiles_max * core_n_tiles` | the whole wave block, `core_row_tiles * core_n_tiles` tiles, live from round 0 to the untilize | `{m: spans -> core_row_tiles_max, n: spans -> core_n_tiles, k: streams (folded by packer L1 accumulation each round), e: streams (sub-blocks of every expert occupy disjoint rows of the same block), wave: streams (recycled per wave)}` | Float32 (`fp32_dest_acc_en = True`, the only supported value) | compute (pack) | compute (unpack, untilize) | one wave | none: live across every round of the wave, so it overlaps `cb_x_round` / `cb_w_round` for its whole life; at the untilize it overlaps `cb_output_rows`. Not aliased with the next wave's x/w because the reader prefetches wave p+1 rounds 0-1 during wave p's untilize (explicit pipelining decision). |
-| `cb_output_rows` | `OUT_DEPTH * core_n_tiles` | 2 untilized tile rows (one being written by the writer, one being packed) | `{n: spans -> core_n_tiles, m: streams (one tile row at a time), k: none (after accumulation), e: none, wave: streams}` | Float16_b (output dtype) | compute | writer RISC (L1 y) or reader RISC (DRAM y, `store_on_reader`) | untilize phase of every wave | none: concurrent with `cb_partials` during the untilize; with `num_waves >= 2` the writer still drains it while wave p+1's rounds run. Cannot alias `cb_partials`: different page format and overlapping lifetime. |
+| `cb_output_rows` | `out_depth_blocks * core_n_tiles`: `max(OUT_DEPTH, core_row_tiles_max)` blocks when the store is paced (`num_waves >= 2`), else `OUT_DEPTH` = 2 | paced: the whole untilized wave block, drained over wave p + 1's rounds; unpaced: 2 tile rows (one being written, one being packed) | `{n: spans -> core_n_tiles, m: spans -> core_row_tiles_max (paced) / streams (unpaced), k: none (after accumulation), e: none, wave: streams}` | Float16_b (output dtype) | compute | writer RISC (L1 y) or reader RISC (DRAM y, `store_on_reader`) | untilize of wave p to the end of wave p + 1's store | none: concurrent with `cb_partials` during the untilize and with every x / w round of wave p + 1 while the paced store drains. Cannot alias `cb_partials` (format, overlapping lifetime). The whole wave block is what lets compute start wave p + 1 without waiting on the store (Refinement 2: t = 4096 172 -> 163 us). |
 | `cb_x_stage` (implementer) | `core_row_tiles_max * k_block_tiles` | 1 step: the next owned x step's rows, prefetched by the rotating sender | `{m: spans, k: spans, n/e/wave: streams}` | Bfp8_b | reader (NoC reads) | reader (multicast source) | whole kernel, RISC-private, no CB credits | none: live from the prefetch issue (one step after the sender's previous send) to its next send, overlapping `cb_x_round`'s two slots. It decouples the sender's L1 reads from the slot ring (X_DEPTH alone would cap the lookahead at one round). |
 | `cb_w_stage` (implementer) | `NUM_EXPERTS * core_n_tiles * k_block_tiles` | 1 step of in-wave expert chunks | `{e, n, k: spans; m, wave: streams}` | Bfp8_b | writer RISC (DRAM reads) | writer RISC (multicast source) | whole kernel, RISC-private | none: same reason as `cb_x_stage`; lets every line keep several steps of w DRAM reads in flight. |
 | `cb_counts_compute` | 1 (32 B page, constant) | 1 | `{m, n, k, e, wave: none}` (constant) | UInt32 | reader | compute | whole kernel | none: a second consumer (writer) would violate the one-consumer rule, hence `cb_counts_writer`. 32 B. |
@@ -38,8 +38,8 @@ Pattern check (Rule 3):
 | `core_row_tiles_max` | `ceil(ceil(tensor_row_tiles / num_waves) / num_m_groups)` <= 15 on p100a | `select_blocking`; device `core_row_tiles <= core_row_tiles_max` because the device clamps `active_row_tiles <= tensor_row_tiles` |
 | `k_block_tiles` | divisor of 96, <= `K_BLOCK_MAX` = 8 | `select_blocking` |
 | `NUM_EXPERTS` | 8 | `validate()`: E == 8 |
-| `X_DEPTH`, `W_DEPTH`, `OUT_DEPTH` | 2 each | host constants |
-| `CB_BUDGET_BYTES` | 960 KiB = 983,040 B (L1 x, L1 y) | host constant; y's lowest L1 address measured 1,204,352 B at R = 8416 on p100a (x 250 KB + y 118 KB per bank above the CBs). `cb_budget_bytes()` adds the MAX_ROWS per-bank share of x (+250,240 B) and/or y (+118,272 B) when that tensor is in DRAM: 1,233,280 / 1,101,312 / 1,351,552 B for DRAM x / DRAM y / both. At the measured shapes the selected blocking is unchanged (one wave at t = 4096 needs 1,455,232 B at `k_block_tiles` = 8). |
+| `X_DEPTH`, `W_DEPTH`, `OUT_DEPTH` | 2 each (`cb_output_rows` grows to the wave block when `STORE_PACED` and `num_waves >= 2`) | host constants; `out_depth_blocks()` |
+| `CB_BUDGET_BYTES` | 976 KiB = 999,424 B (L1 x, L1 y; was 960 KiB, raised in Refinement 2 so the paced store keeps t = 4096 at 2 waves) | host constant; y's lowest L1 address measured 1,204,352 B at R = 8416 on p100a (x 250 KB + y 118 KB per bank above the CBs). `cb_budget_bytes()` adds the MAX_ROWS per-bank share of x (+250,240 B) and/or y (+118,272 B) when that tensor is in DRAM: 1,233,280 / 1,101,312 / 1,351,552 B for DRAM x / DRAM y / both. At the measured shapes the selected blocking is unchanged (one wave at t = 4096 needs 1,455,232 B at `k_block_tiles` = 8). |
 
 ## Footprint
 
@@ -50,7 +50,7 @@ both read it).
 footprint = (X_DEPTH + 1) * core_row_tiles_max * k_block_tiles * 1088      # + cb_x_stage
           + (W_DEPTH + 1) * NUM_EXPERTS * core_n_tiles * k_block_tiles * 1088  # + cb_w_stage
           + core_row_tiles_max * core_n_tiles * 4096
-          + OUT_DEPTH * core_n_tiles * 2048
+          + out_depth_blocks * core_n_tiles * 2048         # max(OUT_DEPTH, core_row_tiles_max) when paced
           + 2 * 32
 ```
 
@@ -60,10 +60,10 @@ footprint = (X_DEPTH + 1) * core_row_tiles_max * k_block_tiles * 1088      # + c
 | `cb_w_round` | `k_block_tiles` x `core_n_tiles`, linear in `W_DEPTH`; independent of rows |
 | `cb_x_stage`, `cb_w_stage` | one round of `cb_x_round` / `cb_w_round` each (depth 1, sender-private) |
 | `cb_partials` | `core_row_tiles_max` x `core_n_tiles`; independent of `k_block_tiles` |
-| `cb_output_rows` | `core_n_tiles`, `OUT_DEPTH` |
+| `cb_output_rows` | `core_n_tiles` x (`core_row_tiles_max` when paced, else `OUT_DEPTH`) |
 | counts | constant |
 
-p100a, L layout (`core_n_tiles` = 2, `num_m_groups` = 9, `k_block_tiles` = 8): t = 4096 (2 waves, `core_row_tiles_max` = 15) 391,680 + 417,792 + 122,880 + 8,192 + 64 = 940,608 B (staging included). One wave would exceed the budget, which is why `num_waves` = 2 there.
+p100a, L layout (`core_n_tiles` = 2, `num_m_groups` = 9, `k_block_tiles` = 8): t = 4096 (2 waves, `core_row_tiles_max` = 15) 391,680 + 417,792 + 122,880 + 8,192 + 64 = 940,608 B (staging included); with the paced store `cb_output_rows` is 15 blocks (61,440 B), so 993,856 B. One wave would exceed the budget, which is why `num_waves` = 2 there.
 
 Implementation note: the w channel runs on the writer RISC (NoC0) and x on the reader RISC (NoC1), each sender multicasting from its staging buffer; w moves as one multicast per K round covering the wave's expert slot range.
 
@@ -88,6 +88,7 @@ Totals per tier: DRAM 20.05 to 22.5 MB (w), plus 27.5 MB (x) and/or 12.9 MB (y) 
   measured a 130 us sync + multicast floor at t = 4096 (compute about 15 us of it), so the multicast scaffold, not
   the DRAM stream, binds there. The receive-byte reduction (R2 plus a layout re-solve) is filed as perf
   Refinement 2 in `op_requirements.md`.
-- The CB region ends at about 1,052,640 B (960 KiB budget above the unreserved base). Any L1 tensor below that
+- The CB region ends at about 1,052,640 B (960 KiB budget above the unreserved base); after Refinement 2 (976 KiB
+  budget, 993,856 B used at t = 4096) at about 1,063,500 B. Any L1 tensor below that
   address at call time makes program creation throw `Statically allocated circular buffers ... clash with L1
   buffers`. With x and y in L1 at R = 8416 that leaves no room for other L1 residents.
