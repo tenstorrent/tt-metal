@@ -513,13 +513,14 @@ class KdaStates:
             nd_dram_memory_config(mesh_device, [1, 1, geometry.head_dim, KDA_RECURRENT_BAND_WIDTH]),
         )
         _zero_fill(recurrent)
-        convolution = ttnn.zeros(
-            (batches, geometry.convolution_shards_per_layer, geometry.convolution_slab_row_width),
-            dtype=KDA_CONVOLUTION_DTYPE,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        convolution = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([batches, geometry.convolution_shards_per_layer, geometry.convolution_slab_row_width]),
+            KDA_CONVOLUTION_DTYPE,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
+        _zero_fill(convolution)
         states = cls(
             recurrent=recurrent,
             convolution=convolution,
