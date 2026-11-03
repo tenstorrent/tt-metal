@@ -295,6 +295,13 @@ MemoryConfig derive_effective_output_memory_config(
     return synthesized_config;
 }
 
+// Narrow-row untilize truncates every height tile to the partial tile width.
+// Use the interleaved factory to preserve complete rows when H spans multiple tiles.
+bool sharded_rm_wh_drops_partial_rows(const Tensor& input_tensor) {
+    const uint32_t height = input_tensor.logical_shape()[-2];
+    return height > TILE_HEIGHT && height % TILE_HEIGHT != 0;
+}
+
 }  // namespace
 
 TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_program_factory(
@@ -332,7 +339,8 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
         native && ((input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard) ||
                    (N == 1 && C == 1 && input_height_sharded && output_width_sharded));
     // RM factory hardcodes num_hw_blocks_per_core = shard_height/H, so RM demands the fully-in-shard subset.
-    bool use_sharded_wh_rm = native && input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard;
+    bool use_sharded_wh_rm = native && input_width_and_height_fully_in_shard &&
+                             output_width_and_height_fully_in_shard && !sharded_rm_wh_drops_partial_rows(input_tensor);
     bool use_sharded_hc = native && input_height_sharded && output_height_sharded && is_row_major;
 
     auto parallelization_strategy = get_parallelization_strategy(operation_attributes, tensor_args);

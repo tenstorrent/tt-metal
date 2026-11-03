@@ -101,7 +101,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     log_debug(tt::LogOp, "shard_height: {}", shard_height);
     log_debug(tt::LogOp, "dst_single_tile_size: {}", dst_single_tile_size);
 
-    bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32;
+    bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32 ||
+                            src0_dfb_data_format == tt::DataFormat::Int32 ||
+                            src0_dfb_data_format == tt::DataFormat::UInt32;
 
     auto& all_cores = shard_spec.grid;
     [[maybe_unused]] uint32_t num_cores = shard_spec.num_cores();
