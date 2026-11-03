@@ -133,11 +133,11 @@ def test_adapter_hooks_name_the_three_configs():
 
 
 def test_layer_position_range_follows_the_contract():
-    """Contract section 5: MLA layers over the request, KDA layers over the version window decode reads next."""
+    """MLA layers over the request; KDA layers over their one Snapshot window, whatever the prompt length."""
     adapter = KimiK3Adapter()
     assert adapter.layer_position_range(3, 100) == (0, 100)
-    assert adapter.layer_position_range(0, 100) == (110_592, 147_456)  # the contract's own example, v = 3
-    assert adapter.layer_position_range(0, 56_320) == (7 * 36_864, 8 * 36_864)
+    assert adapter.layer_position_range(0, 100) == (0, 36_864)
+    assert adapter.layer_position_range(0, 56_320) == (0, 36_864)
     assert adapter.layer_position_range(0, 1) == (0, 36_864)
     assert adapter.layer_position_range(92, 56_320) == (0, 56_320)
 
@@ -147,7 +147,7 @@ def test_driver_groups_consecutive_same_axis_layers_into_runs():
 
     real_len = 56_320
     runs = _layer_runs(range(KimiK3Config.NUM_LAYERS), real_len, KimiK3Adapter().layer_position_range)
-    window = (7 * 36_864, 8 * 36_864)
+    window = (0, 36_864)
     assert runs[:4] == [(0, 3, *window), (3, 4, 0, real_len), (4, 7, *window), (7, 8, 0, real_len)]
     assert runs[-1] == (91, 93, 0, real_len)  # layers 91 and 92 are both MLA: one call
     assert len(runs) == 46

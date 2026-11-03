@@ -188,7 +188,7 @@ class PrefillModelAdapter(ABC):
     def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
         """Table positions one /migrate of layer ``layer_idx`` covers after a ``real_len``-token prefill.
         A token cache migrates ``[0, real_len)``. A model whose layer holds a cache on another axis
-        (Kimi-K3's KDA state: one of decode's eight version windows) overrides this; the migration driver
+        (Kimi-K3's KDA state: one synthetic window per layer) overrides this; the migration driver
         issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
         return 0, real_len
 

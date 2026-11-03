@@ -289,8 +289,8 @@ def _layer_runs(layers, real_len: int, position_range) -> list:
     """Consecutive layers sharing a position range, as ``(layer_start, layer_end, pos_start, pos_end)``.
 
     One /migrate applies one position range to every config of its layers, so layers whose caches sit
-    on different axes (Kimi-K3: MLA on tokens, KDA on the contract's version windows) need separate
-    calls; consecutive layers of one kind share a call.
+    on different axes (Kimi-K3: MLA on tokens, KDA on the contract's synthetic window) need separate
+    calls; consecutive layers with equal ranges share a call.
     """
     runs = []
     for layer in sorted(int(l) for l in layers):
@@ -500,9 +500,8 @@ def _verify_dst_vs_src_bytes(
         for cfg_id, picked in checkable:
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
             stride = int(tcfg.chunk_n_tokens)
-            # Compare the positions _issue requested for each layer: [0, real_len) on a token cache, one
-            # version window of the synthetic axis on Kimi-K3's KDA configs (the other windows alias the
-            # same source bytes and, on a real destination, hold versions this migration did not touch).
+            # Compare the positions _issue requested for each layer: [0, real_len) on a token cache, the
+            # whole synthetic window on Kimi-K3's KDA configs (a Snapshot, moved whole).
             spans = {}
             for layer, _ in picked:
                 pos_start, pos_end = producer.ADAPTER.layer_position_range(layer, real_len)
