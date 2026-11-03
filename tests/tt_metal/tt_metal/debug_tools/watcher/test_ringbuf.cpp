@@ -97,12 +97,10 @@ experimental::quasar::QuasarDataMovementConfig dispatch_engine_config(uint32_t n
     return {.num_threads_per_cluster = 1, .compile_args = {num_pushes}, .is_legacy_kernel = true};
 }
 
-// sem_wrap (Quasar Tensix DM only): the writer starts the head so that half of its pushes land before the rewind.
 void RunTest(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    HalProcessorIdentifier processor,
-    bool sem_wrap = false) {
+    HalProcessorIdentifier processor) {
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -114,8 +112,9 @@ void RunTest(
     // and set up the kernel on the correct risc
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = device->arch() == tt::ARCH::QUASAR;
-    // Push past capacity so the oldest entries are overwritten, whatever the buffer size.
-    uint32_t num_pushes = hal.get_ring_buffer_capacity() + 12;
+    // Push past capacity so the oldest entries are overwritten, whatever the buffer size. A multiple of 8 so a
+    // dispatch engine's last push flushes its head (ring_buffer.h).
+    uint32_t num_pushes = hal.get_ring_buffer_capacity() + 16;
     constexpr const char* kernel_metal2 = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf_2_0.cpp";
     const experimental::KernelSpecName kRingbufKernelName{"ringbuf_kernel"};
 
@@ -134,9 +133,6 @@ void RunTest(
                         kernel_spec.num_threads = 6;
                         kernel_spec.compile_time_args["dm_id"] = processor.processor_type;
                         kernel_spec.hw_config = experimental::DataMovementHardwareConfig{};
-                        if (sem_wrap) {
-                            kernel_spec.compiler_options.defines["WATCHER_RINGBUF_SINGLE_SEM_WRAP"] = "1";
-                        }
                     } else {
                         kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
                             .config_1xx =
@@ -511,20 +507,6 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscDispatchEngineMultiWriter) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunDispatchEngineMultiWriterTest(fixture, mesh_device);
-            },
-            mesh_device);
-    }
-}
-
-// One writer pushes across the rewind, so the dump has to order positions from both sides of it.
-TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscSemaphoreRewindInOrder) {
-    if (MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "Only Quasar keeps the MPSC head in a saturating semaphore";
-    }
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, {HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 2}, true);
             },
             mesh_device);
     }

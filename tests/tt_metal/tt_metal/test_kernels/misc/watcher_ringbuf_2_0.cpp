@@ -46,11 +46,6 @@ void kernel_main() {
 #endif
 #endif
 
-#if defined(WATCHER_RINGBUF_SINGLE_SEM_WRAP)
-    // Quasar only, single writer: start the head so that half of the pushes land before the rewind.
-    watcher_ring_buf_sem_init(watcher_ring_buf_reset_at + 1 - num_pushes / 2);
-#endif
-
 #if defined(WATCHER_RINGBUF_SEM_WRAP)
     // Quasar only. One DM starts the head so that half of all pushes land before the rewind, and no writer
     // pushes until it is set.

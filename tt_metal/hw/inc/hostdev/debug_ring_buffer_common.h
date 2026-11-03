@@ -23,17 +23,9 @@ struct debug_spsc_ring_buf_msg_t {
 constexpr int DEBUG_RING_BUFFER_MPSC_ELEMENTS_QUASAR = 128;
 constexpr int DEBUG_RING_BUFFER_MPSC_ELEMENTS_BLACKHOLE = 32;
 
-// write_id: the low byte is thread_idx + 1, so 0 means never written. Quasar doesn't publish the head; it stores the
-// claimed position in the bits above it.
-constexpr uint32_t DEBUG_RING_BUFFER_WRITE_ID_THREAD_MASK = 0xFF;
-constexpr uint32_t DEBUG_RING_BUFFER_WRITE_ID_POS_SHIFT = 8;
-constexpr uint32_t DEBUG_RING_BUFFER_DISPATCH_POS_WRAP = 1u << (32 - DEBUG_RING_BUFFER_WRITE_ID_POS_SHIFT);
-// Quasar Tensix positions come from a 16-bit semaphore that is rewound to 0 when it reaches this value.
-constexpr uint32_t DEBUG_RING_BUFFER_QUASAR_SEM_POS_WRAP = 0x10000 - DEBUG_RING_BUFFER_MPSC_ELEMENTS_QUASAR;
-
 struct debug_mpsc_ring_buf_slot_t {
     uint32_t data;
-    uint32_t write_id;
+    uint32_t write_id;  // thread_idx + 1; 0 means never written
 };
 
 template <int Capacity>
