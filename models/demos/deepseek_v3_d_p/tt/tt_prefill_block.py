@@ -819,6 +819,15 @@ class TtPrefillBlock(LightweightModule):
             )
             ttnn.deallocate(x_k)
             outs.append(out_k)
+            if (
+                idx_k is not None
+                and indexer_indices is None
+                and self.mla.tp_factor > 1
+                and not self.mla._needs_head_to_seq_reshard
+            ):
+                # A head-sharded TP>1 indexer (e.g. 64 heads at TP=2) returns its gathered top-k in a shared
+                # all-gather buffer that the next chunk's gather overwrites; keep this chunk's copy.
+                idx_k = ttnn.clone(idx_k)
             chunk_indices.append(idx_k)
 
         if self.kv_only:
