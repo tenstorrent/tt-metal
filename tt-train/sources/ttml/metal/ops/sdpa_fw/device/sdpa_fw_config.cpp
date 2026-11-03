@@ -212,9 +212,8 @@ void check_l1(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, ui
 
 void check_chunks(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape, uint64_t l1_budget_bytes) {
     const SDPAForwardChunks user = user_chunks(config, shape);
-    // The pick only shrinks the unset chunk sizes, down to one tile, so the config fits at all iff it fits
-    // with every unset chunk size at one tile (heads_per_item 0 = 1). With both chunk sizes pinned this is
-    // the final check.
+    // The pick only shrinks the unset knobs, down to one tile / one head, so the config fits at all iff it
+    // fits with every unset knob at one. With all three pinned this is the final check.
     const SDPAForwardChunks floor{
         .Sq_chunk_t = std::max(user.Sq_chunk_t, 1U),
         .Sk_chunk_t = std::max(user.Sk_chunk_t, 1U),
@@ -234,50 +233,76 @@ SDPAForwardChunks resolve_chunks(
     }
 
     // Shape rule for the unset knobs, from the chunk sweep on Blackhole (S=2048/4096, D=64/128, every mask
-    // mode): four query tile-rows per item and eight K/V tiles per step win or tie everywhere they fit;
-    // four K/V tiles do better once the inner dim reaches 128 tiles-wide traffic or with a mask tensor
-    // (the step then reads mask tiles on top of K/V). More rows per item only pay off once the work is
-    // scheduled by cost rather than paired, so heads_per_item stays 1 unless asked for. The chunks shrink
-    // while they do not fit L1 or would leave cores idle: causal work goes out as light/heavy chunk pairs
-    // once there is a pair per core (main's rule), so on a causal shape that can pair (an even tile count,
-    // which main always paired) a pair per core is the floor (main's one-row chunks on every core), an item
-    // per core otherwise. An odd chunk count has no pairs, so it shrinks too: three four-row chunks of a
-    // twelve-tile sequence would go out contiguously and unbalanced where main paired.
+    // mode): four tile-rows per item and eight K/V tiles per step win or tie everywhere they fit; four K/V
+    // tiles do better once the inner dim reaches 128 tiles-wide traffic, or with a mask tensor and a single
+    // head per item (the step then reads mask tiles on top of K/V). With a mask tensor the item stacks up to
+    // four heads of the K/V group and keeps four rows: the stacked heads share the step's mask tiles as they
+    // share K/V, which halves or quarters the reader's traffic per head. Measured on p150b against the
+    // one-head pick: TinyLlama (D=64, 8 heads per group) 1843 -> 1377 us at one row, four heads, eight K/V
+    // tiles; Llama-3-8B (D=128, 4 heads per group) 3307 -> 2085 us at one row, four heads, four K/V tiles.
+    // Without a mask tensor the stacking does not pay (no mask reads to share; the unmasked TinyLlama shape
+    // ties at best), and the causal rows go out as light/heavy chunk pairs, where more rows per item only
+    // pay off once the work is scheduled by cost rather than paired; so those keep one head per item.
+    // The chunks shrink while they do not fit L1 or would leave cores idle: causal work goes out as
+    // light/heavy chunk pairs once there is a pair per core (main's rule), so on a causal shape that can
+    // pair (an even tile count, which main always paired) a pair per core is the floor (main's one-row
+    // chunks on every core), an item per core otherwise. An odd chunk count has no pairs, so it shrinks
+    // too: three four-row chunks of a twelve-tile sequence would go out contiguously and unbalanced where
+    // main paired. The picked rows shrink before the picked stacking: the stacking is the reuse.
     //
     // The units >= cores rule is main's, not a measured optimum, and it misses K/V reuse at the tensor-
     // parallel shapes: 8 query heads at S=2048 on 130 cores give 128 two-row pairs, so the pick drops to
     // one-row chunks although two-row pairs on 128 cores do the same per-core compute with half the K/V
     // reads; and at 110 cores and S=4096 it keeps four-row chunks with 128 pairs, so 18 cores carry two.
     // The cost-based scheduler (https://github.com/tenstorrent/tt-metal/pull/62646) replaces this rule.
-    constexpr uint32_t kDefaultSqChunkT = 4U;
-    const uint32_t default_sk_chunk_t = (shape.qWt >= 4U || shape.mask_type == AttentionMaskType::Arbitrary) ? 4U : 8U;
-    SDPAForwardChunks chunks{
-        .Sq_chunk_t = user.Sq_chunk_t,
-        .Sk_chunk_t = user.Sk_chunk_t,
-        .heads_per_item = std::max(user.heads_per_item, 1U)};
+    constexpr uint32_t kDefaultRows = 4U;
+    constexpr uint32_t kMaxPickedHeads = 4U;
+    const bool has_mask_tensor = shape.mask_type == AttentionMaskType::Arbitrary;
+    SDPAForwardChunks chunks = user;
+    if (chunks.heads_per_item == 0U) {
+        // The largest of 4, 2, 1 that divides the K/V group.
+        const uint32_t heads_per_group = shape.q_heads / shape.kv_heads;
+        chunks.heads_per_item = has_mask_tensor ? kMaxPickedHeads : 1U;
+        while (heads_per_group % chunks.heads_per_item != 0U) {
+            chunks.heads_per_item /= 2U;
+        }
+    }
     if (chunks.Sq_chunk_t == 0U) {
-        chunks.Sq_chunk_t = kDefaultSqChunkT;
-        const bool can_pair = shape.mask_type == AttentionMaskType::Causal && shape.St % 2U == 0U;
-        const auto units_for_balance = [&]() {
-            return can_pair ? num_causal_pairs(shape, chunks) : num_work_items(shape, chunks);
-        };
-        while (chunks.Sq_chunk_t > 1U &&
-               (shape.St % chunks.Sq_chunk_t != 0U || units_for_balance() < num_available_cores)) {
+        chunks.Sq_chunk_t = std::max(kDefaultRows / chunks.heads_per_item, 1U);
+        while (chunks.Sq_chunk_t > 1U && shape.St % chunks.Sq_chunk_t != 0U) {
             chunks.Sq_chunk_t /= 2U;
         }
     }
     if (chunks.Sk_chunk_t == 0U) {
-        chunks.Sk_chunk_t = default_sk_chunk_t;
+        const bool single_head_with_mask = has_mask_tensor && chunks.heads_per_item == 1U;
+        chunks.Sk_chunk_t = (shape.qWt >= 4U || single_head_with_mask) ? 4U : 8U;
         while (chunks.Sk_chunk_t > 1U && shape.St % chunks.Sk_chunk_t != 0U) {
             chunks.Sk_chunk_t /= 2U;
         }
     }
-    // Shrink the picked (not the pinned) chunks until the circular buffers fit.
+    // Shrink the picked (not the pinned) knobs while cores would idle: the rows first, then the stacking.
+    const bool can_pair = shape.mask_type == AttentionMaskType::Causal && shape.St % 2U == 0U;
+    const auto units_for_balance = [&]() {
+        return can_pair ? num_causal_pairs(shape, chunks) : num_work_items(shape, chunks);
+    };
+    while (units_for_balance() < num_available_cores) {
+        if (user.Sq_chunk_t == 0U && chunks.Sq_chunk_t > 1U) {
+            chunks.Sq_chunk_t /= 2U;
+        } else if (user.heads_per_item == 0U && chunks.heads_per_item > 1U) {
+            chunks.heads_per_item /= 2U;
+        } else {
+            break;
+        }
+    }
+    // Shrink the picked (not the pinned) knobs until the circular buffers fit: the K/V step first, then the
+    // rows, then the stacking, so the floor is every unset knob at one, as check_chunks assumes.
     while (l1_bytes(cb_tiles(shape, chunks)) > l1_budget_bytes) {
         if (user.Sk_chunk_t == 0U && chunks.Sk_chunk_t > 1U) {
             chunks.Sk_chunk_t /= 2U;
         } else if (user.Sq_chunk_t == 0U && chunks.Sq_chunk_t > 1U) {
             chunks.Sq_chunk_t /= 2U;
+        } else if (user.heads_per_item == 0U && chunks.heads_per_item > 1U) {
+            chunks.heads_per_item /= 2U;
         } else {
             break;
         }

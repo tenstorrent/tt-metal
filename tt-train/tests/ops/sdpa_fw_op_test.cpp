@@ -1781,6 +1781,37 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     EXPECT_GE(num_causal_pairs(odd_chunks, picked_odd), kCores);
     EXPECT_EQ(num_work_units(odd_chunks, picked_odd, kCores), num_causal_pairs(odd_chunks, picked_odd))
         << "the split must hand out pairs";
+
+    // A mask tensor: the item stacks four heads of the K/V group (they share the step's mask tiles) and keeps
+    // four rows, so one row per head, with the eight-tile K/V step of D=64; MHA has nothing to stack and gets
+    // the single-head mask rule (four rows, four K/V tiles).
+    SDPAForwardShape masked = tinyllama;
+    masked.mask_type = ttml::metal::AttentionMaskType::Arbitrary;
+    const auto picked_masked = resolve_chunks({}, masked, kBudget, kCores);
+    EXPECT_EQ(picked_masked.heads_per_item, 4U);
+    EXPECT_EQ(picked_masked.Sq_chunk_t, 1U);
+    EXPECT_EQ(picked_masked.Sk_chunk_t, 8U);
+    SDPAForwardShape masked_mha = masked;
+    masked_mha.kv_heads = masked_mha.q_heads;
+    const auto picked_mha = resolve_chunks({}, masked_mha, kBudget, kCores);
+    EXPECT_EQ(picked_mha.heads_per_item, 1U);
+    EXPECT_EQ(picked_mha.Sq_chunk_t, 4U);
+    EXPECT_EQ(picked_mha.Sk_chunk_t, 4U);
+    // A group of two stacks two heads with two rows each; a short masked shape (8 heads, S=256: 16 items at
+    // the full stacking) unstacks down to one head once the rows are at one, and still has only 64 items.
+    SDPAForwardShape masked_pairs = masked;
+    masked_pairs.kv_heads = 16U;
+    const auto picked_pairs = resolve_chunks({}, masked_pairs, kBudget, kCores);
+    EXPECT_EQ(picked_pairs.heads_per_item, 2U);
+    EXPECT_EQ(picked_pairs.Sq_chunk_t, 2U);
+    SDPAForwardShape masked_short = masked;
+    masked_short.q_heads = 8U;
+    masked_short.kv_heads = 2U;
+    masked_short.St = 8U;
+    const auto picked_short = resolve_chunks({}, masked_short, kBudget, kCores);
+    EXPECT_EQ(picked_short.heads_per_item, 1U);
+    EXPECT_EQ(picked_short.Sq_chunk_t, 1U);
+    EXPECT_EQ(num_work_items(masked_short, picked_short), 64U);
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
