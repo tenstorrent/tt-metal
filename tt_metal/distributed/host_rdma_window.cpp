@@ -70,6 +70,13 @@ bool RdmaWindow::agree(bool local_ok, std::string& err) {
 std::unique_ptr<RdmaWindow> RdmaWindow::create(
     uint8_t* region_base, uint64_t region_bytes, uint32_t expect_rank, uint32_t expect_size, std::string& err) {
     err.clear();
+    // Every rank of an MPI job has MPI initialized, so this returns on all ranks or on none.
+    if (int mpi_initialized = 0; MPI_Initialized(&mpi_initialized) != MPI_SUCCESS || mpi_initialized == 0) {
+        err =
+            "RdmaWindow::create: MPI is not initialized. Host-to-host sockets need an MPI job: launch with tt-run or "
+            "mpirun, or set TT_METAL_MPI_INIT=always";
+        return nullptr;
+    }
     std::unique_ptr<RdmaWindow> w(new RdmaWindow());
     Impl& im = *w->impl_;
     im.comm = MPI_COMM_WORLD;

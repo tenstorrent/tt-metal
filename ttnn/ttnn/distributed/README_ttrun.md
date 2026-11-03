@@ -195,6 +195,20 @@ rank 3=hostname3 slot=0
 
 ---
 
+## Processes Started Without tt-run
+
+TT-Metal initializes MPI only when the process is a rank of an MPI job: when `mpirun`/`tt-run` (`OMPI_COMM_WORLD_SIZE`) or another PMIx launcher such as `srun --mpi=pmix` (`PMIX_RANK`) started it, or when something else in the process already called `MPI_Init`. Otherwise it uses a single-host distributed context of size 1, so plain single-process runs do not leave OpenMPI files in `/dev/shm` and `/tmp`.
+
+Set `TT_METAL_MPI_INIT` to override the detection:
+
+| Value | Behaviour |
+|---|---|
+| `auto` (default) | Detect the launcher as described above |
+| `always` | Initialize MPI, as an OpenMPI singleton when there is no launcher |
+| `never` | Use the single-host context even under a launcher; every rank sees a world of size 1 |
+
+---
+
 ## Multi-Node Clusters
 
 For multi-node setup, MPI host assignment, hostfiles, and cluster validation:
