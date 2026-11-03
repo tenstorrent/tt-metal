@@ -529,6 +529,7 @@ class ttKDA:
             actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
             memory_config=self.qkv_memory_config,
+            history_layout=ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         result = self.recurrence(

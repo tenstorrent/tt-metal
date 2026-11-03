@@ -147,6 +147,7 @@ def _run(
         program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
         memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
+        history_layout=ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS,
     )
 
 
@@ -535,6 +536,7 @@ def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: t
             exchange_buffer=exchange_buffer,
             exchange_semaphores=exchange_semaphores,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            history_layout=ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS,
         )
 
     # Warm the program cache so the profiled call measures the cached program.
@@ -810,6 +812,7 @@ def test_qkv_causal_conv1d_silu_tiled_input(
         actual_start=zero_actual_start,
         predecessor_carry=history_tt,
         input_column_offset=column_offset,
+        history_layout=ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS,
     )
     for name, golden, output in zip(("q", "k", "v"), expected, (q, k, v), strict=True):
         assert_accurate(golden, ttnn.to_torch(output), name=f"tiled {name}", pcc_threshold=0.999, nrmse_threshold=0.008)
@@ -833,6 +836,7 @@ def test_qkv_causal_conv1d_silu_tiled_input(
             ttnn.create_global_semaphore(device, exchange_cores, 0) for _ in range(KDA_HISTORY_EXCHANGE_SEMAPHORES)
         ],
         input_column_offset=column_offset,
+        history_layout=ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS,
     )
     for name, golden, output in zip(("q", "k", "v"), expected, (q, k, v), strict=True):
         assert_accurate(

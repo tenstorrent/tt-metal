@@ -89,6 +89,10 @@ tt::tt_metal::experimental::DataMovementHardwareConfig exchange_datamovement_con
     return config;
 }
 
+bool segment_history(const QkvCausalConv1dSiluParams& attrs) {
+    return attrs.history_layout == ttnn::experimental::kda::QkvCausalConv1dSiluHistoryLayout::SEGMENTS;
+}
+
 // Add the fabric history exchange to every rank's program: one kernel on exchange_core that sends the rows the
 // convolution cores staged, releases them once the predecessor's rows have landed, and distributes the carry.
 void add_history_exchange(
@@ -182,7 +186,8 @@ void add_history_exchange(
                  {"sp_rank", coordinate[axis]},
                  {"sp_size", sp_size},
                  {"local_rows", attrs.sequence},
-                 {"has_actual_end", uint32_t(in.actual_end.has_value())}},
+                 {"has_actual_end", uint32_t(in.actual_end.has_value())},
+                 {"segment_history", uint32_t(segment_history(attrs))}},
             .runtime_arg_schema = {.runtime_arg_names = {semaphore_args.begin(), semaphore_args.end()}},
             .hw_config = exchange_datamovement_config(),
         };
@@ -349,7 +354,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
              {"group", group},
              {"input_wt", input_wt},
              {"input_ct_offset", input_ct_offset},
-             {"exchange", uint32_t(exchange)}},
+             {"exchange", uint32_t(exchange)},
+             {"segment_history", uint32_t(segment_history(attrs))}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };

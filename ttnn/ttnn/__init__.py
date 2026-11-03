@@ -644,6 +644,7 @@ from ttnn.operations.transformer import (
 transformer.SparseKVFormat = SparseKVFormat
 
 QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
+QkvCausalConv1dSiluHistoryLayout = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluHistoryLayout
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 

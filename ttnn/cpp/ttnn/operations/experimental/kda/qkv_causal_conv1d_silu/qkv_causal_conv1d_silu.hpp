@@ -18,6 +18,14 @@ struct QkvCausalConv1dSiluProgramConfig {
     uint32_t channel_chunk_size;
 };
 
+// How `history`, the predecessor carry and the returned carry store the three rows preceding the input.
+enum class QkvCausalConv1dSiluHistoryLayout : uint8_t {
+    // [1, 3, Q+K+V]: page r is history row r.
+    ROWS,
+    // [1, (Q+K+V)/64, 3*64]: page c holds the three rows of channels [64c, 64c+64), row r at element 64r.
+    SEGMENTS,
+};
+
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const ttnn::Tensor& input,
     const ttnn::Tensor& history,
@@ -34,7 +42,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     uint32_t sequence_parallel_axis = 0,
-    uint32_t input_column_offset = 0);
+    uint32_t input_column_offset = 0,
+    QkvCausalConv1dSiluHistoryLayout history_layout = QkvCausalConv1dSiluHistoryLayout::ROWS);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu_with_carry(
     const ttnn::Tensor& input,
@@ -54,6 +63,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     uint32_t sequence_parallel_axis = 0,
-    uint32_t input_column_offset = 0);
+    uint32_t input_column_offset = 0,
+    QkvCausalConv1dSiluHistoryLayout history_layout = QkvCausalConv1dSiluHistoryLayout::ROWS);
 
 }  // namespace ttnn::experimental::kda

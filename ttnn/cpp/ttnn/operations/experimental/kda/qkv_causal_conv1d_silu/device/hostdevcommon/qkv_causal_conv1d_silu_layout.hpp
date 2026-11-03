@@ -26,10 +26,11 @@ constexpr uint32_t face_row_bytes = face_width * element_bytes;
 constexpr uint32_t face_bytes = face_height * face_width * element_bytes;
 constexpr uint32_t tile_bytes = tile_height * tile_width * element_bytes;
 constexpr uint32_t tile_row_bytes = tile_width * element_bytes;
-// The layer's convolution tail (`history` in, `final_history` out) is stored per 64-channel segment, the KDA state
-// migration contract's convolution segment, so the engine's slab copy is a plain page copy: page `c / segment_channels`
-// holds `history_rows` rows of that segment's channels, row `r` at byte `r * segment_row_bytes`. Tensor shape
-// `[1, channels / segment_channels, history_rows * segment_channels]`, ROW_MAJOR, one segment per page.
+// The convolution tail (`history` in, `final_history` out) is stored in the caller's history layout. ROWS: one page
+// per history row, `[1, history_rows, channels]`. SEGMENTS (KDA, whose state migration contract copies it as plain
+// pages): one page per 64-channel segment, `[1, channels / segment_channels, history_rows * segment_channels]`, page
+// `c / segment_channels` holding `history_rows` rows of that segment's channels, row `r` at byte
+// `r * segment_row_bytes`. Both are ROW_MAJOR.
 constexpr uint32_t segment_channels = 64;
 constexpr uint32_t tiles_per_segment = segment_channels / tile_width;
 constexpr uint32_t segment_row_bytes = segment_channels * element_bytes;

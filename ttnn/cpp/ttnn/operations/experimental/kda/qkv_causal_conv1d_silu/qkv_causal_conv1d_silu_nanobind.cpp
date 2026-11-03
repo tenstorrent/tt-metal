@@ -13,6 +13,15 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
             return fmt::format("QkvCausalConv1dSiluProgramConfig(channel_chunk_size={})", config.channel_chunk_size);
         });
 
+    using ttnn::experimental::kda::QkvCausalConv1dSiluHistoryLayout;
+    nb::enum_<QkvCausalConv1dSiluHistoryLayout>(
+        mod, "QkvCausalConv1dSiluHistoryLayout", "How qkv_causal_conv1d_silu's history and carries are stored.")
+        .value("ROWS", QkvCausalConv1dSiluHistoryLayout::ROWS, "[1, 3, Q+K+V]: one page per history row (default).")
+        .value(
+            "SEGMENTS",
+            QkvCausalConv1dSiluHistoryLayout::SEGMENTS,
+            "[1, (Q+K+V)/64, 192]: one page per 64-channel segment, holding its three rows.");
+
     ttnn::bind_function<"qkv_causal_conv1d_silu", "ttnn.experimental.kda.">(
         mod,
         R"doc(
@@ -38,13 +47,13 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 channels from ``input_column_offset`` are the convolution input,
                 read in place (such as a fused projection). A ROW_MAJOR input is
                 tilized first.
-            history (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 history, stored
-                per 64-channel segment: shape ``[1, (Q+K+V)/64, 192]``, page ``c``
-                holding the three history rows of channels ``[64c, 64c+64)``, row
-                ``r`` at element ``64r``; ``Q+K+V`` must be a multiple of 64. SP
-                calls supply the predecessor's three-row history separately. The
-                kernel derives when each history is needed from actual_start and
-                its mesh coordinate.
+            history (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 three-row
+                history in ``history_layout``: ``[1, 3, Q+K+V]`` (``ROWS``), or
+                ``[1, (Q+K+V)/64, 192]`` (``SEGMENTS``), page ``c`` holding the
+                three rows of channels ``[64c, 64c+64)``, row ``r`` at element
+                ``64r``, with ``Q+K+V`` a multiple of 64. SP calls supply the
+                predecessor's history separately. The kernel derives when each
+                history is needed from actual_start and its mesh coordinate.
             tap0, tap1, tap2, tap3 (ttnn.Tensor): Per-channel convolution taps.
                 Each must have logical volume ``Q+K+V`` and be an interleaved
                 TILE-layout BFLOAT16 device tensor.
@@ -70,6 +79,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 Compute-kernel configuration.
             input_column_offset (int, optional): First convolution channel of
                 ``input``; tile aligned. Defaults to 0.
+            history_layout (QkvCausalConv1dSiluHistoryLayout, optional): Storage of
+                ``history`` and ``predecessor_carry``. Defaults to ``ROWS``.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: New TILE-layout BFLOAT16
@@ -98,7 +109,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("input_column_offset") = 0);
+        nb::arg("input_column_offset") = 0,
+        nb::arg("history_layout") = QkvCausalConv1dSiluHistoryLayout::ROWS);
 
     mod.def(
         "qkv_causal_conv1d_silu_exchange_core",
@@ -123,7 +135,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         that does not start the logical sequence reads the preceding rank's last
         three rows, which arrive over the fabric. The fourth output is the
         three-token history ending at the logical end of the interval
-        (``actual_end``, default full capacity), for the next call.
+        (``actual_end``, default full capacity), for the next call, in
+        ``history_layout`` (default ``ROWS``).
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: ``q``, ``k``,
@@ -149,6 +162,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("input_column_offset") = 0);
+        nb::arg("input_column_offset") = 0,
+        nb::arg("history_layout") = QkvCausalConv1dSiluHistoryLayout::ROWS);
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

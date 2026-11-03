@@ -9,6 +9,7 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/qkv_causal_conv1d_silu.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
@@ -22,6 +23,8 @@ struct QkvCausalConv1dSiluParams {
     uint32_t sequence_parallel_axis;
     // First channel of the convolution within the input's last dimension.
     uint32_t input_column_offset;
+    // Selects the history-row and segment-page read and write paths in the reader and exchange kernels.
+    ttnn::experimental::kda::QkvCausalConv1dSiluHistoryLayout history_layout;
     // Fabric history exchange only: L1 addresses of its global semaphores, entry, predecessor arrival, carry arrival.
     std::array<uint32_t, 3> exchange_semaphore_addresses{};
     tt::tt_metal::MemoryConfig output_mem_config;

@@ -305,6 +305,7 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
             actual_start=actual_start,
             sequence_parallel_axis=axis,
             predecessor_carry=predecessor_tt,
+            history_layout=ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS,
         )
         ttnn.synchronize_device(mesh_device)
         if cache_entries is None:
@@ -399,6 +400,7 @@ def test_sp_payload_contracts(mesh_device, expect_error):
             program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=192),
             actual_start=actual_start,
             predecessor_carry=wrong_history,
+            history_layout=ttnn.QkvCausalConv1dSiluHistoryLayout.SEGMENTS,
         )
 
 

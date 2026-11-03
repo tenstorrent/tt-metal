@@ -141,21 +141,31 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
             std::ranges::none_of(attrs.exchange_semaphore_addresses, [](uint32_t address) { return address == 0; }),
             "qkv_causal_conv1d_silu: exchange_buffer needs its exchange semaphores");
     }
-    TT_FATAL(
-        channels % qkv_conv::segment_channels == 0,
-        "qkv_causal_conv1d_silu: Q+K+V must be a multiple of {} (the convolution tail's segment width), got {}",
-        qkv_conv::segment_channels,
-        channels);
-    TT_FATAL(
-        history_shape.rank() == 3 && history_shape[0] == 1 &&
-            history_shape[1] == channels / qkv_conv::segment_channels &&
-            history_shape[2] == qkv_conv::history_rows * qkv_conv::segment_channels,
-        "qkv_causal_conv1d_silu: history must be [1,(Q+K+V)/{},{}] (one {}-channel segment of {} rows per page), got {}",
-        qkv_conv::segment_channels,
-        qkv_conv::history_rows * qkv_conv::segment_channels,
-        qkv_conv::segment_channels,
-        qkv_conv::history_rows,
-        history_shape);
+    if (attrs.history_layout == ttnn::experimental::kda::QkvCausalConv1dSiluHistoryLayout::SEGMENTS) {
+        TT_FATAL(
+            channels % qkv_conv::segment_channels == 0,
+            "qkv_causal_conv1d_silu: with the SEGMENTS history layout, Q+K+V must be a multiple of {}, got {}",
+            qkv_conv::segment_channels,
+            channels);
+        TT_FATAL(
+            history_shape.rank() == 3 && history_shape[0] == 1 &&
+                history_shape[1] == channels / qkv_conv::segment_channels &&
+                history_shape[2] == qkv_conv::history_rows * qkv_conv::segment_channels,
+            "qkv_causal_conv1d_silu: a SEGMENTS history must be [1,(Q+K+V)/{},{}] (one {}-channel segment of {} rows "
+            "per page), got {}",
+            qkv_conv::segment_channels,
+            qkv_conv::history_rows * qkv_conv::segment_channels,
+            qkv_conv::segment_channels,
+            qkv_conv::history_rows,
+            history_shape);
+    } else {
+        TT_FATAL(
+            history_shape.rank() == 3 && history_shape[0] == 1 && history_shape[1] == qkv_conv::history_rows &&
+                history_shape[2] == channels,
+            "qkv_causal_conv1d_silu: a ROWS history must be [1,{},Q+K+V], got {}",
+            qkv_conv::history_rows,
+            history_shape);
+    }
     TT_FATAL(
         attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
         "qkv_causal_conv1d_silu: sequence must be positive and tile aligned");
