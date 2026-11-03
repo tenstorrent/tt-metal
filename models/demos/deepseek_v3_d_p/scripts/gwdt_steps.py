@@ -440,15 +440,16 @@ def smi_step() -> Step:
 
 
 def fabric_step() -> Step:
-    test = f"{TESTS}/utils/test_fabric_availability.py"
-    inner = pytest_step("fabric", "fabric", "gate", None, [f"{test}::test_fabric_opens[FABRIC_2D_TORUS_XY]"])
+    test = f"{TESTS}/utils/test_fabric_availability.py::test_fabric_opens"
+    inner = pytest_step("fabric", "fabric", "gate", None, [f"{test}[FABRIC_2D_TORUS_XY]"])
+    fallbacks = " ".join(f"'{test}[{name}]'" for name in ("FABRIC_2D_TORUS_X", "FABRIC_2D_TORUS_Y", "FABRIC_2D"))
 
     def run(ctx: Ctx, state: State) -> Result:
         r = inner.run(ctx, state)
         if ctx.mode_co or r.status in (Status.PASS, Status.HANG):
             return r
         log = step_dir(ctx, "fabric") / "all_configs.log"
-        sh(ctx, f"pytest -rA '{test}'", log)
+        sh(ctx, f"pytest -rA {fallbacks}", log)
         opens = fabric_results(log.read_text(errors="replace"))
         r.details = [f"{name} {'opens' if ok else 'FAILS'}" for name, ok in opens.items()]
         return r
