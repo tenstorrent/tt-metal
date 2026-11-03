@@ -494,13 +494,10 @@ std::optional<LaunchPlan> plan_codegen(
     }
     // Tile rows and LCM where they beat native, then tile rows, the segment map and LCM where they do not.
     const uint32_t num_cores = reshape_core_grid(input, sub_core_grids).num_cores();
-    const auto supported = [&](const LaunchPlan& plan) {
-        return supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, plan);
-    };
     std::optional<LaunchPlan> rows;
     if (auto tile_rows = plan_tile_rows(input.logical_shape(), logical_output_shape)) {
         LaunchPlan plan{.tile_route = TileRoute::TileRows, .tile_rows = std::move(*tile_rows)};
-        if (supported(plan)) {
+        if (supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, plan)) {
             rows = std::move(plan);
         }
     }
@@ -510,7 +507,7 @@ std::optional<LaunchPlan> plan_codegen(
     std::optional<LaunchPlan> lcm;
     if (auto geometry = lcm_tile_geometry(input, logical_output_shape, num_cores)) {
         LaunchPlan plan{.tile_route = TileRoute::Lcm, .lcm = std::move(geometry)};
-        if (supported(plan)) {
+        if (supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, plan)) {
             lcm = std::move(plan);
         }
     }
@@ -521,7 +518,7 @@ std::optional<LaunchPlan> plan_codegen(
         return rows;
     }
     LaunchPlan mapped{.tile_route = TileRoute::TileMapped};
-    if (supported(mapped)) {
+    if (supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, mapped)) {
         return mapped;
     }
     return lcm;
