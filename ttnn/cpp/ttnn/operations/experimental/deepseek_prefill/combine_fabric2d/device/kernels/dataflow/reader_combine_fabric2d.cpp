@@ -52,8 +52,8 @@
 #include "combine_fabric2d_reader_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
 
-// `local_expert` throughout is a WALK STEP, not a slot id. Standalone the two coincide; overlapped the
-// step is the routed expert's threshold-split order and `expert_of` maps it through the id table. That one
+// `local_expert` throughout is a WALK STEP, not a slot id. Without a threshold the two coincide; with one the
+// step is the routed expert's threshold-split order. `expert_of` maps a step through the id table, and that one
 // function is the only place the order is decided.
 
 constexpr ::cmbf2d::ReaderCtArgs ct{};
@@ -129,19 +129,9 @@ volatile tt_l1_ptr ::cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
 
 // The global expert chip `dg_index` handles at walk step `step`. Any chip of the ring, not just ours, which
 // is what lets us size a chunk we neither produced nor receive.
-#ifdef CMBF2D_OVERLAPPED
-// Overlapped, steps are the routed expert's threshold-split order, so the id comes from the table.
 uint32_t expert_of(const ::cmbf2d::ControlTables& ctl, uint32_t dg_index, uint32_t step) {
     return ::cmbf2d::expert_at_step(ctl, dg_index, ct.experts_per_chip, ct.expert_threshold, step);
 }
-#else
-// Standalone, a step IS the local slot, and the group's experts are laid out in dispatch-group-index order,
-// so our own base locates every other chip's.
-constexpr uint32_t group_expert_base = ct.my_expert_base - ct.my_dg_index * ct.experts_per_chip;
-uint32_t expert_of(const ::cmbf2d::ControlTables&, uint32_t dg_index, uint32_t step) {
-    return group_expert_base + dg_index * ct.experts_per_chip + step;
-}
-#endif
 
 // Every DRAM buffer this kernel touches, so the phases take one argument instead of seven.
 struct Dram {
@@ -152,9 +142,7 @@ struct Dram {
     decltype(TensorAccessor(ct.dram_counts_args, uint32_t{})) counts;
     decltype(TensorAccessor(ct.dram_region_args, uint32_t{})) region;
     decltype(TensorAccessor(ct.dram_expert_offsets_args, uint32_t{})) expert_offsets;
-#ifdef CMBF2D_OVERLAPPED
     decltype(TensorAccessor(ct.dram_expert_table_args, uint32_t{})) expert_table;
-#endif
 };
 
 Dram open_dram() {
@@ -166,26 +154,21 @@ Dram open_dram() {
         TensorAccessor(ct.dram_meta_args, rt.dram_meta),
         TensorAccessor(ct.dram_counts_args, rt.dram_counts),
         TensorAccessor(ct.dram_region_args, rt.dram_region),
-        TensorAccessor(ct.dram_expert_offsets_args, rt.dram_expert_offsets)
-#ifdef CMBF2D_OVERLAPPED
-            ,
-        TensorAccessor(ct.dram_expert_table_args, rt.dram_expert_table)
-#endif
-    };
+        TensorAccessor(ct.dram_expert_offsets_args, rt.dram_expert_offsets),
+        TensorAccessor(ct.dram_expert_table_args, rt.dram_expert_table)};
 }
 
 // Control tensors, read once. All three are one row per page of `num_routed_experts` uint32: expert_offsets
 // has one row per ORIGIN chip (it is replicated along that axis so every chip sees all of them), counts and
 // region_offsets are a single row each. A few kB in total, so the whole slice comes in rather than
 // cherry-picking this chip's columns — a strided gather of 4-byte words would cost more NoC transactions
-// than the bytes saved.
+// than the bytes saved. The id table follows them: this ring's rows of the caller's, or the contiguous
+// layout when there is none.
 ::cmbf2d::ControlTables read_control_tables(const Dram& dram) {
     constexpr uint32_t row_bytes = ct.num_routed_experts * 4;
-#ifdef CMBF2D_OVERLAPPED
     constexpr uint32_t ids_addr =
         control_tables_addr + ::cmbf2d::align_control((ct.dispatch_group_size + 2) * row_bytes);
     constexpr uint32_t ids_stride = ::cmbf2d::expert_table_row_stride(ct.experts_per_chip);
-#endif
     ::cmbf2d::ControlTables ctl{
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control_tables_addr),
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -195,21 +178,23 @@ Dram open_dram() {
         ct.num_routed_experts,
         ct.dispatch_group_size,
         ct.dispatch_capacity,
-#ifdef CMBF2D_OVERLAPPED
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_addr),
         ids_stride / 4,
-#endif
     };
+    // Without the id table L1 is uninitialised and expert_at_step names a garbage expert, which walks garbage
+    // page ranges and never terminates.
     for (uint32_t r = 0; r < ct.dispatch_group_size; r++) {
         noc_async_read(dram.expert_offsets.get_noc_addr(r), control_tables_addr + r * row_bytes, row_bytes);
-#ifdef CMBF2D_OVERLAPPED
-        // Without this the id table is uninitialised L1 and expert_at_step names a garbage expert, which
-        // walks garbage page ranges and never terminates.
-        noc_async_read(
-            dram.expert_table.get_noc_addr(ct.expert_table_page_base + r),
-            ids_addr + r * ids_stride,
-            ct.experts_per_chip * 4);
-#endif
+        if constexpr (ct.has_expert_table != 0) {
+            noc_async_read(
+                dram.expert_table.get_noc_addr(ct.expert_table_page_base + r),
+                ids_addr + r * ids_stride,
+                ct.experts_per_chip * 4);
+        }
+    }
+    if constexpr (ct.has_expert_table == 0) {
+        ::cmbf2d::fill_contiguous_expert_ids(
+            ctl, ct.my_expert_base - ct.my_dg_index * ct.experts_per_chip, ct.experts_per_chip);
     }
     noc_async_read(dram.counts.get_noc_addr(0), (uint32_t)ctl.counts, row_bytes);
     noc_async_read(dram.region.get_noc_addr(0), (uint32_t)ctl.region, row_bytes);
@@ -278,8 +263,8 @@ struct Untilized {
 
     // End of stream. Every batch has been released, so each untilizer has stopped bumping. The wait is for
     // its last bump to have LANDED: a late one would otherwise reach the next program's kernel-config
-    // region. Whether the count then needs zeroing depends on where it lives.
-    void reset_counters() const {
+    // region, which is where the counts live.
+    void wait_for_last_bumps() const {
         for (uint32_t j = 0; j < ct.num_untilizers; j++) {
             const uint32_t mine = expert_base > j ? (expert_base - j - 1) / ct.num_untilizers + 1 : 0;
             volatile tt_l1_ptr uint32_t* produced = produced_by(j);
@@ -287,7 +272,6 @@ struct Untilized {
             while (*produced < mine) {
                 invalidate_l1_cache();
             }
-            ct.reset_produced_counter(produced);
         }
     }
 };
@@ -789,7 +773,7 @@ void kernel_main() {
     reader.close_credits();
     reader.end_stream();
 #if TILE
-    reader.untilized.reset_counters();
+    reader.untilized.wait_for_last_bumps();
 #endif
     // After end_stream, so our own sender is already free to finish: the upstream sender we are waiting on
     // only needs its own reader to have ended, never ours, so this cannot close a cycle around the ring.
