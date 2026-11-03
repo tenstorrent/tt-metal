@@ -39,7 +39,7 @@ def test_vit(device, model_location_generator):
 
     model = load_torch_model(model_location_generator, embedding=True)
     config = model.config
-    config = ttnn_optimized_sharded_vit_bh.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit_bh.update_model_config(config, batch_size, device)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
 
     parameters = preprocess_model_parameters(

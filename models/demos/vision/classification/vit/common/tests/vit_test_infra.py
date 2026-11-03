@@ -56,7 +56,10 @@ class VitTestInfra:
         model = load_torch_model(model_location_generator, embedding=True)
         config = model.config
 
-        self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+        if is_blackhole():
+            self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, device)
+        else:
+            self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
         image_processor = AutoImageProcessor.from_pretrained(model_name)
 
         self.parameters = preprocess_model_parameters(
