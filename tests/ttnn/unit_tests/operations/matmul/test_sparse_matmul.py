@@ -1528,8 +1528,9 @@ def test_sparse_matmul_zero_init_output(device, num_experts):
             is_input_a_sparse=False,
             is_input_b_sparse=True,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=output_tile,
             program_config=program_config,
+            # a caller-supplied output carries its own tile (the op rejects both)
+            **({} if "optional_output_tensor" in kwargs else {"output_tile": output_tile}),
             **kwargs,
         )
 
