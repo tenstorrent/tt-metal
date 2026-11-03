@@ -24,12 +24,15 @@
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include <impl/debug/watcher_server.hpp>
+#include <internal/l1_ecc_halt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
-#include "zone_meta.hpp"
-#include <umd/device/driver_atomics.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include "binary_metadata.hpp"
+#include "tt_elffile.hpp"
+#include "observability_event_meta.hpp"
+#include <tt-umd/driver_atomics.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
 // llrt = lower-level runtime
@@ -39,32 +42,58 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-const ll_api::memory& get_risc_binary(
+namespace {
+
+// The binary cache's value: the packed device image PLUS host-side metadata, both harvested from a
+// single ELF open (see get_cached_binary). Kept together so a consumer that only wants metadata (e.g. the
+// op-to-op R/W query) reads it straight from the cache without re-opening the ELF.
+struct CachedBinary {
+    ll_api::memory image;
+    ll_api::BinaryMetadata metadata;
+};
+
+struct BinaryCache {
+    std::unordered_map<std::string, std::unique_ptr<const CachedBinary>> map;
+    std::mutex mutex;
+    std::condition_variable cvar;
+};
+
+BinaryCache& binary_cache() {
+    static BinaryCache cache;
+    return cache;
+}
+
+// Common lookup-or-load: return the cached binary for PATH, reading + parsing + caching it on first use.
+// Both get_risc_binary and get_binary_metadata build on this and just return their own slice, so the two
+// share one cache and one read path. `loading` / `update_callback` are consulted only on first load.
+const CachedBinary& get_cached_binary(
     const std::string& path,
     ll_api::memory::Loading loading,
     const std::function<void(ll_api::memory&)>& update_callback) {
-    static struct {
-        std::unordered_map<std::string, std::unique_ptr<const ll_api::memory>> map;
-        std::mutex mutex;
-        std::condition_variable cvar;
-    } cache;
+    BinaryCache& cache = binary_cache();
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(path);
-    const ll_api::memory* ptr = nullptr;
+    const CachedBinary* ptr = nullptr;
     if (inserted) {
         // We're the first with PATH. Create and insert.
         lock.unlock();
-        ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
-        if (update_callback) {
-            update_callback(*mutable_ptr);
-        }
+        // Single ELF open: harvest metadata from the pristine ELF first (from_elf may transform it in
+        // place for XIP), then pack the device image.
+        ll_api::ElfFile elf;
+        elf.ReadImage(path);
+        ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
         // Every device-executed image, kernel or firmware, passes through here before it can run, so
-        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
-        // Streaming only: the DRAM profiler's ELFs carry no .tt_zone_meta and resolve names its own way.
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_streaming_profiler_enabled()) {
-            ZoneMetaRegistry::instance().ingest_elf(path);
+        // harvesting .tt_event_descriptor_meta registers an event's name strictly before that event can reach the
+        // host. Not gated on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the JIT build key)
+        // carry .tt_event_descriptor_meta, and ingest_elf returns immediately for the rest. Must run before
+        // from_elf, which may XIP-transform the ELF in place.
+        ObservabilityEventMetaRegistry::instance().ingest_elf(elf, path);
+        ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
+        if (update_callback) {
+            update_callback(image);
         }
+        auto* mutable_ptr = new CachedBinary{.image = std::move(image), .metadata = std::move(metadata)};
 
         lock.lock();
         // maps have iterator stability, so SLOT is still valid.
@@ -79,10 +108,29 @@ const ll_api::memory& get_risc_binary(
             cache.cvar.wait(lock, [=] { return bool(slot->second); });
         }
         ptr = slot->second.get();
-        TT_ASSERT(ptr->get_loading() == loading);
+        TT_ASSERT(ptr->image.get_loading() == loading);
     }
 
     return *ptr;
+}
+
+}  // namespace
+
+const ll_api::memory& get_risc_binary(
+    const std::string& path,
+    ll_api::memory::Loading loading,
+    const std::function<void(ll_api::memory&)>& update_callback) {
+    return get_cached_binary(path, loading, update_callback).image;
+}
+
+const ll_api::BinaryMetadata& get_binary_metadata(
+    const std::string& path,
+    ll_api::memory::Loading loading,
+    const std::function<void(ll_api::memory&)>& update_callback) {
+    // The common case is a cache hit: the binary was already loaded via get_risc_binary (an op-to-op
+    // query runs after the program has). If not, the shared child loads it once with LOADING, exactly as
+    // get_risc_binary would. Cache entries are stable, so the returned reference outlives this call.
+    return get_cached_binary(path, loading, update_callback).metadata;
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
@@ -137,8 +185,14 @@ void send_reset_go_signal(
     cluster.write_core_immediate(
         reset_msg.data(), reset_msg.size(), {static_cast<size_t>(chip), virtual_core}, go_signal_addr);
     cluster.l1_barrier(chip);
-    uint64_t go_message_index_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
+    // The reset is in slot 0 of row 0. Point the core there: it may be waiting on another launch message slot or row
+    // after fast dispatch.
     uint32_t zero = 0;
+    uint64_t launch_msg_rd_ptr_addr =
+        hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+    cluster.write_core_immediate(
+        &zero, sizeof(uint32_t), {static_cast<size_t>(chip), virtual_core}, launch_msg_rd_ptr_addr);
+    uint64_t go_message_index_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
     cluster.write_core_immediate(
         &zero, sizeof(uint32_t), {static_cast<size_t>(chip), virtual_core}, go_message_index_addr);
 }
@@ -374,9 +428,7 @@ std::optional<std::string> get_watcher_error_message_in_test_mode(
         auto& watcher = *context.watcher_server();
         if (watcher.killed_due_to_error() || !watcher.exception_message().empty()) {
             return fmt::format(
-                "Device {}: Aborting wait due to watcher error: {}",
-                device_id,
-                watcher.exception_message());
+                "Device {}: Aborting wait due to watcher error: {}", device_id, watcher.exception_message());
         }
     }
     return std::nullopt;
@@ -411,8 +463,10 @@ void wait_until_cores_done(
             std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
                 .count();
     }
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(context, device_id);
     while (!not_done_phys_cores.empty()) {
         throw_if_watcher_tripped_in_test_mode(context, device_id);
+        ecc_watch.poll();
 
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();
@@ -424,6 +478,7 @@ void wait_until_cores_done(
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
 
+                ecc_watch.check_now();
                 context.on_dispatch_timeout_detected();
 
                 TT_THROW(

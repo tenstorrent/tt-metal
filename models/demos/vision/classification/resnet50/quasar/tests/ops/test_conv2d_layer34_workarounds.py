@@ -73,6 +73,7 @@ def _run_conv(
     slice_config=None,
     act_block_h_override=32,
     reshard_if_not_optimal=True,
+    tiled_input=False,
     pcc=PCC,
 ):
     kh, kw = kernel_size
@@ -96,6 +97,24 @@ def _run_conv(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+    elif tiled_input:
+        # Pre-shard a TILE_LAYOUT input into L1 the way the model feeds conv2 (the conv1 matmul output): shards are
+        # whole tile rows, so when NHW's tile rows don't split evenly the last core's shard ends in padding tile
+        # rows. That drives the halo's tiled (untilize) path, where the last core untilizes fewer blocks than its
+        # shard holds.
+        grid = device.compute_with_storage_grid_size()
+        num_cores = min(grid.x * grid.y, -(-nhw // 32))
+        shard_h = -(-nhw // (32 * num_cores)) * 32
+        num_cores = -(-nhw // shard_h)
+        core_grid = ttnn.num_cores_to_corerangeset(num_cores, grid, True)
+        in_mem = ttnn.create_sharded_memory_config(
+            shape=(1, 1, shard_h, in_channels),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        tt_input = ttnn.from_torch(flat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device, in_mem)
     else:
         # Pre-shard into L1 (height-sharded) so conv2d takes the in-L1 path.
         grid = device.compute_with_storage_grid_size()
@@ -204,6 +223,37 @@ def test_quasar_conv2d_layer3_hs(mesh_device, cfg):
         padding=p,
         shard_layout=HS,
         input_in_dram=False,
+    )
+
+
+_LAYER3_HS_3X3 = [c for c in _LAYER3_HS if tuple(c[4]) == (3, 3)]
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("cfg", _LAYER3_HS_3X3, ids=[_id3(c) for c in _LAYER3_HS_3X3])
+def test_quasar_conv2d_layer3_hs_tiled_input(mesh_device, cfg, monkeypatch):
+    """Layer3 3x3 convs with a TILE_LAYOUT height-sharded input + the split path, as the e2e model runs them.
+
+    The ROW_MAJOR-input cases above take the halo's skip-untilize path. Here the halo untilizes, and on the 2-core
+    emulator the last core's shard ends in a padding tile row the gather never references (14x14: 7 tile rows ->
+    4 + 3). The halo reader used to push the whole shard to the compute's src DFB while the compute popped only
+    the referenced blocks, so the ~DataflowBuffer() drains on that core hung (halo_gather / pack_untilize at AAW).
+    """
+    monkeypatch.setenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "1")  # model's HS conv routing; auto-restored
+    ic, oc, h, w, k, s, p = cfg
+    _run_conv(
+        mesh_device,
+        in_channels=ic,
+        out_channels=oc,
+        input_height=h,
+        input_width=w,
+        kernel_size=k,
+        stride=s,
+        padding=p,
+        shard_layout=HS,
+        input_in_dram=False,
+        tiled_input=True,
     )
 
 

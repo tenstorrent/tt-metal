@@ -25,7 +25,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
@@ -82,7 +82,7 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
     auto worker_mem_map = BaseFabricFixture::generate_worker_mem_map(sender_device, topology);
     uint32_t payload = worker_mem_map.packet_payload_size_bytes;
 
-    tt_metal::Program sender_program = tt_metal::CreateProgram();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_device);
     std::vector<uint32_t> sender_ct_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -119,7 +119,7 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
     std::vector<uint32_t> receiver_rt_args = {payload, num_packets, time_seed};
     for (uint32_t slot = 0; slot < num_dests; slot++) {
         auto receiver_device = fixture->get_device(writing_physical_devices[slot]);
-        tt_metal::Program receiver_program = tt_metal::CreateProgram();
+        tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_device);
         std::vector<uint32_t> receiver_ct_args = {
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,

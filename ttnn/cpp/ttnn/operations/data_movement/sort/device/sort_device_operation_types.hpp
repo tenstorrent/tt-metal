@@ -14,6 +14,8 @@ struct SortParams {
     const bool descending;
     const bool stable;
     const tt::tt_metal::MemoryConfig output_mem_config;
+    // True when ttnn::sort padded the sort dim to a power of two (padding is ±inf, or 0 / 65535 for uint16).
+    const bool sort_dim_padded;
 };
 
 struct SortInputs {

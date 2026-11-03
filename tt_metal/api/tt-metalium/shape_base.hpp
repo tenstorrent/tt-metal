@@ -4,7 +4,11 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
+#include <utility>
 #include <vector>
 
 #include <tt_stl/small_vector.hpp>

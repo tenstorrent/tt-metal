@@ -5,7 +5,6 @@
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/device/attn_res_weighted_reduce_nc_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -23,7 +22,7 @@ void AttnResWeightedReduceNCDeviceOperation::validate_on_program_cache_miss(
     // The compute config defaults to HiFi4 with fp32 dest accumulation, which is only
     // correct on Blackhole; elsewhere the op compiles, runs, and returns silently wrong
     // values. Reject the device rather than let a caller reach that path.
-    const tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    const tt::ARCH arch = input.device()->arch();
     TT_FATAL(arch == tt::ARCH::BLACKHOLE, "AttnResWeightedReduceNC is only supported on Blackhole, got {}", arch);
 
     // The input is BFLOAT16 only: the MAC path is `mul_tiles_bcast_cols` with

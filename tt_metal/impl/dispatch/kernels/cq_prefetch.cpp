@@ -135,6 +135,42 @@ constexpr uint32_t is_h_variant = IS_H_VARIANT;
 constexpr uintptr_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uintptr_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 
+// The alias the prefetcher polls fetch queue entries through. Host writes on Quasar skip the DM caches, so
+// entries are read uncached unless PREFETCH_Q_CACHED, where the prefetcher reads them through its cache and
+// invalidates queue lines itself to pick up new host writes.
+#if defined(PREFETCH_Q_CACHED)
+constexpr uintptr_t prefetch_q_view_base = prefetch_q_base;
+#else
+constexpr uintptr_t prefetch_q_view_base = l1_uncached_addr(prefetch_q_base);
+#endif
+constexpr uintptr_t prefetch_q_view_end = prefetch_q_view_base + prefetch_q_size;
+
+#if defined(PREFETCH_Q_CACHED)
+static_assert(sizeof(prefetch_q_entry_type) == 4, "Cached fetch queue entries carry a phase bit in a 4-byte entry");
+static_assert(
+    prefetch_q_base % L2_CACHE_LINE_SIZE == 0 && prefetch_q_size % L2_CACHE_LINE_SIZE == 0 &&
+        cmddat_q_base % L2_CACHE_LINE_SIZE == 0 && cmddat_q_base >= prefetch_q_end,
+    "Fetch queue lines are invalidated without writeback, so they must not hold anything else");
+// Phase the current lap's entries carry. Slots still holding the previous lap's phase are not ready yet.
+static uint32_t prefetch_q_expected_phase = 1U;
+#endif
+
+// With PREFETCH_Q_CACHED, a slot from the previous lap reads as empty and a ready slot has its phase bit
+// stripped, so callers see the same encoding as the clearing scheme. A stale cached line only ever reads
+// as empty this way.
+FORCE_INLINE uint32_t prefetch_q_read_slot(volatile tt_l1_ptr prefetch_q_entry_type* slot) {
+    const uint32_t entry = *slot;
+#if defined(PREFETCH_Q_CACHED)
+    constexpr uint32_t phase_bit = tt::tt_metal::PrefetchConstants::PREFETCH_Q_PHASE_BIT;
+    if (((entry >> phase_bit) & 1U) != prefetch_q_expected_phase) {
+        return 0U;
+    }
+    return entry & ~(1U << phase_bit);
+#else
+    return entry;
+#endif
+}
+
 // Read and store telemetry values via local variables to avoid L1 reads
 static uint32_t command_counter = 0;
 static uint32_t upstream_blocked_counter = 0;
@@ -300,6 +336,9 @@ struct DispatchSRelayInlineState {
 };
 
 struct PrefetchExecBufState {
+    // NoC transaction ID for exec_buf DRAM reads into cmddat_q
+    static constexpr uint32_t READ_TRID = 1U;
+
     uint32_t page_id;
     uint32_t base_addr;
     uint32_t log_page_size;
@@ -558,21 +597,38 @@ FORCE_INLINE uint32_t read_from_pcie(
         fence);
 #endif
 
+#if defined(PREFETCH_Q_CACHED)
+    // Nothing to clear: next lap the slot still carries this lap's phase, which reads as empty.
+    const uintptr_t consumed_entry_addr = reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr);
+#else
     *prefetch_q_rd_ptr = 0U;
+    const uintptr_t consumed_entry_addr = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+#endif
 
     // Tell host we read. Store the cached-form pointer value so host comparisons against
     // prefetch_q_dev_ptrs (which are cached offsets) match. Write through the uncached L1 alias
     // so the value lands in L1 SRAM directly (otherwise it sits in DM0's L1 D$ and the host's
     // NOC poll reads stale). l1_uncached_addr/l1_cached_addr are identity on WH/BH.
-    *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+    *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = consumed_entry_addr;
 
     ++prefetch_q_rd_ptr;
-
-    // Wrap prefetch_q. prefetch_q_rd_ptr lives in the uncached alias on Quasar, so compare and
-    // reset via l1_uncached_addr (identity on WH/BH, so no change there).
-    if (reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) == l1_uncached_addr(prefetch_q_end)) {
-        prefetch_q_rd_ptr = uncached_l1_ptr<prefetch_q_entry_type>(prefetch_q_base);
+    if (reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) == prefetch_q_view_end) {
+        prefetch_q_rd_ptr = reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(prefetch_q_view_base);
+#if defined(PREFETCH_Q_CACHED)
+        prefetch_q_expected_phase ^= 1U;
+#endif
     }
+#if defined(PREFETCH_Q_CACHED)
+    // On entering a line, drop the next one from the cache, so its first read comes fresh from TL1 and the rest
+    // of it hits. Skipping the fences is fine since the invalidate has a whole line of entries to land first.
+    if ((reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) & (L2_CACHE_LINE_SIZE - 1)) == 0) {
+        uintptr_t next_line = reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) + L2_CACHE_LINE_SIZE;
+        if (next_line == prefetch_q_view_end) {
+            next_line = prefetch_q_view_base;
+        }
+        invalidate_l2_cache_line_async(next_line);
+    }
+#endif
     return pending_read_size;
 }
 
@@ -610,9 +666,13 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     static uint32_t inflight_count = 0U;
     static uint32_t inflight_head = 0U;
 
-    // Reserve trid 0/1 for other traffic (0 is the default; 1 is used by exec_buf DRAM reads).
+    // NoC read transaction IDs used by the prefetcher:
+    //   0                                default
+    //   PrefetchExecBufState::READ_TRID  exec_buf DRAM reads (1)
+    //   PREFETCH_TRIDS                   in-flight fetch_q reads (2-5)
+    //   RELAY_LINEAR_TRIDS               relay_linear scratch DB halves (6-7)
     // Keep TRIDs unique across in-flight reads so retirement barriers only wait for the oldest read.
-    static constexpr uint32_t MIN_TRID = 2U;
+    static constexpr uint32_t MIN_TRID = PrefetchExecBufState::READ_TRID + 1U;
     static constexpr std::array<uint32_t, tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS>
         PREFETCH_TRIDS = {{
             MIN_TRID,
@@ -628,12 +688,11 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     // End of reserved (possibly-not-yet-committed) region in cmddat_q for issued reads.
     // `fence` remains the committed boundary used for cmd_ready checks.
     static uintptr_t issue_fence = cmddat_q_base;
-    // On Quasar prefetch_q_rd_ptr lives in the uncached L1 alias so every deref bypasses the DM core's
-    // L1 D$/L2. l1_uncached_addr is identity on non-Quasar, so this is unchanged on WH/BH. The bare
-    // reinterpret_cast (rather than uncached_l1_ptr) keeps this a constant initializer; the kernel
-    // environment disallows dynamic initialization of static storage.
+    // prefetch_q_rd_ptr points into prefetch_q_view_base's alias, uncached on Quasar unless PREFETCH_Q_CACHED.
+    // The bare reinterpret_cast keeps this a constant initializer; the kernel environment
+    // disallows dynamic initialization of static storage.
     static volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr =
-        reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(l1_uncached_addr(prefetch_q_base));
+        reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(prefetch_q_view_base);
     static constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1U);
 
     if (stall_state == StallState::STALLED) {
@@ -693,22 +752,13 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
             return;
         }
 
-        // Local helper for reading the current prefetch_q entry.
-        uint32_t prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
-        uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
-        bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
-
 #if ENABLE_PREFETCH_DPRINTS
-        DPRINT(
-            "fetch_q_get_cmds: STATE cmd_ready={} fetch_size={} stall_flag={} inflight_count={}\n",
-            cmd_ready,
-            fetch_size,
-            stall_flag,
-            inflight_count);
+        DPRINT("fetch_q_get_cmds: STATE cmd_ready={} inflight_count={}\n", cmd_ready, inflight_count);
 #endif
 
         // Issue tagged reads (up to MAX_OUTSTANDING_READS) whenever host has work and there is capacity.
         // Stop once we encounter a stall_flag entry (do not prefetch beyond it).
+        // The next entry is polled only when there is room to issue it, since a full window would discard the poll.
         if (!has_pending_stall_after) {
 #ifdef ARCH_BLACKHOLE
             // Nothing between issues here touches read_cmd_buf, so PCIe routing is programmed once on the
@@ -716,8 +766,14 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
             // idle_erisc has no room for the extra inlined helpers elsewhere.
             bool pcie_state_set = false;
 #endif
-            while ((fetch_size != 0U) &&
-                   (inflight_count < tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS)) {
+            while (inflight_count < tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS) {
+                const uint32_t prefetch_q_rd_ptr_local = prefetch_q_read_slot(prefetch_q_rd_ptr);
+                const uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
+                if (fetch_size == 0U) {
+                    break;
+                }
+                const bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
+
                 const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
                 uint32_t total_size = 0U;
                 const uint32_t idx = (inflight_head + inflight_count) & INFLIGHT_MASK;
@@ -798,11 +854,6 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 if (stall_flag) {
                     break;
                 }
-
-                // Refresh host state for potential next issue.
-                prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
-                fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
-                stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
             }
 
 #ifdef ARCH_BLACKHOLE
@@ -876,12 +927,20 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 WAYPOINT("HQW");
                 uint32_t heartbeat = 0U;
 
-                if ((fetch_size = *prefetch_q_rd_ptr) == 0U) {
+#if defined(PREFETCH_Q_CACHED)
+                // The host may have written this slot after its line was cached. Nothing else to do, so wait
+                // for the invalidate before rereading.
+                invalidate_l2_cache_line(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+#endif
+                if (prefetch_q_read_slot(prefetch_q_rd_ptr) == 0U) {
                     PrefetchTelemetryBlockGuard block_guard;
                     do {
                         invalidate_l1_cache();
+#if defined(PREFETCH_Q_CACHED)
+                        invalidate_l2_cache_line(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+#endif
                         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-                    } while ((fetch_size = *prefetch_q_rd_ptr) == 0U);
+                    } while (prefetch_q_read_slot(prefetch_q_rd_ptr) == 0U);
                 }
                 // Host has work now; restart without recursion.
                 continue;
@@ -1177,7 +1236,7 @@ public:
 #endif
     }
 
-    FORCE_INLINE uint32_t coord() const { return interleaved_addr_gen::get_noc_xy<is_dram>(bank_, noc_index); }
+    FORCE_INLINE uint32_t bank() const { return bank_; }
 
     template <bool folded>
     FORCE_INLINE uint32_t local_addr() const {
@@ -1223,7 +1282,8 @@ public:
     // address generation gets wrong rather than silently reading the wrong pages.
     template <bool folded, typename AddrGen>
     FORCE_INLINE bool matches(const AddrGen& addr_gen) const {
-        return get_noc_addr_helper(coord(), local_addr<folded>()) == addr_gen.get_noc_addr(page_id_);
+        return noc_address_backend::bank_address<is_dram>(bank_, local_addr<folded>(), noc_index) ==
+               addr_gen.get_noc_addr(page_id_);
     }
 #endif
 
@@ -1260,15 +1320,27 @@ FORCE_INLINE void assert_walker_matches(
 // there the count runs low, where noc_async_read would have counted per packet. Nothing depends on the difference:
 // v2 answers ncrisc_noc_reads_flushed() from the hardware's outstanding-transaction count, so the barrier waits on
 // the responses themselves rather than on noc_reads_num_issued.
-template <enum CQNocFlags flags>
-FORCE_INLINE void issue_page_read(uint32_t coord, uint32_t local_addr, uint32_t dst_addr, uint32_t page_size) {
+template <enum CQNocFlags flags, bool is_dram>
+FORCE_INLINE void issue_page_read(uint32_t bank, uint32_t local_addr, uint32_t dst_addr, uint32_t page_size) {
     // Keep the reads visible to watcher and to noc tracing, both of which noc_async_read would have done. Both
     // compile out of a release build.
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ, dst_addr, get_noc_addr_helper(coord, local_addr), page_size, -1, false, noc_index);
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_index, get_noc_addr_helper(coord, local_addr), dst_addr, page_size);
+        NocEventType::READ,
+        dst_addr,
+        noc_address_backend::bank_address<is_dram>(bank, local_addr, noc_index),
+        page_size,
+        -1,
+        false,
+        noc_index);
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(
+        noc_index, noc_address_backend::bank_address<is_dram>(bank, local_addr, noc_index), dst_addr, page_size);
+#if defined(NOC_ATT_ENABLED)
+    noc_read_with_state_bank<DM_DEDICATED_NOC, read_cmd_buf, flags, is_dram, CQ_NOC_SEND, CQ_NOC_WAIT>(
+        noc_index, bank, local_addr, dst_addr, 0);
+#else
     noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, flags, CQ_NOC_SEND, CQ_NOC_WAIT>(
-        noc_index, coord, local_addr, dst_addr, 0);
+        noc_index, interleaved_addr_gen::get_noc_xy<is_dram>(bank, noc_index), local_addr, dst_addr, 0);
+#endif
 }
 
 // Issues the reads that fill one scratch buffer with whole pages, advancing the walker past them and returning the
@@ -1301,12 +1373,12 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
         while (run_bytes <= amt_to_read) {
             const uint32_t local_addr = walker.template local_addr<true>();
             assert_walker_matches<true>(walker, addr_gen);
-            issue_page_read<CQ_NOC_SNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+            issue_page_read<CQ_NOC_SNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
             walker.advance_within_row();
             scratch_read_addr += page_size;
             for (uint32_t left = run_pages - 1; left != 0; left--) {
                 assert_walker_matches<true>(walker, addr_gen);
-                issue_page_read<CQ_NOC_sNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+                issue_page_read<CQ_NOC_sNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
                 walker.advance_within_row();
                 scratch_read_addr += page_size;
             }
@@ -1322,14 +1394,14 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
         if (amt_to_read >= page_size) {
             const uint32_t local_addr = walker.template local_addr<true>();
             assert_walker_matches<true>(walker, addr_gen);
-            issue_page_read<CQ_NOC_SNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+            issue_page_read<CQ_NOC_SNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
             walker.advance_within_row();
             scratch_read_addr += page_size;
             amt_to_read -= page_size;
             amt_read += page_size;
             while (amt_to_read >= page_size) {
                 assert_walker_matches<true>(walker, addr_gen);
-                issue_page_read<CQ_NOC_sNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+                issue_page_read<CQ_NOC_sNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
                 walker.advance_within_row();
                 scratch_read_addr += page_size;
                 amt_to_read -= page_size;
@@ -1344,12 +1416,13 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
     // noc_async_read.
     while (amt_to_read >= page_size) {
         assert_walker_matches<false>(walker, addr_gen);
-        const uint32_t coord = walker.coord();
+        const uint32_t bank = walker.bank();
         const uint32_t local_addr = walker.template local_addr<false>();
         if constexpr (single_read) {
-            issue_page_read<CQ_NOC_SNDl>(coord, local_addr, scratch_read_addr, page_size);
+            issue_page_read<CQ_NOC_SNDl, is_dram>(bank, local_addr, scratch_read_addr, page_size);
         } else {
-            noc_async_read(get_noc_addr_helper(coord, local_addr), scratch_read_addr, page_size);
+            noc_async_read(
+                noc_address_backend::bank_address<is_dram>(bank, local_addr, noc_index), scratch_read_addr, page_size);
         }
         walker.advance();
         scratch_read_addr += page_size;
@@ -1487,12 +1560,12 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     // Writes are fast, reads are slow
     uint32_t db_cur = 0;
     uint32_t scratch_write_addr;
-    // Value of the nonposted-writes-issued counter right after the write that last sourced from each buffer.
+    // Checkpoint of the nonposted writes issued right after the write that last sourced from each buffer.
     // Waiting on it before refilling that buffer replaces the global flush. At depth two the buffer being
     // refilled always sourced the immediately preceding write, so there is nothing to be gained over a flush
     // and the bookkeeping is compiled out.
     constexpr bool track_writes_per_buf = scratch_db_max_nbuf > 2;
-    [[maybe_unused]] uint32_t buf_writes_issued[scratch_db_max_nbuf] = {};
+    [[maybe_unused]] uint32_t buf_writes_checkpoint[scratch_db_max_nbuf] = {};
     [[maybe_unused]] uint32_t buf_written_mask = 0;
     read_wlength -= amt_read;
     while (read_wlength != 0) {
@@ -1509,7 +1582,7 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
             if constexpr (track_writes_per_buf) {
                 if (buf_written_mask & (1u << db_next)) {
                     WAYPOINT("RPBW");
-                    while (!noc_nonposted_writes_sent_at_count(noc_index, buf_writes_issued[db_next]));
+                    while (!noc_nonposted_writes_sent_since(noc_index, buf_writes_checkpoint[db_next]));
                     WAYPOINT("RPBD");
                 }
             } else {
@@ -1529,7 +1602,7 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
             DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
             if constexpr (track_writes_per_buf) {
-                buf_writes_issued[db_cur] = noc_get_nonposted_writes_issued(noc_index);
+                buf_writes_checkpoint[db_cur] = noc_nonposted_writes_checkpoint(noc_index);
                 buf_written_mask |= (1u << db_cur);
             }
 
@@ -1756,7 +1829,7 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     // DPRINT("relay_linear: cmd_ptr={} length={} read_addr={} noc_xy_addr={}\n", cmd_ptr, wlength, read_addr,
     // noc_xy_addr);
 
-    // TRIDs for the two scratch DB halves (unique from fetch_q's 2-5 and exec_buf's 1).
+    // TRIDs for the two scratch DB halves (unique from the others, see the table in fetch_q_get_cmds).
     // Each TRID is barriered before the next read to the same half, so the max outstanding
     // per TRID is ceil(scratch_db_half_size / NOC_MAX_BURST_SIZE).
     static_assert((scratch_db_half_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE <= NOC_MAX_TRANSACTION_ID_COUNT);
@@ -1865,8 +1938,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
     }
 
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
-    // set transaction ID to 1 for all read
-    noc_async_read_set_trid(1);
+    noc_async_read_set_trid(PrefetchExecBufState::READ_TRID);
     ASSERT(page_size <= NOC_MAX_BURST_SIZE);
     // Initialize the read size for all later commands.
     noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(0, 0, 0, page_size);
@@ -1879,7 +1951,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
         pages -= initial_pages_at_once;
 
         while (initial_pages_at_once != 0) {
-            uint32_t pages_to_read = noc_available_transactions(noc_index, 1);
+            uint32_t pages_to_read = noc_available_transactions(noc_index, PrefetchExecBufState::READ_TRID);
             if (pages_to_read > initial_pages_at_once) {
                 pages_to_read = initial_pages_at_once;
             }
@@ -1893,7 +1965,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
                 pages_to_read--;
             }
         }
-        noc_async_read_barrier_with_trid(1);
+        noc_async_read_barrier_with_trid(PrefetchExecBufState::READ_TRID);
         // update length always after barrier to make sure data in cmddat_q
         exec_buf_state.page_id = page_id;
         exec_buf_state.pages = pages;
@@ -1902,7 +1974,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
     } else {
         ASSERT(exec_buf_state.length == 0);
         // add barrier to wait for prefetch noc read to complete
-        noc_async_read_barrier_with_trid(1);
+        noc_async_read_barrier_with_trid(PrefetchExecBufState::READ_TRID);
         // update always after barrier to make sure data in cmddat_q
         exec_buf_state.length += exec_buf_state.prefetch_length;
         exec_buf_state.prefetch_length = 0;
@@ -1922,7 +1994,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
         pages -= prefetch_pages_at_once;
 
         while (prefetch_pages_at_once != 0) {
-            uint32_t pages_to_read = noc_available_transactions(noc_index, 1);
+            uint32_t pages_to_read = noc_available_transactions(noc_index, PrefetchExecBufState::READ_TRID);
             if (pages_to_read > prefetch_pages_at_once) {
                 pages_to_read = prefetch_pages_at_once;
             }
@@ -1943,7 +2015,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
         exec_buf_state.read_ptr = read_ptr;
     }
 
-    // set transaction ID to 0 for other noc read to not use transaction id 1
+    // set transaction ID to 0 for other noc read to not use READ_TRID
     // to remove unnecessary barrier delay
     noc_async_read_set_trid(0);
     // Ensure reads receive the updated data.
@@ -2544,6 +2616,8 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_EXEC_BUF_END:
             // DPRINT("exec_buf_end: {}\n", cmd_ptr);
             ASSERT(exec_buf);
+            // Read-ahead may still be landing in cmddat_q, which upstream reuses once exec_buf_end is relayed
+            noc_async_read_barrier_with_trid(PrefetchExecBufState::READ_TRID);
             stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
                 cmd_ptr, downstream_data_ptr, exec_buf_state);
             done = true;
@@ -3212,6 +3286,11 @@ void kernel_main() {
     noc_v3_cq_state_reset();
 #endif
     set_l1_data_cache<true>();
+#if defined(PREFETCH_Q_CACHED)
+    // Lines of the queue can still be cached from an earlier run on this core. Invalidating a clean L2 line also
+    // drops its L1 D$ copy, and the prefetcher never writes the queue, so the L2 invalidate covers both levels.
+    invalidate_l2_cache_range(prefetch_q_view_base, prefetch_q_size);
+#endif
 #if defined(FABRIC_RELAY)
     DPRINT("prefetcher_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);
 #else

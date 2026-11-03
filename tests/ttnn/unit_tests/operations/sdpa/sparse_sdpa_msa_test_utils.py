@@ -153,6 +153,7 @@ def run_op_msa_native(
     cluster_axis=None,
     block_cyclic_sp_axis=None,
     block_cyclic_chunk_local=None,
+    enable_kv_block_cache=False,
 ):
     """Run the native op. K/V are pre-tiled; q/indices/output stay row-major."""
     _, H, _, d = q.shape
@@ -183,6 +184,7 @@ def run_op_msa_native(
         cluster_axis=cluster_axis,
         block_cyclic_sp_axis=block_cyclic_sp_axis,  # set -> K/V are block-cyclic; op remaps block ids in-kernel
         block_cyclic_chunk_local=block_cyclic_chunk_local,
+        enable_kv_block_cache=enable_kv_block_cache,  # on: slots sized from free L1; byte-identical either way
     )
     # Output dtype matches q. fp8 can't be to_torch'd directly, so typecast fp8 -> bf16 on device first.
     if tt_out.dtype == ttnn.fp8_e4m3:

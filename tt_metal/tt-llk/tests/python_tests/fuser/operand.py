@@ -7,7 +7,6 @@ from enum import Enum
 from typing import List, Optional, Tuple
 
 import torch
-from helpers.device_io import read_from_device, write_to_device
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
 from helpers.pack import (
     pack_bfp8_b,
@@ -35,6 +34,7 @@ from helpers.tile_constants import (
 from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_res_tiles
+from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 L1_PACKERS = {
     DataFormat.Float16: pack_fp16,
@@ -60,10 +60,6 @@ class BfdResource(Enum):
 class L1AccessMode(Enum):
     CONTINUOUS = "ckernel::trisc::L1AccessMode::Continuous"
     STRIDED = "ckernel::trisc::L1AccessMode::Strided"
-
-
-def bfd_current(engine: BfdResource) -> str:
-    return f"ckernel::trisc::bfd_current<{engine.value}>()"
 
 
 @dataclass
@@ -102,14 +98,9 @@ class Operand:
             else PartialFace.No
         )
 
-        TILE_SIZES = {
-            DataFormat.Bfp8_b: 68,
-            DataFormat.Float32: 256,
-        }
-
         self.tile_size = (
-            TILE_SIZES.get(self.data_format, 128) * self.tile_shape.total_num_faces()
-        ) // 4
+            self.data_format.num_bytes_per_tile(self.tile_shape.total_tile_size()) // 16
+        )
 
     def generate_data(self):
         height, width = self.dimensions[0], self.dimensions[1]
@@ -238,12 +229,20 @@ class Operand:
         self,
         engine: BfdResource,
         mode: L1AccessMode = L1AccessMode.CONTINUOUS,
+        *,
+        result_name: Optional[str] = None,
     ) -> str:
+        assignment = f"const auto {result_name} = " if result_name else ""
+        data_format = (
+            DataFormat.Int16
+            if self.data_format == DataFormat.UInt16
+            else self.data_format
+        )
         return (
-            f"ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
+            f"{assignment}ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
             f"{self.tile_shape.cpp_value}, "
             f"{hex(self.l1_address)} / 16, "
-            f"{self.data_format.cpp_underlying_value});\n"
+            f"{data_format.cpp_underlying_value});\n"
         )
 
 

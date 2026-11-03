@@ -33,7 +33,6 @@
 #include "tt-metalium/mesh_device.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
 
 #include "impl/emulation/emule_live_ranges.hpp"
@@ -182,8 +181,8 @@ std::unordered_set<CoreCoord> claimed_service_cores(const IDevice* device) {
         return claimed;
     }
     if (const auto* mesh = dynamic_cast<const distributed::MeshDevice*>(device)) {
-        for (const IDevice* chip : mesh->get_devices()) {
-            const auto chip_claimed = service_cores.claimed_cores(chip->id());
+        for (auto chip_id : mesh->get_device_ids()) {
+            const auto chip_claimed = service_cores.claimed_cores(chip_id);
             claimed.insert(chip_claimed.begin(), chip_claimed.end());
         }
     } else {
@@ -910,7 +909,7 @@ DeviceAddr ShardSpecBuffer::num_pages() const {
 namespace ttsl::json {
 tt::tt_metal::ShardSpec from_json_t<tt::tt_metal::ShardSpec>::operator()(const nlohmann::json& json_object) const {
     return tt::tt_metal::ShardSpec{
-        from_json<CoreRangeSet>(json_object.at("grid")),
+        from_json<tt::tt_metal::CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt::tt_metal::ShardOrientation>(json_object.at("orientation")),
     };

@@ -64,3 +64,20 @@ def test_online_local_run_still_downloads_uncached_adapter(monkeypatch, tmp_path
 
     monkeypatch.setattr("huggingface_hub.hf_hub_download", download)
     assert asset.resolve_lora() == str(tmp_path / asset.FILENAME)
+
+
+def test_preflight_returns_shared_cache_hit_without_copying(monkeypatch, tmp_path):
+    monkeypatch.delenv("LORA_PATH", raising=False)
+    monkeypatch.setattr(asset.Path, "home", lambda: tmp_path)
+    cached = tmp_path / "hf_home" / asset.FILENAME
+    cached.parent.mkdir()
+    cached.write_bytes(b"adapter")
+
+    def download(repo, filename, **kwargs):
+        assert kwargs["local_files_only"] is True
+        return str(cached)
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", download)
+    destination = tmp_path / "job_storage"
+    assert asset.resolve_lora(download_dir=destination) == str(cached)
+    assert not destination.exists()

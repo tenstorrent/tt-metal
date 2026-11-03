@@ -122,7 +122,23 @@ inline uint32_t noc_v3_inline_write_state_val = 0;
 // callers that pass a state address with a nonzero offset (the existing
 // dataflow wrappers do) behave identically to V2 instead of leaking stale
 // base bits into base | local.
+// noc_v3_state_base_of and noc_v3_cq_local_of return a bare 32-bit CQ offset
+// whole: every real operand has bits >= 32 set because every window they can
+// match has a compare >= 2^32, except LoopbackScratch (compare 0x100000), whose
+// aperture a bare offset must never fall into. Pin that for the active map.
+static_assert(
+    noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::Worker).compare >= (uint64_t{1} << 32) &&
+        noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::Dram).compare >= (uint64_t{1} << 32) &&
+        noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::FullTile).compare >= (uint64_t{1} << 32),
+    "ATT CQ walk assumes only LoopbackScratch has compare < 2^32; a bare CQ offset would otherwise "
+    "match a real window and lose its high bits");
+
 inline __attribute__((always_inline)) uint64_t noc_v3_state_base_of(uint64_t noc_addr) {
+    // A bare 32-bit offset (completion-queue pointer, packed-write tail) is not a
+    // windowed operand: return it whole.
+    if (noc_addr < (uint64_t{1} << 32)) {
+        return noc_addr;
+    }
     const noc_att::WindowClass window_class = noc_att::matching_window_class(ACTIVE_ATT_MAP, noc_addr);
     if (window_class != noc_att::WindowClass::Invalid) {
         const noc_att::Window& window = noc_att::map_window(ACTIVE_ATT_MAP, window_class);
@@ -159,7 +175,9 @@ inline __attribute__((always_inline)) void noc_restore_default_atomic_ret_addr(u
 // Expects overlay_cmd_buff_init to have set on OVERLAY_RD_CMD_BUF:
 //   MISC = CMD_BUF_MISC_READ
 //   TR_ID / WR_SENT_TR_ID / TR_ACK_TR_ID = NOC_OVERLAY_TRID_STATIC (0)
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+//
+// src_in_cmd_buf: the address generator already pushed the source address into SRC_ADDR (src_addr is ignored).
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool src_in_cmd_buf = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -173,8 +191,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, read_req_vc);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_RD_RESP_VC);
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
+    if constexpr (!src_in_cmd_buf) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
+    }
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, noc_v3_local_operand(dest_addr));
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -199,7 +219,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool update_counter = true>
+// dest_in_cmd_buf: the address generator already pushed the destination address into DEST_ADDR (dest_addr is ignored;
+// unicast only).
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool use_trid = false,
+    bool update_counter = true,
+    bool dest_in_cmd_buf = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -249,8 +275,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
 
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_v3_local_operand(src_addr));
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dest_addr);
+    if constexpr (!dest_in_cmd_buf) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dest_addr);
+    }
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, len_bytes);
     if (mcast) {
@@ -406,6 +434,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     // instruction. LEN is the transfer size. The INLINE_WR/BYTE_ENABLE MISC bits
     // with a byte-enable mask in LEN never complete on this NIU (no ack, no
     // data), and one such issue wedges every later barrier on the core.
+    // Quasar-only: byte-enabled writes bypass the security fence (checks 64 B of 256 B).
     ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     uint32_t num_dests = 1;
     uint32_t mcast_coord = 0;
@@ -471,6 +500,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     // Same recipe as noc_fast_write_dw_inline (see there); the caller supplies
     // the destination count. The sender is not included, so a rectangle that
     // contains it has one destination fewer than its area.
+    // Quasar-only: byte-enabled writes bypass the security fence (checks 64 B of 256 B).
     ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     uint32_t mcast_coord = 0;
     if (mcast) {
@@ -665,6 +695,7 @@ template <uint8_t noc_mode = DM_DEDICATED_NOC, bool one_packet = false, bool use
 inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t src_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    noc_cmd_buf_assert_rd_resp_vc(cmd_buf);
 
     if constexpr (use_vc) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
@@ -784,6 +815,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t be, uint32_t static_vc, uint32_t val = 0) {
     // Reference recipe (cmdbuff_api.hpp): plain write, LEN = dword; see
     // noc_fast_write_dw_inline for why the INLINE_WR/BYTE_ENABLE form is wrong.
+    // Quasar-only: byte-enabled writes bypass the security fence (checks 64 B of 256 B).
     ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     if constexpr (set_val) {
         noc_v3_inline_write_state_val = val;
@@ -968,6 +1000,11 @@ inline constexpr uint64_t NOC_V3_CQ_MCAST_LOCAL_MASK = noc_att::DESCRIPTOR_LOCAL
 
 // Extract the offset half of an address.
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_addr) {
+    // A bare 32-bit CQ offset is already a local offset: return it whole so the
+    // LoopbackScratch aperture cannot match it.
+    if (noc_addr < (uint64_t{1} << 32)) {
+        return noc_addr;
+    }
     const noc_att::WindowClass window_class = noc_att::matching_window_class(ACTIVE_ATT_MAP, noc_addr);
     if (window_class == noc_att::WindowClass::Invalid) {
         return noc_addr;
@@ -977,10 +1014,11 @@ inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_a
 
 // Turn a host-packed coordinate word ((y << NOC_ADDR_NODE_ID_BITS) | x) into
 // the coordinate half of an address: the tile's window and selector with a
-// zero offset.
+// zero offset. The word is in the host's frame, so the map's frame offset is
+// applied before the lookup.
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_packed_base(uint32_t packed_xy) {
     constexpr uint32_t node_mask = (1u << NOC_ADDR_NODE_ID_BITS) - 1;
-    const noc_att::ResolvedTile tile = noc_att::resolve_current(
+    const noc_att::ResolvedTile tile = noc_att::resolve_host_coordinate(
         ACTIVE_ATT_MAP, packed_xy & node_mask, (packed_xy >> NOC_ADDR_NODE_ID_BITS) & node_mask);
     if (!tile.valid) {
         __builtin_trap();
@@ -1037,6 +1075,7 @@ template <uint32_t cmd_buf>
 inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_READ);
+    noc_cmd_buf_assert_rd_resp_vc(cmd_buf);
 }
 
 // src_addr carries the whole source: a full ATT address, or, when only the
@@ -1302,7 +1341,8 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
         }
     }
     if constexpr (flags & CQ_NOC_INLINE_FLAG_BE) {
-        ASSERT(be == 0xF);
+        // Quasar-only: byte-enabled writes bypass the security fence (checks 64 B of 256 B).
+        ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     }
     if constexpr (send) {
         const uint32_t data = (flags & CQ_NOC_INLINE_FLAG_VAL) ? val : noc_v3_cq_state[cmd_buf].inline_val;

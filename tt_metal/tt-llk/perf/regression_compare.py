@@ -10,14 +10,11 @@ Run it by path: ``tt_metal/tt-llk`` is not an importable package.
 import argparse
 import csv
 import glob
-import html
 import json
 import os
 import re
-from collections import Counter
 
 import pandas as pd
-import regression_accept
 
 # 5 runs of one commit on Blackhole moved at most 1.9% and 25 cycles (#53752).
 DEFAULT_THRESHOLD = 0.02
@@ -180,14 +177,12 @@ def compare_runs(
     for (key, mean_col), cval in cur.items():
         marker, config = key
         run_type = _run_type_of(mean_col)
-        module = dict(config).get(MODULE_COL, "")
         point = {
             "marker": marker,
             "run_type": run_type,
             "config": config,
             "current": cval,
-            MODULE_COL: module,
-            "point_id": regression_accept.point_id(module, marker, run_type, config),
+            MODULE_COL: dict(config).get(MODULE_COL, ""),
         }
         bval = base.get((key, mean_col))
         if bval is None:
@@ -231,12 +226,6 @@ def _side_line(role, sha, label, iters):
     return f"- {named}: `{sha}`{tail}"
 
 
-def _varying_keys(rows):
-    """Config keys that differ across the rows shown; those tell them apart."""
-    keys = {k for r in rows for k, _ in r["config"] if k != MODULE_COL}
-    return {k for k in keys if len({dict(r["config"]).get(k) for r in rows}) > 1}
-
-
 def _findings(rows):
     """Points that differ only in marker or run type are one finding."""
     groups = {}
@@ -245,30 +234,73 @@ def _findings(rows):
     return sorted(groups.values(), key=lambda g: -max(abs(p["delta"]) for p in g))
 
 
-def _delta_table(rows, *, caption):
-    """One line per finding, then each finding's configuration in full."""
-    groups = _findings(rows)
-    varying = _varying_keys([g[0] for g in groups])
+def _short(value):
+    """`DestAccumulation.Yes` -> `Yes`, `64.0` -> `64`: the key already names the type."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value)
+    head, _, tail = text.partition(".")
+    return tail if tail and head[:1].isupper() and head.isidentifier() else text
+
+
+_FORMAT_GROUPS = (
+    ("formats.input", ("formats.input_A", "formats.input_B")),
+    (
+        "formats.register",
+        (
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+        ),
+    ),
+)
+
+
+def _fixed_params(records):
+    """Per test, the parameters that hold one value across its whole sweep."""
+    seen = {}
+    for r in records:
+        values = seen.setdefault(r.get(MODULE_COL, ""), {})
+        for k, v in r["config"]:
+            values.setdefault(k, set()).add(v)
+    return {
+        module: {k for k, v in values.items() if len(v) == 1}
+        for module, values in seen.items()
+    }
+
+
+def _params(config, hidden=()):
+    shown = {k: v for k, v in config if k != MODULE_COL and k not in hidden}
+    for name, keys in _FORMAT_GROUPS:
+        values = {shown[k] for k in keys if k in shown}
+        if len(values) == 1 and all(k in shown for k in keys):
+            for k in keys:
+                del shown[k]
+            shown[name] = values.pop()
+    return ", ".join(f"`{k}={_short(shown[k])}`" for k in sorted(shown))
+
+
+def _delta_table(rows, *, caption, fixed=None):
+    """One line per finding, with the parameters that vary within its test."""
+    fixed = fixed or {}
     lines = [
         f"## {caption}",
         "",
-        "| # | test | points | markers | run types | current | baseline | Δ | Δ cycles |",
-        "|--:|---|--:|---|---|--:|--:|--:|--:|",
+        "| # | test | configuration | points | markers | run types | current | baseline | Δ | Δ cycles |",
+        "|--:|---|---|--:|---|---|--:|--:|--:|--:|",
     ]
-    for n, g in enumerate(groups, 1):
+    for n, g in enumerate(_findings(rows), 1):
         w = max(g, key=lambda p: abs(p["delta"]))
+        module = w.get(MODULE_COL) or "?"
         markers = ", ".join(sorted({p["marker"] for p in g}))
         run_types = ", ".join(sorted({p["run_type"] for p in g}))
+        config = _params(g[0]["config"], fixed.get(module, ()))
         lines.append(
-            f"| {n} | {w.get(MODULE_COL) or '?'} | {len(g)} | {markers} | {run_types} | "
+            f"| {n} | {module} | {config or '—'} | {len(g)} | {markers} | {run_types} | "
             f"{w['current']:.1f} | {w['baseline']:.1f} | {w['delta'] * 100:+.1f}% | "
             f"{w.get('abs_delta', 0.0):+.0f} |"
         )
-    lines += ["", "### Configuration of each row above", ""]
-    for n, g in enumerate(groups, 1):
-        config = {k: v for k, v in g[0]["config"] if k != MODULE_COL}
-        ordered = sorted(config, key=lambda k: (k not in varying, k))
-        lines.append(f"{n}. " + ", ".join(f"`{k}={config[k]}`" for k in ordered))
     return lines
 
 
@@ -285,17 +317,18 @@ def render_report(
     baseline_label=None,
     current_label=None,
     module_thresholds=None,
-    acceptance=None,
+    arch=None,
 ):
     """Markdown: the verdict, the worst findings each way, and the new points."""
     regs = sorted(result["regressions"], key=lambda r: -r["delta"])
     imps = sorted(result.get("improvements", []), key=lambda r: r["delta"])
     reg_groups, imp_groups = _findings(regs), _findings(imps)
     verdict = "❌ REGRESSIONS FOUND" if regs else "✅ no regressions"
+    name = arch.capitalize() if arch else None
     lines = [
-        f"# Perf compare — {test}",
+        f"# Perf compare — {test}" + (f" — {name}" if name else ""),
         "",
-        f"**{verdict}**",
+        f"**{name + ': ' if name else ''}{verdict}**",
         "",
         f"Rule: a point is a regression when it is **more than {threshold * 100:.0f}% "
         f"slower AND more than {min_cycles:.0f} cycles slower**. Both must hold. "
@@ -325,9 +358,13 @@ def render_report(
             "(INIT, UNINIT) are a few hundred cycles, where a handful of cycles of "
             "jitter looks like a large percentage."
         )
+    if reg_groups or imp_groups:
+        lines.append(
+            "- The configuration column leaves out the parameters that never change "
+            "within a test; `.points.csv` has every parameter."
+        )
+    fixed = _fixed_params(result["records"])
     lines.append("")
-    if acceptance is not None:
-        lines += _acceptance_lines(result, acceptance)
     for groups, what, where, companion in (
         (reg_groups, "regression", "slower", ".regressions.csv"),
         (imp_groups, "improvement", "faster", ".points.csv"),
@@ -335,13 +372,23 @@ def render_report(
         if not groups:
             continue
         shown = groups[:_TOP_N]
-        lines += _delta_table(
+        count = (
+            f"Top {_TOP_N} of {len(groups)}"
+            if len(groups) > _TOP_N
+            else f"All {len(groups)}"
+        )
+        table = _delta_table(
             [p for g in shown for p in g],
-            caption=f"Top {len(shown)} {what} findings ({where} on current)",
+            caption=f"{count} {what} findings ({where} on current)",
+            fixed=fixed,
         )
         if len(groups) > _TOP_N:
-            lines += ["", f"_… and {len(groups) - _TOP_N} more — see `{companion}`._"]
-        lines.append("")
+            table += ["", f"_… and {len(groups) - _TOP_N} more — see `{companion}`._"]
+        summary = table[0].removeprefix("## ")
+        # Regressions are what a reader comes for, so their table starts open.
+        details = "<details open>" if what == "regression" else "<details>"
+        lines += [details, f"<summary>{summary}</summary>", ""]
+        lines += table[2:] + ["", "</details>", ""]
     if result["new_points"]:
         lines.append(
             f"## New points ({len(result['new_points'])}) — no baseline, not counted as regressions"
@@ -352,80 +399,11 @@ def render_report(
     return "\n".join(lines)
 
 
-_ACCEPT_STATE = {
-    "none": "no `## REGRESSION ACCEPTANCE` section in the PR description.",
-    "invalid": "the `## REGRESSION ACCEPTANCE` section does not parse, so nothing is accepted.",
-    "waiting": "the table covers every regressed point. It waits for a perf approver.",
-    "incomplete": "the table does not cover every regressed point, so the perf approvers are not asked yet.",
-    "approved": "approved by @{approver}.",
-    "not needed": "the table is present, but no point regressed.",
-}
-
-
-def _acceptance_lines(result, acc):
-    """The acceptance state, the accepted points, and the table to paste."""
-    lines = [
-        "## Regression acceptance",
-        "",
-        "- "
-        + _ACCEPT_STATE.get(acc["state"], acc["state"]).format(
-            approver=acc.get("approver")
-        ),
-    ]
-    if acc.get("table") and acc["state"] in ("waiting", "incomplete"):
-        lines.append(
-            f"- Table hash `{acc['table']}`. A perf approver who accepts this table "
-            f"comments `/accept-regression {acc['table']}`. A change to the table changes the hash."
-        )
-    lines += [f"- ❌ {e}" for e in acc.get("errors") or []]
-    if acc.get("missing"):
-        ids = ", ".join(f"`{i}`" for i in acc["missing"][:20])
-        more = (
-            f" and {len(acc['missing']) - 20} more" if len(acc["missing"]) > 20 else ""
-        )
-        lines.append(
-            f"- Not covered: {ids}{more}. A row also stops covering a point that is slower than its max delta."
-        )
-    accepted = result.get("accepted") or []
-    if accepted:
-        lines += [
-            "",
-            f"### Accepted regressions ({len(accepted)}), not counted",
-            "",
-            "| point | test | marker | run type | Δ | max delta | reason |",
-            "|---|---|---|---|--:|--:|---|",
-        ]
-        for r in sorted(accepted, key=lambda x: -x["delta"]):
-            # The reason is PR text: keep it from adding markup to the bot's comment.
-            reason = html.escape(r["reason"], quote=False)
-            lines.append(
-                f"| `{r['point_id']}` | {r.get(MODULE_COL) or '?'} | {r['marker']} | "
-                f"{r['run_type']} | {r['delta'] * 100:+.1f}% | +{r['max_pct']:g}% | {reason} |"
-            )
-    if result["regressions"]:
-        lines += [
-            "",
-            "<details><summary>To accept these regressions on purpose, paste this into the PR description "
-            "and write a reason in each row (#57871)</summary>",
-            "",
-            "```markdown",
-            *regression_accept.paste_table(result["regressions"]),
-            "```",
-            "",
-            "A row can also name a filter instead of an ID, for example `mathop=MathOperation.Square`. "
-            "The next gate report then shows the table hash for the perf approver.",
-            "</details>",
-        ]
-    lines.append("")
-    return lines
-
-
 def _write_points_csv(records, path):
     """Stream records to CSV, worst delta first. One row is held at a time."""
     if not records:
         return False
     fixed = [
-        "point_id",
         "marker",
         "run_type",
         "current",
@@ -442,7 +420,6 @@ def _write_points_csv(records, path):
         writer.writeheader()
         for r in sorted(records, key=lambda x: -x["delta"]):
             row = {
-                "point_id": r.get("point_id", ""),
                 "marker": r["marker"],
                 "run_type": r["run_type"],
                 "current": r["current"],
@@ -489,6 +466,7 @@ def main(argv=None):
     )
     ap.add_argument("--report", default="regression_report.md")
     ap.add_argument("--test", default="?")
+    ap.add_argument("--arch", help="named in the title and the verdict")
     ap.add_argument("--baseline-sha", default="?")
     ap.add_argument("--current-sha", default="?")
     ap.add_argument(
@@ -496,10 +474,6 @@ def main(argv=None):
         help="what the baseline side is, e.g. 'branch point on main' or the ref as typed",
     )
     ap.add_argument("--current-label", help="what the current side is")
-    ap.add_argument(
-        "--accept",
-        help="the PR's acceptance (regression_accept.py read); approved rows are not counted",
-    )
     a = ap.parse_args(argv)
 
     current = sorted(glob.glob(a.current, recursive=True))
@@ -531,14 +505,6 @@ def main(argv=None):
         )
         raise SystemExit(1)
 
-    acceptance = None
-    if a.accept:
-        with open(a.accept) as fh:
-            ids = Counter(
-                p["point_id"] for p in result["records"] + result["new_points"]
-            )
-            acceptance = regression_accept.apply(result, json.load(fh), ids)
-
     report = render_report(
         result,
         threshold=a.threshold,
@@ -551,7 +517,7 @@ def main(argv=None):
         baseline_label=a.baseline_label,
         current_label=a.current_label,
         module_thresholds=_module_thresholds(a.module_threshold),
-        acceptance=acceptance,
+        arch=a.arch,
     )
     with open(a.report, "w") as f:
         f.write(report + "\n")
@@ -562,10 +528,6 @@ def main(argv=None):
         written.append(f"{stem}.points.csv")
     if _write_points_csv(result["regressions"], f"{stem}.regressions.csv"):
         written.append(f"{stem}.regressions.csv")
-    if acceptance is not None:
-        with open(f"{stem}.acceptance.json", "w") as fh:
-            json.dump(acceptance, fh, indent=1)
-        written.append(f"{stem}.acceptance.json")
 
     print(report)
     print("\n(wrote " + " + ".join(written) + ")")
@@ -575,7 +537,6 @@ def main(argv=None):
             {
                 "status": "regressed" if result["regressions"] else "clean",
                 "regressions": len(result["regressions"]),
-                "accepted": len(result.get("accepted") or []),
                 "points": len(result["records"]),
             },
             fh,

@@ -17,12 +17,13 @@ import torch
 
 import ttnn
 
-from models.common.metrics import compute_max_abs_error, compute_pcc
+from models.common.metrics import compute_pcc
 from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe import NomicMoELayer
 from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import (
     MOE_LAYER,
     TOKEN_SHAPES,
+    assert_bias_added_once,
     from_block_layout,
     hidden_states,
     load_reference,
@@ -40,9 +41,11 @@ MODULE_PCC = 0.998
 # regression from hiding inside a PCC taken over agreeing tokens only.
 MAX_DISAGREEING_FRACTION = 0.01
 
-BIAS_MISPLACEMENT_MAX_ABS = 1e-3
-
 PREFIX = f"encoder.layers.{MOE_LAYER}.mlp."
+
+# TOKEN_SHAPES plus 4096 tokens, the most whose router selection sits in L1 beside the whole
+# chain, and 5000, past it and off the tile grid.
+MOE_SHAPES = [*TOKEN_SHAPES, (8, 512), (10, 500)]
 
 
 @pytest.fixture
@@ -62,8 +65,9 @@ def agreeing_tokens(config, reference, tt_moe, x: torch.Tensor, x_tt: ttnn.Tenso
     the order of the two positions does not reach the result.
     """
     batch, seqlen, _ = x.shape
-    _, values, indices = tt_moe.router.select(flatten_tokens(x_tt))
-    selected = ttnn.to_torch(indices).long().reshape(batch * seqlen, config.moe_top_k)
+    routing = tt_moe.router(flatten_tokens(x_tt))
+    selected = ttnn.to_torch(routing.indices).long().reshape(batch * seqlen, config.moe_top_k)
+    routing.deallocate()
 
     with torch.no_grad():
         _, _, ref_indices = reference.router(x)
@@ -74,7 +78,7 @@ def agreeing_tokens(config, reference, tt_moe, x: torch.Tensor, x_tt: ttnn.Tenso
     return agreeing.reshape(batch, seqlen)
 
 
-@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+@pytest.mark.parametrize("batch, seqlen", MOE_SHAPES)
 def test_moe_layer(device, config, reference, tt_moe, batch, seqlen):
     """Route each token and combine its experts, against the reference layer.
 
@@ -113,11 +117,16 @@ def test_renormalizing_the_routed_weights_is_measurably_wrong(device, config, re
         ref = reference(x)
     agreeing = agreeing_tokens(config, reference, tt_moe, x, x_tt)
 
-    dense = tt_moe.router(flat)
-    renormalized = ttnn.divide(dense, ttnn.sum(dense, dim=-1, keepdim=True))
+    selection = tt_moe.router(flat)
+    total = ttnn.sum(selection.values, dim=-1, keepdim=True)
+    renormalized = ttnn.divide(selection.values, total)
+    ttnn.deallocate(total)
 
     correct = from_block_layout(tt_moe(x_tt))
-    wrong = ttnn.to_torch(tt_moe.experts(flat, renormalized)).float().reshape(batch, seqlen, config.hidden_size)
+    wrong = ttnn.to_torch(tt_moe.experts(flat, selection._replace(values=renormalized)))
+    wrong = wrong.float().reshape(batch, seqlen, config.hidden_size)
+    selection.deallocate()
+    ttnn.deallocate(renormalized)
 
     assert compute_pcc(correct[agreeing], ref[agreeing]) > MODULE_PCC
     assert compute_pcc(wrong[agreeing], ref[agreeing]) < MODULE_PCC
@@ -129,12 +138,14 @@ def test_the_shared_bias_lands_outside_the_reduce(device, config, reference, tt_
     Adding the shared expert bias inside the per-expert loop scales it by the routed-weight sum,
     leaving a nearly constant offset of (sum(w) - 1) * bias.
 
-    As in test_ttnn_experts.py, the two oracles are built from the module's own bias-zeroed
-    output rather than from the reference, so the bfloat16 noise is common to both and cancels.
-    At real weights that noise is 0.22 against an offset far below it, so comparing against the
-    reference instead would measure the dtype rather than the placement.
+    As in test_ttnn_experts.py, the placement is read off the module's own bias-zeroed output
+    rather than the reference: at real weights the bfloat16 noise is 0.22 against an offset far
+    below it, so comparing against the reference would measure the dtype rather than the
+    placement. The output's difference from the bias-zeroed run is projected onto the bias over every
+    token, which averages away the rounding the two runs do differently when the bias is added inside
+    an accumulator.
     """
-    batch, seqlen = 2, 128
+    batch, seqlen = 2, 512
     x = hidden_states(batch, seqlen, config.hidden_size)
     x_tt = to_device(to_block_layout(x), device)
 
@@ -145,12 +156,6 @@ def test_the_shared_bias_lands_outside_the_reduce(device, config, reference, tt_
     tt_moe.experts.bias = to_device(torch.zeros(1, 1, 1, config.hidden_size), device, dtype=tt_config.weight_dtype)
     weighted_sum = from_block_layout(tt_moe(x_tt))
 
-    bias = reference.experts.bias.detach()
-    routed_weight_sum = top_weights.sum(-1).reshape(batch, seqlen, 1)
-    correct = weighted_sum + bias
-    inside_the_loop = weighted_sum + bias * routed_weight_sum
-
-    assert (routed_weight_sum < 1.0).all(), "top-k weights are not renormalized, so they must sum below 1"
-    assert compute_max_abs_error(correct, inside_the_loop) > BIAS_MISPLACEMENT_MAX_ABS
-    assert compute_pcc(inside_the_loop, correct) > 0.9999, "if PCC caught this, the docstring is stale"
-    assert compute_max_abs_error(got, correct) < compute_max_abs_error(got, inside_the_loop)
+    assert_bias_added_once(
+        got, weighted_sum, reference.experts.bias.detach(), top_weights.sum(-1).reshape(batch, seqlen, 1)
+    )

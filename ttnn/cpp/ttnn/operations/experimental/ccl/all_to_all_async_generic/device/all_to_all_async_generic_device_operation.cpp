@@ -6,8 +6,11 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <internal/mesh_device.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -33,16 +36,15 @@ DrainCoreMapping gather_drain_virtual_cores(
     const size_t candidates_per_node = logical_core_candidates.size();
 
     std::vector<DrainCoreRecord> local_records(mesh_shape.mesh_size() * candidates_per_node);
-    auto maybe_device_it = mesh_device->get_view().begin();
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh_shape)) {
-        const auto& maybe_coordinate_device = *maybe_device_it++;
-        if (maybe_coordinate_device.is_remote()) {
+        if (!mesh_device->is_local(coord)) {
             continue;
         }
+        auto* coordinate_device = tt::tt_metal::internal::get_device(*mesh_device, coord);
         const size_t node_index = coord.to_linear_index(mesh_shape);
         for (size_t candidate = 0; candidate < candidates_per_node; ++candidate) {
             const auto drain_virtual_core =
-                maybe_coordinate_device.value()->worker_core_from_logical_core(logical_core_candidates[candidate]);
+                coordinate_device->worker_core_from_logical_core(logical_core_candidates[candidate]);
             local_records[node_index * candidates_per_node + candidate] = {
                 .valid = 1,
                 .x = static_cast<uint32_t>(drain_virtual_core.x),
@@ -128,18 +130,36 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
+    // A row-major input is tilized on the way (concatenating along the rows dim, splitting an outer dim) and the
+    // output is tiled, so its packets carry output tiles rather than input rows.
+    const bool tilize_input = input_tensor.layout() == Layout::ROW_MAJOR;
+    const uint32_t packet_page_size =
+        tilize_input ? compute_output_specs(operation_attributes, tensor_args).compute_page_size_bytes() : page_size;
     TT_FATAL(
-        max_payload_size >= page_size,
-        "Fabric maximum payload {} must fit at least one tensor page of size {}",
+        max_payload_size >= packet_page_size,
+        "Fabric maximum payload {} must fit at least one transmitted page of size {}",
         max_payload_size,
-        page_size);
+        packet_page_size);
 
     TT_FATAL(
         input_shape[operation_attributes.out_dim] % operation_attributes.num_devices == 0,
         "AllToAllAsync: input tensor dimension {} must be divisible by num_devices {}",
         input_shape[operation_attributes.out_dim],
         operation_attributes.num_devices);
-    TT_FATAL(input_tensor.layout() == Layout::TILE, "Unsupported input layout {}.", input_tensor.layout());
+    // The tilize runs with a 16-bit dest, which only bfloat16 passes through unchanged.
+    TT_FATAL(
+        !tilize_input || input_tensor.dtype() == DataType::BFLOAT16,
+        "A row-major input must be bfloat16, got {}",
+        input_tensor.dtype());
+    TT_FATAL(
+        input_tensor.layout() == Layout::TILE ||
+            (tilize_input && operation_attributes.in_dim == rank - 2 && operation_attributes.out_dim < rank - 2 &&
+             input_shape[rank - 1] % tt::constants::TILE_WIDTH == 0 &&
+             input_shape[rank - 2] % tt::constants::TILE_HEIGHT == 0 &&
+             input_tensor.buffer()->buffer_type() == BufferType::DRAM),
+        "Unsupported input layout {} (a row-major input must concatenate along dim {} with whole tiles, in DRAM).",
+        input_tensor.layout(),
+        rank - 2);
 
     // recreate output shape to cover optional output buffer
     auto output_shape = input_tensor.logical_shape();
@@ -227,10 +247,14 @@ AllToAllAsyncGenericDeviceOperation::spec_return_value_t AllToAllAsyncGenericDev
     auto shape = input_tensor.logical_shape();
     shape[operation_attributes.in_dim] *= operation_attributes.num_devices;
     shape[operation_attributes.out_dim] /= operation_attributes.num_devices;
+    // The output is tiled; a row-major input is tilized on the way.
     return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));
+            input_tensor.dtype(),
+            input_tensor.layout() == Layout::ROW_MAJOR ? tt::tt_metal::PageConfig(Layout::TILE)
+                                                       : input_tensor.tensor_spec().page_config(),
+            operation_attributes.output_mem_config));
 }
 
 AllToAllAsyncGenericDeviceOperation::tensor_return_value_t AllToAllAsyncGenericDeviceOperation::create_output_tensors(
@@ -240,6 +264,37 @@ AllToAllAsyncGenericDeviceOperation::tensor_return_value_t AllToAllAsyncGenericD
     }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncGenericDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // all_to_all along `cluster_axis` (or over the whole mesh) is an all_gather of `in_dim` followed by each device
+    // keeping its own ring-index piece of `out_dim`, so the label is composed the same way: the all_gather label for
+    // in_dim (Replicate on the cluster axis; a gather that would interleave a 1-D-mapped tensor's shards is refused),
+    // then Shard{out_dim} on the cluster axis through the reduce_scatter-shaped alias, which also collapses an N-D
+    // [Shard{out_dim}, Shard{in_dim}] exchanged along axis 1 to the row-major {N}, [Shard{out_dim}]. The caller's
+    // persistent output buffer is the result; in_dim / out_dim are stored unsigned as given and the helper normalises.
+    // Without a cluster_axis the program factory ranks the whole-mesh ring by the input's device-storage coordinates
+    // (get_linearized_index_from_physical_coord), so that label is spelled over them (over_storage_ring_order); with
+    // a cluster_axis the ring rank is the coordinate value and the label is kept as is. With no honest label (nullopt,
+    // already reported) the output keeps the input's label.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    const auto gathered = ttnn::operations::ccl::common::all_gather_output_topology(
+        tensor_args.input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.in_dim));
+    if (!gathered.has_value()) {
+        return {input_topology};
+    }
+    const auto output_topology = ttnn::operations::ccl::common::over_storage_ring_order(
+        ttnn::operations::ccl::common::all_to_all_output_topology(
+            *gathered,
+            operation_attributes.cluster_axis,
+            tensor_args.input_tensor.device()->shape(),
+            static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank()),
+            static_cast<int32_t>(operation_attributes.out_dim)),
+        tensor_args.input_tensor,
+        operation_attributes.cluster_axis,
+        "all_to_all_async_generic");
+    return {output_topology.value_or(input_topology)};
 }
 
 ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(

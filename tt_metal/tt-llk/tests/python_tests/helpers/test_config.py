@@ -3,8 +3,10 @@
 
 import fcntl
 import glob
+import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import struct
@@ -17,6 +19,7 @@ from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, ClassVar, List
+from uuid import uuid4
 
 import numpy as np
 import pytest
@@ -25,7 +28,10 @@ from ttexalens.tt_exalens_lib import (
     TTException,
     load_elf,
     parse_elf,
+    read_from_device,
     read_word_from_device,
+    write_to_device,
+    write_words_to_device,
 )
 
 from . import device as device_module
@@ -33,9 +39,9 @@ from . import golden_generators as golden_generators_module
 from .chip_architecture import (
     ChipArchitecture,
     get_chip_architecture,
-    quasar_arch_variant,
+    quasar_variant,
 )
-from .data_format_inference import data_formats, is_format_combination_outlier
+from .data_format_inference import data_formats, effective_dest_acc
 from .device import (
     CHIP_DEFAULT_BOOT_MODES,
     KERNEL_COMPLETE,
@@ -50,7 +56,6 @@ from .device import (
     set_tensix_soft_reset,
     wait_brisc_boot_ready,
 )
-from .device_io import read_from_device, write_to_device, write_words_to_device
 from .device_print import aux_size_for
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -120,6 +125,11 @@ class TestOutcome:
     device_print_lines: list = field(default_factory=list)
 
 
+LLK_CODE_SHIFT = int(os.environ.get("LLK_CODE_SHIFT", "0"))
+# The link flag that applies it; the object cache key leaves it out, so every position reuses the objects.
+CODE_SHIFT_FLAG = "-Wl,--defsym=__llk_code_shift="
+
+
 class TestConfig:
 
     # === STATIC VARIABLES ===
@@ -131,7 +141,7 @@ class TestConfig:
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
     QUASAR_VECTOR_MARCH: ClassVar[str] = (
-        "-march=rv32im_zmmul_zaamo_zve32x_zvl128b_xtttensixqsr_xttzbkb"
+        "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb"
     )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
@@ -222,8 +232,15 @@ class TestConfig:
 
     # CLI perf counter flags
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
+    # The readout token of the last counting launch (counters.h launch_word), 1..0xFFFF. It starts at a random value in each
+    # process, so a readout an earlier session left in L1 does not carry the token a rerun expects.
+    _LAUNCH_TOKEN: ClassVar[int] = secrets.randbelow(0xFFFF)
     # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
     PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
+    # Quasar has no L1 counter bank; one l1_client event (subport*8 + event, -1 = none) rides in its slot.
+    PERF_L1_CLIENT_SEL: ClassVar[int] = int(
+        os.environ.get("LLK_PERF_L1_CLIENT_SEL", "-1")
+    )
     DUMP_PERF_COUNTERS: ClassVar[bool] = False
 
     # === Addresses ===
@@ -262,6 +279,18 @@ class TestConfig:
 
     # Size of one full zone block (data + sync/pad)
     PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
+
+    # counters.h PERF_COUNTERS_LAUNCH_WORD_ADDR, Quasar's launch word: the word after the zone blocks.
+    _PERF_COUNTERS_QUASAR_COUNTED_ZONES: ClassVar[int] = (
+        PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
+    )
+    # counters.h LAUNCH_TOKEN_SHIFT: the launch word's token sits above the zone bits (the sync word's above its flag).
+    _LAUNCH_TOKEN_SHIFT: ClassVar[int] = 8
+    # counters.h LAUNCH_WORD_*: the Wormhole/Blackhole launch word is STREAM_SCRATCH_1 of overlay stream 0.
+    _LAUNCH_WORD_OVERLAY_BASE: ClassVar[int] = 0xFFB40000
+    _LAUNCH_WORD_SCRATCH_INDEX_WORMHOLE: ClassVar[int] = 249
+    _LAUNCH_WORD_SCRATCH_INDEX_BLACKHOLE: ClassVar[int] = 37
+    _STREAM_REG_BYTES: ClassVar[int] = 4
 
     # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
@@ -369,13 +398,57 @@ class TestConfig:
 
     @staticmethod
     def _quasar_variant_suffix() -> str:
-        variant = quasar_arch_variant()
+        variant = quasar_variant()
         return f"-{variant}" if variant else ""
 
     @staticmethod
+    def _perf_counters_suffix() -> str:
+        """Counters on compiles BRISC and the kernels differently (counters.h), so its artefacts never mix with counters off."""
+        if not TestConfig.ENABLE_PERF_COUNTERS:
+            return ""
+        return f"-counters-l1mux{TestConfig.PERF_L1_MUX_GROUP}-l1client{TestConfig.PERF_L1_CLIENT_SEL}"
+
+    @staticmethod
+    def runs_on_ttsim() -> bool:
+        sim_path = (
+            os.environ.get("TT_METAL_SIMULATOR")
+            or os.environ.get("TT_UMD_SIMULATOR_PATH")
+            or ""
+        )
+        return TestConfig.TEST_TARGET.run_simulator and sim_path.endswith(".so")
+
+    @staticmethod
+    def counted_zones_address() -> int | None:
+        """counters.h COUNTED_ZONES_REG, or None on ttsim (no overlay registers, counters compiled out)."""
+        if TestConfig.runs_on_ttsim():
+            return None
+        match TestConfig.CHIP_ARCH:
+            case ChipArchitecture.WORMHOLE:
+                index = TestConfig._LAUNCH_WORD_SCRATCH_INDEX_WORMHOLE
+            case ChipArchitecture.BLACKHOLE:
+                index = TestConfig._LAUNCH_WORD_SCRATCH_INDEX_BLACKHOLE
+            case _:
+                return TestConfig._PERF_COUNTERS_QUASAR_COUNTED_ZONES
+        return (
+            TestConfig._LAUNCH_WORD_OVERLAY_BASE + index * TestConfig._STREAM_REG_BYTES
+        )
+
+    @staticmethod
     def resolve_artefacts_path() -> Path:
-        """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
+        """Resolve the build root, isolating hardware-free sessions from device builds."""
         runner_temp = os.environ.get("RUNNER_TEMP")
+        if os.environ.get("LLK_HARDWARE_FREE") == "1":
+            # Inherit one private tree across xdist workers, outside the normal build tree.
+            run_id = os.environ.get("LLK_HARDWARE_FREE_RUN_ID")
+            if not run_id:
+                run_id = uuid4().hex
+                os.environ["LLK_HARDWARE_FREE_RUN_ID"] = run_id
+            base = (
+                Path(runner_temp)
+                if runner_temp
+                else TestConfig.DEFAULT_ARTEFACTS_PATH.parent
+            )
+            return base / f"tt-llk-hardware-free-{run_id}"
         if runner_temp:
             return Path(runner_temp) / "tt-llk-build"
         return TestConfig.DEFAULT_ARTEFACTS_PATH
@@ -410,7 +483,10 @@ class TestConfig:
 
         # A Quasar IP variant compiles the shared objects differently, so it gets its own directory.
         variant_suffix = TestConfig._quasar_variant_suffix()
-        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / f"shared{variant_suffix}"
+        TestConfig.SHARED_DIR = (
+            TestConfig.ARTEFACTS_DIR
+            / f"shared{variant_suffix}{TestConfig._perf_counters_suffix()}"
+        )
         TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
         TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
         # Profiler builds need separate shared artefacts (trisc.cpp compiles differently with -DLLK_PROFILER)
@@ -515,8 +591,9 @@ class TestConfig:
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
                 # Some SFPU kernels include their neighbours unqualified
                 # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
-                # resolves with this on the path. Listed last so the tt-llk copy still
-                # wins the basenames that exist in both trees.
+                # resolves with this on the path. Its order against tt-llk's common/inc/sfpu
+                # does not matter: tests/hardware_free/kernels/test_sfpu_header_location.py
+                # keeps each SFPU header in only one of the two.
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
                 # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
                 # ClassVar, so anything added here lands in the compile command for every Blackhole test. A
@@ -580,8 +657,6 @@ class TestConfig:
                 "-Ifirmware/riscv/common",
                 "-Ihelpers/include",
                 "-I../../hostdevcommon/api",
-                # perf_counters.hpp: the PerfCounterType enum that hw_counters.h needs
-                "-I../../tools/profiler",
             ]
             + hw_specific_includes
             + [
@@ -725,17 +800,24 @@ class TestConfig:
         ``"cfg.h"``, ``"sfpu/..."`` — the same four roots ``setup_compilation_options``
         already adds for the in-tree copy.
 
-        For a ``tt_llk_quasar`` tree, prepend the selected variant's header root.
+        For a ``tt_llk_quasar`` tree, prepend the selected variant's header root
+        and expose the tree root for qualified includes of the base headers.
+        The in-tree Quasar tree has no ``common/inc/sfpu``: its eltwise SFPU kernels are in
+        ``llk_sfpu`` and its experimental ones under ``common/inc/experimental``. A Quasar tree
+        that still ships the directory keeps it as a root.
         """
         root = Path(arch_root)
         roots = [
             root / "llk_lib",
             root / "llk_lib" / "hal",
             root / "common" / "inc",
-            root / "common" / "inc" / "sfpu",
         ]
+        sfpu = root / "common" / "inc" / "sfpu"
+        if root.name != "tt_llk_quasar" or sfpu.is_dir():
+            roots.append(sfpu)
         if root.name == "tt_llk_quasar":
-            variant = quasar_arch_variant()
+            roots.append(root)
+            variant = quasar_variant()
             if variant:
                 # First, so the variant's headers shadow the base Quasar ones.
                 roots.insert(0, root / "arch" / variant)
@@ -953,7 +1035,7 @@ class TestConfig:
         # (These used to default to a shared ``[]`` that the fold mutated, so a
         # variant constructed without explicit ``templates`` inherited the
         # previous variant's runtimes -- invisible until it changed what got
-        # compiled. Regression coverage: test_test_config.py.)
+        # compiled. Regression coverage: tests/hardware_free/harness/test_config.py.)
         templates = list(templates or [])
         runtimes = list(runtimes or [])
 
@@ -1009,17 +1091,14 @@ class TestConfig:
         }
 
         if formats:
-            # Check if this is an outlier format combination that requires dest_acc to be enabled
-            # Automatically enable dest_acc for outlier combinations
-            if (
-                is_format_combination_outlier(
-                    formats.input_format,
-                    formats.output_format,
-                    dest_acc,
-                )
-                and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-            ):
-                self.dest_acc = DestAccumulation.Yes
+            # An outlier format combination needs a 32-bit Dest; promote dest_acc for it.
+            # The rule lives in effective_dest_acc so its other readers cannot drift.
+            self.dest_acc = effective_dest_acc(
+                formats.input_format,
+                formats.output_format,
+                dest_acc,
+                TestConfig.CHIP_ARCH,
+            )
 
             self.formats_config = data_formats(
                 input_format=formats.input_format,
@@ -1256,6 +1335,9 @@ class TestConfig:
             "temp_elfs",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
+            # Which zones a launch counts and its readout token, written before it (counters.h launch_word).
+            "counted_zones",
+            "launch_token",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1324,8 +1406,16 @@ class TestConfig:
             *src_include_append,
         ]
 
+        # Counters on compiles every variant differently (counters.h), so it hashes apart from counters off.
+        counters = (
+            [TestConfig._perf_counters_suffix()]
+            if TestConfig.ENABLE_PERF_COUNTERS
+            else []
+        )
         self.variant_id = sha256(
-            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
+            str(
+                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + counters)
+            ).encode()
         ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
@@ -1377,6 +1467,9 @@ class TestConfig:
             if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
             else "-DLLK_BOOT_MODE_BRISC "
         )
+        # ttsim models no counter or overlay registers; the RTL emulator does, so it keeps them.
+        if TestConfig.runs_on_ttsim():
+            OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
@@ -1438,13 +1531,10 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                # BRISC only gets counter support when counters are enabled: the NC build
-                # then contains no counter code at all, so its codegen is unaffected.
-                perf_cnt_flag = (
-                    f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
-                    if TestConfig.ENABLE_PERF_COUNTERS
-                    else ""
-                )
+                # Only counters on compiles counter code into BRISC (counters.h).
+                perf_cnt_flag = ""
+                if TestConfig.ENABLE_PERF_COUNTERS:
+                    perf_cnt_flag = f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
@@ -1682,6 +1772,34 @@ class TestConfig:
                 f"Failed to parse text size from riscv-tt-elf-size output for {elf_path}:\n{result.stdout}"
             ) from e
 
+    def _compile_kernel_part(self, name, compile_command, source):
+        cache = os.environ.get("LLK_OBJ_CACHE")
+        if not cache:
+            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+            return
+        head = compile_command[: compile_command.index("-x")]
+        root = str(TestConfig.ARTEFACTS_DIR)
+        key = [
+            token.replace(root, "<artefacts>")
+            for token in head
+            if not token.startswith(CODE_SHIFT_FLAG)
+        ]
+        digest = sha256((json.dumps(key) + source).encode()).hexdigest()[:32]
+        obj = Path(cache) / f"{digest}.o"
+        if not obj.exists():
+            obj.parent.mkdir(parents=True, exist_ok=True)
+            partial = obj.with_suffix(f".{os.getpid()}.tmp")
+            run_shell_command(
+                head + ["-c", "-x", "c++", "-", "-o", str(partial)],
+                TestConfig.TESTS_WORKING_DIR,
+                source,
+            )
+            os.replace(partial, obj)
+        run_shell_command(
+            head + [str(obj), "-lc", "-lgcc", "-o", compile_command[-1]],
+            TestConfig.TESTS_WORKING_DIR,
+        )
+
     def build_elfs(self):
 
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
@@ -1748,18 +1866,18 @@ class TestConfig:
                 if self.requires_vector_ext and name == "unpack":
                     optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
 
-                # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
-                # Quasar is intentionally excluded: it adds a 4th compute thread
-                # (SFPU) and the entry/exit barrier in `counters.h` posts a fixed
-                # number of tokens for 3 threads, so enabling perf counters on
-                # Quasar would deadlock the SFPU thread (it would spinwait on a
-                # semaphore that never gets the extra post). A static_assert in
-                # `counters.h` enforces this at compile time as a safety net.
-                if (
-                    TestConfig.ENABLE_PERF_COUNTERS
-                    and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-                ):
-                    optional_kernel_flags += f" -DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
+                # Only counters on compiles counter code, with its L1 selection (mux group on tt-1xx, l1_client
+                # event on Quasar); counters off keeps each zone's rendezvous alone (counters.h).
+                if TestConfig.ENABLE_PERF_COUNTERS:
+                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+                    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+                        optional_kernel_flags += (
+                            f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
+                        )
+                    else:
+                        optional_kernel_flags += (
+                            f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
+                        )
 
                 coverage_args = (
                     [
@@ -1808,6 +1926,7 @@ class TestConfig:
                         f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
                         f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
                     ],
+                    ([f"{CODE_SHIFT_FLAG}{LLK_CODE_SHIFT}"] if LLK_CODE_SHIFT else []),
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
                     # that -nostdlib drops; only referenced helpers are linked.
                     ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
@@ -1816,9 +1935,9 @@ class TestConfig:
 
                 logger.trace(" ".join(shlex.quote(part) for part in compile_command))
 
-                run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
+                self._compile_kernel_part(
+                    name,
                     compile_command,
-                    TestConfig.TESTS_WORKING_DIR,
                     (
                         f"{self._barrier_reservation_include()}"
                         f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
@@ -1904,12 +2023,50 @@ class TestConfig:
     # soft-reset kick (re-polling alone cannot recover a wedged core).
     BRISC_BOOT_MAX_ATTEMPTS: ClassVar[int] = 3
 
+    def _write_launch_word(self, counted_zones: int):
+        """Counters on only: the launch word counters.h reads (launch_word), and on Quasar the bank registers."""
+        if counted_zones:
+            TestConfig._LAUNCH_TOKEN = TestConfig._LAUNCH_TOKEN % 0xFFFF + 1
+            self.launch_token = TestConfig._LAUNCH_TOKEN
+        counted_zones_addr = TestConfig.counted_zones_address()
+        if counted_zones_addr is not None:
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                counted_zones_addr,
+                [counted_zones | self.launch_token << TestConfig._LAUNCH_TOKEN_SHIFT],
+                safe_mode=False,  # a register on Wormhole and Blackhole
+            )
+        if (
+            counted_zones_addr is not None
+            and TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+            and counted_zones
+        ):
+            # imported here: counters.py imports this module
+            from .counters import configure_quasar_counters
+
+            configure_quasar_counters(TestConfig.TENSIX_LOCATION)
+
     def run_elf_files(self) -> list:
         boot_mode = (
             CHIP_DEFAULT_BOOT_MODES[TestConfig.CHIP_ARCH]
             if self.boot_mode == BootMode.DEFAULT
             else self.boot_mode
         )
+
+        VARIANT_ELF_DIR = (
+            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        )
+
+        self.temp_elfs = [
+            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
+            for trisc_name in TestConfig.KERNEL_COMPONENTS
+        ]
+
+        missing = [Path(elf).name for elf in self.temp_elfs if not Path(elf).is_file()]
+        if missing:
+            raise FileNotFoundError(
+                f"{VARIANT_ELF_DIR} has no {', '.join(missing)}: the variant did not compile, so it is not run"
+            )
 
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
@@ -1986,17 +2143,15 @@ class TestConfig:
         else:
             commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
-        VARIANT_ELF_DIR = (
-            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
-        )
-
-        self.temp_elfs = [
-            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
-            for trisc_name in TestConfig.KERNEL_COMPONENTS
-        ]
+        # Counters on: every launch names the zones it counts (counters.h launch_word), 0 unless a perf run counts
+        # them, then with a new token that the readouts store, so a result is never one an earlier launch left.
+        self.launch_token = 0
+        if TestConfig.ENABLE_PERF_COUNTERS:
+            self._write_launch_word(getattr(self, "counted_zones", 0))
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
-            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
+            # A failed load or start address update leaves the TRISCs on two variants
+            TestConfig.LAST_LOADED_ELFS = Path()
 
             for i, elf_file_path in enumerate(self.temp_elfs):
                 if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
@@ -2034,7 +2189,10 @@ class TestConfig:
                     BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
                     timeout=brisc_cmd_timeout,
                 )
+                TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
                 return
+
+            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
 
         match boot_mode:
             case BootMode.BRISC:

@@ -317,7 +317,10 @@ On one N150:
 | 1.7B | 86.20% | 99.86% | 0.10 s | 20.3 |
 | 0.6B | 86.99% | 99.92% | 0.10 s | 22.9 |
 
-The targets stay TODO until a CI run on each SKU gives runner numbers.
+The targets in `models/model_targets.yaml` come from two CI runs on each SKU, where accuracy
+came out identical to the hundredth and frames per second within 2%: top-1 within 2% and top-5
+within 1%, frames per second within the default 15%. Time to first frame moved by almost half
+between runs on the Wormhole runner, so it gets 50% either side.
 
 Timeouts are the cold-kernel-cache time on the CI runners plus 20%, the unit legs with the
 watcher on. The runners take about 2.35x a local N150's time on Wormhole and 1.85x on Blackhole,

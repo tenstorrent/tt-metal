@@ -420,6 +420,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     };
     KernelDescriptor::Defines reader_local_defines(
         reader_specialization_defines_map.begin(), reader_specialization_defines_map.end());
+    for (const auto& define : topk_width_padding_defines(tensor_args.input, args.largest)) {
+        reader_local_defines.push_back(define);
+    }
 
     KernelDescriptor reader_local_desc;
     reader_local_desc.kernel_source =

@@ -14,8 +14,8 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

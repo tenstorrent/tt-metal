@@ -79,7 +79,7 @@ def kv_cache_pcc_check(
         n_tokens = min(n_tokens, real_len)
 
     head_dim = hf_config.head_dim
-    rotary_dim = getattr(hf_config, "rotary_dim", head_dim)
+    rotary_dim = hf_config.rotary_dim
     src = _hf_to_meta_rotary_perm(head_dim, rotary_dim)
 
     kv_dir = Path(trace_dir) / "kv_cache"

@@ -68,7 +68,7 @@ operations:
         operation: Elwmul
         unpacker: UnpackerAB
         broadcast_type: ROW
-        math_fidelity: HiFi4
+        math_fidelity: LoFi
         block_size: [32, 32]
         in0: x
         in1: input_mask
@@ -84,7 +84,7 @@ operations:
       - type: Fpu
         operation: Elwmul
         unpacker: UnpackerAB
-        math_fidelity: HiFi4
+        math_fidelity: LoFi
         acc_to_dest: true
         block_size: [32, 32]
         in0: masked
@@ -102,7 +102,7 @@ operations:
         unpacker: ReduceUnpacker
         reduce_dim: REDUCE_SCALAR
         reduce_pool: SUM
-        math_fidelity: HiFi4
+        math_fidelity: LoFi
         block_size: [32, 32]
         in0: sum_x
         in1: scaler
@@ -135,7 +135,7 @@ operations:
         operation: Elwmul
         unpacker: UnpackerAB
         broadcast_type: ROW
-        math_fidelity: HiFi4
+        math_fidelity: LoFi
         block_size: [32, 32]
         in0: centered
         in1: input_mask
@@ -150,7 +150,7 @@ operations:
       - type: Fpu
         operation: Elwmul
         unpacker: UnpackerAB
-        math_fidelity: HiFi4
+        math_fidelity: LoFi
         acc_to_dest: true
         block_size: [32, 32]
         in0: centered_masked
@@ -168,7 +168,7 @@ operations:
         unpacker: ReduceUnpacker
         reduce_dim: REDUCE_SCALAR
         reduce_pool: SUM
-        math_fidelity: HiFi4
+        math_fidelity: LoFi
         block_size: [32, 32]
         in0: sum_squared
         in1: scaler
@@ -206,7 +206,7 @@ operations:
         operation: Elwmul
         unpacker: UnpackerAB
         broadcast_type: SCALAR
-        math_fidelity: HiFi4
+        math_fidelity: LoFi
         block_size: [32, 32]
         in0: centered_masked
         in1: rstd
@@ -237,7 +237,7 @@ operations:
         operation: Elwmul
         unpacker: UnpackerAB
         broadcast_type: ROW
-        math_fidelity: HiFi4
+        math_fidelity: LoFi
         block_size: [32, 32]
         in0: copied
         in1: gamma

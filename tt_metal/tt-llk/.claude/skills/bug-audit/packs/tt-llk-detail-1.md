@@ -1095,7 +1095,7 @@ Two mechanisms recur. (1) Integer-granularity rounding: an instruction, loop or 
 - grep -nE '(convert<[^>]+>|int32_to_float|float_to_(fp16[ab]|u?int(8|16)))\(' over SFPU kernels and keep calls with no RoundMode argument; also `TTI_SFP_STOCH_RND\(\s*1`, `RoundMode::NearestStochastic` outside stochastic_round ops
 - `& 0x7FFE` or other tie-to-even bit tricks after a narrow integer conversion, in rounding ops
 
-**Where it clusters:** tt_metal/tt-llk/tt_llk_quasar/llk_lib (eltwise binary, binary broadcast, unary datacopy, unary broadcast MOP configs); tt_metal/tt-llk/tt_llk_*/common/inc/ckernel.h (replay-buffer helpers); tt_metal/hw/ckernels/{wormhole_b0,blackhole,quasar}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h; tt_metal/hw/ckernels/*/metal/llk_api/llk_sfpu/ckernel_sfpu_conversions.h (RNE helper); tt-llk SFPU rounding ops (ckernel_sfpu_rounding_ops.h) and any SFPU kernel doing int/float conversion; tiny-tile (face_r_dim < 16, num_faces < 4) code paths in the MOP/pack/math configs
+**Where it clusters:** tt_metal/tt-llk/tt_llk_quasar/llk_lib (eltwise binary, binary broadcast, unary datacopy, unary broadcast MOP configs); tt_metal/tt-llk/tt_llk_*/common/inc/ckernel.h (replay-buffer helpers); tt_metal/hw/ckernels/{wormhole_b0,blackhole,quasar}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h; tt_metal/hw/ckernels/*/metal/llk_api/llk_sfpu/ckernel_sfpu_conversions.h (RNE helper); SFPU rounding ops (llk_sfpu/ckernel_sfpu_rounding_ops.h) and any SFPU kernel doing int/float conversion; tiny-tile (face_r_dim < 16, num_faces < 4) code paths in the MOP/pack/math configs
 
 **How fixes for this class went incomplete**
 
@@ -1213,7 +1213,6 @@ Code that is right on one arch or boot path is silently wrong on another, becaus
 **Candidate sites** (unverified leads)
 
 - tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h:685: load_replay_buf brackets the record window with disable/enable_gathering only under the ENABLE_GATHERING build macro, and many BH replay records bypass this helper entirely
-- tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_where.h:34: direct lltt::record(0, 6) outside load_replay_buf, so it is unprotected when gathering is enabled
 - tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bcast.h:202: direct lltt::record outside the gathering bracket
 - tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_transpose_dest.h:283: direct record in transpose_dest, the same kernel family already shown to wedge under gathering
 - tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_math_reduce_custom.h:149: three direct lltt::record calls (also at 178 and 217) outside load_replay_buf; the same pattern appears in llk_math_reduce_runtime_custom.h:171
@@ -1308,7 +1307,6 @@ The LLK is correct, but the test harness never exercises the parameter point the
 - tt_metal/tt-llk/tests/sources/matmul_test.cpp:111 — calls _llk_unpack_AB_matmul_ with TILE_SIZE_UNPACK_A, TILE_SIZE_UNPACK_B, the opposite order from math_matmul_test/unpack_matmul_test/tilize_polluter_tiny_matmul_test (B, A). Latent while it uses full tiles and one input format; wrong for a tiny in0 or mixed formats.
 - tt_metal/tt-llk/tests/sources/matmul_test.cpp:62 — the init call here also passes A, B (the siblings pass B, A at init), so it is the same latent swap on the init path.
 - tt_metal/tt-llk/tests/sources/matmul_custom_test.cpp:38 — init and run (line 58) both pass TILE_SIZE_UNPACK_A, TILE_SIZE_UNPACK_B, the opposite of the tiny-tile siblings. Full tiles only, so there is no current exposure.
-- tt_metal/tt-llk/tests/sources/matmul_and_unary_sfpu_test.cpp:46 — the _llk_unpack_AB_matmul_ call passes TILE_SIZE_UNPACK_A, TILE_SIZE_UNPACK_B: the same latent operand-order inconsistency.
 - tt_metal/tt-llk/tests/python_tests/test_eltwise_unary_sfpu.py:207 — _sweep_params always crosses dest_acc [No, Yes] with BROAD_FORMATS (Float16_b/Bfp8_b -> Float16) and FORMATS_BFP4_B (Bfp4_b -> Float16), with no distinct_dest_accumulation_modes filter. On WH, TestConfig (helpers/test_config.py:997) promotes the dest_acc:No case to Yes, so it reruns the Yes kernel under a misleading ID. On BH, _skip_bh_unless_fp32 / _skip_bh_unsupported_float_combo skip only some of these combinations.
 
 

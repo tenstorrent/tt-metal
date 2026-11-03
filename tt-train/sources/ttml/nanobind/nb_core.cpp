@@ -134,6 +134,12 @@ void py_module(nb::module_& m) {
             &ttnn_fixed::distributed::disable_fabric,
             "Tear down the process-global fabric config (SetFabricConfig(DISABLED)). "
             "Safe to call only when no devices are open; close the mesh device first.");
+        py_distributed.def(
+            "release_metal_env",
+            &ttnn_fixed::distributed::release_metal_env,
+            "Destroy the process-global MetalContext and the MetalEnv it owns, so the next "
+            "device access rebuilds both from the current environment. Raises if any device "
+            "is still open.");
 
         // Returns std::unique_ptr<TensorToMesh>
         py_distributed.def(
@@ -150,6 +156,13 @@ void py_module(nb::module_& m) {
             static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(ttnn::distributed::MeshDevice&)>(
                 &ttnn::distributed::replicate_tensor_to_mesh_mapper),
             nb::arg("device"));
+
+        py_distributed.def(
+            "replicate_to_mesh_mapper",
+            &ttml::core::replicate_to_mesh_mapper,
+            nb::arg("device"),
+            "Mapper replicating a tensor on every mesh axis, with one placement per axis (ttnn's "
+            "replicate_tensor_to_mesh_mapper writes the collapsed `{N}, [Replicate]`).");
 
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
@@ -210,6 +223,15 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("cluster_axis") = nb::none(),
             "Raw all_reduce without autograd tracking. Returns a new ttnn::Tensor.");
+
+        py_distributed.def(
+            "is_sharded_on_axis",
+            &ttml::core::distributed::is_sharded_on_axis,
+            nb::arg("tensor"),
+            nb::arg("axis"),
+            "True when `tensor`'s TensorTopology is Shard on mesh axis `axis` of the mesh `tensor` is on; a collapsed "
+            "1-D label counts as its placement on every axis of size > 1. Raises for a host tensor, or for a label "
+            "that is neither per-axis nor a collapsed label covering the mesh.");
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
@@ -296,8 +318,7 @@ void py_module(nb::module_& m) {
                     auto filled = self.recv(tensor.get_grad(), ctx, Rank{rank});
                     tensor.set_grad(filled);
                 } else {
-                    auto filled = self.recv(tensor.get_value(), ctx, Rank{rank});
-                    tensor.set_value(filled);
+                    self.recv_value(tensor, ctx, Rank{rank});
                 }
                 return tensor;
             },

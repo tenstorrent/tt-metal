@@ -260,9 +260,12 @@ def run(
 
     # Let core_grid, memory_config, num_groups, epsilon flow through op_kwargs
     # so they get parsed from dicts. Exclude only non-op params.
+    # `reciprocals` is excluded because ttnn.group_norm no longer takes it (#54786 replaced the
+    # Welford recurrence with two-pass statistics that compute reciprocals at compile time), but
+    # configs traced before that still record it.
     op_kwargs = build_op_kwargs(
         kwargs,
-        exclude={"inplace", "negative_mask", "num_out_blocks", "use_welford"},
+        exclude={"inplace", "negative_mask", "num_out_blocks", "use_welford", "reciprocals"},
         output_memory_config=output_memory_config,
     )
 
@@ -398,7 +401,7 @@ def run(
     # The core_grid.y value determines the num_cores_across_channel parameter
     _op_kwargs_copy = build_op_kwargs(
         kwargs,
-        exclude={"inplace", "negative_mask", "num_out_blocks", "use_welford"},
+        exclude={"inplace", "negative_mask", "num_out_blocks", "use_welford", "reciprocals"},
         output_memory_config=output_memory_config,
     )
     if "core_grid" in _op_kwargs_copy:
