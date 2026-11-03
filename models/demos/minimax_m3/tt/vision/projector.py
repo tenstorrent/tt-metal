@@ -56,12 +56,11 @@ class M3VLProjector(LightweightModule):
         ref_projector: torch.nn.Module,  # MultiModalProjector (reference/vision.py): linear_1/2, merge_linear_1/2
         dtype=ttnn.bfloat16,
     ) -> "M3VLProjector":
-        def build_mlp(fc1: torch.nn.Linear, fc2: torch.nn.Linear) -> M3VLMLP:
-            return M3VLMLP(mesh_device, fc1.weight.data, fc1.bias.data, fc2.weight.data, fc2.bias.data, dtype=dtype)
-
         return cls(
-            mlp=build_mlp(ref_projector.linear_1, ref_projector.linear_2),
-            merge_mlp=build_mlp(ref_projector.merge_linear_1, ref_projector.merge_linear_2),
+            mlp=M3VLMLP.from_linears(mesh_device, ref_projector.linear_1, ref_projector.linear_2, dtype=dtype),
+            merge_mlp=M3VLMLP.from_linears(
+                mesh_device, ref_projector.merge_linear_1, ref_projector.merge_linear_2, dtype=dtype
+            ),
             spatial_merge_size=ref_projector.spatial_merge_size,
         )
 

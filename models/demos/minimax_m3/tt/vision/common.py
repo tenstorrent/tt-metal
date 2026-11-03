@@ -58,13 +58,13 @@ def as_linear_bias(mesh_device, torch_b: torch.Tensor, dtype) -> ttnn.Tensor:
     return to_device(torch_b.view(1, 1, 1, -1), mesh_device, dtype)
 
 
-def hifi4_compute_config(fp32_dest_acc: bool = True, packer_l1_acc: bool = False):
-    """HiFi4 compute-kernel config with exact math and fp32 accumulation (bf16 with fp32_dest_acc=False): the config
-    of LayerNorm, RoPE and SDPA. linear_compute_config adds packer_l1_acc for the weight matmuls."""
+def hifi4_compute_config(packer_l1_acc: bool = False):
+    """HiFi4 compute-kernel config with exact math and fp32 accumulation: the config of LayerNorm, RoPE and SDPA.
+    linear_compute_config adds packer_l1_acc for the weight matmuls."""
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=fp32_dest_acc,
+        fp32_dest_acc_en=True,
         packer_l1_acc=packer_l1_acc,
     )
 
@@ -181,9 +181,10 @@ def _linear_blocking(
 
     def cb_bytes(in0_block_w):
         # The 2D multicast factory's buffers: double-buffered in0 and in1 K blocks, the output block and a bias row
-        # in bf16 tiles (2 KB), and the output block's partial sums (fp32 tiles with fp32 accumulation).
+        # in bf16 tiles (2 KB), and with fp32 accumulation the output block's partial sums in fp32 tiles (4 KB). With
+        # bf16 accumulation the partial sums are bf16 like the output and share its buffer.
         block = per_core_m * per_core_n
-        partials = block * (4096 if fp32_dest_acc else 2048)
+        partials = block * 4096 if fp32_dest_acc else 0
         return 2048 * (2 * in0_block_w * (per_core_m + per_core_n) + block + per_core_n) + partials
 
     fitting = [w for w in range(1, min(k_tiles, max_in0_block_w) + 1) if k_tiles % w == 0 and cb_bytes(w) <= l1_bytes]
@@ -221,15 +222,12 @@ def sdpa_program_config(mesh_device, seq_len: int, num_heads: int):
 
 # Unbounded: one int per patch count and grid, and ttnn keeps a compiled SDPA program for each anyway.
 @functools.lru_cache(maxsize=None)
-def _sdpa_q_chunk_size(
-    seq_len: int, num_heads: int, cores: int, *, q_chunk_sizes: tuple[int, ...] = SDPA_Q_CHUNK_SIZES
-) -> int:
-    """sdpa_program_config's q chunk, of q_chunk_sizes, on a grid of `cores` cores. q_chunk_sizes defaults to
-    SDPA_Q_CHUNK_SIZES's value at import and, as an argument, is part of the cache key.
+def _sdpa_q_chunk_size(seq_len: int, num_heads: int, cores: int) -> int:
+    """sdpa_program_config's q chunk, of SDPA_Q_CHUNK_SIZES, on a grid of `cores` cores.
 
     Each q chunk runs over all of k and v, so on a tie the larger chunk makes fewer passes: at 672x672 on a 12x10 P150
     chunks of 64 and of 160 both left the slowest core 320 rows, and those of 160 ran 3.3 ms faster.
     """
     # The op deals the num_heads x ceil(seq_len / q) q chunks evenly over the cores, so the slowest core runs
     # ceil(num_heads * ceil(seq_len / q) / cores) chunks of q rows.
-    return min(q_chunk_sizes, key=lambda q: (math.ceil(num_heads * math.ceil(seq_len / q) / cores) * q, -q))
+    return min(SDPA_Q_CHUNK_SIZES, key=lambda q: (math.ceil(num_heads * math.ceil(seq_len / q) / cores) * q, -q))

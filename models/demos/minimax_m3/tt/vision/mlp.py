@@ -72,6 +72,24 @@ class M3VLMLP(LightweightModule):
         self.fuse_gelu = False
 
     @classmethod
+    def from_linears(
+        cls,
+        mesh_device,
+        fc1: torch.nn.Linear,
+        fc2: torch.nn.Linear,
+        dtype=ttnn.bfloat16,
+    ) -> "M3VLMLP":
+        """Construct from two torch Linear layers with bias: fc1, then fc2 on its GELU."""
+        return cls(
+            mesh_device=mesh_device,
+            fc1_weight=fc1.weight.data,
+            fc1_bias=fc1.bias.data,
+            fc2_weight=fc2.weight.data,
+            fc2_bias=fc2.bias.data,
+            dtype=dtype,
+        )
+
+    @classmethod
     def from_torch(
         cls,
         mesh_device,
@@ -79,14 +97,7 @@ class M3VLMLP(LightweightModule):
         dtype=ttnn.bfloat16,
     ) -> "M3VLMLP":
         """Construct from a torch MLP with fc1 and fc2: VisionMLP of the Torch reference (reference/vision.py)."""
-        return cls(
-            mesh_device=mesh_device,
-            fc1_weight=ref.fc1.weight.data,
-            fc1_bias=ref.fc1.bias.data,
-            fc2_weight=ref.fc2.weight.data,
-            fc2_bias=ref.fc2.bias.data,
-            dtype=dtype,
-        )
+        return cls.from_linears(mesh_device, ref.fc1, ref.fc2, dtype=dtype)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         hidden = linear(

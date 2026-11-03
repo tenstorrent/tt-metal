@@ -23,10 +23,10 @@ from ..test_factory import parametrize_mesh_with_fabric
 from .vision_helpers import (
     ATTENTION_CI_GRIDS,
     MAX_REL_L2,
-    assert_pcc,
+    assert_close,
     grid_name,
     parametrize_vision_grids,
-    to_device,
+    rows_to_device,
     to_host,
 )
 
@@ -44,14 +44,7 @@ def test_vision_attention_vs_ref(mesh_device, device_params, grid_thw, vision_re
 
     padded_head_dim = nearest_32(config.head_dim)  # as M3VLVisionModel.from_torch pads the heads
     tt_attn = M3VLAttention.from_torch(mesh_device, reference.layers[0].self_attn, padded_head_dim, dtype=ttnn.bfloat16)
-    cos_tt, sin_tt = rope_tensors(
-        mesh_device,
-        acts["grid_thw"],
-        head_dim=config.head_dim,
-        padded_head_dim=padded_head_dim,
-        theta=config.rope_theta,
-        spatial_merge_size=config.spatial_merge_size,
-    )
-    out = to_host(tt_attn(to_device(x_in, mesh_device), cos_tt, sin_tt), mesh_device, ref_out.shape)
+    cos_tt, sin_tt = rope_tensors(mesh_device, acts["grid_thw"], config, padded_head_dim)
+    out = to_host(tt_attn(rows_to_device(x_in, mesh_device), cos_tt, sin_tt), mesh_device, ref_out.shape)
 
-    assert_pcc(f"attention {grid_name(grid_thw)} L={x_in.shape[0]}", ref_out, out, 0.9999, MAX_REL_L2["attention"])
+    assert_close(f"attention {grid_name(grid_thw)} L={x_in.shape[0]}", ref_out, out, 0.9999, MAX_REL_L2["attention"])

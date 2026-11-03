@@ -17,7 +17,7 @@ import ttnn
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 
 from ..test_factory import parametrize_mesh_with_fabric
-from .vision_helpers import MAX_REL_L2, assert_pcc, grid_name, parametrize_vision_grids, to_device, to_host
+from .vision_helpers import MAX_REL_L2, assert_close, grid_name, parametrize_vision_grids, rows_to_device, to_host
 
 
 @torch.no_grad()
@@ -34,6 +34,6 @@ def test_vision_layernorm_vs_ref(mesh_device, device_params, grid_thw, vision_re
     ref_out = layer_norm(x_in)
 
     tt_ln = M3VLLayerNorm.from_torch(mesh_device, layer_norm, dtype=ttnn.bfloat16)
-    out = to_host(tt_ln(to_device(x_in, mesh_device)), mesh_device, ref_out.shape)
+    out = to_host(tt_ln(rows_to_device(x_in, mesh_device)), mesh_device, ref_out.shape)
 
-    assert_pcc(f"layernorm {grid_name(grid_thw)} L={x_in.shape[0]}", ref_out, out, 0.9999, MAX_REL_L2["layernorm"])
+    assert_close(f"layernorm {grid_name(grid_thw)} L={x_in.shape[0]}", ref_out, out, 0.9999, MAX_REL_L2["layernorm"])

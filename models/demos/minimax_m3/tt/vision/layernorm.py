@@ -20,8 +20,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.minimax_m3.tt.vision.common import hifi4_compute_config, to_device
 
-TILE = ttnn.TILE_SIZE  # 32
-
 
 class M3VLLayerNorm(LightweightModule):
     """Interleaved LayerNorm with learned weight + bias.
@@ -51,8 +49,8 @@ class M3VLLayerNorm(LightweightModule):
         # Match the qwen3_vl convention: expand to [TILE, dim] so the
         # underlying op can broadcast across the height dim of any
         # input.
-        self.weight = to_device(weight.view(1, 1, dim).expand(1, TILE, dim), mesh_device, dtype)
-        self.bias = to_device(bias.view(1, 1, dim).expand(1, TILE, dim), mesh_device, dtype)
+        self.weight = to_device(weight.view(1, 1, dim).expand(1, ttnn.TILE_SIZE, dim), mesh_device, dtype)
+        self.bias = to_device(bias.view(1, 1, dim).expand(1, ttnn.TILE_SIZE, dim), mesh_device, dtype)
 
         # Statistics accumulated in fp32, not bf16: on a P150 with the MiniMax-M3.1-Flash weights, against the
         # Hugging Face model in fp32 on 11 images, this raised the vision tokens' PCC on every image, cut their relL2

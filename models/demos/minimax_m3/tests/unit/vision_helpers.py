@@ -1,13 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared parts of the vision encoder unit tests (test_vision_*_vs_ref.py): the image grids, the host to
-device copies and the comparison with the reference. The reference model and its activations are fixtures in
-conftest.py. tests/perf/test_vision_encoder_timing.py also uses VISION_GRIDS and to_host."""
+"""Shared parts of the vision encoder unit tests: for the device tests (test_vision_*_vs_ref.py) the image grids, the
+host to device copies and the comparison with the reference, and for the host tests a stand-in for the mesh device
+(grid_device). The reference model and its activations are fixtures in conftest.py.
+tests/perf/test_vision_encoder_timing.py also uses VISION_GRIDS and to_host."""
 
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -64,9 +66,14 @@ def grid_name(grid_thw) -> str:
     return f"h{h}w{w}" if t == 1 else f"t{t}h{h}w{w}"
 
 
-def to_device(x: torch.Tensor, mesh_device) -> ttnn.Tensor:
-    """(L, D) host tensor -> (1, 1, L, D) bf16 tile tensor in DRAM, replicated over the mesh (common.to_device)."""
+def rows_to_device(x: torch.Tensor, mesh_device) -> ttnn.Tensor:
+    """(L, D) host rows -> (1, 1, L, D) bf16 tile tensor in DRAM, replicated over the mesh (common.to_device)."""
     return common.to_device(x.reshape(1, 1, *x.shape), mesh_device)
+
+
+def grid_device(x: int, y: int):
+    """Stands in for a mesh device in host tests: the program configs only ask it for its compute grid, x by y cores."""
+    return SimpleNamespace(compute_with_storage_grid_size=lambda: ttnn.CoreCoord(x, y))
 
 
 def to_host(x: ttnn.Tensor, mesh_device, shape) -> torch.Tensor:
@@ -95,7 +102,7 @@ def check_close(name: str, ref: torch.Tensor, out: torch.Tensor, min_pcc: float,
     return line, passed
 
 
-def assert_pcc(name: str, ref: torch.Tensor, out: torch.Tensor, min_pcc: float, max_rel_l2: float):
+def assert_close(name: str, ref: torch.Tensor, out: torch.Tensor, min_pcc: float, max_rel_l2: float):
     """Logs check_close's line and asserts that out passes it."""
     line, passed = check_close(name, ref, out, min_pcc, max_rel_l2)
     logger.info(line)

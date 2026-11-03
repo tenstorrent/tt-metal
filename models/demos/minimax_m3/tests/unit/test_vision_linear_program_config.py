@@ -45,12 +45,13 @@ from models.demos.minimax_m3.tt.vision.common import (
     LINEAR_L1_BYTES,
     LINEAR_MIN_TRANSPOSED_PER_CORE_M,
     _linear_blocking,
-    hifi4_compute_config,
     linear,
     linear_compute_config,
     linear_program_config,
 )
 from models.demos.minimax_m3.tt.vision.mlp import accurate_gelu
+
+from .vision_helpers import grid_device
 
 CONFIG = MiniMaxM3VisionConfig()
 HEADS_SIZE = CONFIG.num_attention_heads * nearest_32(CONFIG.head_dim)  # q, k and v each, with the heads padded (1536)
@@ -94,23 +95,13 @@ CONFIGS_MID = {
 GRIDS = {"x11y10": (11, 10), "x12y10": (12, 10), "x13y10": (13, 10)}
 
 
-class _Device:
-    """Stands in for the mesh device: linear_program_config only asks it for its compute grid."""
-
-    def __init__(self, x: int, y: int):
-        self.grid = ttnn.CoreCoord(x, y)
-
-    def compute_with_storage_grid_size(self):
-        return self.grid
-
-
 def _config(name, patches, grid=(12, 10), compute_kernel_config=None):
     """linear_program_config for one of LINEARS in the forward of an image of `patches` patches."""
     in_features, out_features, patches_per_row = LINEARS[name]
     if compute_kernel_config is None:
         compute_kernel_config = linear_compute_config()
     return linear_program_config(
-        _Device(*grid), patches // patches_per_row, in_features, out_features, compute_kernel_config
+        grid_device(*grid), patches // patches_per_row, in_features, out_features, compute_kernel_config
     )
 
 
@@ -170,8 +161,10 @@ def test_vision_linear_program_config_pinned():
 @pytest.mark.parametrize("grid", list(GRIDS.values()), ids=list(GRIDS))
 def test_vision_linear_program_config_valid(grid, fp32_dest_acc):
     """Every config for every image size, as the device op and the 2D factory check it, and transpose_mcast only with
-    at least LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core."""
-    compute_kernel_config = hifi4_compute_config(fp32_dest_acc=fp32_dest_acc, packer_l1_acc=True)
+    at least LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core. The encoder accumulates in fp32; the bf16 case is
+    linear_compute_config with fp32 accumulation turned off, as a measurement may set it."""
+    compute_kernel_config = linear_compute_config()
+    compute_kernel_config.fp32_dest_acc_en = fp32_dest_acc
     configs = transposed = 0
     for name, (in_features, out_features, patches_per_row) in LINEARS.items():
         for patches in range(16, 2304 + 1, 4):
@@ -203,7 +196,7 @@ def test_vision_linear(monkeypatch):
     monkeypatch.setattr(ttnn, "gelu", record("gelu"))
     compute_kernel_config = linear_compute_config()
     in_features, out_features, _ = LINEARS["fc1"]
-    device = _Device(12, 10)
+    device = grid_device(12, 10)
     w = SimpleNamespace(padded_shape=(in_features, out_features))
     for patches, padded_rows in ((2160, 2176), (16, 32)):
         x = SimpleNamespace(padded_shape=(1, 1, padded_rows, in_features), device=lambda: device)
@@ -256,7 +249,7 @@ def test_vision_mlp_fuse_gelu(monkeypatch, expect_error):
         fc2_bias=torch.empty(hidden),
     )
     for grid in GRIDS.values():
-        device = _Device(*grid)
+        device = grid_device(*grid)
         model = mlp.M3VLMLP(device, **weights)
         assert model.fuse_gelu is False
         fused = set()
