@@ -61,6 +61,11 @@ def satisfied(status: str | None) -> bool:
     return status in DONE_STATUSES
 
 
+def _sig6(v):
+    """F246: a metric as state.json records it: floats to 6 significant digits (the full value is in results/)."""
+    return float(f"{v:.6g}") if isinstance(v, float) else v
+
+
 class LedgerError(ValueError):
     pass
 
@@ -231,7 +236,8 @@ class Ledger:
 
     # F180: the per-task histories that grow with every attempt / pick live beside state.json, uncommitted (the repo's
     # 500 KB hook refused DeepSeek-V4.1's state.json at Z.1: agent_runs 137 KB, ab 85 KB); state() merges them back
-    SIDE_KEYS = ("agent_runs", "ab")
+    # F246: also a refused commit's record (commit_pending: every staged file's name, ~190 KB at P.29), transient by nature
+    SIDE_KEYS = ("agent_runs", "ab", "commit_pending")
 
     @property
     def side_path(self) -> Path:
@@ -275,6 +281,10 @@ class Ledger:
         for tid, e in state.items():  # F129: older entries kept every metric; trim them on the next save
             if isinstance(e, dict) and e.get("metrics") and tid in tasks:
                 e["metrics"] = state_metrics(tasks[tid].get("gate", {}).get("metrics") or {}, e["metrics"])
+            if isinstance(e, dict) and isinstance(
+                e.get("metrics"), dict
+            ):  # F246: 6 significant digits (results/ keeps all)
+                e["metrics"] = {k: _sig6(v) for k, v in e["metrics"].items()}
         side = {}
         for tid, e in state.items():  # F180
             if isinstance(e, dict):

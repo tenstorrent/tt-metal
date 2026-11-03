@@ -464,6 +464,18 @@ def test_attempt_and_ab_histories_live_beside_state_json(sandbox):
     assert len(led.state()["A.1"]["agent_runs"]) == 2
 
 
+def test_a_refused_commit_record_and_long_floats_stay_out_of_state_json(sandbox):
+    """F246: DeepSeek-V4.1 P.29's commit was refused at 506 KB: its commit_pending record (190 KB) went into state.json,
+    and metrics kept 17-digit floats. commit_pending lives beside state.json; metrics keep 6 significant digits."""
+    led = sandbox.tasks(task("A.1", "true"))
+    led.update("A.1", commit_pending={"files": ["x"] * 3}, metrics={"err_x": 0.01756252724938108, "n": 3}, status="X")
+    raw = json.loads(led.state_path.read_text())["A.1"]
+    assert "commit_pending" not in raw and raw["metrics"] == {"err_x": 0.0175625, "n": 3}
+    assert led.state()["A.1"]["commit_pending"] == {"files": ["x"] * 3}
+    led.update("A.1", commit_pending=None)
+    assert led.state()["A.1"].get("commit_pending") is None
+
+
 def test_a_spec_rule_that_contradicts_realistic_precision_is_refused():
     """F208: DeepSeek-V4.1's 2026-10-14 line 'HiFi4, fp32 accumulation, bf16 KV cache' survived F123 in agents.rules and
     the serving contract followed it (bf16 KV caches where the reference stores fp8 / fp4)."""
