@@ -464,6 +464,9 @@ void kernel_main() {
             if constexpr (act_mcast) {
                 if (m_block == 0 && n_block == 0) {
                     ack_rounds(0);
+#if defined(GS_SPLIT)
+                    conv_gather::gs_brisc_gather_first_kblock();  // split first own K-block (Perf 2)
+#endif
                 }
             }
             for (uint32_t k_block = 0; k_block < num_k_blocks; ++k_block) {

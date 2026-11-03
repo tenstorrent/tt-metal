@@ -193,6 +193,7 @@ CB_ACT_WINDOW2 = 11  # R3 split gather: the writer RISC's halo window (odd m-blo
 CB_ACT_RM2 = 12  # R3 split gather: the writer RISC's RM im2col (odd m-blocks)
 CB_WIN_TILES = 13  # TILE input: the window's tile-rows (DRAM) / halo tile-rows (sharded) awaiting untilize
 CB_STICK_STAGE = 14  # R0 unaligned C_in: DRAM-aligned stick staging (two halves), copied into the window
+CB_GS_MAILBOX = 15  # R4 split first K-block: NCRISC -> BRISC ShardSource handoff (64 B)
 # R0 unaligned C_in: sticks per staging half (one DRAM read barrier per half; the other half's
 # window copies overlap it). Clamped to the window width.
 STAGE_ROW_STICKS = 64
@@ -1303,8 +1304,16 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         _div_up(p["C_in"], TILE),  # input tile columns (TILE DRAM window page index)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    # The writer carries the same gather args (its own window / rm CBs) for the split gather.
-    writer_gather_ct = [CB_ACT_WINDOW2, CB_ACT_RM2] + reader_ct[2:]
+    # Split first K-block (Perf 2): the writer BRISC gathers the tail tile-rows of m-block 0's first own
+    # K-block while it waits for act round 0 (measured -4.7% SDXL L1 3x3, -5..-10% ResNet BLOCK).
+    # Carve-outs (cannot): writer-side weights (not wr_on: the BRISC is busy with the weight fill and a
+    # WIDTH group's sink cores run no reader to hand it a window); TILE input (the gather reads the
+    # compute-untilized window, whose readiness only the reader sees); R9 / depthwise (no own gather);
+    # the R3 split gather (the BRISC already gathers odd m-blocks).
+    gs_on = wr_on and act_mcast and not dw and not tile_in and not direct_in0 and p.get("num_gather_roles", 1) == 1
+    # The writer carries the same gather args: its own window / rm CBs for the R3 split gather, the
+    # reader's for the split first K-block.
+    writer_gather_ct = ([CB_ACT_WINDOW, CB_ACT_RM] if gs_on else [CB_ACT_WINDOW2, CB_ACT_RM2]) + reader_ct[2:]
 
     # ---- Writer (BRISC): weights, bias, K-exchange multicast (R4/R5), output ----
     writer_ct = [
@@ -1553,10 +1562,23 @@ def create_program_descriptor(device, input_tensor, weight_tensor, bias_tensor, 
         )
         if wr_on:
             w_mcast.attach(descriptor, "w_mcast", [reader], next_sem)
+            next_sem = w_mcast.next_semaphore_id()
             ttnn.attach_absent_mcast(writer, "w_mcast")
         else:
             w_mcast.attach(descriptor, "w_mcast", [writer], next_sem)
     else:
         ttnn.attach_absent_mcast(writer, "w_mcast")
+    if gs_on:
+        sems = list(descriptor.semaphores)
+        for k in range(2):
+            sems.append(ttnn.SemaphoreDescriptor(id=next_sem + k, core_ranges=cores, initial_value=0))
+        descriptor.semaphores = sems
+        descriptor.cbs = list(descriptor.cbs) + [_cb(CB_GS_MAILBOX, ttnn.uint32, 64, 1, cores)]
+        # NCRISC keeps the first ~5/13 of the tile-rows (it also runs the weight ring: measured
+        # ~1.4k cycles/row vs the BRISC's ~1.1k on the focus case).
+        gs_split = max(1, (5 * p["block_m_tiles"] + 6) // 13)
+        gs_defs = [("GS_SPLIT", str(gs_split)), ("GS_SEM_WIN", str(next_sem)), ("GS_SEM_ROWS", str(next_sem + 1))]
+        reader.defines = list(reader.defines) + gs_defs
+        writer.defines = list(writer.defines) + gs_defs
     descriptor.kernels = [reader, writer, compute]
     return descriptor

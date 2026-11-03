@@ -667,6 +667,29 @@ FORCE_INLINE void gather_tile_row_taps(
     }
 }
 
+#if defined(GS_SPLIT)
+// Perf 2 split first K-block (gather_startup): m-block 0's first own K-block — which gates act round 0
+// of the whole row — is gathered by BOTH data-movement RISCs. NCRISC gathers tile-rows [0, GS_SPLIT)
+// and keeps the reserve / push protocol of cb_act_rm (its only pusher); the writer BRISC, idle until
+// round 0 while the weight ring runs on the reader, gathers rows [GS_SPLIT, end) straight into their
+// cb_act_rm slots (first pass of the CB, therefore free) and publishes "rows < t+1 done" on a local
+// semaphore; NCRISC pushes them in one push. NCRISC hands the m-block's ShardSource over in a 64 B
+// mailbox CB and raises the window semaphore once its halo fetch has landed.
+// Raw local semaphores, no helper: two RISCs of one core co-producing one CB is outside every
+// kernel_lib producer contract (single producer). Measured: SDXL L1 3x3 round 0 lands 24.5k -> 14.9k.
+constexpr uint32_t GS_MAILBOX_CB = 15;
+FORCE_INLINE uint32_t gs_row_bytes() { return block_k_tiles * get_tile_size(cb_act_rm); }
+// Only rows whose slot lies in cb_act_rm's first pass (free at kernel start) go to BRISC.
+FORCE_INLINE uint32_t gs_brisc_end() {
+    const uint32_t fit = get_local_cb_interface(cb_act_rm).fifo_size / gs_row_bytes();
+    return fit < block_m_tiles ? fit : block_m_tiles;
+}
+FORCE_INLINE bool gs_brisc_row(uint32_t t) { return t >= GS_SPLIT && t < gs_brisc_end(); }
+FORCE_INLINE volatile tt_l1_ptr uint32_t* gs_sem(uint32_t id) {
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id));
+}
+#endif
+
 // gather_m_blocks: this instance's m-blocks (role, role + num_gather_roles, ...) — window / halo fetch
 // then the im2col gather of every K-block into cb_act_rm. RT args start at rt_base (reader layout).
 // Weights on the reader (WR_WEIGHTS): an optional Poll functor (the reader's non-blocking weight
@@ -934,7 +957,30 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role, Poll poll = P
         set_local_read_state();
         if constexpr (polled) {
             set_gather_trid(GATHER_TRID);
+            if (m_block == role) {
+                // The weight ring's first step, deferred past the first halo barrier so that full
+                // barrier does not also wait on in-flight weight DRAM reads.
+                run_poll();
+            }
         }
+#if defined(GS_SPLIT) && defined(COMPILE_FOR_NCRISC)
+        if (m_block == 0) {
+            volatile tt_l1_ptr uint32_t* mb =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(GS_MAILBOX_CB));
+            mb[0] = shard_src.shard_base;
+            mb[1] = shard_src.halo_base;
+            mb[2] = static_cast<uint32_t>(shard_src.own_lo);
+            mb[3] = static_cast<uint32_t>(shard_src.own_hi);
+            mb[4] = static_cast<uint32_t>(shard_src.win_lo);
+            mb[5] = static_cast<uint32_t>(shard_src.after_lo);
+            mb[6] = static_cast<uint32_t>(shard_src.n_before);
+            mb[7] = t0;
+            mb[8] = t1;
+            mb[9] = static_cast<uint32_t>(padding);
+            mb[10] = static_cast<uint32_t>(stride);
+            noc_semaphore_set(gs_sem(GS_SEM_WIN), 1);
+        }
+#endif
 
         // ---- gather_im2col_kblock, per n-block (activation is reused across n) ----
         for (uint32_t n_block = 0; n_block < num_n_blocks; ++n_block) {
@@ -962,6 +1008,21 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role, Poll poll = P
                         }
                         cb_reserve_back(cb_act_rm, block_k_tiles);
                     }
+#if defined(GS_SPLIT) && defined(COMPILE_FOR_NCRISC)
+                    if (m_block == 0 && n_block == 0 && k_block == 0 && gs_brisc_row(t)) {
+                        // Rows [t, end) were gathered by the BRISC (split first K-block): wait, push.
+                        const uint32_t last = gs_brisc_end();
+                        cb_reserve_back(cb_act_rm, (last - t) * block_k_tiles);  // first pass: free
+                        {
+                            MaybeDeviceZoneScope("reader_gs_wait");
+                            noc_semaphore_wait_min(gs_sem(GS_SEM_ROWS), last);
+                        }
+                        cb_push_back(cb_act_rm, (last - t) * block_k_tiles);
+                        run_poll();
+                        t = last - 1;
+                        continue;
+                    }
+#endif
                     const uint32_t dst_base = get_write_ptr(cb_act_rm);
                     if (tile >= t1) {
                         // Ragged block tail: tile-row past the core's range.
@@ -1018,5 +1079,51 @@ FORCE_INLINE void gather_m_blocks(uint32_t rt_base, uint32_t role, Poll poll = P
         set_gather_trid(0);  // kernel handoff expects cleared packet tags
     }
 }
+
+#if defined(GS_SPLIT)
+// Split first K-block, BRISC side: rows [GS_SPLIT, gs_brisc_end()) of m-block 0's first own K-block.
+FORCE_INLINE void gs_brisc_gather_first_kblock() {
+    static_assert(k_exchange && !tile_in && !depthwise && !direct_in0, "GS_SPLIT: R4/R5 RM K-exchange only");
+    MaybeDeviceZoneScope("writer_gs_gather");
+    noc_semaphore_wait_min(gs_sem(GS_SEM_WIN), 1);
+    volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(GS_MAILBOX_CB));
+    const ShardSource src{
+        mb[0],
+        mb[1],
+        static_cast<int32_t>(mb[2]),
+        static_cast<int32_t>(mb[3]),
+        static_cast<int32_t>(mb[4]),
+        static_cast<int32_t>(mb[5]),
+        static_cast<int32_t>(mb[6])};
+    const uint32_t t0 = mb[7];
+    const uint32_t t1 = mb[8];
+    const int32_t padding = static_cast<int32_t>(mb[9]);
+    const int32_t stride = static_cast<int32_t>(mb[10]);
+    const int32_t wo_int_lo = (padding + stride - 1) / stride;
+    const int32_t wo_int_num = static_cast<int32_t>(W) - eff_kW + padding;
+    const int32_t wo_int_hi = wo_int_num >= 0 ? wo_int_num / stride : -1;
+    const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
+    set_local_read_state();
+    KBlockSegments seg;
+    build_segments(0, seg);
+    const bool fast_ok = !kblock_has_k_padding(0);
+    const uint32_t base = get_write_ptr(cb_act_rm);
+    auto rows = gs_sem(GS_SEM_ROWS);
+    for (uint32_t t = GS_SPLIT; t < gs_brisc_end(); ++t) {
+        const uint32_t tile = t0 + t;
+        const uint32_t dst = base + t * gs_row_bytes();
+        if (tile >= t1) {
+            zero_run(zeros_noc, dst, TILE_DIM * im2col_row_bytes);
+        } else if constexpr (tap_major) {
+            gather_tile_row_taps(zeros_noc, src, 0, tile * TILE_DIM, dst, padding);
+        } else {
+            gather_tile_row(
+                zeros_noc, src, seg, fast_ok, 0, tile * TILE_DIM, dst, stride, padding, wo_int_lo, wo_int_hi);
+        }
+        noc_async_read_barrier();
+        noc_semaphore_set(rows, t + 1);
+    }
+}
+#endif
 
 }  // namespace conv_gather

@@ -203,7 +203,7 @@ void kernel_main() {
         return issued;
     };
 
-    step();
+    // The ring's first step runs inside the gather, right after the first halo barrier.
     conv_gather::gather_m_blocks(W_RT, 0, step);
     {
         MaybeDeviceZoneScope("reader_wt_drain");
