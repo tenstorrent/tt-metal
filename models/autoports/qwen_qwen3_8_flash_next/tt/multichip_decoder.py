@@ -588,6 +588,10 @@ class ParallelMoE:
             return ttnn.to_layout(
                 ttnn.reshape(ttnn.to_layout(result, ttnn.ROW_MAJOR_LAYOUT), (1, b, 1, 640)), ttnn.TILE_LAYOUT
             )
+        if s == 1 and b == 1 and getattr(self, "single_token", None) is not None:
+            from .moe_decode import group_single
+
+            return self.ops.scatter_reduce(group_single(self, x))
         if s == 1:
             lanes = [self.group_native(x[:, lane : lane + 1, :, :]) for lane in range(b)]
             return self.ops.scatter_reduce(lanes[0] if len(lanes) == 1 else ttnn.concat(lanes, dim=1))
