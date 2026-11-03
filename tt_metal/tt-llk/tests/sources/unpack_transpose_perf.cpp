@@ -20,7 +20,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static_assert(PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE, "Math isolation not supported for unpack_transpose");
 static_assert(PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE, "Pack isolation not supported for unpack_transpose");
-static_assert(PERF_RUN_TYPE != PerfRunType::L1_CONGESTION, "L1 congestion not supported for unpack_transpose");
 
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
