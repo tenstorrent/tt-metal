@@ -258,13 +258,12 @@ def _config_tensor(mesh_device, config_mapper, sp_factor):
         )
     assert config_mapper == "shard_1d"
     # One row per chip along the SP axis (the production labelling, collapsed to 1-D on a 1x2 mesh).
-    return ttnn.from_torch(
+    return _sharded_1d(
+        mesh_device,
         torch.zeros((sp_factor, 2), dtype=torch.int32),
-        device=mesh_device,
+        dim=0,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
 
