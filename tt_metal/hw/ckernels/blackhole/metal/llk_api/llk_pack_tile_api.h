@@ -401,6 +401,16 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
 #ifdef LLK_PACK_W_OFFSET
+        // Four Bfp8_b tiles from an fp32 DEST at half sync: the W block writes take L1 bank cycles from the unpacker's
+        // Float32 reads (+1 %), the closed block without W does not.
+        if (is_fp32_dest_acc_en && DST_SYNC_MODE == DstSync::SyncHalf && ntiles == 4 &&
+            pack_dst_format[output_id] == static_cast<std::uint32_t>(DataFormat::Bfp8_b)) {
+            _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+            pack_w_valid = false;
+            _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_tile<PackMode::Default>>(
+                start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
+            return;
+        }
         std::uint32_t out_tile = 0;
         if (llk_pack_w_take(output_id, pack_tile_addr, page_size, ntiles, out_tile)) {
             _llk_pack_block_closed_w_mop_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles, get_output_num_faces(output_id));

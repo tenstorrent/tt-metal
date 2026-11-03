@@ -206,7 +206,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // block with the W offset for block-float outputs), the output programmed once by _llk_pack_block_w_init_. pack_block_w (3) and pack_block_fast (4) are library
 // forms on purpose: the W offset forms behind _llk_pack_block_fast_init_, and the fast forms of the matmul harness.
 template <DstSync sync, bool fp32>
-inline void pack_block_call(std::uint32_t dst_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, bool bfp, std::uint32_t out_tile = 0)
+inline void pack_block_call(
+    std::uint32_t dst_index,
+    std::uint32_t address,
+    std::uint32_t num_tiles,
+    std::uint32_t tile_stride,
+    bool bfp,
+    std::uint32_t out_tile = 0,
+    bool closed_no_w       = false)
 {
     if constexpr (pack_block_w)
     {
@@ -244,7 +251,11 @@ inline void pack_block_call(std::uint32_t dst_index, std::uint32_t address, std:
     }
     else
     {
-        if (bfp)
+        if (bfp && closed_no_w)
+        {
+            _llk_pack_block_closed_<sync, fp32>(dst_index, address, num_tiles, tile_stride);
+        }
+        else if (bfp)
         {
             _llk_pack_block_closed_w_mop_<sync, fp32>(dst_index, out_tile, num_tiles);
         }
@@ -326,7 +337,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     NUM_TILES_IN_BLOCK,
                                     (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
                                     true,
-                                    res_tile_idx);
+                                    res_tile_idx,
+                                    is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf && NUM_TILES_IN_BLOCK == 4 &&
+                                        formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Bfp8_b));
                                 break;
                             }
                             if (NUM_TILES_IN_BLOCK > 1)
@@ -369,7 +382,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     NUM_TILES_IN_BLOCK,
                                     (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
                                     true,
-                                    res_tile_idx);
+                                    res_tile_idx,
+                                    is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf && NUM_TILES_IN_BLOCK == 4 &&
+                                        formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Bfp8_b));
                                 break;
                             }
                             if (NUM_TILES_IN_BLOCK > 1)
