@@ -278,6 +278,7 @@ class TtKimiK3Block(LightweightModule):
         padding_real_rows: Optional[tuple] = None,
         packed_padding_config=None,
         attn_input_tap=None,
+        zero_pad: bool = False,
     ) -> None:
         """One layer of a packed forward, folded into `residual`: ``len(ctxs)`` chunks back to back on each SP
         chip, ``rows // len(ctxs)`` rows each.
@@ -292,6 +293,7 @@ class TtKimiK3Block(LightweightModule):
             MLA layer, its KV write and pad-zero).
         empty: per chunk, whether it is empty. A traced forward runs every position (an empty one in a scratch
             slot) and passes all False.
+        zero_pad: on an MLA layer, zero each chunk's KV pad window without acking it (the caller acks later).
         """
         n = len(ctxs)
         assert n == self.forward_chunks, f"{n} chunks for a block built for {self.forward_chunks}"
@@ -331,8 +333,9 @@ class TtKimiK3Block(LightweightModule):
                     on_layer_complete=ack,
                     trace_controller=getattr(self, "_trace_controller", None),
                     tp_axis=self.attention.mla.tp_shard_kv_axis,
+                    zero_only=zero_pad,
                 )
-            elif ack is not None:
+            elif ack is not None and not zero_pad:
                 send_layer_ack(
                     mesh_device=self.mesh_device,
                     global_layer_idx=self.layer_idx,

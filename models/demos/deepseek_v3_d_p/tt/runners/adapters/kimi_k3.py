@@ -175,7 +175,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
                 mesh_shape=params.mesh_shape,
                 sp_axis=params.sp_axis,
                 num_layers=schedule.num_mla_layers,
-                num_users=params.num_users,
+                # num_users, plus the traced packed forward's scratch slot when the runtime packs under trace. The KDA
+                # slabs below stay at num_users: their copies skip the scratch slot on device.
+                num_users=self.kv_cache_slots(params),
                 tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
                 bank_aligned=True,
             )
