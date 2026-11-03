@@ -44,8 +44,8 @@ void sdpa_fw_recip_tile_first_column(uint32_t idst) {
 #endif  // TRISC_MATH
 
 // Softmax helpers. Score CB is row-major (row r, K tile n at r * Sk_chunk_t + n); each stat CB is
-// rows deep with row r in slot r. The row-range helpers (row0, n) leave the CB waits/reserves/pushes to
-// the caller; the block-level ones (apply_exp_inplace_and_find_exp_sum, matmul_qk_by_v) do their own.
+// rows deep with row r in slot r. The row-range helpers (row0, n) and apply_exp_inplace_and_find_exp_sum
+// (the whole block) leave the CB waits/reserves/pushes to the caller; matmul_qk_by_v does its own.
 //
 // TODO: these re-implement ttnn's SDPA helpers in
 // ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp:
