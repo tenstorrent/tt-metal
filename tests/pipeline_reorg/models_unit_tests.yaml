@@ -8,6 +8,8 @@
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
 #     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
+#     first-use-timeout: (optional) Job timeout in minutes on a dispatch with mlperf-write-access, which may
+#       download or convert weights into /mnt/MLPerf on first use. Not charged to the time budget.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 
@@ -836,6 +838,40 @@
       timeout: 38
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+  budget_type: unit
+
+# MiMo-V2.6-Flash (models/experimental/mimo_v2_6_flash) prefill unit tests on BH Galaxy (TP=8 x DP=4).
+# Real weights: the XiaomiMiMo/MiMo-V2.6-Flash-MOPD hub snapshot on /mnt/MLPerf (staged by the vLLM Model
+# Tests MiMo entry) and its TT cache in the same TT_CACHE_PATH that entry uses (MIMO_TT_CACHE/<snapshot>/<tag>).
+# The fp32 reference outputs of the chunked-prefill cases are kept in MIMO_REF_CACHE. First use: dispatch with
+# mlperf-write-access; that run converts the three tested layers (layer_bfp8, ~23 GB) and saves the reference
+# outputs (~3 GB), under first-use-timeout. Read-only runs only read them.
+- name: MiMo-V2.6-Flash prefill unit tests (Galaxy)
+  cmd: |
+    export HF_MODEL=XiaomiMiMo/MiMo-V2.6-Flash-MOPD TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/XiaomiMiMo--MiMo-V2.6-Flash-MOPD
+    HUB=/mnt/MLPerf/huggingface/hub/models--XiaomiMiMo--MiMo-V2.6-Flash-MOPD
+    export MIMO_MODEL_PATH="$HUB/snapshots/$(cat "$HUB/refs/main")"
+    export MIMO_TT_CACHE=$TT_CACHE_PATH MIMO_REF_CACHE=$TT_CACHE_PATH/reference
+    # The tests skip without a checkpoint; fail instead, so a missing snapshot is not a green run.
+    test -f "$MIMO_MODEL_PATH/config.json" || { echo "::error::no MiMo checkpoint at $MIMO_MODEL_PATH (stage it with mlperf-write-access)"; exit 1; }
+    T=models/experimental/mimo_v2_6_flash/tests
+    # Host only (no device, no weights): KV block tables, prefill helpers, prefill chunk traces, KV pair split.
+    pytest --timeout 300 $T/test_kv_tables.py $T/test_prefill_helpers.py $T/test_prefill_chunk_trace_host.py $T/test_kv_pair_split_host.py
+    # Chunked prefill of one layer per type vs the fp32 reference: every short case and the start-keying check,
+    # plus the 32K prompt on a SWA MoE layer (1) and on a global layer with K/V on both chips (5-kvboth).
+    pytest --timeout 900 $T/test_chunked_prefill_tp8_dp4.py -k "not 32k or 1-32k or 5-kvboth-32k"
+    pytest --timeout 900 $T/test_decoder_tp8_dp4.py
+  model: mimo-v2.6-flash
+  model_family: MiMo
+  skus:
+    bh_galaxy:
+      # Measured on a local BH Galaxy with warm caches: host tests ~1.5 min, the 10 chunked-prefill cases ~5.5 min,
+      # the 3 decoder layers ~2.5 min. The margin covers kernel compiles and reading the weights from /mnt/MLPerf.
+      timeout: 25
+      first-use-timeout: 90
+      tier: 1
+  owner_id: U0APWUMQBJ9 # Divy Wadhwani
   team: models
   budget_type: unit
 

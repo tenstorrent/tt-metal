@@ -89,6 +89,35 @@ def pcc(a, b):
     return score
 
 
+# Two runs of the same prompt (one-shot vs chunked prefill, say) round their logits differently, so where the top two
+# logits tie to within bf16 rounding (a step is 2**-7 of the logit's power of two) either run may pick either token.
+TIE_STEPS = 2
+
+
+def tie_margin(logits, token):
+    """How far ``token`` scores below the best logit, in bf16 steps at the best logit's magnitude."""
+    best = float(logits.max())
+    step = 2.0 ** (math.floor(math.log2(abs(best))) - 7)
+    return (best - float(logits[token])) / step
+
+
+def near_top(logits, token):
+    """``token`` scores within TIE_STEPS bf16 steps of the best logit (ties from rounding the logits to bf16)."""
+    return tie_margin(logits, token) <= TIE_STEPS
+
+
+def first_divergence(tokens, logits, ref_tokens, ref_logits):
+    """Two greedy runs compared up to their first different token (``logits[k]`` is what picked ``tokens[k]``).
+
+    None if they agree throughout, else (k, near_tie) at the first difference k: near_tie when each run's pick is
+    near_top in the other run's logits there. Later tokens are not compared: the runs' histories fork at k.
+    """
+    for k, (t, ref) in enumerate(zip(tokens, ref_tokens)):
+        if t != ref:
+            return k, near_top(ref_logits[k], t) and near_top(logits[k], ref)
+    return None
+
+
 def dp_submeshes(mesh_device):
     """The 4x8 Galaxy split into its four 1x8 rows: one TP=8 replica per row."""
     assert tuple(mesh_device.shape) == (DP, TP), f"expected a {DP}x{TP} mesh, got {tuple(mesh_device.shape)}"

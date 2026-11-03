@@ -26,9 +26,6 @@
 #     guaranteed to be split across engine steps. Must equal the
 #     --max-num-batched-tokens passed in additional-server-args.
 #   chunked-prefill-test-timeout: per-step timeout for that step (minutes, default 15).
-#   prefix-caching-test: enables the prefix-caching gate (cache-hit resume of a ~24K-token
-#     document). It reads the resume's usage.prompt_tokens_details.cached_tokens when the
-#     server reports it (--enable-prompt-tokens-details), else the /metrics counters.
 #   server-default-top-k: top_k for requests that do not set one, passed to the server
 #     as --override-generation-config. Set it to the device sampler's top-k limit (32)
 #     when the entry samples on device, the model's default temperature is above 0,
@@ -491,49 +488,6 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   co-owner-2-id: U06F3ER8X9A # Stuti Raizada
-  team: models
-  budget_type: vllm
-
-# ── MiMo ───────────────────────────────────────────────────────────
-
-# MiMo-V2.6-Flash (models/experimental/mimo_v2_6_flash) on BH Galaxy: four TP=8
-# lanes, one per mesh row, 4 users each. Serving settings follow the
-# tt-inference-server BLACKHOLE_GALAXY spec. The chunked-prefill and
-# prefix-caching steps send prompts longer than the 4096-token budget, so later
-# prefill chunks run and replay their traces (MIMO_PREFILL_CHUNK_TRACE, default
-# on). The first run needs a dispatch with mlperf-write-access: it downloads the
-# 178 GB checkpoint and builds the ~186 GB TT cache (~45 min of weights plus
-# ~1 min per MoE layer); every later run starts from the cache.
-- name: "MiMo-V2.6-Flash DP=4"
-  model: XiaomiMiMo/MiMo-V2.6-Flash-MOPD
-  # Warm start: TT cache load + prefill warmup (712 s in run 40908073239) + trace captures.
-  server-timeout: 40
-  first-use-server-timeout: 200
-  hub-download: true
-  benchmark-timeout: 10
-  mesh-device: "(4, 8)"
-  arch: arch-blackhole
-  tt-config: '{"trace_mode": "decode_only", "trace_region_size": 1000000000, "l1_small_size": 65536, "dispatch_core_axis": "col", "sample_on_device_mode": "decode_only", "prefill_gather_ms": 200, "prefill_gather_quiet_ms": 25}'
-  additional-server-args: "--data_parallel_size 4 --max_num_seqs 4 --block_size 64 --max_model_len 1048576 --max_num_batched_tokens 4096 --enable_chunked_prefill --enable-prefix-caching --trust-remote-code --reasoning-parser mimo --enable-auto-tool-choice --tool-call-parser mimo --enable-prompt-tokens-details --prefix-cache-retention-interval 1024"
-  # --prefix-cache-retention-interval 1024: vLLM 0.30's default (0) keeps a sliding-window
-  # layer's cached KV only at the end of each prompt, so a request that shares a
-  # prefix but not the whole prompt (the gate's resume) hits nothing; 1024 keeps
-  # a window every 1024 tokens (a hit lands up to 1023 tokens short of the shared prefix).
-  # VLLM_ENGINE_READY_TIMEOUT_S: the first-use start (TT cache build) runs for hours.
-  extra-env: "VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 MIMO_KV_GB_PER_CHIP=6.7 VLLM_ENGINE_READY_TIMEOUT_S=14400"
-  coherence-test: true
-  # The plugin's lane coordinator builds its lanes with log_stats=False, so
-  # vllm:prefix_cache_* never move (run 40908073239: 0 of 0); the gate reads the
-  # resume's own cached_tokens instead (--enable-prompt-tokens-details).
-  prefix-caching-test: true
-  chunked-prefill-budget: 4096
-  multimodal: false
-  skus:
-    bh_galaxy:
-      timeout: 85
-      first-use-timeout: 480
-      tier: 3
-  owner_id: U0APWUMQBJ9 # Divy Wadhwani
   team: models
   budget_type: vllm
 

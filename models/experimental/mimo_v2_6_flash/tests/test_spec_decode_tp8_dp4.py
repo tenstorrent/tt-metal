@@ -88,7 +88,7 @@ MEAN_ACCEPTED = {}
 # The grouped verify attention (tt/attention.py _verify_grouped, on by default with groups of 2 slots) rounds
 # differently from the plain decode's, so where the plain step's top logits tie to within bf16 rounding the verify can
 # pick the other token. A divergence passes only there: the speculative token scores within TIE_STEPS bf16 steps of the
-# plain step's best logit at that position (as test_model_chunked_tp8_dp4.near_top); every token before it matched.
+# plain step's best logit at that position (as common.near_top); every token before it matched.
 # The grouped verify runs only under the KV pair split; without it (the per-slot verify) the tokens must match plain
 # greedy exactly.
 TIE_STEPS = 2
