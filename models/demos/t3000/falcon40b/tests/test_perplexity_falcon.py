@@ -256,8 +256,28 @@ def test_perplexity_huggingface(
         ("prefill", 1, 1024, "BFLOAT8_B-DRAM", 64, 7.25, 0.55, 0.78),
         ("prefill", 1, 2048, "BFLOAT8_B-DRAM", 64, 6.55, 0.56, 0.80),
         ("decode", 32, 128, "BFLOAT8_B-SHARDED", 64, 13.95, 0.45, 0.71),
-        ("decode", 32, 1024, "BFLOAT8_B-SHARDED", 64, 7.79, 0.54, 0.78),
-        ("decode", 32, 2048, "BFLOAT8_B-SHARDED", 64, 6.96, 0.55, 0.79),  # TODO: Hangs on CI
+        pytest.param(
+            "decode",
+            32,
+            1024,
+            "BFLOAT8_B-SHARDED",
+            64,
+            7.79,
+            0.54,
+            0.78,
+            marks=pytest.mark.skip(reason="Decode mode is hanging for seqlen > 128"),
+        ),
+        pytest.param(
+            "decode",
+            32,
+            2048,
+            "BFLOAT8_B-SHARDED",
+            64,
+            6.96,
+            0.55,
+            0.79,
+            marks=pytest.mark.skip(reason="Decode mode is hanging for seqlen > 128"),
+        ),  # TODO: Hangs on CI
     ),
     ids=[
         "prefill_seq128",
@@ -282,9 +302,6 @@ def test_perplexity(
     mesh_device,
 ):
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
-
-    if llm_mode == "decode" and max_seq_len > 128:
-        pytest.skip("Decode mode is hanging for seqlen > 128")
 
     run_test_perplexity(
         llm_mode,

@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.t3000.falcon40b.tests.test_utils import load_falcon_reference_model
+from models.demos.t3000.falcon40b.tests.test_utils import load_falcon_reference_model, unsupported_mode_reason
 from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
@@ -93,6 +93,7 @@ def run_test_FalconMLP_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@pytest.mark.skip_params(reason_fn=unsupported_mode_reason)
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len",
@@ -136,11 +137,6 @@ def test_FalconMLP_inference(
     model_config_str,
     mesh_device,
 ):
-    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
-        pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
-        pytest.skip("Decode is only supported for SHARDED memory config!")
-
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
