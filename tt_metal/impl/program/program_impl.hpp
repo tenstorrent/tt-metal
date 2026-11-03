@@ -11,6 +11,7 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include <tt_stl/assert.hpp>
+#include <tt_stl/optional_reference.hpp>
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
@@ -382,7 +383,7 @@ public:
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set,
         const experimental::dfb::DataflowBufferConfig& config,
-        const std::optional<CoreRangeSet>& allocation_core_range_set = std::nullopt);
+        ttsl::optional_reference<const CoreRangeSet> allocation_core_range_set = std::nullopt);
 
     uint32_t assign_dfb_device_slot(const experimental::dfb::detail::DataflowBufferImpl& dfb) const;
 
