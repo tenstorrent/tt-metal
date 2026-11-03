@@ -28,10 +28,6 @@ def _placement_names(topology):
     return [f"Shard({p.dim})" if isinstance(p, ttnn.PlacementShard) else "Replicate" for p in topology.placements()]
 
 
-def _mesh_coords(topology):
-    return [tuple(coord) for coord in topology.mesh_coords()]
-
-
 def _storage_coords(tt_tensor):
     return [tuple(coord) for coord in tt_tensor.device_coords()]
 
@@ -60,10 +56,18 @@ def _shard0_per_mesh_axis(mesh_device):
     return [ttnn.PlacementShard(0) if size > 1 else ttnn.PlacementReplicate() for size in mesh_device.shape]
 
 
-# How a tensor is distributed over the mesh in the partial-write tests.
+# How a tensor is distributed over the mesh, and under which label.
 REPLICATED = "replicated"  # ReplicateTensorToMesh: collapsed 1-D label [Replicate]
+REPLICATED_2D = "replicated_2d"  # same data, one placement per mesh axis: [Replicate, Replicate] on a 1x2 mesh
 SHARD0 = "shard0"  # ShardTensorToMesh(dim=0): collapsed 1-D label [Shard(0)]
 SHARD0_2D = "shard0_2d"  # same data, one placement per mesh axis, e.g. [Replicate, Shard(0)] on a 1x2 mesh
+
+# The same distribution under the label of the other rank.
+_OTHER_LABEL = {REPLICATED: REPLICATED_2D, REPLICATED_2D: REPLICATED, SHARD0: SHARD0_2D, SHARD0_2D: SHARD0}
+
+
+def _is_replicated(label):
+    return label in (REPLICATED, REPLICATED_2D)
 
 
 def _distribute(torch_tensor, mesh_device, label, **kwargs):
@@ -71,17 +75,21 @@ def _distribute(torch_tensor, mesh_device, label, **kwargs):
         return _replicated(torch_tensor, mesh_device, **kwargs)
     if label == SHARD0:
         return _sharded(torch_tensor, mesh_device, 0, **kwargs)
-    assert label == SHARD0_2D
-    mapper = ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(_shard0_per_mesh_axis(mesh_device)))
+    if label == REPLICATED_2D:
+        placements = [ttnn.PlacementReplicate() for _ in mesh_device.shape]
+    else:
+        assert label == SHARD0_2D
+        placements = _shard0_per_mesh_axis(mesh_device)
+    mapper = ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(placements))
     return _from_torch(torch_tensor, mesh_device, mapper, **kwargs)
 
 
 def _global_shape(label, per_device_shape, num_devices):
-    return per_device_shape if label == REPLICATED else [num_devices] + per_device_shape[1:]
+    return per_device_shape if _is_replicated(label) else [num_devices] + per_device_shape[1:]
 
 
 def _per_device_slice(label, torch_tensor, device_index):
-    return torch_tensor if label == REPLICATED else torch_tensor[device_index : device_index + 1]
+    return torch_tensor if _is_replicated(label) else torch_tensor[device_index : device_index + 1]
 
 
 def _per_device(tt_tensor):
@@ -93,9 +101,16 @@ def _assert_labels(tt_tensor, expected_names, what):
     assert names == expected_names, f"{what}: expected placements {expected_names}, got {names}"
 
 
-def _reset_program_cache(mesh_device):
+def _check_program_cache(mesh_device, run, label):
+    """Calls ``run(seed, label)``, then ``run`` with the source's other label: the second call must hit the cache."""
     mesh_device.enable_program_cache()
     mesh_device.clear_program_cache()
+    first = run(1, label)
+    entries = mesh_device.num_program_cache_entries()
+    assert entries > 0
+    second = run(2, _OTHER_LABEL[label])
+    assert first[0].tensor_topology() != second[0].tensor_topology(), "precondition: another source label"
+    assert mesh_device.num_program_cache_entries() == entries, "a call with other labels must hit the program cache"
 
 
 # (input label, caller's cache/output label, whether the caller's label is replaced by the union). The union case
@@ -134,16 +149,16 @@ def test_sharded_to_interleaved_partial_label_follows_the_data(mesh_device, inpu
     grid_size = (grid.x, grid.y)
     height_shard_spec = [H // num_slices, W]
 
-    def run(seed):
+    def run(seed, in_label):
         torch.manual_seed(seed)
-        in0 = torch.randn(_global_shape(input_label, per_device_shape, num_devices)).bfloat16()
-        in0_t = _distribute(in0, mesh_device, input_label, memory_config=ttnn.L1_MEMORY_CONFIG)
+        in0 = torch.randn(_global_shape(in_label, per_device_shape, num_devices)).bfloat16()
+        in0_t = _distribute(in0, mesh_device, in_label, memory_config=ttnn.L1_MEMORY_CONFIG)
         cache = torch.zeros(_global_shape(cache_label, per_device_shape, num_devices)).bfloat16()
         cache_t = _distribute(cache, mesh_device, cache_label, memory_config=ttnn.L1_MEMORY_CONFIG)
         cache_names_before = _placement_names(cache_t.tensor_topology())
         input_names = _placement_names(in0_t.tensor_topology())
         # The union replaces the cache's label exactly when the input is sharded on an axis the cache is not.
-        assert takes_union == (input_label != REPLICATED and cache_label == REPLICATED)
+        assert takes_union == (not _is_replicated(in_label) and _is_replicated(cache_label))
         expected_names = input_names if takes_union else cache_names_before
         expected_topology = in0_t.tensor_topology() if takes_union else cache_t.tensor_topology()
 
@@ -169,15 +184,10 @@ def test_sharded_to_interleaved_partial_label_follows_the_data(mesh_device, inpu
 
         # Each device's cache now holds the slices that device was given.
         for device_index, cache_shard in enumerate(_per_device(cache_t)):
-            assert torch.equal(cache_shard, _per_device_slice(input_label, in0, device_index))
+            assert torch.equal(cache_shard, _per_device_slice(in_label, in0, device_index))
         return in0_t, cache_t
 
-    _reset_program_cache(mesh_device)
-    keep_alive = [run(1)]
-    entries = mesh_device.num_program_cache_entries()
-    assert entries > 0
-    keep_alive.append(run(2))
-    assert mesh_device.num_program_cache_entries() == entries, "relabelling must not miss the program cache"
+    _check_program_cache(mesh_device, run, input_label)
 
 
 # ---------------------------------------------------------------------------
@@ -204,18 +214,16 @@ def test_slice_write_label_follows_the_data(mesh_device, input_memory_config, in
     end = in_shape
     step = [1, 1, 1, 1]
 
-    def run(seed):
+    def run(seed, in_label):
         torch.manual_seed(seed)
-        src = torch.randn(_global_shape(input_label, in_shape, num_devices)).bfloat16()
-        src_t = _distribute(
-            src, mesh_device, input_label, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=input_memory_config
-        )
+        src = torch.randn(_global_shape(in_label, in_shape, num_devices)).bfloat16()
+        src_t = _distribute(src, mesh_device, in_label, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=input_memory_config)
         out = torch.zeros(_global_shape(output_label, out_shape, num_devices)).bfloat16()
         out_t = _distribute(out, mesh_device, output_label, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_names_before = _placement_names(out_t.tensor_topology())
         input_names = _placement_names(src_t.tensor_topology())
         # The union replaces the output's label exactly when the input is sharded on an axis the output is not.
-        assert takes_union == (input_label != REPLICATED and output_label == REPLICATED)
+        assert takes_union == (not _is_replicated(in_label) and _is_replicated(output_label))
         expected_names = input_names if takes_union else output_names_before
         expected_topology = src_t.tensor_topology() if takes_union else out_t.tensor_topology()
 
@@ -228,16 +236,11 @@ def test_slice_write_label_follows_the_data(mesh_device, input_memory_config, in
         assert returned.buffer_address() == out_t.buffer_address()
         for device_index, out_shard in enumerate(_per_device(out_t)):
             expected = torch.zeros(out_shape).bfloat16()
-            expected[:, :, : in_shape[2], :] = _per_device_slice(input_label, src, device_index)
+            expected[:, :, : in_shape[2], :] = _per_device_slice(in_label, src, device_index)
             assert torch.equal(out_shard, expected)
         return src_t, out_t
 
-    _reset_program_cache(mesh_device)
-    keep_alive = [run(1)]
-    entries = mesh_device.num_program_cache_entries()
-    assert entries > 0
-    keep_alive.append(run(2))
-    assert mesh_device.num_program_cache_entries() == entries, "relabelling must not miss the program cache"
+    _check_program_cache(mesh_device, run, input_label)
 
 
 # ---------------------------------------------------------------------------
@@ -269,28 +272,30 @@ _WRITE_INTO_DST = [
 def test_replicated_src_into_sharded_dst_adopts_replicate(mesh_device, write_into, dst_dtype, dst_torch_dtype):
     """Replicated src written into a dst labelled Shard(0): dst becomes Replicate, on both handles.
 
-    src and dst span the same set of mesh coordinates (full coverage), so after the write every device holds the
-    same data and Replicate is the only label that describes dst. The union over ``{src, dst}`` is dst's Shard(0),
-    which would compose into ``num_devices`` stacked copies of src.
+    src and dst are stored on the same mesh coordinates (full coverage), so after the write every device holds the
+    same data and a Replicate label is the only one that describes dst. With src's collapsed label the union over
+    ``{src, dst}`` is dst's Shard(0), which would compose into ``num_devices`` stacked copies of src.
     """
     num_devices = mesh_device.get_num_devices()
     shape = [1, 1, 64, 64]
 
-    def run(seed):
+    def run(seed, src_label):
         torch.manual_seed(seed)
         src = torch.randn(shape).bfloat16()
-        src_t = _replicated(src, mesh_device)
+        src_t = _distribute(src, mesh_device, src_label)
         # Per-device shape matches src; the label is what differs.
         dst_t = _sharded(torch.zeros([num_devices] + shape[1:], dtype=dst_torch_dtype), mesh_device, 0, dtype=dst_dtype)
-        _assert_labels(src_t, ["Replicate"], "precondition: src is replicated")
+        src_names = _placement_names(src_t.tensor_topology())
+        assert set(src_names) == {"Replicate"}, f"precondition: src is replicated, got {src_names}"
         _assert_labels(dst_t, ["Shard(0)"], "precondition: dst is labelled Shard(0)")
-        assert _mesh_coords(src_t.tensor_topology()) == _mesh_coords(dst_t.tensor_topology()), "full coverage"
+        assert _storage_coords(src_t) == _storage_coords(dst_t), "full coverage"
 
         returned = write_into(src_t, dst_t)
 
-        _assert_labels(dst_t, ["Replicate"], "dst after write (caller's handle)")
-        _assert_labels(returned, ["Replicate"], "dst after write (returned handle)")
+        _assert_labels(dst_t, src_names, "dst after write (caller's handle)")
+        _assert_labels(returned, src_names, "dst after write (returned handle)")
         assert returned.tensor_topology() == src_t.tensor_topology()
+        assert dst_t.tensor_topology() == src_t.tensor_topology()
         assert returned.buffer_address() == dst_t.buffer_address()
         assert returned.dtype == dst_dtype
         expected = src.to(dst_torch_dtype)
@@ -298,12 +303,7 @@ def test_replicated_src_into_sharded_dst_adopts_replicate(mesh_device, write_int
             assert torch.equal(dst_shard, expected)
         return src_t, dst_t
 
-    _reset_program_cache(mesh_device)
-    keep_alive = [run(1)]
-    entries = mesh_device.num_program_cache_entries()
-    assert entries > 0
-    keep_alive.append(run(2))
-    assert mesh_device.num_program_cache_entries() == entries, "relabelling must not miss the program cache"
+    _check_program_cache(mesh_device, run, REPLICATED)
 
 
 @MESH_PARAMS
@@ -318,17 +318,18 @@ def test_sharded_src_into_replicated_dst_adopts_shard(mesh_device, write_into, d
     per_device_shape = [1, 1, 64, 64]
     full_shape = [num_devices] + per_device_shape[1:]
 
-    def run(seed):
+    def run(seed, src_label):
         torch.manual_seed(seed)
         src = torch.randn(full_shape).bfloat16()
-        src_t = _sharded(src, mesh_device, 0)
+        src_t = _distribute(src, mesh_device, src_label)
         dst_t = _replicated(torch.zeros(per_device_shape, dtype=dst_torch_dtype), mesh_device, dtype=dst_dtype)
-        _assert_labels(src_t, ["Shard(0)"], "precondition: src is sharded on dim 0")
+        src_names = _placement_names(src_t.tensor_topology())
+        assert "Shard(0)" in src_names, f"precondition: src is sharded on dim 0, got {src_names}"
         _assert_labels(dst_t, ["Replicate"], "precondition: dst is replicated")
 
         returned = write_into(src_t, dst_t)
 
-        _assert_labels(dst_t, ["Shard(0)"], "dst after write (caller's handle)")
+        _assert_labels(dst_t, src_names, "dst after write (caller's handle)")
         assert returned.tensor_topology() == src_t.tensor_topology()
         assert dst_t.tensor_topology() == src_t.tensor_topology()
         assert returned.buffer_address() == dst_t.buffer_address()
@@ -337,12 +338,7 @@ def test_sharded_src_into_replicated_dst_adopts_shard(mesh_device, write_into, d
         assert torch.equal(composed, src.to(dst_torch_dtype))
         return src_t, dst_t
 
-    _reset_program_cache(mesh_device)
-    keep_alive = [run(1)]
-    entries = mesh_device.num_program_cache_entries()
-    assert entries > 0
-    keep_alive.append(run(2))
-    assert mesh_device.num_program_cache_entries() == entries, "relabelling must not miss the program cache"
+    _check_program_cache(mesh_device, run, SHARD0)
 
 
 # Sources stored on one device of the mesh, built from device 0's tensor of a mesh tensor: (how, what device 0 of
