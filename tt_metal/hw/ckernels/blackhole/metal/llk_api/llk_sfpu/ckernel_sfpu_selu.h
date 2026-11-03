@@ -22,8 +22,25 @@ inline void selu_init() {
     expm1_cw_init_prgm_consts();
 }
 
+bool bf16_dest_selu();
+template <int ITERATIONS>
+void calculate_selu_bf16();
+// The scale the generated selu kernel is fitted for, as FP32 bits; any other scale runs the stock kernel.
+inline constexpr std::uint32_t selu_bf16_scale_bits = 0x3f867d5fu;
+// The alpha the generated selu kernel is fitted for, as FP32 bits; any other alpha runs the stock kernel.
+inline constexpr std::uint32_t selu_bf16_alpha_bits = 0x3fd62d7du;
+// Whether BF16 DEST runs the generated selu kernel as one call over the whole tile.
+inline constexpr bool selu_bf16_whole_tile = true;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_selu(uint32_t scale, uint32_t alpha) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_selu() && scale == ckernel::sfpu::selu_bf16_scale_bits &&
+            alpha == ckernel::sfpu::selu_bf16_alpha_bits) {
+            calculate_selu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     const sfpi::vFloat scale_val = Converter::as_float(scale);
     const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
     // expm1's top Horner coefficient, loaded once and held in an LReg for the whole loop (the three
@@ -51,3 +68,5 @@ inline void calculate_selu(uint32_t scale, uint32_t alpha) {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_selu_bf16.h"
