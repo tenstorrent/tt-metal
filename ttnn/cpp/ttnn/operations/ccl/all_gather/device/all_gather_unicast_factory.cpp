@@ -227,7 +227,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
 
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
 
-    if (use_mux) {
+    if (use_mux && mux_core_range.num_cores() > 0) {
         mux_config.place_in_program_local_l1(desc, mux_core_range);
         tt::tt_metal::KernelDescriptor mux_kernel_desc{
             .kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
@@ -447,7 +447,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     });
 
-    const auto writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+    auto writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
     desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
         .kernel_source = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_writer.cpp",
         .core_ranges = worker_core_range,
