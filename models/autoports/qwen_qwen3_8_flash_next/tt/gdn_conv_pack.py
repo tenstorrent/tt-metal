@@ -58,10 +58,20 @@ def history_convolution(model, projected, *, flat=False):
         compute_kernel_config=model.compute,
     )
     result = []
-    for output, width in zip(outputs, WIDTHS):
-        rows = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
-        selected = rows[:, 3 : 4 * batch : 4, :]
-        result.append(ttnn.to_layout(ttnn.reshape(selected, (batch, 1, width)), ttnn.TILE_LAYOUT))
+    if os.environ.get("QWEN_FLASH_CONV_JOIN", "1") == "1":
+        # One untilize/select/tilize over the joined q|k|v rows (pure data movement): the separate
+        # 512-wide tilizes otherwise run on one core per lane.
+        rows = ttnn.to_layout(ttnn.concat(list(outputs), dim=-1), ttnn.ROW_MAJOR_LAYOUT)
+        joined = ttnn.to_layout(ttnn.reshape(rows[:, 3 : 4 * batch : 4, :], (batch, 1, sum(WIDTHS))), ttnn.TILE_LAYOUT)
+        start = 0
+        for width in WIDTHS:
+            result.append(joined[:, :, start : start + width])
+            start += width
+    else:
+        for output, width in zip(outputs, WIDTHS):
+            rows = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+            selected = rows[:, 3 : 4 * batch : 4, :]
+            result.append(ttnn.to_layout(ttnn.reshape(selected, (batch, 1, width)), ttnn.TILE_LAYOUT))
     # Observed during eager warmup/capture; replay has no host callback/query.
     model._decode_conv_history_geometry = {
         "batch": batch,

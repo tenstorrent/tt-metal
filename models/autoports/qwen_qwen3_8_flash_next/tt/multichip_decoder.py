@@ -334,6 +334,20 @@ def _from_sm(x, memory_config=None):
     return ttnn.concat([x[:, j : j + 1] for j in range(4)], dim=-1, memory_config=memory_config)
 
 
+def _fast_partial_program(b):
+    """1D multicast over the 11 output tiles of the HC down projection, 40-tile K blocks."""
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(11, 1),
+        in0_block_w=40,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=math.ceil(b / 32),
+        per_core_N=1,
+        fuse_batch=True,
+        mcast_in0=True,
+    )
+
+
 def _sm_prefill(x):
     """Single-request prefill rows ([1,1,S,2560], S > 1) take the stream-major HC implementation."""
     shape = tuple(x.shape)
@@ -480,12 +494,23 @@ class ParallelHyperConnection:
         """
         b = x.shape[-2]
         streams = self.ops.norm(x, self.norm_sm, self.eps)
-        # The default program's K blocking (in0_block_w=2) is required: wider blocks accumulate in the FPU dest
-        # differently and change the result on real (heavy-tailed) activations.
-        partial = self.ops.linear(
-            _from_sm(streams), self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
-        )
+        flat = _from_sm(streams)
+        # The default program's K blocking (in0_block_w=2) is bit-identical to read(); QWEN_FLASH_HC_FAST_PARTIAL
+        # uses 40-tile K blocks (~3x faster, different FPU dest accumulation order: not bit-identical).
+        if os.environ.get("QWEN_FLASH_HC_FAST_PARTIAL", "1") == "1":
+            partial = ttnn.linear(
+                flat,
+                self.read_weight,
+                program_config=_fast_partial_program(b),
+                compute_kernel_config=self.compute,
+                dtype=ttnn.float32,
+            )
+        else:
+            partial = self.ops.linear(
+                flat, self.read_weight, compute_kernel_config=self.compute, dtype=ttnn.float32, max_cores=5
+            )
         packed = ttnn.typecast(self.ops.reduce(partial), ttnn.bfloat16)
+        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
         # One K=320 product per stream (same sequential accumulation as the flat projection); the explicit
         # 4x row batch lets the matmul spread over 20 cores (a broadcast in0 runs single-core).
         mix = ttnn.sigmoid(
@@ -497,7 +522,6 @@ class ParallelHyperConnection:
             )
         )
         mixed = ttnn.mean(ttnn.multiply(mix, streams), dim=1, keepdim=True)
-        inject = ttnn.multiply(packed[..., 320:324], 2, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
         return self.ops.gather(mixed), ttnn.transpose(inject, 1, 3)
 
     def _lane_mean(self, prod):
