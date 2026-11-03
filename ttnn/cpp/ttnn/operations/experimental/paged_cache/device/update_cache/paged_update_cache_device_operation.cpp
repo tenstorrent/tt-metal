@@ -257,6 +257,25 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             input_tensor.padded_shape()[1]);
     }
 
+    // A position passed in the update_idxs list becomes the user's cache write offset on the host
+    // (compute_update_cache_offsets: tile row update_idx / TILE_HEIGHT, row offset within that tile),
+    // with no bound of its own and no skip sentinel, so a position past the end of the sequence would
+    // land in the next user's rows or past the end of the cache buffer. Paged mode needs the index
+    // tensor, so the list only occurs in non-paged mode, where cache dim -2 is the sequence length.
+    // Positions in update_idxs_tensor live on the device and cannot be checked here. This runs on every
+    // program-cache hit too: compute_program_hash excludes the positions.
+    if (!paged_cache) {
+        const uint32_t cache_seq_len = cache_tensor.padded_shape()[-2];
+        for (size_t i = 0; i < operation_attributes.update_idxs.size(); ++i) {
+            TT_FATAL(
+                operation_attributes.update_idxs[i] < cache_seq_len,
+                "update_idxs[{}] ({}) must be less than cache tensor sequence length ({})",
+                i,
+                operation_attributes.update_idxs[i],
+                cache_seq_len);
+        }
+    }
+
     // Sharding validation
     TT_FATAL(input_tensor.is_sharded(), "Expect input_tensor to be sharded");
     if (input_tensor.is_sharded()) {

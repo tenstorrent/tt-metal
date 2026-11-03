@@ -715,3 +715,23 @@ def test_update_cache_preserves_fp32_neighbors(fp32_dest_acc_en, head_dim, devic
         expected[:, :, index, :] = 3.0
         assert torch.equal(ttnn.to_torch(cache_tt), expected)
     assert device.num_program_cache_entries() - entries_before == 1
+
+
+@pytest.mark.parametrize("cache_idx", [64, 95, 1000])
+def test_update_cache_rejects_position_past_sequence(cache_idx, device, expect_error):
+    """A position past the cache's sequence length used to be accepted and land in another head's or
+    user's rows, or past the end of the cache buffer. The first, valid call builds the program, so the
+    rejected one is a program-cache hit: compute_program_hash excludes the position."""
+    num_users, num_heads, max_seq_len, head_dim = 2, 2, 64, 64
+    cache = torch.full((num_users, num_heads, max_seq_len, head_dim), -1.0, dtype=torch.bfloat16)
+    update = torch.full((1, num_heads, 32, head_dim), 3.0, dtype=torch.bfloat16)
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.from_torch(update, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.update_cache(cache_tt, update_tt, max_seq_len - 1)
+    expected = cache.clone()
+    expected[:, :, max_seq_len - 1, :] = 3.0
+
+    with expect_error(RuntimeError, "must be less than cache tensor sequence length"):
+        ttnn.update_cache(cache_tt, update_tt, cache_idx)
+    assert torch.equal(ttnn.to_torch(cache_tt), expected)
