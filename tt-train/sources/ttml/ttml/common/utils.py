@@ -279,6 +279,19 @@ def build_causal_mask(T: int, device: bool = False):
     return ttml.autograd.Tensor.from_numpy(m, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
 
+def scaled_dot_product_attention_auto(query, key, value, mask=None):
+    """Fused SDPA when q_seq == k_seq and the mask is None or [1, 1, q_seq, q_seq], composite otherwise."""
+    # TODO: #39558
+    q_seq = query.shape()[2]
+    fused = q_seq == key.shape()[2] and (mask is None or list(mask.shape()) == [1, 1, q_seq, q_seq])
+    sdpa = (
+        ttml.ops.attention.scaled_dot_product_attention
+        if fused
+        else ttml.ops.attention.scaled_dot_product_attention_composite
+    )
+    return sdpa(query, key, value, mask)
+
+
 def deallocate_tensors(tensors) -> None:
     if tensors is None:
         return

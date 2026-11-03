@@ -78,7 +78,7 @@ from ttml.models.qwen3.weights import (
     unpermute_norm_weights,
     expected_fused_load_shape,
 )
-from ttml.common.utils import resolve_padded_load_shape
+from ttml.common.utils import resolve_padded_load_shape, scaled_dot_product_attention_auto
 from utils.param_utils import build_weight_mapping_distributed
 from utils.tensor_utils import (
     get_device,
@@ -282,14 +282,7 @@ class DistributedQwen3Attention(AbstractModuleBase):
         if past_key_values is not None:
             key_heads, value_heads = past_key_values.update(self.layer_idx, key_heads, value_heads)
 
-        q_seq = query_heads.shape()[2]
-        k_seq = key_heads.shape()[2]
-        sdpa_fn = (
-            ttml.ops.attention.scaled_dot_product_attention
-            if q_seq == k_seq
-            else ttml.ops.attention.scaled_dot_product_attention_composite
-        )
-        attn = sdpa_fn(query_heads, key_heads, value_heads, attention_mask)
+        attn = scaled_dot_product_attention_auto(query_heads, key_heads, value_heads, attention_mask)
 
         return self.o_proj(ttml.ops.multi_head_utils.heads_fusion(attn))
 

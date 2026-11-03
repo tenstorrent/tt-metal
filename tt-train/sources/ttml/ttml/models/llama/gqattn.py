@@ -10,6 +10,7 @@ from typing import Callable, Optional
 
 import ttnn
 import ttml
+from ttml.common.utils import scaled_dot_product_attention_auto
 from ttml.modules import AbstractModuleBase, LinearLayer, ColumnParallelLinear, RowParallelLinear, RunMode
 
 
@@ -172,14 +173,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         k_cache_to_process = ttml.autograd.create_tensor(k_cache_slice)
         v_cache_to_process = ttml.autograd.create_tensor(v_cache_slice)
 
-        # The fused SDPA needs q_seq == k_seq and a [1, 1, S, S] mask; decode uses the composite one.
-        q_seq = q_heads.shape()[2]
-        sdpa_fn = (
-            ttml.ops.attention.scaled_dot_product_attention
-            if list(mask.shape()) == [1, 1, q_seq, q_seq]
-            else ttml.ops.attention.scaled_dot_product_attention_composite
-        )
-        attention = sdpa_fn(q_heads, k_cache_to_process, v_cache_to_process, mask)
+        attention = scaled_dot_product_attention_auto(q_heads, k_cache_to_process, v_cache_to_process, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)
