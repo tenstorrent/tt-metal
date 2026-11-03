@@ -6726,6 +6726,35 @@ def record_kernel_attempt(
     #
     # Permanence across runs comes free: _load_attempts_all reads archive UNION live, so a rung tried
     # in a previous optimize of this model is still closed in the next one.
+
+    # DIFF GATE: an attempt without a source change is a "paper review" — the agent reasoned the
+    # lever away without trying it. One per (op, rung) is enough to record a genuine irreducible;
+    # beyond that the agent must edit, measure, and let the numbers decide. Without this gate an
+    # agent can exhaust the entire ladder on every op with zero code changes and zero real
+    # measurements (287 attempts, 0 diffs observed in the first model that hit this).
+    _diff_now = _capture_attempt_diff()
+    _max_no_diff = int(os.environ.get("PERF_MCP_MAX_NO_DIFF_ATTEMPTS", "1"))
+    if not _diff_now and "wedged" not in (note or "").lower() and os.environ.get("PERF_MCP_ALLOW_NO_DIFF") != "1":
+        _prior_no_diff = sum(
+            1
+            for a in _load_attempts_all()
+            if _op_match(op_signature, a)
+            and _normalise_rung(a.get("kernel_kind")) == _normalise_rung(kernel_kind)
+            and not (a.get("diff") or "").strip()
+            and not a.get("wedged")
+        )
+        if _prior_no_diff >= _max_no_diff:
+            return {
+                "recorded": False,
+                "refused": (
+                    "NO SOURCE CHANGE: %d of %d permitted no-diff attempt(s) for %r/%r already "
+                    "recorded. Edit the source, run measure_candidate on the changed code, then "
+                    "record with the measured result. An attempt that changes nothing proves "
+                    "nothing — the measurement is the proof, not the reasoning."
+                    % (_prior_no_diff, _max_no_diff, _normalise_rung(kernel_kind), op_signature)
+                ),
+            }
+
     rec = {
         "op_signature": op_signature,
         "kernel_kind": kernel_kind,
@@ -6772,7 +6801,7 @@ def record_kernel_attempt(
         "ttnn_version": _ttnn_version(),
         "wedged": False,
         "evidence": ev,
-        "diff": _capture_attempt_diff(),
+        "diff": _diff_now,
     }
     _append_attempt(rec)
     return {
