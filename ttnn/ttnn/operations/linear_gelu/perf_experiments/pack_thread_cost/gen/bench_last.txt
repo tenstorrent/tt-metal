@@ -1,0 +1,21 @@
+/localdev/kgrujcic/tt-metal-codegen/ttnn/ttnn/operations/linear_gelu/perf_experiments/pack_thread_cost/gen/prof/reports/2026_11_03_00_08_22/ops_perf_results_2026_11_03_00_08_22.csv 20 op rows, 20 calls
+nr_nostall_c3                nsb=32:sb=4                      80518 ns  GenericOpDeviceOperation
+nr_nostall_c3                nsb=32:sb=1                      20800 ns  GenericOpDeviceOperation
+nr_nostall_c3                nsb=160:sb=4                    400975 ns  GenericOpDeviceOperation
+nr_nostall_c3                nsb=160:sb=1                    102125 ns  GenericOpDeviceOperation
+noreconfig                   nsb=32:sb=4                      82370 ns  GenericOpDeviceOperation
+noreconfig                   nsb=32:sb=1                      21179 ns  GenericOpDeviceOperation
+noreconfig                   nsb=160:sb=4                    410233 ns  GenericOpDeviceOperation
+noreconfig                   nsb=160:sb=1                    104013 ns  GenericOpDeviceOperation
+base                         nsb=32:sb=4                      85161 ns  GenericOpDeviceOperation
+base                         nsb=32:sb=1                      24250 ns  GenericOpDeviceOperation
+base                         nsb=160:sb=4                    423968 ns  GenericOpDeviceOperation
+base                         nsb=160:sb=1                    119167 ns  GenericOpDeviceOperation
+interleave                   nsb=32:sb=4                      85614 ns  GenericOpDeviceOperation
+interleave                   nsb=32:sb=1                      24267 ns  GenericOpDeviceOperation
+interleave                   nsb=160:sb=4                    426114 ns  GenericOpDeviceOperation
+interleave                   nsb=160:sb=1                    119174 ns  GenericOpDeviceOperation
+diag_nogelu                  nsb=32:sb=4                      11402 ns  GenericOpDeviceOperation
+diag_nogelu                  nsb=32:sb=1                       6189 ns  GenericOpDeviceOperation
+diag_nogelu                  nsb=160:sb=4                     55210 ns  GenericOpDeviceOperation
+diag_nogelu                  nsb=160:sb=1                     28944 ns  GenericOpDeviceOperation

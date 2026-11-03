@@ -409,8 +409,15 @@ ALWI void matmul_block(
                             tile_regs_wait();
                         }
 
-                        if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
+                        // The swap is redundant when the target is interm itself: the packer already holds its
+                        // format (pre-loop reconfig, a spill's reconfig, or the caller under NONE), and it costs
+                        // ~90 ns per subblock on the pack thread.
+                        if constexpr (packer_l1_acc) {
                             PACK((pack_reconfig_data_format(pack_target_id)));
+                        } else if constexpr (get_fp32_dest_acc_enabled()) {
+                            if (last_block_target == LastBlockTarget::OutWithUntilize || pack_target_id != interm_cb_id) {
+                                PACK((pack_reconfig_data_format(pack_target_id)));
+                            }
                         }
 
                         if constexpr (packer_l1_acc) {
