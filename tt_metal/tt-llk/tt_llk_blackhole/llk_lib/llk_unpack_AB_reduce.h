@@ -104,7 +104,6 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
         LLK_ASSERT(tensor_shape_scaler.num_faces_c_dim == tensor_shape.num_faces_c_dim, "The scaler needs a face for every column of data faces");
         if (_llk_unpack_AB_reduce_scaler_whole_tile_(tensor_shape, tensor_shape_scaler))
         {
-            // One UNPACR per operand.
             constexpr std::uint32_t whole_tile_replay_len = 2;
             load_replay_buf(
                 0,
