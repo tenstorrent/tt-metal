@@ -62,13 +62,12 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
+        // start and step are int32 bit patterns; wrap-around uint32 math equals int32 math.
         CoreLocalMem<uint32_t> ptr(w_addr);
 
         for (uint32_t w = 0; w < chunk_width; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
-            int32_t val;
-            val = start_u.f + step_u.f * idx;
-            ptr[w] = val;
+            ptr[w] = start + step * static_cast<uint32_t>(idx);
         }
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
