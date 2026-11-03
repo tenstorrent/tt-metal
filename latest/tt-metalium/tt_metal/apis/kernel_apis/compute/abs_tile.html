@@ -339,7 +339,6 @@
 <dd>
 <p>Performs element-wise computation of absolute value on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
 <p>Note: This version of the function is for int32 datatype</p>
-<p>On Wormhole, this operation records replay slots 0-2 and relies on the ADDR_MOD_6 programmed by <em>abs_tile_init</em>. Callers sharing the replay buffer with other SFPU operations must reinitialize it as needed.</p>
 <p>Return value: None</p>
 <p></p>
 <div class="tt-api-param-list colwidths-auto docutils container">
