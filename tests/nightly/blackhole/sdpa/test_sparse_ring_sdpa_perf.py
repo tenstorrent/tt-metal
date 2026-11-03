@@ -43,9 +43,11 @@ from tests.nightly.blackhole.sdpa.test_sparse_ring_sdpa import (
     Case,
     Geometry,
     _density,
+    frame_block_mask,
     make_mask,
     make_structured_mask,
     pool,
+    window_allow,
 )
 
 pytestmark = pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
@@ -58,6 +60,12 @@ DENSITIES = [0.20, 0.07, 0.05]  # 5 s block densities at tau 1 / 2 / 3
 K_CHUNKS = [256, 384, 512]
 FAMILY_DENSITIES = [0.05, 0.1, 0.2, 0.35]
 FAMILY_K_CHUNK = 256  # production at 5 / 10 / 15 s
+# The closed frame-sparse ring_joint path's video shapes (sosborne/sparse-ring-sdpa): 21 frames padded to 24, rows per
+# device on SP=8 for 3840 / 1920 tokens per frame, the dense op at that branch's chunks (320, 384).
+FRAME_POINTS = {11520: ("720p", 3840), 5760: ("480p", 1920)}
+FRAMES_REAL, FRAMES_PADDED = 21, 24
+DENSE_CHUNKS.update({rows: (320, 384) for rows in FRAME_POINTS})
+SHAPE_NAMES = {**WORKING_POINTS, **{rows: name for rows, (name, _) in FRAME_POINTS.items()}}
 
 
 @pytest.fixture(scope="module")
@@ -103,31 +111,33 @@ class Bench:
     """Device inputs for one shape (the last one used; the previous is freed) and its dense / gather baselines."""
 
     def __init__(self, rt):
-        self.rt, self.rows, self.case, self.tensors, self.baselines = rt, None, None, (), {}
+        self.rt, self.key, self.case, self.tensors, self.baselines = rt, None, None, (), {}
         # The MiniMax-H3 attention module's SDPA compute config (attention_minimax_h3.py), not the dense ring test's,
         # which also turns packer L1 accumulation off: timings should match the model's.
         self.ckc = ttnn.init_device_compute_kernel_config(
             rt.mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
         )
 
-    def shape(self, rows):
-        if rows != self.rows:
+    def shape(self, rows, logical_n=None):
+        """The case for `rows` per device and `logical_n` real tokens (default: every row)."""
+        logical_n = rows * MESH_CONFIG.sp_size if logical_n is None else logical_n
+        if (rows, logical_n) != self.key:
             self._free()
-            geo = Geometry(rows, rows * MESH_CONFIG.sp_size, K_CHUNKS[0], dense_chunks=DENSE_CHUNKS[rows])
+            geo = Geometry(rows, logical_n, K_CHUNKS[0], dense_chunks=DENSE_CHUNKS[rows])
             case = Case(self.rt, geo)
             shape = (1, case.H, case.S * rows, D)
             g = torch.Generator().manual_seed(rows)
             self.qkv = [torch.randn(shape, generator=g, dtype=torch.bfloat16) for _ in range(3)]
             self.tensors = tuple(case._upload(x, case.seq_dims) for x in self.qkv)
             self.pooled = tuple(case._upload(pool(x, geo, case.S), case.dims(None, 1)) for x in self.qkv[1:])
-            self.rows, self.case = rows, case
+            self.key, self.case = (rows, logical_n), case
         return self.case
 
     def _free(self):
         if self.case is not None:
             for t in (*self.tensors, *self.pooled, self.case.buf_k, self.case.buf_v):
                 ttnn.deallocate(t)
-        self.case, self.tensors, self.pooled, self.qkv = None, (), (), ()
+        self.key, self.case, self.tensors, self.pooled, self.qkv = None, None, (), (), ()
 
     def dense(self):
         rt, case = self.rt, self.case
@@ -205,13 +215,13 @@ class Bench:
             block_size=BLOCK,
         )
 
-    def baseline(self, rows):
-        """(dense, gather) replay times for `rows`, timed on first use."""
-        if rows not in self.baselines:
-            self.shape(rows)
+    def baseline(self, rows, logical_n=None):
+        """(dense, gather) replay times for `rows` (and `logical_n`), timed on first use."""
+        self.shape(rows, logical_n)
+        if self.key not in self.baselines:
             mesh = self.rt.mesh_device
-            self.baselines[rows] = (traced_ms(mesh, self.dense()), traced_ms(mesh, self.gather()))
-        return self.baselines[rows]
+            self.baselines[self.key] = (traced_ms(mesh, self.dense()), traced_ms(mesh, self.gather()))
+        return self.baselines[self.key]
 
 
 @pytest.fixture(scope="module")
@@ -224,7 +234,7 @@ def bench(runtime):
 def record(results_file, rows, mode, times, *, k_chunk=None, density=None, dense=None, gather=None, structure="random"):
     op_ms = statistics.median(times)
     rec = {
-        "shape": WORKING_POINTS[rows],
+        "shape": SHAPE_NAMES[rows],
         "rows": rows,
         "mesh": f"{MESH_CONFIG.tp_size}x{MESH_CONFIG.sp_size}",
         "mode": mode,
@@ -311,4 +321,35 @@ def test_mask_family_perf(bench, results_file, rows, structure, density):
         dense=dense,
         gather=gather,
         structure=structure,
+    )
+
+
+@pytest.mark.skipif(MESH_CONFIG.sp_size != 8, reason="the frame-sparse video shapes are per device on SP=8")
+@pytest.mark.parametrize("rows", list(FRAME_POINTS), ids=[name for name, _ in FRAME_POINTS.values()])
+def test_frame_mask_perf(bench, results_file, rows):
+    """The old frame-sparse video shapes (window 5 and the last frame, kept blocks only) against the dense op on the
+    same shape: the frame-sparse ring_joint path measured about 2.8x over dense at its mask density."""
+    tokens_per_frame = FRAME_POINTS[rows][1]
+    logical_n = FRAMES_REAL * tokens_per_frame
+    dense, gather = bench.baseline(rows, logical_n)
+    case = bench.shape(rows, logical_n)
+    allow = window_allow(FRAMES_REAL, FRAMES_PADDED, window=5, add_last_frame=True)
+    mask = frame_block_mask(allow, tokens_per_frame, case.geo, case.S, case.H)
+    block_density = _density(mask, case.geo, case.S)
+    t_mask = case._upload(mask, case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    del mask
+    try:
+        times = traced_ms(case.rt.mesh_device, bench.sparse(t_mask, FAMILY_K_CHUNK, False))
+    finally:
+        ttnn.deallocate(t_mask)
+    record(
+        results_file,
+        rows,
+        "kept",
+        times,
+        k_chunk=FAMILY_K_CHUNK,
+        density=round(block_density, 4),
+        dense=dense,
+        gather=gather,
+        structure="frames",
     )

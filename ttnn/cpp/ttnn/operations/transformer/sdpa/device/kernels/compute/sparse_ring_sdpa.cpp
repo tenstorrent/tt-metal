@@ -105,6 +105,9 @@ void kernel_main() {
     constexpr uint32_t cb_block_counts = get_named_compile_time_arg_val("cb_block_counts");
     constexpr uint32_t cb_key_bias = get_named_compile_time_arg_val("cb_key_bias");
     constexpr uint32_t key_bias_tiles = get_named_compile_time_arg_val("key_bias_tiles");
+    // The step's row-sum operand: an identity tile (the writer generates it), so the sum slots keep one partial sum
+    // per column; cb_col_identity collapses them at normalization.
+    constexpr uint32_t cb_sum_identity = get_named_compile_time_arg_val("cb_sum_identity");
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
@@ -206,7 +209,8 @@ void kernel_main() {
                 kv_cb_pages,
                 has_block_counts,
                 cb_key_bias,
-                key_bias_tiles>(
+                key_bias_tiles,
+                cb_sum_identity>(
                 pass_q_start,
                 pass_q_end,
                 num_q_chunks,

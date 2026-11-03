@@ -102,6 +102,22 @@ void kernel_main() {
         fill_tile_zeros<get_tile_size(cb_col_identity)>(noc_zero, cb_col_identity, 0);
     }
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
+    {
+        // The compute step's row-sum operand: an identity tile (the scalar on the diagonal of faces 0 and 3, which
+        // hold rows / columns 0-15 and 16-31), so P x I = P and each sum slot keeps one partial sum per column.
+        constexpr uint32_t cb_sum_identity = get_named_compile_time_arg_val("cb_sum_identity");
+        Noc noc_zero;
+        fill_tile_zeros<get_tile_size(cb_sum_identity)>(noc_zero, cb_sum_identity, 0);
+        CircularBuffer cb(cb_sum_identity);
+        cb.reserve_back(1);
+        volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr());
+        const uint16_t one = identity_scalar_packed >> 16;
+        for (uint32_t r = 0; r < 16; ++r) {
+            p[r * 16 + r] = one;            // face 0
+            p[3 * 256 + r * 16 + r] = one;  // face 3
+        }
+        cb.push_back(1);
+    }
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::MAX,

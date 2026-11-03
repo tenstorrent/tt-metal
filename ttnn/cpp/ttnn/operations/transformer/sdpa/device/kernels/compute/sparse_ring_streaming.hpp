@@ -321,8 +321,8 @@ static __attribute__((noinline, noclone)) void res_s5_flush(
  *  4. The exp stage and the P@V are interleaved per member (see S5 + S6 below): the P@V of the members
  *     finished in one S5 batch runs under the exp and packs of the next, with one PACK_DONE token per S5 batch.
  * The running max is lazy (S2-S4: the state is rescaled only when some row's max grows past a threshold), the row
- * sum is P x e0, and the pooled entries add their column bias before the max. run_cols / run_ws / n_runs are per
- * member; a pooled entry is one run of its active width from column 0 with apply_col_bias.
+ * sum is P x I (one partial sum per column), and the pooled entries add their column bias before the max. run_cols /
+ * run_ws / n_runs are per member; a pooled entry is one run of its active width from column 0 with apply_col_bias.
  */
 template <
     uint32_t Sq_chunk_t,
@@ -336,7 +336,7 @@ template <
     uint32_t cb_v_in,
     uint32_t cb_qkt_im,
     uint32_t cb_identity_scale_in,
-    uint32_t cb_col_identity,
+    uint32_t cb_sum_identity,
     uint32_t cb_max_scratch,
     uint32_t cb_exp_max_diff,
     uint32_t cb_max_in,
@@ -752,7 +752,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     //      every stage switch (the broadcast subtract and the matmul share the unpacker/math configuration), as is
     //      the unpacker's srcA format when V is block float (a compile-time no-op otherwise). ----
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
-    CircularBuffer(cb_col_identity).wait_front(1);
+    CircularBuffer(cb_sum_identity).wait_front(1);
     {
         constexpr auto s5_flush = res_s5_flush<
             Sq_chunk_t,
@@ -806,10 +806,12 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         s5_flush(st, true);
     }
 
-    // ---- S6b: the row sums P@e0 in batches of stat_slots_per_acq members (the matmul takes the member's row
-    //      stride W_g, re-issued when it changes). Every S5 token has been taken by now, so all exp'd scores are in
-    //      L1. ----
-    sdpa_maybe_reconfig_data_format<cb_v_in, cb_col_identity, cb_qkt_im, cb_qkt_im>();
+    // ---- S6b: the row sums P@I in batches of stat_slots_per_acq members (the matmul takes the member's row
+    //      stride W_g, re-issued when it changes): the slot keeps one partial sum per column, as the dense op's
+    //      column-tile sum, and normalize_row_streaming collapses the 32 columns. A single column (P@e0) put every key
+    //      of the row in one bf16 accumulator, whose rounding error grows with the keys per row (MiniMax-H3 10 s
+    //      keep-all: ~73k). Every S5 token has been taken by now, so all exp'd scores are in L1. ----
+    sdpa_maybe_reconfig_data_format<cb_v_in, cb_sum_identity, cb_qkt_im, cb_qkt_im>();
     configure_single_tile_pack(cb_sum_in);
     {
         uint32_t rs_stride = 0;
@@ -819,12 +821,12 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             for (uint32_t gg = 0; gg < n_g; ++gg) {
                 const uint32_t g = g0 + gg;
                 if (W[g] != rs_stride) {
-                    sdpa_pv_mm_setup(cb_qkt_im, cb_col_identity, false, 1, Sq_chunk_t, W[g]);
+                    sdpa_pv_mm_setup(cb_qkt_im, cb_sum_identity, false, 1, Sq_chunk_t, W[g]);
                     rs_stride = W[g];
                 }
                 for (uint32_t c = 0; c < W[g]; ++c) {
                     sdpa_matmul_block_no_mop(
-                        cb_qkt_im, cb_col_identity, sidx(g, 0, c), 0, gg * Sq_chunk_t, false, 1, Sq_chunk_t, W[g]);
+                        cb_qkt_im, cb_sum_identity, sidx(g, 0, c), 0, gg * Sq_chunk_t, false, 1, Sq_chunk_t, W[g]);
                 }
             }
             tile_regs_commit();
@@ -848,7 +850,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             tile_regs_release();
         }
     }
-    sdpa_maybe_reconfig_data_format<cb_col_identity, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+    sdpa_maybe_reconfig_data_format<cb_sum_identity, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
 
     CircularBuffer(cb_qkt_im).pop_front(qk_cap);
     CircularBuffer(cb_max_scratch).pop_front(stats_cap);
@@ -924,7 +926,8 @@ template <
     uint32_t kv_cb_pages,
     bool has_block_counts,
     uint32_t cb_key_bias,
-    uint32_t key_bias_tiles>
+    uint32_t key_bias_tiles,
+    uint32_t cb_sum_identity>
 void sdpa_ring_resident(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1132,7 +1135,7 @@ void sdpa_ring_resident(
             cb_v_in,
             cb_qkt_im,
             cb_identity_scale_in,
-            cb_col_identity,
+            cb_sum_identity,
             cb_max_scratch,
             cb_exp_max_diff,
             cb_max_in,

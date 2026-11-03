@@ -514,10 +514,31 @@ def _check(tag, r, density, *, dense_min, ref_min):
 DENSE_FLOOR_MARGIN = 5e-4
 
 
+def _block_pccs(ref, out):
+    """PCC of every computed (head, 64-row Q block) of out against ref (blocks the reference left NaN are skipped),
+    worst first: whether an error is spread evenly (accumulation) or concentrated (a head, a core's blocks, a shard)."""
+    res = []
+    for h in range(ref.shape[1]):
+        for b0 in range(0, ref.shape[2], BLOCK):
+            rb = ref[0, h, b0 : b0 + BLOCK]
+            if torch.isnan(rb).all():
+                continue
+            res.append((_pcc(rb, out[0, h, b0 : b0 + BLOCK]), h, b0 // BLOCK))
+    return sorted(res)
+
+
 def _check_vs_dense_floor(tag, r, density):
     p_ref = _pcc(r["ref"], r["sparse"])
     p_floor = _pcc(r["dense_ref"], r["dense"])
     logger.info(f"[{tag}] block density {density:.3f}: pcc vs reference {p_ref:.5f}, dense vs exact {p_floor:.5f}")
+    blocks, dense_blocks = _block_pccs(r["ref"], r["sparse"]), _block_pccs(r["dense_ref"], r["dense"])
+    if blocks:
+        med = blocks[len(blocks) // 2][0]
+        worst = ", ".join(f"h{h} qb{qb} {p:.5f}" for p, h, qb in blocks[:3])
+        logger.info(
+            f"[{tag}] per Q block (global block index): median {med:.5f}, worst {worst}; dense median "
+            f"{dense_blocks[len(dense_blocks) // 2][0]:.5f}, worst {dense_blocks[0][0]:.5f}"
+        )
     assert torch.isfinite(r["sparse"]).all(), f"{tag}: non-finite output"
     assert p_ref > p_floor - DENSE_FLOOR_MARGIN, f"{tag}: pcc vs reference {p_ref:.5f}, dense floor {p_floor:.5f}"
 

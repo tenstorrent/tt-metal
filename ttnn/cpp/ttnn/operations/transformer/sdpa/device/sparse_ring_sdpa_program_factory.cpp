@@ -936,7 +936,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         (has_block_counts || args.logical_n % tt::constants::TILE_WIDTH != 0) ? 2 * (Sk_chunk_t / block_tiles) : 0u;
     struct CbLayout {
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
-            recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias;
+            recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity;
     };
     const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, bool pairs, const auto& alloc) -> CbLayout {
         const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {
@@ -948,6 +948,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         l.v_in = tile_cb(v_piece_tiles * kv_pages, v_tile_size, v_df);
         l.identity_scale_in = tile_cb(scale_tiles, scalar_tile_size, scalar_df);
         l.col_identity = tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+        // The compute step's row-sum operand (an identity tile, from the writer): the sum slots keep one partial sum
+        // per column, which normalization collapses with col_identity.
+        l.sum_identity = tile_cb(1, scalar_tile_size, scalar_df);
         const uint32_t qk_im_cb_tiles =
             std::max(qk_tiles, std::min(slots, kResidentGroup) * Sq_chunk_t * Sk_chunk_t * (pairs ? 2u : 1u));
         const uint32_t res_stats_tiles = statistics_tiles * slots;
@@ -1344,6 +1347,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"cb_block_counts", cb_block_counts},
         {"key_bias_tiles", key_bias_tiles},
         {"cb_key_bias", cb_key_bias},
+        {"cb_sum_identity", cbs.sum_identity},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = named_args;
