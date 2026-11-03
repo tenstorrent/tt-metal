@@ -46,7 +46,10 @@ jobs:
             - >-
               /tmp/uv/bin/uv pip install -q --python /tmp/venv/bin/python
               --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt
-            - . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
+            # The guest's /workspace is a 9p share, slow for the many small
+            # reads of kernel compiles: run from a local copy (torrentci#2327).
+            - cp -a tt_metal/tt-llk /tmp/tt-llk
+            - . /tmp/venv/bin/activate && cd /tmp/tt-llk/tests && ./setup_testing_env.sh
       - id: group-1
         kind: shell
         shell:
@@ -54,7 +57,7 @@ jobs:
             # pytest's progress dots are one output event each and exhaust the
             # runner's event cap (torrentci#2321): log to a file, print the tail.
             - >-
-              ulimit -n 4096; . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests/python_tests &&
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/tt-llk/tests/python_tests &&
               rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
               -m "$PYTEST_MARKERS" --splits 2 --group 1 --timeout=60 --durations=25
               --junitxml=pytest-report-wormhole-1.xml . >/tmp/pytest-1.log 2>&1 || rc=$?;
@@ -66,7 +69,7 @@ jobs:
             # pytest's progress dots are one output event each and exhaust the
             # runner's event cap (torrentci#2321): log to a file, print the tail.
             - >-
-              ulimit -n 4096; . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests/python_tests &&
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/tt-llk/tests/python_tests &&
               rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal
               -m "$PYTEST_MARKERS" --splits 2 --group 2 --timeout=60 --durations=25
               --junitxml=pytest-report-wormhole-2.xml . >/tmp/pytest-2.log 2>&1 || rc=$?;
