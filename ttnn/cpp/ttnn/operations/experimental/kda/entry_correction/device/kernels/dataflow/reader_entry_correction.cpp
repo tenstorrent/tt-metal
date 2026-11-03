@@ -14,17 +14,16 @@ constexpr uint32_t cb_a = get_compile_time_arg_val(4);
 constexpr uint32_t cb_b = get_compile_time_arg_val(5);
 constexpr uint32_t cb_ctl = get_compile_time_arg_val(6);
 constexpr uint32_t cb_ctl_writer = get_compile_time_arg_val(7);
-constexpr uint32_t seed_semaphore_id = get_compile_time_arg_val(8);
-constexpr uint32_t sp_rank = get_compile_time_arg_val(9);
-constexpr uint32_t sp_size = get_compile_time_arg_val(10);
-constexpr uint32_t local_rows = get_compile_time_arg_val(11);
-constexpr uint32_t kt = get_compile_time_arg_val(12);
-constexpr bool has_actual_end = get_compile_time_arg_val(13);
+constexpr uint32_t sp_rank = get_compile_time_arg_val(8);
+constexpr uint32_t sp_size = get_compile_time_arg_val(9);
+constexpr uint32_t local_rows = get_compile_time_arg_val(10);
+constexpr uint32_t kt = get_compile_time_arg_val(11);
+constexpr bool has_actual_end = get_compile_time_arg_val(12);
 // A head's cores each form every final_stride-th tile row of the final state.
-constexpr uint32_t final_stride = get_compile_time_arg_val(14);
+constexpr uint32_t final_stride = get_compile_time_arg_val(13);
 // Interleaved terms: this core reads its chunk rows of F(0) and F(I) one chunk at a time.
-constexpr bool streamed = get_compile_time_arg_val(15);
-constexpr auto a_args = TensorAccessorArgs<16>();
+constexpr bool streamed = get_compile_time_arg_val(14);
+constexpr auto a_args = TensorAccessorArgs<15>();
 constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
 constexpr auto entry_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
 constexpr auto tail_args = TensorAccessorArgs<entry_args.next_compile_time_args_offset()>();
@@ -33,8 +32,8 @@ constexpr auto end_args = TensorAccessorArgs<start_args.next_compile_time_args_o
 constexpr auto terms_args = TensorAccessorArgs<end_args.next_compile_time_args_offset()>();
 constexpr uint32_t state_tiles = kt * kt;
 
-// Entry correction reader: the chronology (this core's valid chunks and the reset chunk), the head's seeds (read by the
-// head's first core and written to the head's other cores), and the rows of A and B this core forms the final state of.
+// Entry correction reader: the chronology (this core's valid chunks and the reset chunk), the head's seeds, and the
+// rows of A and B this core forms the final state of.
 void kernel_main() {
     size_t arg = 0;
     const uint32_t a_address = get_common_arg_val<uint32_t>(0);
@@ -49,11 +48,6 @@ void kernel_main() {
     const uint32_t last_chunk = get_arg_val<uint32_t>(arg++);
     // The first tile row of the final state this core forms (kt: none); it forms every final_stride-th row on.
     const uint32_t final_row = get_arg_val<uint32_t>(arg++);
-    // The head's first core reads its seeds and writes them to the head's other cores (NoC x | y << 16 each).
-    const bool seed_sender = get_arg_val<uint32_t>(arg++);
-    const uint32_t seed_receivers = get_arg_val<uint32_t>(arg++);
-    const size_t receiver_args = arg;
-    const uint32_t seed_semaphore = get_semaphore(seed_semaphore_id);
     const bool owns_final = final_row < kt;
 
     // The chronology: valid chunks and the reset chunk (where the tail's seed takes over).
@@ -83,7 +77,7 @@ void kernel_main() {
     }
     const uint32_t final = owns_final && valid != 0;
     const uint32_t final_tail = final && reset != 0;
-    // Every core of the head takes the group's seed, and the tail's after a reset: the head's seeds are shared.
+    // Every core of the head takes the group's seed, and the tail's after a reset.
     const uint32_t need_group = valid != 0;
     const uint32_t need_tail = valid != 0 && reset != 0;
     words[0] = chunks;
@@ -104,49 +98,23 @@ void kernel_main() {
     cb_push_back(cb_ctl_writer, 1);
     cb_push_back(cb_ctl, 1);
 
-    const uint32_t seeds = need_group + need_tail;
-    if (seed_sender) {
-        const auto send = [&](uint32_t cb, uint32_t address, const auto& args) {
-            cb_reserve_back(cb, state_tiles);
-            const uint32_t local = get_write_ptr(cb);
-            const auto states = TensorAccessor(args, address);
-            const uint32_t tile = get_tile_size(cb);
-            for (uint32_t i = 0; i < state_tiles; ++i) {
-                noc_async_read_page(head * state_tiles + i, states, local + i * tile);
-            }
-            noc_async_read_barrier();
-            for (uint32_t d = 0; d < seed_receivers; ++d) {
-                const uint32_t xy = get_arg_val<uint32_t>(receiver_args + d);
-                noc_async_write(local, get_noc_addr(xy & 0xFFFF, xy >> 16, local), state_tiles * tile);
-            }
-            cb_push_back(cb, state_tiles);
-        };
-        if (need_group) {
-            send(cb_seed, entry_address, entry_args);
+    // Each of the head's cores reads its own copy of the head's seeds.
+    const auto read_seed = [&](uint32_t cb, uint32_t address, const auto& args) {
+        cb_reserve_back(cb, state_tiles);
+        const uint32_t local = get_write_ptr(cb);
+        const auto states = TensorAccessor(args, address);
+        const uint32_t tile = get_tile_size(cb);
+        for (uint32_t i = 0; i < state_tiles; ++i) {
+            noc_async_read_page(head * state_tiles + i, states, local + i * tile);
         }
-        if (need_tail) {
-            send(cb_tail, tail_address, tail_args);
-        }
-        if (seeds != 0) {
-            noc_async_write_barrier();
-            for (uint32_t d = 0; d < seed_receivers; ++d) {
-                const uint32_t xy = get_arg_val<uint32_t>(receiver_args + d);
-                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, seed_semaphore), seeds);
-            }
-            noc_async_atomic_barrier();
-        }
-    } else if (seeds != 0) {
-        // The seeds land at the same buffer addresses on every core of the program.
-        volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(seed_semaphore);
-        noc_semaphore_wait_min(landed, seeds);
-        if (need_group) {
-            cb_reserve_back(cb_seed, state_tiles);
-            cb_push_back(cb_seed, state_tiles);
-        }
-        if (need_tail) {
-            cb_reserve_back(cb_tail, state_tiles);
-            cb_push_back(cb_tail, state_tiles);
-        }
+        noc_async_read_barrier();
+        cb_push_back(cb, state_tiles);
+    };
+    if (need_group) {
+        read_seed(cb_seed, entry_address, entry_args);
+    }
+    if (need_tail) {
+        read_seed(cb_tail, tail_address, tail_args);
     }
     if constexpr (streamed) {
         // Head h's F(0) rows are tile rows h * 2 * num_chunks + chunk of the terms, its F(I) rows num_chunks further.
