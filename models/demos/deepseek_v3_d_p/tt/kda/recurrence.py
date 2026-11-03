@@ -479,9 +479,8 @@ def _scan_sp_grouped_chunks(
         final_state = final_carry(rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows)
         return RecurrenceResult(output, final_state)
     # Several groups per head: the relay carries each rank's reduced transform, and a scan over the groups follows. The
-    # reduction and the scan read only slots with a
-    # valid segment (the reduction writes its own identity for a rank without a head), so the other slots need no
-    # identity.
+    # reduction and the scan read only slots with a valid segment (the reduction writes its own identity for a rank
+    # without a head), so the other slots need no identity.
     summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         groups_per_head=groups,
