@@ -25,12 +25,7 @@ on:
           - BH-LoudBox
         default: "N150"
       load-to-db:
-        description: "Homogenize and load into the Snowflake trace DB (SELF_SERVE.TTNN_OPS_V6)"
-        required: false
-        type: boolean
-        default: false
-      open-manifest-pr:
-        description: "After a load, open a PR adding the new trace_run_id to trace_selection_registry.yaml (requires load-to-db)"
+        description: "Homogenize, load into DB, and open a single manifest PR"
         required: false
         type: boolean
         default: false
@@ -739,7 +734,7 @@ jobs:
           merge-multiple: true
 
       - name: Create manifest PR
-        if: inputs.open-manifest-pr && steps.load.outcome == 'success' && steps.load.outputs.trace_run_id != ''
+        if: steps.load.outcome == 'success' && steps.load.outputs.trace_run_id != ''
         env:
           GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           TRACE_UID: ${{ steps.homogenize.outputs.trace_uid }}
