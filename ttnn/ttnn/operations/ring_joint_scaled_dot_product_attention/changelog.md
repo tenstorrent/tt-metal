@@ -36,3 +36,23 @@
   `test_ring_joint_scaled_dot_product_attention_placement_switch.py`, `probes/focus_breakdown.py` (perf-breakdown
   probe, not collected). Existing: `test_ring_joint_scaled_dot_product_attention.py` (acceptance, 15 cases),
   `test_ring_joint_scaled_dot_product_attention_debug.py`.
+
+## Refinement 1 — Numerical configurability: bf16 DEST (perf-focus enabler) + bfloat8_b Q and K/V
+- Date: 2026-11-03
+- What was done: `SUPPORTED["dtype"]` and `["kv_dtype"]` += `bfloat8_b`, `SUPPORTED["fp32_dest_acc_en"]` += `False`. Reused:
+  the existing dtype-derived CB plan (`compute_cb_plan`: Q / K / V CBs follow Q / K/V dtypes, scores / stats / O follow
+  `fp32_dest_acc_en` → Float16_b at bf16 DEST, no Float32 page), the K/V-dtype landing buffers, port CB and `run_pages`, the
+  bf16 output, the HiFi3 floor for fp32 DEST only (bf16 DEST keeps the requested HiFi2). Added: nothing in the kernels or
+  descriptor; EXCLUSIONS stays empty. At bf16 DEST `choose_block_extents()` picks Sq=16, Sk=8 for the Wan2.2 case (8, 8 at fp32).
+- Accuracy achieved (Linear G=2, worst device, HiFi2 requested): fp32 DEST all dtype pairs PCC ≥ 0.999997, rel-RMS ≤ 0.0026;
+  bf16 DEST PCC ≥ 0.99985, rel-RMS 0.011–0.018 (gate 0.05 / 0.06 / 0.08) on shapes [1x1x64x64, 1x4x256x128 padded,
+  1x10x512x128 padded, 1x6x512x128 + joint 512 padded]. Large logits (std ~36): fp32 DEST ≤ 0.0051; bf16 DEST 0.058–0.085
+  for every dtype pair, also 0.071 at HiFi4 — Q·Kᵀ accumulates in 16-bit DEST (host model with per-face 16-bit
+  accumulation reproduces 0.058–0.066), so it is inherent to the config, not a kernel defect. The golden
+  `test_large_logits` runs fp32 DEST only and is unaffected.
+- Golden test progress: slice of every bf8b / bf16-DEST cell in test_golden + test_ring_mock + test_fabric_configs:
+  280 passed / 0 failed / 0 XPASS (1228 xfail_expected); `test_op_loose` (Wan2.2 FOCUS, bf16 / bf16 / False, 1x4 ring) passes.
+- Issues encountered: None in the op. Finding: the bf16-DEST large-logit precision above.
+- Tests added: `test_ring_joint_scaled_dot_product_attention_precision_baseline.py` now parametrizes 7 (dtype, kv_dtype,
+  DEST width) configs gated on the golden TOLERANCES, plus `test_large_logits_config` (fp32 DEST: golden gate; bf16 DEST:
+  0.10 regression ceiling).

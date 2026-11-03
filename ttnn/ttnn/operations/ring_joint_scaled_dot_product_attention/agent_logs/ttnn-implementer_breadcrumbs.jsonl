@@ -2,3 +2,5 @@
 {"event":"fix_applied","what":"port sender re-armed arrival counter before consumers_done gate; reordered: wait cdone, then drain+decrement arrival","ts":"2026-11-03T20:00:00+00:00"}
 {"event":"test_run","result":"linear 10/10 pass --dev, ring_mock 5/5 pass --dev (separate session)","note":"Ethernet cores stuck at teardown under --dev reproduces with the reference fabric_all_gather too -> watcher artifact; breaks mid-session fabric reopen under --dev only","ts":"2026-11-03T20:22:02+00:00"}
 {"event":"test_run","result":"acceptance 15/15 pass (prod), golden test_golden 40 passed / 0 failed / 1657 xfailed / 5984 skipped","ts":"2026-11-03T20:25:54+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-03T21:51:41+00:00"}
+{"event":"test_run","result":"pass","detail":"golden bf8b/bf16-DEST slice 280 passed 0 failed; test_op_loose pass; large_logits bf16 DEST 0.067/0.085 inherent 16-bit accumulation","ts":"2026-11-03T21:59:25+00:00"}

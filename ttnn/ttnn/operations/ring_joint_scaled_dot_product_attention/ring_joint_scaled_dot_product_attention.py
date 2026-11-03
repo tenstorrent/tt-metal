@@ -57,13 +57,13 @@ INPUT_TAGGERS = {
 }
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0)
+# 2. SUPPORTED (Phase 0 + Refinement 1: bf16 DEST, bfloat8_b Q and K/V)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "kv_dtype": [ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "kv_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self"],
