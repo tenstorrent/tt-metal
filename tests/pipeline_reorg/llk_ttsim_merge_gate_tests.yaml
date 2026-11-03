@@ -96,17 +96,50 @@
   budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
 
-# SFPU kernels outside eltwise that Sanity runs on ttsim. 690 tests.
-# sfpu_binary_bcast: welford layernorm (interleaved, large, sharded) and two_pass groupnorm.
+# SFPU kernels outside eltwise that Sanity runs on ttsim, split three ways to fit 15 min.
+# sfpu_binary_bcast: welford layernorm (interleaved, sharded) and two_pass groupnorm.
 # reshuffle_rows: embedding_bw, the case ttnn_sanity_tests.yaml runs.
-- name: "llk sfpu norm embedding sim"
+# -k "not False" drops use_welford=False (no sfpu_binary_bcast); -k cannot match "=".
+
+# Welford layernorm (use_welford=True only) and embedding_bw. 165 tests.
+- name: "llk sfpu layernorm embedding sim"
   cmd: >-
     pytest --timeout 60 -xv
     tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
-    tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
-    tests/ttnn/unit_tests/operations/fused/test_group_norm.py
     tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw_with_program_cache
-    -k "welford or two_pass or embedding_bw_with_program_cache"
+    -k "(welford and not False) or embedding_bw_with_program_cache"
+    -m "not disable_fast_runtime_mode"
+  skus:
+    sim_wh_n150:
+      timeout: 15
+    sim_bh_p150:
+      timeout: 15
+  team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
+
+# Welford sharded layernorm. 285 tests.
+- name: "llk sfpu layernorm sharded sim"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
+    -k "welford"
+    -m "not disable_fast_runtime_mode"
+  skus:
+    sim_wh_n150:
+      timeout: 15
+    sim_bh_p150:
+      timeout: 15
+  team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
+
+# Two-pass (welford) groupnorm. 106 tests.
+- name: "llk sfpu groupnorm sim"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/fused/test_group_norm.py
+    -k "two_pass"
     -m "not disable_fast_runtime_mode"
   skus:
     sim_wh_n150:
