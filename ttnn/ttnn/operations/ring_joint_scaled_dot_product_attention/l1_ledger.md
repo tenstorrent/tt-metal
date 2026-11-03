@@ -16,13 +16,13 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (
 | `cb_max_scaler` | 1 | 1 (constant) | {all axes: streams — constant} | Float16_b (pool-type-aware bf16 scaler) | writer | compute | whole program | not shared with `cb_sum_scaler`: produced by different pool-type-aware overloads (MAX vs SUM, `reduce_helpers_dataflow.hpp:97-99`) whose fill patterns may differ; 1 tile each |
 | `cb_sum_scaler` | 1 | 1 (constant) | {all axes: streams — constant} | Float16_b | writer | compute | whole program | see `cb_max_scaler` |
 | `cb_scores` | `Sq·Sk` | `Sq·Sk_valid` (S, then P in place) | {batch: 1, q_head: 1, q_rows: spans → Sq, keys: spans → Sk, head_dim: streams (contracted), v_head_dim: streams, transport_entry: streams, transport_chunk: streams} | T_acc | compute | compute | per key block (score → mask → max → exp in place → consumed by pv) | none: S→P is already in place (Rule 3.2); live concurrently with stats and both O buffers; cannot alias `cb_out_tiles` because the writer drains the previous unit's output while this unit's scores are live |
-| `cb_max_a` | `Sq` | `Sq` | {q_rows: spans → Sq; batch, q_head: 1; keys, head_dim, v_head_dim, transport_*: streams} | T_acc | compute | compute | ping-pong across key blocks | pair with `cb_max_b`: α = exp(s(m_prev − m_cur)) reads both at once (concurrent lifetime) |
-| `cb_max_b` | `Sq` | `Sq` | same as `cb_max_a` | T_acc | compute | compute | ping-pong | see `cb_max_a` |
-| `cb_sum_a` | `Sq` | `Sq` (32-wide row partials until finalize) | {q_rows: spans → Sq; batch, q_head: 1; others: streams} | T_acc | compute | compute | ping-pong | pair with `cb_sum_b`: `l_cur += α·l_prev` reads both (concurrent); a single in-place sum would need L1-accumulating packs onto a fronted CB — lamp "single accumulator" |
-| `cb_sum_b` | `Sq` | `Sq` | same | T_acc | compute | compute | ping-pong | see `cb_sum_a` |
-| `cb_row_factor` | `Sq` | `Sq` | {q_rows: spans → Sq; others: streams/1} | T_acc | compute | compute | α during each key block; 1/l at finalize | **shared by role**: α (key walk) and 1/l (finalize) have disjoint lifetimes, so one CB serves both — Rule 3.3 applied |
-| `cb_out_acc_a` | `Sq·DVt` | `Sq·DVt` | {q_rows: spans → Sq, v_head_dim: spans → DVt; batch, q_head: 1; keys, head_dim, transport_*: streams} | T_acc | compute | compute | ping-pong across key blocks | pair with `cb_out_acc_b`: `O_cur = P·V` is packed while `O_prev` is still needed for `O_cur += α·O_prev` (concurrent); folding into one buffer needs PV to L1-accumulate onto a rescaled O — lamp "single O accumulator" |
-| `cb_out_acc_b` | `Sq·DVt` | `Sq·DVt` | same | T_acc | compute | compute | ping-pong | see `cb_out_acc_a` |
+| `cb_max_blk` (7) | `Sq` | `Sq` (m of this key block, then max(m_acc, m_blk)) | {q_rows: spans → Sq; batch, q_head: 1; keys, head_dim, v_head_dim, transport_*: streams} | T_acc | compute | compute | per key block (scratch) | not shared with `cb_max_acc`: α = exp(s(m_acc − m_blk)) reads both at once (concurrent lifetime) |
+| `cb_max_acc` (8) | `Sq` | `Sq` (running max) | same as `cb_max_blk` | T_acc | compute | compute | per unit (copied from `cb_max_blk` at the end of every key block) | see `cb_max_blk` |
+| `cb_sum_blk` (9) | `Sq` | `Sq` (row sums of this block's P, column-0 valid: `reduce<SUM, REDUCE_ROW>`) | {q_rows: spans → Sq; batch, q_head: 1; others: streams} | T_acc | compute | compute | per key block (scratch; unused on a unit's first block, which reduces straight into `cb_sum_acc`) | not shared with `cb_sum_acc`: `l_acc = α·l_acc + l_blk` reads both (concurrent) |
+| `cb_sum_acc` (10) | `Sq` | `Sq` (running l) | same as `cb_sum_blk` | T_acc | compute | compute | per unit | see `cb_sum_blk` |
+| `cb_row_factor` (11) | `Sq` | `Sq` | {q_rows: spans → Sq; others: streams/1} | T_acc | compute | compute | α during each key block; 1/l at finalize | **shared by role**: α (key walk) and 1/l (finalize) have disjoint lifetimes, so one CB serves both — Rule 3.3 applied |
+| `cb_out_blk` (12) | `Sq·DVt` | `Sq·DVt` (P·V of this block) | {q_rows: spans → Sq, v_head_dim: spans → DVt; batch, q_head: 1; keys, head_dim, transport_*: streams} | T_acc | compute | compute | per key block (scratch; the unit's first block packs straight into `cb_out_acc`) | not shared with `cb_out_acc`: `O_acc = α·O_acc + O_blk` reads both (concurrent). Folding the two needs PV to L1-accumulate onto a rescaled O_acc — design lamp "single O accumulator", folded into Refinement 3 (it frees `Sq·DVt·T_acc`, which raises Sq) |
+| `cb_out_acc` (13) | `Sq·DVt` | `Sq·DVt` (running O) | same as `cb_out_blk` | T_acc | compute | compute | per unit | see `cb_out_blk` |
 | `cb_out_tiles` | `out_block_depth·Sq·DVt` | `Sq·DVt` | {q_rows: spans → Sq, v_head_dim: spans → DVt; others: streams/1} | Float16_b (the output dtype; the final rounding of an fp32 DEST result — not an intermediate) | compute | writer | per unit | none: the writer drains it during the next unit's key walk, concurrent with every compute CB; cannot be `cb_out_acc_*` (different format, and the writer would become a second consumer of a compute-owned CB) |
 
 ### Port cores
@@ -47,23 +47,30 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (
 | `port_batch_chunks` | `max(1, min(8, 112 KiB // (2·chunk_bytes)))` = 4 | example's `group` rule |
 | `T_q, T_kv` | 2048 B (bf16), 1088 B (bfp8) | dtype |
 | `T_acc` | 4096 / 2048 B | `fp32_dest_acc_en` |
-| `L1_CB_BUDGET` | per-core CB region of the device (≈ 1.3 MB on Blackhole) | queried from the device once per process |
+| `L1_CB_BUDGET` | 1300 KiB (host constant in the program descriptor; Blackhole 1.5 MB L1 minus firmware / allocator base) | `choose_block_extents()` footprint ≤ it |
 
 ## Total per-core footprint
 
-Compute core:
+Single source: `compute_cb_plan(Sq, Sk, ...)` in the program descriptor is the CB inventory (index, pages, dtype);
+`choose_block_extents()` sums it for the fit and the descriptor allocates exactly it (verifier fix: the footprint
+used to restate the inventory as a second formula). Compute core:
 
 ```
 F(Sq, Sk) = q_block_depth·Sq·DHt·T_q                       # scales with Sq, DHt
           + kv_block_depth·Sk·(DHt + DVt)·T_kv             # scales with Sk, DHt, DVt
           + Sq·Sk·T_acc                                    # scales with Sq·Sk (scores)
-          + 5·Sq·T_acc                                     # stats: max a/b, sum a/b, row_factor — Sq
-          + 2·Sq·DVt·T_acc                                 # O ping-pong — Sq, DVt
+          + 5·Sq·T_acc                                     # stats: max blk/acc, sum blk/acc, row_factor — Sq
+          + 2·Sq·DVt·T_acc                                 # O_acc + O_blk — Sq, DVt
           + out_block_depth·Sq·DVt·2048                    # output — Sq, DVt
           + (2 + mask_tiles)·2048                          # constants
 ```
 
-dh = dv = 128: fp32 DEST, (Sq, Sk) = (8, 8) → 1,062 KB; bf16 DEST (FOCUS), (16, 8) → 1,184 KB.
+dh = dv = 128 (computed from `compute_cb_plan`): fp32 DEST, (Sq, Sk) = (8, 8) → 1,062 KiB (FOCUS shape: 1280 units over
+106 cores = 12.08 waves); bf16 DEST (FOCUS), (16, 8) → 1,190 KiB (640 units = 6.04 waves). Golden 1×10×512×128 on a
+4-ring: (1, 16) → 650 KiB (occupancy-driven Sq = 1).
+
+Not CBs: four global semaphores per worker core (arrival, ready, consumers_done, poll scratch — the compute reader's
+private NoC-read target for a port's arrival count; verifier fix, see verification_report.md).
 Port core: `2·port_batch_chunks·run_pages·page_bytes` = 112 KiB (+ packet-header pool).
 
 ## Data-movement budget (chosen split R1, per device per call)

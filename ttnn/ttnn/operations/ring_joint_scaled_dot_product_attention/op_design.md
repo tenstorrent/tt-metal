@@ -66,6 +66,7 @@ Registry axes (names exactly as in `feature_spec.py` TARGET): call-derived `dtyp
 | `sem_arrival` | global semaphore over every used core | (mesh id, port+compute core set) | per-port landing counter (TRANSPORT + OVERLAP) |
 | `sem_ready` | global semaphore | same | per-call fence between chips (TRANSPORT) |
 | `sem_consumers_done` | global semaphore | same | port re-arm gate: every compute reader has stopped polling (OVERLAP) |
+| `sem_poll` | global semaphore (never a counter) | same | the compute reader's private NoC-read target for a port's arrival count (verifier fix: polling into `sem_arrival` left stale counts on cores re-placed as ports in a later call) |
 | port plan | per device: port cores per (direction, link), links per hop, Ethernet-adjacent placement | (mesh id, cluster_axis, topology, num_links, fabric config) | `fabric_all_gather.plan()`-equivalent, probed once |
 
 Landing slot of source s on device p: `slot(p, s) = (s − p − 1) mod G ∈ [0, G−2]`; landing page = `slot·tensor_pages + source_page`. Semaphore creation runs once per cache key, followed by one `ttnn.synchronize_device` (every counter must be zero on every chip before any chip's first increment) — exactly `fabric_all_gather.py:1095-1102`; later calls allocate nothing and never synchronize. A second call with new tensor addresses only patches runtime args; the program uses a `custom_program_hash` covering every structural input (`fabric_ring_exchange/program_descriptor.py:229`: generic_op's cache ignores the per-core RT-arg layout).

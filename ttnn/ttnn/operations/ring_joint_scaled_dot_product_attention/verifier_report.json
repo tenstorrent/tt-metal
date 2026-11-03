@@ -1,0 +1,2225 @@
+{
+ "summary": {
+  "total": 7799,
+  "supported_pass": 110,
+  "supported_fail": 0,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 1705,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 0,
+  "invalid_skipped": 5984,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 0,
+  "no_axes_found": 0
+ },
+ "note": "Trimmed for the repo (full report: eval.verify_supported output, 7 MB). Run: EVAL_CAPTURE_L1=0 eval/eval_test_runner.sh eval/golden_tests/ring_joint_scaled_dot_product_attention/ <dir>; python3 -m eval.verify_supported <dir> ttnn.operations.ring_joint_scaled_dot_product_attention. Per-node lists of xfail_expected / invalid_skipped replaced by counts.",
+ "by_category": {
+  "supported_pass": [
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_1D-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_1D-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_1D_RING-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_1D_RING-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_1D_RING-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_1D_RING-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_1D_RING-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_1D_RING-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_1D_RING-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_1D_RING-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_1D_RING-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_1D_RING-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_1D_RING-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_1D_RING-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_1D_RING-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_1D_RING-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_1D_RING-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_1D_RING-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_1D_RING-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_1D_RING-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_2D-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_2D-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x1x64x64_1x1x64x64_1x1x64x64-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x1x64x64_1x1x64x64_1x1x64x64-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x1x64x64_1x1x64x64_1x1x64x64-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x1x64x64_1x1x64x64_1x1x64x64-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x2x128x64_1x2x128x64_1x2x128x64-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x2x128x64_1x2x128x64_1x2x128x64-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x2x128x64_1x2x128x64_1x2x128x64-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x2x128x64_1x2x128x64_1x2x128x64-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[2x2x128x64_2x2x128x64_2x2x128x64-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[2x2x128x64_2x2x128x64_2x2x128x64-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[2x2x128x64_2x2x128x64_2x2x128x64-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[2x2x128x64_2x2x128x64_2x2x128x64-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x10x512x128_1x10x512x128_1x10x512x128-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x10x512x128_1x10x512x128_1x10x512x128-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x10x512x128_1x10x512x128_1x10x512x128-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x10x512x128_1x10x512x128_1x10x512x128-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x8x1024x128_1x8x1024x128_1x8x1024x128-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x8x1024x128_1x8x1024x128_1x8x1024x128-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x8x1024x128_1x8x1024x128_1x8x1024x128-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x8x1024x128_1x8x1024x128_1x8x1024x128-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x5x384x256_1x5x384x256_1x5x384x256-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x5x384x256_1x5x384x256_1x5x384x256-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x5x384x256_1x5x384x256_1x5x384x256-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x5x384x256_1x5x384x256_1x5x384x256-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x4x288x96_1x4x288x96_1x4x288x96-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x4x288x96_1x4x288x96_1x4x288x96-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x4x288x96_1x4x288x96_1x4x288x96-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x4x288x96_1x4x288x96_1x4x288x96-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x14x256x128_1x14x256x128_1x14x256x128-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x14x256x128_1x14x256x128_1x14x256x128-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x14x256x128_1x14x256x128_1x14x256x128-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x14x256x128_1x14x256x128_1x14x256x128-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x12x256x128_1x12x256x128_1x12x256x128_1x12x128x128-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x12x256x128_1x12x256x128_1x12x256x128_1x12x128x128-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=exact-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x12x256x128_1x12x256x128_1x12x256x128_1x12x128x128-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_golden.py::test_op[1x12x256x128_1x12x256x128_1x12x256x128_1x12x128x128-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_regression.py::test_every_block_counted[0-no_joint]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_regression.py::test_every_block_counted[0-joint]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_regression.py::test_every_block_counted[1-no_joint]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_regression.py::test_every_block_counted[1-joint]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_regression.py::test_far_needle[0]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_regression.py::test_far_needle[1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "exact",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_regression.py::test_large_logits[0]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_regression.py::test_large_logits[1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_regression.py::test_deterministic[0]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_regression.py::test_deterministic[1]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_X-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_X-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_X-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_X-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_X-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_X-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_X-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_X-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_2D_TORUS_X-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_2D_TORUS_X-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_XY-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_XY-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_XY-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_XY-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_XY-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_XY-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_XY-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[1x4-FABRIC_2D_TORUS_XY-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_2D_TORUS_XY-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_2D_TORUS_XY-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_XY-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_XY-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_XY-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_XY-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_XY-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_XY-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_XY-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_XY-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_2D_TORUS_Y-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_fabric_configs.py::test_fabric_config[FABRIC_2D_TORUS_Y-alignment=tile_aligned-attention_kind=self-cluster_axis=1-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_Y-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_Y-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_Y-1x10x512x128_1x10x512x128_1x10x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_Y-1x10x512x128_1x10x512x128_1x10x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=none-joint_mode=none-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "none",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "none"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_Y-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_Y-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Ring]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Ring",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_Y-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links1-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   },
+   {
+    "nodeid": "eval/golden_tests/ring_joint_scaled_dot_product_attention/test_ring_mock.py::test_ring_mock[4x1-FABRIC_2D_TORUS_Y-1x6x512x128_1x6x512x128_1x6x512x128_1x6x512x128-links2-alignment=tile_aligned-attention_kind=self-cluster_axis=0-dtype=BFLOAT16-fp32_dest_acc_en=True-is_balanced=False-joint_len=aligned-joint_mode=replicated-kv_dtype=BFLOAT16-kv_heads_mode=mha-layout=TILE-mask_mode=none-seq_padding=padded-topology=Linear]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "kv_dtype": "BFLOAT16",
+     "fp32_dest_acc_en": true,
+     "layout": "TILE",
+     "joint_mode": "replicated",
+     "mask_mode": "none",
+     "is_balanced": false,
+     "seq_padding": "padded",
+     "cluster_axis": 0,
+     "topology": "Linear",
+     "alignment": "tile_aligned",
+     "attention_kind": "self",
+     "kv_heads_mode": "mha",
+     "joint_len": "aligned"
+    },
+    "status": "passed"
+   }
+  ],
+  "xfail_expected": 1705,
+  "invalid_skipped": 5984
+ }
+}

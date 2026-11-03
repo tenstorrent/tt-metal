@@ -58,6 +58,9 @@ void kernel_main() {
     const uint32_t core_idx = get_arg_val<uint32_t>(a++);
     const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);
     const uint32_t cdone_addr = get_arg_val<uint32_t>(a++);
+    // Private L1 word the remote counter is read into. Never a counter word: placement changes between calls, so a
+    // core polling here may be a port core next call, where a stale arrival count would read as landed items.
+    const uint32_t poll_addr = get_arg_val<uint32_t>(a++);
     uint32_t port_x[MAX_PORTS], port_y[MAX_PORTS], seen[MAX_PORTS];
     for (uint32_t i = 0; i < num_ports; ++i) {
         port_x[i] = get_arg_val<uint32_t>(a + i);
@@ -80,7 +83,7 @@ void kernel_main() {
     constexpr uint32_t B = BH / hq;
     constexpr uint32_t k_slot_pages = B * hk * n_kv_t * DHt;
     constexpr uint32_t v_slot_pages = B * hk * n_kv_t * DVt;
-    volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
+    volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll_addr);
 
     constexpr uint32_t U = total_units<Sq, n_q_t, Lq_t, BH, C>();
     const uint32_t my_units = units_of_core(U, C, core_idx);
@@ -121,17 +124,14 @@ void kernel_main() {
             const uint32_t kind = get_arg_val<uint32_t>(base + 0);
             const uint32_t valid = get_arg_val<uint32_t>(base + 1);
             const uint32_t slot = get_arg_val<uint32_t>(base + 3);
-            uint32_t seg_rows = n_kv_t;  // key tile-rows of one head in the source tensor
-            uint32_t k_base, v_base;     // first page of this head in the source tensor
+            uint32_t k_base, v_base;  // first page of this head in the source tensor
             if (kind == 1) {
-                seg_rows = Lq_t;
                 k_base = entry * Lq_t * DHt;
                 v_base = entry * Lq_t * DVt;
             } else {
                 k_base = (kind == 2 ? slot * k_slot_pages : 0) + entry * n_kv_t * DHt;
                 v_base = (kind == 2 ? slot * v_slot_pages : 0) + entry * n_kv_t * DVt;
             }
-            (void)seg_rows;
             if (kind == 2) {
                 // ---- await_landing: count needed = entry * S_in + rank + 1 on every port carrying the source ----
                 const uint32_t S_in = get_arg_val<uint32_t>(base + 4);
@@ -143,7 +143,7 @@ void kernel_main() {
                         continue;
                     }
                     while (seen[pi] < need) {
-                        noc_async_read(get_noc_addr(port_x[pi], port_y[pi], arrival_addr), arrival_addr, 4);
+                        noc_async_read(get_noc_addr(port_x[pi], port_y[pi], arrival_addr), poll_addr, 4);
                         noc_async_read_barrier();
                         seen[pi] = *scratch;
                     }

@@ -44,6 +44,11 @@ KV_BLOCK_DEPTH = 2  # cb_k_block / cb_v_block depth: reader one key block ahead 
 OUT_BLOCK_DEPTH = 1  # cb_out_tiles depth: the writer drains a unit during the next unit's walk
 PORT_BATCH_CHUNKS = 4  # chunks per port batch; cb_port_chunks holds 2 batches (fabric_all_gather README)
 L1_CB_BUDGET = 1300 * 1024  # per-core CB budget for choose_block_extents (design: ~1.3 MB on Blackhole)
+# Precision policy (compute_kernel_config is a FLOOR): with fp32 DEST accumulation requested, the compute kernel runs
+# at least this fidelity. Measured (golden test_regression::test_large_logits, logit std ~36, bf16, fp32 DEST): the
+# Q.K^T operand truncation of HiFi2 gives rel-RMS 0.0206 (gate 0.02); HiFi3 0.0045, HiFi4 0.0045. Not applied
+# when fp32_dest_acc_en is off (the DiT production / perf-focus config keeps the requested HiFi2).
+FP32_DEST_MIN_FIDELITY = ttnn.MathFidelity.HiFi3
 MASK_TILES = 1  # main key-tail mask tile (joint tail mask comes with non-aligned joint)
 
 # ---- CB indices (compute cores) ----
@@ -79,20 +84,38 @@ def _pow2_ceil(x):
     return 1 << (x - 1).bit_length()
 
 
-def choose_block_extents(*, tensor_q_tiles, joint_q_tiles, tensor_kv_tiles, b, hq, C, DHt, DVt, T_q, T_kv, T_acc):
+def compute_cb_plan(Sq, Sk, *, DHt, DVt, q_dtype, kv_dtype, acc_dtype):
+    """The compute-core CB inventory as (index, pages, dtype) — the single source of every compute CB's size.
+
+    choose_block_extents() sums it for the L1 fit and the program descriptor allocates exactly it, so a change to a
+    CB (or a buffer-depth knob) lands in one place (ledger: l1_ledger.md)."""
+    return [
+        (CB_Q_BLOCK, Q_BLOCK_DEPTH * Sq * DHt, q_dtype),
+        (CB_K_BLOCK, KV_BLOCK_DEPTH * Sk * DHt, kv_dtype),
+        (CB_V_BLOCK, KV_BLOCK_DEPTH * Sk * DVt, kv_dtype),
+        (CB_KEY_MASK, MASK_TILES, ttnn.bfloat16),
+        (CB_MAX_SCALER, 1, ttnn.bfloat16),
+        (CB_SUM_SCALER, 1, ttnn.bfloat16),
+        (CB_SCORES, Sq * Sk, acc_dtype),
+        (CB_MAX_BLK, Sq, acc_dtype),
+        (CB_MAX_ACC, Sq, acc_dtype),
+        (CB_SUM_BLK, Sq, acc_dtype),
+        (CB_SUM_ACC, Sq, acc_dtype),
+        (CB_ROW_FACTOR, Sq, acc_dtype),
+        (CB_OUT_BLK, Sq * DVt, acc_dtype),
+        (CB_OUT_ACC, Sq * DVt, acc_dtype),
+        (CB_OUT_TILES, OUT_BLOCK_DEPTH * Sq * DVt, ttnn.bfloat16),
+    ]
+
+
+def choose_block_extents(
+    *, tensor_q_tiles, joint_q_tiles, tensor_kv_tiles, b, hq, C, DHt, DVt, q_dtype, kv_dtype, acc_dtype
+):
     """The single source of (q_block_tiles, k_block_tiles) — op_design.md `choose_block_extents()`."""
-    T_bf = 2048
 
     def footprint(Sq, Sk):
-        return (
-            Q_BLOCK_DEPTH * Sq * DHt * T_q
-            + KV_BLOCK_DEPTH * Sk * (DHt + DVt) * T_kv
-            + Sq * Sk * T_acc
-            + 5 * Sq * T_acc
-            + 2 * Sq * DVt * T_acc
-            + OUT_BLOCK_DEPTH * Sq * DVt * T_bf
-            + (2 + MASK_TILES) * T_bf
-        )
+        plan = compute_cb_plan(Sq, Sk, DHt=DHt, DVt=DVt, q_dtype=q_dtype, kv_dtype=kv_dtype, acc_dtype=acc_dtype)
+        return sum(pages * ttnn.tile_size(dt) for _, pages, dt in plan)
 
     total_q_tiles = b * hq * (tensor_q_tiles + joint_q_tiles)
     sq_occ = _pow2_floor(max(1, total_q_tiles // max(1, C)))
@@ -415,12 +438,16 @@ _LANDING_CACHE = {}
 
 
 def _semaphores(mesh_device):
-    """(arrival, ready, consumers_done) global semaphores over the whole worker grid, created once per mesh."""
+    """(arrival, ready, consumers_done, poll_scratch) global semaphores over the whole worker grid, created once per
+    mesh. poll_scratch is never a counter: a compute reader NoC-reads a port's arrival count into its own copy of it.
+    It must not be one of the counters — port placement changes between calls (topology / num_links), so a core
+    that polled as a compute core in one call can be a port core in the next, and a polled value left in a counter
+    word would read as already-landed items there."""
     grid = mesh_device.compute_with_storage_grid_size()
     key = (id(mesh_device), grid.x, grid.y)
     if key not in _SEM_CACHE:
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-        sems = tuple(ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3))
+        sems = tuple(ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(4))
         # every chip's counters must be zero before any chip's first increment
         ttnn.synchronize_device(mesh_device)
         _SEM_CACHE[key] = (mesh_device, sems)
@@ -518,10 +545,10 @@ def run_ring_joint_sdpa(
         scale = dh**-0.5
 
     fp32_acc = bool(compute_kernel_config.fp32_dest_acc_en)
+    math_fidelity = compute_kernel_config.math_fidelity
+    if fp32_acc and math_fidelity.value < FP32_DEST_MIN_FIDELITY.value:
+        math_fidelity = FP32_DEST_MIN_FIDELITY
     acc_dtype = ttnn.float32 if fp32_acc else ttnn.bfloat16
-    T_q, T_kv = ttnn.tile_size(q.dtype), ttnn.tile_size(k.dtype)
-    T_acc, T_bf = ttnn.tile_size(acc_dtype), ttnn.tile_size(ttnn.bfloat16)
-
     DHt, DVt = dh // 32, dv // 32
     n_q_t, n_kv_t = n_q // 32, n_kv // 32
     Lq_t = (L + 31) // 32
@@ -535,11 +562,12 @@ def run_ring_joint_sdpa(
         C=C,
         DHt=DHt,
         DVt=DVt,
-        T_q=T_q,
-        T_kv=T_kv,
-        T_acc=T_acc,
+        q_dtype=q.dtype,
+        kv_dtype=k.dtype,
+        acc_dtype=acc_dtype,
     )
 
+    cb_plan = compute_cb_plan(Sq, Sk, DHt=DHt, DVt=DVt, q_dtype=q.dtype, kv_dtype=k.dtype, acc_dtype=acc_dtype)
     out_mem = memory_config or ttnn.DRAM_MEMORY_CONFIG
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([b, hq, n_q, dv]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, out_mem
@@ -552,9 +580,9 @@ def run_ring_joint_sdpa(
         else None
     )
     landk, landv = _landing_buffers(mesh_device, G, k, v)
-    sem_arrival, sem_ready, sem_cdone = _semaphores(mesh_device)
-    arrival_addr, ready_addr, cdone_addr = (
-        int(ttnn.get_global_semaphore_address(s)) for s in (sem_arrival, sem_ready, sem_cdone)
+    sem_arrival, sem_ready, sem_cdone, sem_poll = _semaphores(mesh_device)
+    arrival_addr, ready_addr, cdone_addr, poll_addr = (
+        int(ttnn.get_global_semaphore_address(s)) for s in (sem_arrival, sem_ready, sem_cdone, sem_poll)
     )
 
     page_bytes = int(k.buffer_aligned_page_size())
@@ -691,29 +719,15 @@ def run_ring_joint_sdpa(
         # ---------------- compute-core CBs ----------------
         ccrs = _crs(compute)
 
-        def cb(idx, pages, dtype, page):
+        def cb(idx, pages, dtype):
+            page = ttnn.tile_size(dtype)
             return ttnn.CBDescriptor(
                 total_size=pages * page,
                 core_ranges=ccrs,
                 format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=dtype, page_size=page)],
             )
 
-        program.cbs = [
-            cb(CB_Q_BLOCK, Q_BLOCK_DEPTH * Sq * DHt, q.dtype, T_q),
-            cb(CB_K_BLOCK, KV_BLOCK_DEPTH * Sk * DHt, k.dtype, T_kv),
-            cb(CB_V_BLOCK, KV_BLOCK_DEPTH * Sk * DVt, v.dtype, T_kv),
-            cb(CB_KEY_MASK, MASK_TILES, ttnn.bfloat16, T_bf),
-            cb(CB_MAX_SCALER, 1, ttnn.bfloat16, T_bf),
-            cb(CB_SUM_SCALER, 1, ttnn.bfloat16, T_bf),
-            cb(CB_SCORES, Sq * Sk, acc_dtype, T_acc),
-            cb(CB_MAX_BLK, Sq, acc_dtype, T_acc),
-            cb(CB_MAX_ACC, Sq, acc_dtype, T_acc),
-            cb(CB_SUM_BLK, Sq, acc_dtype, T_acc),
-            cb(CB_SUM_ACC, Sq, acc_dtype, T_acc),
-            cb(CB_ROW_FACTOR, Sq, acc_dtype, T_acc),
-            cb(CB_OUT_BLK, Sq * DVt, acc_dtype, T_acc),
-            cb(CB_OUT_ACC, Sq * DVt, acc_dtype, T_acc),
-            cb(CB_OUT_TILES, OUT_BLOCK_DEPTH * Sq * DVt, ttnn.bfloat16, T_bf),
+        program.cbs = [cb(*e) for e in cb_plan] + [
             ttnn.CBDescriptor(
                 total_size=2 * group * run_pages * page_bytes,
                 core_ranges=_crs(port_cores),
@@ -765,6 +779,7 @@ def run_ring_joint_sdpa(
                     ci,
                     arrival_addr,
                     cdone_addr,
+                    poll_addr,
                 ]
                 + [c.x for c in pxy]
                 + [c.y for c in pxy]
@@ -812,7 +827,7 @@ def run_ring_joint_sdpa(
                 compile_time_args=compute_ct,
                 runtime_args=compute_rt,
                 config=ttnn.ComputeConfigDescriptor(
-                    math_fidelity=compute_kernel_config.math_fidelity,
+                    math_fidelity=math_fidelity,
                     fp32_dest_acc_en=fp32_acc,
                     math_approx_mode=False,
                 ),
@@ -843,13 +858,14 @@ def run_ring_joint_sdpa(
                 q.dtype,
                 k.dtype,
                 fp32_acc,
-                compute_kernel_config.math_fidelity,
+                math_fidelity,
                 scale_bits,
                 run_pages,
                 tuple((c.x, c.y) for c in port_cores),
                 len(compute),
                 tuple(segments),
                 has_joint,
+                out_mem,  # the writer's out / joint_out TensorAccessorArgs are compile-time
             )
         )
         program.custom_program_hash = int.from_bytes(hashlib.sha1(hkey.encode()).digest()[:8], "little") >> 1
