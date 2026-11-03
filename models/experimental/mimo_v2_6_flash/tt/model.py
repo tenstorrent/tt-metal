@@ -1912,14 +1912,15 @@ class TtMiMoModel:
         if self.dflash is not None:
             self.dflash.release_trace()
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None, groups=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, groups=None, drain=False):
         """A verify step (tokens, positions: torch [max_batch], -1 an idle slot). Non-blocking; returns the verify
         trace's output (its ``next_tokens`` are the slots' greedy tokens). Copies the packed tokens and positions
         (the trace derives its other inputs from them) with the chain row ``chain`` (reference.spec_chain.chain_row;
         None: no draft chains behind the pass), and the RoPE cos / sin unless the trace reads them from the device
         tables. ``accept``: the pass's (slots, groups) for the accept trace (``verify_accept_enqueue``), staged first:
         the verify trace's relay step writes a chained pass's drafts into the control page. ``groups``: the verify
-        variant to replay (attention.verify_variant of the pass's highest used group; None: every group)."""
+        variant to replay (attention.verify_variant of the pass's highest used group; None: every group).
+        ``drain``: replay only on an empty queue (``_decode_replay``'s sampled step): the uploads land first."""
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
         variant = verify_variants()[-1] if groups is None else groups
         trace = self.verify_traces[variant]
@@ -1935,6 +1936,8 @@ class TtMiMoModel:
             )
             for h, d in zip(host, trace["inputs"][2:6]):
                 ttnn.copy_host_to_device_tensor(h, d)
+        if drain:
+            ttnn.synchronize_device(self.mesh_device)
         ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
         return trace["output"]
 

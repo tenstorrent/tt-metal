@@ -194,7 +194,7 @@ class Lane:
     def set_vllm_page_tables(self, rows):
         pass
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, drain=False):
         if accept is not None:
             self.ctrl = control_words(accept[1])
         self.verify_words, self.ctrl = relay_step(

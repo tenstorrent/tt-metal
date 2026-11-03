@@ -139,12 +139,14 @@ class FakeLane:
         self.verify_words = self.argmax = None
         self.ctrl = control_words([])
         self.accepts = self.reads = 0
+        self.drains = []  # each verify's ``drain``
 
     def set_vllm_page_tables(self, rows):
         pass
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, drain=False):
         """The verify trace: the relay step on the upload (and the control page, staged first), then the oracle."""
+        self.drains.append(drain)
         if accept is not None:
             self.verify_accept_stage(*accept)
         self.verify_words, self.ctrl = relay_step(
@@ -394,9 +396,10 @@ class LayersLane(FakeLane):
         self.mtp = LayersMTP(self, mtps, embedding, lm_head)
         self.step_hidden = torch.zeros(B, HIDDEN)
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, drain=False):
         """The verify trace: the relay step (a chained verify's tokens and positions from the lane's last page), then
         the target over the slots."""
+        self.drains.append(drain)
         if accept is not None:
             self.verify_accept_stage(*accept)
         self.verify_words, self.ctrl = relay_step(
@@ -540,9 +543,9 @@ def test_the_backfill_runs_where_the_rings_do_not_continue(adapter):
     rows_seen = []
     enqueue = lane.verify_enqueue
 
-    def verify_enqueue(tokens, positions, chain=None, accept=None):
+    def verify_enqueue(tokens, positions, chain=None, accept=None, drain=False):
         rows_seen.append(chain[CHAIN_HSLOTS : CHAIN_HSLOTS + SPEC_SLOTS].tolist())
-        return enqueue(tokens, positions, chain, accept)
+        return enqueue(tokens, positions, chain, accept, drain)
 
     lane.verify_enqueue = verify_enqueue
     p = 600
@@ -626,8 +629,8 @@ class DFlashLane(FakeLane):
         self.dflash_words = dflash_inputs(DFLASH)
         self.tap_positions = [-1] * B
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
-        out = super().verify_enqueue(tokens, positions, chain, accept)
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, drain=False):
+        out = super().verify_enqueue(tokens, positions, chain, accept, drain)
         self.tap_positions = list(self.verify_words[B : 2 * B])
         return out
 

@@ -529,6 +529,8 @@ def test_chained_greedy_equals_the_synchronous_path(adapter, defer):
     seq, counts = run_chained(adapter, 200)
     assert seq == SEQ[: len(seq)]
     assert lane.mtp.planned == 1, "only the first draft is host-planned: every other one chained on device"
+    # Only the verify the host built waits for an empty queue (VERIFY_DRAIN); the relayed ones queue behind it.
+    assert lane.drains == [generator_vllm.VERIFY_DRAIN] + [False] * (len(counts) - 1)
     assert adapter.chain_stats["uncovered"] == 0
     plans = lane.mtp.plans if lane.mtp.multi else None
     if plans is not None:

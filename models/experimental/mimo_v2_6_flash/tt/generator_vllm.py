@@ -219,6 +219,11 @@ ASYNC_SPEC = os.environ.get("MIMO_ASYNC_SPEC", "1") == "1"
 # chains onto it; by default it returns a handle and is read a step later (VerifyHandle), and the plugin may chain the
 # next verify onto it.
 SPEC_DEFER = os.environ.get("MIMO_SPEC_DEFER", "1") == "1"
+# A verify the host built (not relayed from the lane's last pass: after a prefill, a width change) replays only on an
+# empty queue, as the sampled decode step does (TtMiMoModel._decode_replay): replayed behind the commands still in
+# flight, its first layer now and then computed garbage (non-finite or 1e37 logits for every slot), which the next
+# replay of the same trace on the same inputs did not. MIMO_VERIFY_DRAIN=0 replays it at once.
+VERIFY_DRAIN = os.environ.get("MIMO_VERIFY_DRAIN", "1") == "1"
 
 
 def _untraced_decode(vllm_config):
@@ -1533,6 +1538,7 @@ class MiMoV2ForCausalLM:
         slot (the verify trace writes the slots' final norm rows into their requests' rings). ``accept``: its accept
         step's (slots, groups), staged before the verify (TtMiMoModel.verify_enqueue)."""
         model = self.models[lane]
+        relay = chain is not None and bool(chain[2])
         hslots = None
         if model.mtp is not None and model.mtp.history is not None:
             first = lane * self.per_lane
@@ -1560,7 +1566,7 @@ class MiMoV2ForCausalLM:
         ]
         variant = verify_variant(used, vp.width, sequential=_imbalanced(contexts))
         narrow = {"groups": variant} if variant is not None and variant != verify_variants()[-1] else {}
-        return model.verify_enqueue(tok, pos, chain, accept=accept, **narrow)
+        return model.verify_enqueue(tok, pos, chain, accept=accept, drain=VERIFY_DRAIN and not relay, **narrow)
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         """Drafts for the next step: the drafter drafts for the requests of each lane whose last step ran one pass (one
