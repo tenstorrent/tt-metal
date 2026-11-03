@@ -159,9 +159,10 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
 }
 
 std::vector<tt::tt_metal::TensorTopology> TypecastDeviceOperation::compute_output_topologies(
-    const TypecastParams& /*args*/, const TypecastInputs& tensor_args) {
+    const TypecastParams& args, const TypecastInputs& tensor_args) {
     // A typecast is distributed like its source.
-    return source_output_topologies(tensor_args.input, tensor_args.preallocated_output);
+    return source_output_topologies(
+        tensor_args.input, tensor_args.preallocated_output, [&] { validate_on_program_cache_miss(args, tensor_args); });
 }
 
 bool TypecastDeviceOperation::skip_launch(
