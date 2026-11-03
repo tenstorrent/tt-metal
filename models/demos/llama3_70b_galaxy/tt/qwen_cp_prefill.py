@@ -21,7 +21,8 @@ Layout per device (r, c), S = padded prefill length:
     bit-identical; QWEN_CP_CHUNKED_SDPA=0 keeps ring SDPA.
 
 Guard (cp_prefill_applies): Qwen, Wormhole, prefetcher, batch 1, start_pos 0 (no prefix cache),
-8192 < S <= QWEN_OPT_MAX_SEQ_LEN (tt/qwen_opt_limits.py), S % 1024 == 0, env QWEN_CP_PREFILL=1 (the default).
+QWEN_CP_MIN_SEQ_LEN <= S <= QWEN_OPT_MAX_SEQ_LEN (tt/qwen_opt_limits.py), S % 1024 == 0, env QWEN_CP_PREFILL=1
+(the default).
 QWEN_CP_PREFILL=0 selects the keep-14 seq-parallel path.
 """
 
@@ -46,6 +47,13 @@ GATHER_DIMS = {"wqkv": 2, "wo": 3, "w1": 2, "w3": 2, "w2": 3}
 WEIGHT_AG_KW = dict(num_workers_per_link=6)  # job139: all five 1.201 -> 1.156 ms
 
 
+# Shortest padded prefill the CP path takes. Measured on the 64L model (batch 1, untraced, vs the main per-layer
+# path): S=4096 829 -> 479 ms, S=8192 722 -> 489 ms, last-token logits PCC 0.9954 / 0.9957 against main, the same
+# agreement CP has with main at 16384 / 32768 (0.9944 / 0.9957). At S=2048 CP is slower (396 -> 630 ms) and flips the
+# top-1 token, so shorter prefills keep the main path.
+QWEN_CP_MIN_SEQ_LEN = 4096
+
+
 def cp_prefill_enabled() -> bool:
     return os.environ.get("QWEN_CP_PREFILL", "1") == "1"
 
@@ -61,7 +69,7 @@ def cp_prefill_applies(args, use_prefetcher, prefetcher_setup, mode, batch_size,
         and tuple(args.cluster_shape) == (ROWS, COLS)
         and batch_size == 1
         and start_pos == 0
-        and seq_len > 8192
+        and seq_len >= QWEN_CP_MIN_SEQ_LEN
         and qwen_opt_seq_len_ok(seq_len)  # S > QWEN_OPT_MAX_SEQ_LEN: main's per-layer path
         and seq_len % 1024 == 0
     )
@@ -887,7 +895,8 @@ def layer_major_enabled() -> bool:
 
 def layer_major_applies(model, batch, prefill_seq_lens, num_cached_tokens, page_table, do_device_sampling) -> bool:
     """The generator's prefill_forward_text call can run layer-major: every user is a CP prefill of one padded
-    length (> 8192, no prefix cache), paged KV cache, on-device sampling (the logits go to the sampling buffers)."""
+    length (>= QWEN_CP_MIN_SEQ_LEN, no prefix cache), paged KV cache, on-device sampling (the logits go to the sampling buffers).
+    """
     if not (layer_major_enabled() and do_device_sampling and page_table is not None and batch >= 1):
         return False
     if any(num_cached_tokens[:batch]) or len(set(prefill_seq_lens[:batch])) != 1:

@@ -740,6 +740,18 @@ class Generator(WarmupForwardMixin):
                     user_enable_trace = False
                 if explicit_seeded_prefill:
                     user_enable_trace = False
+                # The Qwen context-parallel prefill (tt/qwen_cp_prefill.py) runs untraced, also at a traced bucket
+                # length (4096) that it covers.
+                if qwen_cp_prefill.cp_prefill_applies(
+                    self.model.args,
+                    self.model.use_prefetcher,
+                    self.model.prefetcher_setup,
+                    "prefill",
+                    1,
+                    num_cached_tokens,
+                    prefill_seq_len,
+                ):
+                    user_enable_trace = False
 
             padded_batch = 32
             if work_use_batched_prefill:

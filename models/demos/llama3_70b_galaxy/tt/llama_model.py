@@ -1061,7 +1061,7 @@ class TtTransformer(LightweightModule):
             # (qwen_opt_limits.prefill_norm: main's eps for any cached prefix).
             set_prefill_total_len(self.model_config, start_pos + x.shape[-2], num_cached=start_pos)
 
-        # Qwen long prefill on Wormhole (batch 1, no prefix, S > 8192): context-parallel layout B
+        # Qwen long prefill on Wormhole (batch 1, no prefix, S >= QWEN_CP_MIN_SEQ_LEN): context-parallel layout B
         # (tt/qwen_cp_prefill.py; QWEN_CP_PREFILL=0 keeps the seq-parallel path below). Returns the same natural
         # [1, 1, S, 1280] pre-norm output as that path.
         if qwen_cp_prefill.cp_prefill_applies(

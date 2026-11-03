@@ -41,7 +41,8 @@ def _mm(M, K, N, sh, sw, gx, gy):
     return dict(M=M, K=K, N=N, sh=sh, sw=sw, grid=(gx, gy))
 
 
-# Branch head before the cap (4a43f337532), Wormhole, recorded host-only with the same readers as below.
+# Branch head before the cap (4a43f337532), Wormhole, recorded host-only with the same readers as below; then CP from
+# QWEN_CP_MIN_SEQ_LEN (4096, was > 8192).
 HEAD_LE_CAP = {
     4096: dict(
         ring_sdpa=(256, 512, False),
@@ -50,7 +51,7 @@ HEAD_LE_CAP = {
         ff13=_mm(8, 8, 8, 4, 2, 7, 9),
         rs=None,
         ag=None,
-        cp=False,
+        cp=True,
         fused=(False, False),
     ),
     8192: dict(
@@ -60,7 +61,7 @@ HEAD_LE_CAP = {
         ff13=_mm(8, 8, 8, 1, 8, 7, 9),
         rs=_RS,
         ag=_AG,
-        cp=False,
+        cp=True,
         fused=(False, False),
     ),
     16384: dict(
@@ -221,7 +222,8 @@ PREFIX_CASES = [
 def test_prefix_cached_gates_follow_total_context(qwen_args, cached, S):
     obs = _observed(qwen_args, S, cached=cached)
     if cached + S > CAP:
-        want = dict(MAIN_GT_CAP) if S > 4096 else dict(HEAD_LE_CAP[4096])
+        # S <= 4096: the le-cap configs, but no CP (it needs no prefix)
+        want = dict(MAIN_GT_CAP) if S > 4096 else {**HEAD_LE_CAP[4096], "cp": False}
         want["fused"] = obs["fused"]  # fused AG is CP-only; CP is off with a prefix
     else:
         want = {**HEAD_LE_CAP[S], "cp": False}
@@ -405,8 +407,9 @@ def test_output_norm_eps_follows_the_prefill_just_run(fake_prefill_stack, path):
 
 
 def test_prefill_trace_rule_is_heads():
-    """The prefill trace rule is HEAD's / main's: tracing is turned off only for untraced lengths and seeded prefill
-    (the prefix-cached traces carry main's eps, valid at every total)."""
+    """The prefill trace rule is HEAD's / main's: tracing is turned off only for untraced lengths, seeded prefill and
+    the Qwen context-parallel prefill, which runs untraced also at the traced bucket it covers (4096) (the
+    prefix-cached traces carry main's eps, valid at every total)."""
     gen_src = _src("generator.py")
     trace_off = sorted(
         ast.unparse(n.test)
@@ -414,7 +417,12 @@ def test_prefill_trace_rule_is_heads():
         if isinstance(n, ast.If)
         and any(isinstance(s, ast.Assign) and getattr(s.targets[0], "id", None) == "user_enable_trace" for s in n.body)
     )
-    assert trace_off == ["explicit_seeded_prefill", "prefill_seq_len not in self.model.tt_ccl.support_seqlens"]
+    assert trace_off == [
+        "explicit_seeded_prefill",
+        "prefill_seq_len not in self.model.tt_ccl.support_seqlens",
+        "qwen_cp_prefill.cp_prefill_applies(self.model.args, self.model.use_prefetcher, self.model.prefetcher_setup, "
+        "'prefill', 1, num_cached_tokens, prefill_seq_len)",
+    ]
 
 
 def test_cap_constant_is_shared():
