@@ -15,6 +15,9 @@
 #   default - the model's call, no compute_kernel_config (op default: HiFi4 on Quasar today)
 #   hifi4   - explicit HiFi4, otherwise identical to the bf16-input default config
 #   lofi    - explicit LoFi, otherwise identical; runs on ttsim
+# On the RTL emulator HiFi4 is measurably more accurate than LoFi (ulp_mean 0.365 vs 0.453, abs_max
+# 2.5e-3 vs 3.8e-3), so the extra phases do real work there and the op default stays HiFi4. ttsim's
+# check_fidelity_phase refuses them, so default and hifi4 are skipped on ttsim only (Quasar).
 # The explicit configs mirror softmax_init_compute_kernel_config's bf16 default (approx on,
 # fp32 dest acc on, packer L1 acc off) so only the fidelity differs.
 # ---------------------------------------------------------------------------
@@ -55,6 +58,11 @@ def _compute_config(mesh, fidelity):
 )
 def test_softmax_l1_small_grid(ttnn_mesh_device, reset_seeds, shape, fidelity):
     fid_name = "default" if fidelity is None else str(fidelity).split(".")[-1]
+    if fidelity != ttnn.MathFidelity.LoFi and U.is_quasar() and U.on_ttsim():
+        pytest.skip(
+            f"ttsim: {fid_name} (HiFi4) stops on check_fidelity_phase with bf16 math src formats; "
+            "runs correctly on the RTL emulator (issue #63782)"
+        )
     T.run_softmax_l1(
         ttnn_mesh_device,
         shape,
