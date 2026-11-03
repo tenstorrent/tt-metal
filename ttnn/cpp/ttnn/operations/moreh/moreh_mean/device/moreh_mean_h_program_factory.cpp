@@ -50,8 +50,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores_wt_core_range(core_range, units_to_divide);
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
     tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
 
@@ -82,15 +81,15 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
         ReduceOpDim::H,
         std::nullopt,
         ReduceFp32Mode::Fast,
-        {.arch = device->arch(),
-         .fp32_dest_acc_en = fp32_dest_acc_en,
-         .dst_full_sync_en = dst_full_sync_en,
-         .math_fidelity = math_fidelity},
+        reduce_host::make_reduce_hardware_config(device->arch(), compute_hw),
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
     const auto& auxiliary = reduce_plan.auxiliary_cb;
-    const auto compute_reduce_args = reduce_host::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
-    const auto writer_reduce_args =
-        reduce_host::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
+    enum LogicalDfb : uint32_t { Input, Auxiliary, Output };
+    const auto compute_reduce_args =
+        reduce_host::ReduceCallArgs(
+            reduce_plan, {.input_cb_id = Input, .auxiliary_cb_id = Auxiliary, .output_cb_id = Output})
+            .get_compile_time_args();
+    const auto writer_reduce_args = reduce_host::ReduceAuxiliaryArgs(reduce_plan, Auxiliary).get_compile_time_args();
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_DFB,
         .entry_size = tile_size(data_format),
@@ -155,8 +154,6 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
     });
 
     // ---- Compute kernels (two groups) ----
-    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
-
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         Group<DFBBinding> dfb_bindings = {
             DFBBinding{
