@@ -27,6 +27,7 @@ void bind_normalization_rms_norm(nb::module_& mod) {
 
         Returns:
             ttnn.DeviceComputeKernelConfig: The default compute config for RMS norm (HiFi4, approx_mode=False, fp32_dest_acc_en=True).
+                Quasar keeps approx_mode=True and fp32_dest_acc_en=False for now.
         )doc");
 
     const auto* doc = R"doc(
@@ -52,6 +53,7 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`, which uses
                 :func:`ttnn.rmsnorm_default_compute_config` (HiFi4, math_approx_mode=False, fp32_dest_acc_en=True).
+                Quasar keeps math_approx_mode=True and fp32_dest_acc_en=False for now.
                 Fields that trade accuracy for speed:
 
                 - fp32_dest_acc_en: True accumulates in FP32 (more accurate, can be slower). False accumulates in
