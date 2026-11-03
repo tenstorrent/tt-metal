@@ -50,6 +50,15 @@ def _compute_config(device):
     )
 
 
+def _rms_norm_config(device):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+    )
+
+
 # ── host-side tables ────────────────────────────────────────────────────────
 
 
@@ -183,6 +192,7 @@ class TtTalkerAttention:
         self.groups = self.heads // self.kv_heads
         self.scale = self.head_dim**-0.5
         self.eps = config["rms_norm_eps"]
+        self.norm_config = _rms_norm_config(device)
 
     def _split_heads(self, x, heads, length):
         """[1, T, heads*head_dim] -> [1, heads, T, head_dim]."""
@@ -205,8 +215,8 @@ class TtTalkerAttention:
         )
 
         # QK-norm runs per head over head_dim, before the rotation.
-        query = ttnn.rms_norm(query, weight=self.p["q_norm"], epsilon=self.eps)
-        key = ttnn.rms_norm(key, weight=self.p["k_norm"], epsilon=self.eps)
+        query = ttnn.rms_norm(query, weight=self.p["q_norm"], epsilon=self.eps, compute_kernel_config=self.norm_config)
+        key = ttnn.rms_norm(key, weight=self.p["k_norm"], epsilon=self.eps, compute_kernel_config=self.norm_config)
 
         query = self._apply_rotation(query, cos, sin)
         key = self._apply_rotation(key, cos, sin)
@@ -229,13 +239,18 @@ class TtTalkerDecoderLayer:
     def __init__(self, device, params, config, compute_config):
         self.p = params
         self.eps = config["rms_norm_eps"]
+        self.norm_config = _rms_norm_config(device)
         self.attention = TtTalkerAttention(device, params, config, compute_config)
         self.mlp = TtTalkerMLP(device, params, compute_config)
 
     def __call__(self, x, cos, sin, mask, length):
-        normed = ttnn.rms_norm(x, weight=self.p["input_layernorm"], epsilon=self.eps)
+        normed = ttnn.rms_norm(
+            x, weight=self.p["input_layernorm"], epsilon=self.eps, compute_kernel_config=self.norm_config
+        )
         x = ttnn.add(x, self.attention(normed, cos, sin, mask, length))
-        normed = ttnn.rms_norm(x, weight=self.p["post_attention_layernorm"], epsilon=self.eps)
+        normed = ttnn.rms_norm(
+            x, weight=self.p["post_attention_layernorm"], epsilon=self.eps, compute_kernel_config=self.norm_config
+        )
         return ttnn.add(x, self.mlp(normed))
 
 
@@ -247,6 +262,7 @@ class TtTalker:
         self.p = parameters
         self.config = parameters["config"]
         self.compute_config = _compute_config(device)
+        self.norm_config = _rms_norm_config(device)
         self.layers = [
             TtTalkerDecoderLayer(device, layer, self.config, self.compute_config) for layer in parameters["layers"]
         ]
@@ -270,7 +286,9 @@ class TtTalker:
             if return_intermediates:
                 intermediates[f"layers.{index}"] = x
 
-        x = ttnn.rms_norm(x, weight=self.p["norm"], epsilon=self.config["rms_norm_eps"])
+        x = ttnn.rms_norm(
+            x, weight=self.p["norm"], epsilon=self.config["rms_norm_eps"], compute_kernel_config=self.norm_config
+        )
         if return_intermediates:
             intermediates["norm"] = x
             return x, intermediates

@@ -30,7 +30,12 @@ import torch
 
 import ttnn
 from models.demos.audio.qwen3_tts import weights as checkpoint
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import TtTalkerDecoderLayer, _compute_config, causal_mask
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import (
+    TtTalkerDecoderLayer,
+    _compute_config,
+    _rms_norm_config,
+    causal_mask,
+)
 
 CODE_PREDICTOR_PREFIX = "talker.code_predictor."
 TALKER_CODEC_EMBEDDING = "talker.model.codec_embedding."
@@ -155,6 +160,7 @@ class TtCodePredictor:
         self.config = parameters["config"]
         self.groups = self.config["num_code_groups"]
         self.compute_config = _compute_config(device)
+        self.norm_config = _rms_norm_config(device)
         self.layers = [
             TtTalkerDecoderLayer(device, layer, self.config, self.compute_config) for layer in parameters["layers"]
         ]
@@ -181,7 +187,9 @@ class TtCodePredictor:
             if return_intermediates:
                 intermediates[f"layers.{index}"] = x
 
-        x = ttnn.rms_norm(x, weight=self.p["norm"], epsilon=self.config["rms_norm_eps"])
+        x = ttnn.rms_norm(
+            x, weight=self.p["norm"], epsilon=self.config["rms_norm_eps"], compute_kernel_config=self.norm_config
+        )
         if return_intermediates:
             intermediates["norm"] = x
             return x, intermediates
