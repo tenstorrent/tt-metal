@@ -1,23 +1,23 @@
 # tt-model-p300x2.yaml — Qwen/Qwen3.8-27B on a P300x2 (2x P300 boards = 4 Blackhole chips, (1,4) mesh) via vLLM, on the
 # RESIDENT decode engine (qwen36_resident/: one persistent program per chip per decode step).
-# ONE image, five serve profiles (the default is decided after the benchmark grid; PROVISIONAL below):
-#   single-user-dflash2  one user, lossless DFlash2 speculative decoding (greedy only), up to 256K context
-#   single-user          one user, plain resident decode, full sampling (greedy and top-k <= 32 drawn on device)
-#   single-user-mtp      one user, lossless MTP speculative decoding (greedy only)
-#   multi-user           several users on the rows-mode resident engine (paged KV pool, chunked prefill, device sampling)
-#   multi-user-long      multi-user with a 25 % larger KV pool (no 128-token prefill chunk), for long-context-heavy use
+# ONE image; the lineup and the default are the user's decision (2026-11-02):
+#   single-user          one user, lossless DFlash2 speculative decoding (greedy only), up to 256K context
+#   multi-user           DEFAULT: 1-16 users on the rows-mode resident engine (shared 29,440-block KV pool, prefill
+#                        gangs + one pipelined PP pass per prefill step, device sampling); TTFT-first scheduling is an
+#                        option of it (prefill_gang_tokens 0)
+# (batch, 17-32 users on the previous package's ttnn decode path, is a separate change, gated on a hardware check.)
+# Dropped from the earlier draft: plain single-user, single-user-mtp, multi-user-long (now multi-user's sizing).
 # Replaces the ttnn-path manifest of the same repo (branch qwen36-p300x2-pkg, tt-metal b220c901dec, plugin 96d4416,
 # image f6edb50771ac: profiles plain / batch8-dflash2 / single-user-dflash2). tt-model.yaml on this branch is the p150x2
 # package (changh95/qwen3.8-27b-p150x2) and is untouched.
 #
 #   tt-model package --container models/demos/blackhole/qwen36/tt-model-p300x2.yaml --out <builds>
-#   tt-model serve   <builds>/qwen3.8-27b-p300x2/tt_kernel_manifest.json [--profile single-user-dflash2]
+#   tt-model serve   <builds>/qwen3.8-27b-p300x2/tt_kernel_manifest.json [--profile single-user]
 #   tt-model push    <builds>/qwen3.8-27b-p300x2 --private
 #
 # OPEN before packaging (search TBD): the plugin ref (resident-mu pushed to the fork), the adapter merge (lane serve's
 # qwen38-res-mu-serve package-ready SHA, which must include ae776ee280c: RESIDENT_PREFILL_CHUNKS, without which
-# multi-user-long ignores its chunk list and OOMs at build), the multi-user sizing (lane mu's grid / lane serve's OOM churn), MTP at 256K,
-# the default profile, the card's benchmark cells.
+# multi-user ignores its chunk list and OOMs at build), the card's benchmark cells.
 schema: "5.1"
 repo: changh95/qwen3.8-27b-p300x2
 name: qwen3.8-27b-p300x2
@@ -29,7 +29,9 @@ arch: blackhole
 
 source:
   # Branch qwen38-resident-package = qwen38-resident (resident engine + multi-user rows + DFlash2 R=8 verify + 2-link
-  # hub all-reduce) + lane serve's adapters (TBD merge) + this manifest. Build prerequisites in the worktree: submodules
+  # hub all-reduce) + lane serve's adapters (TBD merge) + lane sched's qwen38-res-sched (prefill gangs in serve_local,
+  # one first-token launch per launch for a gang's prompts, lane prefill's PPPrefill.run_batch + HiFi2 / exp_approx SDPA
+  # default merged, the multi pool fix) + this manifest. Build prerequisites in the worktree: submodules
   # initialised (git submodule update --init --recursive) and `runtime` a real directory, not a symlink (the docker
   # build context drops a symlink that points outside it).
   tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal-res-pkg
@@ -53,9 +55,12 @@ runtime:
   # vllm-tt-plugin branch resident-mu = upstream tenstorrent/vllm-tt-plugin da7c018 (== the resident reference plugin) +
   # the TT chunk core the multi-user profile needs: a67c7f3 (aligned, one-long-in-flight chunked prefill), a0ee58a (a
   # split prompt's continuation keeps its state slot), 2c683cd (prefill_total_lens), 5618c8b (a split replay's last
-  # one-token chunk is prefill work). The single-user profiles use upstream paths only (adaptive block output for
-  # MTP / DFlash2; the chunk core is off at max_num_seqs 1). Pin = 5618c8b once resident-mu is pushed to the fork.
-  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 5618c8b_TBD_PUSH}
+  # one-token chunk is prefill work); then branch resident-mu-sched: a80d7a7 (prefill gangs, prefill_gang_tokens /
+  # prefill_gang_idle_tokens), ae93205 (a request with no decode step yet does not cap the next gang), docs; merged with
+  # fix-ttft2's resident-mu-ttft2 6641c17 as resident-mu-sched-ttft2 d5e699c (profiles/resident/sched/
+  # plugin_ttft2_merge_note.txt). single-user uses upstream paths only (adaptive block output for DFlash2; the chunk
+  # core is off at max_num_seqs 1). Pin = d5e699c once pushed to the fork.
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: d5e699c_TBD_PUSH}
   extra_models_dir: qwen36_resident/vllm_models    # main_class qwen36_resident.generator_vllm:Qwen36ResidentForCausalLM
 
 serve:                         # common to every profile; a profile's env MERGES over this (it cannot unset a key)
@@ -92,7 +97,7 @@ serve:                         # common to every profile; a profile's env MERGES
     - --async-scheduling
 
 serve_profiles:
-  - name: single-user-dflash2
+  - name: single-user
     description: One request at a time with lossless DFlash2 speculative decoding (greedy only), up to 256K context.
     max_num_seqs: 1
     env:
@@ -102,22 +107,21 @@ serve_profiles:
       # its cache has no refs/main). `hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68a...` once before
       # `tt-model serve` (quickstart). Also the code default (qwen36_resident.dflash.DRAFTER_WEIGHTS).
       DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
-  - name: single-user
-    description: One request at a time, plain resident decode, full sampling (greedy and top-k <= 32 on device).
-    max_num_seqs: 1
-  - name: single-user-mtp
-    description: One request at a time with lossless MTP speculative decoding (greedy only).
-    max_num_seqs: 1
-    max_model_len: 32768                 # as validated (lane serve); MTP at 256K is not measured, so it stays here
-    env:
-      TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentMTPForCausalLM"
+      # PENDING (lane prefill session 9, DFlash2 acceptance A/B of the prefill SDPA default, HiFi2 + exp_approx since
+      # dc5da2e5c5c): if DFlash2 keeps the previous prefill numerics, they go here, for this profile only:
+      #   RESIDENT_PP_SDPA_FIDELITY: HiFi4
+      #   RESIDENT_PP_SDPA_EXP_APPROX: "0"
   - name: multi-user
-    description: Several concurrent requests on the rows-mode resident engine (paged KV pool shared by the users, chunked prefill, device sampling).
+    description: 1-16 concurrent requests on the rows-mode resident engine (one KV pool shared by the users, device sampling, full sampling controls); waiting prompts prefill together before their decodes start, so each user decodes at the decode-step speed. TTFT-first scheduling is an option (prefill_gang_tokens 0).
     max_num_seqs: 16                     # two launches of 8
     env:
-      # KV pool = 24,064 blocks x 64, ~0.66 GB/chip free after the 16-slot build (lane mu: 24,640 blocks OOM at build
-      # with 16 slots). Note: an 8-slot build fits 1576960 (24,640 blocks).
-      RESIDENT_MAX_TOKENS_ALL_USERS: "1540096"
+      # KV pool = 29,440 blocks x 64 (the former multi-user-long sizing; lane serve 0dea74b8748: 30,016 + the plugin's
+      # 16 reservation blocks OOMs at build; 29,440 passed the card churn, queue_wp8_r3, and with PPPrefill.run_batch's
+      # staging a 250K-token prompt, lane sched rb1). No 128-token PP chunk: the prefill drops its 128-chunk SmallMatmul
+      # weight copies (3.24 GB/chip) for the pool; +49 ms TTFT at <= 128-token prompts, +20 ms at 512, none from ~768
+      # tokens (HF accuracy within noise, 32K bit-identical; needs RESIDENT_PREFILL_CHUNKS in the adapter, ae776ee280c).
+      RESIDENT_MAX_TOKENS_ALL_USERS: "1884160"
+      RESIDENT_PREFILL_CHUNKS: "256,512,1024"
       # the rows build's core split (lane mu, accuracy-gated; needs the GDN head collector fix c6436ac2bfc): 28 attention
       # workers, 4 GDN head groups; 8 users -8.6 % step time at <= 4K, -5.8 % at 32K, +2.5 % at 128K. The single-user
       # profiles keep the defaults (32 workers).
@@ -125,56 +129,48 @@ serve_profiles:
       RESIDENT_HEAD_GROUPS: "4"
     additional_config:
       tt:                                # deep-merged over serve.additional_config.tt
-        prefill_chunk_tokens: 1024       # the TT chunk core: chunked prefill between decode steps
+        prefill_chunk_tokens: 1024       # the TT chunk core: a prompt over the gang cap splits into 1024-token spans
+        # Prefill gangs (lane sched): the waiting prompts prefill whole, in one step (one pipelined PP pass,
+        # PPPrefill.run_batch), before their decodes start, so a burst is one wave (c=16, 2K-16K prompts: TPOT at the
+        # decode step, TTFT 1.4-2.0x the interleaved policy's); a prompt arriving while others decode runs whole
+        # up to 2048 tokens, longer ones split between decode steps. 0 = the interleaved (TTFT-first) policy.
+        prefill_gang_tokens: 2048
         sample_on_device_mode: decode_only   # the rows-mode hub feed (WP7)
-  - name: multi-user-long
-    description: Several concurrent requests with a 25 % larger KV pool for long-context-heavy use (prefill chunks of 256 tokens and up; same decode as multi-user).
-    max_num_seqs: 16
-    env:
-      # KV pool = 30,016 blocks x 64: 0.572 GB/chip free after a 250K prefill + decode (lane mu item 5,
-      # profiles/resident/mu/item5/: with128.json, no128.json, session.log)
-      RESIDENT_MAX_TOKENS_ALL_USERS: "1921024"
-      # no 128-token PP chunk: the prefill drops its 128-chunk SmallMatmul weight copies (3.24 GB/chip) for the pool;
-      # +49 ms TTFT at <= 128-token prompts, +20 ms at 512, none from ~768 tokens (HF accuracy within noise, 32K
-      # bit-identical). Needs RESIDENT_PREFILL_CHUNKS in the adapter (ae776ee280c): without it the build keeps the
-      # 128 copies and OOMs at this pool.
-      RESIDENT_PREFILL_CHUNKS: "256,512,1024"
-      RESIDENT_ATTN_WORKERS: "28"
-      RESIDENT_HEAD_GROUPS: "4"
-    additional_config:
-      tt:                                # deep-merged over serve.additional_config.tt
-        prefill_chunk_tokens: 1024       # the TT chunk core: chunked prefill between decode steps
-        sample_on_device_mode: decode_only   # the rows-mode hub feed (WP7)
-default_profile: single-user-dflash2     # PROVISIONAL: decided after the grid
+default_profile: multi-user              # user decision 2026-11-02
 
 card:
   description: >-
     [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) on a P300x2 (4 Blackhole chips) with vLLM, on the
     resident decode engine: one persistent program per chip per decode step, about 12 ms per token for one user.
-    Profiles: one user with lossless [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding
-    (up to 256K context), one user plain, one user with MTP, and several users with a shared KV pool.
+    Profiles: up to 16 users with a shared KV pool (the default), and one user with lossless
+    [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding (up to 256K context).
   quickstart: |
     ### At a glance
     - Weights: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) @ `1d4bf0f`; drafter
       [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) @ `dedf8df`
     - Hardware: P300x2 (QuietBox 2), one (1, 4) Blackhole mesh
-    - Profiles: `single-user-dflash2` (default, TBD), `single-user`, `single-user-mtp`, `multi-user`,
-      `multi-user-long`
-    - `single-user-dflash2` and `single-user-mtp` are **greedy only**: every request is decoded greedily (the server logs
-      one warning for a request with temperature > 0). Speculation is lossless against the model's own greedy output;
-      tokens can differ from `single-user` at bf16 near-ties.
+    - Profiles: `multi-user` (default), `single-user`
+    - `single-user` is **greedy only**: every request is decoded greedily (the server logs one warning for a request with
+      temperature > 0). Speculation is lossless against the model's own greedy output; tokens can differ from plain
+      decoding at bf16 near-ties.
     - DFlash2 helps most on short and medium prompts. On long, hard-to-predict text the gain shrinks to about 1.3x over
-      `single-user`; it stayed faster at every length measured (32K to 250K).
+      plain decoding; it stayed faster at every length measured (32K to 250K).
 
-    ### Get the drafter (`single-user-dflash2`)
+    ### Which profile
+    - One user, greedy (temperature 0): `single-user`.
+    - Sampling, or 2 to 16 users: `multi-user`. One user on it gets about 70 t/s/u (plain decode in a launch of 8
+      rows).
+    - If the time to the first token matters more than decode speed: `multi-user` with the TTFT-first option below.
+
+    ### Get the drafter (`single-user`)
     ```bash
     hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4
     ```
 
     ### Serve
     ```bash
-    tt-model serve changh95/qwen3.8-27b-p300x2                                 # default profile
-    tt-model serve changh95/qwen3.8-27b-p300x2 --profile single-user-dflash2
+    tt-model serve changh95/qwen3.8-27b-p300x2                                 # default profile: multi-user
+    tt-model serve changh95/qwen3.8-27b-p300x2 --profile single-user
     tt-model profiles changh95/qwen3.8-27b-p300x2
     ```
 
@@ -187,16 +183,14 @@ card:
     }'
     ```
 
-    ### Users x context (`multi-user`, `multi-user-long`)
-    The users share one KV pool: 1,540,096 tokens on `multi-user` (24,064 blocks of 64 tokens) and 1,921,024 tokens on `multi-user-long` (30,016 blocks of 64 tokens); 8.7 KB per token per chip. A request can use up to `max_model_len` (262,144), and any mix of requests fits while their contexts add up to the pool. The table gives the context each user gets when all of them are equally long. Up to 8 users decode together in one launch. With 9 to 16 users a second launch runs as well: the aggregate stays at the 8-user level and each user's speed halves.
+    ### Users x context (`multi-user`)
+    The users share one KV pool: 1,884,160 tokens on `multi-user` (29,440 blocks of 64 tokens); 8.7 KB per token per chip. A request can use up to `max_model_len` (262,144), and any mix of requests fits while their contexts add up to the pool. The table gives the context each user gets when all of them are equally long. Up to 8 users decode together in one launch. With 9 to 16 users a second launch runs as well: the aggregate stays at the 8-user level and each user's speed halves.
 
-    | users | context per user, `multi-user` | context per user, `multi-user-long` |
-    |---|---|---|
-    | 1-5 | 262,144 | 262,144 |
-    | 6 | 256,640 | 262,144 |
-    | 7 | 219,968 | 262,144 |
-    | 8 | 192,448 | 240,064 |
-    | 16 | 96,192 | 120,000 |
+    | users | context per user, `multi-user` |
+    |---|---|
+    | 1-7 | 262,144 |
+    | 8 | 235,456 |
+    | 16 | 117,696 |
 
     ### Rows decode, users x context (`multi-user`)
     Decode speed from the device step time with every user at the given context (no host or HTTP overhead); each cell is t/s/u / aggregate t/s:
@@ -208,21 +202,57 @@ card:
     | 4 | 61 / 243 | 60 / 241 | 49 / 196 | 41 / 165 | 31 / 124 |
     | 8 | 50 / 401 | 50 / 398 | 36 / 285 | 28 / 222 | 19 / 156 |
 
-    Which profile: for a single user, `single-user` is faster (about 86 t/s/u at short context against about 70 t/s/u for one user on `multi-user`, whose 8-row launch costs about 2.7 ms more per step). From 2 concurrent users on, `multi-user` gives more total throughput at every context: 1.3-1.6x at 2 users and 2.4-4.7x at 8 users (device step time, 128 to 128K context).
+    One user on `multi-user` gets about 70 t/s/u at short context: its 8-row launch costs about 2.7 ms more per step than a one-user build of plain decoding (86 t/s/u); for one greedy user, `single-user` (DFlash2) is faster still. From 2 concurrent users on, `multi-user` gives more total throughput than that one-user build at every context: 1.3-1.6x at 2 users and 2.4-4.7x at 8 users (device step time, 128 to 128K context).
 
-    `multi-user-long` decodes exactly like `multi-user` (same rows decode table) with a 25 % larger KV pool: up to 7 users at the full 256K instead of 5. It prefills in chunks of at least 256 tokens, which costs about +49 ms TTFT on prompts of up to 128 tokens and +20 ms at 512 (none from about 768 tokens): pick it for long-context-heavy use.
+    ### Prefill and decode on `multi-user`, and the TTFT-first option
+    A step on this engine either prefills or decodes, never both, so prefill time that runs while a user decodes is a
+    pause in that user's tokens. `multi-user` prefills the prompts that are waiting together, in one pipelined pass,
+    before their decodes start: when many requests arrive together, each user then decodes at the decode-step speed,
+    and the first tokens of the whole group come out after its prefill. With the TTFT-first option a long prompt is
+    split into 1024-token pieces between decode steps instead: first tokens come sooner, and every user's decode pauses
+    while the others' prompts prefill. `multi-user` prefills in chunks of at least 256 tokens, which costs about +49 ms
+    TTFT on prompts of up to 128 tokens (+20 ms at 512, none from about 768; about +0.2 s for a burst of 16 such
+    prompts): the price of its larger KV pool.
+    Turn the TTFT-first option on by passing the profile's tt config with `prefill_gang_tokens` 0:
+
+    ```bash
+    tt-model serve changh95/qwen3.8-27b-p300x2 --additional-config '{"tt": {"fabric_config": "FABRIC_1D", "trace_region_size": 134217728, "sample_on_device_mode": "decode_only", "prefill_chunk_tokens": 1024, "prefill_gang_tokens": 0}}'
+    ```
+
+    16 concurrent users, 128 or 1024 new tokens (tt-inference-server; each cell t/s/u / TTFT; the TTFT-first column is
+    an earlier run of that scheduling, before the pipelined prefill pass); total throughput is +56 % to +84 %
+    higher on the default:
+
+    | prompt / new tokens | `multi-user` | TTFT-first option |
+    |---|---|---|
+    | 2,048 / 128 | 24.7 / 4.0 s | 10.3 / 2.0 s |
+    | 8,192 / 128 | 22.9 / 12.5 s | 5.0 / 7.2 s |
+    | 16,384 / 128 | 15.4 / 28.9 s | 2.8 / 15.6 s |
+    | 8,192 / 1,024 | 22.1 / 12.5 s | 11.7 / 8.8 s |
+    | 10,000 / 1,024 | 20.6 / 15.6 s | 11.0 / 10.6 s |
 
     ### Benchmarks (tt-inference-server `--workflow benchmarks`)
     | profile | users | ISL / OSL | t/s | t/s/u | TTFT |
     |---|---|---|---|---|---|
-    | single-user-dflash2 | 1 | 128 / 128 | TBD | TBD | TBD |
-    | single-user | 1 | 128 / 128 | TBD | TBD | TBD |
-    | single-user-mtp | 1 | 128 / 128 | TBD | TBD | TBD |
-    | multi-user | 8 | 128 / 128 | TBD | TBD | TBD |
+    | `single-user` | 1 | 128 / 128 | 116.8 | 132.6 | 0.14 s |
+    | `single-user` | 1 | 2048 / 128 | 89.3 | 123.7 | 0.41 s |
+    | `single-user` | 1 | 8192 / 128 | 59.1 | 111.3 | 1.02 s |
+    | `single-user` | 1 | 8192 / 1024 | 118.8 | 134.5 | 1.02 s |
+    | `single-user` | 1 | 32768 / 128 | 27.2 | 132.3 | 3.74 s |
+    | `multi-user` | 1 | 128 / 128 | 63.6 | 69.2 | 0.18 s |
+    | `multi-user` | 1 | 2048 / 128 | 56.9 | 68.7 | 0.40 s |
+    | `multi-user` | 1 | 8192 / 128 | 44.5 | 68.0 | 1.01 s |
+    | `multi-user` | 1 | 8192 / 1024 | 51.4 | 54.2 | 1.03 s |
+    | `multi-user` | 1 | 32768 / 128 | 18.3 | 46.1 | 4.24 s |
+    | `multi-user` | 16 | 128 / 128 | 332.0 | 24.7 | 1.03 s |
+    | `multi-user` | 16 | 2048 / 128 | 222.8 | 24.7 | 4.05 s |
+    | `multi-user` | 16 | 8192 / 128 | 113.5 | 22.9 | 12.50 s |
+    | `multi-user` | 16 | 8192 / 1024 | 278.4 | 22.1 | 12.51 s |
+    | `multi-user` | 16 | 32768 / 128 | 21.8 | 3.3 | 52.88 s |
 
     DFlash2 at long context (one user, 128 new tokens, one prose prompt per length):
 
-    | prompt | single-user-dflash2 t/s/u | single-user t/s/u |
+    | prompt | `single-user` (DFlash2) t/s/u | plain decode t/s/u |
     |---|---|---|
     | 32K | ~120 | ~79 |
     | 64K | ~207 | ~74 |
@@ -230,7 +260,7 @@ card:
     | 250K | ~160 | ~49 |
 
 verify:
-  - "from qwen36_resident.generator_vllm import Qwen36ResidentForCausalLM, Qwen36ResidentMTPForCausalLM, Qwen36ResidentDFlashForCausalLM; assert Qwen36ResidentDFlashForCausalLM"
+  - "from qwen36_resident.generator_vllm import Qwen36ResidentForCausalLM, Qwen36ResidentDFlashForCausalLM; assert Qwen36ResidentDFlashForCausalLM"
   - "from qwen36_resident.dflash import ResidentDFlash, DRAFTER_WEIGHTS; assert DRAFTER_WEIGHTS.endswith('dedf8df68adfb1afeaf7b7480c0a0243108177b4')"
-  # multi-user-long's chunk list reaches the adapter (ae776ee280c); without it the build keeps the 128 chunk and OOMs
+  # multi-user's chunk list reaches the adapter (ae776ee280c); without it the build keeps the 128 chunk and OOMs
   - "import os; os.environ['RESIDENT_PREFILL_CHUNKS'] = '256,512,1024'; from qwen36_resident.generator_vllm import PREFILL_CHUNKS; assert PREFILL_CHUNKS == (256, 512, 1024), PREFILL_CHUNKS"
