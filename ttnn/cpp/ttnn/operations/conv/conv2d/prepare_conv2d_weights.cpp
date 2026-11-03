@@ -1280,7 +1280,6 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto orig_stride = stride;
-    const bool is_conv1d = is_1d_conv(kernel_size[0], input_height);
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
         input_memory_config,
         input_layout,
@@ -1309,8 +1308,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
 
     auto conv_execution_path =
         determine_conv2d_execution_path(input_memory_config.buffer_type() == BufferType::L1, dram_slice_config_);
-    // Conv1D doesn't support DRAM
-    bool is_dram_conv = (conv_execution_path == Conv2dExecutionPath::DRAM) && !is_conv1d;
+    bool is_dram_conv = conv_execution_path == Conv2dExecutionPath::DRAM;
 
     if (is_dram_conv && !mm_conv /*DRAM with Matmul doesn't need slicing*/) {
         Tensor dummy_weight_tensor = ttnn::create_device_tensor(
@@ -1524,6 +1522,9 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         input_dtype);
 
     const bool auto_shard = !input_memory_config.is_sharded() && !conv_config.shard_layout.has_value();
+    const uint32_t unfolded_in_channels = conv_config.enable_kernel_stride_folding.value()
+                                              ? in_channels / (orig_stride[0] * orig_stride[1])
+                                              : in_channels;
     return Conv2dWeightsBiasPrepConfig(
         input_channels_alignment,
         conv_config.weights_dtype,
@@ -1542,7 +1543,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         coalesce_1d_depthwise_kw_reads,
-        orig_stride);
+        orig_stride,
+        unfolded_in_channels);
 }
 
 static ttnn::Tensor prepare_conv_weights_internal(
@@ -1591,6 +1593,17 @@ static ttnn::Tensor prepare_conv_weights_internal(
         }
     }
     if (params.enable_kernel_stride_folding) {
+        // Pad the weights to the activation's input channels (e.g. RGB zero-padded to 16) before folding.
+        const auto& unfolded_shape = weight_tensor_.logical_shape();
+        if (params.groups == 1 && params.stride[0] * params.stride[1] > 1 &&
+            params.unfolded_input_channels > unfolded_shape[1]) {
+            weight_tensor_ = ttnn::pad(
+                weight_tensor_,
+                ttnn::Array4D(
+                    {unfolded_shape[0], params.unfolded_input_channels, unfolded_shape[2], unfolded_shape[3]}),
+                ttnn::Array4D({0, 0, 0, 0}),
+                0);
+        }
         weight_tensor_ = to_folded_weight_layout(weight_tensor_, params.stride);
     }
     const auto& weights_shape = weight_tensor_.logical_shape();
