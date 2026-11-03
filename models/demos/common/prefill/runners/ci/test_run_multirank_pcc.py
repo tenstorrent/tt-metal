@@ -231,14 +231,14 @@ class MultirankPccHarnessTests(unittest.TestCase):
         manifest_dir.mkdir(parents=True)
         for model_key, max_seq_len, num_users in (
             ("kimi27", 256000, 86),
-            ("glm53", 1049600, 28),
             ("mistral4", 61440, 1),
         ):
             (manifest_dir / f"{model_key}.json").write_text(
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
             )
-        # Kimi-K3's layout is its manifest's, so the harness reads the real one.
-        shutil.copyfile(REPO / MANIFESTS / "kimi_k3.json", manifest_dir / "kimi_k3.json")
+        # Kimi-K3's and GLM-5.3's layouts are their manifests', so the harness reads the real ones.
+        for name in ("kimi_k3.json", "glm53.json", "glm53_mtp_kv_share.json"):
+            shutil.copyfile(REPO / MANIFESTS / name, manifest_dir / name)
         checkpoint = root / "checkpoint"
         checkpoint.mkdir()
         (checkpoint / "config.json").write_text("{}")
@@ -335,9 +335,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_existing_models_use_discovery_and_four_hosts(self):
-        for model in ("kimi27", "glm53"):
+        for model, config in (("kimi27", "sc4"), ("glm53", "sc4_8x4")):
             with self.subTest(model=model):
-                result, records = self.run_harness(model)
+                result, records = self.run_harness(model, config=config)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 launch = self.one_record(records, "runner_launch")["args"]
                 self.assertIn("--mesh-graph-descriptor", launch)
@@ -346,16 +346,20 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertFalse([record for record in records if record["kind"] == "probe"])
                 producer = self.one_record(records, "producer")["env"]
                 self.assertEqual(producer["TEST_MPI_HOST"], "worker0:1,worker1:1,worker2:1,worker3:1")
-                expected_length = 256000 if model == "kimi27" else 1049600
+                expected_length = 256000 if model == "kimi27" else 1064960
                 self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], str(expected_length))
-                # The request can be shorter than the window: GLM-5.3 sends 1044480 of its 1049600.
+                # The request can be shorter than the window: GLM-5.3 sends 1044480 of its 1064960.
                 request_len = {"kimi27": 256000, "glm53": 1044480}[model]
                 self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(request_len // 5120))
 
     def test_sc1_windows_preserve_model_defaults(self):
-        for model, expected_length in (("mistral4", 61440), ("kimi27", 256000), ("glm53", 1049600)):
+        for model, config, expected_length in (
+            ("mistral4", "sc1", 61440),
+            ("kimi27", "sc1", 256000),
+            ("glm53", "sc1_8x4", 1064960),
+        ):
             with self.subTest(model=model):
-                result, records = self.run_harness(model, config="sc1")
+                result, records = self.run_harness(model, config=config)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(self.one_record(records, "runner")["env"]["PREFILL_NUM_USERS"], "1")
                 self.assertEqual(
@@ -548,7 +552,6 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.addCleanup(summaries.cleanup)
         result, records = self.run_harness(
             "kimi_k3",
-            config="sc4_4x4",
             hosts=self.SC4_HOSTS,
             extra_env={"TEST_RUNNER_CRASH": when, "PREFILL_SUMMARIES": summaries.name},
         )
@@ -586,39 +589,92 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("no 4x4 weight cache", result.stdout + result.stderr)
         self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
-    def test_glm53_4x4_binds_by_discovery_from_its_own_cache(self):
-        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS)
+    def test_glm53_sc4_is_eight_4x4_stages_from_the_manifest(self):
+        result, records = self.run_harness("glm53", hosts=self.SC4_HOSTS)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         launch = self.one_record(records, "runner_launch")["args"]
         self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith("ci/sc4_4x4_sp1_mgd.textproto"))
         producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
         self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], "8")
         runner = self.one_record(records, "runner")["env"]
-        self.assertEqual(runner["PREFILL_SP_AXIS"], "1")
-        self.assertEqual(runner["PREFILL_MAX_SEQ_LEN"], "1049600")
+        # The stage shape and the slots are the manifest's, which the runner applies itself.
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53.json"))
+        for key in ("PREFILL_SP", "PREFILL_TP", "PREFILL_SP_AXIS", "PREFILL_NUM_USERS"):
+            self.assertNotIn(key, runner, key)
         self.assertTrue(runner["PREFILL_TTNN_CACHE"].endswith("cache"))
         producer = self.one_record(records, "producer")["env"]
-        self.assertEqual(producer["PREFILL_SP"], "4")
-        self.assertEqual(producer["PREFILL_TP"], "4")
+        self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/glm53.json"))
+        self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], "1064960")
         self.assertEqual((runner["PREFILL_CHUNK_SIZE"], producer["PREFILL_CHUNK_SIZE"]), ("2560", "2560"))
         self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1044480 // 2560))
         self.assertIn("PCC GATE PASS", result.stdout)
 
+    def test_glm53_sc1_is_two_4x4_stages_on_one_galaxy(self):
+        result, records = self.run_harness("glm53", config="sc1", hosts=self.SC4_HOSTS[:1])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        launch = self.one_record(records, "runner_launch")["args"]
+        self.assertTrue(
+            launch[launch.index("--mesh-graph-descriptor") + 1].endswith(
+                "topology_configuration/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto"
+            )
+        )
+        runner = self.one_record(records, "runner")["env"]
+        # All 78 layers over the two tray halves, one slot, as the 8x4 sc1 ran.
+        self.assertNotIn("PREFILL_NUM_LAYERS", runner)
+        self.assertEqual(runner["PREFILL_NUM_USERS"], "1")
+        producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+        self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], "2")
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_glm53_8x4_configs_put_the_8x4_stage_back(self):
+        for config, descriptor, users in (
+            ("sc4_8x4", "ci/sc4_mgd.textproto", "54"),
+            ("sc1_8x4", "ci/sc1_mgd.textproto", "1"),
+        ):
+            with self.subTest(config=config):
+                result, records = self.run_harness("glm53", config=config)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                launch = self.one_record(records, "runner_launch")["args"]
+                self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith(descriptor))
+                runner = self.one_record(records, "runner")["env"]
+                producer = self.one_record(records, "producer")["env"]
+                for env in (runner, producer):
+                    self.assertEqual(
+                        (env["PREFILL_SP"], env["PREFILL_TP"], env["PREFILL_SP_AXIS"], env["PREFILL_CHUNK_SIZE"]),
+                        ("8", "4", "0", "5120"),
+                    )
+                self.assertEqual(runner["PREFILL_NUM_USERS"], users)
+                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1044480 // 5120))
+                self.assertNotIn("no 4x4 weight cache", result.stdout + result.stderr)
+
     def test_glm53_4x4_missing_cache_names_the_glm_dir(self):
-        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True)
+        result, records = self.run_harness("glm53", hosts=self.SC4_HOSTS, missing_cache=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no 4x4 weight cache at", result.stdout + result.stderr)
         self.assertIn("glm_5_3_bh_16dev/4x4_sp1", result.stdout + result.stderr)
         self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
-    def test_glm53_4x4_has_no_mtp_variant(self):
-        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, args=["--variant", "mtp_kv_share"])
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("glm53/sc4_4x4 has no mtp_kv_share variant", result.stderr)
-        self.assertFalse(records)
+    def test_glm53_mtp_runs_on_the_8x4_configs_only(self):
+        for config in ("sc4", "sc1"):
+            with self.subTest(config=config):
+                result, records = self.run_harness(
+                    "glm53", config=config, hosts=self.SC4_HOSTS, args=["--variant", "mtp_kv_share"]
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("runs on sc4_8x4 / sc1_8x4 only (no 4x4 MTP cache)", result.stderr)
+                self.assertFalse(records)
+        # The stub's verdicts carry no MTP caches, so the gate fails; the launch is what is under test.
+        _, records = self.run_harness("glm53", config="sc4_8x4", args=["--variant", "mtp_kv_share"])
+        runner = self.one_record(records, "runner")["env"]
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_mtp_kv_share.json"))
+        # The MTP manifest is 8x4 already and keeps its own slots.
+        self.assertNotIn("PREFILL_SP_AXIS", runner)
+        self.assertNotIn("PREFILL_NUM_USERS", runner)
 
-    def test_only_kimi_k3_has_the_8x4_configs(self):
-        for model, config in (("kimi27", "sc4_8x4"), ("kimi27", "sc4_4x4"), ("glm53", "sc4_8x4")):
+    def test_only_kimi_k3_and_glm53_have_the_8x4_configs(self):
+        for model, config in (("kimi27", "sc4_8x4"), ("kimi27", "sc4_4x4"), ("glm53", "sc4_4x4")):
             with self.subTest(model=model, config=config):
                 result, records = self.run_harness(model, config=config)
                 self.assertEqual(result.returncode, 2)
@@ -667,9 +723,12 @@ class PerfGateTableTests(unittest.TestCase):
         argv = ["perf_gate.py", str(perf_json), "--table", str(root / "table.json"), "--model", model]
         argv += ["--config", "sc1"] + (["--power", power] if power else []) + list(extra_args)
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(sys, "argv", argv), mock.patch.dict(
-            os.environ, {"PREFILL_SUMMARIES": str(root / "summaries"), **(env or {})}
-        ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.dict(os.environ, {"PREFILL_SUMMARIES": str(root / "summaries"), **(env or {})}),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
             returncode = self.perf_gate.main()
         result = types.SimpleNamespace(returncode=returncode, stdout=out.getvalue(), stderr=err.getvalue())
         verdicts = root / "summaries" / "perf" / "run_sc1_gate.md"

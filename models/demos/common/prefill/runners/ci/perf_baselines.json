@@ -24,7 +24,7 @@
       }
     },
     "glm53": {
-      "sc4": {
+      "sc4_8x4": {
         "probe": "@1020k",
         "8kw": {
           "throughput_tok_s": 24555,
@@ -32,7 +32,7 @@
           "chunk_time_ms": 814
         }
       },
-      "sc1": {
+      "sc1_8x4": {
         "probe": "@1020k",
         "14kw": {
           "throughput_tok_s": 6832,

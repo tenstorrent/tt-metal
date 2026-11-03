@@ -18,13 +18,11 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
-# Kimi-K3's sc4 and sc1 are 4x4 stages, two per galaxy (its manifest's layout); the _8x4 configs keep
-# the one-stage-per-galaxy layout for hand comparisons and are in no CI leg. GLM-5.3's sc4_4x4 is the model
-# as 8 stages of 4x4 (two per galaxy) instead of 4 of 8x4.
+# Kimi-K3's and GLM-5.3's sc4 and sc1 are 4x4 stages, two per galaxy (their manifests' layout); the _8x4
+# configs keep the one-stage-per-galaxy layout for hand comparisons and GLM-5.3's MTP variants.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
-  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
-  glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4" ;;
+  kimi_k3|glm53)       MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -120,23 +118,38 @@ case "${MODEL}" in
       # Same 1M request and tail window as the trunk golden above, so the MTP compare reuses its window.
       MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
       PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
-      [ "${CONFIG}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
+      [ "${SCALE}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
     fi
-    if [ "${CONFIG}" = sc4_4x4 ]; then
-      # No 4x4 MTP cache exists, so only the base model runs on this layout.
-      [ "${MTP}" -eq 0 ] || { echo "${MODEL}/${CONFIG} has no ${VARIANT#_} variant" >&2; exit 2; }
-      # Two ranks per galaxy, bound by discovery as for Kimi-K3 below. The manifest's 1064960 window already
-      # suits a 4x4 stage: GLM TP-dedups its KV over all 16 chips, so the bank-aligned window is a
-      # multiple of 16 x 256 = 4096 tokens, as well as of the 2560 chunk below.
-      PP_RANKS=8
-      PP_4X4_HOSTS=4
-      GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill}"
-      PP_CACHE_DIR="${GLM_CACHE}/glm_5_3_bh_16dev/4x4_sp1"
-      RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${GLM_CACHE}';"
-      PRODUCER_ENV+=" export PREFILL_SP=4; export PREFILL_TP=4;"
-      # The 4x4 bindings' chunk, as for Kimi-K3 below: 640 tokens per chip at SP=4, GLM's 8x4 load.
-      CHUNK_SIZE=2560
-    fi
+    case "${CONFIG}" in
+      sc4|sc1)
+        # No 4x4 MTP cache exists, so the MTP variants run on the _8x4 configs below.
+        [ "${MTP}" -eq 0 ] || { echo "${MODEL}${VARIANT} runs on sc4_8x4 / sc1_8x4 only (no 4x4 MTP cache)" >&2; exit 2; }
+        # The manifest describes a 4x4 stage: SP=4 on mesh axis 1, 2560-token chunks (640 tokens per chip,
+        # GLM's 8x4 per-chip load), TP-deduped KV and the slots that layout fits. Its 1064960 window is a
+        # multiple of the deduped cache's 16 x 256 = 4096-token bank quantum and of the chunk. Two ranks per
+        # galaxy, bound by tt-run discovery as for Kimi-K3 below: 8 stages for sc4, two (all 78 layers) for sc1.
+        CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
+        PP_4X4_HOSTS=1
+        [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
+        PP_RANKS=$((2 * PP_4X4_HOSTS))
+        # The 4x4 cache is not under GLM-5.3-Cache-prefill yet; this is the copy infra made of job 161770's
+        # 78-layer build. Checked non-empty on every host before launch.
+        GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/rkim/glm53_ttnn_cache}"
+        PP_CACHE_DIR="${GLM_CACHE}/glm_5_3_bh_16dev/4x4_sp1"
+        RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${GLM_CACHE}';"
+        ;;
+      *_8x4)
+        # One 8x4 stage per galaxy, SP=8 on axis 0, 5120-token chunks, at the 54 slots that layout fits
+        # (the MTP manifests are 8x4 already and keep their own). Exported to runner and producer, ahead
+        # of the manifest.
+        if [ "${MTP}" -eq 0 ]; then
+          if [ "${SCALE}" = sc4 ]; then : "${PREFILL_NUM_USERS:=54}"; export PREFILL_NUM_USERS; fi
+          LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
+          RUNNER_ENV+=" ${LAYOUT_8X4}"
+          PRODUCER_ENV+=" ${LAYOUT_8X4}"
+        fi
+        ;;
+    esac
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
