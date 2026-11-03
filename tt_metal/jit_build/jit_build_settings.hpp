@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
 #include <tt_stl/assert.hpp>
 #include "impl/metal2_host_api/llk_metadata.hpp"
 
@@ -53,13 +54,20 @@ inline std::string_view sem_scope_enumerator(SemScope scope) {
     TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
 }
 
+// One semaphore binding token's type, name and initializer, e.g.
+//   ::SemaphoreBindingToken name{3u, ::SemScope::EXTERNAL}
+// The token carries the id and the mechanism the host picked.
+inline std::string format_semaphore_binding_token(std::string_view name, const SemBindingEntry& entry) {
+    return fmt::format(
+        "::SemaphoreBindingToken {}{{{}u, ::SemScope::{}}}", name, entry.id, sem_scope_enumerator(entry.scope));
+}
+
 // The generated semaphore section: one constexpr binding token per bound semaphore, in
-// `namespace sem`. The token carries the id and the mechanism the host picked.
+// `namespace sem`.
 inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
     os << "namespace sem {\n";
     for (const auto& entry : entries) {
-        os << "constexpr ::SemaphoreBindingToken " << entry.name << "{" << entry.id
-           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope) << "};\n";
+        os << "constexpr " << format_semaphore_binding_token(entry.name, entry) << ";\n";
     }
     os << "}  // namespace sem\n";
 }

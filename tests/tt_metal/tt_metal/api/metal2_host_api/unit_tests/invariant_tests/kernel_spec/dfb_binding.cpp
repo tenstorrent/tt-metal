@@ -37,7 +37,8 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidLocalAccessorNameFails) {
         "has-dash",       // hyphen
         "has space",      // whitespace
         "1starts_digit",  // leading digit
-        "has.dot",        // punctuation
+        "a.b.c",          // two scope separators (one level of scope; "a.b" is a valid scoped name)
+        "has!bang",       // punctuation
         "class",          // C++ keyword
         "namespace",      // C++ keyword
         "int",            // C++ keyword

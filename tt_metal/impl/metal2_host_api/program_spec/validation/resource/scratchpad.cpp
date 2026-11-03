@@ -46,10 +46,11 @@ void ValidateScratchpadBindings(const KernelSpec& kernel) {
             kernel.unique_id,
             binding.accessor_name);
         TT_FATAL(
-            IsValidCppIdentifier(binding.accessor_name),
-            "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
+            IsValidKernelVisibleName(binding.accessor_name),
+            "Kernel '{}' scratchpad accessor_name '{}' must be {}",
             kernel.unique_id,
-            binding.accessor_name);
+            binding.accessor_name,
+            KERNEL_VISIBLE_NAME_RULE);
         ValidateAccessorNameLength(kernel.unique_id, "scratchpad", binding.accessor_name);
     }
 }

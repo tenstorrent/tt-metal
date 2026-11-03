@@ -24,6 +24,7 @@
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
+#include "impl/metal2_host_api/scoped_name.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "emule_device_map.hpp"              // NOC_NODE_ID_BITS
@@ -84,6 +85,38 @@ ProcIdList compute_proc_ids_and_thread_count(
     return out;
 }
 
+// The emulator generates its own copy of a Metal 2.0 kernel's generated headers, which doesn't
+// support scoped names ("scope.name") yet.
+void reject_scoped_names(Kernel& k) {
+    if (!k.is_metal2_kernel()) {
+        return;  // legacy named compile-time args are free-form strings
+    }
+    auto reject = [](const std::string& name) {
+        TT_FATAL(!is_scoped_name(name), "Name '{}' is scoped, which emulation does not support yet", name);
+    };
+    for (const auto& name : k.get_runtime_arg_names()) {
+        reject(name);
+    }
+    for (const auto& name : k.get_common_runtime_arg_names()) {
+        reject(name);
+    }
+    for (const auto& [name, value] : k.named_compile_time_args()) {
+        reject(name);
+    }
+    k.process_dataflow_buffer_binding_handles(
+        [&reject](
+            const std::string& name, uint16_t, bool, uint8_t, const std::optional<LLKMetadata>&, uint8_t, uint8_t) {
+            reject(name);
+        });
+    k.process_semaphore_binding_handles([&reject](const std::string& name, uint16_t, auto, uint32_t) { reject(name); });
+    k.process_tensor_binding_handles(
+        [&reject](const std::string& name, uint32_t, bool, uint32_t, uint32_t, const LLKMetadata&) { reject(name); });
+    k.process_prefetcher_pipe_binding_handles([&reject](const std::string& name, uint8_t) { reject(name); });
+    k.process_scratchpad_binding_handles(
+        [&reject](const std::string& name, uint32_t, uint32_t, const std::optional<LLKMetadata>&) { reject(name); });
+    k.process_tensor_binding_sequences(
+        [&reject](const std::string& name, const std::vector<std::string>&) { reject(name); });
+}
 }  // namespace
 
 // ── SocView: SoC geometry, bank maps, and the HAL/arch reads the interpretation modules need.
@@ -393,6 +426,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 kd.is_quasar_compute = kd.is_compute && (qck != nullptr);
             }
             // Metal 2.0 binding handles (mirror build_metal2_snapshot).
+            reject_scoped_names(k);
             kd.bindings.is_metal2 = k.is_metal2_kernel();
             kd.bindings.rta_names = k.get_runtime_arg_names();
             kd.bindings.crta_names = k.get_common_runtime_arg_names();

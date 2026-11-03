@@ -45,6 +45,7 @@
 #include "impl/kernels/kernel_source.hpp"
 #include "impl/data_format/hw_data_format.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
+#include "impl/metal2_host_api/scoped_name.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
@@ -73,6 +74,12 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
     ttsl::unreachable();
 }
 
+// Includes for the Metal 2.0 generated headers (see write_metal2_generated_headers).
+constexpr const char* METAL2_GENERATED_HEADER_INCLUDES =
+    "#include \"kernel_bindings_generated.h\"\n"
+    "#include \"kernel_args_generated.h\"\n"
+    "#include \"kernel_scopes_generated.h\"\n";
+
 // Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
 // Kernels using Metal 2.0 get additional JIT-generated headers (not included for legacy kernels)
 string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool has_blaze_experimental_ct_args) {
@@ -82,8 +89,7 @@ string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool 
     // (e.g. compute_kernel_hw_startup.h) that test them, and #pragma once fixes what they saw.
     prolog << "#include \"defines_generated.h\"\n";
     if (is_metal2_kernel) {
-        prolog << "#include \"kernel_bindings_generated.h\"\n";
-        prolog << "#include \"kernel_args_generated.h\"\n";
+        prolog << METAL2_GENERATED_HEADER_INCLUDES;
     }
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
@@ -135,11 +141,41 @@ bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings
 // DFBBindingToken template argument for a dfb::AccessPattern code (STRIDED 0, ALL 1, BLOCKED 2).
 const char* dfb_access_name(uint8_t code) {
     switch (code) {
-        case 0: return "dfb::AccessPattern::STRIDED";
-        case 1: return "dfb::AccessPattern::ALL";
-        case 2: return "dfb::AccessPattern::BLOCKED";
+        case 0: return "::dfb::AccessPattern::STRIDED";
+        case 1: return "::dfb::AccessPattern::ALL";
+        case 2: return "::dfb::AccessPattern::BLOCKED";
         default: TT_THROW("Unknown DFB access pattern code {}", code);
     }
+}
+
+// Where generated declarations land, and which names land there. Unscoped names are declared at
+// namespace scope, in their kind's namespace (args::name, dfb::name, ...). The names in a scope
+// ("scope.name") are declared as static members of the struct generated for that scope
+// (scope::name). The two differ only in the declaration specifier and the indentation.
+struct DeclSite {
+    string_view scope;  // "" for the unscoped names
+    string_view specifier;
+    string_view indent;
+};
+DeclSite kind_namespace() { return {.scope = "", .specifier = "constexpr", .indent = ""}; }
+DeclSite scope_struct(string_view scope) { return {.scope = scope, .specifier = "static constexpr", .indent = "    "}; }
+
+// Calls fn(entry, name) for each entry whose name lands at `site`, where `name` is the entry's
+// name without its scope.
+template <typename Entry, typename Fn>
+void for_each_at(DeclSite site, const vector<Entry>& entries, Fn fn) {
+    for (const auto& entry : entries) {
+        const ScopedName parts = split_scoped_name(entry.name);
+        if (parts.scope == site.scope) {
+            fn(entry, parts.name);
+        }
+    }
+}
+
+template <typename Entry>
+bool any_at(DeclSite site, const vector<Entry>& entries) {
+    return std::ranges::any_of(
+        entries, [site](const Entry& entry) { return split_scoped_name(entry.name).scope == site.scope; });
 }
 
 /**
@@ -150,27 +186,43 @@ const char* dfb_access_name(uint8_t code) {
  *
  * This is used by kernels to check if a binding is present when kernel is meant to be reusable across different
  * programs.
+ *
+ * Unscoped bindings get it in their kind's namespace, as dfb::get_token_if_present() and so on. A scope's struct holds
+ * every binding kind, so it gets one per kind, each named for its kind (e.g. scope::get_dfb_token_if_present()).
+ *
+ * `enclosing` is the namespace or scope struct the tokens are declared in. Each returned token is
+ * qualified with it, since a token named `name` would otherwise be the getter's template parameter.
  */
 template <typename Entry>
 void emit_programmatic_binding_token_getter(
-    ostream& content, const vector<Entry>& entries, string_view null_binding_type) {
-    // Function header
-    content << "template <::internal::TemplateString name>\n"
-            // Using auto here as the tokens could be templated differently depending on the name.
-            << "constexpr auto get_token_if_present() {\n";
+    ostream& content,
+    DeclSite site,
+    string_view enclosing,
+    string_view function_name,
+    const vector<Entry>& entries,
+    string_view null_binding_type) {
+    vector<string_view> names;
+    for_each_at(site, entries, [&names](const Entry&, string_view name) { names.push_back(name); });
 
-    // 4 space left pad.
-    string padding(4, ' ');
+    // Function header
+    content << site.indent
+            << "template <::internal::TemplateString name>\n"
+            // Using auto here as the tokens could be templated differently depending on the name.
+            << site.indent << site.specifier << " auto " << function_name << "() {\n";
+
+    // 4 space left pad, inside the declaration's own indentation.
+    const string padding = string(site.indent) + string(4, ' ');
+    const string inner_padding = padding + string(4, ' ');
 
     // If statements for each entry, switching between `if constexpr` and `else if constexpr`
     const char* if_kw = "if constexpr";
-    for (const auto& entry : entries) {
+    for (string_view name : names) {
         // Emits equivalent to:
         // if constexpr (name == "entry_name") {
         //     return &entry_name;
         // }
-        content << padding << if_kw << " (name == \"" << entry.name << "\") {\n"
-                << padding << padding << "return &" << entry.name << ";\n";
+        content << padding << if_kw << " (name == \"" << name << "\") {\n"
+                << inner_padding << "return &::" << enclosing << "::" << name << ";\n";
 
         if_kw = "} else if constexpr";
     }
@@ -180,18 +232,18 @@ void emit_programmatic_binding_token_getter(
     // equivalent to:
     // using null_token_ptr_t = const <null_binding_type>*;
     // return null_token_ptr_t{nullptr};
-    if (entries.empty()) {
+    if (names.empty()) {
         content << padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
                 << padding << "return null_token_ptr_t{nullptr};\n";
     } else {
         content << padding << "} else {\n"
-                << padding << padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
-                << padding << padding << "return null_token_ptr_t{nullptr};\n"
+                << inner_padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
+                << inner_padding << "return null_token_ptr_t{nullptr};\n"
                 << padding << "}\n";
     }
 
     // Function close
-    content << "}\n";
+    content << site.indent << "}\n";
 }
 
 // Generates the list of cached semaphores this kernel binds: each one's id and how many harts on
@@ -215,108 +267,230 @@ string generate_cached_semaphore_list(const JitBuildSettings& settings) {
         fmt::join(views::values(cached_semaphore_entries), ", "));
 }
 
-// METAL 2.0 only:
-// This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
-// Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
-void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
-    const string path = out_dir + "kernel_bindings_generated.h";
+// METAL 2.0 only: the kernel's resource bindings, as the generated headers emit them.
+// Each name may be scoped ("scope.name").
+struct DfbEntry {
+    string name;
+    uint16_t id;
+    bool is_relay;
+    uint8_t prefetcher_pipe_id;
+    std::optional<LLKMetadata> metadata;
+    uint8_t pap;
+    uint8_t cap;
+};
+struct TaEntry {
+    string name;
+    uint32_t cta_offset;
+    bool is_per_node;
+    uint32_t addr_offset;
+    LLKMetadata metadata;
+};
+struct ScratchEntry {
+    string name;
+    uint32_t size_bytes;
+    uint32_t addr_crta_word;
+    std::optional<LLKMetadata> metadata;
+};
+struct PipeEntry {
+    string name;
+    uint8_t prefetcher_pipe_id;
+};
+struct TensorBindingSequenceEntry {
+    string name;
+    vector<string> members;
+};
+struct KernelBindingEntries {
+    vector<DfbEntry> dfbs;
+    vector<tt::tt_metal::SemBindingEntry> semaphores;
+    vector<TaEntry> tensors;
+    vector<ScratchEntry> scratchpads;
+    vector<PipeEntry> pipes;
+    vector<TensorBindingSequenceEntry> tensor_sequences;
+};
+
+KernelBindingEntries collect_binding_entries(const JitBuildSettings& settings) {
+    KernelBindingEntries entries;
 
     // Get the DFB bindings from the settings callback
     // Sort them to ensure the file output is deterministic for the JIT build cache
     // (aka the on-disk per-object dephash cache)
-    struct DfbEntry {
-        string name;
-        uint16_t id;
-        bool is_relay;
-        uint8_t prefetcher_pipe_id;
-        std::optional<LLKMetadata> metadata;
-        uint8_t pap;
-        uint8_t cap;
-    };
-    vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
-        [&dfb_entries](
+        [&entries](
             const string& name,
             uint16_t id,
             bool is_relay,
             uint8_t prefetcher_pipe_id,
             const std::optional<LLKMetadata>& metadata,
             uint8_t pap,
-            uint8_t cap) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap});
-        });
-    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+            uint8_t cap) { entries.dfbs.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap}); });
+    sort(entries.dfbs.begin(), entries.dfbs.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
     // Sort them to ensure the file output is deterministic, as explained above
-    vector<tt::tt_metal::SemBindingEntry> sem_entries;
     settings.process_semaphore_binding_handles(
-        [&sem_entries](const string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
-            sem_entries.push_back({name, id, scope, total_binder_harts});
+        [&entries](const string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
+            entries.semaphores.push_back({name, id, scope, total_binder_harts});
         });
-    sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+    sort(entries.semaphores.begin(), entries.semaphores.end(), [](const auto& a, const auto& b) {
+        return a.name < b.name;
+    });
 
     // Get the tensor binding handles from the settings callback
     // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
     // (Kernel::compute_hash also hashes them in the same order... these two must be the same.)
-    struct TaEntry {
-        string name;
-        uint32_t cta_offset;
-        bool is_per_node;
-        uint32_t addr_offset;
-        LLKMetadata metadata;
-    };
-    vector<TaEntry> ta_entries;
-    settings.process_tensor_binding_handles([&ta_entries](
+    settings.process_tensor_binding_handles([&entries](
                                                 const string& name,
                                                 uint32_t cta_offset,
                                                 bool is_per_node,
                                                 uint32_t addr_offset,
                                                 uint32_t /*num_rt_words*/,
                                                 const LLKMetadata& metadata) {
-        ta_entries.push_back({name, cta_offset, is_per_node, addr_offset, metadata});
+        entries.tensors.push_back({name, cta_offset, is_per_node, addr_offset, metadata});
     });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
     // (Kernel::compute_hash hashes them in the same order — the two must agree).
-    struct ScratchEntry {
-        string name;
-        uint32_t size_bytes;
-        uint32_t addr_crta_word;
-        std::optional<LLKMetadata> metadata;
-    };
-    vector<ScratchEntry> scratch_entries;
-    settings.process_scratchpad_binding_handles([&scratch_entries](
+    settings.process_scratchpad_binding_handles([&entries](
                                                     const string& name,
                                                     uint32_t size_bytes,
                                                     uint32_t addr_crta_word,
                                                     const std::optional<LLKMetadata>& metadata) {
-        scratch_entries.push_back({name, size_bytes, addr_crta_word, metadata});
+        entries.scratchpads.push_back({name, size_bytes, addr_crta_word, metadata});
     });
 
     // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
     // hashes them in binding order; both orders carry the same set, so the cache key is stable).
-    struct PipeEntry {
-        string name;
-        uint8_t prefetcher_pipe_id;
-    };
-    vector<PipeEntry> pipe_entries;
-    settings.process_prefetcher_pipe_binding_handles([&pipe_entries](const string& name, uint8_t prefetcher_pipe_id) {
-        pipe_entries.push_back({name, prefetcher_pipe_id});
+    settings.process_prefetcher_pipe_binding_handles([&entries](const string& name, uint8_t prefetcher_pipe_id) {
+        entries.pipes.push_back({name, prefetcher_pipe_id});
     });
-    sort(pipe_entries.begin(), pipe_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+    sort(entries.pipes.begin(), entries.pipes.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
-    struct TensorBindingSequenceEntry {
-        string name;
-        vector<string> members;
-    };
-    vector<TensorBindingSequenceEntry> tensor_binding_sequence_entries;
-    settings.process_tensor_binding_sequences(
-        [&tensor_binding_sequence_entries](const string& name, const vector<string>& members) {
-            tensor_binding_sequence_entries.push_back({name, members});
-        });
+    settings.process_tensor_binding_sequences([&entries](const string& name, const vector<string>& members) {
+        entries.tensor_sequences.push_back({name, members});
+    });
+
+    return entries;
+}
+
+// The null token type each binding kind's by-name lookup returns when the name isn't bound.
+constexpr string_view DFB_NULL_TOKEN =
+    "::DFBBindingToken<::dfb::AccessPattern::UNKNOWN, ::dfb::AccessPattern::UNKNOWN>";
+// Unlike other binding token types, TensorBindingToken has meaningful template parameters associated with it.
+// Thus, a dedicated type is needed to represent the absence of a binding.
+constexpr string_view TENSOR_NULL_TOKEN = "::tensor_accessor::NullTensorBindingToken";
+constexpr string_view SCRATCHPAD_NULL_TOKEN = "::ScratchpadBindingToken";
+
+// Each emit_*_tokens function below emits the tokens of the bindings that land at `site`.
+//
+// A scope's struct mixes names of every kind, so a member may share a name with a type that a later
+// declaration refers to, and hide it (an arg named `DFBBindingToken`, say). So every declaration
+// spells the types it refers to fully qualified: ::DFBBindingToken, ::uint32_t. (A namespace name can't be hidden
+// that way, since a name followed by :: is looked up only among namespaces and types. Namespaces are
+// qualified too, to keep the rule simple: qualify everything.)
+
+void emit_dfb_tokens(ostream& content, DeclSite site, const vector<DfbEntry>& entries) {
+    for_each_at(site, entries, [&](const DfbEntry& entry, string_view name) {
+        content << site.indent << site.specifier << " ";
+        if (entry.is_relay) {
+            // PrefetcherPipe relays bake the persistent slot into the token so the TRISC
+            // constructor can O(1)-align to the durable checkpoint; CrossNode relays
+            // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
+            content << "::RelayDFBBindingToken " << name << "{" << entry.id;
+            if (entry.prefetcher_pipe_id != 0xFF) {
+                content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
+            }
+            content << "};\n";
+        } else {
+            // Both sides' access patterns ride on the token so the device DataflowBuffer can
+            // specialize on the pattern pair at compile time; LLK metadata, when the host set it,
+            // rides as the second constructor argument.
+            content << "::DFBBindingToken<" << dfb_access_name(entry.pap) << ", " << dfb_access_name(entry.cap) << "> "
+                    << name << "{" << entry.id;
+            if (entry.metadata.has_value()) {
+                content << ", ";
+                content << serialize_llk_metadata(*entry.metadata);
+            }
+            content << "};\n";
+        }
+    });
+}
+
+// PrefetcherPipe bindings: one token per accessor, carrying the program slot id.
+void emit_pipe_tokens(ostream& content, DeclSite site, const vector<PipeEntry>& entries) {
+    for_each_at(site, entries, [&](const PipeEntry& entry, string_view name) {
+        content << site.indent << site.specifier << " ::PrefetcherPipeBindingToken " << name << "{"
+                << static_cast<uint32_t>(entry.prefetcher_pipe_id) << "};\n";
+    });
+}
+
+void emit_semaphore_tokens(ostream& content, DeclSite site, const vector<tt::tt_metal::SemBindingEntry>& entries) {
+    for_each_at(site, entries, [&](const tt::tt_metal::SemBindingEntry& entry, string_view name) {
+        content << site.indent << site.specifier << " " << tt::tt_metal::format_semaphore_binding_token(name, entry)
+                << ";\n";
+    });
+}
+
+// TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+// static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
+// its implicit base-address CRTA.
+// The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
+//
+// Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
+// template with extra metadata in the future without touching kernel source.
+//
+// Per-node bindings get a PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET> instead.
+void emit_tensor_tokens(ostream& content, DeclSite site, const vector<TaEntry>& entries) {
+    for_each_at(site, entries, [&](const TaEntry& entry, string_view name) {
+        const char* token_type = entry.is_per_node ? "PerNodeTensorBindingToken" : "TensorBindingToken";
+        content << site.indent << "using " << name << "_t = ::tensor_accessor::" << token_type << "<"
+                << entry.cta_offset << "u, " << entry.addr_offset << "u>;\n";
+        content << site.indent << site.specifier << " " << name << "_t " << name << "{";
+        content << serialize_llk_metadata(entry.metadata);
+        content << "};\n";
+    });
+}
+
+// Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
+// A sequence's members share its scope (validated), so they are named unqualified.
+void emit_tensor_binding_sequences(
+    ostream& content, DeclSite site, const vector<TensorBindingSequenceEntry>& sequences) {
+    for_each_at(site, sequences, [&](const TensorBindingSequenceEntry& sequence, string_view name) {
+        vector<string_view> members;
+        members.reserve(sequence.members.size());
+        for (const auto& member : sequence.members) {
+            members.push_back(split_scoped_name(member).name);
+        }
+        content << site.indent
+                << fmt::format("{} auto {} = ::std::make_tuple({});\n", site.specifier, name, fmt::join(members, ", "));
+    });
+}
+
+// ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
+// Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
+// and the scratchpad's compile-time per-node size.
+// The kernel-side Scratchpad(token) constructor unpacks both.
+// The token's members are opaque, so the framework can extend it later without touching
+// kernel source.
+void emit_scratchpad_tokens(ostream& content, DeclSite site, const vector<ScratchEntry>& entries) {
+    for_each_at(site, entries, [&](const ScratchEntry& entry, string_view name) {
+        content << site.indent << site.specifier << " ::ScratchpadBindingToken " << name << "{" << entry.addr_crta_word
+                << "u, " << entry.size_bytes << "u";
+        if (entry.metadata.has_value()) {
+            content << ", ";
+            content << serialize_llk_metadata(*entry.metadata);
+        }
+        content << "};\n";
+    });
+}
+
+// METAL 2.0 only:
+// This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
+// Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
+// Emits the unscoped bindings; scoped ones go in kernel_scopes_generated.h.
+void write_kernel_bindings_generated_header(const string& out_dir, const KernelBindingEntries& entries) {
+    const string path = out_dir + "kernel_bindings_generated.h";
 
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
@@ -340,19 +514,22 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                "#pragma once\n\n";
 
     // Emit Includes:
+    // These are gated on every binding, scoped or not: kernel_scopes_generated.h gets its token
+    // types from this header.
+    //
     // Support get_token_if_present() helper.
     content << "#include \"internal/template_string.h\"\n";
 
-    if (!dfb_entries.empty()) {
+    if (!entries.dfbs.empty()) {
         content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
     }
-    if (!pipe_entries.empty()) {
+    if (!entries.pipes.empty()) {
         // Defines PrefetcherPipeBindingToken. Header-only and dependency-free (the token is just
         // the slot id); the kernel includes api/dataflow/prefetcher_pipe.h itself to use it.
         content << "#include \"api/dataflow/prefetcher_pipe_binding_token.h\"\n";
     }
 
-    if (!sem_entries.empty()) {
+    if (!entries.semaphores.empty()) {
         // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
         // so it is safe on compute builds too.
         content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
@@ -362,11 +539,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // definition of TensorBindingToken.
     content << "#include \"api/tensor/tensor_binding_token.h\"\n";
 
-    if (!scratch_entries.empty()) {
+    if (!entries.scratchpads.empty()) {
         content << "#include \"api/scratchpad.h\"\n";
     }
 
-    if (!tensor_binding_sequence_entries.empty()) {
+    if (!entries.tensor_sequences.empty()) {
         content << "#include <tuple>\n";
     }
     content << "\n";
@@ -374,144 +551,88 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // get_token_if_present() is always emitted. When this kernel has no DFB / scratchpad bindings,
     // the headers that define those token types are omitted, but the empty getter still returns
     // const BindingTokenType*{nullptr} and needs those types in scope.
-    if (dfb_entries.empty()) {
+    if (entries.dfbs.empty()) {
         // DFBBindingToken is a template (pattern pair), so it cannot be forward-declared here.
         content << "#include \"api/dataflow/dfb_binding_token.h\"\n";
     }
-    if (scratch_entries.empty()) {
+    if (entries.scratchpads.empty()) {
         content << "struct ScratchpadBindingToken;\n";
     }
 
+    // The unscoped bindings, each kind in its namespace
+    const DeclSite site = kind_namespace();
+
     // Emit DFB bindings
     content << "namespace dfb {\n";
-    for (const auto& entry : dfb_entries) {
-        if (entry.is_relay) {
-            // PrefetcherPipe relays bake the persistent slot into the token so the TRISC
-            // constructor can O(1)-align to the durable checkpoint; CrossNode relays
-            // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
-            content << "constexpr RelayDFBBindingToken " << entry.name << "{" << entry.id;
-            if (entry.prefetcher_pipe_id != 0xFF) {
-                content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
-            }
-            content << "};\n";
-        } else {
-            // Both sides' access patterns ride on the token so the device DataflowBuffer can
-            // specialize on the pattern pair at compile time; LLK metadata, when the host set it,
-            // rides as the second constructor argument.
-            content << "constexpr DFBBindingToken<" << dfb_access_name(entry.pap) << ", " << dfb_access_name(entry.cap)
-                    << "> " << entry.name << "{" << entry.id;
-            if (entry.metadata.has_value()) {
-                content << ", ";
-                content << serialize_llk_metadata(*entry.metadata);
-            }
-            content << "};\n";
-        }
-    }
-    emit_programmatic_binding_token_getter(
-        content, dfb_entries, "DFBBindingToken<dfb::AccessPattern::UNKNOWN, dfb::AccessPattern::UNKNOWN>");
+    emit_dfb_tokens(content, site, entries.dfbs);
+    emit_programmatic_binding_token_getter(content, site, "dfb", "get_token_if_present", entries.dfbs, DFB_NULL_TOKEN);
     content << "}  // namespace dfb\n";
 
-    // Emit PrefetcherPipe bindings: one token per accessor, carrying the program slot id.
-    if (!pipe_entries.empty()) {
+    // Emit PrefetcherPipe bindings
+    if (!entries.pipes.empty()) {
         content << "namespace pipe {\n";
-        for (const auto& entry : pipe_entries) {
-            content << "constexpr PrefetcherPipeBindingToken " << entry.name << "{"
-                    << static_cast<uint32_t>(entry.prefetcher_pipe_id) << "};\n";
-        }
+        emit_pipe_tokens(content, site, entries.pipes);
         content << "}  // namespace pipe\n";
     }
 
     // Emit Semaphore bindings
-    tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
+    content << "namespace sem {\n";
+    emit_semaphore_tokens(content, site, entries.semaphores);
+    content << "}  // namespace sem\n";
 
-    // Emit Tensor bindings
+    // Emit Tensor bindings and TensorBindingToken sequences
     content << "namespace tensor {\n";
-    // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
-    // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-    // its implicit base-address CRTA.
-    // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
-    //
-    // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
-    // template with extra metadata in the future without touching kernel source.
-    //
-    // Per-node bindings get a PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET> instead.
-    //
-    // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
-    for (const auto& entry : ta_entries) {
-        const char* token_type = entry.is_per_node ? "PerNodeTensorBindingToken" : "TensorBindingToken";
-        content << "using " << entry.name << "_t = ::tensor_accessor::" << token_type << "<" << entry.cta_offset
-                << "u, " << entry.addr_offset << "u>;\n";
-        content << "constexpr " << entry.name << "_t " << entry.name << "{";
-        content << serialize_llk_metadata(entry.metadata);
-        content << "};\n";
-    }
-
-    // Unlike other binding token types, TensorBindingToken has meaningful template parameters associated with it.
-    // Thus, a dedicated type is needed to represent the absence of a binding.
-    emit_programmatic_binding_token_getter(content, ta_entries, "::tensor_accessor::NullTensorBindingToken");
-
-    // Emit TensorBindingToken sequences
-    for (const auto& sequence : tensor_binding_sequence_entries) {
-        content << fmt::format(
-            "constexpr auto {} = std::make_tuple({});\n", sequence.name, fmt::join(sequence.members, ", "));
-    }
-
+    emit_tensor_tokens(content, site, entries.tensors);
+    emit_programmatic_binding_token_getter(
+        content, site, "tensor", "get_token_if_present", entries.tensors, TENSOR_NULL_TOKEN);
+    emit_tensor_binding_sequences(content, site, entries.tensor_sequences);
     content << "}  // namespace tensor\n";
 
     // Emit Scratchpad bindings
     content << "namespace scratch {\n";
-
-    // ScratchpadBindingToken scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
-    // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
-    // and the scratchpad's compile-time per-node size.
-    // The kernel-side Scratchpad(token) constructor unpacks both.
-    // The token's members are opaque, so the framework can extend it later without touching
-    // kernel source.
-    for (const auto& entry : scratch_entries) {
-        if (entry.metadata.has_value()) {
-            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                    << entry.size_bytes << "u, ";
-            content << serialize_llk_metadata(*entry.metadata);
-            content << "};\n";
-        } else {
-            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                    << entry.size_bytes << "u};\n";
-        }
-    }
-
-    emit_programmatic_binding_token_getter(content, scratch_entries, "ScratchpadBindingToken");
-
+    emit_scratchpad_tokens(content, site, entries.scratchpads);
+    emit_programmatic_binding_token_getter(
+        content, site, "scratch", "get_token_if_present", entries.scratchpads, SCRATCHPAD_NULL_TOKEN);
     content << "}  // namespace scratch\n";
 
     write_file(path, content.str());
 }
 
-// METAL 2.0 only:
-// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the `args` namespace.
-// Also emits get_vararg() / get_common_vararg() helpers with the named-args offset baked
-// in, so that vararg indices in kernel code are stable across schema changes.
-//
-// NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
-//       Legacy kernels do not get kernel_args_generated.h.
-void write_kernel_args_generated_header(const std::filesystem::path& out_dir, const JitBuildSettings& settings) {
-    const fs::path path = out_dir / "kernel_args_generated.h";
+// METAL 2.0 only: one named kernel argument's accessor, as the generated headers emit it:
+//   <type> <name><initializer>, e.g. experimental::RtaArg<uint32_t> num_tiles{8}
+struct ArgAccessor {
+    string name;  // possibly scoped
+    string type;
+    string initializer;
+};
 
-    // Named RTAs/CRTAs come straight from the settings as ordered vectors.
-    const vector<string>& rta_names = settings.get_runtime_arg_names();
-    const vector<string>& crta_names = settings.get_common_runtime_arg_names();
+// The kernel's named RTAs, CRTAs and CTAs. Scoping a name changes only where its accessor is
+// emitted, not the dispatch buffer layout: offsets are assigned over all names, scoped or not.
+vector<ArgAccessor> collect_arg_accessors(const JitBuildSettings& settings) {
+    vector<ArgAccessor> accessors;
 
-    // The kernel's CRTA buffer is laid out as three back-to-back sections:
-    //   [ user-named CRTAs | TensorBinding section | varargs ]
-    // The boundaries are precomputed at spec-resolution time and stored on the kernel,
-    // so we read them directly here. The vararg helpers below need the vararg-section
-    // start offset to skip past sections 1 and 2.
-    const KernelCrtaLayout crta_layout = settings.get_crta_layout();
-    const KernelRtaLayout rta_layout = settings.get_rta_layout();
+    // Named RTAs
+    // Here, rta_offset tracks the byte_offset of the RTA in the dispatch buffer.
+    // (Only uint32_t arg types are currently supported, but we later want to extend this.)
+    uint32_t rta_offset = 0;
+    for (const auto& name : settings.get_runtime_arg_names()) {
+        accessors.push_back({name, "::experimental::RtaArg<::uint32_t>", fmt::format("{{{}}}", rta_offset)});
+        rta_offset += sizeof(uint32_t);
+    }
+    // Named CRTAs
+    // The TensorBinding address section follows immediately after the named CRTA slots in the CRTA
+    // buffer (see the vararg-offset computation in write_kernel_args_generated_header).
+    uint32_t crta_offset = 0;
+    for (const auto& name : settings.get_common_runtime_arg_names()) {
+        accessors.push_back({name, "::experimental::CrtaArg<::uint32_t>", fmt::format("{{{}}}", crta_offset)});
+        crta_offset += sizeof(uint32_t);
+    }
 
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
     // The order in which we emit them DOES matter!
     // We sort them to ensure the file output is deterministic for the JIT build cache
     // (aka the on-disk per-object dephash cache)
+    // No offsets to deal with here; CTA values are emitted directly into the generated header.
     vector<pair<string, uint32_t>> cta_entries;
     settings.process_named_compile_time_args(
         [&cta_entries](const std::unordered_map<std::string, uint32_t>& named_args) {
@@ -520,6 +641,39 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             }
         });
     sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (const auto& [name, value] : cta_entries) {
+        accessors.push_back({name, "::experimental::CtaVal<::uint32_t>", fmt::format("{{{}u}}", value)});
+    }
+
+    return accessors;
+}
+
+void emit_arg_accessors(ostream& content, DeclSite site, const vector<ArgAccessor>& accessors) {
+    for_each_at(site, accessors, [&](const ArgAccessor& accessor, string_view name) {
+        content << site.indent << site.specifier << " " << accessor.type << " " << name << accessor.initializer
+                << ";\n";
+    });
+}
+
+// METAL 2.0 only:
+// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the `args` namespace.
+// (Unscoped names only: scoped ones go in kernel_scopes_generated.h.)
+// Also emits get_vararg() / get_common_vararg() helpers with the named-args offset baked
+// in, so that vararg indices in kernel code are stable across schema changes.
+//
+// NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
+//       Legacy kernels do not get kernel_args_generated.h.
+void write_kernel_args_generated_header(
+    const std::filesystem::path& out_dir, const JitBuildSettings& settings, const vector<ArgAccessor>& accessors) {
+    const fs::path path = out_dir / "kernel_args_generated.h";
+
+    // The kernel's CRTA buffer is laid out as three back-to-back sections:
+    //   [ user-named CRTAs | TensorBinding section | varargs ]
+    // The boundaries are precomputed at spec-resolution time and stored on the kernel,
+    // so we read them directly here. The vararg helpers below need the vararg-section
+    // start offset to skip past sections 1 and 2.
+    const KernelCrtaLayout crta_layout = settings.get_crta_layout();
+    const KernelRtaLayout rta_layout = settings.get_rta_layout();
 
     // Metal 2.0 CTA-vararg prefix length in positional KERNEL_COMPILE_TIME_ARGS.
     // Values live in kernel_compile_time_args[0..N); TensorBinding payloads follow.
@@ -533,35 +687,13 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
                "#include \"api/compile_time_args.h\"\n"
                "#include \"api/debug/assert.h\"\n\n";
 
-    // Named args namespace: emit only when the kernel has at least one named arg or CTA.
+    // Named args namespace: emit only when the kernel has at least one unscoped named arg or CTA.
     // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
     // so we keep emitting those unconditionally.
-    const bool has_named_args = !rta_names.empty() || !crta_names.empty() || !cta_entries.empty();
-    if (has_named_args) {
+    const DeclSite site = kind_namespace();
+    if (any_at(site, accessors)) {
         content << "namespace args {\n";
-
-        // Named RTAs
-        // Here, rta_offset tracks the byte_offset of the RTA in the dispatch buffer.
-        // (Only uint32_t arg types are currently supported, but we later want to extend this.)
-        uint32_t rta_offset = 0;
-        for (const auto& name : rta_names) {
-            content << "constexpr experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
-            rta_offset += sizeof(uint32_t);
-        }
-        // Named CRTAs
-        // The TensorBinding address section follows immediately after the named CRTA slots in the CRTA
-        // buffer (see vararg-offset computation below).
-        uint32_t crta_offset = 0;
-        for (const auto& name : crta_names) {
-            content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
-            crta_offset += sizeof(uint32_t);
-        }
-        // Named CTAs
-        // No offsets to deal with here; CTA values are emitted directly into the generated header.
-        for (const auto& [name, value] : cta_entries) {
-            content << "constexpr experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
-        }
-
+        emit_arg_accessors(content, site, accessors);
         content << "}  // namespace args\n\n";
     }
 
@@ -613,6 +745,76 @@ FORCE_INLINE constexpr uint32_t get_compile_time_vararg(uint32_t idx) {{
     write_file(path, content.str());
 }
 
+// METAL 2.0 only:
+// Emits one struct per scope, holding all of the kernel's names in that scope ("scope.name"),
+// of every kind, as static members: the kernel spells them scope::name. A scope is a class type,
+// so device code can be templated on it (template <typename Scope> ... Scope::name). The structs
+// are at namespace scope, so kernel source shared across KernelSpecs can forward-declare a scope
+// that this KernelSpec doesn't have.
+// Every scope gets the by-name binding lookups, even for kinds it has no bindings of.
+void write_kernel_scopes_generated_header(
+    const string& out_dir, const KernelBindingEntries& bindings, const vector<ArgAccessor>& args) {
+    const string path = out_dir + "kernel_scopes_generated.h";
+
+    // Sorted, so the output is deterministic for the JIT build cache.
+    std::set<string_view> scopes;
+    auto add_scopes = [&scopes](const auto& entries) {
+        for (const auto& entry : entries) {
+            const ScopedName parts = split_scoped_name(entry.name);
+            if (!parts.scope.empty()) {
+                scopes.insert(parts.scope);
+            }
+        }
+    };
+    add_scopes(args);
+    add_scopes(bindings.dfbs);
+    add_scopes(bindings.pipes);
+    add_scopes(bindings.semaphores);
+    add_scopes(bindings.tensors);
+    add_scopes(bindings.tensor_sequences);
+    add_scopes(bindings.scratchpads);
+
+    ostringstream content;
+    content << "// AUTO-GENERATED — do not edit.\n\n"
+               "#pragma once\n\n"
+               // The token and accessor types, and their includes
+               "#include \"kernel_bindings_generated.h\"\n"
+               "#include \"kernel_args_generated.h\"\n";
+
+    for (string_view scope : scopes) {
+        const DeclSite site = scope_struct(scope);
+        content << "\nstruct " << scope << " {\n";
+        emit_arg_accessors(content, site, args);
+        emit_dfb_tokens(content, site, bindings.dfbs);
+        emit_pipe_tokens(content, site, bindings.pipes);
+        emit_semaphore_tokens(content, site, bindings.semaphores);
+        emit_tensor_tokens(content, site, bindings.tensors);
+        emit_tensor_binding_sequences(content, site, bindings.tensor_sequences);
+        emit_scratchpad_tokens(content, site, bindings.scratchpads);
+        emit_programmatic_binding_token_getter(
+            content, site, scope, SCOPED_DFB_LOOKUP_NAME, bindings.dfbs, DFB_NULL_TOKEN);
+        emit_programmatic_binding_token_getter(
+            content, site, scope, SCOPED_TENSOR_LOOKUP_NAME, bindings.tensors, TENSOR_NULL_TOKEN);
+        emit_programmatic_binding_token_getter(
+            content, site, scope, SCOPED_SCRATCH_LOOKUP_NAME, bindings.scratchpads, SCRATCHPAD_NULL_TOKEN);
+        content << "};\n";
+    }
+
+    write_file(path, content.str());
+}
+
+// METAL 2.0 only: writes the kernel's three generated headers.
+//  - kernel_bindings_generated.h: unscoped binding tokens, in dfb::, pipe::, sem::, tensor::, scratch::
+//  - kernel_args_generated.h:     unscoped named args, in args::, and the vararg helpers
+//  - kernel_scopes_generated.h:   scoped names of every kind, one struct per scope
+void write_metal2_generated_headers(const string& out_dir, const JitBuildSettings& settings) {
+    const KernelBindingEntries bindings = collect_binding_entries(settings);
+    const vector<ArgAccessor> args = collect_arg_accessors(settings);
+    write_kernel_bindings_generated_header(out_dir, bindings);
+    write_kernel_args_generated_header(out_dir, settings, args);
+    write_kernel_scopes_generated_header(out_dir, bindings, args);
+}
+
 // Scan a kernel source for a TT_KERNEL entry and, if present, return the generated kernel_main()
 // shim text (validated against the host-registered arg schema). Returns "" when the source has no
 // TT_KERNEL marker (a legacy / hand-written kernel_main() — fully backward compatible). Fail-fasts
@@ -654,6 +856,21 @@ std::string generate_tt_kernel_shim_if_present(
             cta_names.push_back(entry.first);
         }
     });
+    // The entry takes the kernel's arguments as parameters, named as the host names them,
+    // so a scoped name (scope.name) can't be one.
+    auto reject_scoped_args = [&sig](const std::vector<std::string>& names) {
+        for (const auto& name : names) {
+            TT_FATAL(
+                !is_scoped_name(name),
+                "TT_KERNEL entry '{}' cannot take the scoped argument '{}'. A TT_KERNEL entry takes the kernel's "
+                "arguments as parameters, so their names must be unscoped.",
+                sig->name,
+                name);
+        }
+    };
+    reject_scoped_args(cta_names);
+    reject_scoped_args(settings.get_runtime_arg_names());
+    reject_scoped_args(settings.get_common_runtime_arg_names());
     validate_signature_against_schema(
         *sig, cta_names, settings.get_runtime_arg_names(), settings.get_common_runtime_arg_names());
     return generate_kernel_main_shim(*sig);
@@ -755,10 +972,8 @@ void jit_build_genfiles_kernel_include(
     const bool is_metal2 = settings.is_metal2_kernel();
     string kernel_header_content;
     if (is_metal2) {
-        write_kernel_bindings_generated_header(out_dir, settings);
-        write_kernel_args_generated_header(out_dir, settings);
-        kernel_header_content =
-            string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
+        write_metal2_generated_headers(out_dir, settings);
+        kernel_header_content = METAL2_GENERATED_HEADER_INCLUDES;
     }
     // No #include line: this one is force-included by the compile recipe so the map is defined
     // before any header that reads it (api/compile_time_args.h) can be pulled in.
@@ -800,8 +1015,7 @@ void jit_build_genfiles_triscs_src(
     const bool is_metal2 = settings.is_metal2_kernel();
     if (is_metal2) {
         // The cached pool is DM-only
-        write_kernel_bindings_generated_header(out_dir, settings);
-        write_kernel_args_generated_header(out_dir, settings);
+        write_metal2_generated_headers(out_dir, settings);
     }
     // No prolog #include: force-included by the compile recipe instead, so the map is defined ahead
     // of any header that reads it (api/compile_time_args.h).

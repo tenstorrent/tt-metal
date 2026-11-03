@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 
+#include "impl/metal2_host_api/scoped_name.hpp"
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -105,6 +106,20 @@ inline bool IsValidCppIdentifier(std::string_view s) {
 
     // If we got this far, and the name doesn't match any keywords, it's valid.
     return !kCppKeywords.contains(s);
+}
+
+// A kernel-visible name (an argument name, a binding's accessor_name, or a tensor binding sequence_name)
+// is a C++ identifier, or a scoped name "<scope>.<name>" whose two parts are C++ identifiers.
+// (One level of scope only. See tech_reports/NamedKernelArgs/scoped_names.md.)
+// KERNEL_VISIBLE_NAME_RULE states the rule for validation error messages.
+inline constexpr std::string_view KERNEL_VISIBLE_NAME_RULE =
+    "a valid C++ identifier, or a scoped name '<scope>.<name>' of two C++ identifiers";
+inline bool IsValidKernelVisibleName(std::string_view s) {
+    if (!is_scoped_name(s)) {
+        return IsValidCppIdentifier(s);
+    }
+    const ScopedName parts = split_scoped_name(s);
+    return IsValidCppIdentifier(parts.scope) && IsValidCppIdentifier(parts.name);
 }
 
 inline bool is_gen2_arch(tt::ARCH arch) { return arch == tt::ARCH::QUASAR; }

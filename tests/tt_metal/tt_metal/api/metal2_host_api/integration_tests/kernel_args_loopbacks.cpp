@@ -176,6 +176,80 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 }
 
 // ============================================================================
+// Scoped Args Readback
+// ============================================================================
+//
+// Scoped RTAs, CRTAs and CTAs ("scope.name"; see tech_reports/NamedKernelArgs/scoped_names.md) deliver their
+// values on real WH/BH hardware. One templated piece of device code reads two scopes, a and b, which
+// have the same names; an unscoped arg shares a name with them too. The kernel reports every value
+// to a host-known L1 location, and each must come back from its own slot.
+
+TEST_F(ProgramSpecHWTest, ScopedArgsReadback) {
+    auto mesh_device = devices_.at(0);
+    constexpr uint32_t kReportAddr = 100 * 1024;  // host-known fixed L1 addr
+    constexpr uint32_t kReportWords = 7;
+    const NodeCoord node{0, 0};
+
+    auto kernel = MakeMinimalGen1DMKernel("kernel");
+    kernel.source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
+
+template <typename Scope>
+void report(volatile tt_l1_ptr uint32_t* out) {
+    out[0] = get_arg(Scope::id);     // RTA
+    out[1] = get_arg(Scope::batch);  // CRTA
+    out[2] = get_arg(Scope::Ht);     // CTA
+}
+
+void kernel_main() {
+    auto* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uintptr_t>(get_arg(args::report_addr)));
+    out[0] = get_arg(args::id);
+    report<a>(out + 1);
+    report<b>(out + 4);
+}
+)"};
+    kernel.runtime_arg_schema.runtime_arg_names = {"report_addr", "id", "a.id", "b.id"};
+    kernel.runtime_arg_schema.common_runtime_arg_names = {"a.batch", "b.batch"};
+    kernel.compile_time_args = {{"a.Ht", 0xA0000003u}, {"b.Ht", 0xB0000003u}};
+
+    ProgramSpec spec;
+    spec.name = "scoped_args_readback";
+    spec.kernels = {kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"kernel"},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            node, {{"report_addr", kReportAddr}, {"id", 0x00000001u}, {"a.id", 0xA0000001u}, {"b.id", 0xB0000001u}}),
+        .common_runtime_arg_values = {{"a.batch", 0xA0000002u}, {"b.batch", 0xB0000002u}},
+    }};
+    SetProgramRunArgs(program, params);
+
+    // Pre-zero the report, so a value the kernel never wrote is caught.
+    std::vector<uint32_t> zero_report(kReportWords, 0u);
+    slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
+
+    LaunchProgram(*mesh_device, std::move(program));
+
+    std::vector<uint32_t> reported;
+    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, kReportWords * sizeof(uint32_t), reported);
+    const std::vector<uint32_t> expected = {
+        0x00000001u,  // args::id
+        0xA0000001u,  // a::id
+        0xA0000002u,  // a::batch
+        0xA0000003u,  // a::Ht
+        0xB0000001u,  // b::id
+        0xB0000002u,  // b::batch
+        0xB0000003u,  // b::Ht
+    };
+    EXPECT_EQ(reported, expected);
+}
+
+// ============================================================================
 // Named Args Loopback — Compute Producer
 // ============================================================================
 //

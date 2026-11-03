@@ -65,6 +65,11 @@ namespace tt::tt_metal::experimental {
 //
 // PLACEMENT: The nodes the kernel runs on are derived from WorkUnitSpec membership.
 //
+// SCOPED NAMES: Used when composing several pieces of device code into one fused kernel.
+//   (Ordinary kernels don't need them). Any accessor_name or argument name may be written
+//   "<scope>.<name>", and kernel code then reaches it as <scope>::<name>.
+//   See tech_reports/NamedKernelArgs/scoped_names.md.
+//
 // ============================================================================
 
 // A name identifying a KernelSpec within a ProgramSpec.
@@ -204,10 +209,10 @@ struct KernelSpec {
     // Currently, only arguments of uint32_t are supported.
 
     struct RuntimeArgSchema {
-        // Runtime argument names (must be unique, valid C++ identifiers.)
+        // Runtime argument names (must be unique, valid C++ identifiers, or scoped names.)
         Group<std::string> runtime_arg_names;
 
-        // Common runtime argument names (must be unique, valid C++ identifiers.)
+        // Common runtime argument names (must be unique, valid C++ identifiers, or scoped names.)
         Group<std::string> common_runtime_arg_names;
     };
     RuntimeArgSchema runtime_arg_schema{};

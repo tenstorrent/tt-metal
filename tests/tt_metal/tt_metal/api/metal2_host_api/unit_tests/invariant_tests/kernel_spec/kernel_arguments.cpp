@@ -37,7 +37,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidNamedRtaIdentifierFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("named RTA name 'int' is not a valid C++ identifier")));
+            ::testing::HasSubstr("named RTA name 'int' must be a valid C++ identifier")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_InvalidNamedCrtaIdentifierFails) {
@@ -47,7 +47,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidNamedCrtaIdentifierFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("named CRTA name 'has-dash' is not a valid C++ identifier")));
+            ::testing::HasSubstr("named CRTA name 'has-dash' must be a valid C++ identifier")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_NamedRtaCrtaCollisionFails) {
