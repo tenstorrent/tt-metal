@@ -40,7 +40,16 @@ not in tenstorrent/tt-metal, so the design is taken, not the code.
 Target arithmetic: 1 + 2 + 3 = ~13 ms floor + ~3 ms overhead = ~16-20 ms per step = 50-60 tok/s/u at 4-8 users per
 instance, 16-32 users on the Galaxy.
 
-## Gates
+## Gates (refined 2026-11-03 21:50)
+
+The frozen release used "decode ids identical" as the coherence proxy. For this program the gate is the quality
+itself: a change that keeps the math (a layout, a TP width, a bit-exact fusion) must keep the DECODE-IDS line; a
+change that moves rounding (bfp4, a fused op whose reduction order differs) is judged by (1) its per-op PCC against
+the composite on real activations (>= 0.9999 for glue, the expert ops at their existing bars), (2) the chain's
+per-user PCC within noise of the base, and (3) the served coherence smoke plus GPQA / LiveCodeBench / MMMU through
+the release flow. Under that gate the fused DSA decode-state program (`GLM53_DSA_DECODE_STATE=1`, closed on
+2026-11-03 for 6 of 16 ids at chain PCC 0.8469 vs 0.85; -1.6 ms per step at 4 users per row) is a candidate again.
+
 
 * coherence: `DECODE-IDS` line of the chain test identical to the frozen tip for levers 1 and 3 (TP changes keep the
   math up to reduction order; a program fusion must be bit-exact or PCC-gated per op as today's custom ops are);
