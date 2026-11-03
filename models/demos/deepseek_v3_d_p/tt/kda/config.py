@@ -15,7 +15,7 @@ KDA_QKV_DTYPE = ttnn.bfloat16
 KDA_GATE_DTYPE = ttnn.bfloat16
 KDA_RECURRENT_STATE_DTYPE = ttnn.float32
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
-KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
+KDA_PREP_OUTPUT_BF16_MASK = 0  # INVESTIGATION: every prep output FP32
 # The L1 budgets below are static: they are sized on Galaxy SP8xTP4 against what is live next to these tensors
 # there (the local summary and prefix buffers, the scans' circular buffers and the CCL semaphores), not measured at
 # run time. They assume the device is opened with an L1_SMALL region (as the model's prefill tests do), so the CCL
