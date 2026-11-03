@@ -273,6 +273,28 @@ void validate_stride(const std::array<uint32_t, 2>& stride) {
     TT_FATAL(stride[0] > 0 && stride[1] > 0, "stride must be greater than 0, got ({}, {})", stride[0], stride[1]);
 }
 
+void validate_conv_params(
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    uint32_t groups) {
+    validate_stride(stride);
+    TT_FATAL(
+        kernel_size[0] > 0 && kernel_size[1] > 0,
+        "kernel_size must be greater than 0, got ({}, {})",
+        kernel_size[0],
+        kernel_size[1]);
+    TT_FATAL(
+        in_channels > 0 && out_channels > 0,
+        "in_channels ({}) and out_channels ({}) must be greater than 0",
+        in_channels,
+        out_channels);
+    TT_FATAL(batch_size > 0, "batch_size must be greater than 0");
+    TT_FATAL(groups > 0, "groups must be greater than 0");
+}
+
 void validate_act_block_h_override(uint32_t act_block_h_override) {
     TT_FATAL(
         act_block_h_override % tt::constants::TILE_HEIGHT == 0,
