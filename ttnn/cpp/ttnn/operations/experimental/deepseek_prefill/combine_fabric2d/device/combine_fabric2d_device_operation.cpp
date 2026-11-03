@@ -65,9 +65,8 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.device != nullptr, "combine_fabric2d requires a mesh device in attributes");
     TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
-    // Zero would divide the dense region by nothing. Any value >= 1 is legal -- the movement-class split
-    // means no size can deadlock the ring -- and the page floor catches a factor large enough to round a
-    // channel away, so this only rejects the one value that has no meaning.
+    // The movement-class split means no depth can deadlock the ring, so the only floor is the credit
+    // scheme's own: a channel returns credits every quarter of its depth, which must stay at least one page.
     TT_FATAL(
         args.fwd_vc_pages >= cmbf2d::MIN_VC_PAGES,
         "combine_fabric2d: fwd_vc_pages must be at least {} (got {}); the credit threshold is a quarter of a "
