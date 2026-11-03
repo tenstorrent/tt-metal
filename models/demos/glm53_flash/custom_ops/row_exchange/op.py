@@ -173,6 +173,7 @@ class RowExchange:
                     r,
                     xchg_noc,
                     self.recv.buffer_address(),
+                    self._noc(self.device, core),
                 ]
                 compute_rt[core.x][core.y] = []
             cb_src = self.CB_OUT if self.mode == 1 else self.CB_T

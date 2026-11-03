@@ -9,7 +9,7 @@
 //
 // compile-time: [MODE, CB_SEND, CB_RM, CB_RM2, CB_SRC, CB_ZERO, CT, T, ROWS, NCHUNKS, PS, CPP, NP, SEM_GO, SEM_STAGED,
 //                <TensorAccessorArgs out>, <TensorAccessorArgs recv>]
-// runtime: [out_addr, col_tile0, chunk k, my_row, xchg_noc (x << 16 | y), recv_addr]
+// runtime: [out_addr, col_tile0, chunk k, my_row, xchg_noc (x << 16 | y), recv_addr, own_noc]
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -46,7 +46,9 @@ void kernel_main() {
     const uint32_t my_row = get_arg_val<uint32_t>(3);
     const uint32_t xchg_noc = get_arg_val<uint32_t>(4);
     const uint32_t recv_addr = get_arg_val<uint32_t>(5);
+    const uint32_t own_noc = get_arg_val<uint32_t>(6);
     const uint32_t xx = xchg_noc >> 16, xy = xchg_noc & 0xffff;
+    const uint32_t ox = own_noc >> 16, oy = own_noc & 0xffff;
 
     const auto s_out = TensorAccessor(out_args, out_addr, TILE_BYTES);
     const auto s_recv = TensorAccessor(recv_args, recv_addr, PKT);
@@ -78,14 +80,14 @@ void kernel_main() {
         const uint32_t dst = rm2 + r * PIECE;
         if (r == my_row) {
             const uint32_t src = (MODE == 0) ? rm : rm + my_row * PIECE;
-            noc_async_read(get_noc_addr(src), dst, PIECE);
+            noc_async_read(get_noc_addr(ox, oy, src), dst, PIECE);
         } else {
-            noc_async_read(s_recv.get_noc_addr(r * NP + k / CPP) + (k % CPP) * PS, dst, PIECE);
+            noc_async_read(s_recv.get_noc_addr(r * NP + k / CPP, (k % CPP) * PS), dst, PIECE);
         }
     }
     if constexpr (MODE == 0 && ROWS * T < 32) {
         cb_wait_front(CB_ZERO, 1);
-        const uint64_t zero = get_noc_addr(get_read_ptr(CB_ZERO));
+        const uint64_t zero = get_noc_addr(ox, oy, get_read_ptr(CB_ZERO));
         for (uint32_t i = ROWS * T; i < 32; ++i) {
             noc_async_read(zero, rm2 + i * ROW_B, ROW_B);
         }
