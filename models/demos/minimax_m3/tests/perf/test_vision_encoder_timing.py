@@ -7,14 +7,22 @@ speed numbers, so anyone can rerun them from the repository.
 Opt-in, as it builds the 32-layer encoder; skipped unless M3_VISION_TIMING=1:
     M3_VISION_TIMING=1 pytest -s models/demos/minimax_m3/tests/perf/test_vision_encoder_timing.py
 
-It prints two lines, each with the median of 10 calls after 2 warm-up calls, then the fastest and the slowest of the
-10. Each call is timed up to the end of ttnn.synchronize_device after it. The device forward runs first: its first
-warm-up compiles the programs and pushes the grid's RoPE tables, which the end-to-end calls then reuse.
+It prints two lines, each with the median of 10 calls, the fastest and the slowest of them, and the 10 in the order
+they ran. Each line's calls follow 2 warm-up calls and a pause of IDLE_S (3 s), and each call is timed up to the end of
+ttnn.synchronize_device after it. The pause matters: after about a second of back-to-back forwards the board lowers the
+chip clock, and about a second of idle brings it back. So the 10 calls, about 0.7 s of work at 672x672, run at full
+clock, and each line is the time of one image on an idle chip. Both lines come from one process. The device forward
+runs first: its first warm-up compiles the programs and pushes the grid's RoPE tables, which the end-to-end calls then
+reuse.
   - "device forward X ms": M3VLVisionModel.forward_device on pixel values pushed to the device once, before the calls:
     every device op of the encoder (patch embed, the input LayerNorm, the blocks and the projector), their dispatch
-    from the host included. This is the encoder's speed, the number to compare with its roofline.
-  - "end-to-end forward Y ms": model(pixel_values, image_grid_thw) on the pixel values on the host, what a caller sees:
-    the input check and the upload (push_pixel_values), then forward_device.
+    from the host included. This is the encoder's time for one image on an idle chip, the number to compare with its
+    roofline, which assumes the full clock.
+  - "end-to-end forward Y ms": model(pixel_values, image_grid_thw) on the pixel values on the host, what a caller sees
+    for one image: the input check and the upload (push_pixel_values), then forward_device. As both lines run at full
+    clock, Y - X is the time of the check and the upload.
+Neither line is the rate of images sent back to back: on the P150 where this was measured, 672x672 forwards run back to
+back for a few seconds settled about 8% slower each, about 76.5 ms against 70.9 ms.
 It asserts that the two outputs have the shape of the 576 tokens, are finite and are equal bit for bit (the same device
 ops on the same input), never a time.
 
@@ -47,15 +55,22 @@ if os.getenv("M3_VISION_TIMING") != "1":
 
 WARMUP_CALLS = 2
 TIMED_CALLS = 10
+# Seconds of idle between the warm-ups and the timed calls. After about a second of back-to-back forwards the board
+# lowers the chip clock, and back to back a 672x672 forward then takes about 8% longer; about a second of idle brings
+# the clock back.
+IDLE_S = 3.0
 
 
 def _time_calls(call, mesh_device):
-    """Runs call() WARMUP_CALLS + TIMED_CALLS times, each followed by ttnn.synchronize_device, and frees each output
-    before the next call. Returns the timed calls' wall times in ms and the last output."""
+    """Runs call() WARMUP_CALLS times, waits IDLE_S, then runs it TIMED_CALLS times, each call followed by
+    ttnn.synchronize_device, and frees each output before the next call. Returns the timed calls' wall times in ms and
+    the last output."""
     times_ms, out = [], None
-    for _ in range(WARMUP_CALLS + TIMED_CALLS):
+    for i in range(WARMUP_CALLS + TIMED_CALLS):
         if out is not None:
             ttnn.deallocate(out)
+        if i == WARMUP_CALLS:
+            time.sleep(IDLE_S)
         start = time.perf_counter()
         out = call()
         ttnn.synchronize_device(mesh_device)
@@ -82,7 +97,9 @@ def test_vision_encoder_timing(mesh_device, device_params, vision_reference):
     }
     print()
     for name, (times_ms, _) in runs.items():
-        print(f"{name} {statistics.median(times_ms):.2f} ms (min {min(times_ms):.2f}, max {max(times_ms):.2f})")
+        median, fastest, slowest = statistics.median(times_ms), min(times_ms), max(times_ms)
+        calls = " ".join(f"{t:.2f}" for t in times_ms)
+        print(f"{name} {median:.2f} ms (min {fastest:.2f}, max {slowest:.2f}), calls {calls}")
 
     shape = (num_tokens(grid_thw), reference.config.text_hidden_size)
     tokens = []
