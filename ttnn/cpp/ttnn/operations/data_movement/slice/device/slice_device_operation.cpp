@@ -578,17 +578,36 @@ SliceDeviceOperation::tensor_return_value_t slice(
     const std::optional<Tensor>& preallocated_output,
     bool output_mem_config_inherited) {
     using OperationType = ttnn::prim::SliceDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    const auto attributes = [&](const tt::tt_metal::MemoryConfig& mem_config, bool inherited) {
+        return OperationType::operation_attributes_t{
             slice_start,
             slice_end,
             step,
-            output_mem_config,
+            mem_config,
             use_tensor_args,
             slice_dim,
             num_devices,
             sub_core_grids,
-            output_mem_config_inherited},
-        OperationType::tensor_args_t{input, std::move(start_tensor), std::move(end_tensor), preallocated_output});
+            inherited};
+    };
+    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
+        input,
+        output_mem_config,
+        preallocated_output,
+        [&] {
+            return OperationType::compute_output_specs(
+                attributes(output_mem_config, output_mem_config_inherited),
+                OperationType::tensor_args_t{input, start_tensor, end_tensor, preallocated_output});
+        },
+        [&](const Tensor& launch_input, const std::optional<tt::tt_metal::MemoryConfig>& explicit_mem_config) {
+            return ttnn::device_operation::launch<OperationType>(
+                explicit_mem_config.has_value() ? attributes(*explicit_mem_config, false)
+                                                : attributes(output_mem_config, output_mem_config_inherited),
+                OperationType::tensor_args_t{
+                    launch_input,
+                    start_tensor,
+                    end_tensor,
+                    explicit_mem_config.has_value() ? std::nullopt : preallocated_output});
+        });
 }
 }  // namespace ttnn::prim

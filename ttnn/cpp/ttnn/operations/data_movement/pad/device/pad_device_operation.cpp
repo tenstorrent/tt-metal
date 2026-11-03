@@ -243,15 +243,29 @@ PadDeviceOperation::tensor_return_value_t pad(
     const std::optional<ttnn::Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = PadDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    const auto attributes = [&](const tt::tt_metal::MemoryConfig& mem_config) {
+        return OperationType::operation_attributes_t{
             output_logical_shape,
             output_padded_shape,
             input_tensor_start,
             pad_value,
-            output_mem_config,
+            mem_config,
             use_multicore,
-            sub_core_grids},
-        OperationType::tensor_args_t{input, preallocated_output});
+            sub_core_grids};
+    };
+    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
+        input,
+        output_mem_config,
+        preallocated_output,
+        [&] {
+            return OperationType::compute_output_specs(
+                attributes(output_mem_config), OperationType::tensor_args_t{input, preallocated_output});
+        },
+        [&](const Tensor& launch_input, const std::optional<tt::tt_metal::MemoryConfig>& explicit_mem_config) {
+            return ttnn::device_operation::launch<OperationType>(
+                attributes(explicit_mem_config.value_or(output_mem_config)),
+                OperationType::tensor_args_t{
+                    launch_input, explicit_mem_config.has_value() ? std::nullopt : preallocated_output});
+        });
 }
 }  // namespace ttnn::prim
